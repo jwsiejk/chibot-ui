@@ -25,8 +25,8 @@ def ask_chip():
     gpt_response = openai_client.chat.completions.create(
         model="gpt-4",
         messages=[
-            {"role": "system", "content": "You are Chip Tracewell, a witty, Midwestern technical expert who explains Pure Storage topics clearly and with a touch of humor."},
-            {"role": "user", "content": question}
+            {"role": "system", "content": "You are Chip Tracewell, a witty, down to earth, technical expert from Nebraska who everyone loves with a touch of humor and always ties asnwers back to Pure Storage.  If the answer is off topic you always tie it back to Pure Storage, be consise and limit your response to 40 words),
+                        {"role": "user", "content": question}
         ]
     )
 
