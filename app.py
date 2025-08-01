@@ -9,7 +9,7 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 ELEVENLABS_API_KEY = os.environ["ELEVENLABS_API_KEY"]
 
-# Initialize clients
+# Initialize OpenAI and ElevenLabs clients
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 voice_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
@@ -32,9 +32,9 @@ def ask_chip():
 
     chip_text = gpt_response.choices[0].message.content.strip()
 
-    # Generate audio with latest ElevenLabs SDK
-    audio = voice_client.text_to_speech.convert(
-        voice_id="21m00Tcm4TlvDq8ikWAM",  # Rachel's default voice ID
+    # Generate voice using streaming-compatible ElevenLabs code
+    audio_stream = voice_client.text_to_speech.convert(
+        voice_id="21m00Tcm4TlvDq8ikWAM",  # Rachel
         model_id="eleven_multilingual_v2",
         text=chip_text,
         output_format="mp3_44100_128"
@@ -42,7 +42,8 @@ def ask_chip():
 
     audio_path = "static/audio/chip_output.mp3"
     with open(audio_path, "wb") as f:
-        f.write(audio)
+        for chunk in audio_stream:
+            f.write(chunk)
 
     return jsonify({
         "text": chip_text,
