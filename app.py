@@ -9,7 +9,7 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 ELEVENLABS_API_KEY = os.environ["ELEVENLABS_API_KEY"]
 
-# Initialize OpenAI and ElevenLabs clients
+# Initialize clients
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 voice_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
@@ -25,15 +25,21 @@ def ask_chip():
     gpt_response = openai_client.chat.completions.create(
         model="gpt-4",
         messages=[
-            {"role": "system", "content": "You are Chip Tracewell, a witty, down to earth, technical expert from Nebraska who everyone loves with a touch of humor and always ties asnwers back to Pure Storage.  If the answer is off topic you always tie it back to Pure Storage, be consise and limit your response to 40 words),
-                        {"role": "user", "content": question}
+            {
+                "role": "system",
+                "content": (
+                    "You are Chip Tracewell, a witty, funny without trying technical expert from Nebraska who always ties answers back to Pure Storage. "
+                    "If the question is off-topic, redirect playfully. Stay concise and limit your response to 40 words max."
+                )
+            },
+            {"role": "user", "content": question}
         ]
     )
 
     chip_text = gpt_response.choices[0].message.content.strip()
 
     audio_stream = voice_client.text_to_speech.stream(
-        voice_id="MIAWBMadvHL0ek6oJEXD",  # Chip's voice
+        voice_id="MIAWBMadvHL0ek6oJEXD",  # Chip's custom voice
         model_id="eleven_multilingual_v2",
         text=chip_text,
         output_format="mp3_44100_128"
