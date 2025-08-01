@@ -14,9 +14,7 @@
       border-radius: 8px;
       box-shadow: 0 0 10px rgba(0,0,0,0.1);
     }
-    h1 {
-      color: #ff6600;
-    }
+    h1 { color: #ff6600; }
     input, button {
       padding: 10px;
       font-size: 16px;
@@ -30,45 +28,41 @@
       border: none;
       cursor: pointer;
     }
-    button:hover {
-      background-color: #e65c00;
-    }
+    button:hover { background-color: #e65c00; }
     .response {
       margin-top: 20px;
       background: white;
       padding: 15px;
       border-radius: 5px;
     }
-    audio {
-      margin-top: 10px;
-      width: 100%;
-    }
+    audio { margin-top: 10px; width: 100%; }
   </style>
 </head>
 <body>
   <h1>Ask Chip</h1>
   <input id="question" type="text" placeholder="What would you like to ask Chip?" />
   <button onclick="askChip()">Submit</button>
-
   <div class="response" id="chipReply" style="display:none">
     <strong>Chip says:</strong>
     <p id="chipText"></p>
     <audio id="chipAudio" controls></audio>
   </div>
-
   <script>
     async function askChip() {
       const question = document.getElementById('question').value;
       if (!question) return alert('Please enter a question.');
-
       const responseDiv = document.getElementById('chipReply');
       const textElement = document.getElementById('chipText');
       const audioElement = document.getElementById('chipAudio');
-
-      // TEMP: Fake response for demo only
-      textElement.innerText = "FlashArray is optimized for block storage while FlashBlade excels at unstructured data.";
-      audioElement.src = "https://yourdomain.com/audio/chip_sample.mp3"; // <-- replace with your hosted audio path
-
+      const res = await fetch('/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question })
+      });
+      const data = await res.json();
+      textElement.innerText = data.text;
+      audioElement.src = data.audio_url;
+      audioElement.play();
       responseDiv.style.display = 'block';
     }
   </script>
