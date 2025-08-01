@@ -33,12 +33,13 @@ def ask_chip():
     chip_text = gpt_response.choices[0].message.content.strip()
 
     # Generate voice using streaming-compatible ElevenLabs code
-    audio_stream = voice_client.text_to_speech.convert(
-        voice_id="21m00Tcm4TlvDq8ikWAM",  # Rachel
-        model_id="eleven_multilingual_v2",
-        text=chip_text,
-        output_format="mp3_44100_128"
-    )
+   audio_stream = voice_client.text_to_speech.stream(
+    voice_id="MIAWBMadvHL0ek6oJEXD",  # Chip's voice
+    model_id="eleven_multilingual_v2",
+    text=chip_text,
+    output_format="mp3_44100_128"
+)
+
 
     audio_path = "static/audio/chip_output.mp3"
     with open(audio_path, "wb") as f:
