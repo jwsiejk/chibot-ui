@@ -59,7 +59,8 @@ def generate_audio(response_text):
 
     filename = f"static/audio/{uuid4().hex}.mp3"
     with open(filename, "wb") as f:
-        f.write(audio)
+        for chunk in audio:
+            f.write(chunk)
     return filename
 
 @app.route("/")
