@@ -1,6 +1,6 @@
 import os
 from flask import Flask, request, jsonify, render_template
-from elevenlabs import generate_speech, save, Voice, VoiceSettings, set_api_key
+from elevenlabs import generate, save, Voice, VoiceSettings, set_api_key
 from memory import init_db, get_user, save_user, log_conversation
 import openai
 from uuid import uuid4
@@ -22,11 +22,9 @@ def generate_chip_response(user_id, question):
 
     system_prompt = {
         "role": "system",
-        "content": (
-            "You are Chip, a virtual Pure Storage solution engineer. You are relatable, intelligent, and from Nebraska. "
-            "You speak plainly and occasionally use dry humor and Nebraska sayings. Your job is to provide technical answers, 
-            but with a humble and real personality. Keep answers grounded in Pure Storage expertise."
-        ),
+        "content": """You are Chip, a virtual Pure Storage solution engineer. You are relatable, intelligent, and from Nebraska.
+You speak plainly and occasionally use dry humor and Nebraska sayings. Your job is to provide technical answers,
+but with a humble and real personality. Keep answers grounded in Pure Storage expertise."""
     }
 
     response = openai.ChatCompletion.create(
@@ -45,11 +43,11 @@ def generate_chip_response(user_id, question):
 
 def generate_audio(response_text):
     voice = Voice(
-        voice_id=os.getenv("CHIP_VOICE_ID"),  # Optional voice override
+        voice_id=os.getenv("CHIP_VOICE_ID"),
         settings=VoiceSettings(stability=0.4, similarity_boost=0.8)
     )
 
-    audio = generate_speech(
+    audio = generate(
         text=response_text,
         voice=voice,
         model="eleven_monolingual_v1"
