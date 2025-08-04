@@ -1,3 +1,5 @@
+print("✅ Chip app starting...")
+
 import os
 import json
 import traceback
