@@ -1,0 +1,91 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Ask Chip 3D Demo</title>
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f5f5f5;
+      margin: 0;
+      padding: 20px;
+      text-align: center;
+    }
+    model-viewer {
+      width: 100%;
+      max-width: 600px;
+      height: 500px;
+      margin: 0 auto 30px;
+      border-radius: 8px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+    }
+    #question {
+      width: 60%;
+      padding: 12px;
+      font-size: 16px;
+    }
+    #submit {
+      padding: 12px 20px;
+      font-size: 16px;
+      background-color: #ff6600;
+      color: white;
+      border: none;
+      cursor: pointer;
+      margin-left: 10px;
+    }
+    #submit:hover {
+      background-color: #e65c00;
+    }
+    #response {
+      margin-top: 30px;
+      font-size: 18px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Ask Chip (3D Demo)</h1>
+
+  <model-viewer src="/static/models/chip.glb"
+                alt="3D Chip"
+                auto-rotate
+                camera-controls
+                ar
+                shadow-intensity="1"
+                interaction-prompt="auto">
+  </model-viewer>
+
+  <div>
+    <input id="question" type="text" placeholder="Ask Chip a question..." />
+    <button id="submit" onclick="askChip()">Submit</button>
+  </div>
+
+  <div id="response"></div>
+  <audio id="chipAudio" controls style="display:none; margin-top:20px;"></audio>
+
+  <script>
+    async function askChip() {
+      const question = document.getElementById('question').value;
+      const responseDiv = document.getElementById('response');
+      const chipAudio = document.getElementById('chipAudio');
+
+      const user = JSON.parse(localStorage.getItem('chip_user') || '{}');
+
+      const res = await fetch('/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, user })
+      });
+
+      const data = await res.json();
+      responseDiv.textContent = "Chip says: " + data.text;
+
+      chipAudio.src = data.audio_url;
+      chipAudio.style.display = 'block';
+      chipAudio.play();
+    }
+  </script>
+</body>
+</html>
