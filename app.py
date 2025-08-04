@@ -1,21 +1,17 @@
 import os
 from flask import Flask, request, jsonify, render_template
 from elevenlabs.client import ElevenLabs
-from elevenlabs import save, Voice, VoiceSettings
 from memory import init_db, get_user, save_user, log_conversation
 import openai
 from uuid import uuid4
 
 app = Flask(__name__)
 
-# Set OpenAI and ElevenLabs keys
+# API KEYS
 openai.api_key = os.getenv("OPENAI_API_KEY")
+eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 
-client = ElevenLabs(
-    api_key=os.getenv("ELEVENLABS_API_KEY")
-)
-
-# Initialize memory
+# DB
 init_db()
 
 def generate_chip_response(user_id, question):
@@ -27,39 +23,34 @@ def generate_chip_response(user_id, question):
     system_prompt = {
         "role": "system",
         "content": (
-            "You are Chip, a virtual Pure Storage solution engineer. You're intelligent, relatable, and from Nebraska. "
-            "Speak plainly, occasionally use dry humor or Nebraska sayings. Stay grounded in technical answers related to "
-            "Pure Storage — like FlashBlade, FlashArray, Portworx, or Fusion."
+            "You are Chip, a virtual Pure Storage solution engineer. "
+            "You are relatable, intelligent, and from Nebraska. "
+            "You speak plainly and occasionally use dry humor and Nebraska sayings. "
+            "Your job is to provide technical answers, but with a humble and real personality. "
+            "Keep answers grounded in Pure Storage expertise."
         ),
     }
 
-    response = openai.chat.completions.create(
+    response = openai.ChatCompletion.create(
         model="gpt-4o",
         messages=[system_prompt] + messages,
         max_tokens=300
     )
 
     answer = response.choices[0].message.content
-
     save_user(user_id, messages)
     log_conversation(user_id, question, answer)
-
     return answer
 
 def generate_audio(response_text):
-    voice = Voice(
-        voice_id=os.getenv("CHIP_VOICE_ID"),
-        settings=VoiceSettings(stability=0.4, similarity_boost=0.8)
-    )
-
-    audio = client.generate(
+    audio = eleven.generate(
         text=response_text,
-        voice=voice,
+        voice=os.getenv("CHIP_VOICE_ID"),
         model="eleven_monolingual_v1"
     )
-
     filename = f"static/audio/{uuid4().hex}.mp3"
-    save(audio, filename)
+    with open(filename, "wb") as f:
+        f.write(audio)
     return filename
 
 @app.route("/")
