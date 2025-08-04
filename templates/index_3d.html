@@ -48,14 +48,15 @@
 <body>
   <h1>Ask Chip (3D Demo)</h1>
 
-  <model-viewer src="/static/models/chip.glb"
-                alt="3D Chip"
-                auto-rotate
-                camera-controls
-                ar
-                shadow-intensity="1"
-                interaction-prompt="auto">
-  </model-viewer>
+<model-viewer
+  src="/static/models/chip.glb"
+  alt="Ask Chip in 3D"
+  auto-rotate
+  camera-controls
+  shadow-intensity="1"
+  style="width: 600px; height: 600px;"
+></model-viewer>
+
 
   <div>
     <input id="question" type="text" placeholder="Ask Chip a question..." />
