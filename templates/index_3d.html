@@ -87,6 +87,8 @@
 
     <form id="chat-form">
       <input type="text" id="question" name="question" placeholder="Ask Chip a question..." required />
+      <input type="hidden" name="role" value="engineer" />
+      <input type="hidden" name="region" value="NA" />
       <button type="submit">Submit</button>
     </form>
 
@@ -97,7 +99,12 @@
   <script>
     document.getElementById("chat-form").addEventListener("submit", async function(event) {
       event.preventDefault();
-      const question = document.getElementById("question").value;
+
+      const formData = new URLSearchParams();
+      formData.append("question", document.getElementById("question").value);
+      formData.append("role", document.querySelector("input[name='role']").value);
+      formData.append("region", document.querySelector("input[name='region']").value);
+
       const responseDiv = document.getElementById("response");
       const audioPlayer = document.getElementById("audio");
 
@@ -107,7 +114,7 @@
       try {
         const response = await fetch("/ask", {
           method: "POST",
-          body: new URLSearchParams({ question })
+          body: formData
         });
 
         const data = await response.json();
