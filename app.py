@@ -1,7 +1,6 @@
 import os
 from flask import Flask, request, jsonify, render_template
-from elevenlabs import Voice, VoiceSettings, set_api_key
-from elevenlabs.client import ElevenLabs
+from elevenlabs import ElevenLabs
 from memory import init_db, get_user, save_user, log_conversation
 import openai
 from uuid import uuid4
@@ -10,16 +9,14 @@ app = Flask(__name__)
 
 # Set API keys
 openai.api_key = os.getenv("OPENAI_API_KEY")
-set_api_key(os.getenv("ELEVENLABS_API_KEY"))
-client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+elevenlabs_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 
-# Init DB
+# Initialize database
 init_db()
 
 def generate_chip_response(user_id, question):
     user = get_user(user_id)
     messages = user["messages"] if user else []
-
     messages.append({"role": "user", "content": question})
 
     system_prompt = {
@@ -28,7 +25,7 @@ def generate_chip_response(user_id, question):
             "You are Chip, a virtual Pure Storage solution engineer. You are relatable, intelligent, and from Nebraska. "
             "You speak plainly and occasionally use dry humor and Nebraska sayings. Your job is to provide technical answers, "
             "but with a humble and real personality. Keep answers grounded in Pure Storage expertise."
-        )
+        ),
     }
 
     response = openai.ChatCompletion.create(
@@ -38,24 +35,22 @@ def generate_chip_response(user_id, question):
     )
 
     answer = response.choices[0].message.content
-
     save_user(user_id, messages)
     log_conversation(user_id, question, answer)
 
     return answer
 
 def generate_audio(response_text):
-    audio = client.generate(
+    audio = elevenlabs_client.generate(
         text=response_text,
-        voice=Voice(
-            voice_id=os.getenv("CHIP_VOICE_ID"),
-            settings=VoiceSettings(stability=0.4, similarity_boost=0.8)
-        )
+        voice=os.getenv("CHIP_VOICE_ID"),
+        model="eleven_monolingual_v1"
     )
 
     filename = f"static/audio/{uuid4().hex}.mp3"
     with open(filename, "wb") as f:
         f.write(audio)
+
     return filename
 
 @app.route("/")
