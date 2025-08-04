@@ -1,95 +1,93 @@
-
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Ask Chip 3D Demo</title>
-  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background-color: #f5f5f5;
-      margin: 0;
-      padding: 20px;
-      text-align: center;
-    }
-    model-viewer {
-      width: 100%;
-      max-width: 600px;
-      height: 500px;
-      margin: 0 auto 30px;
-      border-radius: 8px;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-    }
-    #question {
-      width: 60%;
-      padding: 12px;
-      font-size: 16px;
-    }
-    #submit {
-      padding: 12px 20px;
-      font-size: 16px;
-      background-color: #ff6600;
-      color: white;
-      border: none;
-      cursor: pointer;
-      margin-left: 10px;
-    }
-    #submit:hover {
-      background-color: #e65c00;
-    }
-    #response {
-      margin-top: 30px;
-      font-size: 18px;
-    }
-  </style>
-</head>
-<body>
-  <h1>Ask Chip (3D Demo)</h1>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Ask Chip (3D Demo)</title>
+    <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #f4f4f4;
+        margin: 0;
+        padding: 40px 0;
+        text-align: center;
+      }
 
-<model-viewer
-  src="/static/models/Astronaut.glb"
-  alt="Ask Chip in 3D"
-  auto-rotate
-  camera-controls
-  shadow-intensity="1"
-  exposure="1"
-  environment-image="neutral"
-  style="width: 600px; height: 600px; background-color: #1a1a1a;"
-></model-viewer>
+      h1 {
+        margin-bottom: 30px;
+        font-size: 32px;
+      }
 
+      .container {
+        background-color: #1a1a1a;
+        width: 640px;
+        margin: auto;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      }
 
+      model-viewer {
+        width: 600px;
+        height: 600px;
+        background-color: #1a1a1a;
+        border-radius: 8px;
+      }
 
-  <div>
-    <input id="question" type="text" placeholder="Ask Chip a question..." />
-    <button id="submit" onclick="askChip()">Submit</button>
-  </div>
+      #chat-form {
+        margin-top: 20px;
+        display: flex;
+        justify-content: center;
+        gap: 10px;
+      }
 
-  <div id="response"></div>
-  <audio id="chipAudio" controls style="display:none; margin-top:20px;"></audio>
+      #user-input {
+        width: 70%;
+        padding: 10px;
+        font-size: 16px;
+        border: none;
+        border-radius: 4px;
+      }
 
-  <script>
-    async function askChip() {
-      const question = document.getElementById('question').value;
-      const responseDiv = document.getElementById('response');
-      const chipAudio = document.getElementById('chipAudio');
+      button {
+        padding: 10px 20px;
+        font-size: 16px;
+        background-color: #f26522;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
 
-      const user = JSON.parse(localStorage.getItem('chip_user') || '{}');
+      button:hover {
+        background-color: #d35400;
+      }
+    </style>
+  </head>
 
-      const res = await fetch('/ask', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, user })
-      });
+  <body>
+    <h1>Ask Chip (3D Demo)</h1>
 
-      const data = await res.json();
-      responseDiv.textContent = "Chip says: " + data.text;
+    <div class="container">
+      <model-viewer
+        src="https://modelviewer.dev/shared-assets/models/Astronaut.glb"
+        alt="Ask Chip in 3D"
+        auto-rotate
+        camera-controls
+        shadow-intensity="1"
+        exposure="1"
+        environment-image="neutral"
+      ></model-viewer>
 
-      chipAudio.src = data.audio_url;
-      chipAudio.style.display = 'block';
-      chipAudio.play();
-    }
-  </script>
-</body>
+      <form id="chat-form" method="POST">
+        <input
+          type="text"
+          id="user-input"
+          name="user_input"
+          placeholder="Ask Chip a question..."
+        />
+        <button type="submit">Submit</button>
+      </form>
+    </div>
+  </body>
 </html>
