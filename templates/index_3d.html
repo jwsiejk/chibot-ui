@@ -1,123 +1,142 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Ask Chip (3D)</title>
-  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
   <style>
     body {
+      background-color: #efefef;
       font-family: Arial, sans-serif;
-      background-color: #f0f0f0;
-      padding: 20px;
-      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 0;
+      padding: 0;
     }
-
+    h1 {
+      margin-top: 20px;
+      font-size: 2rem;
+    }
     .container {
-      background-color: #1e1e1e;
+      background-color: #222;
       padding: 20px;
       border-radius: 12px;
-      width: 700px;
+      margin-top: 10px;
+      box-shadow: 0 0 20px rgba(0,0,0,0.3);
+    }
+    canvas {
+      width: 512px;
+      height: 512px;
+      display: block;
       margin: auto;
-      color: white;
     }
-
-    model-viewer {
-      width: 100%;
-      height: 500px;
-      background-color: #1e1e1e;
-    }
-
-    #chat-form {
-      display: flex;
-      justify-content: center;
+    .form-row {
       margin-top: 20px;
+      display: flex;
+      gap: 10px;
     }
-
-    #user-input {
-      width: 70%;
-      padding: 12px;
-      font-size: 16px;
-      border-radius: 6px 0 0 6px;
+    input[type="text"] {
+      flex: 1;
+      padding: 10px;
+      font-size: 1rem;
       border: none;
+      border-radius: 4px;
     }
-
-    #submit-button {
-      padding: 12px 20px;
-      font-size: 16px;
-      background-color: #f26522;
+    button {
+      padding: 10px 20px;
+      background-color: #e75c00;
       color: white;
       border: none;
-      border-radius: 0 6px 6px 0;
+      border-radius: 4px;
       cursor: pointer;
     }
-
-    #chip-response {
-      margin-top: 20px;
-      background-color: #333;
-      padding: 12px;
-      border-radius: 8px;
-      min-height: 40px;
+    .error-message {
+      color: #ff6666;
+      margin-top: 10px;
+      text-align: center;
     }
   </style>
 </head>
 <body>
   <h1>Ask Chip (3D)</h1>
   <div class="container">
-    <model-viewer
-      src="/static/models/chip.glb"
-      alt="Chip in 3D"
-      auto-rotate
-      camera-controls
-      exposure="1"
-      shadow-intensity="1"
-      environment-image="neutral">
-    </model-viewer>
+    <div id="viewer" style="width: 512px; height: 512px;"></div>
 
-    <form id="chat-form">
-      <input type="text" id="user-input" placeholder="Ask Chip a question..." required>
-      <button type="submit" id="submit-button">Submit</button>
+    <form id="ask-form" class="form-row">
+      <input type="text" id="question" placeholder="Ask Chip a question..." required />
+      <button type="submit">Submit</button>
     </form>
 
-    <div id="chip-response"></div>
-    <audio id="chip-audio" controls style="margin-top: 10px; display:none;"></audio>
+    <p id="error-message" class="error-message"></p>
+    <audio id="audio" src="" hidden></audio>
   </div>
 
+  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js';
+    import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/controls/OrbitControls.js';
+    import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/loaders/GLTFLoader.js';
+
+    // Setup
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x222222);
+
+    const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 1000);
+    camera.position.z = 5;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(512, 512);
+    document.getElementById('viewer').appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+
+    const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1.4);
+    scene.add(light);
+
+    const loader = new GLTFLoader();
+    loader.load('/static/models/chip.glb', function (gltf) {
+      const model = gltf.scene;
+      scene.add(model);
+    });
+
+    function animate() {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+
   <script>
-    const form = document.getElementById('chat-form');
-    const input = document.getElementById('user-input');
-    const responseBox = document.getElementById('chip-response');
-    const audioPlayer = document.getElementById('chip-audio');
+    const form = document.getElementById("ask-form");
+    const audio = document.getElementById("audio");
+    const errorMessage = document.getElementById("error-message");
 
-    form.addEventListener('submit', async (e) => {
+    form.addEventListener("submit", async (e) => {
       e.preventDefault();
+      errorMessage.textContent = "";
 
-      const prompt = input.value.trim();
-      if (!prompt) return;
-
-      responseBox.innerHTML = '<em>Chip is thinking...</em>';
-      audioPlayer.style.display = 'none';
+      const question = document.getElementById("question").value;
 
       try {
-        const res = await fetch('/ask', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt })
+        const response = await fetch("/ask", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ question }),
         });
 
-        const data = await res.json();
-        responseBox.textContent = data.response || 'No response received.';
+        const data = await response.json();
 
-        if (data.audio) {
-          audioPlayer.src = data.audio;
-          audioPlayer.style.display = 'block';
-          audioPlayer.play();
+        if (response.ok) {
+          audio.src = data.audio_url;
+          audio.play();
+        } else {
+          errorMessage.textContent = data.error || "Something went wrong.";
         }
       } catch (err) {
-        console.error('Error:', err);
-        responseBox.textContent = 'Something went wrong. Try again later.';
+        errorMessage.textContent = "Request failed. Try again later.";
       }
-
-      input.value = '';
     });
   </script>
 </body>
