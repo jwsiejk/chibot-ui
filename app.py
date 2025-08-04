@@ -1,17 +1,18 @@
 import os
 from flask import Flask, request, jsonify, render_template
-from elevenlabs import generate, save, Voice, VoiceSettings, set_api_key
+from elevenlabs.client import ElevenLabs
 from memory import init_db, get_user, save_user, log_conversation
 import openai
 from uuid import uuid4
 
 app = Flask(__name__)
 
-# Set API keys from environment variables
+# Initialize API clients
 openai.api_key = os.getenv("OPENAI_API_KEY")
-set_api_key(os.getenv("ELEVENLABS_API_KEY"))
+eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+voice_id = os.getenv("CHIP_VOICE_ID")
 
-# Initialize database connection
+# Initialize memory database
 init_db()
 
 def generate_chip_response(user_id, question):
@@ -38,27 +39,24 @@ def generate_chip_response(user_id, question):
     )
 
     answer = response.choices[0].message.content
-
-    # Save user and conversation
     save_user(user_id, messages)
     log_conversation(user_id, question, answer)
-
     return answer
 
 def generate_audio(response_text):
-    voice = Voice(
-        voice_id=os.getenv("CHIP_VOICE_ID"),
-        settings=VoiceSettings(stability=0.4, similarity_boost=0.8)
-    )
+    if not voice_id:
+        raise ValueError("CHIP_VOICE_ID environment variable is missing.")
 
-    audio = generate(
+    audio = eleven.text_to_speech.convert(
+        voice_id=voice_id,
+        model_id="eleven_monolingual_v1",
         text=response_text,
-        voice=voice,
-        model="eleven_monolingual_v1"
+        optimize_streaming_latency=1
     )
 
     filename = f"static/audio/{uuid4().hex}.mp3"
-    save(audio, filename)
+    with open(filename, "wb") as f:
+        f.write(audio)
     return filename
 
 @app.route("/")
@@ -83,7 +81,6 @@ def ask():
         print("✅ Audio saved at:", audio_path)
 
         return jsonify({"response": response_text, "audio": audio_path})
-
     except Exception as e:
         print("🔥 ERROR IN /ask:", str(e))
         return jsonify({"error": "Something went wrong. Try again later."}), 500
