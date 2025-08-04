@@ -33,7 +33,7 @@ def generate_chip_response(user_id, question):
         ),
     }
 
-    response = openai.ChatCompletion.create(
+    response = openai.chat.completions.create(
         model="gpt-4o",
         messages=[system_prompt] + messages,
         max_tokens=300
