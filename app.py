@@ -7,11 +7,11 @@ from uuid import uuid4
 
 app = Flask(__name__)
 
-# API KEYS
+# Set API keys
 openai.api_key = os.getenv("OPENAI_API_KEY")
 eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 
-# DB
+# Initialize database
 init_db()
 
 def generate_chip_response(user_id, question):
@@ -28,7 +28,7 @@ def generate_chip_response(user_id, question):
             "You speak plainly and occasionally use dry humor and Nebraska sayings. "
             "Your job is to provide technical answers, but with a humble and real personality. "
             "Keep answers grounded in Pure Storage expertise."
-        ),
+        )
     }
 
     response = openai.ChatCompletion.create(
