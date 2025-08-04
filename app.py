@@ -1,84 +1,86 @@
 import os
 from flask import Flask, request, jsonify, render_template
-from elevenlabs import generate, save, Voice, VoiceSettings, set_api_key
+from elevenlabs import generate_speech, save, Voice, VoiceSettings, set_api_key
+from memory import init_db, get_user, save_user, log_conversation
 import openai
-from dotenv import load_dotenv
+from uuid import uuid4
 
-load_dotenv()
+app = Flask(__name__)
 
-# Initialize Flask app
-app = Flask(__name__, static_folder="static")
+# Set API keys from environment variables
+openai.api_key = os.getenv("OPENAI_API_KEY")
+set_api_key(os.getenv("ELEVENLABS_API_KEY"))
 
-# Load API keys from environment
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
+# Initialize database connection
+init_db()
 
-# Set ElevenLabs API key
-set_api_key(ELEVEN_API_KEY)
+def generate_chip_response(user_id, question):
+    user = get_user(user_id)
+    messages = user["messages"] if user else []
 
-# Configure OpenAI client using new v1 syntax
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    messages.append({"role": "user", "content": question})
 
-# Chip's personality prompt
-chip_system_prompt = """
-You are Chip Tracewell, a slightly awkward but brilliant virtual solutions engineer from Nebraska. 
-You’re highly technical, humble, occasionally funny without realizing it, and focused on Pure Storage and related technologies. 
-Always answer like Chip, in his voice.
-"""
+    system_prompt = {
+        "role": "system",
+        "content": (
+            "You are Chip, a virtual Pure Storage solution engineer. You are relatable, intelligent, and from Nebraska. "
+            "You speak plainly and occasionally use dry humor and Nebraska sayings. Your job is to provide technical answers, 
+            but with a humble and real personality. Keep answers grounded in Pure Storage expertise."
+        ),
+    }
+
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[system_prompt] + messages,
+        max_tokens=300
+    )
+
+    answer = response.choices[0].message.content
+
+    # Save user and conversation
+    save_user(user_id, messages)
+    log_conversation(user_id, question, answer)
+
+    return answer
+
+def generate_audio(response_text):
+    voice = Voice(
+        voice_id=os.getenv("CHIP_VOICE_ID"),  # Optional voice override
+        settings=VoiceSettings(stability=0.4, similarity_boost=0.8)
+    )
+
+    audio = generate_speech(
+        text=response_text,
+        voice=voice,
+        model="eleven_monolingual_v1"
+    )
+
+    filename = f"static/audio/{uuid4().hex}.mp3"
+    save(audio, filename)
+    return filename
 
 @app.route("/")
-def home():
+def index():
     return render_template("index.html")
 
 @app.route("/3d")
-def home_3d():
-    return render_template("index3d.html")
+def index_3d():
+    return render_template("index_3d.html")
 
 @app.route("/ask", methods=["POST"])
-def ask_chip():
+def ask():
     try:
-        user_question = request.json.get("question")
+        user_id = request.remote_addr or str(uuid4())
+        question = request.form.get("question")
 
-        if not user_question:
-            return jsonify({"error": "Missing question"}), 400
+        response_text = generate_chip_response(user_id, question)
+        audio_path = generate_audio(response_text)
 
-        # Generate Chip's response from OpenAI
-        chat_response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": chip_system_prompt},
-                {"role": "user", "content": user_question}
-            ]
-        )
-
-        chip_reply = chat_response.choices[0].message.content.strip()
-
-        # Generate audio with ElevenLabs
-        audio = generate(
-            text=chip_reply,
-            voice=Voice(
-                voice_id="EXAVITQu4vr4xnSDxMaL",  # Replace with your Chip voice ID
-                settings=VoiceSettings(
-                    stability=0.45,
-                    similarity_boost=0.75,
-                    style=0.35,
-                    use_speaker_boost=True
-                )
-            ),
-            model="eleven_monolingual_v1"
-        )
-
-        output_path = os.path.join("static", "output.wav")
-        save(audio, output_path)
-
-        return jsonify({
-            "answer": chip_reply,
-            "audio_url": "/static/output.wav"
-        })
+        return jsonify({"response": response_text, "audio": audio_path})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+        print("Error:", e)
+        return jsonify({"error": "Something went wrong. Try again later."}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, host="0.0.0.0", port=3000)
