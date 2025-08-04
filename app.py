@@ -16,7 +16,7 @@ voice_id = os.getenv("CHIP_VOICE_ID")
 # Initialize memory database
 init_db()
 
-def generate_chip_response(user_id, question):
+def generate_chip_response(user_id, question, role, region):
     user = get_user(user_id)
     messages = user["messages"] if user else []
 
@@ -40,7 +40,7 @@ def generate_chip_response(user_id, question):
     )
 
     answer = response.choices[0].message.content
-    save_user(user_id, messages)
+    save_user(user_id, messages, role, region)
     log_conversation(user_id, question, answer)
     return answer
 
@@ -73,9 +73,14 @@ def ask():
     try:
         user_id = request.remote_addr or str(uuid4())
         question = request.form.get("question")
-        print("🔹 Question received:", question)
+        role = request.form.get("role", "engineer")
+        region = request.form.get("region", "NA")
 
-        response_text = generate_chip_response(user_id, question)
+        print("🔹 Question received:", question)
+        print("🔸 Role:", role)
+        print("🔸 Region:", region)
+
+        response_text = generate_chip_response(user_id, question, role, region)
         print("✅ OpenAI response:", response_text)
 
         audio_path = generate_audio(response_text)
