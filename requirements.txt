@@ -3,4 +3,4 @@ elevenlabs>=2.8.1
 Flask>=2.2.0
 python-dotenv
 psycopg2-binary
-
+Flask-Session>=0.4.0
