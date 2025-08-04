@@ -4,7 +4,7 @@ import os
 
 app = Flask(__name__)
 
-# Initialize the database
+# Initialize database
 init_db()
 
 @app.route('/')
@@ -16,10 +16,11 @@ def index_3d():
     if request.method == 'POST':
         user_input = request.form.get('user_input')
         print(f"[3D] User asked: {user_input}")
-        # Future: You can route this to Chip’s brain here
+        # Future: Route to Chip's logic
         return redirect(url_for('index_3d'))
     return render_template('index_3d.html')
 
+# Make sure Flask runs with the correct port in production
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(debug=False, host='0.0.0.0', port=port)
+    port = int(os.environ.get('PORT', 5000))  # Render sets PORT
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
