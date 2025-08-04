@@ -87,6 +87,7 @@
 
     <form id="chat-form">
       <input type="text" id="question" name="question" placeholder="Ask Chip a question..." required />
+      <input type="hidden" name="name" value="James" />
       <input type="hidden" name="role" value="engineer" />
       <input type="hidden" name="region" value="NA" />
       <button type="submit">Submit</button>
@@ -102,6 +103,7 @@
 
       const formData = new URLSearchParams();
       formData.append("question", document.getElementById("question").value);
+      formData.append("name", document.querySelector("input[name='name']").value);
       formData.append("role", document.querySelector("input[name='role']").value);
       formData.append("region", document.querySelector("input[name='region']").value);
 
