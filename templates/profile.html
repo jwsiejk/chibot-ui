@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Chip - User Profile</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px auto;
+      width: 500px;
+      background-color: #f3f3f3;
+      padding: 20px;
+      border-radius: 8px;
+    }
+    h2 {
+      text-align: center;
+      color: #333;
+    }
+    label {
+      display: block;
+      margin-top: 15px;
+      font-weight: bold;
+    }
+    input {
+      width: 100%;
+      padding: 8px;
+      margin-top: 5px;
+      border-radius: 5px;
+      border: 1px solid #ccc;
+    }
+    button {
+      margin-top: 20px;
+      width: 100%;
+      padding: 10px;
+      background-color: #f26722;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      font-size: 16px;
+    }
+    button:hover {
+      background-color: #d15512;
+    }
+  </style>
+</head>
+<body>
+  <h2>Your Chip Preferences</h2>
+  <form method="POST">
+    <label for="name">Name</label>
+    <input type="text" name="name" value="{{ user.name }}" />
+
+    <label for="role">Role</label>
+    <input type="text" name="role" value="{{ user.role }}" />
+
+    <label for="region">Region</label>
+    <input type="text" name="region" value="{{ user.region }}" />
+
+    <button type="submit">Update Preferences</button>
+  </form>
+</body>
+</html>
