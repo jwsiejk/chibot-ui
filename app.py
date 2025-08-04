@@ -1,10 +1,11 @@
 import os
+import json
+import traceback
 from flask import Flask, request, jsonify, render_template
 from elevenlabs.client import ElevenLabs
 from memory import init_db, get_user, save_user, log_conversation
 import openai
 from uuid import uuid4
-import traceback
 
 app = Flask(__name__)
 
@@ -16,7 +17,7 @@ voice_id = os.getenv("CHIP_VOICE_ID")
 # Initialize memory database
 init_db()
 
-def generate_chip_response(user_id, question, role, region):
+def generate_chip_response(user_id, name, question, role, region):
     user = get_user(user_id)
     messages = user["messages"] if user else []
 
@@ -25,11 +26,11 @@ def generate_chip_response(user_id, question, role, region):
     system_prompt = {
         "role": "system",
         "content": (
-            "You are Chip, a virtual Pure Storage solution engineer. "
-            "You are relatable, intelligent, and from Nebraska. "
-            "You speak plainly and occasionally use dry humor and Nebraska sayings. "
-            "Your job is to provide technical answers, but with a humble and real personality. "
-            "Keep answers grounded in Pure Storage expertise."
+            f"You are Chip, a virtual Pure Storage solution engineer. "
+            f"You are relatable, intelligent, and from Nebraska. "
+            f"You speak plainly and occasionally use dry humor and Nebraska sayings. "
+            f"Your job is to provide technical answers, but with a humble and real personality. "
+            f"Keep answers grounded in Pure Storage expertise. The user's name is {name}."
         ),
     }
 
@@ -40,7 +41,8 @@ def generate_chip_response(user_id, question, role, region):
     )
 
     answer = response.choices[0].message.content
-    save_user(user_id, messages, role, region)
+
+    save_user(user_id, json.dumps(messages), role, region, name)
     log_conversation(user_id, question, answer)
     return answer
 
@@ -73,14 +75,16 @@ def ask():
     try:
         user_id = request.remote_addr or str(uuid4())
         question = request.form.get("question")
+        name = request.form.get("name", "User")
         role = request.form.get("role", "engineer")
         region = request.form.get("region", "NA")
 
         print("🔹 Question received:", question)
+        print("🧑 Name:", name)
         print("🔸 Role:", role)
         print("🔸 Region:", region)
 
-        response_text = generate_chip_response(user_id, question, role, region)
+        response_text = generate_chip_response(user_id, name, question, role, region)
         print("✅ OpenAI response:", response_text)
 
         audio_path = generate_audio(response_text)
