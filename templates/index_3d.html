@@ -2,103 +2,134 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Ask Chip (3D)</title>
-  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
   <style>
     body {
       font-family: Arial, sans-serif;
-      background: #efefef;
-      margin: 0;
-      padding: 0;
-      text-align: center;
+      background-color: #f4f4f4;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
     }
-
     h1 {
-      margin-top: 30px;
+      margin-bottom: 20px;
     }
-
     #container {
-      background: #1c1c1c;
-      width: 600px;
-      margin: 30px auto;
+      background-color: #1e1e1e;
       padding: 20px;
       border-radius: 12px;
-      box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+      width: 800px;
+      max-width: 95%;
     }
-
     model-viewer {
       width: 100%;
       height: 500px;
+      background-color: #1e1e1e;
+      border-radius: 12px;
     }
-
-    form {
+    #form {
       display: flex;
       margin-top: 20px;
     }
-
     input[type="text"] {
       flex: 1;
-      padding: 10px;
-      border-radius: 4px 0 0 4px;
-      border: none;
+      padding: 12px;
       font-size: 16px;
+      border: none;
+      border-radius: 6px 0 0 6px;
     }
-
     button {
-      padding: 10px 20px;
-      border: none;
-      background: #e65c00;
-      color: white;
+      padding: 12px 24px;
       font-size: 16px;
-      border-radius: 0 4px 4px 0;
+      background-color: #f26522;
+      color: white;
+      border: none;
+      border-radius: 0 6px 6px 0;
       cursor: pointer;
     }
-
     #response {
+      margin-top: 15px;
       color: white;
-      margin-top: 20px;
       font-size: 16px;
+      background-color: #333;
+      padding: 12px;
+      border-radius: 6px;
+      display: none;
     }
   </style>
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
 </head>
 <body>
-  <h1>Ask Chip (3D)</h1>
   <div id="container">
-    <model-viewer src="/static/models/astronaut.glb" autoplay camera-controls auto-rotate background-color="#1c1c1c"></model-viewer>
-    <form id="askForm">
-      <input type="text" id="question" name="question" placeholder="Ask Chip a question..." required />
+    <h1 style="color:white;">Ask Chip (3D)</h1>
+
+    <model-viewer 
+      id="chipModel"
+      src="{{ url_for('static', filename='models/astronaut.glb') }}" 
+      alt="3D Chip"
+      auto-rotate
+      camera-controls
+      shadow-intensity="1"
+      exposure="1"
+      ar>
+    </model-viewer>
+
+    <form id="form">
+      <input type="text" id="question" placeholder="Ask Chip a question..." required />
       <button type="submit">Submit</button>
     </form>
+
     <div id="response"></div>
+    <audio id="audio" controls style="margin-top: 15px; width: 100%; display: none;"></audio>
   </div>
 
   <script>
-    const form = document.getElementById("askForm");
-    const responseDiv = document.getElementById("response");
+    const form = document.getElementById("form");
+    const questionInput = document.getElementById("question");
+    const responseBox = document.getElementById("response");
+    const audio = document.getElementById("audio");
 
-    form.onsubmit = async (e) => {
+    form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const question = document.getElementById("question").value;
-      responseDiv.textContent = "Thinking...";
+      const question = questionInput.value.trim();
+      if (!question) return;
+
+      responseBox.style.display = "block";
+      responseBox.textContent = "Thinking...";
 
       const formData = new FormData();
       formData.append("question", question);
 
-      const res = await fetch("/ask", {
-        method: "POST",
-        body: formData
-      });
+      try {
+        const res = await fetch("/ask", {
+          method: "POST",
+          body: formData,
+        });
 
-      const data = await res.json();
+        const data = await res.json();
 
-      if (data.response && data.audio) {
-        responseDiv.textContent = data.response;
-        const audio = new Audio(data.audio);
-        audio.play();
-      } else {
-        responseDiv.textContent = "Something went wrong. Try again later.";
+        if (data.error) {
+          responseBox.textContent = data.error;
+          audio.style.display = "none";
+        } else {
+          responseBox.textContent = data.response;
+          audio.src = data.audio;
+          audio.style.display = "block";
+          audio.play();
+        }
+
+      } catch (err) {
+        responseBox.textContent = "Something went wrong. Try again later.";
+        audio.style.display = "none";
+        console.error(err);
       }
-    };
+
+      questionInput.value = "";
+    });
   </script>
 </body>
 </html>
