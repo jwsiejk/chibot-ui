@@ -1,13 +1,21 @@
 
 import psycopg2
 import os
+from urllib.parse import urlparse
 from datetime import datetime
 
-# Connect to the PostgreSQL database using the environment variable
+# Parse the DATABASE_URL safely
 DB_URL = os.environ.get("DATABASE_URL")
 
 def connect():
-    return psycopg2.connect(DB_URL)
+    result = urlparse(DB_URL)
+    return psycopg2.connect(
+        dbname=result.path[1:],
+        user=result.username,
+        password=result.password,
+        host=result.hostname,
+        port=result.port
+    )
 
 def init_db():
     with connect() as conn:
