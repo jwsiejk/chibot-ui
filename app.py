@@ -4,6 +4,7 @@ from elevenlabs.client import ElevenLabs
 from memory import init_db, get_user, save_user, log_conversation
 import openai
 from uuid import uuid4
+import traceback
 
 app = Flask(__name__)
 
@@ -83,6 +84,7 @@ def ask():
         return jsonify({"response": response_text, "audio": audio_path})
     except Exception as e:
         print("🔥 ERROR IN /ask:", str(e))
+        traceback.print_exc()
         return jsonify({"error": "Something went wrong. Try again later."}), 500
 
 if __name__ == "__main__":
