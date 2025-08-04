@@ -1,3 +1,4 @@
+print("🔧 Initializing database...")
 import psycopg2
 import os
 from urllib.parse import urlparse
