@@ -128,7 +128,9 @@ def profile():
         messages = get_user(user_id)["messages"] if get_user(user_id) else []
         session["name"] = name
         save_user(user_id, json.dumps(messages), role, region, name)
-        return redirect("/profile")
+
+        # ✅ Redirect to /3d with updated query params
+        return redirect(url_for("index_3d", name=name, role=role, region=region))
 
     user = get_user(user_id) or {"name": session.get("name", "User"), "role": "engineer", "region": "NA"}
     return render_template("profile.html", user=user)
