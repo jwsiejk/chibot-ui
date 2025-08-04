@@ -41,10 +41,20 @@
     button:hover {
       background-color: #d15512;
     }
+    .success {
+      text-align: center;
+      color: green;
+      margin-bottom: 10px;
+    }
   </style>
 </head>
 <body>
   <h2>Your Chip Preferences</h2>
+
+  {% if request.args.get("updated") %}
+    <p class="success">Preferences updated!</p>
+  {% endif %}
+
   <form method="POST">
     <label for="name">Name</label>
     <input type="text" name="name" value="{{ user.name }}" />
