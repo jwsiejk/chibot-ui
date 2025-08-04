@@ -1,13 +1,17 @@
 import os
 import json
 import traceback
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, redirect, session, url_for
+from flask_session import Session
 from elevenlabs.client import ElevenLabs
 from memory import init_db, get_user, save_user, log_conversation
 import openai
 from uuid import uuid4
 
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET", "supersecret")
+app.config["SESSION_TYPE"] = "filesystem"
+Session(app)
 
 # Initialize API clients
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -20,7 +24,6 @@ init_db()
 def generate_chip_response(user_id, name, question, role, region):
     user = get_user(user_id)
     messages = user["messages"] if user else []
-
     messages.append({"role": "user", "content": question})
 
     system_prompt = {
@@ -41,7 +44,6 @@ def generate_chip_response(user_id, name, question, role, region):
     )
 
     answer = response.choices[0].message.content
-
     save_user(user_id, json.dumps(messages), role, region, name)
     log_conversation(user_id, question, answer)
     return answer
@@ -74,11 +76,11 @@ def index_3d():
 @app.route("/ask", methods=["POST"])
 def ask():
     try:
-        user_id = request.remote_addr or str(uuid4())
-        question = request.form.get("question")
-        name = request.form.get("name", "User")
+        user_id = session.get("user_id") or request.remote_addr or str(uuid4())
+        name = session.get("name", request.form.get("name", "User"))
         role = request.form.get("role", "engineer")
         region = request.form.get("region", "NA")
+        question = request.form.get("question")
 
         print("🔹 Question received:", question)
         print("🧑 Name:", name)
@@ -86,10 +88,7 @@ def ask():
         print("🔸 Region:", region)
 
         response_text = generate_chip_response(user_id, name, question, role, region)
-        print("✅ OpenAI response:", response_text)
-
         audio_path = generate_audio(response_text)
-        print("✅ Audio saved at:", audio_path)
 
         return jsonify({"response": response_text, "audio": audio_path})
     except Exception as e:
@@ -97,5 +96,39 @@ def ask():
         traceback.print_exc()
         return jsonify({"error": "Something went wrong. Try again later."}), 500
 
-if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=3000)
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        name = request.form.get("name")
+        session["user_id"] = request.remote_addr
+        session["name"] = name
+        return redirect("/profile")
+    return '''
+        <form method="POST">
+            <input name="name" placeholder="Enter your name" required />
+            <button type="submit">Login</button>
+        </form>
+    '''
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+@app.route("/profile", methods=["GET", "POST"])
+def profile():
+    user_id = session.get("user_id") or request.remote_addr
+    if not session.get("name"):
+        return redirect("/login")
+
+    if request.method == "POST":
+        name = request.form.get("name")
+        role = request.form.get("role")
+        region = request.form.get("region")
+        messages = get_user(user_id)["messages"] if get_user(user_id) else []
+        session["name"] = name
+        save_user(user_id, json.dumps(messages), role, region, name)
+        return redirect("/profile")
+
+    user = get_user(user_id) or {"name": session.get("name", "User"), "role": "engineer", "region": "NA"}
+    return render_template("profile.html", user=user)
