@@ -1,5 +1,5 @@
 openai>=1.0.0
-elevenlabs>=1.1.0
+elevenlabs==1.1.0
 Flask>=2.2.0
 python-dotenv
 psycopg2-binary
