@@ -1,3 +1,4 @@
+
 from flask import Flask, request, jsonify, render_template
 from openai import OpenAI
 from elevenlabs import ElevenLabs
@@ -20,6 +21,10 @@ init_db()
 @app.route("/")
 def index():
     return render_template("index.html")
+
+@app.route("/3d")
+def index_3d():
+    return render_template("index_3d.html")
 
 @app.route("/ask", methods=["POST"])
 def ask_chip():
