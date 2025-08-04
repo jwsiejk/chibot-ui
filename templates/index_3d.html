@@ -19,6 +19,7 @@
       text-decoration: none;
       color: #f26722;
       font-size: 14px;
+      margin: 0 10px;
     }
 
     #container {
@@ -80,7 +81,10 @@
 </head>
 <body>
   <h1>Ask Chip (3D)</h1>
-  <p><a href="/profile">View Your Profile</a></p>
+  <p>
+    <a href="/profile">View Your Profile</a> |
+    <a href="/logout">Logout</a>
+  </p>
 
   <div id="container">
     <model-viewer
@@ -106,6 +110,20 @@
   </div>
 
   <script>
+    // Pre-fill fields from URL parameters if available
+    window.addEventListener("DOMContentLoaded", () => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.has("name")) {
+        document.querySelector("input[name='name']").value = params.get("name");
+      }
+      if (params.has("role")) {
+        document.querySelector("input[name='role']").value = params.get("role");
+      }
+      if (params.has("region")) {
+        document.querySelector("input[name='region']").value = params.get("region");
+      }
+    });
+
     document.getElementById("chat-form").addEventListener("submit", async function(event) {
       event.preventDefault();
 
