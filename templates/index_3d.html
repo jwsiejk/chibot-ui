@@ -1,135 +1,94 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Ask Chip (3D)</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background-color: #f4f4f4;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-    }
-    h1 {
-      margin-bottom: 20px;
-    }
-    #container {
-      background-color: #1e1e1e;
-      padding: 20px;
-      border-radius: 12px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-      width: 800px;
-      max-width: 95%;
-    }
-    model-viewer {
-      width: 100%;
-      height: 500px;
-      background-color: #1e1e1e;
-      border-radius: 12px;
-    }
-    #form {
-      display: flex;
-      margin-top: 20px;
-    }
-    input[type="text"] {
-      flex: 1;
-      padding: 12px;
-      font-size: 16px;
-      border: none;
-      border-radius: 6px 0 0 6px;
-    }
-    button {
-      padding: 12px 24px;
-      font-size: 16px;
-      background-color: #f26522;
-      color: white;
-      border: none;
-      border-radius: 0 6px 6px 0;
-      cursor: pointer;
-    }
-    #response {
-      margin-top: 15px;
-      color: white;
-      font-size: 16px;
-      background-color: #333;
-      padding: 12px;
-      border-radius: 6px;
-      display: none;
-    }
-  </style>
-  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+    <meta charset="UTF-8" />
+    <title>Ask Chip (3D)</title>
+    <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f4f4;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2em;
+        }
+        h1 {
+            margin-bottom: 0.5em;
+        }
+        .container {
+            background: #222;
+            padding: 1em;
+            border-radius: 10px;
+            width: 600px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.3);
+        }
+        model-viewer {
+            width: 100%;
+            height: 500px;
+        }
+        form {
+            display: flex;
+            margin-top: 1em;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 0.5em;
+            border: none;
+            border-radius: 5px 0 0 5px;
+        }
+        button {
+            background-color: #f60;
+            border: none;
+            color: white;
+            padding: 0 1em;
+            border-radius: 0 5px 5px 0;
+            cursor: pointer;
+        }
+        #response {
+            color: white;
+            margin-top: 1em;
+        }
+    </style>
 </head>
 <body>
-  <div id="container">
-    <h1 style="color:white;">Ask Chip (3D)</h1>
+    <h1>Ask Chip (3D)</h1>
+    <div class="container">
+        <model-viewer src="/static/models/chip.glb" autoplay camera-controls background-color="#222" exposure="1" shadow-intensity="1"></model-viewer>
+        <form id="chatForm">
+            <input type="text" name="question" id="question" placeholder="Ask Chip a question..." required />
+            <button type="submit">Submit</button>
+        </form>
+        <div id="response"></div>
+    </div>
+    <script>
+        document.getElementById("chatForm").addEventListener("submit", async function(e) {
+            e.preventDefault();
+            const question = document.getElementById("question").value;
+            const formData = new FormData();
+            formData.append("question", question);
+            
+            const resDiv = document.getElementById("response");
+            resDiv.textContent = "Thinking...";
 
-    <model-viewer 
-      id="chipModel"
-      src="{{ url_for('static', filename='models/astronaut.glb') }}" 
-      alt="3D Chip"
-      auto-rotate
-      camera-controls
-      shadow-intensity="1"
-      exposure="1"
-      ar>
-    </model-viewer>
+            try {
+                const response = await fetch("/ask", {
+                    method: "POST",
+                    body: formData
+                });
 
-    <form id="form">
-      <input type="text" id="question" placeholder="Ask Chip a question..." required />
-      <button type="submit">Submit</button>
-    </form>
-
-    <div id="response"></div>
-    <audio id="audio" controls style="margin-top: 15px; width: 100%; display: none;"></audio>
-  </div>
-
-  <script>
-    const form = document.getElementById("form");
-    const questionInput = document.getElementById("question");
-    const responseBox = document.getElementById("response");
-    const audio = document.getElementById("audio");
-
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const question = questionInput.value.trim();
-      if (!question) return;
-
-      responseBox.style.display = "block";
-      responseBox.textContent = "Thinking...";
-
-      const formData = new FormData();
-      formData.append("question", question);
-
-      try {
-        const res = await fetch("/ask", {
-          method: "POST",
-          body: formData,
+                const data = await response.json();
+                if (data.error) {
+                    resDiv.textContent = data.error;
+                } else {
+                    resDiv.textContent = data.response;
+                    const audio = new Audio(data.audio);
+                    audio.play();
+                }
+            } catch (err) {
+                resDiv.textContent = "Error talking to Chip.";
+            }
         });
-
-        const data = await res.json();
-
-        if (data.error) {
-          responseBox.textContent = data.error;
-          audio.style.display = "none";
-        } else {
-          responseBox.textContent = data.response;
-          audio.src = data.audio;
-          audio.style.display = "block";
-          audio.play();
-        }
-
-      } catch (err) {
-        responseBox.textContent = "Something went wrong. Try again later.";
-        audio.style.display = "none";
-        console.error(err);
-      }
-
-      questionInput.value = "";
-    });
-  </script>
+    </script>
 </body>
 </html>
