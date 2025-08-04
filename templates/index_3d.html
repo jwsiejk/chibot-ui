@@ -1,141 +1,125 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta charset="UTF-8">
   <title>Ask Chip (3D)</title>
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
   <style>
     body {
-      background-color: #efefef;
-      font-family: Arial, sans-serif;
+      font-family: sans-serif;
+      background: #f3f3f3;
+      margin: 0;
       display: flex;
       flex-direction: column;
       align-items: center;
-      margin: 0;
-      padding: 0;
     }
+
     h1 {
-      margin-top: 20px;
+      margin-top: 30px;
       font-size: 2rem;
     }
+
     .container {
-      background-color: #222;
+      background: #1e1e1e;
       padding: 20px;
       border-radius: 12px;
-      margin-top: 10px;
-      box-shadow: 0 0 20px rgba(0,0,0,0.3);
-    }
-    canvas {
-      width: 512px;
-      height: 512px;
-      display: block;
-      margin: auto;
-    }
-    .form-row {
-      margin-top: 20px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.2);
       display: flex;
-      gap: 10px;
+      flex-direction: column;
+      align-items: center;
+      width: 90%;
+      max-width: 600px;
     }
+
+    model-viewer {
+      width: 100%;
+      height: 500px;
+      background: #1e1e1e;
+      border-radius: 12px;
+    }
+
+    form {
+      display: flex;
+      width: 100%;
+      margin-top: 15px;
+    }
+
     input[type="text"] {
-      flex: 1;
-      padding: 10px;
+      flex-grow: 1;
+      padding: 12px;
       font-size: 1rem;
       border: none;
-      border-radius: 4px;
+      border-radius: 6px 0 0 6px;
     }
+
     button {
-      padding: 10px 20px;
-      background-color: #e75c00;
-      color: white;
+      padding: 12px 20px;
+      background-color: #f26c21;
       border: none;
-      border-radius: 4px;
+      border-radius: 0 6px 6px 0;
+      color: white;
+      font-weight: bold;
       cursor: pointer;
     }
-    .error-message {
-      color: #ff6666;
+
+    .output {
+      margin-top: 20px;
+      color: white;
+      text-align: left;
+      width: 100%;
+    }
+
+    audio {
       margin-top: 10px;
-      text-align: center;
+      width: 100%;
     }
   </style>
 </head>
 <body>
   <h1>Ask Chip (3D)</h1>
-  <div class="container">
-    <div id="viewer" style="width: 512px; height: 512px;"></div>
 
-    <form id="ask-form" class="form-row">
-      <input type="text" id="question" placeholder="Ask Chip a question..." required />
+  <div class="container">
+    <model-viewer src="/static/models/astronaut.glb" alt="3D Chip"
+      auto-rotate camera-controls disable-zoom></model-viewer>
+
+    <form id="ask-form">
+      <input type="text" id="question" name="question" placeholder="Ask Chip a question..." required />
       <button type="submit">Submit</button>
     </form>
 
-    <p id="error-message" class="error-message"></p>
-    <audio id="audio" src="" hidden></audio>
+    <div class="output" id="output"></div>
+    <audio id="audio" controls style="display:none;"></audio>
   </div>
-
-  <script type="module">
-    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js';
-    import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/controls/OrbitControls.js';
-    import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/loaders/GLTFLoader.js';
-
-    // Setup
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x222222);
-
-    const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 1000);
-    camera.position.z = 5;
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(512, 512);
-    document.getElementById('viewer').appendChild(renderer.domElement);
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-
-    const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1.4);
-    scene.add(light);
-
-    const loader = new GLTFLoader();
-    loader.load('/static/models/chip.glb', function (gltf) {
-      const model = gltf.scene;
-      scene.add(model);
-    });
-
-    function animate() {
-      requestAnimationFrame(animate);
-      renderer.render(scene, camera);
-    }
-    animate();
-  </script>
 
   <script>
     const form = document.getElementById("ask-form");
+    const output = document.getElementById("output");
     const audio = document.getElementById("audio");
-    const errorMessage = document.getElementById("error-message");
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      errorMessage.textContent = "";
-
       const question = document.getElementById("question").value;
+      output.innerText = "Thinking...";
+      audio.style.display = "none";
 
       try {
         const response = await fetch("/ask", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ question }),
+          body: new URLSearchParams({ question })
         });
 
         const data = await response.json();
 
-        if (response.ok) {
-          audio.src = data.audio_url;
-          audio.play();
+        if (data.error) {
+          output.innerText = data.error;
         } else {
-          errorMessage.textContent = data.error || "Something went wrong.";
+          output.innerText = data.response;
+          audio.src = "/" + data.audio;
+          audio.style.display = "block";
+          audio.play();
         }
       } catch (err) {
-        errorMessage.textContent = "Request failed. Try again later.";
+        output.innerText = "Something went wrong. Try again later.";
       }
     });
   </script>
