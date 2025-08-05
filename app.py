@@ -75,10 +75,20 @@ def generate_audio(response_text):
 
 @app.route("/")
 def index():
+    user_id = session.get("user_id") or request.remote_addr
+    name = session.get("name")
+    user = get_user(user_id)
+    if not name or not user or not user.get("role") or not user.get("region"):
+        return redirect("/login")
     return render_template("index.html")
 
 @app.route("/3d")
 def index_3d():
+    user_id = session.get("user_id") or request.remote_addr
+    name = session.get("name")
+    user = get_user(user_id)
+    if not name or not user or not user.get("role") or not user.get("region"):
+        return redirect("/login")
     return render_template("index_3d.html")
 
 @app.route("/ask", methods=["POST"])
@@ -112,6 +122,7 @@ def login():
         session["name"] = name
         return redirect("/profile")
     return '''
+        <h3>Please complete your profile to continue.</h3>
         <form method="POST">
             <input name="name" placeholder="Enter your name" required />
             <button type="submit">Login</button>
@@ -136,9 +147,10 @@ def profile():
         messages = get_user(user_id)["messages"] if get_user(user_id) else []
         session["name"] = name
         save_user(user_id, json.dumps(messages), role, region, name)
-
-        # ✅ Redirect to /3d with saved values in query string
-        return redirect(url_for("index_3d", name=name, role=role, region=region))
+        return redirect("/3d")
 
     user = get_user(user_id) or {"name": session.get("name", "User"), "role": "engineer", "region": "NA"}
     return render_template("profile.html", user=user)
+
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=3000)
