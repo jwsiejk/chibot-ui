@@ -70,7 +70,7 @@ def index_3d():
     user = get_user(user_id)
     if not name or not user or not user.get("role") or not user.get("region"):
         return redirect("/login")
-    return render_template("index_3d_v3.html")
+    return render_template("index_3d_v4.html")
 
 @app.route("/ask", methods=["POST"])
 def ask():
