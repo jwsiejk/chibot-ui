@@ -127,7 +127,7 @@ def ask_chip():
             audio_path = f"/tmp/{uuid4().hex}.webm"
             audio_file.save(audio_path)
 
-           client = openai.OpenAI()
+client = openai.OpenAI()
 
 with open(audio_path, "rb") as f:
     transcript = client.audio.transcriptions.create(
