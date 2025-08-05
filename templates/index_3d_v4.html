@@ -265,6 +265,7 @@ function autoStartListening() {
         recorder.onstop = async () => {
           updateStatus("📤 Uploading audio to Chip...");
           const blob = new Blob(chunks, { type: 'audio/webm' });
+          console.log('[Chip] Audio blob size:', blob.size, 'bytes');
           const formData = new FormData();
           formData.append("audio", blob, "input.webm");
 
