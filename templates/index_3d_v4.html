@@ -165,7 +165,6 @@
       if (data.audio && skinnedMesh) {
         playVisemeAudio(data.audio, [], "👍 I'm ready when you are.");
         recordBtn.classList.add("blinking");
-        recordBtn.classList.add("blinking");
       }
     }
 
@@ -263,6 +262,7 @@
             playVisemeAudio(audioUrl, visemes);
           } else {
             updateStatus("⚠️ Failed to get audio or visemes.");
+            recordBtn.classList.add("blinking");
             recordBtn.classList.add("blinking");
           }
         };
