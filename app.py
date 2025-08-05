@@ -89,12 +89,19 @@ def ask():
             role = request.form.get("role", "engineer")
             region = request.form.get("region", "NA")
 
+        if not question:
+            return jsonify({"error": "Missing question."}), 400
+
         print("🔹 Question received:", question)
         print("🧑 Name:", name)
         print("🔸 Role:", role)
         print("🔸 Region:", region)
 
-        response_text = generate_chip_response(user_id, name, question, role, region)
+        # ✅ This part handles the greeting override
+        if request.is_json and data.get("greeting"):
+            response_text = question
+        else:
+            response_text = generate_chip_response(user_id, name, question, role, region)
 
         voice_settings = {"speed": 0.9}
         audio = eleven.text_to_speech.convert(
