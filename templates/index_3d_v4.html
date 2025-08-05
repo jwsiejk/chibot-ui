@@ -8,7 +8,14 @@
   <meta content="no-cache, no-store, must-revalidate" http-equiv="Cache-Control">
    <script>
     console.log("🧪 Loaded index_3d.html vDEBUG-9");
-   </script>
+   
+function autoStartListening() {
+  setTimeout(() => {
+    const btn = document.getElementById("recordBtn");
+    if (btn) btn.click();
+  }, 500); // short delay after greeting
+}
+</script>
    <style>
     body {
       margin: 0;
@@ -231,6 +238,7 @@
       updateStatus("✅ Chip model loaded. Initializing...");
       renderOnce();
       await greetUser();
+      autoStartListening();
     });
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -320,6 +328,13 @@ caption.style.visibility = "visible"; caption.style.display = "block";
         console.error(err);
       }
     });
-  </script>
+  
+function autoStartListening() {
+  setTimeout(() => {
+    const btn = document.getElementById("recordBtn");
+    if (btn) btn.click();
+  }, 500); // short delay after greeting
+}
+</script>
  </body>
 </html>
