@@ -5,7 +5,7 @@
   <title>Ask Chip (3D)</title>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <script>
-    console.log("🧪 Loaded index_3d.html vDEBUG-7");
+    console.log("🧪 Loaded index_3d.html vDEBUG-8");
   </script>
   <style>
     body {
@@ -34,21 +34,28 @@
       font-weight: bold;
       box-shadow: 0 0 10px rgba(255, 165, 0, 0.4);
     }
+    .blinking {
+      animation: blink 1s infinite;
+    }
+    @keyframes blink {
+      0%, 100% { background-color: orange; }
+      50% { background-color: #ffaa00; }
+    }
     #caption {
-  position: absolute;
-  top: 50%;
-  left: 20px;
-  transform: translateY(-50%);
-  font-size: 12px;
-  color: #cccccc;
-  background: rgba(0, 0, 0, 0.4);
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-style: italic;
-  pointer-events: none;
-  max-width: 300px;
-  z-index: 15;
-}
+      position: absolute;
+      top: 50%;
+      left: 20px;
+      transform: translateY(-50%);
+      font-size: 12px;
+      color: #cccccc;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-style: italic;
+      pointer-events: none;
+      max-width: 300px;
+      z-index: 15;
+    }
     #status {
       position: absolute;
       top: 20px;
@@ -75,7 +82,8 @@
 <body>
   <button id="recordBtn">🎤 Ask Chip</button>
   <div id="status">Ready</div>
-  <div id="version-tag">Ask Chip UI vDEBUG-7</div>
+  <div id="version-tag">Ask Chip UI vDEBUG-8</div>
+  <div id="caption"></div>
 
   <script type="module">
     import * as THREE from 'https://esm.sh/three@0.155.0';
@@ -87,6 +95,7 @@
     const canvas = document.createElement('canvas');
     document.body.appendChild(canvas);
     const statusDiv = document.getElementById("status");
+    const recordBtn = document.getElementById("recordBtn");
 
     function updateStatus(message) {
       statusDiv.textContent = message;
@@ -99,6 +108,7 @@
 
     function playVisemeAudio(audioUrl, visemes, customDoneMessage = "✅ Done. Ask another question.") {
       updateStatus("🔊 Playing Chip's response...");
+      recordBtn.classList.remove("blinking");
       const audio = new Audio(audioUrl);
       audio.play();
 
@@ -126,10 +136,11 @@
     async function greetUser() {
       updateStatus("👋 Chip is saying hi...");
 
+      const name = sessionStorage.getItem("chip_name") || "there";
       const greeting = {
-  question: `Hey ${name}! I'm Chip. What can I help you with today?`,
-  name: name,
-  greeting: true
+        question: `Hey ${name}! I'm Chip. What can I help you with today?`,
+        name: name,
+        greeting: true
       };
 
       const response = await fetch("/ask", {
@@ -141,6 +152,7 @@
       const data = await response.json();
       if (data.audio && skinnedMesh) {
         playVisemeAudio(data.audio, [], "👍 I'm ready when you are.");
+        recordBtn.classList.add("blinking");
       }
     }
 
@@ -182,8 +194,9 @@
       renderOnce();
     });
 
-    document.getElementById("recordBtn").addEventListener("click", async () => {
+    recordBtn.addEventListener("click", async () => {
       updateStatus("🎙️ Listening for 5 seconds...");
+      recordBtn.classList.remove("blinking");
 
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -223,9 +236,9 @@
                 if (data.viseme_timestamps) visemes = data.viseme_timestamps;
                 if (data.audio) audioUrl = data.audio;
                 if (data.transcript) {
-  updateStatus("🗣️ You said: " + data.transcript);
-  document.getElementById("caption").textContent = data.transcript;
-};
+                  updateStatus("🗣️ You said: " + data.transcript);
+                  document.getElementById("caption").textContent = data.transcript;
+                }
                 if (data.response) console.log("🤖 Chip replied:", data.response);
               }
             }
@@ -246,8 +259,5 @@
       }
     });
   </script>
-
-  <div id="caption"></div>
-  
 </body>
 </html>
