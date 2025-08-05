@@ -35,14 +35,17 @@
       cursor: pointer;
       font-weight: bold;
       box-shadow: 0 0 10px rgba(255, 165, 0, 0.4);
+    
     }
-    .blinking {
-      animation: blink 1s infinite;
+    #askButton.blinking {
+      animation: blink-animation 1s steps(2, start) infinite;
+  }
+
+  @keyframes blink-animation {
+    to {
+      visibility: hidden;
     }
-    @keyframes blink {
-      0%, 100% { background-color: orange; }
-      50% { background-color: #ffaa00; }
-    }
+  }
     #caption {
       position: absolute;
       top: 50%;
