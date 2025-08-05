@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <title>Chip 3D with Viseme Animation</title>
   <style>
-    body { margin: 0; background-color: #1e1e1e; }
+    body { margin: 0; background-color: #1e1e1e; color: white; font-family: sans-serif; }
     canvas { display: block; }
     #recordBtn {
       position: absolute;
@@ -19,10 +19,24 @@
       border-radius: 8px;
       cursor: pointer;
     }
+    #status {
+      position: absolute;
+      top: 70px;
+      left: 20px;
+      z-index: 10;
+      background: rgba(0,0,0,0.7);
+      padding: 10px 15px;
+      border-radius: 8px;
+      font-size: 14px;
+      color: lightgreen;
+      max-width: 300px;
+    }
   </style>
 </head>
 <body>
   <button id="recordBtn">🎤 Ask Chip</button>
+  <div id="status">Ready</div>
+
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js';
     import { GLTFLoader } from 'https://unpkg.com/three@0.158.0/examples/jsm/loaders/GLTFLoader.js';
@@ -32,6 +46,12 @@
     let model, visemeMap, skinnedMesh;
     const canvas = document.createElement('canvas');
     document.body.appendChild(canvas);
+    const statusDiv = document.getElementById("status");
+
+    function updateStatus(message) {
+      statusDiv.textContent = message;
+      console.log("[Chip]", message);
+    }
 
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
@@ -59,11 +79,13 @@
 
       skinnedMesh = model.getObjectByProperty('type', 'SkinnedMesh');
       if (!skinnedMesh || !skinnedMesh.morphTargetDictionary) {
+        updateStatus("No viseme morph targets found.");
         console.warn('No morph targets found on SkinnedMesh.');
         return;
       }
 
       visemeMap = skinnedMesh.morphTargetDictionary;
+      updateStatus("Chip model loaded.");
     });
 
     window.addEventListener('resize', () => {
@@ -79,69 +101,86 @@
 
     animate();
 
-    // 🔴 Record + stream to /ask-chip
+    // 🎤 Mic input and viseme playback
     document.getElementById("recordBtn").addEventListener("click", async () => {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      const chunks = [];
+      updateStatus("🎙️ Listening...");
+      console.log("🔊 Starting mic access");
 
-      recorder.ondataavailable = e => chunks.push(e.data);
-      recorder.onstop = async () => {
-        const blob = new Blob(chunks, { type: 'audio/webm' });
-        const formData = new FormData();
-        formData.append("audio", blob, "input.webm");
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const recorder = new MediaRecorder(stream);
+        const chunks = [];
 
-        const response = await fetch("/ask-chip", { method: "POST", body: formData });
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
+        recorder.ondataavailable = e => chunks.push(e.data);
 
-        let visemes = [];
-        let audioUrl = "";
+        recorder.onstop = async () => {
+          updateStatus("⏳ Sending audio to Chip...");
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          const formData = new FormData();
+          formData.append("audio", blob, "input.webm");
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+          const response = await fetch("/ask-chip", { method: "POST", body: formData });
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
 
-          const text = decoder.decode(value);
-          const lines = text.split("--frame").filter(Boolean);
+          let visemes = [];
+          let audioUrl = "";
 
-          for (const line of lines) {
-            const [, headers, content] = line.split(/\r?\n\r?\n/);
-            if (!headers || !content) continue;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-            const contentType = headers.match(/Content-Type: (.+)/)?.[1];
-            if (contentType === "application/json") {
-              const data = JSON.parse(content);
-              if (data.viseme_timestamps) visemes = data.viseme_timestamps;
-              if (data.audio) audioUrl = data.audio;
+            const text = decoder.decode(value);
+            const lines = text.split("--frame").filter(Boolean);
+
+            for (const line of lines) {
+              const [, headers, content] = line.split(/\r?\n\r?\n/);
+              if (!headers || !content) continue;
+
+              const contentType = headers.match(/Content-Type: (.+)/)?.[1];
+              if (contentType === "application/json") {
+                const data = JSON.parse(content);
+                if (data.viseme_timestamps) visemes = data.viseme_timestamps;
+                if (data.audio) audioUrl = data.audio;
+                if (data.transcript) console.log("🗣️ You said:", data.transcript);
+                if (data.response) console.log("🤖 Chip replied:", data.response);
+              }
             }
           }
-        }
 
-        if (audioUrl && visemes.length && skinnedMesh) {
-          const audio = new Audio(audioUrl);
-          audio.play();
+          if (audioUrl && visemes.length && skinnedMesh) {
+            updateStatus("▶️ Playing response...");
+            const audio = new Audio(audioUrl);
+            audio.play();
 
-          visemes.forEach(({ time, viseme }, i) => {
-            const delay = time * 1000;
-            const targetName = `viseme_${viseme}`;
-            const index = visemeMap[targetName];
-            if (index === undefined) return;
-            setTimeout(() => {
-              skinnedMesh.morphTargetInfluences.fill(0);
-              skinnedMesh.morphTargetInfluences[index] = 1;
-            }, delay);
+            visemes.forEach(({ time, viseme }) => {
+              const delay = time * 1000;
+              const targetName = `viseme_${viseme}`;
+              const index = visemeMap[targetName];
+              if (index === undefined) return;
 
-            // clear after 120ms
-            setTimeout(() => {
-              skinnedMesh.morphTargetInfluences[index] = 0;
-            }, delay + 120);
-          });
-        }
-      };
+              setTimeout(() => {
+                skinnedMesh.morphTargetInfluences.fill(0);
+                skinnedMesh.morphTargetInfluences[index] = 1;
+              }, delay);
 
-      recorder.start();
-      setTimeout(() => recorder.stop(), 5000);
+              setTimeout(() => {
+                skinnedMesh.morphTargetInfluences[index] = 0;
+              }, delay + 120);
+            });
+
+            audio.onended = () => updateStatus("✅ Done. Ask another question.");
+          } else {
+            updateStatus("⚠️ Failed to get audio or visemes.");
+          }
+        };
+
+        recorder.start();
+        setTimeout(() => recorder.stop(), 5000);
+      } catch (err) {
+        updateStatus("❌ Mic access failed.");
+        console.error(err);
+      }
     });
   </script>
 </body>
