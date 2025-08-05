@@ -3,6 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <title>Ask Chip (3D)</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <script>
+    console.log("🧪 Loaded index_3d.html vDEBUG-1");
+  </script>
   <style>
     body { margin: 0; background-color: #1e1e1e; color: white; font-family: sans-serif; }
     canvas { display: block; }
@@ -31,11 +35,19 @@
       color: lightgreen;
       max-width: 300px;
     }
+    #version-tag {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      font-size: 12px;
+      color: #aaa;
+    }
   </style>
 </head>
 <body>
   <button id="recordBtn">🎤 Ask Chip</button>
   <div id="status">Ready</div>
+  <div id="version-tag">Ask Chip UI vDEBUG-1</div>
 
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js';
