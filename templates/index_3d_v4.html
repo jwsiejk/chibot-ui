@@ -294,6 +294,7 @@ function autoStartListening() {
                 if (data.viseme_timestamps) visemes = data.viseme_timestamps;
                 if (data.audio) audioUrl = data.audio;
                 if (data.transcript) {
+                  console.log("[Chip] Transcript received:", data.transcript);
                   updateStatus("🗣️ You said: " + data.transcript);
                   console.log("📝 Caption set:", data.transcript);
                   const caption = document.getElementById("caption");
