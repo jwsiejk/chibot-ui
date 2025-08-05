@@ -157,6 +157,8 @@ function autoStartListening() {
       recordBtn.classList.remove("blinking");
       const audio = new Audio(audioUrl);
       audio.play();
+      audio.onplay = () => console.log("🔊 Audio started");
+      audio.onerror = (e) => console.error("❌ Audio playback error:", e);
 
       visemes.forEach(({ time, viseme }) => {
         const delay = time * 1000;
@@ -300,6 +302,7 @@ function autoStartListening() {
                   const caption = document.getElementById("caption");
 caption.textContent = data.transcript;
 caption.style.visibility = "visible"; caption.style.display = "block";
+                  setTimeout(() => { caption.style.display = "none"; }, 4000);
                 }
                 if (data.response) console.log("🤖 Chip replied:", data.response);
               }
