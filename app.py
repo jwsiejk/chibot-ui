@@ -79,7 +79,7 @@ def index_3d():
     user = get_user(user_id)
     if not name or not user or not user.get("role") or not user.get("region"):
         return redirect("/login")
-    return render_template("index_3d.html")
+    return render_template("index_3d_v3.html")
 
 @app.route("/viseme-test")
 def viseme_test():
