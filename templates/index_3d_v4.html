@@ -111,10 +111,10 @@
     async function greetUser() {
       updateStatus("👋 Chip is saying hi...");
 
-      const name = sessionStorage.getItem("chip_name") || "there";
       const greeting = {
-        question: `Hey ${name}! I'm Chip. What can I help you with today?`,
-        name: name
+  question: `Hey ${name}! I'm Chip. What can I help you with today?`,
+  name: name,
+  greeting: true
       };
 
       const response = await fetch("/ask", {
