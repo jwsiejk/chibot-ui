@@ -127,8 +127,13 @@ def ask_chip():
             audio_path = f"/tmp/{uuid4().hex}.webm"
             audio_file.save(audio_path)
 
-            with open(audio_path, "rb") as f:
-                transcript = openai.Audio.transcribe("whisper-1", f)["text"]
+           client = openai.OpenAI()
+
+with open(audio_path, "rb") as f:
+    transcript = client.audio.transcriptions.create(
+        model="whisper-1",
+        file=f
+    ).text
 
             yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"transcript": transcript}).encode() + b"\r\n"
 
