@@ -38,13 +38,12 @@
     
     }
     #recordBtn.blinking {
-      animation: blink-animation 1s steps(2, start) infinite;
+      animation: blink-animation 2s ease-in-out infinite;
   }
 
   @keyframes blink-animation {
-    to {
-      visibility: hidden;
-    }
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
   }
     #caption {
       position: absolute;
@@ -259,7 +258,7 @@
                   console.log("📝 Caption set:", data.transcript);
                   const caption = document.getElementById("caption");
 caption.textContent = data.transcript;
-caption.style.visibility = "visible";
+caption.style.visibility = "visible"; caption.style.display = "block";
                 }
                 if (data.response) console.log("🤖 Chip replied:", data.response);
               }
