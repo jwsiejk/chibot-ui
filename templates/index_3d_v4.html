@@ -188,5 +188,13 @@
       }
     });
   </script>
+
+    <script>
+    const scripts = Array.from(document.getElementsByTagName("script")).map(s => s.src || "[inline]");
+    console.log("Scripts loaded on page:", scripts);
+  </script>
+</body>
+</html>
+
 </body>
 </html>
