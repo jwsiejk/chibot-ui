@@ -76,10 +76,18 @@ def index_3d():
 def ask():
     try:
         user_id = session.get("user_id") or request.remote_addr or str(uuid4())
-        name = session.get("name", request.form.get("name", "User"))
-        role = request.form.get("role", "engineer")
-        region = request.form.get("region", "NA")
-        question = request.form.get("question")
+
+        if request.is_json:
+            data = request.get_json()
+            question = data.get("question")
+            name = session.get("name", data.get("name", "User"))
+            role = data.get("role", "engineer")
+            region = data.get("region", "NA")
+        else:
+            question = request.form.get("question")
+            name = session.get("name", request.form.get("name", "User"))
+            role = request.form.get("role", "engineer")
+            region = request.form.get("region", "NA")
 
         print("🔹 Question received:", question)
         print("🧑 Name:", name)
