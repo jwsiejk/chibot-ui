@@ -144,18 +144,22 @@ def ask_chip():
 
             client = openai.OpenAI()
 
+            print("🎧 Audio file saved to:", audio_path)
             with open(audio_path, "rb") as f:
                 transcript = client.audio.transcriptions.create(
                     model="whisper-1",
                     file=f
                 ).text
+            print("📝 Transcript:", transcript)
 
             yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"transcript": transcript}).encode() + b"\r\n"
 
             response_text = generate_chip_response(user_id, name, transcript, role, region)
+            print("🤖 GPT response:", response_text)
             yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"response": response_text}).encode() + b"\r\n"
 
             voice_settings = {"speed": 0.9}
+            print("🗣️ Sending text to ElevenLabs:", response_text)
             audio_stream = eleven.text_to_speech.convert(
                 voice_id=voice_id,
                 model_id="eleven_monolingual_v1",
