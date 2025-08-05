@@ -5,7 +5,7 @@
   <title>Ask Chip (3D)</title>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <script>
-    console.log("🧪 Loaded index_3d.html vDEBUG-8");
+    console.log("🧪 Loaded index_3d.html vDEBUG-9");
   </script>
   <style>
     body {
@@ -82,7 +82,7 @@
 <body>
   <button id="recordBtn">🎤 Ask Chip</button>
   <div id="status">Ready</div>
-  <div id="version-tag">Ask Chip UI vDEBUG-8</div>
+  <div id="version-tag">Ask Chip UI vDEBUG-9</div>
   <div id="caption"></div>
 
   <script type="module">
@@ -130,7 +130,10 @@
         }, delay + 120);
       });
 
-      audio.onended = () => updateStatus(customDoneMessage);
+      audio.onended = () => {
+        updateStatus(customDoneMessage);
+        recordBtn.classList.add("blinking");
+      };
     }
 
     async function greetUser() {
