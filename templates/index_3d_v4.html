@@ -34,6 +34,21 @@
       font-weight: bold;
       box-shadow: 0 0 10px rgba(255, 165, 0, 0.4);
     }
+    #caption {
+  position: absolute;
+  top: 50%;
+  left: 20px;
+  transform: translateY(-50%);
+  font-size: 12px;
+  color: #cccccc;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-style: italic;
+  pointer-events: none;
+  max-width: 300px;
+  z-index: 15;
+}
     #status {
       position: absolute;
       top: 20px;
@@ -207,7 +222,10 @@
                 const data = JSON.parse(content);
                 if (data.viseme_timestamps) visemes = data.viseme_timestamps;
                 if (data.audio) audioUrl = data.audio;
-                if (data.transcript) updateStatus("🗣️ You said: " + data.transcript);
+                if (data.transcript) {
+  updateStatus("🗣️ You said: " + data.transcript);
+  document.getElementById("caption").textContent = data.transcript;
+};
                 if (data.response) console.log("🤖 Chip replied:", data.response);
               }
             }
@@ -228,5 +246,8 @@
       }
     });
   </script>
+
+  <div id="caption"></div>
+  
 </body>
 </html>
