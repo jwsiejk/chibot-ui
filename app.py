@@ -118,14 +118,14 @@ def ask_chip():
             role = "engineer"
             region = "NA"
 
-            if "audio" not in request.files:
-                yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"error": "No audio file uploaded."}).encode() + b"\r\n"
-                return
+           if "audio" not in request.files:
+    yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"error": "No audio file uploaded."}).encode() + b"\r\n"
+    return
 
-            audio_file = request.files["audio"]
-            audio_file.filename = secure_filename(audio_file.filename)
-            audio_path = f"/tmp/{uuid4().hex}.webm"
-            audio_file.save(audio_path)
+audio_file = request.files["audio"]
+audio_file.filename = secure_filename(audio_file.filename)
+audio_path = f"/tmp/{uuid4().hex}.webm"
+audio_file.save(audio_path)
 
 client = openai.OpenAI()
 
@@ -135,7 +135,7 @@ with open(audio_path, "rb") as f:
         file=f
     ).text
 
-            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"transcript": transcript}).encode() + b"\r\n"
+yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"transcript": transcript}).encode() + b"\r\n"
 
             response_text = generate_chip_response(user_id, name, transcript, role, region)
             yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"response": response_text}).encode() + b"\r\n"
