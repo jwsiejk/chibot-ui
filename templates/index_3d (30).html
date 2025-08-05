@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Ask Chip (3D)</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <script>
+    console.log("🧪 Loaded index_3d.html vDEBUG-3");
+  </script>
+  <style>
+    body { margin: 0; background-color: #1e1e1e; color: white; font-family: sans-serif; }
+    canvas { display: block; }
+    #recordBtn {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 10;
+      padding: 10px 20px;
+      font-size: 16px;
+      background-color: orange;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    #status {
+      position: absolute;
+      top: 70px;
+      left: 20px;
+      z-index: 10;
+      background: rgba(0,0,0,0.7);
+      padding: 10px 15px;
+      border-radius: 8px;
+      font-size: 14px;
+      color: lightgreen;
+      max-width: 300px;
+    }
+    #version-tag {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      font-size: 12px;
+      color: #aaa;
+    }
+  </style>
+</head>
+<body>
+  <button id="recordBtn">🎤 Ask Chip</button>
+  <div id="status">Ready</div>
+  <div id="version-tag">Ask Chip UI vDEBUG-3</div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.155.0/build/three.module.js';
+    import { GLTFLoader } from 'https://unpkg.com/three@0.155.0/examples/jsm/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.155.0/examples/jsm/controls/OrbitControls.js';
+
+    let scene, camera, renderer;
+    let model, visemeMap, skinnedMesh;
+    const canvas = document.createElement('canvas');
+    document.body.appendChild(canvas);
+    const statusDiv = document.getElementById("status");
+
+    function updateStatus(message) {
+      statusDiv.textContent = message;
+      console.log("[Chip]", message);
+    }
+
+    function renderOnce() {
+      renderer.render(scene, camera);
+    }
+
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 1.5, 2.5);
+
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(1);
+    renderer.setClearColor(0x1e1e1e);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 1));
+
+    const loader = new GLTFLoader();
+    loader.load('/static/models/chip.glb', gltf => {
+      model = gltf.scene;
+      model.scale.set(1, 1, 1);
+      scene.add(model);
+
+      skinnedMesh = model.getObjectByProperty('type', 'SkinnedMesh');
+      if (!skinnedMesh || !skinnedMesh.morphTargetDictionary) {
+        updateStatus("No viseme morph targets found.");
+        return;
+      }
+
+      visemeMap = skinnedMesh.morphTargetDictionary;
+      updateStatus("Chip model loaded.");
+      renderOnce();
+    });
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderOnce();
+    });
+
+    document.getElementById("recordBtn").addEventListener("click", async () => {
+      updateStatus("🎙️ Listening...");
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const recorder = new MediaRecorder(stream);
+        const chunks = [];
+
+        recorder.ondataavailable = e => chunks.push(e.data);
+
+        recorder.onstop = async () => {
+          updateStatus("⏳ Sending audio to Chip...");
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          const formData = new FormData();
+          formData.append("audio", blob, "input.webm");
+
+          const response = await fetch("/ask-chip", { method: "POST", body: formData });
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+
+          let visemes = [];
+          let audioUrl = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const text = decoder.decode(value);
+            const lines = text.split("--frame").filter(Boolean);
+
+            for (const line of lines) {
+              const [, headers, content] = line.split(/\r?\n\r?\n/);
+              if (!headers || !content) continue;
+
+              const contentType = headers.match(/Content-Type: (.+)/)?.[1];
+              if (contentType === "application/json") {
+                const data = JSON.parse(content);
+                if (data.viseme_timestamps) visemes = data.viseme_timestamps;
+                if (data.audio) audioUrl = data.audio;
+                if (data.transcript) console.log("🗣️ You said:", data.transcript);
+                if (data.response) console.log("🤖 Chip replied:", data.response);
+              }
+            }
+          }
+
+          if (audioUrl && visemes.length && skinnedMesh) {
+            updateStatus("▶️ Playing response...");
+            const audio = new Audio(audioUrl);
+            audio.play();
+
+            visemes.forEach(({ time, viseme }) => {
+              const delay = time * 1000;
+              const targetName = `viseme_${viseme}`;
+              const index = visemeMap[targetName];
+              if (index === undefined) return;
+
+              setTimeout(() => {
+                skinnedMesh.morphTargetInfluences.fill(0);
+                skinnedMesh.morphTargetInfluences[index] = 1;
+                renderOnce();
+              }, delay);
+
+              setTimeout(() => {
+                skinnedMesh.morphTargetInfluences[index] = 0;
+                renderOnce();
+              }, delay + 120);
+            });
+
+            audio.onended = () => updateStatus("✅ Done. Ask another question.");
+          } else {
+            updateStatus("⚠️ Failed to get audio or visemes.");
+          }
+        };
+
+        recorder.start();
+        setTimeout(() => recorder.stop(), 5000);
+      } catch (err) {
+        updateStatus("❌ Mic access failed.");
+        console.error(err);
+      }
+    });
+  </script>
+</body>
+</html>
