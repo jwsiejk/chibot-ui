@@ -5,7 +5,7 @@
   <title>Ask Chip (3D)</title>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <script>
-    console.log("🧪 Loaded index_3d.html vDEBUG-1");
+    console.log("🧪 Loaded index_3d.html vDEBUG-2");
   </script>
   <style>
     body { margin: 0; background-color: #1e1e1e; color: white; font-family: sans-serif; }
@@ -47,11 +47,12 @@
 <body>
   <button id="recordBtn">🎤 Ask Chip</button>
   <div id="status">Ready</div>
-  <div id="version-tag">Ask Chip UI vDEBUG-1</div>
+  <div id="version-tag">Ask Chip UI vDEBUG-2</div>
 
   <script type="module">
-    import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js';
-    import { GLTFLoader } from 'https://unpkg.com/three@0.158.0/examples/jsm/loaders/GLTFLoader.js';
+    import * as THREE from 'https://cdn.skypack.dev/three';
+    import { GLTFLoader } from 'https://cdn.skypack.dev/three/examples/jsm/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'https://cdn.skypack.dev/three/examples/jsm/controls/OrbitControls.js';
 
     let scene, camera, renderer;
     let model, visemeMap, skinnedMesh;
@@ -74,10 +75,10 @@
 
     renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(1); // Force lower GPU load
+    renderer.setPixelRatio(1);
     renderer.setClearColor(0x1e1e1e);
 
-    scene.add(new THREE.AmbientLight(0xffffff, 1)); // Simpler lighting
+    scene.add(new THREE.AmbientLight(0xffffff, 1));
 
     const loader = new GLTFLoader();
     loader.load('/static/models/chip.glb', gltf => {
@@ -93,8 +94,10 @@
 
       visemeMap = skinnedMesh.morphTargetDictionary;
       updateStatus("Chip model loaded.");
-      renderOnce(); // Only render after model loads
+      renderOnce();
     });
+
+    const controls = new OrbitControls(camera, renderer.domElement);
 
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
