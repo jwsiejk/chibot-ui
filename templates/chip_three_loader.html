@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Chip 3D with Viseme Animation</title>
+  <style>
+    body { margin: 0; background-color: #1e1e1e; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js';
+    import { GLTFLoader } from 'https://unpkg.com/three@0.158.0/examples/jsm/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.158.0/examples/jsm/controls/OrbitControls.js';
+
+    let scene, camera, renderer, controls, clock;
+    let mixer, model, visemeMap;
+
+    const canvas = document.createElement('canvas');
+    document.body.appendChild(canvas);
+
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 1.5, 2.5);
+
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setClearColor(0x1e1e1e);
+
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 1.5, 0);
+    controls.update();
+
+    const light = new THREE.DirectionalLight(0xffffff, 1);
+    light.position.set(2, 5, 5);
+    scene.add(light);
+    scene.add(new THREE.AmbientLight(0x404040));
+
+    clock = new THREE.Clock();
+
+    const loader = new GLTFLoader();
+    loader.load('/static/models/chip.glb', gltf => {
+      model = gltf.scene;
+      model.scale.set(1, 1, 1);
+      scene.add(model);
+
+      const skinnedMesh = model.getObjectByProperty('type', 'SkinnedMesh');
+      if (!skinnedMesh || !skinnedMesh.morphTargetDictionary) {
+        console.warn('No morph targets found on SkinnedMesh.');
+        return;
+      }
+
+      visemeMap = skinnedMesh.morphTargetDictionary;
+
+      // Test cycle: animate each viseme one by one
+      const visemeNames = Object.keys(visemeMap);
+      let index = 0;
+      setInterval(() => {
+        const targetIndex = visemeMap[visemeNames[index]];
+        skinnedMesh.morphTargetInfluences.fill(0);
+        skinnedMesh.morphTargetInfluences[targetIndex] = 1;
+        index = (index + 1) % visemeNames.length;
+      }, 500);
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    }
+
+    animate();
+  </script>
+</body>
+</html>
