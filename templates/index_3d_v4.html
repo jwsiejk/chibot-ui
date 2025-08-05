@@ -117,6 +117,7 @@
 
     function playVisemeAudio(audioUrl, visemes, customDoneMessage = "✅ Done. Ask another question.") {
       updateStatus("🔊 Playing Chip's response...");
+      console.log("⛔ Blinking OFF");
       recordBtn.classList.remove("blinking");
       const audio = new Audio(audioUrl);
       audio.play();
@@ -141,7 +142,8 @@
 
       audio.onended = () => {
         updateStatus(customDoneMessage);
-        recordBtn.classList.add("blinking");
+        console.log("✨ Blinking ON");
+            recordBtn.classList.add("blinking");
       };
     }
 
@@ -164,7 +166,8 @@
       const data = await response.json();
       if (data.audio && skinnedMesh) {
         playVisemeAudio(data.audio, [], "👍 I'm ready when you are.");
-        recordBtn.classList.add("blinking");
+        console.log("✨ Blinking ON");
+            recordBtn.classList.add("blinking");
       }
     }
 
@@ -208,6 +211,7 @@
 
     recordBtn.addEventListener("click", async () => {
       updateStatus("🎙️ Listening for 5 seconds...");
+      console.log("⛔ Blinking OFF");
       recordBtn.classList.remove("blinking");
 
       try {
@@ -249,6 +253,7 @@
                 if (data.audio) audioUrl = data.audio;
                 if (data.transcript) {
                   updateStatus("🗣️ You said: " + data.transcript);
+                  console.log("📝 Caption set:", data.transcript);
                   document.getElementById("caption").textContent = data.transcript;
                 }
                 if (data.response) console.log("🤖 Chip replied:", data.response);
@@ -262,7 +267,9 @@
             playVisemeAudio(audioUrl, visemes);
           } else {
             updateStatus("⚠️ Failed to get audio or visemes.");
+            console.log("✨ Blinking ON");
             recordBtn.classList.add("blinking");
+            console.log("✨ Blinking ON");
             recordBtn.classList.add("blinking");
           }
         };
