@@ -1,13 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Ask Chip (3D)</title>
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <script>
+ <head>
+  <meta charset="utf-8"/>
+  <title>
+   Ask Chip (3D)
+  </title>
+  <meta content="no-cache, no-store, must-revalidate" http-equiv="Cache-Control">
+   <script>
     console.log("🧪 Loaded index_3d.html vDEBUG-9");
-  </script>
-  <style>
+   </script>
+   <style>
     body {
       margin: 0;
       background-color: #1e1e1e;
@@ -77,16 +79,23 @@
       font-size: 12px;
       color: #aaa;
     }
-  </style>
-</head>
-<body>
-  <button id="recordBtn">🎤 Ask Chip</button>
-  <div id="status">Ready</div>
-  <div id="version-tag">Ask Chip UI vDEBUG-9</div>
-  <div id="caption"></div>
-
+   </style>
+  </meta>
+ </head>
+ <body>
+  <button id="recordBtn">
+   🎤 Ask Chip
+  </button>
+  <div id="status">
+   Ready
+  </div>
+  <div id="version-tag">
+   Ask Chip UI vDEBUG-9
+  </div>
+  <div id="caption">
+  </div>
   <script type="module">
-    import * as THREE from 'https://esm.sh/three@0.155.0';
+   import * as THREE from 'https://esm.sh/three@0.155.0';
     import { GLTFLoader } from 'https://esm.sh/three@0.155.0/examples/jsm/loaders/GLTFLoader';
     import { OrbitControls } from 'https://esm.sh/three@0.155.0/examples/jsm/controls/OrbitControls';
 
@@ -262,5 +271,5 @@
       }
     });
   </script>
-</body>
+ </body>
 </html>
