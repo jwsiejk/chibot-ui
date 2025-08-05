@@ -111,32 +111,55 @@ def ask():
 
 @app.route("/ask-chip", methods=["POST"])
 def ask_chip():
-    def generate_stream():
-        try:
-            user_id = session.get("user_id") or request.remote_addr or str(uuid4())
-            name = session.get("name", "User")
-            role = "engineer"
-            region = "NA"
+    
+def generate_stream():
+    try:
+        user_id = session.get("user_id") or request.remote_addr or str(uuid4())
+        name = session.get("name", "User")
+        role = "engineer"
+        region = "NA"
 
-           if "audio" not in request.files:
-    yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"error": "No audio file uploaded."}).encode() + b"\r\n"
-    return
+        if "audio" not in request.files:
+            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"error": "No audio file uploaded."}).encode() + b"\r\n"
+            return
 
-audio_file = request.files["audio"]
-audio_file.filename = secure_filename(audio_file.filename)
-audio_path = f"/tmp/{uuid4().hex}.webm"
-audio_file.save(audio_path)
+        audio_file = request.files["audio"]
+        audio_file.filename = secure_filename(audio_file.filename)
+        audio_path = f"/tmp/{uuid4().hex}.webm"
+        audio_file.save(audio_path)
 
-client = openai.OpenAI()
+        client = openai.OpenAI()
 
-with open(audio_path, "rb") as f:
-    transcript = client.audio.transcriptions.create(
-        model="whisper-1",
-        file=f
-    ).text
+        with open(audio_path, "rb") as f:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f
+            ).text
 
-yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"transcript": transcript}).encode() + b"\r\n"
+        yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"transcript": transcript}).encode() + b"\r\n"
 
+        response_text = generate_chip_response(user_id, name, transcript, role, region)
+        yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"response": response_text}).encode() + b"\r\n"
+
+        voice_settings = {"speed": 0.9}
+        audio_stream = eleven.text_to_speech.convert(
+            voice_id=voice_id,
+            model_id="eleven_monolingual_v1",
+            text=response_text,
+            stream=True,
+            optimize_streaming_latency=1,
+            voice_settings=voice_settings
+        )
+
+        yield b"--frame\r\nContent-Type: audio/mpeg\r\n\r\n"
+        for chunk in audio_stream:
+            yield chunk
+        yield b"\r\n--frame--\r\n"
+
+    except Exception as e:
+        print("🔥 ERROR IN /ask-chip:", str(e))
+        traceback.print_exc()
+        yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"error": "Voice processing failed."}).encode() + b"\r\n"
             response_text = generate_chip_response(user_id, name, transcript, role, region)
             yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"response": response_text}).encode() + b"\r\n"
 
