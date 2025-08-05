@@ -108,22 +108,27 @@
       audio.onended = () => updateStatus("✅ Done. Ask another question.");
     }
 
-    async function greetUser() {
-      updateStatus("👋 Chip is saying hi...");
-      const greeting = { text: "Hey there! I'm Chip. What can I help you with today?" };
-      const response = await fetch("/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(greeting)
-      });
+async function greetUser() {
+  updateStatus("👋 Chip is saying hi...");
 
-      const data = await response.json();
-      if (data.audio && skinnedMesh) {
-        // fallback: no visemes from /ask
-        playVisemeAudio(data.audio, []);
-      }
-    }
+  const name = sessionStorage.getItem("chip_name") || "there";
+  const greeting = {
+    question: `Hey ${name}! I'm Chip. What can I help you with today?`,
+    name: name
+  };
 
+  const response = await fetch("/ask", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(greeting)
+  });
+
+  const data = await response.json();
+  if (data.audio && skinnedMesh) {
+    playVisemeAudio(data.audio, []);
+  }
+}
+    
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
     camera.position.set(0, 1.5, 2.5);
