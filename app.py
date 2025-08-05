@@ -70,6 +70,10 @@ def index_3d():
         return redirect("/login")
     return render_template("index_3d.html")
 
+@app.route("/viseme-test")
+def viseme_test():
+    return render_template("chip_three.html")
+
 @app.route("/ask", methods=["POST"])
 def ask():
     try:
@@ -95,7 +99,6 @@ def ask():
             voice_settings=voice_settings
         )
 
-        # Save as a file for compatibility
         filename = f"static/audio/{uuid4().hex}.mp3"
         with open(filename, "wb") as f:
             for chunk in audio:
@@ -144,7 +147,6 @@ def ask_chip():
                 voice_settings=voice_settings
             )
 
-            # Stream audio as binary in same multipart response
             yield b"--frame\r\nContent-Type: audio/mpeg\r\n\r\n"
             for chunk in audio_stream:
                 yield chunk
