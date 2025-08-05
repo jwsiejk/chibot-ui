@@ -3,7 +3,7 @@ print("✅ Chip app starting...")
 import os
 import json
 import traceback
-from flask import Flask, request, jsonify, render_template, redirect, session, url_for, Response, stream_with_context
+from flask import Flask, request, jsonify, render_template, redirect, session, url_for, Response, stream_with_context, g
 from flask_session import Session
 from elevenlabs.client import ElevenLabs
 from memory import init_db, get_user, save_user, log_conversation
@@ -21,8 +21,18 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 voice_id = os.getenv("CHIP_VOICE_ID")
 
-# Initialize memory database
-init_db()
+# Lazy DB init to avoid boot-time blocking
+@app.before_request
+def ensure_db_ready():
+    if not hasattr(g, "_db_initialized"):
+        try:
+            print("⏳ Lazy initializing DB...")
+            init_db()
+            print("✅ DB ready.")
+            g._db_initialized = True
+        except Exception as e:
+            print("🔥 Failed to initialize DB:", e)
+            g._db_initialized = False
 
 def generate_chip_response(user_id, name, question, role, region):
     user = get_user(user_id)
