@@ -36,12 +36,12 @@
 <body>
   <button id="recordBtn">🎤 Ask Chip</button>
   <div id="status">Ready</div>
+
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js';
     import { GLTFLoader } from 'https://unpkg.com/three@0.158.0/examples/jsm/loaders/GLTFLoader.js';
-    import { OrbitControls } from 'https://unpkg.com/three@0.158.0/examples/jsm/controls/OrbitControls.js';
 
-    let scene, camera, renderer, controls;
+    let scene, camera, renderer;
     let model, visemeMap, skinnedMesh;
     const canvas = document.createElement('canvas');
     document.body.appendChild(canvas);
@@ -52,23 +52,20 @@
       console.log("[Chip]", message);
     }
 
+    function renderOnce() {
+      renderer.render(scene, camera);
+    }
+
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
     camera.position.set(0, 1.5, 2.5);
 
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(1); // Force lower GPU load
     renderer.setClearColor(0x1e1e1e);
 
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 1.5, 0);
-    controls.update();
-
-    const light = new THREE.DirectionalLight(0xffffff, 1);
-    light.position.set(2, 5, 5);
-    scene.add(light);
-    scene.add(new THREE.AmbientLight(0x404040));
+    scene.add(new THREE.AmbientLight(0xffffff, 1)); // Simpler lighting
 
     const loader = new GLTFLoader();
     loader.load('/static/models/chip.glb', gltf => {
@@ -79,31 +76,23 @@
       skinnedMesh = model.getObjectByProperty('type', 'SkinnedMesh');
       if (!skinnedMesh || !skinnedMesh.morphTargetDictionary) {
         updateStatus("No viseme morph targets found.");
-        console.warn('No morph targets found on SkinnedMesh.');
         return;
       }
 
       visemeMap = skinnedMesh.morphTargetDictionary;
       updateStatus("Chip model loaded.");
+      renderOnce(); // Only render after model loads
     });
 
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
+      renderOnce();
     });
 
-    function animate() {
-      requestAnimationFrame(animate);
-      renderer.render(scene, camera);
-    }
-
-    animate();
-
-    // 🎤 Mic input and viseme playback
     document.getElementById("recordBtn").addEventListener("click", async () => {
       updateStatus("🎙️ Listening...");
-      console.log("🔊 Starting mic access");
 
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -161,10 +150,12 @@
               setTimeout(() => {
                 skinnedMesh.morphTargetInfluences.fill(0);
                 skinnedMesh.morphTargetInfluences[index] = 1;
+                renderOnce();
               }, delay);
 
               setTimeout(() => {
                 skinnedMesh.morphTargetInfluences[index] = 0;
+                renderOnce();
               }, delay + 120);
             });
 
