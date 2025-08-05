@@ -37,7 +37,7 @@
       box-shadow: 0 0 10px rgba(255, 165, 0, 0.4);
     
     }
-    #askButton.blinking {
+    #recordBtn.blinking {
       animation: blink-animation 1s steps(2, start) infinite;
   }
 
@@ -257,7 +257,9 @@
                 if (data.transcript) {
                   updateStatus("🗣️ You said: " + data.transcript);
                   console.log("📝 Caption set:", data.transcript);
-                  document.getElementById("caption").textContent = data.transcript;
+                  const caption = document.getElementById("caption");
+caption.textContent = data.transcript;
+caption.style.visibility = "visible";
                 }
                 if (data.response) console.log("🤖 Chip replied:", data.response);
               }
