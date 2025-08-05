@@ -145,7 +145,6 @@ def ask_chip():
                 voice_id=voice_id,
                 model_id="eleven_monolingual_v1",
                 text=response_text,
-                stream=True,
                 optimize_streaming_latency=1,
                 voice_settings=voice_settings
             )
