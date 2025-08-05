@@ -32,6 +32,7 @@ def ensure_db_ready():
             g._db_initialized = True
         except Exception as e:
             print("🔥 Failed to initialize DB:", e)
+            traceback.print_exc()
             g._db_initialized = False
 
 def generate_chip_response(user_id, name, question, role, region):
