@@ -63,15 +63,6 @@ def generate_chip_response(user_id, name, question, role, region):
     log_conversation(user_id, question, answer)
     return answer
 
-@app.route("/")
-def index():
-    user_id = session.get("user_id") or request.remote_addr
-    name = session.get("name")
-    user = get_user(user_id)
-    if not name or not user or not user.get("role") or not user.get("region"):
-        return redirect("/login")
-    return render_template("index.html")
-
 @app.route("/3d")
 def index_3d():
     user_id = session.get("user_id") or request.remote_addr
@@ -80,10 +71,6 @@ def index_3d():
     if not name or not user or not user.get("role") or not user.get("region"):
         return redirect("/login")
     return render_template("index_3d_v3.html")
-
-@app.route("/viseme-test")
-def viseme_test():
-    return render_template("chip_three.html")
 
 @app.route("/ask", methods=["POST"])
 def ask():
