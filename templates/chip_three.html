@@ -6,17 +6,30 @@
   <style>
     body { margin: 0; background-color: #1e1e1e; }
     canvas { display: block; }
+    #recordBtn {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 10;
+      padding: 10px 20px;
+      font-size: 16px;
+      background-color: orange;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
+  <button id="recordBtn">🎤 Ask Chip</button>
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js';
     import { GLTFLoader } from 'https://unpkg.com/three@0.158.0/examples/jsm/loaders/GLTFLoader.js';
     import { OrbitControls } from 'https://unpkg.com/three@0.158.0/examples/jsm/controls/OrbitControls.js';
 
-    let scene, camera, renderer, controls, clock;
-    let mixer, model, visemeMap;
-
+    let scene, camera, renderer, controls;
+    let model, visemeMap, skinnedMesh;
     const canvas = document.createElement('canvas');
     document.body.appendChild(canvas);
 
@@ -38,31 +51,19 @@
     scene.add(light);
     scene.add(new THREE.AmbientLight(0x404040));
 
-    clock = new THREE.Clock();
-
     const loader = new GLTFLoader();
     loader.load('/static/models/chip.glb', gltf => {
       model = gltf.scene;
       model.scale.set(1, 1, 1);
       scene.add(model);
 
-      const skinnedMesh = model.getObjectByProperty('type', 'SkinnedMesh');
+      skinnedMesh = model.getObjectByProperty('type', 'SkinnedMesh');
       if (!skinnedMesh || !skinnedMesh.morphTargetDictionary) {
         console.warn('No morph targets found on SkinnedMesh.');
         return;
       }
 
       visemeMap = skinnedMesh.morphTargetDictionary;
-
-      // Test cycle: animate each viseme one by one
-      const visemeNames = Object.keys(visemeMap);
-      let index = 0;
-      setInterval(() => {
-        const targetIndex = visemeMap[visemeNames[index]];
-        skinnedMesh.morphTargetInfluences.fill(0);
-        skinnedMesh.morphTargetInfluences[targetIndex] = 1;
-        index = (index + 1) % visemeNames.length;
-      }, 500);
     });
 
     window.addEventListener('resize', () => {
@@ -77,6 +78,71 @@
     }
 
     animate();
+
+    // 🔴 Record + stream to /ask-chip
+    document.getElementById("recordBtn").addEventListener("click", async () => {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks = [];
+
+      recorder.ondataavailable = e => chunks.push(e.data);
+      recorder.onstop = async () => {
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const formData = new FormData();
+        formData.append("audio", blob, "input.webm");
+
+        const response = await fetch("/ask-chip", { method: "POST", body: formData });
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        let visemes = [];
+        let audioUrl = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const text = decoder.decode(value);
+          const lines = text.split("--frame").filter(Boolean);
+
+          for (const line of lines) {
+            const [, headers, content] = line.split(/\r?\n\r?\n/);
+            if (!headers || !content) continue;
+
+            const contentType = headers.match(/Content-Type: (.+)/)?.[1];
+            if (contentType === "application/json") {
+              const data = JSON.parse(content);
+              if (data.viseme_timestamps) visemes = data.viseme_timestamps;
+              if (data.audio) audioUrl = data.audio;
+            }
+          }
+        }
+
+        if (audioUrl && visemes.length && skinnedMesh) {
+          const audio = new Audio(audioUrl);
+          audio.play();
+
+          visemes.forEach(({ time, viseme }, i) => {
+            const delay = time * 1000;
+            const targetName = `viseme_${viseme}`;
+            const index = visemeMap[targetName];
+            if (index === undefined) return;
+            setTimeout(() => {
+              skinnedMesh.morphTargetInfluences.fill(0);
+              skinnedMesh.morphTargetInfluences[index] = 1;
+            }, delay);
+
+            // clear after 120ms
+            setTimeout(() => {
+              skinnedMesh.morphTargetInfluences[index] = 0;
+            }, delay + 120);
+          });
+        }
+      };
+
+      recorder.start();
+      setTimeout(() => recorder.stop(), 5000);
+    });
   </script>
 </body>
 </html>
