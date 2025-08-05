@@ -35,14 +35,15 @@ def generate_chip_response(user_id, name, question, role, region):
             f"You are relatable, intelligent, and from Nebraska. "
             f"You speak plainly and occasionally use dry humor and Nebraska sayings. "
             f"Your job is to provide technical answers, but with a humble and real personality. "
-            f"Keep answers grounded in Pure Storage expertise. The user's name is {name}."
+            f"Keep answers grounded in Pure Storage expertise. Use no more than 60 words. "
+            f"The user's name is {name}."
         ),
     }
 
     response = openai.chat.completions.create(
         model="gpt-4o",
         messages=[system_prompt] + messages,
-        max_tokens=300
+        max_tokens=80
     )
 
     answer = response.choices[0].message.content
@@ -54,11 +55,16 @@ def generate_audio(response_text):
     if not voice_id:
         raise ValueError("CHIP_VOICE_ID environment variable is missing.")
 
+    voice_settings = {
+        "speed": 0.9  # Slightly slower than default
+    }
+
     audio = eleven.text_to_speech.convert(
         voice_id=voice_id,
         model_id="eleven_monolingual_v1",
         text=response_text,
-        optimize_streaming_latency=1
+        optimize_streaming_latency=1,
+        voice_settings=voice_settings
     )
 
     filename = f"static/audio/{uuid4().hex}.mp3"
