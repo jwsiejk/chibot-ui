@@ -99,9 +99,6 @@
 
     <form id="chat-form">
       <input type="text" id="question" name="question" placeholder="Ask Chip a question..." required />
-      <input type="hidden" name="name" value="User" />
-      <input type="hidden" name="role" value="engineer" />
-      <input type="hidden" name="region" value="NA" />
       <button type="submit">Submit</button>
     </form>
 
@@ -110,28 +107,11 @@
   </div>
 
   <script>
-    // Pre-fill fields from URL parameters if available
-    window.addEventListener("DOMContentLoaded", () => {
-      const params = new URLSearchParams(window.location.search);
-      if (params.has("name")) {
-        document.querySelector("input[name='name']").value = params.get("name");
-      }
-      if (params.has("role")) {
-        document.querySelector("input[name='role']").value = params.get("role");
-      }
-      if (params.has("region")) {
-        document.querySelector("input[name='region']").value = params.get("region");
-      }
-    });
-
     document.getElementById("chat-form").addEventListener("submit", async function(event) {
       event.preventDefault();
 
       const formData = new URLSearchParams();
       formData.append("question", document.getElementById("question").value);
-      formData.append("name", document.querySelector("input[name='name']").value);
-      formData.append("role", document.querySelector("input[name='role']").value);
-      formData.append("region", document.querySelector("input[name='region']").value);
 
       const responseDiv = document.getElementById("response");
       const audioPlayer = document.getElementById("audio");
