@@ -17,6 +17,11 @@ function autoStartListening() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  function updateStatus(message) {
+    const statusDiv = document.getElementById("status");
+    statusDiv.textContent = message;
+    console.log("[Chip]", message);
+  }
   recordBtn.addEventListener("click", async () => {
   updateStatus("🎙️ Listening for 5 seconds...");
   console.log("⛔ Blinking OFF");
@@ -267,6 +272,11 @@ document.addEventListener("DOMContentLoaded", () => {
     // greetUser fully disabled for testing
 
 document.addEventListener("DOMContentLoaded", () => {
+  function updateStatus(message) {
+    const statusDiv = document.getElementById("status");
+    statusDiv.textContent = message;
+    console.log("[Chip]", message);
+  }
   recordBtn.addEventListener("click", async () => {
   updateStatus("🎙️ Listening for 5 seconds...");
   console.log("⛔ Blinking OFF");
