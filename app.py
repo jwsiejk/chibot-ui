@@ -65,16 +65,11 @@ def generate_chip_response(user_id, name, question, role, region):
 
 @app.route("/3d")
 def index_3d():
-    user_id = session.get("user_id") or request.remote_addr
-    name = session.get("name")
-    user = get_user(user_id)
-    if not name or not user or not user.get("role") or not user.get("region"):
-        session["name"] = session.get("name", "there")
-session["user_id"] = session.get("user_id") or request.remote_addr
-session["role"] = session.get("role", "engineer")
-session["region"] = session.get("region", "NA")
-    # 🔒 login check bypassed for testing
-    return render_template("index_3d_v4.html")
+    # Bypass login/profile enforcement for dev
+    session["user_id"] = session.get("user_id") or request.remote_addr
+    session["name"] = session.get("name", "there")
+    session["role"] = session.get("role", "engineer")
+    session["region"] = session.get("region", "NA")
     return render_template("index_3d_v4.html")
 
 @app.route("/ask", methods=["POST"])
