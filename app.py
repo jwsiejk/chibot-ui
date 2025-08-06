@@ -160,6 +160,11 @@ def ask_chip():
 
             voice_settings = {"speed": 0.9}
             print("🗣️ Sending text to ElevenLabs:", response_text)
+            print("🧾 Voice ID:", voice_id)
+            if not voice_id:
+                raise ValueError("Missing ElevenLabs voice_id")
+            if not response_text or len(response_text.strip()) == 0:
+                raise ValueError("Response text is empty or invalid")
             audio_stream = eleven.text_to_speech.convert(
                 voice_id=voice_id,
                 model_id="eleven_monolingual_v1",
