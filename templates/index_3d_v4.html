@@ -29,7 +29,7 @@
         fetch("/greet")
           .then(res => res.json())
           .then(data => {
-              updateStatus("👋 Hey, it's Chip Tracewell, the Cornhuskers' number one fan. How can I help you today?");
+              updateStatus(data.reply || "👋 Hey there! I'm Chip.");
               if (data.audio) {
                 playVisemeAudio(data.audio, [], "👋 Ask me anything about Pure Storage when you're ready (5 seconds).");
               }
