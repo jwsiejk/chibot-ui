@@ -15,14 +15,7 @@
     }
 
     document.addEventListener("DOMContentLoaded", () => {
-      fetch("/greet")
-        .then(res => res.json())
-        .then(data => {
-          updateStatus(data.reply || "👋 Hey there! I'm Chip.");
-        })
-        .catch(() => {
-          updateStatus("👋 Hey there! I'm Chip.");
-        });
+      updateStatus("👋 Hey there! I'm Chip.");
 
       function updateStatus(message) {
         const statusDiv = document.getElementById("status");
