@@ -23,6 +23,8 @@ document.addEventListener("DOMContentLoaded", () => {
     console.log("[Chip]", message);
   }
   recordBtn.addEventListener("click", async () => {
+    if (recordBtn.disabled) return;  // prevent double click
+    recordBtn.disabled = true;
   updateStatus("🎙️ Listening for 5 seconds...");
   console.log("⛔ Blinking OFF");
   recordBtn.classList.remove("blinking");
@@ -303,6 +305,7 @@ document.addEventListener("DOMContentLoaded", () => {
             document.getElementById("recordPrompt").classList.add("ready");
       document.getElementById("recordPrompt").style.display = "block";
       recordBtn.style.display = "none";
+      recordBtn.disabled = false;
       };
     }
 
@@ -315,6 +318,8 @@ document.addEventListener("DOMContentLoaded", () => {
     console.log("[Chip]", message);
   }
   recordBtn.addEventListener("click", async () => {
+    if (recordBtn.disabled) return;  // prevent double click
+    recordBtn.disabled = true;
   updateStatus("🎙️ Listening for 5 seconds...");
   console.log("⛔ Blinking OFF");
   recordBtn.classList.remove("blinking");
