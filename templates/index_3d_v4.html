@@ -69,7 +69,6 @@
       recordBtn.addEventListener("click", async () => {
         if (recordBtn.disabled) return;
         if (recordBtn) recordBtn.disabled = true;
-        updateStatus("🎙️ Listening for 5 seconds...");
         document.getElementById("recordPrompt").classList.remove("idle");
         document.getElementById("recordPrompt").classList.add("listening");
         console.log("⛔ Blinking OFF");
