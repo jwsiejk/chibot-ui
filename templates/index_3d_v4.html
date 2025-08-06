@@ -55,9 +55,9 @@ document.addEventListener("DOMContentLoaded", () => {
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
-  console.log("📦 Stream ended. Finalizing audio...");
-  break;
-}
+          console.log("📦 Stream ended. Finalizing audio...");
+          break;
+        }
 
         // Check for audio/mpeg binary block (starts with ID3 or binary marker)
         if (value && value.length > 2 && value[0] === 73 && value[1] === 68 && value[2] === 51) {
@@ -340,9 +340,9 @@ document.addEventListener("DOMContentLoaded", () => {
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
-  console.log("📦 Stream ended. Finalizing audio...");
-  break;
-}
+          console.log("📦 Stream ended. Finalizing audio...");
+          break;
+        }
 
         // Check for audio/mpeg binary block (starts with ID3 or binary marker)
         if (value && value.length > 2 && value[0] === 73 && value[1] === 68 && value[2] === 51) {
