@@ -1,22 +1,21 @@
-<!-- index_3d_v5.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
   <title>Ask Chip (3D)</title>
   <script>
-    console.log("🧪 Loaded index_3d_v5.html");
+    console.log("🧪 Loaded index_3d_v4.html (patched)");
 
     async function greetUser() {
       try {
         const response = await fetch("/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: "Say hello to the user.", greeting: true })
+          body: JSON.stringify({ question: "Hi there! I'm Chip. What can I help you with today?", greeting: true })
         });
         const data = await response.json();
         if (data.audio) {
-          playVisemeAudio(data.audio, [], "👋 Hi! I'm Chip. Ask me anything.");
+          playVisemeAudio(data.audio, [], "👋 Chip is ready.");
         }
       } catch (err) {
         console.error("Greeting failed:", err);
@@ -83,7 +82,11 @@
             const text = decoder.decode(value);
             const lines = text.split("--frame").filter(Boolean);
             for (const line of lines) {
-              const [, headers, content] = line.split(/\r?\n\r?\n/);
+              const [, headers, content] = line.split(/
+?
+
+?
+/);
               if (!headers || !content) continue;
 
               const contentType = headers.match(/Content-Type: (.+)/)?.[1];
