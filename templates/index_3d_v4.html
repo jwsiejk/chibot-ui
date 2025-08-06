@@ -51,6 +51,7 @@ document.addEventListener("DOMContentLoaded", () => {
       let visemes = [];
       let audioUrl = "";
       let audioChunks = []; // store binary audio chunks
+      let collectingAudio = false;
 
       const streamTimeout = setTimeout(() => {
         console.warn("⏰ Stream timeout: forcing finalization.");
@@ -66,10 +67,16 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         // Check for audio/mpeg binary block (starts with ID3 or binary marker)
-        if (value && value.length > 2 && value[0] === 73 && value[1] === 68 && value[2] === 51) {
-          console.log("🎧 Detected audio/mpeg binary block");
-          audioChunks.push(value);
-          continue;
+        if (value && value.length > 2) {
+          if (value[0] === 73 && value[1] === 68 && value[2] === 51) {
+            console.log("🎧 Detected audio/mpeg binary start (ID3)");
+            collectingAudio = true;
+          }
+          if (collectingAudio) {
+            audioChunks.push(value);
+            console.log("📥 Appended audio chunk, total:", audioChunks.length);
+            continue;
+          }
         }
 
         const text = decoder.decode(value);
@@ -336,6 +343,7 @@ document.addEventListener("DOMContentLoaded", () => {
       let visemes = [];
       let audioUrl = "";
       let audioChunks = []; // store binary audio chunks
+      let collectingAudio = false;
 
       const streamTimeout = setTimeout(() => {
         console.warn("⏰ Stream timeout: forcing finalization.");
@@ -351,10 +359,16 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         // Check for audio/mpeg binary block (starts with ID3 or binary marker)
-        if (value && value.length > 2 && value[0] === 73 && value[1] === 68 && value[2] === 51) {
-          console.log("🎧 Detected audio/mpeg binary block");
-          audioChunks.push(value);
-          continue;
+        if (value && value.length > 2) {
+          if (value[0] === 73 && value[1] === 68 && value[2] === 51) {
+            console.log("🎧 Detected audio/mpeg binary start (ID3)");
+            collectingAudio = true;
+          }
+          if (collectingAudio) {
+            audioChunks.push(value);
+            console.log("📥 Appended audio chunk, total:", audioChunks.length);
+            continue;
+          }
         }
 
         const text = decoder.decode(value);
