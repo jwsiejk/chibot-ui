@@ -1,430 +1,130 @@
+<!-- index_3d_v5.html -->
 <!DOCTYPE html>
 <html lang="en">
- <head>
+<head>
   <meta charset="utf-8"/>
-  <title>
-   Ask Chip (3D)
-  </title>
-  <meta content="no-cache, no-store, must-revalidate" http-equiv="Cache-Control">
-   <script>
-    console.log("🧪 Loaded index_3d.html vDEBUG-9");
-   
-function autoStartListening() {
-  setTimeout(() => {
-    const btn = document.getElementById("recordBtn");
-    if (btn) btn.click();
-  }, 500); // short delay after greeting
-}
+  <title>Ask Chip (3D)</title>
+  <script>
+    console.log("🧪 Loaded index_3d_v5.html");
 
-document.addEventListener("DOMContentLoaded", () => {
-  function updateStatus(message) {
-    const statusDiv = document.getElementById("status");
-    statusDiv.textContent = message;
-    console.log("[Chip]", message);
-  }
-  recordBtn.addEventListener("click", async () => {
-    if (recordBtn.disabled) return;  // prevent double click
-    recordBtn.disabled = true;
-  updateStatus("🎙️ Listening for 5 seconds...");
-  console.log("⛔ Blinking OFF");
-  recordBtn.classList.remove("blinking");
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const recorder = new MediaRecorder(stream);
-    const chunks = [];
-
-    recorder.ondataavailable = e => chunks.push(e.data);
-
-    recorder.onstop = async () => {
-      updateStatus("📤 Uploading audio to Chip...");
-      const blob = new Blob(chunks, { type: 'audio/webm' });
-      const audioLink = document.getElementById('audioDownload');
-      audioLink.href = URL.createObjectURL(blob);
-      audioLink.style.display = 'block';
-      const formData = new FormData();
-      formData.append("audio", blob, "input.webm");
-
-      updateStatus("🧠 Processing request...");
-      const response = await fetch("/ask-chip", { method: "POST", body: formData });
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-
-      let visemes = [];
-      let audioUrl = "";
-      let audioChunks = []; // store binary audio chunks
-      let collectingAudio = false;
-
-      const streamTimeout = setTimeout(() => {
-        console.warn("⏰ Stream timeout: forcing finalization.");
-        reader.cancel();
-      }, 10000);
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          clearTimeout(streamTimeout);
-          console.log("📦 Stream ended. Finalizing audio...");
-          break;
+    async function greetUser() {
+      try {
+        const response = await fetch("/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: "Say hello to the user.", greeting: true })
+        });
+        const data = await response.json();
+        if (data.audio) {
+          playVisemeAudio(data.audio, [], "👋 Hi! I'm Chip. Ask me anything.");
         }
-
-        // Check for audio/mpeg binary block (starts with ID3 or binary marker)
-        if (value && value.length > 2) {
-          if (value[0] === 73 && value[1] === 68 && value[2] === 51) {
-            console.log("🎧 Detected audio/mpeg binary start (ID3)");
-            collectingAudio = true;
-          }
-          if (collectingAudio) {
-            audioChunks.push(value);
-            console.log("📥 Appended audio chunk, total:", audioChunks.length);
-            continue;
-          }
-        }
-
-        const text = decoder.decode(value);
-        const lines = text.split("--frame").filter(Boolean);
-        for (const line of lines) {
-          console.log("📦 Raw frame:", line);
-  console.log("📦 Raw frame:", line);
-          const [, headers, content] = line.split(/\r?\n\r?\n/);
-          if (!headers || !content) continue;
-
-          const contentType = headers.match(/Content-Type: (.+)/)?.[1];
-          if (contentType === "application/json") {
-            const data = JSON.parse(content);
-            if (data.viseme_timestamps) visemes = data.viseme_timestamps;
-            if (data.audio) audioUrl = data.audio;
-            if (data.transcript) {
-              updateStatus("🗣️ You said: " + data.transcript);
-              const caption = document.getElementById("caption");
-              caption.textContent = data.transcript;
-              caption.style.visibility = "visible";
-              caption.style.display = "block";
-              setTimeout(() => { caption.style.display = "none"; }, 4000);
-            }
-            if (data.response) console.log("🤖 Chip replied:", data.response);
-          }
-        }
+      } catch (err) {
+        console.error("Greeting failed:", err);
       }
+    }
 
-      if (audioChunks.length) {
-        const fullAudioBlob = new Blob(audioChunks, { type: 'audio/mpeg' });
-        audioUrl = URL.createObjectURL(fullAudioBlob);
-        console.log("🔗 Final audioUrl created from chunks:", audioUrl);
-      }
+    document.addEventListener("DOMContentLoaded", () => {
+      greetUser();
+    });
+  </script>
+</head>
+<body>
+  <button id="recordBtn">🎤 Ask Chip</button>
+  <div id="status">Ready</div>
 
-      if (audioUrl) {
-        playVisemeAudio(audioUrl, visemes);
-      } else {
-        updateStatus("⚠️ Failed to get audio or visemes.");
-        recordBtn.style.display = "block";
-      }
-    };
-
-    recorder.start();
-    setTimeout(() => recorder.stop(), 5000);
-  } catch (err) {
-    updateStatus("❌ Microphone access failed.");
-    console.error(err);
-  }
-});
-});
-
-</script>
-   <style>
-    body {
-      margin: 0;
-      background-color: #1e1e1e;
-      color: white;
-      font-family: 'Segoe UI', sans-serif;
-      overflow: hidden;
-    }
-    canvas {
-      display: block;
-    }
-    #recordBtn {
-      position: absolute;
-      bottom: 40px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 10;
-      padding: 12px 24px;
-      font-size: 16px;
-      background-color: orange;
-      color: white;
-      border: none;
-      border-radius: 10px;
-      cursor: pointer;
-      font-weight: bold;
-      box-shadow: 0 0 10px rgba(255, 165, 0, 0.4);
-    
-    }
-    #recordBtn.blinking {
-      animation: blink-animation 2s ease-in-out infinite;
-  }
-
-  @keyframes blink-animation {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
-  }
-    #caption {
-      position: absolute;
-      top: 50%;
-      left: 20px;
-      transform: translateY(-50%);
-      font-size: 12px;
-      color: #cccccc;
-      background: rgba(0, 0, 0, 0.4);
-      padding: 6px 10px;
-      border-radius: 6px;
-      font-style: italic;
-      pointer-events: none;
-      max-width: 300px;
-      z-index: 15;
-    }
-    #status {
-      position: absolute;
-      top: 20px;
-      left: 20px;
-      z-index: 10;
-      background: rgba(0, 0, 0, 0.8);
-      padding: 12px 16px;
-      border-radius: 10px;
-      font-size: 16px;
-      color: #90ee90;
-      max-width: 400px;
-      font-weight: 500;
-      box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
-    }
-    #version-tag {
-      position: absolute;
-      bottom: 10px;
-      right: 10px;
-      font-size: 12px;
-      color: #aaa;
-    }
-   
-    #recordPrompt {
-      position: absolute;
-      bottom: 90px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 16px;
-      color: rgba(255,255,255,0.3);
-      transition: opacity 1s ease;
-      pointer-events: none;
-    }
-    #recordPrompt.ready {
-      color: rgba(255,255,255,0.9);
-    }
-    #waveform {
-      position: absolute;
-      bottom: 50px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 200px;
-      height: 40px;
-      background: transparent;
-      pointer-events: none;
-    }
-    </style>
-    
-  </meta>
- </head>
- <body>
-  <div id="recordPrompt" class="faint"></div>
-  <canvas id="waveform"></canvas>
-  <button id="recordBtn">
-   🎤 Ask Chip
-  </button>
-  <div id="status">
-   Ready
-  </div>
-  <div id="version-tag">
-   Ask Chip UI vDEBUG-9
-  </div>
-  <div id="caption"></div>
-<a id="audioDownload" style="display:none;color:#90ee90;position:absolute;bottom:10px;left:20px;z-index:15;pointer-events:auto;" download="recording.webm">🎧 Download your recording</a>
-  <script type="module">
-   import * as THREE from 'https://esm.sh/three@0.155.0';
-    import { GLTFLoader } from 'https://esm.sh/three@0.155.0/examples/jsm/loaders/GLTFLoader';
-    import { OrbitControls } from 'https://esm.sh/three@0.155.0/examples/jsm/controls/OrbitControls';
-
-    let scene, camera, renderer;
-    let model, visemeMap, skinnedMesh;
-    const canvas = document.createElement('canvas');
-    document.body.appendChild(canvas);
-    const statusDiv = document.getElementById("status");
+  <script>
     const recordBtn = document.getElementById("recordBtn");
+    const statusDiv = document.getElementById("status");
 
     function updateStatus(message) {
       statusDiv.textContent = message;
       console.log("[Chip]", message);
     }
 
-    function renderOnce() {
-      renderer.render(scene, camera);
-    }
+    recordBtn.addEventListener("click", async () => {
+      if (recordBtn.disabled) return;
+      recordBtn.disabled = true;
+      updateStatus("🎙️ Listening...");
 
-    window.playVisemeAudio = async function(audioUrl, visemes, customDoneMessage = "✅ Done. Ask another question.") {
-      updateStatus("🔊 Playing Chip's response...");
-      console.log("⛔ Blinking OFF");
-      recordBtn.classList.remove("blinking");
-      const audio = new Audio(audioUrl);
-      console.log("✅ audioUrl received:", audioUrl);
       try {
-        await audio.play();
-        console.log("🔊 Audio started");
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const recorder = new MediaRecorder(stream);
+        const chunks = [];
+
+        recorder.ondataavailable = e => chunks.push(e.data);
+        recorder.onstop = async () => {
+          updateStatus("📤 Uploading audio to Chip...");
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          const formData = new FormData();
+          formData.append("audio", blob, "input.webm");
+
+          const response = await fetch("/ask-chip", { method: "POST", body: formData });
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+
+          let audioUrl = "";
+          let collectingAudio = false;
+          const audioChunks = [];
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            if (value && value.length > 2) {
+              if (value[0] === 73 && value[1] === 68 && value[2] === 51) {
+                collectingAudio = true;
+              }
+              if (collectingAudio) {
+                audioChunks.push(value);
+                continue;
+              }
+            }
+
+            const text = decoder.decode(value);
+            const lines = text.split("--frame").filter(Boolean);
+            for (const line of lines) {
+              const [, headers, content] = line.split(/\r?\n\r?\n/);
+              if (!headers || !content) continue;
+
+              const contentType = headers.match(/Content-Type: (.+)/)?.[1];
+              if (contentType === "application/json") {
+                const data = JSON.parse(content);
+                if (data.transcript) updateStatus("🗣️ You said: " + data.transcript);
+                if (data.response) console.log("🤖 Chip replied:", data.response);
+              }
+            }
+          }
+
+          if (audioChunks.length) {
+            const fullAudioBlob = new Blob(audioChunks, { type: 'audio/mpeg' });
+            audioUrl = URL.createObjectURL(fullAudioBlob);
+          }
+
+          if (audioUrl) {
+            playVisemeAudio(audioUrl, []);
+          } else {
+            updateStatus("⚠️ No audio returned.");
+          }
+        };
+
+        recorder.start();
+        setTimeout(() => recorder.stop(), 5000);
       } catch (err) {
-        console.error("❌ Audio playback error:", err);
+        updateStatus("❌ Mic error.");
+        console.error(err);
       }
-      audio.onplay = () => console.log("🔊 Audio started");
-      audio.onerror = (e) => console.error("❌ Audio playback error:", e);
+    });
 
-      visemes.forEach(({ time, viseme }) => {
-        const delay = time * 1000;
-        const targetName = `viseme_${viseme}`;
-        const index = visemeMap[targetName];
-        if (index === undefined) return;
-
-        setTimeout(() => {
-          skinnedMesh.morphTargetInfluences.fill(0);
-          skinnedMesh.morphTargetInfluences[index] = 1;
-          renderOnce();
-        }, delay);
-
-        setTimeout(() => {
-          skinnedMesh.morphTargetInfluences[index] = 0;
-          renderOnce();
-        }, delay + 120);
-      });
-
+    window.playVisemeAudio = function(audioUrl, visemes, customDoneMessage = "✅ Done. Ask another question.") {
+      updateStatus("🔊 Playing Chip's response...");
+      const audio = new Audio(audioUrl);
+      audio.play();
       audio.onended = () => {
         updateStatus(customDoneMessage);
-        console.log("✨ Blinking ON");
-            document.getElementById("recordPrompt").classList.add("ready");
-      document.getElementById("recordPrompt").style.display = "block";
-      recordBtn.style.display = "none";
-      recordBtn.disabled = false;
-      };
-    }
-
-    // greetUser fully disabled for testing
-
-document.addEventListener("DOMContentLoaded", () => {
-  function updateStatus(message) {
-    const statusDiv = document.getElementById("status");
-    statusDiv.textContent = message;
-    console.log("[Chip]", message);
-  }
-  recordBtn.addEventListener("click", async () => {
-    if (recordBtn.disabled) return;  // prevent double click
-    recordBtn.disabled = true;
-  updateStatus("🎙️ Listening for 5 seconds...");
-  console.log("⛔ Blinking OFF");
-  recordBtn.classList.remove("blinking");
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const recorder = new MediaRecorder(stream);
-    const chunks = [];
-
-    recorder.ondataavailable = e => chunks.push(e.data);
-
-    recorder.onstop = async () => {
-      updateStatus("📤 Uploading audio to Chip...");
-      const blob = new Blob(chunks, { type: 'audio/webm' });
-      const audioLink = document.getElementById('audioDownload');
-      audioLink.href = URL.createObjectURL(blob);
-      audioLink.style.display = 'block';
-      const formData = new FormData();
-      formData.append("audio", blob, "input.webm");
-
-      updateStatus("🧠 Processing request...");
-      const response = await fetch("/ask-chip", { method: "POST", body: formData });
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-
-      let visemes = [];
-      let audioUrl = "";
-      let audioChunks = []; // store binary audio chunks
-      let collectingAudio = false;
-
-      const streamTimeout = setTimeout(() => {
-        console.warn("⏰ Stream timeout: forcing finalization.");
-        reader.cancel();
-      }, 10000);
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          clearTimeout(streamTimeout);
-          console.log("📦 Stream ended. Finalizing audio...");
-          break;
-        }
-
-        // Check for audio/mpeg binary block (starts with ID3 or binary marker)
-        if (value && value.length > 2) {
-          if (value[0] === 73 && value[1] === 68 && value[2] === 51) {
-            console.log("🎧 Detected audio/mpeg binary start (ID3)");
-            collectingAudio = true;
-          }
-          if (collectingAudio) {
-            audioChunks.push(value);
-            console.log("📥 Appended audio chunk, total:", audioChunks.length);
-            continue;
-          }
-        }
-
-        const text = decoder.decode(value);
-        const lines = text.split("--frame").filter(Boolean);
-        for (const line of lines) {
-          console.log("📦 Raw frame:", line);
-  console.log("📦 Raw frame:", line);
-          const [, headers, content] = line.split(/\r?\n\r?\n/);
-          if (!headers || !content) continue;
-
-          const contentType = headers.match(/Content-Type: (.+)/)?.[1];
-          if (contentType === "application/json") {
-            const data = JSON.parse(content);
-            if (data.viseme_timestamps) visemes = data.viseme_timestamps;
-            if (data.audio) audioUrl = data.audio;
-            if (data.transcript) {
-              updateStatus("🗣️ You said: " + data.transcript);
-              const caption = document.getElementById("caption");
-              caption.textContent = data.transcript;
-              caption.style.visibility = "visible";
-              caption.style.display = "block";
-              setTimeout(() => { caption.style.display = "none"; }, 4000);
-            }
-            if (data.response) console.log("🤖 Chip replied:", data.response);
-          }
-        }
-      }
-
-      if (audioChunks.length) {
-        const fullAudioBlob = new Blob(audioChunks, { type: 'audio/mpeg' });
-        audioUrl = URL.createObjectURL(fullAudioBlob);
-        console.log("🔗 Final audioUrl created from chunks:", audioUrl);
-      }
-
-      if (audioUrl) {
-        playVisemeAudio(audioUrl, visemes);
-      } else {
-        updateStatus("⚠️ Failed to get audio or visemes.");
         recordBtn.style.display = "block";
-      }
+        recordBtn.disabled = false;
+      };
     };
-
-    recorder.start();
-    setTimeout(() => recorder.stop(), 5000);
-  } catch (err) {
-    updateStatus("❌ Microphone access failed.");
-    console.error(err);
-  }
-});
-});
-
-</script>
- </body>
+  </script>
+</body>
 </html>
