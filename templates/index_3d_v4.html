@@ -16,7 +16,8 @@ function autoStartListening() {
   }, 500); // short delay after greeting
 }
 
-recordBtn.addEventListener("click", async () => {
+document.addEventListener("DOMContentLoaded", () => {
+  recordBtn.addEventListener("click", async () => {
   updateStatus("🎙️ Listening for 5 seconds...");
   console.log("⛔ Blinking OFF");
   recordBtn.classList.remove("blinking");
@@ -88,6 +89,7 @@ recordBtn.addEventListener("click", async () => {
     updateStatus("❌ Microphone access failed.");
     console.error(err);
   }
+});
 });
 
 </script>
@@ -264,7 +266,8 @@ recordBtn.addEventListener("click", async () => {
 
     // greetUser fully disabled for testing
 
-recordBtn.addEventListener("click", async () => {
+document.addEventListener("DOMContentLoaded", () => {
+  recordBtn.addEventListener("click", async () => {
   updateStatus("🎙️ Listening for 5 seconds...");
   console.log("⛔ Blinking OFF");
   recordBtn.classList.remove("blinking");
@@ -336,6 +339,7 @@ recordBtn.addEventListener("click", async () => {
     updateStatus("❌ Microphone access failed.");
     console.error(err);
   }
+});
 });
 
 </script>
