@@ -238,7 +238,13 @@ document.addEventListener("DOMContentLoaded", () => {
       console.log("⛔ Blinking OFF");
       recordBtn.classList.remove("blinking");
       const audio = new Audio(audioUrl);
-      audio.play();
+      console.log("✅ audioUrl received:", audioUrl);
+      try {
+        await audio.play();
+        console.log("🔊 Audio started");
+      } catch (err) {
+        console.error("❌ Audio playback error:", err);
+      }
       audio.onplay = () => console.log("🔊 Audio started");
       audio.onerror = (e) => console.error("❌ Audio playback error:", e);
 
