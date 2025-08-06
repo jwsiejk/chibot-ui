@@ -217,3 +217,26 @@ def profile():
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=3000)
+
+
+@app.route("/greet")
+def greet():
+    try:
+        text = "Hey there. I'm Chip — ready when you are."
+        voice_settings = {"speed": 0.9}
+        audio = eleven.text_to_speech.convert(
+            voice_id=voice_id,
+            model_id="eleven_monolingual_v1",
+            text=text,
+            optimize_streaming_latency=1,
+            voice_settings=voice_settings
+        )
+        filename = f"static/audio/{uuid4().hex}.mp3"
+        with open(filename, "wb") as f:
+            for chunk in audio:
+                f.write(chunk)
+        return jsonify({"reply": text, "audio": "/" + filename})
+    except Exception as e:
+        print("🔥 ERROR IN /greet:", str(e))
+        traceback.print_exc()
+        return jsonify({"error": "Greeting failed"}), 500
