@@ -800,5 +800,72 @@ function saveProfile() {
   <div class="chipName">Chip Tracewell</div>
 </div>
 
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const startBtn = document.getElementById("startBtn");
+  if (startBtn) {
+    startBtn.addEventListener("click", () => {
+      fetch("/greet")
+        .then(res => res.json())
+        .then(data => {
+          if (data.reply) updateStatus(data.reply);
+          if (data.audio) {
+            playVisemeAudio(data.audio, [], "👋 Ask me anything about Pure Storage when you're ready (5 seconds).");
+          }
+        });
+      startBtn.style.display = "none";
+    });
+  }
+
+  const resetBtn = document.getElementById("resetBtn");
+  if (resetBtn) {
+    resetBtn.addEventListener("click", async () => {
+      updateStatus("🔄 Restarting session...");
+      document.getElementById("recordPrompt").innerText = "🔁 Resetting...";
+      window.stopPassiveLoop = false;
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      fetch("/greet").then(res => res.json()).then(data => {
+        updateStatus(data.reply || "👋 Welcome back.");
+        if (data.audio) {
+          playVisemeAudio(data.audio, [], "👋 Ask me anything about Pure Storage when you're ready (5 seconds).");
+        }
+      });
+    });
+  }
+
+  const exitBtn = document.getElementById("exitBtn");
+  if (exitBtn) {
+    exitBtn.addEventListener("click", () => {
+      updateStatus("👋 It was great talking with you.");
+      document.getElementById("recordPrompt").innerText = "👋 Chip has left the session.";
+      window.stopPassiveLoop = true;
+    });
+  }
+
+  const profileBtn = document.getElementById("profileBtn");
+  if (profileBtn) {
+    profileBtn.addEventListener("click", () => {
+      const panel = document.getElementById("profilePanel");
+      panel.style.display = panel.style.display === "block" ? "none" : "block";
+    });
+  }
+
+  navigator.mediaDevices.enumerateDevices().then(devices => {
+    const audioOptions = document.getElementById("audioOptions");
+    const audioInputs = devices.filter(device => device.kind === "audioinput");
+    audioOptions.innerHTML = "";
+    audioInputs.forEach(device => {
+      const option = document.createElement("div");
+      option.textContent = device.label || "Audio Input";
+      option.onclick = () => {
+        console.log("🎤 Selected input:", device.deviceId);
+        window.selectedAudioDeviceId = device.deviceId;
+      };
+      audioOptions.appendChild(option);
+    });
+  });
+});
+</script>
 </body>
 </html>
