@@ -340,14 +340,6 @@
   
   
     
-<div id="sessionControls" style="position: absolute; top: 160px; left: 20px; z-index: 20; text-align: left; font-size: 14px; opacity: 0.7;">
-  <button id="startBtn" style="margin-bottom: 10px; background-color: #000; color: orange; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer;">
-    Ask Chip - Start a conversation
-  </button><br>
-  <button id="exitBtn" style="margin-bottom: 6px; background-color: #000; color: orange; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer;">Exit</button><br>
-  <div style="margin-top: 6px; font-size: 12px; color: orange;">Click Exit to end session or just say "Exit"</div><br>
-  <button id="resetBtn" style="background-color: #000; color: orange; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer;">Reset Session</button>
-</div>
 
 
   <script type="module">
@@ -428,5 +420,67 @@
       };
     };
   </script>
+
+<div id="askChipToolbar">
+  <button id="startBtn">🎙️ Start</button>
+  <div class="dropdown">
+    <button id="audioBtn">🔈 Audio ▾</button>
+    <div class="dropdown-content" id="audioOptions">
+      <div>(Same as system)</div>
+      <div>USB Headset</div>
+      <div>Bluetooth</div>
+    </div>
+  </div>
+  <button id="resetBtn">🔁 Reset</button>
+  <button id="exitBtn">❌ End</button>
+</div>
+
+
+<style>
+#askChipToolbar {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.85);
+  padding: 10px 16px;
+  border-radius: 14px 14px 0 0;
+  display: flex;
+  gap: 16px;
+  z-index: 30;
+  font-size: 14px;
+}
+#askChipToolbar button {
+  background: none;
+  border: none;
+  color: orange;
+  font-weight: bold;
+  cursor: pointer;
+}
+.dropdown {
+  position: relative;
+}
+.dropdown-content {
+  display: none;
+  position: absolute;
+  bottom: 30px;
+  background: rgba(30,30,30,0.9);
+  border-radius: 6px;
+  padding: 6px;
+  min-width: 140px;
+  box-shadow: 0 0 6px #000;
+}
+.dropdown-content div {
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.dropdown-content div:hover {
+  background-color: rgba(255,165,0,0.2);
+}
+.dropdown:hover .dropdown-content {
+  display: block;
+}
+</style>
+
 </body>
 </html>
