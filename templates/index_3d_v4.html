@@ -5,7 +5,7 @@
   <title>Ask Chip (3D)</title>
   <meta content="no-cache, no-store, must-revalidate" http-equiv="Cache-Control">
   <script>
-    console.log("🧪 Loaded index_3d.html vDEBUG-9");
+    console.log("🧪 Loaded index_3d.html vDEBUG-10");
 
     function autoStartListening() {
       setTimeout(() => {
@@ -15,7 +15,6 @@
     }
 
     document.addEventListener("DOMContentLoaded", () => {
-      // ✅ Injected greeting call
       fetch("/greet")
         .then(res => res.json())
         .then(data => {
@@ -31,6 +30,15 @@
         console.log("[Chip]", message);
       }
 
+      // ✅ Track conversation history
+      let conversationHistory = [];
+
+      function appendToHistory(role, content) {
+        conversationHistory.push({ role, content });
+        if (conversationHistory.length > 6) conversationHistory.shift();
+      }
+
+      const recordBtn = document.getElementById("recordBtn");
       recordBtn.addEventListener("click", async () => {
         if (recordBtn.disabled) return;
         recordBtn.disabled = true;
@@ -108,8 +116,12 @@
                     caption.style.visibility = "visible";
                     caption.style.display = "block";
                     setTimeout(() => { caption.style.display = "none"; }, 4000);
+                    appendToHistory("user", data.transcript);
                   }
-                  if (data.response) console.log("🤖 Chip replied:", data.response);
+                  if (data.response) {
+                    console.log("🤖 Chip replied:", data.response);
+                    appendToHistory("assistant", data.response);
+                  }
                 }
               }
             }
@@ -137,29 +149,15 @@
       });
     });
   </script>
+
   <style>
-    body {
-      margin: 0;
-      background-color: #1e1e1e;
-      color: white;
-      font-family: 'Segoe UI', sans-serif;
-      overflow: hidden;
-    }
+    body { margin: 0; background-color: #1e1e1e; color: white; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
     canvas { display: block; }
     #recordBtn {
-      position: absolute;
-      bottom: 40px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 10;
-      padding: 12px 24px;
-      font-size: 16px;
-      background-color: orange;
-      color: white;
-      border: none;
-      border-radius: 10px;
-      cursor: pointer;
-      font-weight: bold;
+      position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
+      z-index: 10; padding: 12px 24px; font-size: 16px;
+      background-color: orange; color: white;
+      border: none; border-radius: 10px; cursor: pointer; font-weight: bold;
       box-shadow: 0 0 10px rgba(255, 165, 0, 0.4);
     }
     #recordBtn.blinking {
@@ -170,63 +168,34 @@
       50% { opacity: 0.3; }
     }
     #caption {
-      position: absolute;
-      top: 50%;
-      left: 20px;
-      transform: translateY(-50%);
-      font-size: 12px;
-      color: #cccccc;
-      background: rgba(0, 0, 0, 0.4);
-      padding: 6px 10px;
-      border-radius: 6px;
-      font-style: italic;
-      pointer-events: none;
-      max-width: 300px;
-      z-index: 15;
+      position: absolute; top: 50%; left: 20px; transform: translateY(-50%);
+      font-size: 12px; color: #cccccc; background: rgba(0, 0, 0, 0.4);
+      padding: 6px 10px; border-radius: 6px; font-style: italic;
+      pointer-events: none; max-width: 300px; z-index: 15;
     }
     #status {
-      position: absolute;
-      top: 20px;
-      left: 20px;
-      z-index: 10;
-      background: rgba(0, 0, 0, 0.8);
-      padding: 12px 16px;
-      border-radius: 10px;
-      font-size: 16px;
-      color: #90ee90;
-      max-width: 400px;
-      font-weight: 500;
-      box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+      position: absolute; top: 20px; left: 20px; z-index: 10;
+      background: rgba(0, 0, 0, 0.8); padding: 12px 16px;
+      border-radius: 10px; font-size: 16px; color: #90ee90;
+      max-width: 400px; font-weight: 500; box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
     }
     #version-tag {
-      position: absolute;
-      bottom: 10px;
-      right: 10px;
-      font-size: 12px;
-      color: #aaa;
+      position: absolute; bottom: 10px; right: 10px;
+      font-size: 12px; color: #aaa;
     }
     #recordPrompt {
-      position: absolute;
-      bottom: 90px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 16px;
-      color: rgba(255,255,255,0.3);
-      transition: opacity 1s ease;
+      position: absolute; bottom: 90px; left: 50%;
+      transform: translateX(-50%); font-size: 16px;
+      color: rgba(255,255,255,0.3); transition: opacity 1s ease;
       pointer-events: none;
     }
     #recordPrompt.ready {
       color: rgba(255,255,255,0.9);
     }
     #waveform {
-      position: absolute;
-      bottom: 50px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 200px;
-      height: 40px;
-      background: transparent;
-      pointer-events: none;
+      position: absolute; bottom: 50px; left: 50%;
+      transform: translateX(-50%); width: 200px; height: 40px;
+      background: transparent; pointer-events: none;
     }
   </style>
 </head>
@@ -236,7 +205,7 @@
   <canvas id="waveform"></canvas>
   <button id="recordBtn">🎤 Ask Chip</button>
   <div id="status">Ready</div>
-  <div id="version-tag">Ask Chip UI vDEBUG-9</div>
+  <div id="version-tag">Ask Chip UI vDEBUG-10</div>
   <div id="caption"></div>
   <a id="audioDownload" style="display:none;color:#90ee90;position:absolute;bottom:10px;left:20px;z-index:15;pointer-events:auto;" download="recording.webm">🎧 Download your recording</a>
 
@@ -249,28 +218,17 @@
     let model, visemeMap, skinnedMesh;
     const canvas = document.createElement('canvas');
     document.body.appendChild(canvas);
-    const statusDiv = document.getElementById("status");
-    const recordBtn = document.getElementById("recordBtn");
-
-    function updateStatus(message) {
-      statusDiv.textContent = message;
-      console.log("[Chip]", message);
-    }
 
     function renderOnce() {
       renderer.render(scene, camera);
     }
 
-    // ✅ Updated to keep the button visible after response
     window.playVisemeAudio = async function(audioUrl, visemes, customDoneMessage = "✅ Done. Ask another question.") {
       updateStatus("🔊 Playing Chip's response...");
-      console.log("⛔ Blinking OFF");
       recordBtn.classList.remove("blinking");
-
       const audio = new Audio(audioUrl);
       try {
         await audio.play();
-        console.log("🔊 Audio started");
       } catch (err) {
         console.error("❌ Audio playback error:", err);
       }
@@ -280,13 +238,11 @@
         const targetName = `viseme_${viseme}`;
         const index = visemeMap[targetName];
         if (index === undefined) return;
-
         setTimeout(() => {
           skinnedMesh.morphTargetInfluences.fill(0);
           skinnedMesh.morphTargetInfluences[index] = 1;
           renderOnce();
         }, delay);
-
         setTimeout(() => {
           skinnedMesh.morphTargetInfluences[index] = 0;
           renderOnce();
@@ -297,9 +253,8 @@
         updateStatus(customDoneMessage);
         document.getElementById("recordPrompt").classList.add("ready");
         document.getElementById("recordPrompt").style.display = "block";
-        recordBtn.style.display = "block"; // ✅ changed from "none" to "block"
+        recordBtn.style.display = "block";
         recordBtn.disabled = false;
-        console.log("✨ Blinking ON");
       };
     };
   </script>
