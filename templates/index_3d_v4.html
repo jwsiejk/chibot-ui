@@ -142,7 +142,8 @@
                   if (data.audio) audioUrl = data.audio;
                   if (data.transcript) {
 
-                    if (!data.transcript || data.transcript.trim() === "") {
+                    const transcriptText = data.transcript?.trim() || "";
+                    if (transcriptText === "" || transcriptText === "." || transcriptText === "..." || transcriptText.length <= 2) {
                       window.silenceCounter = (window.silenceCounter || 0) + 1;
                       if (window.silenceCounter === 1) {
                         updateStatus("🤔 I didn’t hear anything. Is there something I can help you with?");
@@ -157,11 +158,18 @@
                     }
 
 
-                    if (!data.transcript || data.transcript.trim() === "") {
-                      window.silenceCounter = (window.silenceCounter || 0) + 1;
-                      if (window.silenceCounter === 1) {
-                        updateStatus("🤔 I didn’t hear anything. Is there something I can help you with?");
-                      } else {
+                     else {
+                        updateStatus("👋 I’m not picking anything up, so I’m going to jump off. Press Start if you want to talk.");
+                        document.getElementById("recordPrompt").innerText = "👋 Chip is offline.";
+                        window.stopPassiveLoop = true;
+                      }
+                      return;
+                    } else {
+                      window.silenceCounter = 0;
+                    }
+
+
+                     else {
                         updateStatus("👋 I’m not picking anything up, so I’m going to jump off. Press Start if you want to talk.");
                         document.getElementById("recordPrompt").innerText = "👋 Chip is offline.";
                         window.stopPassiveLoop = true;
