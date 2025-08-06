@@ -36,11 +36,11 @@
 
       recordBtn.addEventListener("click", async () => {
         if (recordBtn.disabled) return;
-        recordBtn.disabled = true;
+        if (recordBtn) recordBtn.disabled = true;
         updateStatus("🎙️ Listening for 5 seconds...");
         document.getElementById("recordPrompt").innerText = "🎙️ Chip is listening...";
         console.log("⛔ Blinking OFF");
-        recordBtn.classList.remove("blinking");
+        if (recordBtn) recordBtn.classList.remove("blinking");
 
         try {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -239,7 +239,7 @@
 <body>
   <div id="recordPrompt" class="faint"></div>
   <canvas id="waveform"></canvas>
-  <!-- Ask Chip button removed for passive flow -->
+  <button id="recordBtn" style="display: none;">🎤 Ask Chip</button> <!-- Hidden for passive flow -->
   <div id="status">Ready</div>
   <div id="version-tag">Ask Chip UI vDEBUG-9</div>
   <div id="caption"></div>
@@ -270,7 +270,7 @@
     window.playVisemeAudio = async function(audioUrl, visemes, customDoneMessage = "✅ Done. Ask another question.") {
       updateStatus("🔊 Playing Chip's response...");
       console.log("⛔ Blinking OFF");
-      recordBtn.classList.remove("blinking");
+      if (recordBtn) recordBtn.classList.remove("blinking");
 
       const audio = new Audio(audioUrl);
       try {
@@ -303,9 +303,9 @@
         document.getElementById("recordPrompt").innerText = "✅ Ask anything else when you're ready.";
         document.getElementById("recordPrompt").classList.add("ready");
         document.getElementById("recordPrompt").style.display = "block";
-        recordBtn.style.display = "none"; // Button hidden in passive mode
-        setTimeout(() => { document.getElementById("recordBtn").click(); }, 1000);
-        recordBtn.disabled = false;
+        if (recordBtn) recordBtn.style.display = "none"; // Button hidden in passive mode
+        setTimeout(() => { const btn = document.getElementById("recordBtn"); if (btn) btn.click(); }, 1000);
+        if (recordBtn) recordBtn.disabled = false;
         console.log("✨ Blinking ON");
       };
     };
