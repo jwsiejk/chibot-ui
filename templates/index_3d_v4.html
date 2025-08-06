@@ -129,6 +129,7 @@ function autoStartListening() {
    Ask Chip UI vDEBUG-9
   </div>
   <div id="caption">
+  <a id="audioDownload" style="display:none;color:#90ee90;position:absolute;bottom:10px;left:20px;z-index:15;" download="recording.webm">🎧 Download your recording</a>
   </div>
   <script type="module">
    import * as THREE from 'https://esm.sh/three@0.155.0';
@@ -267,6 +268,9 @@ function autoStartListening() {
         recorder.onstop = async () => {
           updateStatus("📤 Uploading audio to Chip...");
           const blob = new Blob(chunks, { type: 'audio/webm' });
+          const audioLink = document.getElementById('audioDownload');
+          audioLink.href = URL.createObjectURL(blob);
+          audioLink.style.display = 'block';
           console.log('[Chip] Audio blob size:', blob.size, 'bytes');
           const formData = new FormData();
           formData.append("audio", blob, "input.webm");
