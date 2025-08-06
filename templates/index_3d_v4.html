@@ -59,6 +59,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const lines = text.split("--frame").filter(Boolean);
 
         for (const line of lines) {
+  console.log("📦 Raw frame:", line);
           const [, headers, content] = line.split(/\r?\n\r?\n/);
           if (!headers || !content) continue;
 
@@ -320,6 +321,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const lines = text.split("--frame").filter(Boolean);
 
         for (const line of lines) {
+  console.log("📦 Raw frame:", line);
           const [, headers, content] = line.split(/\r?\n\r?\n/);
           if (!headers || !content) continue;
 
