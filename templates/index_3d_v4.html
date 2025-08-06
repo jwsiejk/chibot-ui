@@ -26,10 +26,12 @@
       
       const startBtn = document.getElementById("startBtn");
       if (startBtn) startBtn.addEventListener("click", () => {
+        window.silenceCounter = 0; // reset silence tracking
+
         fetch("/greet")
           .then(res => res.json())
           .then(data => {
-              updateStatus(data.reply || "👋 Hey there! I'm Chip.");
+              if (data.reply) updateStatus(data.reply);
               if (data.audio) {
                 playVisemeAudio(data.audio, [], "👋 Ask me anything about Pure Storage when you're ready (5 seconds).");
               }
@@ -139,6 +141,21 @@
                   if (data.viseme_timestamps) visemes = data.viseme_timestamps;
                   if (data.audio) audioUrl = data.audio;
                   if (data.transcript) {
+
+                    if (!data.transcript || data.transcript.trim() === "") {
+                      window.silenceCounter = (window.silenceCounter || 0) + 1;
+                      if (window.silenceCounter === 1) {
+                        updateStatus("🤔 I didn’t hear anything. Is there something I can help you with?");
+                      } else {
+                        updateStatus("👋 I’m not picking anything up, so I’m going to jump off. Press Start if you want to talk.");
+                        document.getElementById("recordPrompt").innerText = "👋 Chip is offline.";
+                        window.stopPassiveLoop = true;
+                      }
+                      return;
+                    } else {
+                      window.silenceCounter = 0;
+                    }
+
 
                     if (!data.transcript || data.transcript.trim() === "") {
                       window.silenceCounter = (window.silenceCounter || 0) + 1;
