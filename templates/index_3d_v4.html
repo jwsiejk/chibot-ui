@@ -233,7 +233,7 @@ document.addEventListener("DOMContentLoaded", () => {
       renderer.render(scene, camera);
     }
 
-    function playVisemeAudio(audioUrl, visemes, customDoneMessage = "✅ Done. Ask another question.") {
+    async function playVisemeAudio(audioUrl, visemes, customDoneMessage = "✅ Done. Ask another question.") {
       updateStatus("🔊 Playing Chip's response...");
       console.log("⛔ Blinking OFF");
       recordBtn.classList.remove("blinking");
