@@ -16,17 +16,17 @@
 
     document.addEventListener("DOMContentLoaded", () => {
       // ✅ Injected greeting call
-      // fetch("/greet")
+      fetch("/greet")
         .then(res => res.json())
         .then(data => {
-          updateStatus(data.reply || "👋 Hey there! I'm Chip.");
-          if (data.audio) {
-            playVisemeAudio(data.audio, [], "👋 Ask me anything when you're ready.");
-          }
-        })
+            updateStatus(data.reply || "👋 Hey there! I'm Chip.");
+            if (data.audio) {
+              playVisemeAudio(data.audio, [], "👋 Ask me anything when you're ready.");
+            }
+          })
         .catch(() => {
           updateStatus("👋 Hey there! I'm Chip.");
-        });
+          });
 
       function updateStatus(message) {
         const statusDiv = document.getElementById("status");
@@ -41,14 +41,14 @@
         fetch("/greet")
           .then(res => res.json())
           .then(data => {
-            updateStatus(data.reply || "👋 Hey there! I'm Chip.");
-            if (data.audio) {
-              playVisemeAudio(data.audio, [], "👋 Ask me anything when you're ready.");
-            }
-          })
+              updateStatus(data.reply || "👋 Hey there! I'm Chip.");
+              if (data.audio) {
+                playVisemeAudio(data.audio, [], "👋 Ask me anything when you're ready.");
+              }
+              })
           .catch(() => {
             updateStatus("👋 Hey there! I'm Chip.");
-          });
+              });
         startBtn.style.display = "none";
       });
 
@@ -70,12 +70,12 @@
         if (recordBtn) recordBtn.style.display = "none";
         window.stopPassiveLoop = false;
         await new Promise(resolve => setTimeout(resolve, 1500));
-        // fetch("/greet").then(res => res.json()).then(data => {
+        fetch("/greet").then(res => res.json()).then(data => {
           updateStatus(data.reply || "👋 Welcome back.");
-          if (data.audio) {
-            playVisemeAudio(data.audio, [], "👋 Ask me anything when you're ready.");
-          }
-        });
+            if (data.audio) {
+              playVisemeAudio(data.audio, [], "👋 Ask me anything when you're ready.");
+            }
+          });
       });
 
       recordBtn.addEventListener("click", async () => {
@@ -117,7 +117,7 @@
             const streamTimeout = setTimeout(() => {
               console.warn("⏰ Stream timeout: forcing finalization.");
               reader.cancel();
-            }, 10000);
+              }, 10000);
 
             while (true) {
               const { done, value } = await reader.read();
@@ -125,19 +125,19 @@
                 clearTimeout(streamTimeout);
                 console.log("📦 Stream ended. Finalizing audio...");
                 break;
-              }
+                }
 
               if (value && value.length > 2) {
                 if (value[0] === 73 && value[1] === 68 && value[2] === 51) {
                   console.log("🎧 Detected audio/mpeg binary start (ID3)");
                   collectingAudio = true;
-                }
+                  }
                 if (collectingAudio) {
                   audioChunks.push(value);
                   console.log("📥 Appended audio chunk, total:", audioChunks.length);
                   continue;
+                  }
                 }
-              }
 
               const text = decoder.decode(value);
               const lines = text.split("--frame").filter(Boolean);
@@ -158,32 +158,32 @@
                       document.getElementById("recordPrompt").classList.add("ready");
                       document.getElementById("recordPrompt").style.display = "block";
                       return; // stop passive loop
-                    }
+                      }
                     updateStatus("🗣️ You said: " + data.transcript);
                     const caption = document.getElementById("caption");
                     caption.textContent = data.transcript;
                     caption.style.visibility = "visible";
                     caption.style.display = "block";
                     setTimeout(() => { caption.style.display = "none"; }, 4000);
-                  }
+                    }
                   if (data.response) console.log("🤖 Chip replied:", data.response);
+                  }
                 }
               }
-            }
 
             if (audioChunks.length) {
               const fullAudioBlob = new Blob(audioChunks, { type: 'audio/mpeg' });
               audioUrl = URL.createObjectURL(fullAudioBlob);
               console.log("🔗 Final audioUrl created from chunks:", audioUrl);
-            }
+              }
 
             if (audioUrl) {
               playVisemeAudio(audioUrl, visemes);
-            } else {
+              } else {
               updateStatus("⚠️ Failed to get audio or visemes.");
               recordBtn.style.display = "block";
-            }
-          };
+              }
+            };
 
           recorder.start();
           setTimeout(() => recorder.stop(), 5000);
@@ -379,7 +379,7 @@
           if (document.getElementById("recordPrompt").innerText.includes("Ask anything else")) {
             updateStatus("💡 Still with me? You can ask something — or say \"That’s all for now\" to end.");
             document.getElementById("recordPrompt").innerText = "💬 Say something when you’re ready — or \"That’s all for now\" to end.";
-          }
+            }
         }, 15000);
 
         console.log("✨ Blinking ON");
