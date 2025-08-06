@@ -107,6 +107,14 @@
                   if (data.viseme_timestamps) visemes = data.viseme_timestamps;
                   if (data.audio) audioUrl = data.audio;
                   if (data.transcript) {
+                    const exitPhrase = data.transcript.trim().toLowerCase();
+                    if (exitPhrase.includes("that's all for now") || exitPhrase.includes("have a nice day") || exitPhrase.includes("catch you later") || exitPhrase.includes("i'm signing off")) {
+                      updateStatus("✅ Conversation ended. Chip is here if you need him.");
+                      document.getElementById("recordPrompt").innerText = "👋 Chip is idle. Say hi again to start over.";
+                      document.getElementById("recordPrompt").classList.add("ready");
+                      document.getElementById("recordPrompt").style.display = "block";
+                      return; // stop passive loop
+                    }
                     updateStatus("🗣️ You said: " + data.transcript);
                     const caption = document.getElementById("caption");
                     caption.textContent = data.transcript;
@@ -300,12 +308,23 @@
 
       audio.onended = () => {
         updateStatus(customDoneMessage);
-        document.getElementById("recordPrompt").innerText = "✅ Ask anything else when you're ready.";
+        document.getElementById("recordPrompt").innerText = "✅ Ask anything else when you're ready — or say \"That's all for now\" to end.";
+
         document.getElementById("recordPrompt").classList.add("ready");
         document.getElementById("recordPrompt").style.display = "block";
         if (recordBtn) recordBtn.style.display = "none"; // Button hidden in passive mode
         setTimeout(() => { const btn = document.getElementById("recordBtn"); if (btn) btn.click(); }, 1000);
         if (recordBtn) recordBtn.disabled = false;
+
+        // ⏳ After Chip's reply, wait 15 seconds, then prompt gently if idle
+        if (window.idlePromptTimeout) clearTimeout(window.idlePromptTimeout);
+        window.idlePromptTimeout = setTimeout(() => {
+          if (document.getElementById("recordPrompt").innerText.includes("Ask anything else")) {
+            updateStatus("💡 Still with me? You can ask something — or say \"That’s all for now\" to end.");
+            document.getElementById("recordPrompt").innerText = "💬 Say something when you’re ready — or \"That’s all for now\" to end.";
+          }
+        }, 15000);
+
         console.log("✨ Blinking ON");
       };
     };
