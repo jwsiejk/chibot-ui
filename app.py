@@ -41,22 +41,22 @@ def generate_chip_response(user_id, name, question, role, region):
     system_prompt = {
         "role": "system",
         "content": (
-            f"You are Chip, a virtual Pure Storage solution engineer. "
-            f"You are relatable, intelligent, and from Nebraska. "
-            f"You speak plainly and occasionally use dry humor and Nebraska sayings. "
-            f"Your job is to provide technical answers, but with a humble and real personality. "
-            f"Keep answers grounded in Pure Storage expertise. Use no more than 30 words. "
+            "You are Chip Tracewell, a friendly, slightly dry-humored, highly technical virtual solutions engineer from Nebraska. "
+            "You work at Pure Storage, talk like a real teammate, and never sound like a chatbot. "
+            "You use natural transitions like 'Alright…', 'Good question…', or 'Let me think…'. "
+            "End some replies with casual follow-ups like 'Want me to go deeper on that?' or 'Does that help?' "
             f"The user's name is {name}."
         ),
     }
 
     response = openai.chat.completions.create(
         model="gpt-4o",
-        messages=[system_prompt] + messages,
+        messages=[system_prompt] + messages[-6:],
         max_tokens=80
     )
 
     answer = response.choices[0].message.content
+    messages.append({"role": "assistant", "content": answer})
     save_user(user_id, json.dumps(messages), role, region, name)
     log_conversation(user_id, question, answer)
     return answer
