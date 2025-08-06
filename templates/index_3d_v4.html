@@ -20,6 +20,9 @@
         .then(res => res.json())
         .then(data => {
           updateStatus(data.reply || "👋 Hey there! I'm Chip.");
+          if (data.audio) {
+            playVisemeAudio(data.audio, [], "👋 Ask me anything when you're ready.");
+          }
         })
         .catch(() => {
           updateStatus("👋 Hey there! I'm Chip.");
