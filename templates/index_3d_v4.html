@@ -68,12 +68,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const text = decoder.decode(value);
         const lines = text.split("--frame").filter(Boolean);
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const text = decoder.decode(value);
-        const lines = text.split("--frame").filter(Boolean);
-
         for (const line of lines) {
           console.log("📦 Raw frame:", line);
   console.log("📦 Raw frame:", line);
@@ -353,12 +347,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const text = decoder.decode(value);
         const lines = text.split("--frame").filter(Boolean);
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const text = decoder.decode(value);
-        const lines = text.split("--frame").filter(Boolean);
-
         for (const line of lines) {
           console.log("📦 Raw frame:", line);
   console.log("📦 Raw frame:", line);
