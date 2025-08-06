@@ -37,6 +37,7 @@ def generate_chip_response(user_id, name, question, role, region):
     user = get_user(user_id)
     messages = user["messages"] if user else []
     messages.append({"role": "user", "content": question})
+    messages = messages[-6:]  # Only keep last 3 turns (user+assistant)
 
     system_prompt = {
         "role": "system",
