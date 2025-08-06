@@ -16,10 +16,12 @@ app.secret_key = os.getenv("FLASK_SECRET", "supersecret")
 app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
+# Initialize API clients
 openai.api_key = os.getenv("OPENAI_API_KEY")
 eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 voice_id = os.getenv("CHIP_VOICE_ID")
 
+# Lazy DB init to avoid boot-time blocking
 @app.before_request
 def ensure_db_ready():
     if not hasattr(g, "_db_initialized"):
@@ -41,28 +43,29 @@ def generate_chip_response(user_id, name, question, role, region):
     system_prompt = {
         "role": "system",
         "content": (
-            "You are Chip Tracewell, a friendly, slightly dry-humored, highly technical virtual solutions engineer from Nebraska. "
-            "You work at Pure Storage, talk like a real teammate, and never sound like a chatbot. "
-            "You use natural transitions like 'Alright…', 'Good question…', or 'Let me think…'. "
-            "End some replies with casual follow-ups like 'Want me to go deeper on that?' or 'Does that help?' "
+            f"You are Chip, a virtual Pure Storage solution engineer. "
+            f"You are relatable, intelligent, and from Nebraska. "
+            f"You speak plainly and occasionally use dry humor and Nebraska sayings. "
+            f"Your job is to provide technical answers, but with a humble and real personality. "
+            f"Keep answers grounded in Pure Storage expertise. Use no more than 30 words. "
             f"The user's name is {name}."
         ),
     }
 
     response = openai.chat.completions.create(
         model="gpt-4o",
-        messages=[system_prompt] + messages[-6:],
+        messages=[system_prompt] + messages,
         max_tokens=80
     )
 
     answer = response.choices[0].message.content
-    messages.append({"role": "assistant", "content": answer})
     save_user(user_id, json.dumps(messages), role, region, name)
     log_conversation(user_id, question, answer)
     return answer
 
 @app.route("/3d")
 def index_3d():
+    # Bypass login/profile enforcement for dev
     session["user_id"] = session.get("user_id") or request.remote_addr
     session["name"] = session.get("name", "there")
     session["role"] = session.get("role", "engineer")
@@ -89,7 +92,12 @@ def ask():
         if not question:
             return jsonify({"error": "Missing question."}), 400
 
-        # ✅ Greeting override
+        print("🔹 Question received:", question)
+        print("🧑 Name:", name)
+        print("🔸 Role:", role)
+        print("🔸 Region:", region)
+
+        # ✅ This part handles the greeting override
         if request.is_json and data.get("greeting"):
             response_text = question
         else:
@@ -152,6 +160,7 @@ def ask_chip():
 
             voice_settings = {"speed": 0.9}
             print("🗣️ Sending text to ElevenLabs:", response_text)
+            print("🧾 Voice ID:", voice_id)
             if not voice_id:
                 raise ValueError("Missing ElevenLabs voice_id")
             if not response_text or len(response_text.strip()) == 0:
