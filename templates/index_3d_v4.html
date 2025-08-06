@@ -190,7 +190,7 @@ function autoStartListening() {
     async function greetUser() {
       updateStatus("👋 Chip is saying hi...");
 
-      const name = sessionStorage.getItem("chip_name") || "there";
+      const name = "there"; // patched to skip profile prompt
       const greeting = {
         question: `Hey ${name}! I'm Chip. What can I help you with today?`,
         name: name,
