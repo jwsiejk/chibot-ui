@@ -142,7 +142,7 @@ def ask_chip():
             audio_path = f"/tmp/{uuid4().hex}.webm"
             audio_file.save(audio_path)
 
-            client = openai.OpenAI()
+            client = openai.OpenAI(api_key=openai.api_key)
 
             print("🎧 Audio file saved to:", audio_path)
             with open(audio_path, "rb") as f:
