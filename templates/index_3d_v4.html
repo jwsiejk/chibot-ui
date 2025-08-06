@@ -52,14 +52,20 @@ document.addEventListener("DOMContentLoaded", () => {
       let audioUrl = "";
       let audioChunks = []; // store binary audio chunks
 
+      
+      const streamTimeout = setTimeout(() => {
+        console.warn("⏰ Stream timeout: forcing finalization.");
+        reader.cancel();  // stop the stream
+      }, 10000);  // 10 seconds
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
+          clearTimeout(streamTimeout);
           console.log("📦 Stream ended. Finalizing audio...");
           break;
         }
 
-        // Check for audio/mpeg binary block (starts with ID3 or binary marker)
         if (value && value.length > 2 && value[0] === 73 && value[1] === 68 && value[2] === 51) {
           console.log("🎧 Detected audio/mpeg binary block");
           audioChunks.push(value);
@@ -68,7 +74,34 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const text = decoder.decode(value);
         const lines = text.split("--frame").filter(Boolean);
+
         for (const line of lines) {
+          console.log("📦 Raw frame:", line);
+          const [, headers, content] = line.split(/
+?
+
+?
+/);
+          if (!headers || !content) continue;
+
+          const contentType = headers.match(/Content-Type: (.+)/)?.[1];
+          if (contentType === "application/json") {
+            const data = JSON.parse(content);
+            if (data.viseme_timestamps) visemes = data.viseme_timestamps;
+            if (data.audio) audioUrl = data.audio;
+            if (data.transcript) {
+              updateStatus("🗣️ You said: " + data.transcript);
+              const caption = document.getElementById("caption");
+              caption.textContent = data.transcript;
+              caption.style.visibility = "visible";
+              caption.style.display = "block";
+              setTimeout(() => { caption.style.display = "none"; }, 4000);
+            }
+            if (data.response) console.log("🤖 Chip replied:", data.response);
+          }
+        }
+      }
+
           console.log("📦 Raw frame:", line);
   console.log("📦 Raw frame:", line);
           const [, headers, content] = line.split(/\r?\n\r?\n/);
@@ -331,14 +364,20 @@ document.addEventListener("DOMContentLoaded", () => {
       let audioUrl = "";
       let audioChunks = []; // store binary audio chunks
 
+      
+      const streamTimeout = setTimeout(() => {
+        console.warn("⏰ Stream timeout: forcing finalization.");
+        reader.cancel();  // stop the stream
+      }, 10000);  // 10 seconds
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
+          clearTimeout(streamTimeout);
           console.log("📦 Stream ended. Finalizing audio...");
           break;
         }
 
-        // Check for audio/mpeg binary block (starts with ID3 or binary marker)
         if (value && value.length > 2 && value[0] === 73 && value[1] === 68 && value[2] === 51) {
           console.log("🎧 Detected audio/mpeg binary block");
           audioChunks.push(value);
@@ -347,7 +386,34 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const text = decoder.decode(value);
         const lines = text.split("--frame").filter(Boolean);
+
         for (const line of lines) {
+          console.log("📦 Raw frame:", line);
+          const [, headers, content] = line.split(/
+?
+
+?
+/);
+          if (!headers || !content) continue;
+
+          const contentType = headers.match(/Content-Type: (.+)/)?.[1];
+          if (contentType === "application/json") {
+            const data = JSON.parse(content);
+            if (data.viseme_timestamps) visemes = data.viseme_timestamps;
+            if (data.audio) audioUrl = data.audio;
+            if (data.transcript) {
+              updateStatus("🗣️ You said: " + data.transcript);
+              const caption = document.getElementById("caption");
+              caption.textContent = data.transcript;
+              caption.style.visibility = "visible";
+              caption.style.display = "block";
+              setTimeout(() => { caption.style.display = "none"; }, 4000);
+            }
+            if (data.response) console.log("🤖 Chip replied:", data.response);
+          }
+        }
+      }
+
           console.log("📦 Raw frame:", line);
   console.log("📦 Raw frame:", line);
           const [, headers, content] = line.split(/\r?\n\r?\n/);
