@@ -16,12 +16,10 @@ app.secret_key = os.getenv("FLASK_SECRET", "supersecret")
 app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
-# Initialize API clients
 openai.api_key = os.getenv("OPENAI_API_KEY")
 eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 voice_id = os.getenv("CHIP_VOICE_ID")
 
-# Lazy DB init to avoid boot-time blocking
 @app.before_request
 def ensure_db_ready():
     if not hasattr(g, "_db_initialized"):
@@ -65,7 +63,6 @@ def generate_chip_response(user_id, name, question, role, region):
 
 @app.route("/3d")
 def index_3d():
-    # Bypass login/profile enforcement for dev
     session["user_id"] = session.get("user_id") or request.remote_addr
     session["name"] = session.get("name", "there")
     session["role"] = session.get("role", "engineer")
@@ -92,12 +89,7 @@ def ask():
         if not question:
             return jsonify({"error": "Missing question."}), 400
 
-        print("🔹 Question received:", question)
-        print("🧑 Name:", name)
-        print("🔸 Role:", role)
-        print("🔸 Region:", region)
-
-        # ✅ This part handles the greeting override
+        # ✅ Greeting override
         if request.is_json and data.get("greeting"):
             response_text = question
         else:
@@ -160,7 +152,6 @@ def ask_chip():
 
             voice_settings = {"speed": 0.9}
             print("🗣️ Sending text to ElevenLabs:", response_text)
-            print("🧾 Voice ID:", voice_id)
             if not voice_id:
                 raise ValueError("Missing ElevenLabs voice_id")
             if not response_text or len(response_text.strip()) == 0:
