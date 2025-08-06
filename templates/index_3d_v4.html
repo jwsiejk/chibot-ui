@@ -50,8 +50,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
       let visemes = [];
       let audioUrl = "";
+      let audioChunks = []; // store binary audio chunks
 
       while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        // Check for audio/mpeg binary block (starts with ID3 or binary marker)
+        if (value && value.length > 2 && value[0] === 73 && value[1] === 68 && value[2] === 51) {
+          console.log("🎧 Detected audio/mpeg binary block");
+          audioChunks.push(value);
+          continue;
+        }
+
+        const text = decoder.decode(value);
+        const lines = text.split("--frame").filter(Boolean);
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -59,6 +72,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const lines = text.split("--frame").filter(Boolean);
 
         for (const line of lines) {
+          console.log("📦 Raw frame:", line);
   console.log("📦 Raw frame:", line);
           const [, headers, content] = line.split(/\r?\n\r?\n/);
           if (!headers || !content) continue;
@@ -79,6 +93,12 @@ document.addEventListener("DOMContentLoaded", () => {
             if (data.response) console.log("🤖 Chip replied:", data.response);
           }
         }
+      }
+
+      if (audioChunks.length) {
+        const fullAudioBlob = new Blob(audioChunks, { type: 'audio/mpeg' });
+        audioUrl = URL.createObjectURL(fullAudioBlob);
+        console.log("🔗 Final audioUrl created from chunks:", audioUrl);
       }
 
       if (audioUrl) {
@@ -312,8 +332,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
       let visemes = [];
       let audioUrl = "";
+      let audioChunks = []; // store binary audio chunks
 
       while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        // Check for audio/mpeg binary block (starts with ID3 or binary marker)
+        if (value && value.length > 2 && value[0] === 73 && value[1] === 68 && value[2] === 51) {
+          console.log("🎧 Detected audio/mpeg binary block");
+          audioChunks.push(value);
+          continue;
+        }
+
+        const text = decoder.decode(value);
+        const lines = text.split("--frame").filter(Boolean);
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -321,6 +354,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const lines = text.split("--frame").filter(Boolean);
 
         for (const line of lines) {
+          console.log("📦 Raw frame:", line);
   console.log("📦 Raw frame:", line);
           const [, headers, content] = line.split(/\r?\n\r?\n/);
           if (!headers || !content) continue;
@@ -341,6 +375,12 @@ document.addEventListener("DOMContentLoaded", () => {
             if (data.response) console.log("🤖 Chip replied:", data.response);
           }
         }
+      }
+
+      if (audioChunks.length) {
+        const fullAudioBlob = new Blob(audioChunks, { type: 'audio/mpeg' });
+        audioUrl = URL.createObjectURL(fullAudioBlob);
+        console.log("🔗 Final audioUrl created from chunks:", audioUrl);
       }
 
       if (audioUrl) {
