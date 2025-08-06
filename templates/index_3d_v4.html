@@ -16,7 +16,7 @@
 
     document.addEventListener("DOMContentLoaded", () => {
       // ✅ Injected greeting call
-      fetch("/greet")
+      // fetch("/greet")
         .then(res => res.json())
         .then(data => {
           updateStatus(data.reply || "👋 Hey there! I'm Chip.");
@@ -35,6 +35,23 @@
       }
 
       
+      
+      const startBtn = document.getElementById("startBtn");
+      if (startBtn) startBtn.addEventListener("click", () => {
+        fetch("/greet")
+          .then(res => res.json())
+          .then(data => {
+            updateStatus(data.reply || "👋 Hey there! I'm Chip.");
+            if (data.audio) {
+              playVisemeAudio(data.audio, [], "👋 Ask me anything when you're ready.");
+            }
+          })
+          .catch(() => {
+            updateStatus("👋 Hey there! I'm Chip.");
+          });
+        startBtn.style.display = "none";
+      });
+
       const exitBtn = document.getElementById("exitBtn");
       const resetBtn = document.getElementById("resetBtn");
 
@@ -53,7 +70,7 @@
         if (recordBtn) recordBtn.style.display = "none";
         window.stopPassiveLoop = false;
         await new Promise(resolve => setTimeout(resolve, 1500));
-        fetch("/greet").then(res => res.json()).then(data => {
+        // fetch("/greet").then(res => res.json()).then(data => {
           updateStatus(data.reply || "👋 Welcome back.");
           if (data.audio) {
             playVisemeAudio(data.audio, [], "👋 Ask me anything when you're ready.");
@@ -281,7 +298,11 @@
   <a id="audioDownload" style="display:none;color:#90ee90;position:absolute;bottom:10px;left:20px;z-index:15;pointer-events:auto;" download="recording.webm">🎧 Download your recording</a>
 
   
-  <div id="sessionControls" style="position: absolute; top: 90px; left: 20px; z-index: 20; text-align: left; font-size: 14px; opacity: 0.7;">
+  
+    <button id="startBtn" style="margin-bottom: 10px; background-color: #000; color: orange; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer;">
+      Ask Chip - Start a conversation
+    </button><br>
+<div id="sessionControls" style="position: absolute; top: 90px; left: 20px; z-index: 20; text-align: left; font-size: 14px; opacity: 0.7;">
     <button id="exitBtn" style="margin-bottom: 6px; background-color: #000; color: orange; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer;">Exit</button><br>
     <button id="resetBtn" style="background-color: #000; color: orange; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer;">Reset Session</button><br>
     <div style="margin-top: 6px; font-size: 12px; color: orange;">Click Exit to end session or just say "Exit"</div>
