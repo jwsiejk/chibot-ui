@@ -15,8 +15,9 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "default_secret")
 app.config['SESSION_TYPE'] = 'filesystem'
 Session(app)
 
-# Register Google OAuth blueprint
-from auth.google import bp as google_bp
+# Initialize and register Google OAuth
+from auth.google import init_oauth, bp as google_bp
+init_oauth(app)
 app.register_blueprint(google_bp, url_prefix="")
 
 @app.route("/")
