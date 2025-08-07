@@ -167,7 +167,8 @@ def ask_chip():
             region = "NA"
 
             if "audio" not in request.files:
-                yield b"--frame
+            yield (b"--frame\r\n"
+                   b"Content-Type: application/json\r\n\r\n" +
 Content-Type: application/json
 
 " + json.dumps({"error": "No audio file uploaded."}).encode() + b"
@@ -182,12 +183,14 @@ Content-Type: application/json
             with open(audio_path, "rb") as f:
                 transcript = client.audio.transcriptions.create(model="whisper-1", file=f).text
 
-            yield b"--frame
+            yield (b"--frame\r\n"
+                   b"Content-Type: application/json\r\n\r\n" +
 Content-Type: application/json
 
 " + json.dumps({"transcript": transcript}).encode() + b"
 "response_text = generate_chip_response(user_id, name, transcript, role, region)
-            yield b"--frame
+            yield (b"--frame\r\n"
+                   b"Content-Type: application/json\r\n\r\n" +
 Content-Type: application/json
 
 " + json.dumps({"response": response_text}).encode() + b"
@@ -200,7 +203,8 @@ Content-Type: application/json
                 voice_settings=voice_settings
             )
 
-            yield b"--frame
+            yield (b"--frame\r\n"
+                   b"Content-Type: application/json\r\n\r\n" +
 Content-Type: audio/mpeg
 
 "
@@ -213,7 +217,8 @@ Content-Type: audio/mpeg
         except Exception as e:
             print("🔥 ERROR IN /ask-chip:", str(e))
             traceback.print_exc()
-            yield b"--frame
+            yield (b"--frame\r\n"
+                   b"Content-Type: application/json\r\n\r\n" +
 Content-Type: application/json
 
 " + json.dumps({"error": "Voice processing failed."}).encode() + b"
