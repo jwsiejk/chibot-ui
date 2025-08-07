@@ -616,5 +616,67 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 });
 </script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const loginBox = document.getElementById("login-box");
+    const startBtn = document.getElementById("start-button");
+    const profileForm = document.getElementById("profile-form");
+    const profileMsg = document.getElementById("profile-message");
+
+    function checkProfile() {
+        const profile = localStorage.getItem("userProfile");
+        if (profile) {
+            profileForm.style.display = "none";
+            profileMsg.style.display = "none";
+            startBtn.disabled = false;
+        } else {
+            profileForm.style.display = "block";
+            profileMsg.style.display = "block";
+            startBtn.disabled = true;
+        }
+    }
+
+    // Show login prompt centered
+    loginBox.style.position = "absolute";
+    loginBox.style.top = "50%";
+    loginBox.style.left = "50%";
+    loginBox.style.transform = "translate(-50%, -50%)";
+
+    // Once user logs in
+    window.onUserLogin = function () {
+        checkProfile();
+    };
+
+    // Save profile
+    document.getElementById("save-profile").addEventListener("click", () => {
+        const name = document.getElementById("name").value;
+        const role = document.getElementById("role").value;
+        const company = document.getElementById("company").value;
+        const email = document.getElementById("email").value;
+
+        if (name && role && company && email) {
+            localStorage.setItem("userProfile", JSON.stringify({ name, role, company, email }));
+            profileForm.style.display = "none";
+            profileMsg.style.display = "none";
+            startBtn.disabled = false;
+        }
+    });
+
+    // When Start is clicked
+    startBtn.addEventListener("click", () => {
+        const profile = localStorage.getItem("userProfile");
+        if (profile) {
+            greetUser(JSON.parse(profile));
+        }
+    });
+
+    function greetUser(profile) {
+        const greeting = `Hi ${profile.name}, I'm Chip. Let’s get started.`;
+        speak(greeting); // function from main app logic
+    }
+});
+</script>
+
 </body>
 </html>
