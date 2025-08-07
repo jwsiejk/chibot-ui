@@ -18,7 +18,10 @@ app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
 # 🔧 Auto-create conversations table if missing
+
 def init_conversation_table():
+    conn = connect_db()
+    
     from memory import get_connection
     try:
         conn = get_connection()
