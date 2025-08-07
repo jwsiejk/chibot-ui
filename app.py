@@ -206,6 +206,49 @@ def ask_chip():
     return Response(stream_with_context(generate_stream()), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 # <!-- PATCH: Persistent Memory + Dynamic Greeting | 2025-08-07 -->
+
+# <!-- PATCH: Conversation History Retrieval | 2025-08-07 -->
+
+@app.route("/history", methods=["POST"])
+def retrieve_history():
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Unauthorized"}), 401
+
+        query = request.json.get("query", "").strip()
+        if not query:
+            return jsonify({"error": "Missing query"}), 400
+
+        user = get_user(user_id)
+        if not user or not user.get("messages"):
+            return jsonify({"response": "I don’t have any past conversations to look at yet."})
+
+        past_dialogue = user["messages"][-12:]
+        flat_history = "\n".join([f"{m['role']}: {m['content']}" for m in past_dialogue])
+
+        prompt = f"""
+You are Chip, a helpful Pure Storage AI. The user asked a question that references past conversations.
+
+Conversation history:
+{flat_history}
+
+Current user query: "{query}"
+
+If something in the history matches what the user is referring to, summarize or clarify the key detail.
+If not, say you couldn't find it.
+"""
+
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": prompt}],
+            max_tokens=150
+        )
+        return jsonify({"response": response.choices[0].message.content.strip()})
+    except Exception as e:
+        print("🔥 ERROR IN /history:", str(e))
+        traceback.print_exc()
+        return jsonify({"error": "History lookup failed"}), 500
 @app.route("/greet", methods=["POST"])
 def greet():
     try:
