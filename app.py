@@ -20,6 +20,9 @@ Session(app)
 # 🔧 Auto-create conversations table if missing
 def init_conversation_table():
     try:
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.autocommit = True
+    try:
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS conversations (
@@ -34,7 +37,7 @@ def init_conversation_table():
             print("✅ Conversation table verified.")
     except Exception as e:
         print("❌ Error creating conversation table:", e)
-        conn.rollback()
+        if 'conn' in locals(): conn.rollback()
 
 # Call the conversation table initializer
 init_conversation_table()
