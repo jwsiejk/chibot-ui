@@ -17,6 +17,28 @@ app.secret_key = os.getenv("FLASK_SECRET", "supersecret")
 app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
+# 🔧 Auto-create conversations table if missing
+def init_conversation_table():
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id SERIAL PRIMARY KEY,
+                    user_id VARCHAR(100),
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    question TEXT,
+                    answer TEXT
+                )
+            """)
+            conn.commit()
+            print("✅ Conversation table verified.")
+    except Exception as e:
+        print("❌ Error creating conversation table:", e)
+        conn.rollback()
+
+# Call the conversation table initializer
+init_conversation_table()
+
 openai.api_key = os.getenv("OPENAI_API_KEY")
 eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 voice_id = os.getenv("CHIP_VOICE_ID")
