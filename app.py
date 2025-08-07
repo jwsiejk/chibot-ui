@@ -19,10 +19,13 @@ Session(app)
 
 # 🔧 Auto-create conversations table if missing
 def init_conversation_table():
+    from memory import get_connection
     try:
+        conn = get_connection()
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = True
     try:
+        conn = get_connection()
     conn = psycopg2.connect(os.environ['DATABASE_URL'])
         with conn.cursor() as cur:
             cur.execute("""
@@ -51,6 +54,7 @@ voice_id = os.getenv("CHIP_VOICE_ID")
 def ensure_db_ready():
     if not hasattr(g, "_db_initialized"):
         try:
+        conn = get_connection()
             print("⏳ Lazy initializing DB...")
             init_db()
             print("✅ DB ready.")
@@ -96,6 +100,7 @@ def index_3d():
 @app.route("/login-basic", methods=["POST"])
 def login_basic():
     try:
+        conn = get_connection()
         data = request.get_json()
         login_name = data.get("login")
         session["user_id"] = login_name
@@ -123,6 +128,7 @@ def login_basic():
 @app.route("/profile", methods=["POST"])
 def save_profile():
     try:
+        conn = get_connection()
         user_id = session.get("user_id")
         data = request.get_json()
         name = data.get("name")
@@ -140,6 +146,7 @@ def save_profile():
 @app.route("/ask", methods=["POST"])
 def ask():
     try:
+        conn = get_connection()
         user_id = session.get("user_id") or request.remote_addr or str(uuid4())
 
         if request.is_json:
@@ -187,6 +194,7 @@ def ask():
 def ask_chip():
     def generate_stream():
         try:
+        conn = get_connection()
             user_id = session.get("user_id") or request.remote_addr or str(uuid4())
             name = session.get("name", "User")
             role = "engineer"
@@ -238,6 +246,7 @@ def ask_chip():
 @app.route("/history", methods=["POST"])
 def retrieve_history():
     try:
+        conn = get_connection()
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"error": "Unauthorized"}), 401
@@ -278,6 +287,7 @@ If not, say you couldn't find it.
 @app.route("/greet", methods=["POST"])
 def greet():
     try:
+        conn = get_connection()
         user_id = session.get("user_id")
         user = get_user(user_id) if user_id else None
         name = user.get("name", "there") if user else "there"
