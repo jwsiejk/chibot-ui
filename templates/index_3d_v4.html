@@ -16,7 +16,49 @@
     }
 
     document.addEventListener("DOMContentLoaded", () => {
+<!-- PATCH: Forced Login & Profile Gating | 2025-08-07 -->
 
+  // Enforce login on load
+  const loginContainer = document.getElementById("loginContainer");
+  const startBtn = document.getElementById("startBtn");
+  const profileModal = document.getElementById("profileModal");
+
+  loginContainer.style.display = "block";
+  startBtn.disabled = true;
+
+  // Save profile with gating message and unlock Start button
+  window.saveProfile = function() {
+    const name = document.getElementById("profileName").value;
+    const title = document.getElementById("profileTitle").value;
+    if (!name || !title) {
+      alert("Please complete all fields.");
+      return;
+    }
+
+    localStorage.setItem("profileName", name);
+    localStorage.setItem("profileTitle", title);
+
+    fetch('/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name,
+        role: title
+      })
+    }).then(res => {
+      if (res.ok) {
+        console.log("✅ Profile saved to DB");
+        startBtn.disabled = false;
+        profileModal.style.display = "none";
+      } else {
+        alert("❌ Failed to save profile. Try again.");
+      }
+    }).catch(err => {
+      console.error("❌ Network error while saving profile:", err);
+      alert("❌ Network error while saving profile.");
+    });
+  };
+        
       const profileBtn = document.getElementById("profileBtn");
       if (profileBtn) profileBtn.addEventListener("click", () => {
         const modal = document.getElementById("profileModal");
