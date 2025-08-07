@@ -16,6 +16,28 @@
 
     document.addEventListener("DOMContentLoaded", () => {
 
+      const profileBtn = document.getElementById("profileBtn");
+      if (profileBtn) profileBtn.addEventListener("click", () => {
+        const modal = document.getElementById("profileModal");
+        modal.style.display = "block";
+        document.getElementById("profileName").value = localStorage.getItem("profileName") || "";
+        document.getElementById("profileTitle").value = localStorage.getItem("profileTitle") || "";
+      });
+
+      window.saveProfile = function() {
+        const name = document.getElementById("profileName").value;
+        const title = document.getElementById("profileTitle").value;
+        localStorage.setItem("profileName", name);
+        localStorage.setItem("profileTitle", title);
+        closeProfile();
+      };
+
+      window.closeProfile = function() {
+        const modal = document.getElementById("profileModal");
+        modal.style.display = "none";
+      };
+
+
       function updateStatus(message) {
         const statusDiv = document.getElementById("status");
         statusDiv.textContent = message;
@@ -367,6 +389,7 @@
   </div>
   <button id="resetBtn">🔁 Reset</button>
   <button id="exitBtn">❌ End</button>
+  <button id="profileBtn">👤 Profile</button>
 </div>
 
 
@@ -415,6 +438,18 @@
   display: block;
 }
 </style>
+
+
+<div id="profileModal" style="display:none; position:fixed; top:10%; left:50%; transform:translateX(-50%);
+  background:#222; color:#fff; padding:20px; border-radius:10px; z-index:999; box-shadow:0 0 10px #000; min-width:300px;">
+  <h3 style="margin-top:0;">Your Profile</h3>
+  <label>Name:</label><br>
+  <input type="text" id="profileName" style="width:100%; margin-bottom:10px;"><br>
+  <label>Title:</label><br>
+  <input type="text" id="profileTitle" style="width:100%; margin-bottom:10px;"><br>
+  <button onclick="saveProfile()" style="margin-right:10px;">💾 Save</button>
+  <button onclick="closeProfile()">❌ Close</button>
+</div>
 
 </body>
 </html>
