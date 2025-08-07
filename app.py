@@ -25,7 +25,7 @@ def init_conversation_table():
 
     try:
         # Attempt to get a connection from memory module
-        conn = get_connection() or psycopg2.connect(os.environ['DATABASE_URL'])
+        conn = get_connection()
         conn.autocommit = True
 
         with conn.cursor() as cur:
@@ -43,7 +43,7 @@ def init_conversation_table():
     except Exception as e:
         print("❌ Error creating conversation table:", e)
         if 'conn' in locals():
-            conn.rollback()
+        if 'conn' in locals(): conn.rollback()
     finally:
         if 'conn' in locals() and not conn.closed:
             conn.close()
@@ -52,7 +52,7 @@ def init_conversation_table():
 def ensure_db_ready():
     if not hasattr(g, "_db_initialized"):
         try:
-        conn = get_connection()
+            conn = get_connection()
             print("⏳ Lazy initializing DB...")
             init_db()
             print("✅ DB ready.")
