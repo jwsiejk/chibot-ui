@@ -678,5 +678,60 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 </script>
 
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const loginContainer = document.getElementById("loginContainer");
+    const loginForm = document.getElementById("loginForm");
+    const loginInput = document.getElementById("loginInput");
+    const profileModal = document.getElementById("profileModal");
+    const startBtn = document.getElementById("startBtn");
+    const nameInput = document.getElementById("nameInput");
+    const titleInput = document.getElementById("titleInput");
+    const loginMsg = document.createElement("div");
+    loginMsg.innerText = "Sign on with your Trace3 or Pure Storage email address to continue";
+    loginMsg.style.color = "#fff";
+    loginMsg.style.marginTop = "8px";
+    loginContainer.appendChild(loginMsg);
+
+    function isValidUser(email) {
+        return email.endsWith("@purestorage.com") || email.endsWith("@trace3.com");
+    }
+
+    loginForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+        const email = loginInput.value.trim().toLowerCase();
+        if (!isValidUser(email)) {
+            alert("Unauthorized user.");
+            return;
+        }
+        localStorage.setItem("chip_user", email);
+        const storedName = localStorage.getItem("chip_name");
+        const storedTitle = localStorage.getItem("chip_title");
+        loginContainer.style.display = "none";
+        if (!storedName || !storedTitle) {
+            profileModal.style.display = "block";
+            document.getElementById("modalMessage").innerText = "Please fill out your profile to continue";
+            startBtn.disabled = true;
+        } else {
+            startBtn.disabled = false;
+        }
+    });
+
+    document.getElementById("saveProfileBtn").addEventListener("click", function () {
+        const name = nameInput.value.trim();
+        const title = titleInput.value.trim();
+        if (name && title) {
+            localStorage.setItem("chip_name", name);
+            localStorage.setItem("chip_title", title);
+            profileModal.style.display = "none";
+            startBtn.disabled = false;
+        } else {
+            alert("Both fields are required.");
+        }
+    });
+});
+</script>
+
 </body>
 </html>
