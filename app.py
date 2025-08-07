@@ -170,7 +170,9 @@ def ask_chip():
                 yield b"--frame
 Content-Type: application/json
 
-" + json.dumps({"error": "No audio file uploaded."}).encode() + b"
+" + json.dumps({
+                    "error": "No audio file uploaded."
+                }).encode() + b"
 "
                 return
 
@@ -186,14 +188,19 @@ Content-Type: application/json
             yield b"--frame
 Content-Type: application/json
 
-" + json.dumps({"transcript": transcript}).encode() + b"
+" + json.dumps({
+                "transcript": transcript
+            }).encode() + b"
 "
 
             response_text = generate_chip_response(user_id, name, transcript, role, region)
+
             yield b"--frame
 Content-Type: application/json
 
-" + json.dumps({"response": response_text}).encode() + b"
+" + json.dumps({
+                "response": response_text
+            }).encode() + b"
 "
 
             voice_settings = {"speed": 0.9}
@@ -221,7 +228,9 @@ Content-Type: audio/mpeg
             yield b"--frame
 Content-Type: application/json
 
-" + json.dumps({"error": "Voice processing failed."}).encode() + b"
+" + json.dumps({
+                "error": "Voice processing failed."
+            }).encode() + b"
 "
 
     return Response(stream_with_context(generate_stream()), mimetype="multipart/x-mixed-replace; boundary=frame")
