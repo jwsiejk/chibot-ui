@@ -24,13 +24,34 @@
         document.getElementById("profileTitle").value = localStorage.getItem("profileTitle") || "";
       });
 
+      
       window.saveProfile = function() {
         const name = document.getElementById("profileName").value;
         const title = document.getElementById("profileTitle").value;
+
         localStorage.setItem("profileName", name);
         localStorage.setItem("profileTitle", title);
-        closeProfile();
+
+        fetch('/profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: name,
+            role: title
+          })
+        }).then(res => {
+          if (res.ok) {
+            console.log("✅ Profile saved to DB");
+          } else {
+            console.error("❌ Failed to save profile to DB");
+          }
+          closeProfile();
+        }).catch(err => {
+          console.error("❌ Network error while saving profile:", err);
+          closeProfile();
+        });
       };
+
 
       window.closeProfile = function() {
         const modal = document.getElementById("profileModal");
