@@ -18,18 +18,16 @@ app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
 # 🔧 Auto-create conversations table if missing
-
 def init_conversation_table():
-    conn = connect_db()
-    
+    import os
+    import psycopg2
     from memory import get_connection
+
     try:
-        conn = get_connection()
-        conn = psycopg2.connect(DATABASE_URL)
+        # Attempt to get a connection from memory module
+        conn = get_connection() or psycopg2.connect(os.environ['DATABASE_URL'])
         conn.autocommit = True
-    try:
-        conn = get_connection()
-    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS conversations (
@@ -44,16 +42,13 @@ def init_conversation_table():
             print("✅ Conversation table verified.")
     except Exception as e:
         print("❌ Error creating conversation table:", e)
-        if 'conn' in locals(): conn.rollback()
+        if 'conn' in locals():
+            conn.rollback()
+    finally:
+        if 'conn' in locals() and not conn.closed:
+            conn.close()
+            print("✅ Database connection closed.")
 
-# Call the conversation table initializer
-init_conversation_table()
-
-openai.api_key = os.getenv("OPENAI_API_KEY")
-eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
-voice_id = os.getenv("CHIP_VOICE_ID")
-
-@app.before_request
 def ensure_db_ready():
     if not hasattr(g, "_db_initialized"):
         try:
