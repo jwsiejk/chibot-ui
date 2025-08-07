@@ -472,5 +472,46 @@
   <button onclick="closeProfile()">❌ Close</button>
 </div>
 
+
+<!-- Magic Link Login Form -->
+<div id="magic-link-login" style="position: absolute; bottom: 20px; left: 20px; z-index: 1000;">
+  <form id="login-form">
+    <input type="email" id="email" name="email" placeholder="Enter your email" required style="padding: 4px;">
+    <button type="submit" style="padding: 4px;">Sign In</button>
+  </form>
+  <p id="login-status" style="color: white; font-size: 12px;"></p>
+</div>
+<script>
+  const loginForm = document.getElementById('login-form');
+  const loginStatus = document.getElementById('login-status');
+  const startButton = document.getElementById('startButton');
+  startButton.disabled = true;
+
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('email').value;
+
+    try {
+      const res = await fetch('/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+
+      if (res.ok) {
+        loginStatus.textContent = 'Check your email for the magic link.';
+        loginStatus.style.color = 'lightgreen';
+        startButton.disabled = false;
+      } else {
+        loginStatus.textContent = 'Login failed.';
+        loginStatus.style.color = 'red';
+      }
+    } catch (err) {
+      loginStatus.textContent = 'Error during login.';
+      loginStatus.style.color = 'red';
+    }
+  });
+</script>
+
 </body>
 </html>
