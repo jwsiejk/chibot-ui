@@ -460,90 +460,63 @@
 <button onclick="closeProfile()">❌ Close</button>
 </div>
 <!-- Magic Link Login Form -->
-<div id="magic-link-login" style="position: absolute; bottom: 20px; left: 20px; z-index: 1000;">
-<form id="login-form">
-<input id="email" name="email" placeholder="Enter your email" required="" style="padding: 4px;" type="email"/>
-<button style="padding: 4px;" type="submit">Sign In</button>
-</form>
-<p id="login-status" style="color: white; font-size: 12px;"></p>
-</div>
-<script>
-  const loginForm = document.getElementById('login-form');
-  const loginStatus = document.getElementById('login-status');
-  const startButton = document.getElementById('startButton');
-  startButton.disabled = true;
 
-  loginForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email = document.getElementById('email').value;
-
-    try {
-      const res = await fetch('/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email })
-      });
-
-      if (res.ok) {
-        loginStatus.textContent = 'Check your email for the magic link.';
-        loginStatus.style.color = 'lightgreen';
-        startButton.disabled = false;
-      } else {
-        loginStatus.textContent = 'Login failed.';
-        loginStatus.style.color = 'red';
-      }
-    } catch (err) {
-      loginStatus.textContent = 'Error during login.';
-      loginStatus.style.color = 'red';
-    }
-  });
-</script>
 
 <!-- Magic Link Sign In Form -->
-<div id="magic-link-login" style="position: absolute; bottom: 20px; left: 20px; z-index: 1000;">
-<form id="login-form">
-<input id="email" name="email" placeholder="Enter your email" required="" style="padding: 4px;" type="email"/>
-<button style="padding: 4px;" type="submit">Sign In</button>
+
+
+<!-- Basic Login -->
+<div id="loginContainer" style="position: absolute; bottom: 20px; left: 20px; background: rgba(0,0,0,0.8); padding: 10px; border-radius: 8px; z-index: 999;">
+<form id="basicLoginForm">
+<label style="color:white;">Login Name:</label>
+<input id="loginName" required="" style="padding: 4px; margin-left: 5px;" type="text"/>
+<button style="padding: 4px;" type="submit">Login</button>
 </form>
-<p id="login-status" style="color: white; font-size: 12px;"></p>
+<p id="loginStatus" style="color: white; font-size: 12px;"></p>
 </div>
+
 <script>
 document.addEventListener("DOMContentLoaded", () => {
-  const loginForm = document.getElementById('login-form');
-  const loginStatus = document.getElementById('login-status');
+  const loginForm = document.getElementById('basicLoginForm');
+  const loginStatus = document.getElementById('loginStatus');
   const startBtn = document.getElementById('startBtn');
-  if (startBtn) {
-    startBtn.disabled = true;
-    startBtn.style.opacity = 0.4;
-  }
+  const profileModal = document.getElementById('profileModal');
+
+  startBtn.disabled = true;
 
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const email = document.getElementById('email').value;
+    const loginName = document.getElementById('loginName').value;
 
     try {
-      const res = await fetch('/login', {
+      const res = await fetch('/login-basic', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email })
+        body: JSON.stringify({ login: loginName })
       });
 
       if (res.ok) {
-        loginStatus.textContent = '✅ Check your email for the magic link.';
-        loginStatus.style.color = 'lightgreen';
-        if (startBtn) {
-          startBtn.disabled = false;
-          startBtn.style.opacity = 1.0;
+        const data = await res.json();
+        loginStatus.textContent = '✅ Login successful';
+        document.getElementById("loginContainer").style.display = "none";
+        startBtn.disabled = false;
+
+        if (data.first_time) {
+          profileModal.style.display = "block";
+        } else {
+          // Populate profile fields
+          document.getElementById("profileName").value = data.name;
+          document.getElementById("profileTitle").value = data.title;
         }
       } else {
-        loginStatus.textContent = '❌ Login failed.';
-        loginStatus.style.color = 'red';
+        loginStatus.textContent = '❌ Login failed';
       }
     } catch (err) {
-      loginStatus.textContent = '❌ Error during login.';
-      loginStatus.style.color = 'red';
+      loginStatus.textContent = '❌ Error during login';
+      console.error(err);
     }
   });
 });
-</script></body>
+</script>
+</body>
 </html>
