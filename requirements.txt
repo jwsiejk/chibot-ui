@@ -1,7 +1,9 @@
 openai>=1.0.0
 elevenlabs>=2.8.1
 Flask>=2.2.0
-python-dotenv
-psycopg2-binary
 Flask-Session>=0.4.0
-gunicorn
+authlib>=1.2.0              # for Google OAuth
+itsdangerous>=2.1.2         # for magic link token signing
+gunicorn                    # for production WSGI server
+psycopg2-binary             # for PostgreSQL (Render)
+python-dotenv               # for .env secrets
