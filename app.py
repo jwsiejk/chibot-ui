@@ -23,9 +23,12 @@ def init_conversation_table():
     import psycopg2
     from memory import get_connection
 
+    if 'DATABASE_URL' not in os.environ:
+        raise ValueError("DATABASE_URL environment variable is not set. Use the internal connection string for Render-managed databases.")
+
     try:
-        # Attempt to get a connection from memory module
-        conn = get_connection()
+        # Attempt to get a connection from memory module or fallback to psycopg2
+        conn = get_connection() or psycopg2.connect(os.environ['DATABASE_URL'])
         conn.autocommit = True
 
         with conn.cursor() as cur:
@@ -43,7 +46,7 @@ def init_conversation_table():
     except Exception as e:
         print("❌ Error creating conversation table:", e)
         if 'conn' in locals():
-        if 'conn' in locals(): conn.rollback()
+            conn.rollback()
     finally:
         if 'conn' in locals() and not conn.closed:
             conn.close()
@@ -61,6 +64,10 @@ def ensure_db_ready():
             print("🔥 Failed to initialize DB:", e)
             traceback.print_exc()
             g._db_initialized = False
+        finally:
+            if 'conn' in locals() and not conn.closed:
+                conn.close()
+                print("✅ Database connection closed.")
 
 def generate_chip_response(user_id, name, question, role, region):
     user = get_user(user_id)
@@ -192,7 +199,7 @@ def ask():
 def ask_chip():
     def generate_stream():
         try:
-        conn = get_connection()
+            conn = get_connection()
             user_id = session.get("user_id") or request.remote_addr or str(uuid4())
             name = session.get("name", "User")
             role = "engineer"
@@ -282,6 +289,7 @@ If not, say you couldn't find it.
         print("🔥 ERROR IN /history:", str(e))
         traceback.print_exc()
         return jsonify({"error": "History lookup failed"}), 500
+
 @app.route("/greet", methods=["POST"])
 def greet():
     try:
