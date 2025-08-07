@@ -330,7 +330,7 @@
 
 <body>
   <div id="chip-container" style="text-align:center; margin-top: 40px;">
-    <img src="chip.png" alt="Chip Tracewell" id="chipImage" style="width: 320px; height: auto; border-radius: 10px; box-shadow: 0px 0px 12px rgba(0,0,0,0.4);">
+    <img src="/static/img/chip.png" alt="Chip Tracewell" id="chipImage" style="width: 320px; height: auto; border-radius: 10px; box-shadow: 0px 0px 12px rgba(0,0,0,0.4);">
   </div>
   <div id="recordPrompt" class="faint"></div>
   <canvas id="waveform"></canvas>
@@ -345,84 +345,7 @@
     
 
 
-  <script type="module">
-    import * as THREE from 'https://esm.sh/three@0.155.0';
-    import { GLTFLoader } from 'https://esm.sh/three@0.155.0/examples/jsm/loaders/GLTFLoader';
-    import { OrbitControls } from 'https://esm.sh/three@0.155.0/examples/jsm/controls/OrbitControls';
-
-    let scene, camera, renderer;
-    let model, visemeMap, skinnedMesh;
-    const canvas = document.createElement('canvas');
-    document.body.appendChild(canvas);
-    const statusDiv = document.getElementById("status");
-    const recordBtn = document.getElementById("recordBtn");
-
-    function updateStatus(message) {
-      statusDiv.textContent = message;
-      console.log("[Chip]", message);
-    }
-
-    function renderOnce() {
-      renderer.render(scene, camera);
-    }
-
-    // ✅ Updated to keep the button visible after response
-    window.playVisemeAudio = async function(audioUrl, visemes, customDoneMessage = "✅ Done. Ask another question.") {
-      updateStatus("🔊 Playing Chip's response...");
-      console.log("⛔ Blinking OFF");
-      if (recordBtn) recordBtn.classList.remove("blinking");
-
-      const audio = new Audio(audioUrl);
-      try {
-        await audio.play();
-        console.log("🔊 Audio started");
-      } catch (err) {
-        console.error("❌ Audio playback error:", err);
-      }
-
-      visemes.forEach(({ time, viseme }) => {
-        const delay = time * 1000;
-        const targetName = `viseme_${viseme}`;
-        const index = visemeMap[targetName];
-        if (index === undefined) return;
-
-        setTimeout(() => {
-          skinnedMesh.morphTargetInfluences.fill(0);
-          skinnedMesh.morphTargetInfluences[index] = 1;
-          renderOnce();
-        }, delay);
-
-        setTimeout(() => {
-          skinnedMesh.morphTargetInfluences[index] = 0;
-          renderOnce();
-        }, delay + 120);
-      });
-
-      audio.onended = () => {
-        updateStatus(customDoneMessage);
-        document.getElementById("recordPrompt").innerText = "✅ Ask anything else when you're ready — or say \"That's all for now\" to end.";
-
-        document.getElementById("recordPrompt").classList.add("ready");
-        document.getElementById("recordPrompt").style.display = "block";
-        if (recordBtn) recordBtn.style.display = "none"; // Button hidden in passive mode
-        setTimeout(() => { if (!window.stopPassiveLoop) { const btn = document.getElementById("recordBtn"); if (btn) btn.click(); } }, 1000);
-        if (recordBtn) recordBtn.disabled = false;
-        document.getElementById("recordPrompt").classList.remove("listening");
-        document.getElementById("recordPrompt").classList.add("idle");
-
-        // ⏳ After Chip's reply, wait 15 seconds, then prompt gently if idle
-        if (window.idlePromptTimeout) clearTimeout(window.idlePromptTimeout);
-        window.idlePromptTimeout = setTimeout(() => {
-          if (document.getElementById("recordPrompt").innerText.includes("Ask anything else")) {
-            updateStatus("💡 Still with me? You can ask something — or say \"That’s all for now\" to end.");
-            document.getElementById("recordPrompt").innerText = "💬 Say something when you’re ready — or \"That’s all for now\" to end.";
-            }
-        }, 15000);
-
-        console.log("✨ Blinking ON");
-      };
-    };
-  </script>
+  
 
 <div id="askChipToolbar">
   <button id="startBtn">🎙️ Start</button>
