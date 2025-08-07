@@ -1,102 +1,486 @@
-
 <!DOCTYPE html>
-
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<title>Ask Chip (3D)</title>
-<meta content="no-cache, no-store, must-revalidate" http-equiv="Cache-Control"/>
-<style>
+  <meta charset="utf-8"/>
+  <title>Ask Chip (3D)</title>
+  <meta content="no-cache, no-store, must-revalidate" http-equiv="Cache-Control">
+  <script>
+    console.log("🧪 Loaded index_3d.html vDEBUG-9");
+
+    function autoStartListening() {
+      setTimeout(() => {
+        const btn = document.getElementById("recordBtn");
+        if (btn) btn.click();
+      }, 500);
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+
+      function updateStatus(message) {
+        const statusDiv = document.getElementById("status");
+        statusDiv.textContent = message;
+        console.log("[Chip]", message);
+      }
+
+      
+      
+      const startBtn = document.getElementById("startBtn");
+      if (startBtn) startBtn.addEventListener("click", () => {
+        window.silenceCounter = 0; // reset silence tracking
+
+        fetch("/greet")
+          .then(res => res.json())
+          .then(data => {
+              if (data.reply) updateStatus(data.reply);
+              if (data.audio) {
+                playVisemeAudio(data.audio, [], "👋 Ask me anything about Pure Storage when you're ready (5 seconds).");
+              }
+              })
+          .catch(() => {
+            updateStatus("👋 Hey there! I'm Chip.");
+              });
+        startBtn.style.display = "none";
+      });
+
+      const exitBtn = document.getElementById("exitBtn");
+      const resetBtn = document.getElementById("resetBtn");
+
+      if (exitBtn) exitBtn.addEventListener("click", () => {
+        updateStatus("👋 It was great talking with you.");
+        document.getElementById("recordPrompt").innerText = "👋 Chip has left the session.";
+        document.getElementById("recordPrompt").style.display = "block";
+        if (recordBtn) recordBtn.style.display = "none";
+        window.stopPassiveLoop = true;
+      });
+
+      if (resetBtn) resetBtn.addEventListener("click", async () => {
+        updateStatus("🔄 Restarting session...");
+        document.getElementById("recordPrompt").innerText = "🔁 Resetting...";
+        document.getElementById("recordPrompt").style.display = "block";
+        if (recordBtn) recordBtn.style.display = "none";
+        window.stopPassiveLoop = false;
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        fetch("/greet").then(res => res.json()).then(data => {
+          updateStatus(data.reply || "👋 Welcome back.");
+            if (data.audio) {
+              playVisemeAudio(data.audio, [], "👋 Ask me anything about Pure Storage when you're ready (5 seconds).");
+            }
+          });
+      });
+
+      recordBtn.addEventListener("click", async () => {
+        if (recordBtn.disabled) return;
+        if (recordBtn) recordBtn.disabled = true;
+        document.getElementById("recordPrompt").classList.remove("idle");
+        document.getElementById("recordPrompt").classList.add("listening");
+        console.log("⛔ Blinking OFF");
+        if (recordBtn) recordBtn.classList.remove("blinking");
+
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const recorder = new MediaRecorder(stream);
+          const chunks = [];
+
+          recorder.ondataavailable = e => chunks.push(e.data);
+
+          recorder.onstop = async () => {
+            updateStatus("📤 Uploading audio to Chip...");
+            const blob = new Blob(chunks, { type: 'audio/webm' });
+            const audioLink = document.getElementById('audioDownload');
+            audioLink.href = URL.createObjectURL(blob);
+            audioLink.style.display = 'block';
+
+            const formData = new FormData();
+            formData.append("audio", blob, "input.webm");
+            updateStatus("🧠 Processing request...");
+        document.getElementById("recordPrompt").innerText = "🤔 Chip is thinking...";
+
+            const response = await fetch("/ask-chip", { method: "POST", body: formData });
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+
+            let visemes = [];
+            let audioUrl = "";
+            let audioChunks = [];
+            let collectingAudio = false;
+
+            const streamTimeout = setTimeout(() => {
+              console.warn("⏰ Stream timeout: forcing finalization.");
+              reader.cancel();
+              }, 10000);
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) {
+                clearTimeout(streamTimeout);
+                console.log("📦 Stream ended. Finalizing audio...");
+                break;
+                }
+
+              if (value && value.length > 2) {
+                if (value[0] === 73 && value[1] === 68 && value[2] === 51) {
+                  console.log("🎧 Detected audio/mpeg binary start (ID3)");
+                  collectingAudio = true;
+                  }
+                if (collectingAudio) {
+                  audioChunks.push(value);
+                  console.log("📥 Appended audio chunk, total:", audioChunks.length);
+                  continue;
+                  }
+                }
+
+              const text = decoder.decode(value);
+              const lines = text.split("--frame").filter(Boolean);
+              for (const line of lines) {
+                const [, headers, content] = line.split(/\r?\n\r?\n/);
+                if (!headers || !content) continue;
+
+                const contentType = headers.match(/Content-Type: (.+)/)?.[1];
+                if (contentType === "application/json") {
+                  const data = JSON.parse(content);
+                  if (data.viseme_timestamps) visemes = data.viseme_timestamps;
+                  if (data.audio) audioUrl = data.audio;
+                  if (data.transcript) {
+
+                    if (!data.transcript || data.transcript.trim() === "") {
+                      window.silenceCounter = (window.silenceCounter || 0) + 1;
+                      if (window.silenceCounter === 1) {
+                        updateStatus("🤔 I didn’t hear anything. Is there something I can help you with?");
+                      } else {
+                        updateStatus("👋 I’m not picking anything up, so I’m going to jump off. Press Start if you want to talk.");
+                        document.getElementById("recordPrompt").innerText = "👋 Chip is offline.";
+                        window.stopPassiveLoop = true;
+                      }
+                      return;
+                    } else {
+                      window.silenceCounter = 0;
+                    }
+
+
+                    if (!data.transcript || data.transcript.trim() === "") {
+                      window.silenceCounter = (window.silenceCounter || 0) + 1;
+                      if (window.silenceCounter === 1) {
+                        updateStatus("🤔 I didn’t hear anything. Is there something I can help you with?");
+                      } else {
+                        updateStatus("👋 I’m not picking anything up, so I’m going to jump off. Press Start if you want to talk.");
+                        document.getElementById("recordPrompt").innerText = "👋 Chip is offline.";
+                        window.stopPassiveLoop = true;
+                      }
+                      return;
+                    } else {
+                      window.silenceCounter = 0;
+                    }
+
+                    const exitPhrase = data.transcript.trim().toLowerCase();
+                    if (exitPhrase.includes("that's all for now") || exitPhrase.includes("have a nice day") || exitPhrase.includes("catch you later") || exitPhrase.includes("i'm signing off") || exitPhrase.includes("exit")) {
+                      updateStatus("👋 It was great talking with you.");
+                      document.getElementById("recordPrompt").innerText = "👋 Chip has left the session.";
+                      document.getElementById("recordPrompt").classList.add("ready");
+                      document.getElementById("recordPrompt").style.display = "block";
+                      return; // stop passive loop
+                      }
+                    updateStatus("🗣️ You said: " + data.transcript);
+                    const caption = document.getElementById("caption");
+                    caption.textContent = data.transcript;
+                    caption.style.visibility = "visible";
+                    caption.style.display = "block";
+                    setTimeout(() => { caption.style.display = "none"; }, 4000);
+                    }
+                  if (data.response) console.log("🤖 Chip replied:", data.response);
+                  }
+                }
+              }
+
+            if (audioChunks.length) {
+              const fullAudioBlob = new Blob(audioChunks, { type: 'audio/mpeg' });
+              audioUrl = URL.createObjectURL(fullAudioBlob);
+              console.log("🔗 Final audioUrl created from chunks:", audioUrl);
+              }
+
+            if (audioUrl) {
+              playVisemeAudio(audioUrl, visemes);
+              } else {
+              updateStatus("⚠️ Failed to get audio or visemes.");
+              recordBtn.style.display = "block";
+              }
+            };
+
+          recorder.start();
+          setTimeout(() => recorder.stop(), 5000);
+        } catch (err) {
+          updateStatus("❌ Microphone access failed.");
+          console.error(err);
+        }
+      });
+    });
+  </script>
+  <style>
     body {
       margin: 0;
       background-color: #1e1e1e;
-      font-family: 'Segoe UI', sans-serif;
       color: orange;
+      font-family: 'Segoe UI', sans-serif;
       overflow: hidden;
     }
-    #chipZoomFrame {
+    canvas { display: block; }
+    #recordBtn {
       position: absolute;
-      top: 70px;
+      bottom: 40px;
       left: 50%;
       transform: translateX(-50%);
-      background: #222;
-      border: 4px solid #444;
-      border-radius: 16px;
-      box-shadow: 0 0 20px rgba(0,0,0,0.6);
-      padding: 8px;
-      z-index: 5;
-      width: 320px;
-      height: 320px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    #chipZoomFrame img {
-      max-width: 100%;
-      max-height: 100%;
-      border-radius: 10px;
-    }
-    #askChipToolbar {
-      position: absolute;
-      bottom: 0;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(0,0,0,0.85);
-      padding: 10px 16px;
-      border-radius: 14px 14px 0 0;
-      display: flex;
-      gap: 16px;
-      z-index: 30;
-      font-size: 14px;
-    }
-    #askChipToolbar button {
-      background: none;
-      border: none;
+      z-index: 10;
+      padding: 12px 24px;
+      font-size: 16px;
+      background-color: orange;
       color: orange;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
       font-weight: bold;
-      cursor: pointer;
+      box-shadow: 0 0 10px rgba(255, 165, 0, 0.4);
     }
-    .dropdown {
-      position: relative;
+    #recordBtn.blinking {
+      animation: blink-animation 2s ease-in-out infinite;
     }
-    .dropdown-content {
-      display: none;
+    @keyframes blink-animation {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    #caption {
       position: absolute;
-      bottom: 30px;
-      background: rgba(30,30,30,0.9);
+      top: 50%;
+      left: 20px;
+      transform: translateY(-50%);
+      font-size: 12px;
+      color: #cccccc;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 6px 10px;
       border-radius: 6px;
-      padding: 6px;
-      min-width: 140px;
-      box-shadow: 0 0 6px #000;
+      font-style: italic;
+      pointer-events: none;
+      max-width: 300px;
+      z-index: 15;
     }
-    .dropdown-content div {
-      padding: 6px 8px;
-      cursor: pointer;
+    #status {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.8);
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 16px;
+      color: #90ee90;
+      max-width: 400px;
+      font-weight: 500;
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
     }
-    .dropdown-content div:hover {
-      background-color: rgba(255,165,0,0.2);
+    #version-tag {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      font-size: 12px;
+      color: #aaa;
     }
-    .dropdown:hover .dropdown-content {
-      display: block;
+    #recordPrompt {
+      position: absolute;
+      bottom: 90px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 16px;
+      color: rgba(255,255,255,0.3);
+      transition: opacity 1s ease;
+      pointer-events: none;
     }
-  </style>
+    #recordPrompt.ready {
+      color: rgba(255,255,255,0.9);
+    }
+    #waveform {
+      position: absolute;
+      bottom: 50px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 200px;
+      height: 40px;
+      background: transparent;
+      pointer-events: none;
+    }
+  
+@keyframes pulseDots {
+  0% { content: ""; opacity: 0.2; }
+  33% { content: "."; opacity: 0.5; }
+  66% { content: ".."; opacity: 0.8; }
+  100% { content: "..."; opacity: 1; }
+}
+#recordPrompt.listening::after {
+  content: "...";
+  animation: pulseDots 1.5s infinite;
+}
+#recordPrompt.idle::after {
+  content: "";
+  animation: blink-idle 2s step-start infinite;
+}
+@keyframes blink-idle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+</style>
 </head>
+
 <body>
-<div id="chipZoomFrame">
-<img alt="Chip Tracewell in Zoom-style view" src="/static/img/chip.png"/>
-</div>
+  <div id="recordPrompt" class="faint"></div>
+  <canvas id="waveform"></canvas>
+  <button id="recordBtn" style="display: none;">🎤 Ask Chip</button> <!-- Hidden for passive flow -->
+  <div id="status">Ready</div>
+  <div id="version-tag">Ask Chip UI vDEBUG-9</div>
+  <div id="caption"></div>
+  <a id="audioDownload" style="display:none;color:#90ee90;position:absolute;bottom:10px;left:20px;z-index:15;pointer-events:auto;" download="recording.webm">🎧 Download your recording</a>
+
+  
+  
+    
+
+
+  <script type="module">
+    import * as THREE from 'https://esm.sh/three@0.155.0';
+    import { GLTFLoader } from 'https://esm.sh/three@0.155.0/examples/jsm/loaders/GLTFLoader';
+    import { OrbitControls } from 'https://esm.sh/three@0.155.0/examples/jsm/controls/OrbitControls';
+
+    let scene, camera, renderer;
+    let model, visemeMap, skinnedMesh;
+    const canvas = document.createElement('canvas');
+    document.body.appendChild(canvas);
+    const statusDiv = document.getElementById("status");
+    const recordBtn = document.getElementById("recordBtn");
+
+    function updateStatus(message) {
+      statusDiv.textContent = message;
+      console.log("[Chip]", message);
+    }
+
+    function renderOnce() {
+      renderer.render(scene, camera);
+    }
+
+    // ✅ Updated to keep the button visible after response
+    window.playVisemeAudio = async function(audioUrl, visemes, customDoneMessage = "✅ Done. Ask another question.") {
+      updateStatus("🔊 Playing Chip's response...");
+      console.log("⛔ Blinking OFF");
+      if (recordBtn) recordBtn.classList.remove("blinking");
+
+      const audio = new Audio(audioUrl);
+      try {
+        await audio.play();
+        console.log("🔊 Audio started");
+      } catch (err) {
+        console.error("❌ Audio playback error:", err);
+      }
+
+      visemes.forEach(({ time, viseme }) => {
+        const delay = time * 1000;
+        const targetName = `viseme_${viseme}`;
+        const index = visemeMap[targetName];
+        if (index === undefined) return;
+
+        setTimeout(() => {
+          skinnedMesh.morphTargetInfluences.fill(0);
+          skinnedMesh.morphTargetInfluences[index] = 1;
+          renderOnce();
+        }, delay);
+
+        setTimeout(() => {
+          skinnedMesh.morphTargetInfluences[index] = 0;
+          renderOnce();
+        }, delay + 120);
+      });
+
+      audio.onended = () => {
+        updateStatus(customDoneMessage);
+        document.getElementById("recordPrompt").innerText = "✅ Ask anything else when you're ready — or say \"That's all for now\" to end.";
+
+        document.getElementById("recordPrompt").classList.add("ready");
+        document.getElementById("recordPrompt").style.display = "block";
+        if (recordBtn) recordBtn.style.display = "none"; // Button hidden in passive mode
+        setTimeout(() => { if (!window.stopPassiveLoop) { const btn = document.getElementById("recordBtn"); if (btn) btn.click(); } }, 1000);
+        if (recordBtn) recordBtn.disabled = false;
+        document.getElementById("recordPrompt").classList.remove("listening");
+        document.getElementById("recordPrompt").classList.add("idle");
+
+        // ⏳ After Chip's reply, wait 15 seconds, then prompt gently if idle
+        if (window.idlePromptTimeout) clearTimeout(window.idlePromptTimeout);
+        window.idlePromptTimeout = setTimeout(() => {
+          if (document.getElementById("recordPrompt").innerText.includes("Ask anything else")) {
+            updateStatus("💡 Still with me? You can ask something — or say \"That’s all for now\" to end.");
+            document.getElementById("recordPrompt").innerText = "💬 Say something when you’re ready — or \"That’s all for now\" to end.";
+            }
+        }, 15000);
+
+        console.log("✨ Blinking ON");
+      };
+    };
+  </script>
+
 <div id="askChipToolbar">
-<button id="startBtn">🎙️ Start</button>
-<div class="dropdown">
-<button id="audioBtn">🔈 Audio ▾</button>
-<div class="dropdown-content" id="audioOptions">
-<div>(Same as system)</div>
-<div>USB Headset</div>
-<div>Bluetooth</div>
+  <button id="startBtn">🎙️ Start</button>
+  <div class="dropdown">
+    <button id="audioBtn">🔈 Audio ▾</button>
+    <div class="dropdown-content" id="audioOptions">
+      <div>(Same as system)</div>
+      <div>USB Headset</div>
+      <div>Bluetooth</div>
+    </div>
+  </div>
+  <button id="resetBtn">🔁 Reset</button>
+  <button id="exitBtn">❌ End</button>
 </div>
-</div>
-<button id="resetBtn">🔁 Reset</button>
-<button id="exitBtn">❌ End</button>
-</div>
+
+
+<style>
+#askChipToolbar {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.85);
+  padding: 10px 16px;
+  border-radius: 14px 14px 0 0;
+  display: flex;
+  gap: 16px;
+  z-index: 30;
+  font-size: 14px;
+}
+#askChipToolbar button {
+  background: none;
+  border: none;
+  color: orange;
+  font-weight: bold;
+  cursor: pointer;
+}
+.dropdown {
+  position: relative;
+}
+.dropdown-content {
+  display: none;
+  position: absolute;
+  bottom: 30px;
+  background: rgba(30,30,30,0.9);
+  border-radius: 6px;
+  padding: 6px;
+  min-width: 140px;
+  box-shadow: 0 0 6px #000;
+}
+.dropdown-content div {
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.dropdown-content div:hover {
+  background-color: rgba(255,165,0,0.2);
+}
+.dropdown:hover .dropdown-content {
+  display: block;
+}
+</style>
+
 </body>
 </html>
