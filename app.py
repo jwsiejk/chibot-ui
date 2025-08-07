@@ -23,6 +23,7 @@ def init_conversation_table():
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = True
     try:
+    conn = psycopg2.connect(os.environ['DATABASE_URL'])
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS conversations (
