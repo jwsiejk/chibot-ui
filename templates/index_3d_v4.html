@@ -1,10 +1,11 @@
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <title>Ask Chip (3D)</title>
-  <meta content="no-cache, no-store, must-revalidate" http-equiv="Cache-Control">
-  <script>
+<meta charset="utf-8"/>
+<title>Ask Chip (3D)</title>
+<meta content="no-cache, no-store, must-revalidate" http-equiv="Cache-Control"/>
+<script>
     console.log("🧪 Loaded index_3d.html vDEBUG-9");
 
     function autoStartListening() {
@@ -265,7 +266,7 @@
       });
     });
   </script>
-  <style>
+<style>
     body {
       margin: 0;
       background-color: #1e1e1e;
@@ -378,42 +379,31 @@
 
 </style>
 </head>
-
 <body>
-  <div id="chip-container" style="text-align:center; margin-top: 40px;">
-    <img src="/static/img/chip.png" alt="Chip Tracewell" id="chipImage" style="width: 320px; height: auto; border-radius: 10px; box-shadow: 0px 0px 12px rgba(0,0,0,0.4);">
-  </div>
-  <div id="recordPrompt" class="faint"></div>
-  <canvas id="waveform"></canvas>
-  <button id="recordBtn" style="display: none;">🎤 Ask Chip</button> <!-- Hidden for passive flow -->
-  <div id="status">Ready</div>
-  <div id="version-tag">Ask Chip UI vDEBUG-9</div>
-  <div id="caption"></div>
-  <a id="audioDownload" style="display:none;color:#90ee90;position:absolute;bottom:10px;left:20px;z-index:15;pointer-events:auto;" download="recording.webm">🎧 Download your recording</a>
-
-  
-  
-    
-
-
-  
-
-<div id="askChipToolbar">
-  <button id="startBtn">🎙️ Start</button>
-  <div class="dropdown">
-    <button id="audioBtn">🔈 Audio ▾</button>
-    <div class="dropdown-content" id="audioOptions">
-      <div>(Same as system)</div>
-      <div>USB Headset</div>
-      <div>Bluetooth</div>
-    </div>
-  </div>
-  <button id="resetBtn">🔁 Reset</button>
-  <button id="exitBtn">❌ End</button>
-  <button id="profileBtn">👤 Profile</button>
+<div id="chip-container" style="text-align:center; margin-top: 40px;">
+<img alt="Chip Tracewell" id="chipImage" src="/static/img/chip.png" style="width: 320px; height: auto; border-radius: 10px; box-shadow: 0px 0px 12px rgba(0,0,0,0.4);"/>
 </div>
-
-
+<div class="faint" id="recordPrompt"></div>
+<canvas id="waveform"></canvas>
+<button id="recordBtn" style="display: none;">🎤 Ask Chip</button> <!-- Hidden for passive flow -->
+<div id="status">Ready</div>
+<div id="version-tag">Ask Chip UI vDEBUG-9</div>
+<div id="caption"></div>
+<a download="recording.webm" id="audioDownload" style="display:none;color:#90ee90;position:absolute;bottom:10px;left:20px;z-index:15;pointer-events:auto;">🎧 Download your recording</a>
+<div id="askChipToolbar">
+<button id="startBtn">🎙️ Start</button>
+<div class="dropdown">
+<button id="audioBtn">🔈 Audio ▾</button>
+<div class="dropdown-content" id="audioOptions">
+<div>(Same as system)</div>
+<div>USB Headset</div>
+<div>Bluetooth</div>
+</div>
+</div>
+<button id="resetBtn">🔁 Reset</button>
+<button id="exitBtn">❌ End</button>
+<button id="profileBtn">👤 Profile</button>
+</div>
 <style>
 #askChipToolbar {
   position: absolute;
@@ -459,27 +449,23 @@
   display: block;
 }
 </style>
-
-
 <div id="profileModal" style="display:none; position:fixed; bottom:60px; right:20px; transform:none;
   background:#222; color:#fff; padding:20px; border-radius:10px; z-index:999; box-shadow:0 0 10px #000; min-width:300px;">
-  <h3 style="margin-top:0;">Your Profile</h3>
-  <label>Name:</label><br>
-  <input type="text" id="profileName" style="width:100%; margin-bottom:10px;"><br>
-  <label>Title:</label><br>
-  <input type="text" id="profileTitle" style="width:100%; margin-bottom:10px;"><br>
-  <button onclick="saveProfile()" style="margin-right:10px;">💾 Save</button>
-  <button onclick="closeProfile()">❌ Close</button>
+<h3 style="margin-top:0;">Your Profile</h3>
+<label>Name:</label><br/>
+<input id="profileName" style="width:100%; margin-bottom:10px;" type="text"/><br/>
+<label>Title:</label><br/>
+<input id="profileTitle" style="width:100%; margin-bottom:10px;" type="text"/><br/>
+<button onclick="saveProfile()" style="margin-right:10px;">💾 Save</button>
+<button onclick="closeProfile()">❌ Close</button>
 </div>
-
-
 <!-- Magic Link Login Form -->
 <div id="magic-link-login" style="position: absolute; bottom: 20px; left: 20px; z-index: 1000;">
-  <form id="login-form">
-    <input type="email" id="email" name="email" placeholder="Enter your email" required style="padding: 4px;">
-    <button type="submit" style="padding: 4px;">Sign In</button>
-  </form>
-  <p id="login-status" style="color: white; font-size: 12px;"></p>
+<form id="login-form">
+<input id="email" name="email" placeholder="Enter your email" required="" style="padding: 4px;" type="email"/>
+<button style="padding: 4px;" type="submit">Sign In</button>
+</form>
+<p id="login-status" style="color: white; font-size: 12px;"></p>
 </div>
 <script>
   const loginForm = document.getElementById('login-form');
@@ -513,5 +499,51 @@
   });
 </script>
 
-</body>
+<!-- Magic Link Sign In Form -->
+<div id="magic-link-login" style="position: absolute; bottom: 20px; left: 20px; z-index: 1000;">
+<form id="login-form">
+<input id="email" name="email" placeholder="Enter your email" required="" style="padding: 4px;" type="email"/>
+<button style="padding: 4px;" type="submit">Sign In</button>
+</form>
+<p id="login-status" style="color: white; font-size: 12px;"></p>
+</div>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const loginForm = document.getElementById('login-form');
+  const loginStatus = document.getElementById('login-status');
+  const startBtn = document.getElementById('startBtn');
+  if (startBtn) {
+    startBtn.disabled = true;
+    startBtn.style.opacity = 0.4;
+  }
+
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('email').value;
+
+    try {
+      const res = await fetch('/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+
+      if (res.ok) {
+        loginStatus.textContent = '✅ Check your email for the magic link.';
+        loginStatus.style.color = 'lightgreen';
+        if (startBtn) {
+          startBtn.disabled = false;
+          startBtn.style.opacity = 1.0;
+        }
+      } else {
+        loginStatus.textContent = '❌ Login failed.';
+        loginStatus.style.color = 'red';
+      }
+    } catch (err) {
+      loginStatus.textContent = '❌ Error during login.';
+      loginStatus.style.color = 'red';
+    }
+  });
+});
+</script></body>
 </html>
