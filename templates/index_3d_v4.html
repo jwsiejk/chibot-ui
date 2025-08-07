@@ -1,11 +1,12 @@
 
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <title>Ask Chip (3D)</title>
-  <meta content="no-cache, no-store, must-revalidate" http-equiv="Cache-Control">
-  <style>
+<meta charset="utf-8"/>
+<title>Ask Chip (3D)</title>
+<meta content="no-cache, no-store, must-revalidate" http-equiv="Cache-Control"/>
+<style>
     body {
       margin: 0;
       background-color: #1e1e1e;
@@ -81,24 +82,21 @@
   </style>
 </head>
 <body>
-
-  <div id="chipZoomFrame">
-    <img src="chip.png" alt="Chip Tracewell in Zoom-style view" />
-  </div>
-
-  <div id="askChipToolbar">
-    <button id="startBtn">🎙️ Start</button>
-    <div class="dropdown">
-      <button id="audioBtn">🔈 Audio ▾</button>
-      <div class="dropdown-content" id="audioOptions">
-        <div>(Same as system)</div>
-        <div>USB Headset</div>
-        <div>Bluetooth</div>
-      </div>
-    </div>
-    <button id="resetBtn">🔁 Reset</button>
-    <button id="exitBtn">❌ End</button>
-  </div>
-
+<div id="chipZoomFrame">
+<img alt="Chip Tracewell in Zoom-style view" src="/static/img/chip.png"/>
+</div>
+<div id="askChipToolbar">
+<button id="startBtn">🎙️ Start</button>
+<div class="dropdown">
+<button id="audioBtn">🔈 Audio ▾</button>
+<div class="dropdown-content" id="audioOptions">
+<div>(Same as system)</div>
+<div>USB Headset</div>
+<div>Bluetooth</div>
+</div>
+</div>
+<button id="resetBtn">🔁 Reset</button>
+<button id="exitBtn">❌ End</button>
+</div>
 </body>
 </html>
