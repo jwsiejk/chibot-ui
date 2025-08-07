@@ -33,7 +33,11 @@
           .then(data => {
               if (data.reply) updateStatus(data.reply);
               if (data.audio) {
-                playVisemeAudio(data.audio, [], "👋 Ask me anything about Pure Storage when you're ready (5 seconds).");
+                
+    const greetingAudio = new Audio(data.audio);
+    greetingAudio.play().catch(err => console.warn("🔇 Greeting audio failed to play:", err));
+    playVisemeAudio(data.audio, [], "👋 Ask me anything about Pure Storage when you're ready (5 seconds).");
+    
               }
               })
           .catch(() => {
@@ -63,7 +67,11 @@
         fetch("/greet").then(res => res.json()).then(data => {
           updateStatus(data.reply || "👋 Welcome back.");
             if (data.audio) {
-              playVisemeAudio(data.audio, [], "👋 Ask me anything about Pure Storage when you're ready (5 seconds).");
+              
+    const greetingAudio = new Audio(data.audio);
+    greetingAudio.play().catch(err => console.warn("🔇 Greeting audio failed to play:", err));
+    playVisemeAudio(data.audio, [], "👋 Ask me anything about Pure Storage when you're ready (5 seconds).");
+    
             }
           });
       });
