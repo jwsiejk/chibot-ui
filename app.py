@@ -10,6 +10,7 @@ from memory import init_db, get_user, save_user, log_conversation
 import openai
 from uuid import uuid4
 from werkzeug.utils import secure_filename
+from datetime import datetime
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "supersecret")
@@ -37,7 +38,7 @@ def generate_chip_response(user_id, name, question, role, region):
     user = get_user(user_id)
     messages = user["messages"] if user else []
     messages.append({"role": "user", "content": question})
-    messages = messages[-6:]  # Only keep last 3 turns (user+assistant)
+    messages = messages[-6:]
 
     system_prompt = {
         "role": "system",
@@ -64,11 +65,51 @@ def generate_chip_response(user_id, name, question, role, region):
 
 @app.route("/3d")
 def index_3d():
-    session["user_id"] = session.get("user_id") or request.remote_addr
-    session["name"] = session.get("name", "there")
-    session["role"] = session.get("role", "engineer")
-    session["region"] = session.get("region", "NA")
     return render_template("index_3d_v4.html")
+
+@app.route("/login-basic", methods=["POST"])
+def login_basic():
+    try:
+        data = request.get_json()
+        login_name = data.get("login")
+        session["user_id"] = login_name
+
+        user = get_user(login_name)
+        if user:
+            session["name"] = user.get("name", login_name)
+            session["role"] = user.get("role", "engineer")
+            session["region"] = user.get("region", "NA")
+            return jsonify({
+                "first_time": False,
+                "name": user.get("name", ""),
+                "title": user.get("role", "")
+            })
+        else:
+            session["name"] = login_name
+            session["role"] = "engineer"
+            session["region"] = "NA"
+            return jsonify({"first_time": True})
+
+    except Exception as e:
+        print("🔥 Login error:", str(e))
+        return jsonify({"error": "Login failed"}), 500
+
+@app.route("/profile", methods=["POST"])
+def save_profile():
+    try:
+        user_id = session.get("user_id")
+        data = request.get_json()
+        name = data.get("name")
+        title = data.get("title")
+
+        messages = get_user(user_id)["messages"] if get_user(user_id) else []
+        save_user(user_id, json.dumps(messages), title, "NA", name)
+        session["name"] = name
+        session["role"] = title
+        return jsonify({"success": True})
+    except Exception as e:
+        print("🔥 Profile save error:", str(e))
+        return jsonify({"error": "Save failed"}), 500
 
 @app.route("/ask", methods=["POST"])
 def ask():
@@ -90,7 +131,6 @@ def ask():
         if not question:
             return jsonify({"error": "Missing question."}), 400
 
-        # ✅ Greeting override
         if request.is_json and data.get("greeting"):
             response_text = question
         else:
@@ -127,7 +167,11 @@ def ask_chip():
             region = "NA"
 
             if "audio" not in request.files:
-                yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"error": "No audio file uploaded."}).encode() + b"\r\n"
+                yield b"--frame
+Content-Type: application/json
+
+" + json.dumps({"error": "No audio file uploaded."}).encode() + b"
+"
                 return
 
             audio_file = request.files["audio"]
@@ -136,27 +180,23 @@ def ask_chip():
             audio_file.save(audio_path)
 
             client = openai.OpenAI(api_key=openai.api_key)
-
-            print("🎧 Audio file saved to:", audio_path)
             with open(audio_path, "rb") as f:
-                transcript = client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=f
-                ).text
-            print("📝 Transcript:", transcript)
+                transcript = client.audio.transcriptions.create(model="whisper-1", file=f).text
 
-            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"transcript": transcript}).encode() + b"\r\n"
+            yield b"--frame
+Content-Type: application/json
+
+" + json.dumps({"transcript": transcript}).encode() + b"
+"
 
             response_text = generate_chip_response(user_id, name, transcript, role, region)
-            print("🤖 GPT response:", response_text)
-            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"response": response_text}).encode() + b"\r\n"
+            yield b"--frame
+Content-Type: application/json
+
+" + json.dumps({"response": response_text}).encode() + b"
+"
 
             voice_settings = {"speed": 0.9}
-            print("🗣️ Sending text to ElevenLabs:", response_text)
-            if not voice_id:
-                raise ValueError("Missing ElevenLabs voice_id")
-            if not response_text or len(response_text.strip()) == 0:
-                raise ValueError("Response text is empty or invalid")
             audio_stream = eleven.text_to_speech.convert(
                 voice_id=voice_id,
                 model_id="eleven_monolingual_v1",
@@ -165,66 +205,26 @@ def ask_chip():
                 voice_settings=voice_settings
             )
 
-            yield b"--frame\r\nContent-Type: audio/mpeg\r\n\r\n"
+            yield b"--frame
+Content-Type: audio/mpeg
+
+"
             for chunk in audio_stream:
                 yield chunk
-            yield b"\r\n--frame--\r\n"
+            yield b"
+--frame--
+"
 
         except Exception as e:
             print("🔥 ERROR IN /ask-chip:", str(e))
             traceback.print_exc()
-            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"error": "Voice processing failed."}).encode() + b"\r\n"
+            yield b"--frame
+Content-Type: application/json
+
+" + json.dumps({"error": "Voice processing failed."}).encode() + b"
+"
 
     return Response(stream_with_context(generate_stream()), mimetype="multipart/x-mixed-replace; boundary=frame")
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        name = request.form.get("name")
-        session["user_id"] = request.remote_addr
-        session["name"] = name
-        return redirect("/profile")
-    return '''
-        <h3>Please complete your profile to continue.</h3>
-        <form method="POST">
-            <input name="name" placeholder="Enter your name" required />
-            <button type="submit">Login</button>
-        </form>
-    '''
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect("/login")
-
-@app.route("/profile", methods=["GET", "POST"])
-def profile():
-    user_id = session.get("user_id") or request.remote_addr
-    if not session.get("name"):
-        return redirect("/login")
-
-    if request.method == "POST":
-        name = request.form.get("name")
-        role = request.form.get("role")
-        region = request.form.get("region")
-        messages = get_user(user_id)["messages"] if get_user(user_id) else []
-        session["name"] = name
-        save_user(user_id, json.dumps(messages), role, region, name)
-        return redirect("/3d")
-
-    user = get_user(user_id) or {"name": session.get("name", "User"), "role": "engineer", "region": "NA"}
-    return render_template("profile.html", user=user)
-
-
-# ✅ Google OAuth integration
-from google_auth import bp as google_auth_bp, init_oauth
-app.register_blueprint(google_auth_bp)
-init_oauth(app)
-
-
-if __name__ == '__main__':
-    app.run(debug=True, host="0.0.0.0", port=3000)
-
 
 @app.route("/greet")
 def greet():
