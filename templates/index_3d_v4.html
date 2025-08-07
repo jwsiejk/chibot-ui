@@ -377,11 +377,33 @@
   50% { opacity: 0.4; }
 }
 
+
+<style>
+.chip-box {
+    width: 1320px;
+    height: 789px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: transparent;
+    border-radius: 12px;
+    overflow: hidden;
+    position: relative;
+}
+
+.chip-box img {
+    max-height: 100%;
+    height: auto;
+    width: auto;
+    transform: scale(1.25) translateX(40px);
+}
+</style>
 </style>
 </head>
 <body>
-<div id="chip-container" style="text-align:center; margin-top: 40px; height: 500px; display: flex; justify-content: center; align-items: center;">
-<img alt="Chip Tracewell" id="chipImage" src="/static/img/chip.png" style="width: 480px; height: auto; border-radius: 10px; box-shadow: 0px 0px 12px rgba(0,0,0,0.4);"/>
+<div id="chip-container" style="text-align:center; margin-top: 40px;">
+<img alt="Chip Tracewell" id="chipImage" src="/static/img/chip.png" style="width: 320px; height: auto; border-radius: 10px; box-shadow: 0px 0px 12px rgba(0,0,0,0.4);"/>
 </div>
 <div class="faint" id="recordPrompt"></div>
 <canvas id="waveform"></canvas>
