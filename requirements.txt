@@ -7,3 +7,4 @@ itsdangerous>=2.1.2         # for magic link token signing
 gunicorn                    # for production WSGI server
 psycopg2-binary             # for PostgreSQL (Render)
 python-dotenv               # for .env secrets
+flask_cors
