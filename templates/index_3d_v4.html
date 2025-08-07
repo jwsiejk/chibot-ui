@@ -601,6 +601,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (data.first_time) {
           profileModal.style.display = "block";
+document.getElementById("profileName").value = loginName;
+document.getElementById("profileTitle").value = "";
         } else {
           // Populate profile fields
           document.getElementById("profileName").value = data.name;
@@ -711,6 +713,8 @@ document.addEventListener("DOMContentLoaded", function () {
         loginContainer.style.display = "none";
         if (!storedName || !storedTitle) {
             profileModal.style.display = "block";
+document.getElementById("profileName").value = loginName;
+document.getElementById("profileTitle").value = "";
             document.getElementById("modalMessage").innerText = "Please fill out your profile to continue";
             startBtn.disabled = true;
         } else {
