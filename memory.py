@@ -35,15 +35,16 @@ def init_db():
         print("🛠 Creating tables if not present...")
         with connect() as conn:
             with conn.cursor() as cursor:
+                # Updated unified user_profiles table
                 cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS user_memory (
-                        user_id TEXT PRIMARY KEY,
-                        name TEXT,
-                        role TEXT,
-                        region TEXT,
-                        preferences TEXT,
-                        last_interaction TIMESTAMP,
-                        notes TEXT
+                    CREATE TABLE IF NOT EXISTS user_profiles (
+                        login_name TEXT PRIMARY KEY,
+                        full_name TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        region TEXT DEFAULT 'NA',
+                        messages JSONB DEFAULT '[]',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 ''')
                 cursor.execute('''
@@ -65,7 +66,7 @@ def init_db():
 def get_user(user_id):
     with connect() as conn:
         with conn.cursor() as cursor:
-            cursor.execute('SELECT * FROM user_memory WHERE user_id = %s', (user_id,))
+            cursor.execute('SELECT * FROM user_profiles WHERE login_name = %s', (user_id,))
             row = cursor.fetchone()
             if row:
                 return {
@@ -73,9 +74,9 @@ def get_user(user_id):
                     "name": row[1],
                     "role": row[2],
                     "region": row[3],
-                    "messages": json.loads(row[4]) if row[4] else [],
-                    "last_interaction": row[5],
-                    "notes": row[6]
+                    "messages": row[4] if isinstance(row[4], list) else json.loads(row[4]),
+                    "created_at": row[5],
+                    "updated_at": row[6]
                 }
             return None
 
@@ -83,17 +84,17 @@ def save_user(user_id, messages, role, region, name="User"):
     with connect() as conn:
         with conn.cursor() as cursor:
             now = datetime.utcnow()
-            preferences_json = messages if isinstance(messages, str) else json.dumps(messages)
+            messages_json = messages if isinstance(messages, str) else json.dumps(messages)
             cursor.execute('''
-                INSERT INTO user_memory (user_id, name, role, region, preferences, last_interaction)
+                INSERT INTO user_profiles (login_name, full_name, title, region, messages, updated_at)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (user_id) DO UPDATE SET
-                    name = EXCLUDED.name,
-                    role = EXCLUDED.role,
+                ON CONFLICT (login_name) DO UPDATE SET
+                    full_name = EXCLUDED.full_name,
+                    title = EXCLUDED.title,
                     region = EXCLUDED.region,
-                    preferences = EXCLUDED.preferences,
-                    last_interaction = EXCLUDED.last_interaction
-            ''', (user_id, name, role, region, preferences_json, now))
+                    messages = EXCLUDED.messages,
+                    updated_at = EXCLUDED.updated_at
+            ''', (user_id, name, role, region, messages_json, now))
             conn.commit()
 
 def log_conversation(user_id, user_message, chip_response):
