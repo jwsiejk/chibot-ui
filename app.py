@@ -171,8 +171,7 @@ def ask_chip():
 Content-Type: application/json
 
 " + json.dumps({"error": "No audio file uploaded."}).encode() + b"
-"
-                return
+"return
 
             audio_file = request.files["audio"]
             audio_file.filename = secure_filename(audio_file.filename)
@@ -187,16 +186,12 @@ Content-Type: application/json
 Content-Type: application/json
 
 " + json.dumps({"transcript": transcript}).encode() + b"
-"
-
-            response_text = generate_chip_response(user_id, name, transcript, role, region)
+"response_text = generate_chip_response(user_id, name, transcript, role, region)
             yield b"--frame
 Content-Type: application/json
 
 " + json.dumps({"response": response_text}).encode() + b"
-"
-
-            voice_settings = {"speed": 0.9}
+"voice_settings = {"speed": 0.9}
             audio_stream = eleven.text_to_speech.convert(
                 voice_id=voice_id,
                 model_id="eleven_monolingual_v1",
@@ -222,9 +217,7 @@ Content-Type: audio/mpeg
 Content-Type: application/json
 
 " + json.dumps({"error": "Voice processing failed."}).encode() + b"
-"
-
-    return Response(stream_with_context(generate_stream()), mimetype="multipart/x-mixed-replace; boundary=frame")
+"return Response(stream_with_context(generate_stream()), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 @app.route("/greet")
 def greet():
