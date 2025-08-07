@@ -72,7 +72,41 @@
       if (startBtn) startBtn.addEventListener("click", () => {
         window.silenceCounter = 0; // reset silence tracking
 
-        fetch("/greet")
+<!-- PATCH: Dynamic Greeting | 2025-08-07 -->
+
+        const userName = localStorage.getItem("profileName") || "there";
+        const now = new Date();
+        const hours = now.getHours();
+        const isMorning = hours < 12;
+        const greetingPrompt = `
+Chip is a friendly, dry-witted, Nebraskan AI with a subtle sense of humor.
+Create a short greeting using the following:
+- Starts with "Good morning" or "Good afternoon" based on current time.
+- Include the user name if available (name: "${userName}").
+- Ends with a natural, conversational variant of "How may I help you today?"
+Make it sound like Chip, and no more than 20 words.
+`;
+
+        fetch("/greet", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt: greetingPrompt })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.reply) updateStatus(data.reply);
+            if (data.audio) {
+                const greetingAudio = new Audio(data.audio);
+                greetingAudio.play().catch(err => console.warn("🔇 Greeting audio failed to play:", err));
+                playVisemeAudio(data.audio, [], "👋 Ask me anything about Pure Storage when you're ready (5 seconds).");
+            }
+        })
+        .catch(() => {
+            updateStatus("👋 Hey there! I'm Chip.");
+        });
+
+        startBtn.style.display = "none";
+                fetch("/greet")
           .then(res => res.json())
           .then(data => {
               if (data.reply) updateStatus(data.reply);
