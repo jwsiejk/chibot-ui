@@ -205,15 +205,29 @@ def ask_chip():
 
     return Response(stream_with_context(generate_stream()), mimetype="multipart/x-mixed-replace; boundary=frame")
 
-@app.route("/greet")
+# <!-- PATCH: Persistent Memory + Dynamic Greeting | 2025-08-07 -->
+@app.route("/greet", methods=["POST"])
 def greet():
     try:
-        text = "Hey there. I'm Chip — ready when you are."
+        user_id = session.get("user_id")
+        user = get_user(user_id) if user_id else None
+        name = user.get("name", "there") if user else "there"
+
+        data = request.get_json()
+        prompt = data.get("prompt", f"Say hello to {name}.")
+
+        openai_response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": prompt}],
+            max_tokens=60
+        )
+        greeting_text = openai_response.choices[0].message.content.strip()
+
         voice_settings = {"speed": 0.9}
         audio = eleven.text_to_speech.convert(
             voice_id=voice_id,
             model_id="eleven_monolingual_v1",
-            text=text,
+            text=greeting_text,
             optimize_streaming_latency=1,
             voice_settings=voice_settings
         )
@@ -221,7 +235,8 @@ def greet():
         with open(filename, "wb") as f:
             for chunk in audio:
                 f.write(chunk)
-        return jsonify({"reply": text, "audio": "/" + filename})
+
+        return jsonify({"reply": greeting_text, "audio": "/" + filename})
     except Exception as e:
         print("🔥 ERROR IN /greet:", str(e))
         traceback.print_exc()
