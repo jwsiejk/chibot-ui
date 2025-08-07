@@ -6,8 +6,8 @@ oauth = OAuth()
 
 def init_oauth(app):
     oauth.init_app(app)
-    app.config['GOOGLE_CLIENT_ID'] = 'YOUR_CLIENT_ID'
-    app.config['GOOGLE_CLIENT_SECRET'] = 'YOUR_CLIENT_SECRET'
+    app.config['GOOGLE_CLIENT_ID'] = os.environ.get('GOOGLE_CLIENT_ID')
+    app.config['GOOGLE_CLIENT_SECRET'] = os.environ.get('GOOGLE_CLIENT_SECRET')
     app.config['GOOGLE_DISCOVERY_URL'] = "https://accounts.google.com/.well-known/openid-configuration"
 
     oauth.register(
