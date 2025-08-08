@@ -24,6 +24,7 @@ def connect():
             password=result.password,
             host=result.hostname,
             port=result.port
+            sslmode='require'
         )
     except Exception as e:
         print("❌ Failed to connect to database:")
