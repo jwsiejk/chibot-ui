@@ -550,6 +550,7 @@ Make it sound like Chip, and no more than 20 words.
 <div id="profileModal" style="display:none; position:fixed; bottom:60px; right:20px; transform:none;
   background:#222; color:#fff; padding:20px; border-radius:10px; z-index:999; box-shadow:0 0 10px #000; min-width:300px;">
 <h3 style="margin-top:0;">Your Profile</h3>
+<div id="modalMessage" style="margin-bottom:10px; color: #ffa;">Please fill out your profile to continue</div>
 <label>Name:</label><br/>
 <input id="profileName" style="width:100%; margin-bottom:10px;" type="text"/><br/>
 <label>Title:</label><br/>
@@ -735,6 +736,43 @@ document.getElementById("profileTitle").value = "";
         }
     });
 });
+</script>
+
+
+<script>
+window.saveProfile = function () {
+  const name = document.getElementById("profileName").value.trim();
+  const title = document.getElementById("profileTitle").value.trim();
+  const startBtn = document.getElementById("startBtn");
+  const profileModal = document.getElementById("profileModal");
+
+  if (!name || !title) {
+    alert("Please complete all fields.");
+    return;
+  }
+
+  localStorage.setItem("profileName", name);
+  localStorage.setItem("profileTitle", title);
+
+  fetch('/profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, role: title })
+  })
+  .then(res => {
+    if (res.ok) {
+      console.log("✅ Profile saved to DB");
+      startBtn.disabled = false;
+      profileModal.style.display = "none";
+    } else {
+      alert("❌ Failed to save profile. Try again.");
+    }
+  })
+  .catch(err => {
+    console.error("❌ Network error while saving profile:", err);
+    alert("❌ Network error while saving profile.");
+  });
+};
 </script>
 
 </body>
