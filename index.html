@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <title>Ask Chip</title>
-  <link rel="stylesheet" href="/user-experience/css/style.css">
-  <script defer src="/user-experience/js/main.js"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='user-experience/css/style.css') }}">
+  <script defer src="{{ url_for('static', filename='user-experience/js/main.js') }}"></script>
 </head>
 <body>
 
@@ -34,7 +34,7 @@
 
   <!-- Chip Image -->
   <div class="chip-box">
-    <img id="chipImage" src="/chip/img/chip.png" alt="Chip">
+    <img id="chipImage" src="{{ url_for('static', filename='chip/img/chip.png') }}" alt="Chip">
   </div>
 
   <!-- Session UI -->
