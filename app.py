@@ -12,18 +12,6 @@ from uuid import uuid4
 from werkzeug.utils import secure_filename
 from datetime import datetime
 
-# def get_connection(): (REMOVED)
-    import psycopg2
-    import urllib.parse as up
-    db_url = os.getenv("DATABASE_URL")
-
-    if not db_url:
-        raise ValueError("DATABASE_URL is not set in environment.")
-
-    if "sslmode" not in db_url:
-        db_url += "?sslmode=require"
-
-    return psycopg2.connect(db_url)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "supersecret")
