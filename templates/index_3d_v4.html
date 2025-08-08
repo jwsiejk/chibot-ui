@@ -7,8 +7,31 @@
   <script defer src="{{ url_for('static', filename='main.js') }}"></script>
 </head>
 <body>
+  <div id="status">Loading Chip...</div>
+
   <div class="chip-box">
     <img id="chipImage" src="{{ url_for('static', filename='img/chip.png') }}" alt="Chip">
   </div>
+
+  <canvas id="waveform"></canvas>
+
+  <div id="recordPrompt" class="idle">Ask me anything</div>
+
+  <div id="caption"></div>
+
+  <button id="recordBtn">🎙️ Talk to Chip</button>
+
+  <div id="askChipToolbar">
+    <button id="resetBtn">Reset</button>
+    <div class="dropdown">
+      <button>Options ▾</button>
+      <div class="dropdown-content">
+        <div id="feedbackOption">Send Feedback</div>
+        <div id="helpOption">Help</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="version-tag">v1.0</div>
 </body>
 </html>
