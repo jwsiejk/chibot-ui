@@ -14,11 +14,16 @@ if not DB_URL:
 else:
     print("✅ DATABASE_URL found.")
 
-def connect():
+def get_connection():
     try:
         result = urlparse(DB_URL)
         print(f"🔌 Connecting to DB at {result.hostname}:{result.port}...")
-        return psycopg2.connect(
+        # Append sslmode=require if not already in the DB_URL
+        if "sslmode" not in DB_URL:
+            DB_URL_with_ssl = DB_URL + "?sslmode=require"
+        else:
+            DB_URL_with_ssl = DB_URL
+        return psycopg2.connect(DB_URL_with_ssl)
             dbname=result.path[1:],
             user=result.username,
             password=result.password,
