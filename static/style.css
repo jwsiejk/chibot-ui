@@ -127,7 +127,7 @@ body {
     max-height: 100%;
     height: auto;
     width: auto;
-    transform: scale(1.25) translateX(40px);
+    transform: scale(1.0) translateX(20px);
 }
 
 #askChipToolbar {
