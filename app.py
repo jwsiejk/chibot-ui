@@ -121,8 +121,10 @@ def login_basic():
         conn = get_connection()
         data = request.get_json()
         login_name = data.get("login")
+
         if not (login_name.endswith("@purestorage.com") or login_name.endswith("@trace3.com")):
             return jsonify({"error": "Unauthorized domain"}), 403
+
         session["user_id"] = login_name
 
         user = get_user(login_name)
