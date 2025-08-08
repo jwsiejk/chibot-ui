@@ -6,7 +6,7 @@ import traceback
 from flask import Flask, request, jsonify, render_template, redirect, session, url_for, Response, stream_with_context, g, send_from_directory
 from flask_session import Session
 from elevenlabs.client import ElevenLabs
-from memory import get_user, save_user, log_conversation, get_connection
+from memory import get_user, save_user, log_conversation, get_connection, init_db
 import openai
 from uuid import uuid4
 from werkzeug.utils import secure_filename
@@ -345,3 +345,36 @@ def greet():
         print("🔥 ERROR IN /greet:", str(e))
         traceback.print_exc()
         return jsonify({"error": "Greeting failed"}), 500
+
+@app.route("/auth/status", methods=["GET"])
+def auth_status():
+    """
+    Lightweight session check so the frontend can decide whether to show the login prompt.
+    Returns authenticated flag and minimal profile if available.
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"authenticated": False})
+        user = get_user(user_id)
+        return jsonify({
+            "authenticated": True,
+            "user_id": user_id,
+            "name": (user.get("name") if user else user_id) or user_id,
+            "role": (user.get("role") if user else "engineer"),
+            "region": (user.get("region") if user else "NA"),
+            "first_time": False if user else True
+        })
+    except Exception as e:
+        print("🔥 ERROR IN /auth/status:", str(e))
+        return jsonify({"authenticated": False, "error": "status check failed"}), 500
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    """Clear session and return ok; frontend can redirect to landing screen and show login prompt."""
+    try:
+        session.clear()
+        return jsonify({"ok": True})
+    except Exception as e:
+        print("🔥 ERROR IN /logout:", str(e))
+        return jsonify({"ok": False}), 500
