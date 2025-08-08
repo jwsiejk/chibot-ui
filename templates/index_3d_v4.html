@@ -620,123 +620,10 @@ document.getElementById("profileTitle").value = "";
 });
 </script>
 
-<script>
-document.addEventListener("DOMContentLoaded", function () {
-    const loginBox = document.getElementById("login-box");
-    const startBtn = document.getElementById("start-button");
-    const profileForm = document.getElementById("profile-form");
-    const profileMsg = document.getElementById("profile-message");
-
-    function checkProfile() {
-        const profile = localStorage.getItem("userProfile");
-        if (profile) {
-            profileForm.style.display = "none";
-            profileMsg.style.display = "none";
-            startBtn.disabled = false;
-        } else {
-            profileForm.style.display = "block";
-            profileMsg.style.display = "block";
-            startBtn.disabled = true;
-        }
-    }
-
-    // Show login prompt centered
-    loginBox.style.position = "absolute";
-    loginBox.style.top = "50%";
-    loginBox.style.left = "50%";
-    loginBox.style.transform = "translate(-50%, -50%)";
-
-    // Once user logs in
-    window.onUserLogin = function () {
-        checkProfile();
-    };
-
-    // Save profile
-    document.getElementById("save-profile").addEventListener("click", () => {
-        const name = document.getElementById("name").value;
-        const role = document.getElementById("role").value;
-        const company = document.getElementById("company").value;
-        const email = document.getElementById("email").value;
-
-        if (name && role && company && email) {
-            localStorage.setItem("userProfile", JSON.stringify({ name, role, company, email }));
-            profileForm.style.display = "none";
-            profileMsg.style.display = "none";
-            startBtn.disabled = false;
-        }
-    });
-
-    // When Start is clicked
-    startBtn.addEventListener("click", () => {
-        const profile = localStorage.getItem("userProfile");
-        if (profile) {
-            greetUser(JSON.parse(profile));
-        }
-    });
-
-    function greetUser(profile) {
-        const greeting = `Hi ${profile.name}, I'm Chip. Let’s get started.`;
-        speak(greeting); // function from main app logic
-    }
-});
-</script>
 
 
-<script>
-document.addEventListener("DOMContentLoaded", function () {
-    const loginContainer = document.getElementById("loginContainer");
-    const loginForm = document.getElementById("loginForm");
-    const loginInput = document.getElementById("loginInput");
-    const profileModal = document.getElementById("profileModal");
-    const startBtn = document.getElementById("startBtn");
-    const nameInput = document.getElementById("nameInput");
-    const titleInput = document.getElementById("titleInput");
-    const loginMsg = document.createElement("div");
-    loginMsg.innerText = "Sign on with your Trace3 or Pure Storage email address to continue";
-    loginMsg.style.color = "#fff";
-    loginMsg.style.marginTop = "8px";
-    loginContainer.appendChild(loginMsg);
 
-    function isValidUser(email) {
-        return email.endsWith("@purestorage.com") || email.endsWith("@trace3.com");
-    }
 
-    loginForm.addEventListener("submit", function (e) {
-        e.preventDefault();
-        const email = loginInput.value.trim().toLowerCase();
-        if (!isValidUser(email)) {
-            alert("Unauthorized user.");
-            return;
-        }
-        localStorage.setItem("chip_user", email);
-        const storedName = localStorage.getItem("chip_name");
-        const storedTitle = localStorage.getItem("chip_title");
-        loginContainer.style.display = "none";
-        if (!storedName || !storedTitle) {
-            profileModal.style.display = "block";
-document.getElementById("profileName").value = loginName;
-document.getElementById("profileTitle").value = "";
-            document.getElementById("modalMessage").innerText = "Please fill out your profile to continue";
-            startBtn.disabled = true;
-        } else {
-            startBtn.disabled = false;
-        }
-    });
-
-    document.getElementById("saveProfileBtn").addEventListener("click", function () {
-        const name = nameInput.value.trim();
-        const title = titleInput.value.trim();
-        if (name && title) {
-            localStorage.setItem("chip_name", name);
-            localStorage.setItem("chip_title", title);
-            profileModal.style.display = "none";
-            startBtn.disabled = false;
-        } else {
-            alert("Both fields are required.");
-        }
-    });
-});
-</script>
 
 
 <script>
@@ -773,6 +660,87 @@ window.saveProfile = function () {
     alert("❌ Network error while saving profile.");
   });
 };
+</script>
+
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const loginForm = document.getElementById('basicLoginForm');
+  const loginStatus = document.getElementById('loginStatus');
+  const startBtn = document.getElementById('startBtn');
+  const profileModal = document.getElementById('profileModal');
+  const loginContainer = document.getElementById("loginContainer");
+
+  startBtn.disabled = true;
+
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const loginName = document.getElementById('loginName').value;
+
+    try {
+      const res = await fetch('/login-basic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ login: loginName })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        loginStatus.textContent = '✅ Login successful';
+        loginContainer.style.display = "none";
+
+        // Show profile modal if missing info
+        if (data.first_time || !data.name || !data.title) {
+          profileModal.style.display = "block";
+          document.getElementById("profileName").value = loginName;
+          document.getElementById("profileTitle").value = "";
+          startBtn.disabled = true;
+        } else {
+          localStorage.setItem("profileName", data.name);
+          localStorage.setItem("profileTitle", data.title);
+          startBtn.disabled = false;
+        }
+      } else {
+        loginStatus.textContent = '❌ Login failed';
+      }
+    } catch (err) {
+      loginStatus.textContent = '❌ Error during login';
+      console.error(err);
+    }
+  });
+
+  window.saveProfile = function () {
+    const name = document.getElementById("profileName").value.trim();
+    const title = document.getElementById("profileTitle").value.trim();
+
+    if (!name || !title) {
+      alert("Please complete all fields.");
+      return;
+    }
+
+    localStorage.setItem("profileName", name);
+    localStorage.setItem("profileTitle", title);
+
+    fetch('/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, role: title })
+    })
+    .then(res => {
+      if (res.ok) {
+        console.log("✅ Profile saved to DB");
+        document.getElementById("startBtn").disabled = false;
+        document.getElementById("profileModal").style.display = "none";
+      } else {
+        alert("❌ Failed to save profile. Try again.");
+      }
+    })
+    .catch(err => {
+      console.error("❌ Network error while saving profile:", err);
+      alert("❌ Network error while saving profile.");
+    });
+  };
+});
 </script>
 
 </body>
