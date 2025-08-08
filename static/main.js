@@ -1,3 +1,5 @@
+
+document.addEventListener("DOMContentLoaded", function () {
 console.log("🧪 Loaded index_3d.html vDEBUG-9");
 
     function autoStartListening() {
@@ -589,4 +591,5 @@ document.addEventListener("DOMContentLoaded", () => {
       alert("❌ Network error while saving profile.");
     });
   };
+});
 });
