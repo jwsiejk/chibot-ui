@@ -6,13 +6,13 @@ import traceback
 from flask import Flask, request, jsonify, render_template, redirect, session, url_for, Response, stream_with_context, g
 from flask_session import Session
 from elevenlabs.client import ElevenLabs
-from memory import init_db, get_user, save_user, log_conversation
+from memory import init_db, get_user, save_user, log_conversation, get_connection
 import openai
 from uuid import uuid4
 from werkzeug.utils import secure_filename
 from datetime import datetime
 
-def get_connection():
+# def get_connection(): (REMOVED)
     import psycopg2
     import urllib.parse as up
     db_url = os.getenv("DATABASE_URL")
