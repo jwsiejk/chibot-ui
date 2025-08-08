@@ -124,10 +124,10 @@ body {
 }
 
 .chip-box img {
-    max-height: 100%;
-    height: auto;
-    width: auto;
-    transform: scale(1.0) translateX(20px);
+  max-height: 100%;
+  height: auto;
+  width: auto;
+  transform: scale(0.75) translateX(10px);
 }
 
 #askChipToolbar {
