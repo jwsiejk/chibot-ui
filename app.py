@@ -141,14 +141,25 @@ def save_profile():
         conn = get_connection()
         user_id = session.get("user_id")
         data = request.get_json()
-        name = data.get("name")
-        title = data.get("title")
+        name = data.get("name", "")
+        title = data.get("title", "")
 
-        messages = get_user(user_id)["messages"] if get_user(user_id) else []
-        save_user(user_id, json.dumps(messages), title, "NA", name)
+        # Safely get messages from profile or use default
+        existing = get_user(user_id)
+        messages = existing.get("messages", []) if existing else []
+
+        # Store full profile object
+        profile = {
+            "name": name,
+            "role": title,
+            "messages": messages
+        }
+
+        save_user(user_id, profile)
         session["name"] = name
         session["role"] = title
         return jsonify({"success": True})
+
     except Exception as e:
         print("🔥 Profile save error:", str(e))
         return jsonify({"error": "Save failed"}), 500
