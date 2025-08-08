@@ -593,3 +593,149 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 });
 });
+
+
+/* ===== PATCH: Auth gating via /auth/status (non-destructive) | 2025-08-08 ===== */
+(function () {
+  // Helpers (no global leaks)
+  function $(sel) { return document.querySelector(sel); }
+  function show(el) { if (el) el.style.display = "block"; }
+  function hide(el) { if (el) el.style.display = "none"; }
+  function enable(el) { if (el) el.disabled = false; }
+  function disable(el) { if (el) el.disabled = true; }
+
+  async function getStatus() {
+    try {
+      const res = await fetch("/auth/status", { credentials: "same-origin" });
+      if (!res.ok) return { authenticated: false };
+      return await res.json();
+    } catch (_) {
+      return { authenticated: false };
+    }
+  }
+
+  async function initAuthGating() {
+    const loginContainer = $("#loginContainer");
+    const startBtn = $("#startBtn");
+    const profileModal = $("#profileModal");
+
+    // Default safe state
+    if (startBtn) disable(startBtn);
+
+    const st = await getStatus();
+
+    if (!st.authenticated) {
+      show(loginContainer);
+      hide(profileModal);
+      if (startBtn) disable(startBtn);
+      return;
+    }
+
+    // Authenticated
+    hide(loginContainer);
+    if (st.first_time) {
+      show(profileModal);
+      if (startBtn) disable(startBtn);
+    } else {
+      hide(profileModal);
+      if (startBtn) enable(startBtn);
+    }
+  }
+
+  // Wire login form to /login (fallback to /login-basic) without breaking existing handlers
+  document.addEventListener("DOMContentLoaded", function () {
+    const form = document.getElementById("basicLoginForm");
+    const statusEl = document.getElementById("loginStatus");
+    const startBtn = document.getElementById("startBtn");
+    const loginContainer = document.getElementById("loginContainer");
+    const profileModal = document.getElementById("profileModal");
+
+    // Run initial gating
+    initAuthGating();
+
+    if (form && !form.dataset.authWired) {
+      form.dataset.authWired = "1";
+      form.addEventListener("submit", async function (e) {
+        try {
+          // Let any existing listeners run first
+          // We only augment by retrying /login if /login-basic fails, then re-run gating
+          setTimeout(async function () {
+            // If Start already enabled by existing code, we're good
+            if (startBtn && !startBtn.disabled) return;
+
+            // Try /login if previous flow didn't authorize
+            const emailInput = document.getElementById("loginName");
+            const email = emailInput ? emailInput.value.trim() : "";
+            if (!email) return;
+
+            let ok = false;
+            try {
+              const r = await fetch("/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "same-origin",
+                body: JSON.stringify({ email })
+              });
+              ok = r.ok;
+            } catch (_) {}
+
+            if (ok) {
+              if (statusEl) statusEl.textContent = "✅ Login successful";
+              if (loginContainer) hide(loginContainer);
+              await initAuthGating();
+            }
+          }, 0);
+        } catch (err) {
+          console.warn("Augmented login handler error:", err);
+        }
+      });
+    }
+
+    // Replace/augment saveProfile to support /profile/save fallback and enabling Start
+    window.saveProfile = async function saveProfile() {
+      const nameEl = document.getElementById("profileName");
+      const titleEl = document.getElementById("profileTitle");
+      const name = (nameEl && nameEl.value || "").trim() || (localStorage.getItem("chip_login") || "");
+      const title = (titleEl && titleEl.value || "").trim();
+
+      if (!name || !title) {
+        alert("Please complete all fields.");
+        return;
+      }
+
+      // Persist locally for existing UI expectations
+      try {
+        localStorage.setItem("profileName", name);
+        localStorage.setItem("profileTitle", title);
+        localStorage.setItem("chip_name", name);
+        localStorage.setItem("chip_title", title);
+      } catch (_) {}
+
+      const body = JSON.stringify({ name, title, role: title });
+      const opts = { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body };
+
+      let saved = false;
+      try {
+        const r1 = await fetch("/profile/save", opts);
+        saved = r1.ok;
+      } catch (_) {}
+
+      if (!saved) {
+        try {
+          const r2 = await fetch("/profile", opts);
+          saved = r2.ok;
+        } catch (_) {}
+      }
+
+      if (saved) {
+        if (profileModal) hide(profileModal);
+        if (startBtn) enable(startBtn);
+        const status = document.getElementById("status");
+        if (status) status.textContent = "Profile saved. Ready.";
+      } else {
+        alert("❌ Failed to save profile. Try again.");
+      }
+    };
+  });
+})();
+/* ===== END PATCH ===== */
