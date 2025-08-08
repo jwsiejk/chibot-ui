@@ -38,7 +38,8 @@
     localStorage.setItem("profileName", name);
     localStorage.setItem("profileTitle", title);
 
-    fetch('/profile', {
+    console.log("📤 Sending profile to /profile:", { name, role: title });
+  fetch('/profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -75,7 +76,8 @@
         localStorage.setItem("profileName", name);
         localStorage.setItem("profileTitle", title);
 
-        fetch('/profile', {
+        console.log("📤 Sending profile to /profile:", { name, role: title });
+  fetch('/profile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -643,6 +645,7 @@ window.saveProfile = function () {
   localStorage.setItem("profileName", name);
   localStorage.setItem("profileTitle", title);
 
+  console.log("📤 Sending profile to /profile:", { name, role: title });
   fetch('/profile', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -725,7 +728,8 @@ document.addEventListener("DOMContentLoaded", () => {
     localStorage.setItem("profileName", name);
     localStorage.setItem("profileTitle", title);
 
-    fetch('/profile', {
+    console.log("📤 Sending profile to /profile:", { name, role: title });
+  fetch('/profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, role: title })
@@ -820,7 +824,8 @@ document.addEventListener("DOMContentLoaded", () => {
     localStorage.setItem("chip_name", name);
     localStorage.setItem("chip_title", title);
 
-    fetch('/profile', {
+    console.log("📤 Sending profile to /profile:", { name, role: title });
+  fetch('/profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, role: title })
