@@ -102,9 +102,9 @@ def generate_chip_response(user_id, name, question, role, region):
     log_conversation(user_id, question, answer)
     return answer
 
-@app.route("/3d")
-def index_3d():
-    return render_template("index_3d_v4.html")
+@app.route("/")
+def index():
+    return send_from_directory(".", "index.html")
 
 @app.route("/login-basic", methods=["POST"])
 def login_basic():
