@@ -1,0 +1,246 @@
+
+body {
+  margin: 0;
+  background-color: #1e1e1e;
+  color: orange;
+  font-family: 'Segoe UI', sans-serif;
+  overflow: hidden;
+}
+
+canvas {
+  display: block;
+}
+
+#recordBtn {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  padding: 12px 24px;
+  font-size: 16px;
+  background-color: orange;
+  color: orange;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: bold;
+  box-shadow: 0 0 10px rgba(255, 165, 0, 0.4);
+}
+
+#recordBtn.blinking {
+  animation: blink-animation 2s ease-in-out infinite;
+}
+
+@keyframes blink-animation {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+#caption {
+  position: absolute;
+  top: 50%;
+  left: 20px;
+  transform: translateY(-50%);
+  font-size: 12px;
+  color: #cccccc;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-style: italic;
+  pointer-events: none;
+  max-width: 300px;
+  z-index: 15;
+}
+
+#status {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  z-index: 10;
+  background: rgba(0, 0, 0, 0.8);
+  padding: 12px 16px;
+  border-radius: 10px;
+  font-size: 16px;
+  color: #90ee90;
+  max-width: 400px;
+  font-weight: 500;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+}
+
+#version-tag {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  font-size: 12px;
+  color: #aaa;
+}
+
+#recordPrompt {
+  position: absolute;
+  bottom: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 16px;
+  color: rgba(255,255,255,0.3);
+  transition: opacity 1s ease;
+  pointer-events: none;
+}
+
+#recordPrompt.ready {
+  color: rgba(255,255,255,0.9);
+}
+
+#waveform {
+  position: absolute;
+  bottom: 50px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 200px;
+  height: 40px;
+  background: transparent;
+  pointer-events: none;
+}
+
+@keyframes pulseDots {
+  0% { content: ""; opacity: 0.2; }
+  33% { content: "."; opacity: 0.5; }
+  66% { content: ".."; opacity: 0.8; }
+  100% { content: "..."; opacity: 1; }
+}
+
+#recordPrompt.listening::after {
+  content: "...";
+  animation: pulseDots 1.5s infinite;
+}
+
+#recordPrompt.idle::after {
+  content: "";
+  animation: blink-idle 2s step-start infinite;
+}
+
+@keyframes blink-idle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.chip-box {
+  width: 1320px;
+  height: 789px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: transparent;
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+}
+
+.chip-box img {
+  max-height: 100%;
+  height: auto;
+  width: auto;
+  transform: scale(0.75) translateX(10px);
+}
+
+#askChipToolbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  background: rgba(30, 30, 30, 0.95);
+  padding: 12px 24px;
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  z-index: 999;
+  border-radius: 0;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.6);
+}
+
+#askChipToolbar button {
+  background: none;
+  border: none;
+  color: orange;
+  font-weight: bold;
+  font-size: 14px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.dropdown {
+  position: relative;
+}
+
+.dropdown-content {
+  display: none;
+  position: absolute;
+  bottom: 30px;
+  background: rgba(30,30,30,0.9);
+  border-radius: 6px;
+  padding: 6px;
+  min-width: 140px;
+  box-shadow: 0 0 6px #000;
+}
+
+.dropdown-content div {
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.dropdown-content div:hover {
+  background-color: rgba(255,165,0,0.2);
+}
+
+.dropdown:hover .dropdown-content {
+  display: block;
+}
+
+#chipImage {
+  width: 320px;
+  max-width: 90%;
+  height: auto;
+  display: block;
+  margin: 60px auto;
+  transform: translateX(10px) scale(0.75);
+}
+
+.modal {
+  display: none;
+  position: fixed;
+  background: rgba(0, 0, 0, 0.95);
+  padding: 20px;
+  border-radius: 8px;
+  color: orange;
+  z-index: 9999;
+  box-shadow: 0 0 10px rgba(255,165,0,0.5);
+}
+
+.modal.center {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.modal.bottom-right {
+  bottom: 20px;
+  right: 20px;
+  width: 300px;
+}
+
+.modal-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal-content.small h3 {
+  margin-top: 0;
+}
+
+.login-hint {
+  font-size: 12px;
+  color: #ccc;
+  margin-top: 8px;
+}
