@@ -1,0 +1,17 @@
+body {
+  margin: 0;
+  background-color: #1e1e1e;
+  color: orange;
+  font-family: 'Segoe UI', sans-serif;
+}
+
+#chip {
+  width: 320px;
+  max-width: 90%;
+  height: auto;
+  display: block;
+  margin: 60px auto;
+  border-radius: 10px;
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.4);
+  transform: translateX(20px);
+}
