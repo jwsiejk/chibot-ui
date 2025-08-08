@@ -19,9 +19,9 @@
 <!-- PATCH: Forced Login & Profile Gating | 2025-08-07 -->
 
   // Enforce login on load
-  const loginContainer = document.getElementById("loginContainer");
-  const startBtn = document.getElementById("startBtn");
-  const profileModal = document.getElementById("profileModal");
+  // 
+  // 
+  // 
 
   loginContainer.style.display = "block";
   startBtn.disabled = true;
@@ -110,7 +110,7 @@
 
       
       
-      const startBtn = document.getElementById("startBtn");
+      
       if (startBtn) startBtn.addEventListener("click", () => {
         window.silenceCounter = 0; // reset silence tracking
 
@@ -630,8 +630,8 @@ document.getElementById("profileTitle").value = "";
 window.saveProfile = function () {
   const name = document.getElementById("profileName").value.trim();
   const title = document.getElementById("profileTitle").value.trim();
-  const startBtn = document.getElementById("startBtn");
-  const profileModal = document.getElementById("profileModal");
+  
+  
 
   if (!name || !title) {
     alert("Please complete all fields.");
@@ -669,7 +669,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const loginStatus = document.getElementById('loginStatus');
   const startBtn = document.getElementById('startBtn');
   const profileModal = document.getElementById('profileModal');
-  const loginContainer = document.getElementById("loginContainer");
+  
 
   startBtn.disabled = true;
 
@@ -750,7 +750,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const loginStatus = document.getElementById('loginStatus');
   const startBtn = document.getElementById('startBtn');
   const profileModal = document.getElementById('profileModal');
-  const loginContainer = document.getElementById("loginContainer");
+  
 
   // Restore login message
   const loginMsg = document.createElement("div");
