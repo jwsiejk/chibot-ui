@@ -1,20 +1,13 @@
 import os
 import psycopg2
-from urllib.parse import urlparse
 import traceback
 
 DB_URL = os.getenv("DATABASE_URL")
 
 def get_connection():
     try:
-        result = urlparse(DB_URL)
-        print(f"🔌 Connecting to DB at {result.hostname}:{result.port}...")
-        # Append sslmode=require if not already in the DB_URL
-        if "sslmode" not in DB_URL:
-            DB_URL_with_ssl = DB_URL + "?sslmode=require"
-        else:
-            DB_URL_with_ssl = DB_URL
-        return psycopg2.connect(DB_URL_with_ssl)
+        print("🔌 Connecting to DB using full DATABASE_URL...")
+        return psycopg2.connect(DB_URL)
     except Exception as e:
         print("❌ Failed to connect to database:")
         traceback.print_exc()
