@@ -6,7 +6,12 @@ import traceback
 from flask import Flask, request, jsonify, render_template, redirect, session, url_for, Response, stream_with_context, g, send_from_directory
 from flask_session import Session
 from elevenlabs.client import ElevenLabs
-from memory import get_user, save_user, log_conversation, get_connection, init_db
+from memory import get_user, save_user, log_conversation, get_connection
+try:
+    from memory import init_db  # optional
+except Exception:
+    init_db = None
+
 import openai
 from uuid import uuid4
 from werkzeug.utils import secure_filename
