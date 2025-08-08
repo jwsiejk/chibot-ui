@@ -7,11 +7,6 @@ from flask import Flask, request, jsonify, render_template, redirect, session, u
 from flask_session import Session
 from elevenlabs.client import ElevenLabs
 from memory import get_user, save_user, log_conversation, get_connection
-try:
-    from memory import init_db  # optional
-except Exception:
-    init_db = None
-
 import openai
 from uuid import uuid4
 from werkzeug.utils import secure_filename
@@ -62,21 +57,16 @@ def init_conversation_table():
             print("✅ Database connection closed.")
 
 def ensure_db_ready():
-    if not hasattr(g, "_db_initialized"):
-        try:
-            conn = get_connection()
-            print("⏳ Lazy initializing DB...")
-            init_db()
-            print("✅ DB ready.")
-            g._db_initialized = True
-        except Exception as e:
-            print("🔥 Failed to initialize DB:", e)
-            traceback.print_exc()
-            g._db_initialized = False
-        finally:
-            if 'conn' in locals() and not conn.closed:
-                conn.close()
-                print("✅ Database connection closed.")
+    # Ping DB without mutating schema. Alembic handles migrations.
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+        print("✅ DB connectivity OK")
+    except Exception as e:
+        print("🔥 DB connectivity check failed:", e)
+        raise
 
 def generate_chip_response(user_id, name, question, role, region):
     user = get_user(user_id)
@@ -383,3 +373,45 @@ def logout():
     except Exception as e:
         print("🔥 ERROR IN /logout:", str(e))
         return jsonify({"ok": False}), 500
+
+@app.route("/healthz/db", methods=["GET"])
+def healthz_db():
+    try:
+        ensure_db_ready()
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/login", methods=["POST"])
+def login():
+    # Accepts JSON {"email": "..."} and sets session. Mirrors /login-basic.
+    try:
+        conn = get_connection()
+        data = request.get_json() or {}
+        email = (data.get("email") or "").strip().lower()
+
+        if not email or not (email.endswith("@purestorage.com") or email.endswith("@trace3.com")):
+            return jsonify({"error": "Unauthorized domain"}), 403
+
+        session["user_id"] = email
+
+        user = get_user(email)
+        if user:
+            session["name"] = user.get("name", email)
+            session["role"] = user.get("role", "engineer")
+            session["region"] = user.get("region", "NA")
+            return jsonify({
+                "first_time": False,
+                "name": user.get("name", ""),
+                "title": user.get("role", "")
+            })
+        else:
+            session["name"] = email
+            session["role"] = "engineer"
+            session["region"] = "NA"
+            return jsonify({"first_time": True})
+
+    except Exception as e:
+        print("🔥 /login error:", str(e))
+        return jsonify({"error": "Login failed"}), 500
+
