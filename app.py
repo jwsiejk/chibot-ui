@@ -19,7 +19,7 @@ app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
 voice_id = os.getenv("CHIP_VOICE_ID")
-eleven = ElevenLabs(api_key=os.getenv("CHIP_VOICE_ID"))
+eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 
 # 🔧 Auto-create conversations table if missing
 def init_conversation_table():
