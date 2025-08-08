@@ -3,7 +3,7 @@ print("✅ Chip app starting...")
 import os
 import json
 import traceback
-from flask import Flask, request, jsonify, render_template, redirect, session, url_for, Response, stream_with_context, g
+from flask import Flask, request, jsonify, render_template, redirect, session, url_for, Response, stream_with_context, g, send_from_directory
 from flask_session import Session
 from elevenlabs.client import ElevenLabs
 from memory import get_user, save_user, log_conversation, get_connection
