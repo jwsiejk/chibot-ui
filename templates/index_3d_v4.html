@@ -1,15 +1,12 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Ask Chip</title>
-  
-  
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script defer src="{{ url_for('static', filename='main.js') }}"></script>
 </head>
 <body>
-  <img id="chip" src="chip.png" />
+  <img id="chip" src="{{ url_for('static', filename='img/chip.png') }}" />
 </body>
 </html>
