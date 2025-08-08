@@ -602,7 +602,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (data.first_time) {
           profileModal.style.display = "block";
-document.getElementById("profileName").value = loginName;
+localStorage.setItem("chip_login", loginName);
+          document.getElementById("profileName").value = loginName;
 document.getElementById("profileTitle").value = "";
         } else {
           // Populate profile fields
@@ -628,7 +629,8 @@ document.getElementById("profileTitle").value = "";
 
 <script>
 window.saveProfile = function () {
-  const name = document.getElementById("profileName").value.trim();
+  let name = document.getElementById("profileName").value.trim();
+    if (!name) name = localStorage.getItem("chip_login") || "";
   const title = document.getElementById("profileTitle").value.trim();
   
   
@@ -692,6 +694,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // Show profile modal if missing info
         if (data.first_time || !data.name || !data.title) {
           profileModal.style.display = "block";
+          localStorage.setItem("chip_login", loginName);
           document.getElementById("profileName").value = loginName;
           document.getElementById("profileTitle").value = "";
           startBtn.disabled = true;
@@ -710,7 +713,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   window.saveProfile = function () {
-    const name = document.getElementById("profileName").value.trim();
+    let name = document.getElementById("profileName").value.trim();
+    if (!name) name = localStorage.getItem("chip_login") || "";
     const title = document.getElementById("profileTitle").value.trim();
 
     if (!name || !title) {
@@ -779,6 +783,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (data.first_time || !data.name || !data.title) {
           profileModal.style.display = "block";
+          localStorage.setItem("chip_login", loginName);
           document.getElementById("profileName").value = loginName;
           document.getElementById("profileTitle").value = "";
           startBtn.disabled = true;
@@ -800,7 +805,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Updated saveProfile to write all required keys
   window.saveProfile = function () {
-    const name = document.getElementById("profileName").value.trim();
+    let name = document.getElementById("profileName").value.trim();
+    if (!name) name = localStorage.getItem("chip_login") || "";
     const title = document.getElementById("profileTitle").value.trim();
 
     if (!name || !title) {
