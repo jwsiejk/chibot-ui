@@ -743,5 +743,98 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 </script>
 
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const loginForm = document.getElementById('basicLoginForm');
+  const loginStatus = document.getElementById('loginStatus');
+  const startBtn = document.getElementById('startBtn');
+  const profileModal = document.getElementById('profileModal');
+  const loginContainer = document.getElementById("loginContainer");
+
+  // Restore login message
+  const loginMsg = document.createElement("div");
+  loginMsg.innerText = "Sign on with your Trace3 or Pure Storage email address to continue";
+  loginMsg.style.color = "#fff";
+  loginMsg.style.marginTop = "8px";
+  loginContainer.appendChild(loginMsg);
+
+  startBtn.disabled = true;
+
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const loginName = document.getElementById('loginName').value;
+
+    try {
+      const res = await fetch('/login-basic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ login: loginName })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        loginStatus.textContent = '✅ Login successful';
+        loginContainer.style.display = "none";
+
+        if (data.first_time || !data.name || !data.title) {
+          profileModal.style.display = "block";
+          document.getElementById("profileName").value = loginName;
+          document.getElementById("profileTitle").value = "";
+          startBtn.disabled = true;
+        } else {
+          localStorage.setItem("profileName", data.name);
+          localStorage.setItem("profileTitle", data.title);
+          localStorage.setItem("chip_name", data.name);
+          localStorage.setItem("chip_title", data.title);
+          startBtn.disabled = false;
+        }
+      } else {
+        loginStatus.textContent = '❌ Login failed';
+      }
+    } catch (err) {
+      loginStatus.textContent = '❌ Error during login';
+      console.error(err);
+    }
+  });
+
+  // Updated saveProfile to write all required keys
+  window.saveProfile = function () {
+    const name = document.getElementById("profileName").value.trim();
+    const title = document.getElementById("profileTitle").value.trim();
+
+    if (!name || !title) {
+      alert("Please complete all fields.");
+      return;
+    }
+
+    // Save all required keys
+    localStorage.setItem("profileName", name);
+    localStorage.setItem("profileTitle", title);
+    localStorage.setItem("chip_name", name);
+    localStorage.setItem("chip_title", title);
+
+    fetch('/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, role: title })
+    })
+    .then(res => {
+      if (res.ok) {
+        console.log("✅ Profile saved to DB");
+        startBtn.disabled = false;
+        profileModal.style.display = "none";
+      } else {
+        alert("❌ Failed to save profile. Try again.");
+      }
+    })
+    .catch(err => {
+      console.error("❌ Network error while saving profile:", err);
+      alert("❌ Network error while saving profile.");
+    });
+  };
+});
+</script>
+
 </body>
 </html>
