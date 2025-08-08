@@ -7,19 +7,20 @@
   <script defer src="{{ url_for('static', filename='main.js') }}"></script>
 </head>
 <body>
-  <div id="loginContainer" class="modal">
+  <div id="loginContainer" class="modal center">
     <form id="basicLoginForm" class="modal-content">
       <h2>Welcome to Ask Chip</h2>
       <label for="loginName">Email:</label>
       <input type="email" id="loginName" required placeholder="yourname@trace3.com or purestorage.com">
       <button type="submit">Login</button>
       <div id="loginStatus"></div>
+      <div class="login-hint">Sign in with your Trace3 or Pure Storage email address</div>
     </form>
   </div>
 
-  <div id="profileModal" class="modal">
-    <form class="modal-content">
-      <h2>Please fill out your profile to continue</h2>
+  <div id="profileModal" class="modal bottom-right">
+    <form class="modal-content small">
+      <h3>Please fill out your profile to continue</h3>
       <label for="profileName">Name:</label>
       <input type="text" id="profileName" required>
       <label for="profileTitle">Title:</label>
@@ -42,6 +43,7 @@
   <div id="askChipToolbar">
     <button id="startBtn">Start</button>
     <button id="resetBtn">Reset</button>
+    <button id="profileBtn">Profile</button>
     <div class="dropdown">
       <button>Options ▾</button>
       <div class="dropdown-content">
