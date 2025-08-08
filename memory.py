@@ -37,7 +37,7 @@ def get_user(login):
     conn.close()
     return row[0] if row else None
 
-def save_user(login, profile):
+def save_user(login, profile, role=None, region=None, name=None):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -48,6 +48,7 @@ def save_user(login, profile):
     conn.commit()
     cur.close()
     conn.close()
+
 
 def log_conversation(login, user_msg, chip_reply):
     conn = get_connection()
