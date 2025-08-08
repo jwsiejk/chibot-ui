@@ -2,8 +2,7 @@ import os
 import psycopg2
 import traceback
 
-# Strip whitespace/newlines from DATABASE_URL
-DB_URL = os.getenv("DATABASE_URL", "").strip()
+DB_URL = os.getenv("DATABASE_URL")
 
 def get_connection():
     try:
@@ -21,7 +20,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             login VARCHAR(255) UNIQUE NOT NULL,
-            profile JSONB
+            profile JSONB,
+            role VARCHAR(255),
+            region VARCHAR(255),
+            name VARCHAR(255)
         )
     ''')
     conn.commit()
@@ -31,20 +33,32 @@ def init_db():
 def get_user(login):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT profile FROM users WHERE login = %s", (login,))
+    cur.execute("SELECT profile, role, region, name FROM users WHERE login = %s", (login,))
     row = cur.fetchone()
     cur.close()
     conn.close()
-    return row[0] if row else None
+    if row:
+        return {
+            "messages": row[0] or [],
+            "role": row[1] or "engineer",
+            "region": row[2] or "NA",
+            "name": row[3] or login
+        }
+    else:
+        return None
 
-def save_user(login, profile):
+def save_user(login, profile, role, region, name):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO users (login, profile)
-        VALUES (%s, %s)
-        ON CONFLICT (login) DO UPDATE SET profile = EXCLUDED.profile
-    """, (login, profile))
+        INSERT INTO users (login, profile, role, region, name)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (login) DO UPDATE
+        SET profile = EXCLUDED.profile,
+            role = EXCLUDED.role,
+            region = EXCLUDED.region,
+            name = EXCLUDED.name
+    """, (login, profile, role, region, name))
     conn.commit()
     cur.close()
     conn.close()
