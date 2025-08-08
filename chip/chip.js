@@ -70,6 +70,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
           if (audioUrl) {
             const audio = new Audio(audioUrl);
+            syncVisemes(visemes, audio);
             audio.play();
             // Optionally trigger viseme sync here with visemes
           } else {
