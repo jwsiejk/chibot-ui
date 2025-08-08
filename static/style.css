@@ -173,3 +173,11 @@ body {
 .dropdown:hover .dropdown-content {
   display: block;
 }
+#chipImage {
+  width: 320px;
+  max-width: 90%;
+  height: auto;
+  display: block;
+  margin: 60px auto;
+  transform: translateX(10px) scale(0.75);
+}
