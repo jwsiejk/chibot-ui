@@ -1,6 +1,7 @@
 import os
 import psycopg2
 import traceback
+from psycopg2.extras import Json
 
 # Strip whitespace/newlines from DATABASE_URL
 DB_URL = os.getenv("DATABASE_URL", "").strip()
@@ -21,12 +22,28 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             login VARCHAR(255) UNIQUE NOT NULL,
-            profile JSONB
+            profile JSONB,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
         )
     ''')
     conn.commit()
     cur.close()
     conn.close()
+
+def ensure_tracking_columns():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()")
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("✅ Tracking columns ensured.")
+    except Exception as e:
+        print("⚠️ Failed to ensure tracking columns:")
+        traceback.print_exc()
 
 def get_user(login):
     conn = get_connection()
@@ -37,18 +54,20 @@ def get_user(login):
     conn.close()
     return row[0] if row else None
 
-def save_user(login, profile, role=None, region=None, name=None):
+def save_user(login, profile):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO users (login, profile)
-        VALUES (%s, %s)
-        ON CONFLICT (login) DO UPDATE SET profile = EXCLUDED.profile
-    """, (login, profile))
+        INSERT INTO users (login, profile, created_at, updated_at)
+        VALUES (%s, %s, NOW(), NOW())
+        ON CONFLICT (login) DO UPDATE SET
+            profile = EXCLUDED.profile,
+            updated_at = NOW()
+    """, (login, Json(profile)))
     conn.commit()
     cur.close()
     conn.close()
-
+    print(f"💾 Saved user profile for {login}")
 
 def log_conversation(login, user_msg, chip_reply):
     conn = get_connection()
