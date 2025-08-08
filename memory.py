@@ -2,7 +2,8 @@ import os
 import psycopg2
 import traceback
 
-DB_URL = os.getenv("DATABASE_URL")
+# Strip whitespace/newlines from DATABASE_URL
+DB_URL = os.getenv("DATABASE_URL", "").strip()
 
 def get_connection():
     try:
