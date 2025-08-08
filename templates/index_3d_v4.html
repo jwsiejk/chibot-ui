@@ -110,7 +110,7 @@
 
       
       
-      const startBtn = document.getElementById("startBtn");
+      
       if (startBtn) startBtn.addEventListener("click", () => {
         window.silenceCounter = 0; // reset silence tracking
 
@@ -578,8 +578,7 @@ Make it sound like Chip, and no more than 20 words.
 document.addEventListener("DOMContentLoaded", () => {
   const loginForm = document.getElementById('basicLoginForm');
   const loginStatus = document.getElementById('loginStatus');
-  const startBtn = document.getElementById('startBtn');
-  const profileModal = document.getElementById('profileModal');
+  const startBtn = document.getElementById('startBtn');ileModal');
 
   startBtn.disabled = true;
 
@@ -689,8 +688,7 @@ document.addEventListener("DOMContentLoaded", function () {
     const loginInput = document.getElementById("loginInput");
     const profileModal = document.getElementById("profileModal");
     const startBtn = document.getElementById("startBtn");
-    const nameInput = document.getElementById("nameInput");
-    const titleInput = document.getElementById("titleInput");
+    const nameInput = document.getElementById("nameId("titleInput");
     const loginMsg = document.createElement("div");
     loginMsg.innerText = "Sign on with your Trace3 or Pure Storage email address to continue";
     loginMsg.style.color = "#fff";
@@ -747,11 +745,7 @@ window.saveProfile = function () {
   const profileModal = document.getElementById("profileModal");
 
   if (!name || !title) {
-    alert("Please complete all fields.");
-    return;
-  }
-
-  localStorage.setItem("profileName", name);
+    alert("Pleaorage.setItem("profileName", name);
   localStorage.setItem("profileTitle", title);
 
   fetch('/profile', {
