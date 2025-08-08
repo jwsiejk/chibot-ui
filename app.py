@@ -104,7 +104,7 @@ def generate_chip_response(user_id, name, question, role, region):
 
 @app.route("/")
 def index():
-    return send_from_directory(".", "index.html")
+    return render_template("index.html")
 
 @app.route("/login-basic", methods=["POST"])
 def login_basic():
