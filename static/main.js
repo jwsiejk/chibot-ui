@@ -1,17 +1,29 @@
-// main.js — consolidated auth/profile gating (guided, JSON login) — 2025-08-09
+// main.js — consolidated auth/profile gating (guided, JSON login) — 2025-08-09c
 document.addEventListener("DOMContentLoaded", () => {
   console.log("✅ main.js loaded (consolidated)");
 
-  // Elements
+  // Elements (wider selectors + guards)
   const loginModal     = document.getElementById("loginModal");
   const profileModal   = document.getElementById("profileModal");
-  const startButton    = document.getElementById("startButton");
+  const startButton    = document.getElementById("startButton")
+                          || document.getElementById("startBtn")
+                          || document.querySelector('[data-role="start"]');
   const loginForm      = document.getElementById("loginForm");
   const profileForm    = document.getElementById("profileForm");
   const saveProfileBtn = document.getElementById("saveProfileBtn");
   const loginHint      = document.getElementById("loginHint");
   const profileHint    = document.getElementById("profileHint");
   const statusBar      = document.getElementById("status");
+
+  // Debug: confirm what exists at runtime
+  console.log("[main] elements:", {
+    startButton: !!startButton,
+    loginModal: !!loginModal,
+    profileModal: !!profileModal,
+    loginForm: !!loginForm,
+    profileForm: !!profileForm,
+    saveProfileBtn: !!saveProfileBtn
+  });
 
   // Guided copy (centralized)
   const MESSAGES = {
@@ -22,7 +34,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (loginHint)   loginHint.textContent   = MESSAGES.login;
   if (profileHint) profileHint.textContent = MESSAGES.profile;
-  if (startButton) startButton.disabled = true;
+
+  // Only touch .disabled if element exists and supports it
+  if (startButton && "disabled" in startButton) startButton.disabled = true;
 
   // Helpers
   const show    = (el) => el && (el.style.display = "block");
