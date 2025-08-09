@@ -1,6 +1,11 @@
-// main.js — auth/profile gating + Chip + toolbar — 2025-08-09i
+// main.js — auth/profile gating + Chip + toolbar — 2025-08-09j
 document.addEventListener("DOMContentLoaded", () => {
   console.log("✅ main.js loaded (consolidated)");
+
+  // --- Global error logger (helps catch silent JS errors) ---
+  window.addEventListener("error", (e) => {
+    console.error("[GlobalError]", e.message, e.filename, e.lineno, e.colno, e.error);
+  });
 
   // ---------- Element lookups (guarded) ----------
   const $ = (id) => document.getElementById(id);
@@ -56,6 +61,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const setStatus = (t) => { if (statusBar) statusBar.textContent = t || ""; };
   const playAudio = (src) => { try { if (src) new Audio(src).play(); } catch {} };
 
+  // Convenience: apply the correct layout displays after auth
+  function applyAuthedLayout() {
+    const appEl = document.getElementById("app");
+    if (appEl) show(appEl, "block");     // app container is block
+    if (chipBox) show(chipBox, "grid");  // Chip stays centered
+    if (toolbar) show(toolbar, "flex");  // Toolbar buttons stay centered
+  }
+
   async function j(path, opts = {}) {
     const r = await fetch(path, {
       credentials: "include",
@@ -99,27 +112,29 @@ document.addEventListener("DOMContentLoaded", () => {
     const st = await getStatus();
 
     if (!st.authenticated) {
-      show(loginModal, 'flex');    
-      hide(toolbar); hide(chipBox);
+      show(loginModal, "flex");        // modals must be flex
+      hide(profileModal);
+      hide(toolbar);
+      hide(chipBox);
       setStatus("Please sign in.");
+      console.log("[gate] unauthenticated");
       return;
     }
     hide(loginModal);
 
     if (st.first_time) {
-      show(profileModal, 'flex');   // <— modals need 'flex'
-      hide(toolbar); hide(chipBox);
+      show(profileModal, "flex");      // modals must be flex
+      hide(toolbar);
+      hide(chipBox);
       setStatus("Profile needed to continue.");
       disable(startButton);
+      console.log("[gate] profile incomplete");
     } else {
       hide(profileModal);
       enable(startButton);
-      // IMPORTANT: preserve layout displays so CSS centering works
-      if (toolbar) show(toolbar, "flex");   // was show(toolbar)
-      if (chipBox) show(chipBox, "grid");   // was show(chipBox)
-      const appEl = document.getElementById('app');
-    if (appEl) show(appEl, 'block');     // app container is block
+      applyAuthedLayout();
       setStatus("Ready.");
+      console.log("[gate] authed + profile complete");
     }
   }
   window.chipGate = gate; // handy manual re-run
@@ -148,10 +163,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       hide(loginModal);
       if (data && data.first_time === true) {
-        show(profileModal);
+        show(profileModal, "flex");   // ensure modal actually shows
         disable(startButton);
       } else {
         enable(startButton);
+        applyAuthedLayout();          // show app/chip/toolbar with correct displays
       }
       gate();
     });
@@ -181,6 +197,7 @@ document.addEventListener("DOMContentLoaded", () => {
         hide(profileModal);
         enable(startButton);
         setStatus(MESSAGES.saved);
+        applyAuthedLayout();
         gate();
       } else {
         alert("Could not save profile. Please try again.");
@@ -193,9 +210,11 @@ document.addEventListener("DOMContentLoaded", () => {
     startButton.dataset.greetWired = "1";
     startButton.addEventListener("click", async () => {
       try {
+        console.log("[UI] Start clicked");
         setStatus("Warming up Chip…");
         disable(startButton);
         const { ok, data } = await j("/greet", { method: "POST", body: JSON.stringify({}) });
+        console.log("[UI] /greet ->", ok, data);
         if (!ok) { setStatus("Greet failed. Try again."); return; }
         if (data?.reply) setStatus(data.reply);
         playAudio(data?.audio);
@@ -210,6 +229,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnAsk && !btnAsk.dataset.wired) {
     btnAsk.dataset.wired = "1";
     btnAsk.addEventListener("click", async () => {
+      console.log("[UI] Ask clicked");
       const q = prompt("Ask Chip:");
       if (!q) return;
       setStatus("Thinking…");
@@ -217,6 +237,7 @@ document.addEventListener("DOMContentLoaded", () => {
         method: "POST",
         body: JSON.stringify({ question: q })
       });
+      console.log("[UI] /ask ->", ok, data);
       if (!ok) { setStatus("Request failed. Try again."); return; }
       if (data?.response) setStatus(data.response);
       playAudio(data?.audio);
@@ -227,6 +248,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnMic && !btnMic.dataset.wired) {
     btnMic.dataset.wired = "1";
     btnMic.addEventListener("click", () => {
+      console.log("[UI] Mic clicked");
       alert("Voice input coming soon. Use Ask for now.");
     });
   }
@@ -235,11 +257,13 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnHistory && !btnHistory.dataset.wired) {
     btnHistory.dataset.wired = "1";
     btnHistory.addEventListener("click", async () => {
+      console.log("[UI] History clicked");
       setStatus("Looking up history…");
       const { ok, data } = await j("/history", {
         method: "POST",
         body: JSON.stringify({ query: "What did we talk about last time?" })
       });
+      console.log("[UI] /history ->", ok, data);
       setStatus(ok ? (data?.response || "No history yet.") : "No history yet.");
     });
   }
@@ -248,7 +272,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnProfile && !btnProfile.dataset.wired) {
     btnProfile.dataset.wired = "1";
     btnProfile.addEventListener("click", () => {
-      if (profileModal) { show(profileModal); profileModal.removeAttribute("hidden"); }
+      console.log("[UI] Profile clicked");
+      if (profileModal) show(profileModal, "flex"); // ensure modal displays
     });
   }
 
@@ -256,6 +281,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnLogout && !btnLogout.dataset.wired) {
     btnLogout.dataset.wired = "1";
     btnLogout.addEventListener("click", async () => {
+      console.log("[UI] Logout clicked");
       await j("/api/logout", { method: "POST" });
       location.reload();
     });
