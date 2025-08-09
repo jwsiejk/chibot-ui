@@ -1,97 +1,231 @@
-// chip.js – Handles mic, audio, GPT response, and Chip's playback logic
+// chip.js — Chip module: static/dynamic audio, mic capture, and viseme scheduling (2025-08-09)
+// No regressions: retains mic flow to /ask-chip, adds modular API for main.js to call.
 
-let mediaRecorder;
-let audioChunks = [];
+(function () {
+  const state = {
+    mediaRecorder: null,
+    audioChunks: [],
+    currentAudio: null,
+    mode: (localStorage.getItem("chip_mode") || "static").toLowerCase() === "dynamic" ? "dynamic" : "static"
+  };
 
-document.addEventListener("DOMContentLoaded", () => {
-  const recordBtn = document.getElementById("recordBtn");
-  const recordPrompt = document.getElementById("recordPrompt");
-  const caption = document.getElementById("caption");
-  const statusDiv = document.getElementById("status");
+  const AUDIO = {
+    greeting: "/static/chip/audio/greeting.mp3",
+    answer:   "/static/chip/audio/answer.mp3"
+  };
 
-  recordBtn.addEventListener("click", async () => {
-    recordBtn.disabled = true;
-    recordPrompt.classList.remove("idle");
-    recordPrompt.classList.add("listening");
-    recordBtn.classList.remove("blinking");
+  // ---------- Mode ----------
+  function getMode() {
+    return state.mode;
+  }
+  function setMode(m) {
+    state.mode = (m === "dynamic") ? "dynamic" : "static";
+    try { localStorage.setItem("chip_mode", state.mode); } catch {}
+    return state.mode;
+  }
 
+  // ---------- Audio helpers ----------
+  function stopAudio() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorder = new MediaRecorder(stream);
-      audioChunks = [];
+      if (state.currentAudio) {
+        state.currentAudio.pause();
+        state.currentAudio.currentTime = 0;
+      }
+    } catch {}
+    state.currentAudio = null;
+  }
 
-      mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+  async function playLocal(path) {
+    stopAudio();
+    const a = new Audio(path);
+    state.currentAudio = a;
+    try {
+      await a.play();
+    } catch (e) {
+      console.warn("[chip] Audio play failed:", e);
+    }
+    return a;
+  }
 
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
-        const formData = new FormData();
-        formData.append("audio", audioBlob, "input.webm");
+  // ---------- Viseme scheduling (delegates if chip-viseme.js present) ----------
+  function scheduleVisemes(timeline, audioEl) {
+    if (!Array.isArray(timeline) || !timeline.length || !audioEl) return;
+    if (window.chipViseme && typeof window.chipViseme.schedule === "function") {
+      window.chipViseme.schedule(timeline, audioEl);
+    }
+  }
 
-        statusDiv.textContent = "🧠 Chip is thinking...";
-        recordPrompt.innerText = "🤔 Processing...";
-        recordPrompt.classList.remove("listening");
+  // ---------- Network helper ----------
+  async function j(path, bodyObj) {
+    const opts = bodyObj
+      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyObj) }
+      : { method: "POST" };
+    const r = await fetch(path, opts);
+    let data = null;
+    try { data = await r.json(); } catch {}
+    return { ok: r.ok, status: r.status, data };
+  }
 
-        try {
-          const res = await fetch("/ask-chip", { method: "POST", body: formData });
-          const reader = res.body.getReader();
-          const decoder = new TextDecoder();
+  // ---------- Public actions ----------
+  async function playGreeting() {
+    if (getMode() === "static") {
+      return playLocal(AUDIO.greeting);
+    }
+    // Dynamic
+    const { ok, data } = await j("/greet", {});
+    if (!ok || !data) return null;
 
-          let audioUrl = "";
-          let visemes = [];
-          let textTranscript = "";
+    const url = data.audio;
+    const vis = data.viseme_timestamps || data.visemes || [];
+    if (url) {
+      stopAudio();
+      const a = new Audio(url);
+      state.currentAudio = a;
+      scheduleVisemes(vis, a);
+      try { await a.play(); } catch {}
+      return a;
+    }
+    return null;
+  }
 
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+  async function playAnswer(questionText) {
+    if (getMode() === "static") {
+      return playLocal(AUDIO.answer);
+    }
+    // Dynamic
+    const { ok, data } = await j("/ask", { question: (questionText || "") });
+    if (!ok || !data) return null;
 
-            const text = decoder.decode(value);
-            const lines = text.split("--frame").filter(Boolean);
+    const url = data.audio;
+    const vis = data.viseme_timestamps || data.visemes || [];
+    if (url) {
+      stopAudio();
+      const a = new Audio(url);
+      state.currentAudio = a;
+      scheduleVisemes(vis, a);
+      try { await a.play(); } catch {}
+      return a;
+    }
+    return null;
+  }
 
-            for (const line of lines) {
-              const [, headers, content] = line.split(/\r?\n\r?\n/);
-              if (!headers || !content) continue;
+  // ---------- Optional mic → /ask-chip (kept from prior version; no regressions) ----------
+  function initMic() {
+    const recordBtn    = document.getElementById("recordBtn");
+    const recordPrompt = document.getElementById("recordPrompt");
+    const caption      = document.getElementById("caption");
+    const statusDiv    = document.getElementById("status");
+    if (!recordBtn) return;
 
-              const contentType = headers.match(/Content-Type: (.+)/)?.[1];
-              if (contentType === "application/json") {
-                const data = JSON.parse(content);
-                if (data.viseme_timestamps) visemes = data.viseme_timestamps;
-                if (data.audio) audioUrl = data.audio;
-                if (data.transcript) {
-                  textTranscript = data.transcript;
-                  caption.textContent = textTranscript;
-                  caption.style.visibility = "visible";
-                  caption.style.display = "block";
-                  setTimeout(() => { caption.style.display = "none"; }, 4000);
-                  statusDiv.textContent = "🗣️ You said: " + textTranscript;
+    recordBtn.addEventListener("click", async () => {
+      recordBtn.disabled = true;
+      if (recordPrompt) {
+        recordPrompt.classList.remove("idle");
+        recordPrompt.classList.add("listening");
+        recordBtn.classList.remove("blinking");
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        state.mediaRecorder = new MediaRecorder(stream);
+        state.audioChunks = [];
+
+        state.mediaRecorder.ondataavailable = (e) => state.audioChunks.push(e.data);
+
+        state.mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(state.audioChunks, { type: "audio/webm" });
+          const formData = new FormData();
+          formData.append("audio", audioBlob, "input.webm");
+
+          if (statusDiv) statusDiv.textContent = "🧠 Chip is thinking...";
+          if (recordPrompt) {
+            recordPrompt.innerText = "🤔 Processing...";
+            recordPrompt.classList.remove("listening");
+          }
+
+          try {
+            const res = await fetch("/ask-chip", { method: "POST", body: formData });
+            const reader = res.body && res.body.getReader ? res.body.getReader() : null;
+            const decoder = new TextDecoder();
+
+            let audioUrl = "";
+            let visemes = [];
+            let textTranscript = "";
+
+            if (reader) {
+              while (true) {
+                const r = await reader.read();
+                if (r.done) break;
+
+                const text = decoder.decode(r.value);
+                const parts = text.split("--frame").filter(Boolean);
+
+                for (let i = 0; i < parts.length; i++) {
+                  const seg = parts[i];
+                  const pieces = seg.split(/\r?\n\r?\n/);
+                  const headers = pieces.length === 3 ? pieces[1] : pieces[0];
+                  const content = pieces.length === 3 ? pieces[2] : pieces[1];
+
+                  const m = (headers || "").match(/Content-Type: (.+)/);
+                  const contentType = m ? m[1] : null;
+                  if (contentType === "application/json") {
+                    const data = JSON.parse(content);
+                    if (data.viseme_timestamps) visemes = data.viseme_timestamps;
+                    if (data.audio) audioUrl = data.audio;
+                    if (data.transcript) {
+                      textTranscript = data.transcript;
+                      if (caption) {
+                        caption.textContent = textTranscript;
+                        caption.style.visibility = "visible";
+                        caption.style.display = "block";
+                        setTimeout(() => { caption.style.display = "none"; }, 4000);
+                      }
+                      if (statusDiv) statusDiv.textContent = "🗣️ You said: " + textTranscript;
+                    }
+                  }
                 }
               }
             }
+
+            if (audioUrl) {
+              stopAudio();
+              const a = new Audio(audioUrl);
+              state.currentAudio = a;
+              scheduleVisemes(visemes, a);
+              try { await a.play(); } catch {}
+            } else {
+              if (statusDiv) statusDiv.textContent = "⚠️ Chip could not respond.";
+            }
+          } catch (err) {
+            console.error("❌ Chip error:", err);
+            if (statusDiv) statusDiv.textContent = "❌ Chip failed to respond.";
+          } finally {
+            recordBtn.disabled = false;
+            if (recordPrompt) recordPrompt.classList.add("idle");
           }
+        };
 
-          if (audioUrl) {
-            const audio = new Audio(audioUrl);
-            syncVisemes(visemes, audio);
-            audio.play();
-            // Optionally trigger viseme sync here with visemes
-          } else {
-            statusDiv.textContent = "⚠️ Chip could not respond.";
-          }
+        state.mediaRecorder.start();
+        setTimeout(() => { try { state.mediaRecorder.stop(); } catch {} }, 5000);
+      } catch (err) {
+        console.error("❌ Mic access error:", err);
+        if (statusDiv) statusDiv.textContent = "❌ Mic access failed.";
+        recordBtn.disabled = false;
+      }
+    });
+  }
 
-        } catch (err) {
-          console.error("❌ Chip error:", err);
-          statusDiv.textContent = "❌ Chip failed to respond.";
-        } finally {
-          recordBtn.disabled = false;
-          recordPrompt.classList.add("idle");
-        }
-      };
-
-      mediaRecorder.start();
-      setTimeout(() => mediaRecorder.stop(), 5000);
-    } catch (err) {
-      console.error("❌ Mic access error:", err);
-      statusDiv.textContent = "❌ Mic access failed.";
-      recordBtn.disabled = false;
-    }
+  document.addEventListener("DOMContentLoaded", () => {
+    initMic(); // safe if no mic UI present
   });
-});
+
+  // ---------- Public API ----------
+  window.chip = window.chip || {};
+  window.chip.playGreeting = playGreeting;
+  window.chip.playAnswer   = playAnswer;
+  window.chip.stopAudio    = stopAudio;
+  window.chip.getMode      = getMode;
+  window.chip.setMode      = setMode;
+  window.chip.playLocal    = playLocal;
+  window.chip.scheduleVisemes = scheduleVisemes;
+})();
