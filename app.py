@@ -1,33 +1,38 @@
 print("✅ Chip app starting...")
 
+# --- Normalize DATABASE_URL before importing anything that might use it ---
 import os
-import json
-import traceback
-from flask import Flask, request, jsonify, render_template, redirect, session, url_for, Response, stream_with_context, g, send_from_directory
-from flask_session import Session
-from elevenlabs.client import ElevenLabs
-from memory import get_user, save_user, log_conversation, get_connection
-import openai
-from uuid import uuid4
-from werkzeug.utils import secure_filename
-from datetime import datetime
-import re  # PATCH: for email allowlist
-
-# --- Normalize DATABASE_URL early (strip accidental quotes/newlines) ---
 _raw_db = (os.getenv("DATABASE_URL") or "").strip()
 if (_raw_db.startswith('"') and _raw_db.endswith('"')) or (_raw_db.startswith("'") and _raw_db.endswith("'")):
     _raw_db = _raw_db[1:-1].strip()
-os.environ["DATABASE_URL"] = _raw_db
+# remove stray whitespace/newlines anywhere (fixes sslmode="require\n")
+os.environ["DATABASE_URL"] = _raw_db.replace("\n", "").replace("\r", "").replace(" ", "")
+
+# ---------------- standard imports (safe after normalization) ----------------
+import json
+import traceback
+import re
+from uuid import uuid4
+from datetime import datetime
+from flask import Flask, request, jsonify, render_template, redirect, session, url_for, Response, stream_with_context, g, send_from_directory
+from flask_session import Session
+from werkzeug.utils import secure_filename
+from elevenlabs.client import ElevenLabs
+import openai
+
+# only import memory after DATABASE_URL is sanitized
+from memory import get_user, save_user, log_conversation, get_connection
+
+# -----------------------------------------------------------------------------
 
 app = Flask(__name__)
 # Support both env var names
 app.secret_key = os.getenv("FLASK_SECRET_KEY") or os.getenv("FLASK_SECRET") or "supersecret"
 app.config["SESSION_TYPE"] = "filesystem"
 
-# PATCH: cookie/session hardening (same-origin safe defaults)
+# Cookie/session hardening (same-origin safe defaults)
 app.config.setdefault("SESSION_COOKIE_HTTPONLY", True)
 app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
-# If you're 100% HTTPS on Render, you can set this env to force Secure cookies.
 if os.getenv("SESSION_COOKIE_SECURE", "false").lower() in ("1", "true", "yes"):
     app.config["SESSION_COOKIE_SECURE"] = True
 
@@ -36,20 +41,14 @@ Session(app)
 voice_id = os.getenv("CHIP_VOICE_ID")
 eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 
-# 🔧 Auto-create conversations table if missing
+# 🔧 Auto-create conversations table if missing (unchanged)
 def init_conversation_table():
-    import os
     import psycopg2
-    from memory import get_connection
-
     if 'DATABASE_URL' not in os.environ:
         raise ValueError("DATABASE_URL environment variable is not set. Use the internal connection string for Render-managed databases.")
-
     try:
-        # Attempt to get a connection from memory module or fallback to psycopg2
         conn = get_connection() or psycopg2.connect(os.environ['DATABASE_URL'])
         conn.autocommit = True
-
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS conversations (
@@ -72,7 +71,6 @@ def init_conversation_table():
             print("✅ Database connection closed.")
 
 def ensure_db_ready():
-    # PATCH: open a scoped connection properly (previously referenced undefined 'conn')
     try:
         conn = get_connection()
         with conn:
@@ -108,6 +106,7 @@ def generate_chip_response(user_id, name, question, role, region):
     )
 
     answer = response.choices[0].message.content
+    # Keep your existing persistence calls
     save_user(user_id, json.dumps(messages), role, region, name)
     log_conversation(user_id, question, answer)
     return answer
@@ -119,9 +118,8 @@ def index():
 @app.route("/login-basic", methods=["POST"])
 def login_basic():
     try:
-        # (surgical) no DB connect needed here
         data = request.get_json()
-        login_name = data.get("login")
+        login_name = data.get("login","").strip().lower()
 
         if not (login_name.endswith("@purestorage.com") or login_name.endswith("@trace3.com")):
             return jsonify({"error": "Unauthorized domain"}), 403
@@ -143,7 +141,6 @@ def login_basic():
             session["role"] = "engineer"
             session["region"] = "NA"
             return jsonify({"first_time": True})
-
     except Exception as e:
         print("🔥 Login error:", str(e))
         return jsonify({"error": "Login failed"}), 500
@@ -151,28 +148,20 @@ def login_basic():
 @app.route("/profile", methods=["POST"])
 def save_profile():
     try:
-        # (surgical) no DB connect needed here
         user_id = session.get("user_id")
-        data = request.get_json()
+        data = request.get_json() or {}
         name = data.get("name", "")
         title = data.get("title", "")
 
-        # Safely get messages from profile or use default
         existing = get_user(user_id)
         messages = existing.get("messages", []) if existing else []
 
-        # Store full profile object
-        profile = {
-            "name": name,
-            "role": title,
-            "messages": messages
-        }
+        profile = {"name": name, "role": title, "messages": messages}
 
         save_user(user_id, profile)
         session["name"] = name
         session["role"] = title
         return jsonify({"success": True})
-
     except Exception as e:
         print("🔥 Profile save error:", str(e))
         return jsonify({"error": "Save failed"}), 500
@@ -180,7 +169,6 @@ def save_profile():
 @app.route("/ask", methods=["POST"])
 def ask():
     try:
-        # (surgical) no DB connect needed here
         user_id = session.get("user_id") or request.remote_addr or str(uuid4())
 
         if request.is_json:
@@ -218,7 +206,6 @@ def ask():
                 f.write(chunk)
 
         return jsonify({"response": response_text, "audio": "/" + filename})
-
     except Exception as e:
         print("🔥 ERROR IN /ask:", str(e))
         traceback.print_exc()
@@ -228,7 +215,6 @@ def ask():
 def ask_chip():
     def generate_stream():
         try:
-            # (surgical) no DB connect needed here
             user_id = session.get("user_id") or request.remote_addr or str(uuid4())
             name = session.get("name", "User")
             role = "engineer"
@@ -265,7 +251,6 @@ def ask_chip():
             for chunk in audio_stream:
                 yield chunk
             yield b"\r\n--frame--\r\n"
-
         except Exception as e:
             print("🔥 ERROR IN /ask-chip:", str(e))
             traceback.print_exc()
@@ -273,14 +258,11 @@ def ask_chip():
 
     return Response(stream_with_context(generate_stream()), mimetype="multipart/x-mixed-replace; boundary=frame")
 
-# <!-- PATCH: Persistent Memory + Dynamic Greeting | 2025-08-07 -->
-
-# <!-- PATCH: Conversation History Retrieval | 2025-08-07 -->
+# ---------------- Conversation History / Greet (unchanged logic) ----------------
 
 @app.route("/history", methods=["POST"])
 def retrieve_history():
     try:
-        # (surgical) no DB connect needed here
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"error": "Unauthorized"}), 401
@@ -307,7 +289,6 @@ Current user query: "{query}"
 If something in the history matches what the user is referring to, summarize or clarify the key detail.
 If not, say you couldn't find it.
 """
-
         response = openai.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "system", "content": prompt}],
@@ -322,12 +303,11 @@ If not, say you couldn't find it.
 @app.route("/greet", methods=["POST"])
 def greet():
     try:
-        # (surgical) no DB connect needed here
         user_id = session.get("user_id")
         user = get_user(user_id) if user_id else None
         name = user.get("name", "there") if user else "there"
 
-        data = request.get_json()
+        data = request.get_json() or {}
         prompt = data.get("prompt", f"Say hello to {name}.")
 
         openai_response = openai.chat.completions.create(
@@ -356,12 +336,10 @@ def greet():
         traceback.print_exc()
         return jsonify({"error": "Greeting failed"}), 500
 
+# ---------------- Auth status / health / classic login ----------------
+
 @app.route("/auth/status", methods=["GET"])
 def auth_status():
-    """
-    Lightweight session check so the frontend can decide whether to show the login prompt.
-    Returns authenticated flag and minimal profile if available.
-    """
     try:
         user_id = session.get("user_id")
         if not user_id:
@@ -381,7 +359,6 @@ def auth_status():
 
 @app.route("/logout", methods=["POST"])
 def logout():
-    """Clear session and return ok; frontend can redirect to landing screen and show login prompt."""
     try:
         session.clear()
         return jsonify({"ok": True})
@@ -399,13 +376,10 @@ def healthz_db():
 
 @app.route("/login", methods=["POST"])
 def login():
-    # Accepts JSON {"email": "..."} and sets session. Mirrors /login-basic.
     try:
-        # (surgical) no DB connect needed here
         data = request.get_json() or {}
         email = (data.get("email") or "").strip().lower()
 
-        # FIXED: removed extra parenthesis
         if not email or not (email.endswith("@purestorage.com") or email.endswith("@trace3.com")):
             return jsonify({"error": "Unauthorized domain"}), 403
 
@@ -426,14 +400,11 @@ def login():
             session["role"] = "engineer"
             session["region"] = "NA"
             return jsonify({"first_time": True})
-
     except Exception as e:
         print("🔥 /login error:", str(e))
         return jsonify({"error": "Login failed"}), 500
 
-# ---------------------------
-# Hardened auth/profile API used by the front-end
-# ---------------------------
+# ---------------- Hardened auth/profile API used by the front-end ----------------
 
 @app.get("/api/me")
 def api_me():
@@ -445,22 +416,19 @@ def api_me():
 
         email = (user or "").strip().lower()
         try:
-            row = get_user(email)  # None or dict-like
+            row = get_user(email)
         except Exception:
             app.logger.exception("get_user failed for %s", email)
-            # Fail-safe: don't 500/502; treat as profile incomplete so UI prompts gracefully
             return jsonify({"email": email, "profileComplete": False, "note": "db_unavailable"}), 200
 
         profile_complete = bool(row)
         return jsonify({"email": email, "profileComplete": profile_complete}), 200
-    except Exception as e:
+    except Exception:
         app.logger.exception("/api/me crashed")
-        # Still prefer 200 with minimal info to avoid frontend hard failures
         return jsonify({"error": "temporary"}), 200
 
 @app.get("/api/profile")
 def api_profile_get():
-    """Return existing profile details if present; otherwise exists=False."""
     try:
         email = session.get("user_id")
         if not email:
@@ -478,13 +446,12 @@ def api_profile_get():
                 "region": row.get("region") if isinstance(row, dict) else (row[4] if len(row) > 4 else None),
             }
         }), 200
-    except Exception as e:
+    except Exception:
         app.logger.exception("/api/profile GET failed")
         return jsonify({"error": "profile lookup failed"}), 500
 
 @app.post("/api/profile")
 def api_profile_post():
-    """Save or update profile; this mirrors your existing /profile but under /api/ too."""
     try:
         email = session.get("user_id")
         if not email:
@@ -499,30 +466,20 @@ def api_profile_post():
         if not name:
             return jsonify({"error": "name required"}), 400
 
-        # Upsert-style: keep existing messages if present
         existing = get_user(email) or {}
         messages = existing.get("messages", []) if isinstance(existing, dict) else []
 
-        profile = {
-            "name": name,
-            "company": company,
-            "role": role,
-            "region": region,
-            "messages": messages,
-        }
+        profile = {"name": name, "company": company, "role": role, "region": region, "messages": messages}
         save_user(email, profile)
 
-        # refresh session hints
         session["name"] = name or email
         session["role"] = role or session.get("role", "engineer")
         session["region"] = region or session.get("region", "NA")
-
         return jsonify({"ok": True}), 200
-    except Exception as e:
+    except Exception:
         app.logger.exception("/api/profile POST failed")
         return jsonify({"error": "profile save failed"}), 500
 
-# ---------- PATCH: add API aliases for login/logout ----------
 ALLOWED_EMAIL_RE = re.compile(r".+@(?:purestorage\.com|trace3\.com)$", re.I)
 
 @app.post("/api/login")
@@ -546,7 +503,7 @@ def api_login():
             session["role"] = "engineer"
             session["region"] = "NA"
             return jsonify({"first_time": True}), 200
-    except Exception as e:
+    except Exception:
         app.logger.exception("/api/login failed")
         return jsonify({"error": "Login failed"}), 500
 
@@ -555,6 +512,6 @@ def api_logout():
     try:
         session.clear()
         return jsonify({"ok": True}), 200
-    except Exception as e:
+    except Exception:
         app.logger.exception("/api/logout failed")
         return jsonify({"ok": False}), 500
