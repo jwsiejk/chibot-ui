@@ -119,5 +119,23 @@
     }
   })();
   </script>
+  <!-- Zoom-style bottom toolbar -->
+<div id="askChipToolbar">
+  <button id="btnMic"      title="Hold to talk">🎤 Mic</button>
+  <button id="btnAsk"      title="Type a question">💬 Ask</button>
+  <div class="dropdown">
+    <button title="More">⋯ More</button>
+    <div class="dropdown-content">
+      <div id="btnHistory">Conversation History</div>
+      <div id="btnProfile">Edit Profile</div>
+      <div id="btnLogout">Log out</div>
+    </div>
+  </div>
+</div>
+
+<!-- Optional floating record button + caption (your CSS supports these) -->
+<button id="recordBtn" style="display:none">Hold to Record</button>
+<div id="recordPrompt" class="idle" style="display:none">Hold the button to speak</div>
+<canvas id="waveform" style="display:none"></canvas>
 </body>
 </html>
