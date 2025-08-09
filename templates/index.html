@@ -46,10 +46,10 @@
 
     /* Bottom title just above toolbar */
     #bottomTitle{
-      position:fixed; left:0; bottom:72px; width:100%;
+      position:fixed; left:0; bottom:80px; width:100%;
       text-align:center; color:#ffb25e; font-weight:700; font-size:28px;
       letter-spacing:.3px; text-shadow:0 1px 0 rgba(0,0,0,.4);
-      pointer-events:none;
+      pointer-events:none; z-index:998;
     }
 
     /* Center the toolbar content; Start is primary */
@@ -57,14 +57,33 @@
       display:none; /* shown by JS after auth */
       position:fixed; left:0; bottom:0; width:100%;
       background:rgba(30,30,30,0.95);
-      padding:14px 20px; display:flex; justify-content:center; gap:16px;
+      padding:14px 20px;
+      display:flex; justify-content:center; align-items:center; gap:16px;
       z-index:999; box-shadow:0 -2px 10px rgba(0,0,0,0.6);
+      min-height:64px;
     }
     #askChipToolbar #startButton{
       font-weight:700; border:none; padding:10px 16px; border-radius:10px;
       background:linear-gradient(180deg,var(--accent),var(--accent-2)); color:#111;
       box-shadow:0 8px 30px rgba(255,106,0,.25);
     }
+
+    /* Whisper-style cue (top-left) */
+    #chipStatusCue{
+      position: fixed; top: 16px; left: 16px;
+      padding: 8px 12px; border-radius: 10px;
+      background: rgba(0,0,0,.6); color: #cfe8cf;
+      font-size: 14px; font-weight: 600; letter-spacing:.2px;
+      box-shadow: 0 6px 16px rgba(0,0,0,.35);
+      opacity: 0; transform: translateY(-6px);
+      transition: opacity .25s ease, transform .25s ease, background .25s ease, color .25s ease;
+      z-index: 1001;
+    }
+    #chipStatusCue.show{ opacity: 1; transform: translateY(0); }
+    #chipStatusCue.think { background: rgba(15,41,66,.7); color:#bfe0ff; }
+    #chipStatusCue.listen{ background: rgba(66,41,15,.7); color:#ffd8a6; }
+    #chipStatusCue.speak { background: rgba(21,66,15,.7); color:#cfeecf; }
+    #chipStatusCue.warn  { background: rgba(66,15,15,.7); color:#ffc9c9; }
   </style>
 
   <!-- External assets -->
@@ -73,6 +92,9 @@
 </head>
 <body>
 
+  <!-- Subtle status cue -->
+  <div id="chipStatusCue" aria-live="polite">Ready.</div>
+
   <!-- Login Modal -->
   <div id="loginModal" class="modal">
     <div class="modal-content">
@@ -80,6 +102,7 @@
       <p id="loginHint" class="hint"></p>
       <form id="loginForm" class="stack">
         <input type="email" name="email" placeholder="Email address" required />
+        <!-- password stays visible but disabled for preview -->
         <input type="password" name="password" placeholder="Password (disabled for preview)" disabled aria-disabled="true" />
         <small style="display:block;margin-top:6px;opacity:.7">
           Password is disabled for this preview. Use your Trace3 or Pure Storage email address.
@@ -106,7 +129,7 @@
 
   <!-- Main Content -->
   <div id="app">
-    <!-- Chip hero image -->
+    <!-- Chip hero image (hidden until authenticated) -->
     <div class="chip-box" id="chipBox" style="display:none">
       <img id="chipImage"
            src="{{ url_for('static', filename='chip/img/chip.png') }}"
@@ -125,9 +148,25 @@
     const profileEl = q('#profileModal');
     const appEl     = q('#app');
     const startBtn  = q('#startButton');
+    const chipBox   = q('#chipBox');
+    const toolbar   = q('#askChipToolbar');
+    const cueEl     = q('#chipStatusCue');
 
     function show(el){ if(el){ el.removeAttribute('hidden'); el.style.display='block'; } }
     function hide(el){ if(el){ el.setAttribute('hidden',''); el.style.display='none'; } }
+    function cue(text, cls=""){
+      if (!cueEl) return;
+      cueEl.className = ""; // reset
+      cueEl.textContent = text || "";
+      if (cls) cueEl.classList.add(cls);
+      void cueEl.offsetWidth;
+      cueEl.classList.add("show");
+      // auto fade after a moment (except think/listen)
+      if (!["think","listen"].includes(cls)) {
+        clearTimeout(cueEl._t);
+        cueEl._t = setTimeout(()=>cueEl.classList.remove("show"), 1200);
+      }
+    }
 
     try {
       const r = await fetch('/api/me', { credentials: 'include' });
@@ -139,8 +178,19 @@
         if (startBtn) startBtn.disabled = true;
         return;
       }
+      // Authenticated: show app, Chip, toolbar
       hide(loginEl); hide(profileEl); show(appEl);
       if (startBtn) startBtn.disabled = false;
+      show(chipBox);
+      show(toolbar);
+      cue("Hi.");
+
+      // Optional: tiny UX cues on actions without touching your existing main.js handlers
+      if (startBtn) {
+        startBtn.addEventListener("click", () => cue("Listening…","listen"));
+      }
+      const btnAsk = q("#btnAsk");
+      if (btnAsk) btnAsk.addEventListener("click", ()=> cue("Thinking…","think"));
     } catch {
       hide(appEl); hide(profileEl); show(loginEl);
     }
@@ -150,8 +200,8 @@
   <!-- Bottom title just above toolbar -->
   <div id="bottomTitle">Ask Chip</div>
 
-  <!-- Zoom-style bottom toolbar (Start moved here) -->
-  <div id="askChipToolbar">
+  <!-- Zoom-style bottom toolbar (centered; Start here) -->
+  <div id="askChipToolbar" style="display:none">
     <button id="startButton" class="btn" data-role="start">Start</button>
     <button id="btnMic"  title="Hold to talk">🎤 Mic</button>
     <button id="btnAsk"  title="Type a question">💬 Ask</button>
