@@ -74,5 +74,41 @@
     <button id="startButton" class="btn">Start</button>
     <div id="chatArea"></div>
   </div>
+  <script>
+  /* Minimal guard so missing elements don't crash boot */
+  document.addEventListener('DOMContentLoaded', () => {
+    const $ = s => document.querySelector(s);
+    const startBtn = $('#startBtn') || $('#startButton') || $('[data-role="start"]');
+    if (startBtn) startBtn.disabled = true;
+  });
+
+  /* Boot auth/profile flow: unchanged behavior, just resilient */
+  (async function bootAuth() {
+    const q = s => document.querySelector(s);
+    const loginEl   = q('#login-panel')   || q('#loginModal') || q('[data-role="login-panel"]');
+    const profileEl = q('#profile-panel') || q('[data-role="profile-panel"]');
+    const appEl     = q('#app') || q('#root');
+    const startBtn  = q('#startBtn') || q('#startButton') || q('[data-role="start"]');
+
+    function show(el){ if(el){ el.removeAttribute('hidden'); el.style.display=''; } }
+    function hide(el){ if(el){ el.setAttribute('hidden',''); el.style.display='none'; } }
+
+    try {
+      const r = await fetch('/api/me', { credentials: 'include' });
+      if (!r.ok) { hide(appEl); hide(profileEl); show(loginEl); return; }
+
+      const me = await r.json();
+      if (!me.profileComplete) {
+        hide(appEl); hide(loginEl); show(profileEl);
+        if (startBtn) startBtn.disabled = true;
+        return;
+      }
+      hide(loginEl); hide(profileEl); show(appEl);
+      if (startBtn) startBtn.disabled = false;
+    } catch {
+      hide(appEl); hide(profileEl); show(loginEl);
+    }
+  })();
+  </script>
 </body>
 </html>
