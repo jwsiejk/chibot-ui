@@ -3,21 +3,21 @@ document.addEventListener("DOMContentLoaded", () => {
   console.log("✅ main.js loaded (consolidated)");
 
   // Elements
-  const loginModal    = document.getElementById("loginModal");
-  const profileModal  = document.getElementById("profileModal");
-  const startButton   = document.getElementById("startButton");
-  const loginForm     = document.getElementById("loginForm");
-  const profileForm   = document.getElementById("profileForm");
-  const saveProfileBtn= document.getElementById("saveProfileBtn");
-  const loginHint     = document.getElementById("loginHint");
-  const profileHint   = document.getElementById("profileHint");
-  const statusBar     = document.getElementById("status");
+  const loginModal     = document.getElementById("loginModal");
+  const profileModal   = document.getElementById("profileModal");
+  const startButton    = document.getElementById("startButton");
+  const loginForm      = document.getElementById("loginForm");
+  const profileForm    = document.getElementById("profileForm");
+  const saveProfileBtn = document.getElementById("saveProfileBtn");
+  const loginHint      = document.getElementById("loginHint");
+  const profileHint    = document.getElementById("profileHint");
+  const statusBar      = document.getElementById("status");
 
   // Guided copy (centralized)
   const MESSAGES = {
-    login:  "Please sign in with your Trace3 or Pure Storage email address.",
-    profile:"Please fill out your profile to continue.",
-    saved:  "Profile saved. Ready."
+    login:   "Please sign in with your Trace3 or Pure Storage email address.",
+    profile: "Please fill out your profile to continue.",
+    saved:   "Profile saved. Ready."
   };
 
   if (loginHint)   loginHint.textContent   = MESSAGES.login;
@@ -25,9 +25,9 @@ document.addEventListener("DOMContentLoaded", () => {
   if (startButton) startButton.disabled = true;
 
   // Helpers
-  const show = (el) => el && (el.style.display = "block");
-  const hide = (el) => el && (el.style.display = "none");
-  const enable = (el) => el && (el.disabled = false);
+  const show    = (el) => el && (el.style.display = "block");
+  const hide    = (el) => el && (el.style.display = "none");
+  const enable  = (el) => el && (el.disabled = false);
   const disable = (el) => el && (el.disabled = true);
 
   async function getStatus() {
@@ -78,11 +78,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Login (JSON → /login)
+  // Login (JSON → /login), password field stays disabled (preview)
   if (loginForm && !loginForm.dataset.wired) {
     loginForm.dataset.wired = "1";
     loginForm.addEventListener("submit", async (e) => {
       e.preventDefault();
+
+      // Enforce disabled password for preview clarity
+      const pw = document.querySelector('input[name="password"]');
+      if (pw) pw.disabled = true;
+
       const fd = new FormData(loginForm);
       const email = (fd.get("email") || "").toString().trim();
       if (!email) return;
@@ -103,7 +108,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
         hide(loginModal);
 
-        // If backend says first-time, show profile; else enable start
         if (data.first_time === true) {
           show(profileModal);
           disable(startButton);
@@ -123,10 +127,10 @@ document.addEventListener("DOMContentLoaded", () => {
     saveProfileBtn.addEventListener("click", async () => {
       if (!profileForm) return;
       const fd = new FormData(profileForm);
-      const name  = (fd.get("name")  || "").toString().trim();
-      const title = (fd.get("title") || "").toString().trim();
-      const role  = (fd.get("role")  || title).toString().trim();
-      const region= (fd.get("region")|| "NA").toString().trim();
+      const name   = (fd.get("name")   || "").toString().trim();
+      const title  = (fd.get("title")  || "").toString().trim();
+      const role   = (fd.get("role")   || title).toString().trim();
+      const region = (fd.get("region") || "NA").toString().trim();
       if (!name || !title) { alert("Please complete all fields."); return; }
 
       // Persist locally for continuity
