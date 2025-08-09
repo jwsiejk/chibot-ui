@@ -1,4 +1,4 @@
-// main.js — auth/profile gating + Chip + toolbar — 2025-08-09h
+// main.js — auth/profile gating + Chip + toolbar — 2025-08-09i
 document.addEventListener("DOMContentLoaded", () => {
   console.log("✅ main.js loaded (consolidated)");
 
@@ -47,11 +47,12 @@ document.addEventListener("DOMContentLoaded", () => {
   if (profileHint) profileHint.textContent = MESSAGES.profile;
   if (startButton && "disabled" in startButton) startButton.disabled = true;
 
-  // ---------- Helpers ----------
-  const show    = (el) => el && (el.style.display = "block");
-  const hide    = (el) => el && (el.style.display = "none");
-  const enable  = (el) => el && (el.disabled = false);
-  const disable = (el) => el && (el.disabled = true);
+  // ---------- Helpers (patched show/hide) ----------
+  // Don't force "block" unless a display is provided. Otherwise, let CSS decide (flex/grid/etc.)
+  const show    = (el, asDisplay) => { if (!el) return; asDisplay ? (el.style.display = asDisplay) : el.style.removeProperty("display"); };
+  const hide    = (el) => { if (el) el.style.display = "none"; };
+  const enable  = (el) => { if (el) el.disabled = false; };
+  const disable = (el) => { if (el) el.disabled = true; };
   const setStatus = (t) => { if (statusBar) statusBar.textContent = t || ""; };
   const playAudio = (src) => { try { if (src) new Audio(src).play(); } catch {} };
 
@@ -113,8 +114,9 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       hide(profileModal);
       enable(startButton);
-      if (toolbar) show(toolbar);
-      if (chipBox) show(chipBox);
+      // IMPORTANT: preserve layout displays so CSS centering works
+      if (toolbar) show(toolbar, "flex");   // was show(toolbar)
+      if (chipBox) show(chipBox, "grid");   // was show(chipBox)
       setStatus("Ready.");
     }
   }
