@@ -33,7 +33,8 @@
   </style>
 
   <!-- Cache-busted script include -->
-  <script src="/static/js/main.js?v=20250809e" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='user-experience/css/styles.css') }}">
+  <script src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250809f" defer></script>
 
 </head>
 <body>
