@@ -1,4 +1,4 @@
-// main.js — consolidated auth/profile gating (guided, JSON login) — 2025-08-09c
+// main.js — consolidated auth/profile gating (guided, JSON login) — 2025-08-09e
 document.addEventListener("DOMContentLoaded", () => {
   console.log("✅ main.js loaded (consolidated)");
 
@@ -15,7 +15,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const profileHint    = document.getElementById("profileHint");
   const statusBar      = document.getElementById("status");
 
-  // Debug: confirm what exists at runtime
   console.log("[main] elements:", {
     startButton: !!startButton,
     loginModal: !!loginModal,
@@ -25,7 +24,6 @@ document.addEventListener("DOMContentLoaded", () => {
     saveProfileBtn: !!saveProfileBtn
   });
 
-  // Guided copy (centralized)
   const MESSAGES = {
     login:   "Please sign in with your Trace3 or Pure Storage email address.",
     profile: "Please fill out your profile to continue.",
@@ -35,7 +33,6 @@ document.addEventListener("DOMContentLoaded", () => {
   if (loginHint)   loginHint.textContent   = MESSAGES.login;
   if (profileHint) profileHint.textContent = MESSAGES.profile;
 
-  // Only touch .disabled if element exists and supports it
   if (startButton && "disabled" in startButton) startButton.disabled = true;
 
   // Helpers
@@ -44,32 +41,48 @@ document.addEventListener("DOMContentLoaded", () => {
   const enable  = (el) => el && (el.disabled = false);
   const disable = (el) => el && (el.disabled = true);
 
+  // Generic fetch that always carries cookies (same-site or cross-subdomain)
+  async function j(path, opts = {}) {
+    const r = await fetch(path, {
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+      ...opts
+    });
+    const contentType = r.headers.get("content-type") || "";
+    let data = null;
+    try { data = contentType.includes("application/json") ? await r.json() : null; } catch {}
+    return { ok: r.ok, status: r.status, data };
+  }
+
   async function getStatus() {
+    // Preferred: session check via /api/me
     try {
-      const r = await fetch("/auth/status", { credentials: "same-origin" });
-      if (!r.ok) return { authenticated: false };
-      return await r.json();
-    } catch {
-      return { authenticated: false };
-    }
+      const { ok, status, data } = await j("/api/me");
+      if (ok && data && data.email) {
+        // If profileComplete present, infer first_time
+        const first_time = data.profileComplete === false;
+        return { authenticated: true, first_time };
+      }
+      if (status === 401) return { authenticated: false };
+    } catch {}
+    // Fallback to legacy status endpoint
+    try {
+      const { ok, data } = await j("/auth/status");
+      if (ok && data) return data;
+    } catch {}
+    return { authenticated: false };
   }
 
   async function saveProfileJSON(payload) {
-    const opts = {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify(payload)
-    };
-    try {
-      const r1 = await fetch("/profile/save", opts);
-      if (r1.ok) return true;
-    } catch {}
-    try {
-      const r2 = await fetch("/profile", opts);
-      if (r2.ok) return true;
-    } catch {}
-    return false;
+    const body = JSON.stringify(payload);
+    // Try new path first
+    let r = await j("/profile/save", { method: "POST", body });
+    if (r.ok) return true;
+    // Fallbacks
+    r = await j("/profile", { method: "POST", body });
+    if (r.ok) return true;
+    r = await j("/api/profile", { method: "POST", body });
+    return r.ok;
   }
 
   async function gate() {
@@ -92,50 +105,44 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Login (JSON → /login), password field stays disabled (preview)
+  // Login (JSON → /api/login). Password field looks present but is ignored.
   if (loginForm && !loginForm.dataset.wired) {
     loginForm.dataset.wired = "1";
     loginForm.addEventListener("submit", async (e) => {
       e.preventDefault();
 
-      // Enforce disabled password for preview clarity
-      const pw = document.querySelector('input[name="password"]');
+      const pw = loginForm.querySelector('input[name="password"]');
       if (pw) pw.disabled = true;
 
       const fd = new FormData(loginForm);
-      const email = (fd.get("email") || "").toString().trim();
+      const email = (fd.get("email") || "").toString().trim().toLowerCase();
       if (!email) return;
 
-      try {
-        const r = await fetch("/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "same-origin",
-          body: JSON.stringify({ email })
-        });
-        const data = await r.json().catch(() => ({}));
+      const { ok, data, status } = await j("/api/login", {
+        method: "POST",
+        body: JSON.stringify({ email })
+      });
 
-        if (!r.ok) {
-          alert(data?.error || "Login failed. Use your Trace3 or Pure Storage email address.");
-          return;
-        }
-
-        hide(loginModal);
-
-        if (data.first_time === true) {
-          show(profileModal);
-          disable(startButton);
-        } else {
-          enable(startButton);
-        }
-      } catch (err) {
-        console.error("Login error:", err);
-        alert("Login failed. Please try again.");
+      if (!ok) {
+        alert((data && data.error) || `Login failed (${status}). Use your Trace3 or Pure Storage email.`);
+        return;
       }
+
+      hide(loginModal);
+
+      if (data && data.first_time === true) {
+        show(profileModal);
+        disable(startButton);
+      } else {
+        enable(startButton);
+      }
+
+      // Re-check session state to sync with any other code that calls /api/me
+      gate();
     });
   }
 
-  // Profile Save (JSON → /profile/save fallback /profile)
+  // Profile Save (JSON → /profile/save fallback /profile and /api/profile)
   if (saveProfileBtn && !saveProfileBtn.dataset.wired) {
     saveProfileBtn.dataset.wired = "1";
     saveProfileBtn.addEventListener("click", async () => {
@@ -147,7 +154,6 @@ document.addEventListener("DOMContentLoaded", () => {
       const region = (fd.get("region") || "NA").toString().trim();
       if (!name || !title) { alert("Please complete all fields."); return; }
 
-      // Persist locally for continuity
       try {
         localStorage.setItem("profileName", name);
         localStorage.setItem("profileTitle", title);
