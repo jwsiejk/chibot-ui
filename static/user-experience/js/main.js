@@ -1,4 +1,4 @@
-// main.js — auth/profile gating + Chip + toolbar — 2025-08-09j
+// main.js — auth/profile gating + Chip + toolbar — 2025-08-09k
 document.addEventListener("DOMContentLoaded", () => {
   console.log("✅ main.js loaded (consolidated)");
 
@@ -106,6 +106,63 @@ document.addEventListener("DOMContentLoaded", () => {
     return r.ok;
   }
 
+  // ---------- Profile completeness helpers ----------
+  const REQUIRED_FIELDS = ["name", "title"]; // email comes from auth; region/role optional defaults
+  function isProfileIncomplete(p) {
+    if (!p || typeof p !== "object") return true;
+    for (let i = 0; i < REQUIRED_FIELDS.length; i++) {
+      const k = REQUIRED_FIELDS[i];
+      const v = (p[k] || "").toString().trim();
+      if (!v) return true;
+    }
+    return false;
+  }
+
+  async function fetchProfile() {
+    const { ok, data } = await j("/api/me");
+    if (ok && data) {
+      const prof = {
+        name: (data.name || data.profile?.name || "").toString(),
+        title: (data.title || data.profile?.title || "").toString(),
+        role: (data.role || data.profile?.role || data.title || "").toString(),
+        region: (data.region || data.profile?.region || "NA").toString(),
+        email: (data.email || "").toString()
+      };
+      return prof;
+    }
+    // last-resort local cache (so we don't regress UX if backend doesn't echo)
+    let name = "", title = "", role = "", region = "NA";
+    try {
+      name   = localStorage.getItem("profileName")  || localStorage.getItem("chip_name")  || "";
+      title  = localStorage.getItem("profileTitle") || localStorage.getItem("chip_title") || "";
+    } catch {}
+    role = title;
+    return { name, title, role, region, email: "" };
+  }
+
+  async function enforceProfileCompleteness(opts) {
+    const o = opts || {};
+    const prof = await fetchProfile();
+    const incomplete = isProfileIncomplete(prof);
+    if (incomplete) {
+      if (profileHint) profileHint.textContent = MESSAGES.profile;
+      show(profileModal, "flex");       // block greet/ask until complete
+      hide(chipBox);
+      hide(toolbar);
+      setStatus("Profile needed to continue.");
+      disable(startButton);
+      console.log("[profile] incomplete -> prompting user");
+      return { ok: false, profile: prof };
+    }
+    // profile is complete; restore app layout if requested
+    if (o.applyLayout !== false) {
+      applyAuthedLayout();
+      enable(startButton);
+      setStatus("Ready.");
+    }
+    return { ok: true, profile: prof };
+  }
+
   // ---------- Gate UI based on auth/profile ----------
   async function gate() {
     disable(startButton);
@@ -122,20 +179,19 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     hide(loginModal);
 
-    if (st.first_time) {
-      show(profileModal, "flex");      // modals must be flex
-      hide(toolbar);
-      hide(chipBox);
-      setStatus("Profile needed to continue.");
-      disable(startButton);
-      console.log("[gate] profile incomplete");
-    } else {
-      hide(profileModal);
-      enable(startButton);
-      applyAuthedLayout();
-      setStatus("Ready.");
-      console.log("[gate] authed + profile complete");
+    // Always do a client-side completeness check (some backends may not flag first_time)
+    const check = await enforceProfileCompleteness({ applyLayout: false });
+    if (!check.ok) {
+      // keep modal up; Start stays disabled
+      return;
     }
+
+    // Profile complete → show app
+    hide(profileModal);
+    enable(startButton);
+    applyAuthedLayout();
+    setStatus("Ready.");
+    console.log("[gate] authed + profile complete");
   }
   window.chipGate = gate; // handy manual re-run
 
@@ -162,14 +218,18 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       hide(loginModal);
-      if (data && data.first_time === true) {
-        show(profileModal, "flex");   // ensure modal actually shows
-        disable(startButton);
-      } else {
-        enable(startButton);
-        applyAuthedLayout();          // show app/chip/toolbar with correct displays
+
+      // Regardless of backend flag, run local completeness enforcement
+      const check = await enforceProfileCompleteness();
+      if (!check.ok) {
+        // modal shown; Start remains disabled
+        return;
       }
-      gate();
+
+      // Ready to proceed
+      enable(startButton);
+      applyAuthedLayout();
+      gate(); // refresh state quietly (keeps behavior consistent)
     });
   }
 
@@ -205,11 +265,15 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // ---------- Start → greet ----------
+  // ---------- Start → greet (guarded by completeness) ----------
   if (startButton && !startButton.dataset.greetWired) {
     startButton.dataset.greetWired = "1";
     startButton.addEventListener("click", async () => {
       try {
+        // Hard guard: if profile incomplete, block greet and prompt
+        const check = await enforceProfileCompleteness({ applyLayout: true });
+        if (!check.ok) return;
+
         console.log("[UI] Start clicked");
         setStatus("Warming up Chip…");
         disable(startButton);
@@ -230,6 +294,10 @@ document.addEventListener("DOMContentLoaded", () => {
     btnAsk.dataset.wired = "1";
     btnAsk.addEventListener("click", async () => {
       console.log("[UI] Ask clicked");
+      // Guard ask behind profile completeness too (prevents "none" in responses)
+      const check = await enforceProfileCompleteness({ applyLayout: true });
+      if (!check.ok) return;
+
       const q = prompt("Ask Chip:");
       if (!q) return;
       setStatus("Thinking…");
