@@ -739,3 +739,160 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 })();
 /* ===== END PATCH ===== */
+
+
+/* ===== CONSOLIDATED AUTH/PROFILE GATING — 2025-08-09 =====
+   Goals:
+   - Single source of truth for login/profile gating
+   - No ReferenceErrors if elements are missing
+   - Wire login form once; fall back to /login if needed
+   - One saveProfile() that enables Start on success
+   - No variable redeclarations in loops; non-destructive to existing features
+*/ 
+(function () {
+  // Idempotence: avoid double-wiring if this block runs twice
+  if (window.__chipAuthGatingV2__) return;
+  window.__chipAuthGatingV2__ = true;
+
+  // Small helpers
+  const $ = (sel) => document.querySelector(sel);
+  const show = (el) => el && (el.style.display = "block");
+  const hide = (el) => el && (el.style.display = "none");
+  const enable = (el) => el && (el.disabled = false);
+  const disable = (el) => el && (el.disabled = true);
+
+  async function status() {
+    try {
+      const r = await fetch("/auth/status", { credentials: "same-origin" });
+      if (!r.ok) return { authenticated: false };
+      return await r.json();
+    } catch {
+      return { authenticated: false };
+    }
+  }
+
+  async function saveProfileRequest(payload) {
+    const opts = {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(payload),
+    };
+    try {
+      const r1 = await fetch("/profile/save", opts);
+      if (r1.ok) return true;
+    } catch {}
+    try {
+      const r2 = await fetch("/profile", opts);
+      if (r2.ok) return true;
+    } catch {}
+    return false;
+  }
+
+  async function gate() {
+    const loginContainer = $("#loginContainer");
+    const profileModal = $("#profileModal");
+    const startBtn = $("#startBtn");
+
+    // Safe default
+    disable(startBtn);
+
+    const st = await status();
+    if (!st.authenticated) {
+      show(loginContainer);
+      hide(profileModal);
+      return;
+    }
+
+    hide(loginContainer);
+    if (st.first_time) {
+      show(profileModal);
+      disable(startBtn);
+    } else {
+      hide(profileModal);
+      enable(startBtn);
+    }
+  }
+
+  function wireLogin() {
+    const form = $("#basicLoginForm");
+    if (!form) return;
+    if (form.dataset.wired === "1") return;
+    form.dataset.wired = "1";
+
+    form.addEventListener("submit", function onSubmitAugment(e) {
+      // Let any existing handlers fire first; then augment via microtask
+      setTimeout(async () => {
+        const startBtn = $("#startBtn");
+        if (startBtn && !startBtn.disabled) return; // another handler already logged in
+
+        const emailInput = document.getElementById("loginName");
+        const email = (emailInput && emailInput.value || "").trim();
+        if (!email) return;
+
+        // Try JSON /login fallback
+        try {
+          const r = await fetch("/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ email })
+          });
+          if (r.ok) {
+            await gate();
+            return;
+          }
+        } catch {}
+        // If /login failed, the legacy flow (/login-basic) may have succeeded; gate again
+        await gate();
+      }, 0);
+    });
+  }
+
+  function wireProfileSave() {
+    // Single canonical saveProfile
+    window.saveProfile = async function saveProfile() {
+      const nameEl = document.getElementById("profileName");
+      const titleEl = document.getElementById("profileTitle");
+      const name = ((nameEl && nameEl.value) || "").trim();
+      const title = ((titleEl && titleEl.value) || "").trim();
+      if (!name || !title) {
+        alert("Please complete all fields.");
+        return;
+      }
+
+      // Persist locally for compatibility with existing UI
+      try {
+        localStorage.setItem("profileName", name);
+        localStorage.setItem("profileTitle", title);
+        localStorage.setItem("chip_name", name);
+        localStorage.setItem("chip_title", title);
+      } catch {}
+
+      const ok = await saveProfileRequest({ name, title, role: title });
+      if (ok) {
+        const profileModal = document.getElementById("profileModal");
+        const startBtn = document.getElementById("startBtn");
+        hide(profileModal);
+        enable(startBtn);
+        const statusDiv = document.getElementById("status");
+        if (statusDiv) statusDiv.textContent = "Profile saved. Ready.";
+      } else {
+        alert("Failed to save profile. Please try again.");
+      }
+    };
+  }
+
+  function init() {
+    wireLogin();
+    wireProfileSave();
+    gate();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init, { once: true });
+  } else {
+    init();
+  }
+})();
+// ===== END CONSOLIDATED AUTH/PROFILE GATING =====
