@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" href="data:," />
 
-  <!-- Inline styles for layout (you can merge into style.css later) -->
+  <!-- Inline layout styles (you can merge into style.css later) -->
   <style>
     :root { --bg:#0f1115; --panel:#181b22; --panel-2:#1f2430; --text:#e8ecf1; --muted:#a7b0bd; --accent:#ff6a00; --accent-2:#ff9350; --border:#2a3040; }
     *{box-sizing:border-box} html,body{height:100%}
@@ -32,7 +32,7 @@
     .chip-box{
       position:absolute; inset:0;
       display:grid; place-items:center;
-      pointer-events:none; /* purely decorative */
+      pointer-events:none; /* decorative */
     }
     #chipImage{
       max-width:min(520px,72vw);
@@ -41,7 +41,7 @@
       filter:drop-shadow(0 12px 32px rgba(0,0,0,.45));
     }
 
-    /* Chat area (for now below the hero space) */
+    /* Chat area */
     #chatArea{margin-top:20px;border:1px dashed #2a3040;border-radius:12px;min-height:220px;padding:16px;background:rgba(31,36,48,.4)}
 
     /* Bottom title just above toolbar */
@@ -52,7 +52,7 @@
       pointer-events:none;
     }
 
-    /* Center the toolbar content; Start is primary */
+    /* Toolbar (buttons centered) */
     #askChipToolbar{
       display:none; /* shown by JS after auth */
       position:fixed; left:0; bottom:0; width:100%;
@@ -65,6 +65,23 @@
       background:linear-gradient(180deg,var(--accent),var(--accent-2)); color:#111;
       box-shadow:0 8px 30px rgba(255,106,0,.25);
     }
+
+    /* Whisper-style cue (top-left) */
+    #chipStatusCue{
+      position: fixed; top: 16px; left: 16px;
+      padding: 8px 12px; border-radius: 10px;
+      background: rgba(0,0,0,.6); color: #cfe8cf;
+      font-size: 14px; font-weight: 600; letter-spacing:.2px;
+      box-shadow: 0 6px 16px rgba(0,0,0,.35);
+      opacity: .0; transform: translateY(-6px);
+      transition: opacity .25s ease, transform .25s ease, background .25s ease, color .25s ease;
+      z-index: 1001;
+    }
+    #chipStatusCue.show{ opacity: 1; transform: translateY(0); }
+    #chipStatusCue.think { background: rgba(15,41,66,.7); color:#bfe0ff; }
+    #chipStatusCue.listen{ background: rgba(66,41,15,.7); color:#ffd8a6; }
+    #chipStatusCue.speak { background: rgba(21,66,15,.7); color:#cfeecf; }
+    #chipStatusCue.warn  { background: rgba(66,15,15,.7); color:#ffc9c9; }
   </style>
 
   <!-- External assets -->
@@ -72,6 +89,9 @@
   <script src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250809h" defer></script>
 </head>
 <body>
+
+  <!-- Subtle status cue -->
+  <div id="chipStatusCue" aria-live="polite">Ready.</div>
 
   <!-- Login Modal -->
   <div id="loginModal" class="modal">
@@ -125,14 +145,11 @@
     const profileEl = q('#profileModal');
     const appEl     = q('#app');
     const startBtn  = q('#startButton');
-
     function show(el){ if(el){ el.removeAttribute('hidden'); el.style.display='block'; } }
     function hide(el){ if(el){ el.setAttribute('hidden',''); el.style.display='none'; } }
-
     try {
       const r = await fetch('/api/me', { credentials: 'include' });
       if (!r.ok) { hide(appEl); hide(profileEl); show(loginEl); return; }
-
       const me = await r.json();
       if (!me.profileComplete) {
         hide(appEl); hide(loginEl); show(profileEl);
@@ -150,8 +167,8 @@
   <!-- Bottom title just above toolbar -->
   <div id="bottomTitle">Ask Chip</div>
 
-  <!-- Zoom-style bottom toolbar (Start moved here) -->
-  <div id="askChipToolbar">
+  <!-- Zoom-style bottom toolbar (Start is here) -->
+  <div id="askChipToolbar" style="display:none">
     <button id="startButton" class="btn" data-role="start">Start</button>
     <button id="btnMic"  title="Hold to talk">🎤 Mic</button>
     <button id="btnAsk"  title="Type a question">💬 Ask</button>
