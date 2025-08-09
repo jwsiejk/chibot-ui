@@ -175,3 +175,23 @@ input::placeholder { color: #8f98a6; }
 
 /* Small utility */
 .hidden { display: none !important; }
+
+/* ====== NEW: Static/Dynamic buttons + hide legacy Start ====== */
+#askChipToolbar #btnModeStatic,
+#askChipToolbar #btnModeDynamic {
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 700;
+}
+#askChipToolbar #btnModeStatic.active,
+#askChipToolbar #btnModeDynamic.active {
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+  background: #444;
+}
+
+/* Hide Start button (kept in DOM for safety, but visually replaced) */
+#askChipToolbar #startButton { display: none !important; }
