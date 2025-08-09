@@ -1,7 +1,27 @@
+// main.js — consolidated auth/profile gating + toolbar wiring — 2025-08-09g
 // main.js — auth/profile gating + Chip + toolbar — 2025-08-09h
 document.addEventListener("DOMContentLoaded", () => {
-  console.log("✅ main.js loaded (consolidated)");
+console.log("✅ main.js loaded (consolidated)");
 
+  // ---------- Elements (wider selectors + guards) ----------
+  const loginModal     = document.getElementById("loginModal");
+  const profileModal   = document.getElementById("profileModal");
+  const startButton    = document.getElementById("startButton")
+                        || document.getElementById("startBtn")
+                        || document.querySelector('[data-role="start"]');
+  const loginForm      = document.getElementById("loginForm");
+  const profileForm    = document.getElementById("profileForm");
+  const saveProfileBtn = document.getElementById("saveProfileBtn");
+  const loginHint      = document.getElementById("loginHint");
+  const profileHint    = document.getElementById("profileHint");
+  const statusBar      = document.getElementById("status");
+  // Toolbar bits (may or may not exist yet)
+  const toolbar        = document.getElementById("askChipToolbar");
+  const btnMic         = document.getElementById("btnMic");
+  const btnAsk         = document.getElementById("btnAsk");
+  const btnHistory     = document.getElementById("btnHistory");
+  const btnProfile     = document.getElementById("btnProfile");
+  const btnLogout      = document.getElementById("btnLogout");
   // ---------- Element lookups (guarded) ----------
   const $ = (id) => document.getElementById(id);
 
@@ -26,65 +46,59 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnProfile     = $("btnProfile");
   const btnLogout      = $("btnLogout");
 
-  // Optional floating controls
+// Optional floating controls
+  const recordBtn      = document.getElementById("recordBtn");
+  const recordPrompt   = document.getElementById("recordPrompt");
+  const waveform       = document.getElementById("waveform");
   const recordBtn      = $("recordBtn");
   const recordPrompt   = $("recordPrompt");
   const waveform       = $("waveform");
 
-  console.log("[main] elements:", {
+console.log("[main] elements:", {
+    startButton: !!startButton,
+    loginModal: !!loginModal,
+    profileModal: !!profileModal,
+    loginForm: !!loginForm,
+    profileForm: !!profileForm,
+    saveProfileBtn: !!saveProfileBtn,
+    toolbar: !!toolbar
     startButton: !!startButton, loginModal: !!loginModal, profileModal: !!profileModal,
     loginForm: !!loginForm, profileForm: !!profileForm, saveProfileBtn: !!saveProfileBtn,
     toolbar: !!toolbar, chipBox: !!chipBox, chipImage: !!chipImage
-  });
+});
 
-  const MESSAGES = {
-    login:   "Please sign in with your Trace3 or Pure Storage email address.",
-    profile: "Please fill out your profile to continue.",
-    saved:   "Profile saved. Ready."
-  };
+const MESSAGES = {
+@@ -44,7 +45,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
-  if (loginHint)   loginHint.textContent   = MESSAGES.login;
-  if (profileHint) profileHint.textContent = MESSAGES.profile;
-  if (startButton && "disabled" in startButton) startButton.disabled = true;
+if (loginHint)   loginHint.textContent   = MESSAGES.login;
+if (profileHint) profileHint.textContent = MESSAGES.profile;
 
-  // ---------- Helpers ----------
-  const show    = (el) => el && (el.style.display = "block");
-  const hide    = (el) => el && (el.style.display = "none");
-  const enable  = (el) => el && (el.disabled = false);
-  const disable = (el) => el && (el.disabled = true);
-  const setStatus = (t) => { if (statusBar) statusBar.textContent = t || ""; };
-  const playAudio = (src) => { try { if (src) new Audio(src).play(); } catch {} };
+if (startButton && "disabled" in startButton) startButton.disabled = true;
 
-  async function j(path, opts = {}) {
-    const r = await fetch(path, {
-      credentials: "include",
-      headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-      ...opts
-    });
-    const ct = r.headers.get("content-type") || "";
-    let data = null;
-    try { data = ct.includes("application/json") ? await r.json() : null; } catch {}
-    return { ok: r.ok, status: r.status, data, raw: r };
-  }
+// ---------- Helpers ----------
+@@ -55,7 +55,6 @@ document.addEventListener("DOMContentLoaded", () => {
+const setStatus = (t) => { if (statusBar) statusBar.textContent = t || ""; };
+const playAudio = (src) => { try { if (src) new Audio(src).play(); } catch {} };
 
-  async function getStatus() {
-    try {
-      const { ok, status, data } = await j("/api/me");
-      if (ok && data && data.email) {
+  // Generic fetch that always carries cookies
+async function j(path, opts = {}) {
+const r = await fetch(path, {
+credentials: "include",
+@@ -72,8 +71,7 @@ document.addEventListener("DOMContentLoaded", () => {
+try {
+const { ok, status, data } = await j("/api/me");
+if (ok && data && data.email) {
+        const first_time = data.profileComplete === false;
+        return { authenticated: true, first_time, me: data };
         return { authenticated: true, first_time: data.profileComplete === false, me: data };
-      }
-      if (status === 401) return { authenticated: false };
-    } catch {}
-    try {
-      const { ok, data } = await j("/auth/status");
-      if (ok && data) return data;
-    } catch {}
-    return { authenticated: false };
-  }
-
-  async function saveProfileJSON(payload) {
-    const body = JSON.stringify(payload);
-    let r = await j("/profile/save", { method: "POST", body });
+}
+if (status === 401) return { authenticated: false };
+} catch {}
+@@ -87,4 +85,178 @@ document.addEventListener("DOMContentLoaded", () => {
+async function saveProfileJSON(payload) {
+const body = JSON.stringify(payload);
+let r = await j("/profile/save", { method: "POST", body });
+    if (r.ok) re
     if (r.ok) return true;
     r = await j("/profile", { method: "POST", body });
     if (r.ok) return true;
@@ -196,3 +210,67 @@ document.addEventListener("DOMContentLoaded", () => {
         if (data?.reply) setStatus(data.reply);
         playAudio(data?.audio);
       } finally {
+        enable(startButton);
+      }
+    });
+  }
+
+  // ---------- Toolbar wiring ----------
+  // Ask (prompt → /ask)
+  if (btnAsk && !btnAsk.dataset.wired) {
+    btnAsk.dataset.wired = "1";
+    btnAsk.addEventListener("click", async () => {
+      const q = prompt("Ask Chip:");
+      if (!q) return;
+      setStatus("Thinking…");
+      const { ok, data } = await j("/ask", {
+        method: "POST",
+        body: JSON.stringify({ question: q })
+      });
+      if (!ok) { setStatus("Request failed. Try again."); return; }
+      if (data?.response) setStatus(data.response);
+      playAudio(data?.audio);
+    });
+  }
+
+  // Mic placeholder (hook streaming later)
+  if (btnMic && !btnMic.dataset.wired) {
+    btnMic.dataset.wired = "1";
+    btnMic.addEventListener("click", () => {
+      alert("Voice input coming soon. Use Ask for now.");
+    });
+  }
+
+  // History
+  if (btnHistory && !btnHistory.dataset.wired) {
+    btnHistory.dataset.wired = "1";
+    btnHistory.addEventListener("click", async () => {
+      setStatus("Looking up history…");
+      const { ok, data } = await j("/history", {
+        method: "POST",
+        body: JSON.stringify({ query: "What did we talk about last time?" })
+      });
+      setStatus(ok ? (data?.response || "No history yet.") : "No history yet.");
+    });
+  }
+
+  // Profile (open modal)
+  if (btnProfile && !btnProfile.dataset.wired) {
+    btnProfile.dataset.wired = "1";
+    btnProfile.addEventListener("click", () => {
+      if (profileModal) { show(profileModal); profileModal.removeAttribute("hidden"); }
+    });
+  }
+
+  // Logout
+  if (btnLogout && !btnLogout.dataset.wired) {
+    btnLogout.dataset.wired = "1";
+    btnLogout.addEventListener("click", async () => {
+      await j("/api/logout", { method: "POST" });
+      location.reload();
+    });
+  }
+
+  // ---------- Initial run ----------
+  gate();
+});
