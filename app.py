@@ -14,7 +14,8 @@ from datetime import datetime
 
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET", "supersecret")
+# Support both env var names
+app.secret_key = os.getenv("FLASK_SECRET_KEY") or os.getenv("FLASK_SECRET") or "supersecret"
 app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
@@ -390,7 +391,8 @@ def login():
         data = request.get_json() or {}
         email = (data.get("email") or "").strip().lower()
 
-        if not email or not (email.endswith("@purestorage.com") or email.endswith("@trace3.com"))):
+        # FIXED: removed extra parenthesis
+        if not email or not (email.endswith("@purestorage.com") or email.endswith("@trace3.com")):
             return jsonify({"error": "Unauthorized domain"}), 403
 
         session["user_id"] = email
@@ -416,7 +418,7 @@ def login():
         return jsonify({"error": "Login failed"}), 500
 
 # ---------------------------
-# NEW: Hardened auth/profile API used by the front-end
+# Hardened auth/profile API used by the front-end
 # ---------------------------
 
 @app.get("/api/me")
