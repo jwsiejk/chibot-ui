@@ -29,6 +29,12 @@
     .modal p.hint{margin:4px 0 12px;color:var(--muted);font-size:14px}
     .stack{display:grid;gap:10px}
 
+    <div class="chip-box" id="chipBox" style="display:none">
+  <img id="chipImage"
+       src="{{ url_for('static', filename='chip/img/chip.png') }}"
+       alt="Chip" />
+</div>
+
     #chatArea{margin-top:20px;border:1px dashed #2a3040;border-radius:12px;min-height:220px;padding:16px;background:rgba(31,36,48,.4)}
   </style>
 
