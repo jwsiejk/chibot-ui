@@ -99,7 +99,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const st = await getStatus();
 
     if (!st.authenticated) {
-      show(loginModal); hide(profileModal);
+      show(loginModal, 'flex');    
       hide(toolbar); hide(chipBox);
       setStatus("Please sign in.");
       return;
@@ -107,7 +107,7 @@ document.addEventListener("DOMContentLoaded", () => {
     hide(loginModal);
 
     if (st.first_time) {
-      show(profileModal);
+      show(profileModal, 'flex');   // <— modals need 'flex'
       hide(toolbar); hide(chipBox);
       setStatus("Profile needed to continue.");
       disable(startButton);
@@ -117,6 +117,8 @@ document.addEventListener("DOMContentLoaded", () => {
       // IMPORTANT: preserve layout displays so CSS centering works
       if (toolbar) show(toolbar, "flex");   // was show(toolbar)
       if (chipBox) show(chipBox, "grid");   // was show(chipBox)
+      const appEl = document.getElementById('app');
+    if (appEl) show(appEl, 'block');     // app container is block
       setStatus("Ready.");
     }
   }
