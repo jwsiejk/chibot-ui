@@ -12,6 +12,11 @@ from uuid import uuid4
 from werkzeug.utils import secure_filename
 from datetime import datetime
 
+# --- Normalize DATABASE_URL early (strip accidental quotes/newlines) ---
+_raw_db = (os.getenv("DATABASE_URL") or "").strip()
+if (_raw_db.startswith('"') and _raw_db.endswith('"')) or (_raw_db.startswith("'") and _raw_db.endswith("'")):
+    _raw_db = _raw_db[1:-1].strip()
+os.environ["DATABASE_URL"] = _raw_db
 
 app = Flask(__name__)
 # Support both env var names
@@ -60,7 +65,7 @@ def init_conversation_table():
 def ensure_db_ready():
     # Ping DB without mutating schema. Alembic handles migrations.
     try:
-        conn = get_connection()
+        # (surgical) no DB connect needed here
         with conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1;")
@@ -105,7 +110,7 @@ def index():
 @app.route("/login-basic", methods=["POST"])
 def login_basic():
     try:
-        conn = get_connection()
+        # (surgical) no DB connect needed here
         data = request.get_json()
         login_name = data.get("login")
 
@@ -137,7 +142,7 @@ def login_basic():
 @app.route("/profile", methods=["POST"])
 def save_profile():
     try:
-        conn = get_connection()
+        # (surgical) no DB connect needed here
         user_id = session.get("user_id")
         data = request.get_json()
         name = data.get("name", "")
@@ -166,7 +171,7 @@ def save_profile():
 @app.route("/ask", methods=["POST"])
 def ask():
     try:
-        conn = get_connection()
+        # (surgical) no DB connect needed here
         user_id = session.get("user_id") or request.remote_addr or str(uuid4())
 
         if request.is_json:
@@ -214,7 +219,7 @@ def ask():
 def ask_chip():
     def generate_stream():
         try:
-            conn = get_connection()
+            # (surgical) no DB connect needed here
             user_id = session.get("user_id") or request.remote_addr or str(uuid4())
             name = session.get("name", "User")
             role = "engineer"
@@ -266,7 +271,7 @@ def ask_chip():
 @app.route("/history", methods=["POST"])
 def retrieve_history():
     try:
-        conn = get_connection()
+        # (surgical) no DB connect needed here
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"error": "Unauthorized"}), 401
@@ -308,7 +313,7 @@ If not, say you couldn't find it.
 @app.route("/greet", methods=["POST"])
 def greet():
     try:
-        conn = get_connection()
+        # (surgical) no DB connect needed here
         user_id = session.get("user_id")
         user = get_user(user_id) if user_id else None
         name = user.get("name", "there") if user else "there"
@@ -387,7 +392,7 @@ def healthz_db():
 def login():
     # Accepts JSON {"email": "..."} and sets session. Mirrors /login-basic.
     try:
-        conn = get_connection()
+        # (surgical) no DB connect needed here
         data = request.get_json() or {}
         email = (data.get("email") or "").strip().lower()
 
