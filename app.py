@@ -11,6 +11,7 @@ import openai
 from uuid import uuid4
 from werkzeug.utils import secure_filename
 from datetime import datetime
+import re  # PATCH: for email allowlist
 
 # --- Normalize DATABASE_URL early (strip accidental quotes/newlines) ---
 _raw_db = (os.getenv("DATABASE_URL") or "").strip()
@@ -22,6 +23,14 @@ app = Flask(__name__)
 # Support both env var names
 app.secret_key = os.getenv("FLASK_SECRET_KEY") or os.getenv("FLASK_SECRET") or "supersecret"
 app.config["SESSION_TYPE"] = "filesystem"
+
+# PATCH: cookie/session hardening (same-origin safe defaults)
+app.config.setdefault("SESSION_COOKIE_HTTPONLY", True)
+app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
+# If you're 100% HTTPS on Render, you can set this env to force Secure cookies.
+if os.getenv("SESSION_COOKIE_SECURE", "false").lower() in ("1", "true", "yes"):
+    app.config["SESSION_COOKIE_SECURE"] = True
+
 Session(app)
 
 voice_id = os.getenv("CHIP_VOICE_ID")
@@ -63,9 +72,9 @@ def init_conversation_table():
             print("✅ Database connection closed.")
 
 def ensure_db_ready():
-    # Ping DB without mutating schema. Alembic handles migrations.
+    # PATCH: open a scoped connection properly (previously referenced undefined 'conn')
     try:
-        # (surgical) no DB connect needed here
+        conn = get_connection()
         with conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1;")
@@ -512,3 +521,40 @@ def api_profile_post():
     except Exception as e:
         app.logger.exception("/api/profile POST failed")
         return jsonify({"error": "profile save failed"}), 500
+
+# ---------- PATCH: add API aliases for login/logout ----------
+ALLOWED_EMAIL_RE = re.compile(r".+@(?:purestorage\.com|trace3\.com)$", re.I)
+
+@app.post("/api/login")
+def api_login():
+    """Passwordless allow-list login used by the frontend. Sets session and returns first_time flag."""
+    try:
+        data = request.get_json(force=True) or {}
+        email = (data.get("email") or "").strip().lower()
+        if not email or not ALLOWED_EMAIL_RE.fullmatch(email):
+            return jsonify({"error": "Unauthorized domain"}), 403
+
+        session["user_id"] = email
+        user = get_user(email)
+        if user:
+            session["name"] = user.get("name", email)
+            session["role"] = user.get("role", "engineer")
+            session["region"] = user.get("region", "NA")
+            return jsonify({"first_time": False, "name": user.get("name", ""), "title": user.get("role", "")}), 200
+        else:
+            session["name"] = email
+            session["role"] = "engineer"
+            session["region"] = "NA"
+            return jsonify({"first_time": True}), 200
+    except Exception as e:
+        app.logger.exception("/api/login failed")
+        return jsonify({"error": "Login failed"}), 500
+
+@app.post("/api/logout")
+def api_logout():
+    try:
+        session.clear()
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        app.logger.exception("/api/logout failed")
+        return jsonify({"ok": False}), 500
