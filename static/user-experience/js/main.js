@@ -1,4 +1,4 @@
-// main.js — auth/profile gating + Chip + toolbar — 2025-08-09k
+// main.js — auth/profile gating + Chip + toolbar — 2025-08-09k → patched to use chip.js
 document.addEventListener("DOMContentLoaded", () => {
   console.log("✅ main.js loaded (consolidated)");
 
@@ -265,23 +265,26 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // ---------- Start → greet (guarded by completeness) ----------
+  // ---------- Start → greet (now delegates to chip.js, guarded by completeness) ----------
   if (startButton && !startButton.dataset.greetWired) {
     startButton.dataset.greetWired = "1";
     startButton.addEventListener("click", async () => {
       try {
-        // Hard guard: if profile incomplete, block greet and prompt
         const check = await enforceProfileCompleteness({ applyLayout: true });
         if (!check.ok) return;
 
         console.log("[UI] Start clicked");
-        setStatus("Warming up Chip…");
+        const mode = (window.chip && typeof window.chip.getMode === "function") ? window.chip.getMode() : "static";
+        setStatus(mode === "dynamic" ? "Warming up Chip…" : "Playing greeting…");
         disable(startButton);
-        const { ok, data } = await j("/greet", { method: "POST", body: JSON.stringify({}) });
-        console.log("[UI] /greet ->", ok, data);
-        if (!ok) { setStatus("Greet failed. Try again."); return; }
-        if (data?.reply) setStatus(data.reply);
-        playAudio(data?.audio);
+
+        if (window.chip && typeof window.chip.playGreeting === "function") {
+          await window.chip.playGreeting(); // plays local greeting.mp3 in static mode, or calls /greet in dynamic
+          setStatus(mode === "dynamic" ? "Greeting complete." : "Greeting finished.");
+        } else {
+          // Fallback (shouldn't happen if chip.js is loaded)
+          setStatus("Chip module not available.");
+        }
       } finally {
         enable(startButton);
       }
@@ -289,26 +292,32 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ---------- Toolbar wiring ----------
-  // Ask (prompt → /ask)
+  // Ask (now delegates to chip.js; still prompts for a question in dynamic mode)
   if (btnAsk && !btnAsk.dataset.wired) {
     btnAsk.dataset.wired = "1";
     btnAsk.addEventListener("click", async () => {
       console.log("[UI] Ask clicked");
-      // Guard ask behind profile completeness too (prevents "none" in responses)
       const check = await enforceProfileCompleteness({ applyLayout: true });
       if (!check.ok) return;
 
-      const q = prompt("Ask Chip:");
-      if (!q) return;
-      setStatus("Thinking…");
-      const { ok, data } = await j("/ask", {
-        method: "POST",
-        body: JSON.stringify({ question: q })
-      });
-      console.log("[UI] /ask ->", ok, data);
-      if (!ok) { setStatus("Request failed. Try again."); return; }
-      if (data?.response) setStatus(data.response);
-      playAudio(data?.audio);
+      const mode = (window.chip && typeof window.chip.getMode === "function") ? window.chip.getMode() : "static";
+
+      // In static mode, we just play the local answer file. In dynamic mode, ask for a question string.
+      let q = "";
+      if (mode === "dynamic") {
+        q = prompt("Ask Chip:");
+        if (!q) return;
+        setStatus("Thinking…");
+      } else {
+        setStatus("Playing answer…");
+      }
+
+      if (window.chip && typeof window.chip.playAnswer === "function") {
+        await window.chip.playAnswer(q);
+        setStatus(mode === "dynamic" ? "Answer ready." : "Answer finished.");
+      } else {
+        setStatus("Chip module not available.");
+      }
     });
   }
 
