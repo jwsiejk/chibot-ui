@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <title>Ask Chip</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:," />
 
   <!-- Temporary inline styles (safe to remove later) -->
   <style>
@@ -32,7 +33,7 @@
   </style>
 
   <!-- Cache-busted script include -->
-  <script src="/static/user-experience/js/main.js?v=20250809b" defer></script>
+  <script src="/static/user-experience/js/main.js?v=20250809d" defer></script>
 </head>
 <body>
   <!-- Login Modal -->
@@ -71,26 +72,32 @@
   <div id="app">
     <h1>Ask Chip</h1>
     <div id="status"></div>
-    <button id="startButton" class="btn">Start</button>
+    <button id="startButton" class="btn" data-role="start">Start</button>
     <div id="chatArea"></div>
   </div>
-  <script>
-  /* Minimal guard so missing elements don't crash boot */
-  document.addEventListener('DOMContentLoaded', () => {
-    const $ = s => document.querySelector(s);
-    const startBtn = $('#startBtn') || $('#startButton') || $('[data-role="start"]');
-    if (startBtn) startBtn.disabled = true;
-  });
 
-  /* Boot auth/profile flow: unchanged behavior, just resilient */
+  <!-- Pre-guard so older bundles can’t crash on .disabled -->
+  <script>
+  document.addEventListener('DOMContentLoaded', () => {
+    try {
+      const sb = document.getElementById('startButton')
+               || document.getElementById('startBtn')
+               || document.querySelector('[data-role="start"]');
+      if (sb && 'disabled' in sb) sb.disabled = true;
+    } catch (e) {}
+  });
+  </script>
+
+  <!-- Resilient boot: show login/profile/app based on /api/me -->
+  <script>
   (async function bootAuth() {
     const q = s => document.querySelector(s);
-    const loginEl   = q('#login-panel')   || q('#loginModal') || q('[data-role="login-panel"]');
-    const profileEl = q('#profile-panel') || q('[data-role="profile-panel"]');
+    const loginEl   = q('#loginModal') || q('#login-panel') || q('[data-role="login-panel"]');
+    const profileEl = q('#profileModal') || q('#profile-panel') || q('[data-role="profile-panel"]');
     const appEl     = q('#app') || q('#root');
-    const startBtn  = q('#startBtn') || q('#startButton') || q('[data-role="start"]');
+    const startBtn  = q('#startButton') || q('#startBtn') || q('[data-role="start"]');
 
-    function show(el){ if(el){ el.removeAttribute('hidden'); el.style.display=''; } }
+    function show(el){ if(el){ el.removeAttribute('hidden'); el.style.display='block'; } }
     function hide(el){ if(el){ el.setAttribute('hidden',''); el.style.display='none'; } }
 
     try {
