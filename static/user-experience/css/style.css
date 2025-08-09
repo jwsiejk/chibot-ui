@@ -1,246 +1,177 @@
+/* ====== Theme Vars ====== */
+:root {
+  --bg:#0f1115;
+  --panel:#181b22;
+  --panel-2:#1f2430;
+  --text:#e8ecf1;
+  --muted:#a7b0bd;
+  --accent:#ff6a00;
+  --accent-2:#ff9350;
+  --border:#2a3040;
+}
 
+/* ====== Base ====== */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
 body {
   margin: 0;
-  background-color: #1e1e1e;
-  color: orange;
-  font-family: 'Segoe UI', sans-serif;
-  overflow: hidden;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  background: linear-gradient(180deg, #0f1115 0%, #0d1014 100%);
+  color: var(--text);
 }
-
-canvas {
-  display: block;
-}
-
-#recordBtn {
-  position: absolute;
-  bottom: 40px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 10;
-  padding: 12px 24px;
-  font-size: 16px;
-  background-color: orange;
-  color: orange;
-  border: none;
-  border-radius: 10px;
-  cursor: pointer;
-  font-weight: bold;
-  box-shadow: 0 0 10px rgba(255, 165, 0, 0.4);
-}
-
-#recordBtn.blinking {
-  animation: blink-animation 2s ease-in-out infinite;
-}
-
-@keyframes blink-animation {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-
-#caption {
-  position: absolute;
-  top: 50%;
-  left: 20px;
-  transform: translateY(-50%);
-  font-size: 12px;
-  color: #cccccc;
-  background: rgba(0, 0, 0, 0.4);
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-style: italic;
-  pointer-events: none;
-  max-width: 300px;
-  z-index: 15;
-}
-
-#status {
-  position: absolute;
-  top: 20px;
-  left: 20px;
-  z-index: 10;
-  background: rgba(0, 0, 0, 0.8);
-  padding: 12px 16px;
-  border-radius: 10px;
-  font-size: 16px;
-  color: #90ee90;
-  max-width: 400px;
-  font-weight: 500;
-  box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
-}
-
-#version-tag {
-  position: absolute;
-  bottom: 10px;
-  right: 10px;
-  font-size: 12px;
-  color: #aaa;
-}
-
-#recordPrompt {
-  position: absolute;
-  bottom: 90px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 16px;
-  color: rgba(255,255,255,0.3);
-  transition: opacity 1s ease;
-  pointer-events: none;
-}
-
-#recordPrompt.ready {
-  color: rgba(255,255,255,0.9);
-}
-
-#waveform {
-  position: absolute;
-  bottom: 50px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 200px;
-  height: 40px;
-  background: transparent;
-  pointer-events: none;
-}
-
-@keyframes pulseDots {
-  0% { content: ""; opacity: 0.2; }
-  33% { content: "."; opacity: 0.5; }
-  66% { content: ".."; opacity: 0.8; }
-  100% { content: "..."; opacity: 1; }
-}
-
-#recordPrompt.listening::after {
-  content: "...";
-  animation: pulseDots 1.5s infinite;
-}
-
-#recordPrompt.idle::after {
-  content: "";
-  animation: blink-idle 2s step-start infinite;
-}
-
-@keyframes blink-idle {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-.chip-box {
-  width: 1320px;
-  height: 789px;
-  margin: 0 auto;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  background-color: transparent;
-  border-radius: 12px;
-  overflow: hidden;
+#app {
+  max-width: 1100px;
+  margin: 40px auto;
+  padding: 0 16px;
   position: relative;
+  min-height: 70vh;
 }
-
-.chip-box img {
-  max-height: 100%;
-  height: auto;
-  width: auto;
-  transform: scale(0.75) translateX(10px);
+button, .btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform .06s, box-shadow .06s, border-color .2s;
+  box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 8px 24px rgba(0,0,0,.35);
 }
+button:hover { transform: translateY(-1px); border-color: #36415a; }
+button:disabled { opacity: .55; cursor: not-allowed; transform: none; }
 
-#askChipToolbar {
-  position: fixed;
-  bottom: 0;
-  left: 0;
+input, select {
   width: 100%;
-  background: rgba(30, 30, 30, 0.95);
-  padding: 12px 24px;
-  display: flex;
-  justify-content: center;
-  gap: 20px;
-  z-index: 999;
-  border-radius: 0;
-  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.6);
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  outline: none;
 }
+input::placeholder { color: #8f98a6; }
 
-#askChipToolbar button {
-  background: none;
-  border: none;
-  color: orange;
-  font-weight: bold;
-  font-size: 14px;
-  padding: 6px 12px;
-  cursor: pointer;
-}
+#status { margin: 8px 0 16px; color: var(--muted); font-size: 14px; min-height: 18px; }
 
-.dropdown {
-  position: relative;
-}
-
-.dropdown-content {
-  display: none;
-  position: absolute;
-  bottom: 30px;
-  background: rgba(30,30,30,0.9);
-  border-radius: 6px;
-  padding: 6px;
-  min-width: 140px;
-  box-shadow: 0 0 6px #000;
-}
-
-.dropdown-content div {
-  padding: 6px 8px;
-  cursor: pointer;
-}
-
-.dropdown-content div:hover {
-  background-color: rgba(255,165,0,0.2);
-}
-
-.dropdown:hover .dropdown-content {
-  display: block;
-}
-
-#chipImage {
-  width: 320px;
-  max-width: 90%;
-  height: auto;
-  display: block;
-  margin: 60px auto;
-  transform: translateX(10px) scale(0.75);
-}
-
+/* ====== Modals ====== */
 .modal {
   display: none;
-  position: fixed;
-  background: rgba(0, 0, 0, 0.95);
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.6);
+  backdrop-filter: blur(3px);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
   padding: 20px;
-  border-radius: 8px;
-  color: orange;
-  z-index: 9999;
-  box-shadow: 0 0 10px rgba(255,165,0,0.5);
+}
+.modal .modal-content {
+  width: 100%; max-width: 440px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 16px 50px rgba(0,0,0,.45);
+}
+.modal h2 { margin: 0 0 8px; font-size: 20px; }
+.modal p.hint { margin: 4px 0 12px; color: var(--muted); font-size: 14px; }
+.stack { display: grid; gap: 10px; }
+
+/* ====== Chip hero ====== */
+.chip-box {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  pointer-events: none; /* decorative */
+}
+#chipImage {
+  max-width: min(520px, 72vw);
+  width: auto; height: auto;
+  transform: translateY(-6vh);
+  filter: drop-shadow(0 12px 32px rgba(0,0,0,.45));
 }
 
-.modal.center {
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+/* ====== Chat area ====== */
+#chatArea {
+  margin-top: 20px;
+  border: 1px dashed #2a3040;
+  border-radius: 12px;
+  min-height: 220px;
+  padding: 16px;
+  background: rgba(31,36,48,.4);
 }
 
-.modal.bottom-right {
-  bottom: 20px;
-  right: 20px;
-  width: 300px;
+/* ====== Bottom title ====== */
+#bottomTitle {
+  position: fixed; left: 0; bottom: 80px; width: 100%;
+  text-align: center; color: #ffb25e; font-weight: 700; font-size: 28px;
+  letter-spacing: .3px; text-shadow: 0 1px 0 rgba(0,0,0,.4);
+  pointer-events: none; z-index: 998;
 }
 
-.modal-content {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+/* ====== Toolbar (centered) ====== */
+#askChipToolbar {
+  display: none; /* shown after auth by JS */
+  position: fixed; left: 0; bottom: 0; width: 100%;
+  background: rgba(30,30,30,0.95);
+  padding: 14px 20px;
+  display: flex; justify-content: center; align-items: center; gap: 16px;
+  z-index: 999; box-shadow: 0 -2px 10px rgba(0,0,0,0.6);
+  min-height: 64px;
 }
+#askChipToolbar #startButton {
+  font-weight: 700; border: none; padding: 10px 16px; border-radius: 10px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-2)); color: #111;
+  box-shadow: 0 8px 30px rgba(255,106,0,.25);
+}
+#askChipToolbar .dropdown { position: relative; }
+#askChipToolbar .dropdown-content {
+  display: none; position: absolute; bottom: 30px;
+  background: rgba(30,30,30,0.9);
+  border-radius: 6px; padding: 6px; min-width: 140px;
+  box-shadow: 0 0 6px #000;
+}
+#askChipToolbar .dropdown-content div { padding: 6px 8px; cursor: pointer; }
+#askChipToolbar .dropdown-content div:hover { background-color: rgba(255,165,0,0.2); }
+#askChipToolbar .dropdown:hover .dropdown-content { display: block; }
 
-.modal-content.small h3 {
-  margin-top: 0;
+/* ====== Whisper-style cue ====== */
+#chipStatusCue{
+  position: fixed; top: 16px; left: 16px;
+  padding: 8px 12px; border-radius: 10px;
+  background: rgba(0,0,0,.6); color: #cfe8cf;
+  font-size: 14px; font-weight: 600; letter-spacing:.2px;
+  box-shadow: 0 6px 16px rgba(0,0,0,.35);
+  opacity: 0; transform: translateY(-6px);
+  transition: opacity .25s ease, transform .25s ease, background .25s ease, color .25s ease;
+  z-index: 1001;
 }
+#chipStatusCue.show{ opacity: 1; transform: translateY(0); }
+#chipStatusCue.think { background: rgba(15,41,66,.7); color:#bfe0ff; }
+#chipStatusCue.listen{ background: rgba(66,41,15,.7); color:#ffd8a6; }
+#chipStatusCue.speak { background: rgba(21,66,15,.7); color:#cfeecf; }
+#chipStatusCue.warn  { background: rgba(66,15,15,.7); color:#ffc9c9; }
 
-.login-hint {
-  font-size: 12px;
-  color: #ccc;
-  margin-top: 8px;
+/* ====== (Optional) Legacy “record” UI you had ====== */
+#recordBtn {
+  position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
+  z-index: 10; padding: 12px 24px; font-size: 16px;
+  background-color: orange; color: orange; border: none; border-radius: 10px;
+  cursor: pointer; font-weight: bold;
+  box-shadow: 0 0 10px rgba(255,165,0,0.4);
 }
+#recordBtn.blinking { animation: blink-animation 2s ease-in-out infinite; }
+@keyframes blink-animation { 0%,100%{opacity:1} 50%{opacity:.3} }
+#recordPrompt {
+  position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%);
+  font-size: 16px; color: rgba(255,255,255,0.3); transition: opacity 1s ease; pointer-events: none;
+}
+#recordPrompt.ready { color: rgba(255,255,255,0.9); }
+#waveform {
+  position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%);
+  width: 200px; height: 40px; background: transparent; pointer-events: none;
+}
+@keyframes pulseDots { 0%{opacity:.2} 33%{opacity:.5} 66%{opacity:.8} 100%{opacity:1} }
+#recordPrompt.listening::after { content: "..."; animation: pulseDots 1.5s infinite; }
+
+/* Small utility */
+.hidden { display: none !important; }
