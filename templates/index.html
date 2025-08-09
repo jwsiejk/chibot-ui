@@ -6,19 +6,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" href="data:," />
 
-  <!-- Temporary inline styles (safe to remove later) -->
+  <!-- Inline styles for layout (you can merge into style.css later) -->
   <style>
     :root { --bg:#0f1115; --panel:#181b22; --panel-2:#1f2430; --text:#e8ecf1; --muted:#a7b0bd; --accent:#ff6a00; --accent-2:#ff9350; --border:#2a3040; }
     *{box-sizing:border-box} html,body{height:100%}
     body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:linear-gradient(180deg,#0f1115 0%,#0d1014 100%);color:var(--text)}
-    #app{max-width:1100px;margin:40px auto;padding:0 16px}
-    h1{font-weight:650;letter-spacing:.2px;margin:0 0 16px}
+    #app{max-width:1100px;margin:40px auto;padding:0 16px;position:relative;min-height:70vh}
+
     #status{margin:8px 0 16px;color:var(--muted);font-size:14px;min-height:18px}
 
     button,.btn{appearance:none;border:1px solid var(--border);background:linear-gradient(180deg,var(--panel-2),var(--panel));color:var(--text);padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer;transition:transform .06s,box-shadow .06s,border-color .2s;box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 8px 24px rgba(0,0,0,.35)}
     button:hover{transform:translateY(-1px);border-color:#36415a}
     button:disabled{opacity:.55;cursor:not-allowed;transform:none}
-    #startButton{background:linear-gradient(180deg,var(--accent),var(--accent-2));border:none;color:#111;box-shadow:0 8px 30px rgba(255,106,0,.25)}
 
     input,select{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--panel);color:var(--text);outline:none}
     input::placeholder{color:#8f98a6}
@@ -29,21 +28,51 @@
     .modal p.hint{margin:4px 0 12px;color:var(--muted);font-size:14px}
     .stack{display:grid;gap:10px}
 
-    <div class="chip-box" id="chipBox" style="display:none">
-  <img id="chipImage"
-       src="{{ url_for('static', filename='chip/img/chip.png') }}"
-       alt="Chip" />
-</div>
+    /* Chip image centered */
+    .chip-box{
+      position:absolute; inset:0;
+      display:grid; place-items:center;
+      pointer-events:none; /* purely decorative */
+    }
+    #chipImage{
+      max-width:min(520px,72vw);
+      width:auto; height:auto;
+      transform:translateY(-6vh);
+      filter:drop-shadow(0 12px 32px rgba(0,0,0,.45));
+    }
 
+    /* Chat area (for now below the hero space) */
     #chatArea{margin-top:20px;border:1px dashed #2a3040;border-radius:12px;min-height:220px;padding:16px;background:rgba(31,36,48,.4)}
+
+    /* Bottom title just above toolbar */
+    #bottomTitle{
+      position:fixed; left:0; bottom:72px; width:100%;
+      text-align:center; color:#ffb25e; font-weight:700; font-size:28px;
+      letter-spacing:.3px; text-shadow:0 1px 0 rgba(0,0,0,.4);
+      pointer-events:none;
+    }
+
+    /* Center the toolbar content; Start is primary */
+    #askChipToolbar{
+      display:none; /* shown by JS after auth */
+      position:fixed; left:0; bottom:0; width:100%;
+      background:rgba(30,30,30,0.95);
+      padding:14px 20px; display:flex; justify-content:center; gap:16px;
+      z-index:999; box-shadow:0 -2px 10px rgba(0,0,0,0.6);
+    }
+    #askChipToolbar #startButton{
+      font-weight:700; border:none; padding:10px 16px; border-radius:10px;
+      background:linear-gradient(180deg,var(--accent),var(--accent-2)); color:#111;
+      box-shadow:0 8px 30px rgba(255,106,0,.25);
+    }
   </style>
 
-  <!-- Cache-busted script include -->
+  <!-- External assets -->
   <link rel="stylesheet" href="{{ url_for('static', filename='user-experience/css/style.css') }}">
-  <script src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250809f" defer></script>
-
+  <script src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250809h" defer></script>
 </head>
 <body>
+
   <!-- Login Modal -->
   <div id="loginModal" class="modal">
     <div class="modal-content">
@@ -51,7 +80,6 @@
       <p id="loginHint" class="hint"></p>
       <form id="loginForm" class="stack">
         <input type="email" name="email" placeholder="Email address" required />
-        <!-- password stays visible but disabled for preview -->
         <input type="password" name="password" placeholder="Password (disabled for preview)" disabled aria-disabled="true" />
         <small style="display:block;margin-top:6px;opacity:.7">
           Password is disabled for this preview. Use your Trace3 or Pure Storage email address.
@@ -78,32 +106,25 @@
 
   <!-- Main Content -->
   <div id="app">
-    <h1>Ask Chip</h1>
+    <!-- Chip hero image -->
+    <div class="chip-box" id="chipBox" style="display:none">
+      <img id="chipImage"
+           src="{{ url_for('static', filename='chip/img/chip.png') }}"
+           alt="Chip" />
+    </div>
+
     <div id="status"></div>
-    <button id="startButton" class="btn" data-role="start">Start</button>
     <div id="chatArea"></div>
   </div>
-
-  <!-- Pre-guard so older bundles can’t crash on .disabled -->
-  <script>
-  document.addEventListener('DOMContentLoaded', () => {
-    try {
-      const sb = document.getElementById('startButton')
-               || document.getElementById('startBtn')
-               || document.querySelector('[data-role="start"]');
-      if (sb && 'disabled' in sb) sb.disabled = true;
-    } catch (e) {}
-  });
-  </script>
 
   <!-- Resilient boot: show login/profile/app based on /api/me -->
   <script>
   (async function bootAuth() {
     const q = s => document.querySelector(s);
-    const loginEl   = q('#loginModal') || q('#login-panel') || q('[data-role="login-panel"]');
-    const profileEl = q('#profileModal') || q('#profile-panel') || q('[data-role="profile-panel"]');
-    const appEl     = q('#app') || q('#root');
-    const startBtn  = q('#startButton') || q('#startBtn') || q('[data-role="start"]');
+    const loginEl   = q('#loginModal');
+    const profileEl = q('#profileModal');
+    const appEl     = q('#app');
+    const startBtn  = q('#startButton');
 
     function show(el){ if(el){ el.removeAttribute('hidden'); el.style.display='block'; } }
     function hide(el){ if(el){ el.setAttribute('hidden',''); el.style.display='none'; } }
@@ -125,23 +146,29 @@
     }
   })();
   </script>
-  <!-- Zoom-style bottom toolbar -->
-<div id="askChipToolbar">
-  <button id="btnMic"      title="Hold to talk">🎤 Mic</button>
-  <button id="btnAsk"      title="Type a question">💬 Ask</button>
-  <div class="dropdown">
-    <button title="More">⋯ More</button>
-    <div class="dropdown-content">
-      <div id="btnHistory">Conversation History</div>
-      <div id="btnProfile">Edit Profile</div>
-      <div id="btnLogout">Log out</div>
+
+  <!-- Bottom title just above toolbar -->
+  <div id="bottomTitle">Ask Chip</div>
+
+  <!-- Zoom-style bottom toolbar (Start moved here) -->
+  <div id="askChipToolbar">
+    <button id="startButton" class="btn" data-role="start">Start</button>
+    <button id="btnMic"  title="Hold to talk">🎤 Mic</button>
+    <button id="btnAsk"  title="Type a question">💬 Ask</button>
+    <div class="dropdown">
+      <button title="More">⋯ More</button>
+      <div class="dropdown-content">
+        <div id="btnHistory">Conversation History</div>
+        <div id="btnProfile">Edit Profile</div>
+        <div id="btnLogout">Log out</div>
+      </div>
     </div>
   </div>
-</div>
 
-<!-- Optional floating record button + caption (your CSS supports these) -->
-<button id="recordBtn" style="display:none">Hold to Record</button>
-<div id="recordPrompt" class="idle" style="display:none">Hold the button to speak</div>
-<canvas id="waveform" style="display:none"></canvas>
+  <!-- Optional floating record button + caption -->
+  <button id="recordBtn" style="display:none">Hold to Record</button>
+  <div id="recordPrompt" class="idle" style="display:none">Hold the button to speak</div>
+  <canvas id="waveform" style="display:none"></canvas>
+
 </body>
 </html>
