@@ -390,7 +390,7 @@ def login():
         data = request.get_json() or {}
         email = (data.get("email") or "").strip().lower()
 
-        if not email or not (email.endswith("@purestorage.com") or email.endswith("@trace3.com")):
+        if not email or not (email.endswith("@purestorage.com") or email.endswith("@trace3.com"))):
             return jsonify({"error": "Unauthorized domain"}), 403
 
         session["user_id"] = email
@@ -415,3 +415,93 @@ def login():
         print("🔥 /login error:", str(e))
         return jsonify({"error": "Login failed"}), 500
 
+# ---------------------------
+# NEW: Hardened auth/profile API used by the front-end
+# ---------------------------
+
+@app.get("/api/me")
+def api_me():
+    """Return 401 if not logged in; otherwise indicate whether profile exists."""
+    try:
+        user = session.get("user_id")
+        if not user:
+            return jsonify({"error": "unauthenticated"}), 401
+
+        email = (user or "").strip().lower()
+        try:
+            row = get_user(email)  # None or dict-like
+        except Exception:
+            app.logger.exception("get_user failed for %s", email)
+            # Fail-safe: don't 500/502; treat as profile incomplete so UI prompts gracefully
+            return jsonify({"email": email, "profileComplete": False, "note": "db_unavailable"}), 200
+
+        profile_complete = bool(row)
+        return jsonify({"email": email, "profileComplete": profile_complete}), 200
+    except Exception as e:
+        app.logger.exception("/api/me crashed")
+        # Still prefer 200 with minimal info to avoid frontend hard failures
+        return jsonify({"error": "temporary"}), 200
+
+@app.get("/api/profile")
+def api_profile_get():
+    """Return existing profile details if present; otherwise exists=False."""
+    try:
+        email = session.get("user_id")
+        if not email:
+            return jsonify({"error": "unauthenticated"}), 401
+        row = get_user(email)
+        if not row:
+            return jsonify({"exists": False}), 200
+        return jsonify({
+            "exists": True,
+            "profile": {
+                "email": email,
+                "name": row.get("name") if isinstance(row, dict) else (row[1] if len(row) > 1 else None),
+                "company": row.get("company") if isinstance(row, dict) else (row[2] if len(row) > 2 else None),
+                "role": row.get("role") if isinstance(row, dict) else (row[3] if len(row) > 3 else None),
+                "region": row.get("region") if isinstance(row, dict) else (row[4] if len(row) > 4 else None),
+            }
+        }), 200
+    except Exception as e:
+        app.logger.exception("/api/profile GET failed")
+        return jsonify({"error": "profile lookup failed"}), 500
+
+@app.post("/api/profile")
+def api_profile_post():
+    """Save or update profile; this mirrors your existing /profile but under /api/ too."""
+    try:
+        email = session.get("user_id")
+        if not email:
+            return jsonify({"error": "unauthenticated"}), 401
+
+        data = request.get_json(force=True) or {}
+        name = (data.get("name") or "").strip()
+        company = (data.get("company") or "").strip()
+        role = (data.get("role") or "").strip()
+        region = (data.get("region") or "NA").strip() or "NA"
+
+        if not name:
+            return jsonify({"error": "name required"}), 400
+
+        # Upsert-style: keep existing messages if present
+        existing = get_user(email) or {}
+        messages = existing.get("messages", []) if isinstance(existing, dict) else []
+
+        profile = {
+            "name": name,
+            "company": company,
+            "role": role,
+            "region": region,
+            "messages": messages,
+        }
+        save_user(email, profile)
+
+        # refresh session hints
+        session["name"] = name or email
+        session["role"] = role or session.get("role", "engineer")
+        session["region"] = region or session.get("region", "NA")
+
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        app.logger.exception("/api/profile POST failed")
+        return jsonify({"error": "profile save failed"}), 500
