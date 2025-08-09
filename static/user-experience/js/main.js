@@ -1,4 +1,4 @@
-// main.js — auth/profile gating + Chip + toolbar — 2025-08-09k → patched to use chip.js
+// main.js — auth/profile gating + Chip + toolbar — 2025-08-09k → patched to use chip.js + Static/Dynamic buttons
 document.addEventListener("DOMContentLoaded", () => {
   console.log("✅ main.js loaded (consolidated)");
 
@@ -31,6 +31,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnProfile     = $("btnProfile");
   const btnLogout      = $("btnLogout");
 
+  // NEW: Static/Dynamic mode buttons (safe if missing)
+  const btnModeStatic  = $("btnModeStatic");
+  const btnModeDynamic = $("btnModeDynamic");
+
   // Optional floating controls
   const recordBtn      = $("recordBtn");
   const recordPrompt   = $("recordPrompt");
@@ -39,7 +43,8 @@ document.addEventListener("DOMContentLoaded", () => {
   console.log("[main] elements:", {
     startButton: !!startButton, loginModal: !!loginModal, profileModal: !!profileModal,
     loginForm: !!loginForm, profileForm: !!profileForm, saveProfileBtn: !!saveProfileBtn,
-    toolbar: !!toolbar, chipBox: !!chipBox, chipImage: !!chipImage
+    toolbar: !!toolbar, chipBox: !!chipBox, chipImage: !!chipImage,
+    btnModeStatic: !!btnModeStatic, btnModeDynamic: !!btnModeDynamic
   });
 
   const MESSAGES = {
@@ -51,9 +56,10 @@ document.addEventListener("DOMContentLoaded", () => {
   if (loginHint)   loginHint.textContent   = MESSAGES.login;
   if (profileHint) profileHint.textContent = MESSAGES.profile;
   if (startButton && "disabled" in startButton) startButton.disabled = true;
+  if (btnModeStatic)  btnModeStatic.disabled  = true;   // disabled until authed+profile
+  if (btnModeDynamic) btnModeDynamic.disabled = true;
 
   // ---------- Helpers (patched show/hide) ----------
-  // Don't force "block" unless a display is provided. Otherwise, let CSS decide (flex/grid/etc.)
   const show    = (el, asDisplay) => { if (!el) return; asDisplay ? (el.style.display = asDisplay) : el.style.removeProperty("display"); };
   const hide    = (el) => { if (el) el.style.display = "none"; };
   const enable  = (el) => { if (el) el.disabled = false; };
@@ -61,12 +67,19 @@ document.addEventListener("DOMContentLoaded", () => {
   const setStatus = (t) => { if (statusBar) statusBar.textContent = t || ""; };
   const playAudio = (src) => { try { if (src) new Audio(src).play(); } catch {} };
 
+  function reflectMode(mode) {
+    if (btnModeStatic)  btnModeStatic.classList.toggle("active", mode === "static");
+    if (btnModeDynamic) btnModeDynamic.classList.toggle("active", mode === "dynamic");
+    // Optional: expose to CSS if you want attribute-driven tweaks
+    document.documentElement.setAttribute("data-chip-mode", mode);
+  }
+
   // Convenience: apply the correct layout displays after auth
   function applyAuthedLayout() {
     const appEl = document.getElementById("app");
-    if (appEl) show(appEl, "block");     // app container is block
-    if (chipBox) show(chipBox, "grid");  // Chip stays centered
-    if (toolbar) show(toolbar, "flex");  // Toolbar buttons stay centered
+    if (appEl) show(appEl, "block");
+    if (chipBox) show(chipBox, "grid");
+    if (toolbar) show(toolbar, "flex");
   }
 
   async function j(path, opts = {}) {
@@ -130,7 +143,6 @@ document.addEventListener("DOMContentLoaded", () => {
       };
       return prof;
     }
-    // last-resort local cache (so we don't regress UX if backend doesn't echo)
     let name = "", title = "", role = "", region = "NA";
     try {
       name   = localStorage.getItem("profileName")  || localStorage.getItem("chip_name")  || "";
@@ -146,18 +158,21 @@ document.addEventListener("DOMContentLoaded", () => {
     const incomplete = isProfileIncomplete(prof);
     if (incomplete) {
       if (profileHint) profileHint.textContent = MESSAGES.profile;
-      show(profileModal, "flex");       // block greet/ask until complete
+      show(profileModal, "flex");
       hide(chipBox);
       hide(toolbar);
       setStatus("Profile needed to continue.");
       disable(startButton);
+      if (btnModeStatic)  disable(btnModeStatic);
+      if (btnModeDynamic) disable(btnModeDynamic);
       console.log("[profile] incomplete -> prompting user");
       return { ok: false, profile: prof };
     }
-    // profile is complete; restore app layout if requested
     if (o.applyLayout !== false) {
       applyAuthedLayout();
       enable(startButton);
+      if (btnModeStatic)  enable(btnModeStatic);
+      if (btnModeDynamic) enable(btnModeDynamic);
       setStatus("Ready.");
     }
     return { ok: true, profile: prof };
@@ -166,10 +181,13 @@ document.addEventListener("DOMContentLoaded", () => {
   // ---------- Gate UI based on auth/profile ----------
   async function gate() {
     disable(startButton);
+    if (btnModeStatic)  disable(btnModeStatic);
+    if (btnModeDynamic) disable(btnModeDynamic);
+
     const st = await getStatus();
 
     if (!st.authenticated) {
-      show(loginModal, "flex");        // modals must be flex
+      show(loginModal, "flex");
       hide(profileModal);
       hide(toolbar);
       hide(chipBox);
@@ -179,16 +197,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     hide(loginModal);
 
-    // Always do a client-side completeness check (some backends may not flag first_time)
     const check = await enforceProfileCompleteness({ applyLayout: false });
-    if (!check.ok) {
-      // keep modal up; Start stays disabled
-      return;
-    }
+    if (!check.ok) return;
 
-    // Profile complete → show app
     hide(profileModal);
     enable(startButton);
+    if (btnModeStatic)  enable(btnModeStatic);
+    if (btnModeDynamic) enable(btnModeDynamic);
     applyAuthedLayout();
     setStatus("Ready.");
     console.log("[gate] authed + profile complete");
@@ -219,17 +234,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
       hide(loginModal);
 
-      // Regardless of backend flag, run local completeness enforcement
       const check = await enforceProfileCompleteness();
-      if (!check.ok) {
-        // modal shown; Start remains disabled
-        return;
-      }
+      if (!check.ok) return;
 
-      // Ready to proceed
       enable(startButton);
+      if (btnModeStatic)  enable(btnModeStatic);
+      if (btnModeDynamic) enable(btnModeDynamic);
       applyAuthedLayout();
-      gate(); // refresh state quietly (keeps behavior consistent)
+      gate();
     });
   }
 
@@ -256,6 +268,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (ok) {
         hide(profileModal);
         enable(startButton);
+        if (btnModeStatic)  enable(btnModeStatic);
+        if (btnModeDynamic) enable(btnModeDynamic);
         setStatus(MESSAGES.saved);
         applyAuthedLayout();
         gate();
@@ -265,7 +279,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // ---------- Start → greet (now delegates to chip.js, guarded by completeness) ----------
+  // ---------- Start → greet (kept for safety; you can remove later if desired) ----------
   if (startButton && !startButton.dataset.greetWired) {
     startButton.dataset.greetWired = "1";
     startButton.addEventListener("click", async () => {
@@ -279,10 +293,9 @@ document.addEventListener("DOMContentLoaded", () => {
         disable(startButton);
 
         if (window.chip && typeof window.chip.playGreeting === "function") {
-          await window.chip.playGreeting(); // plays local greeting.mp3 in static mode, or calls /greet in dynamic
+          await window.chip.playGreeting();
           setStatus(mode === "dynamic" ? "Greeting complete." : "Greeting finished.");
         } else {
-          // Fallback (shouldn't happen if chip.js is loaded)
           setStatus("Chip module not available.");
         }
       } finally {
@@ -291,8 +304,34 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // ---------- NEW: Static/Dynamic mode buttons ----------
+  if (btnModeStatic && !btnModeStatic.dataset.wired) {
+    btnModeStatic.dataset.wired = "1";
+    btnModeStatic.addEventListener("click", async () => {
+      if (window.chip?.setMode) window.chip.setMode("static");
+      reflectMode("static");
+      const check = await enforceProfileCompleteness({ applyLayout: true });
+      if (!check.ok) return;
+      setStatus("Playing greeting (static)...");
+      await window.chip?.playGreeting();
+      setStatus("Greeting finished.");
+    });
+  }
+
+  if (btnModeDynamic && !btnModeDynamic.dataset.wired) {
+    btnModeDynamic.dataset.wired = "1";
+    btnModeDynamic.addEventListener("click", async () => {
+      if (window.chip?.setMode) window.chip.setMode("dynamic");
+      reflectMode("dynamic");
+      const check = await enforceProfileCompleteness({ applyLayout: true });
+      if (!check.ok) return;
+      setStatus("Warming up Chip…");
+      await window.chip?.playGreeting();
+      setStatus("Greeting complete.");
+    });
+  }
+
   // ---------- Toolbar wiring ----------
-  // Ask (now delegates to chip.js; still prompts for a question in dynamic mode)
   if (btnAsk && !btnAsk.dataset.wired) {
     btnAsk.dataset.wired = "1";
     btnAsk.addEventListener("click", async () => {
@@ -302,7 +341,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const mode = (window.chip && typeof window.chip.getMode === "function") ? window.chip.getMode() : "static";
 
-      // In static mode, we just play the local answer file. In dynamic mode, ask for a question string.
       let q = "";
       if (mode === "dynamic") {
         q = prompt("Ask Chip:");
@@ -350,7 +388,7 @@ document.addEventListener("DOMContentLoaded", () => {
     btnProfile.dataset.wired = "1";
     btnProfile.addEventListener("click", () => {
       console.log("[UI] Profile clicked");
-      if (profileModal) show(profileModal, "flex"); // ensure modal displays
+      if (profileModal) show(profileModal, "flex");
     });
   }
 
@@ -365,5 +403,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ---------- Initial run ----------
+  // Reflect current mode to buttons/CSS on load
+  reflectMode((window.chip && window.chip.getMode && window.chip.getMode()) || "static");
   gate();
 });
