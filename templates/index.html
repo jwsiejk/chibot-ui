@@ -66,8 +66,12 @@
     const chipBox   = q('#chipBox');
     const toolbar   = q('#askChipToolbar');
     const cueEl     = q('#chipStatusCue');
-    function show(el){ if(el){ el.removeAttribute('hidden'); el.style.display='block'; } }
-    function hide(el){ if(el){ el.setAttribute('hidden',''); el.style.display='none'; } }
+    function show(el, asDisplay) {
+  if (!el) return;
+  if (asDisplay) el.style.display = asDisplay;
+  else el.style.removeProperty('display');
+}
+function hide(el){ if(el){ el.style.display='none'; }}
     function cue(text, cls=""){
       if (!cueEl) return;
       cueEl.className = ""; cueEl.textContent = text || "";
@@ -88,8 +92,10 @@
       }
       hide(loginEl); hide(profileEl); show(appEl);
       if (startBtn) startBtn.disabled = false;
-      show(chipBox);
-      show(toolbar);
+      
+      show(chipBox, 'grid');  
+      show(toolbar, 'flex'); 
+      
       cue("Hi.");
       if (startBtn) startBtn.addEventListener("click", () => cue("Listening…","listen"));
       const btnAsk = q("#btnAsk"); if (btnAsk) btnAsk.addEventListener("click", ()=> cue("Thinking…","think"));
