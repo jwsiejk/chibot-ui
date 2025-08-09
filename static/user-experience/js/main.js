@@ -70,11 +70,9 @@ document.addEventListener("DOMContentLoaded", () => {
   function reflectMode(mode) {
     if (btnModeStatic)  btnModeStatic.classList.toggle("active", mode === "static");
     if (btnModeDynamic) btnModeDynamic.classList.toggle("active", mode === "dynamic");
-    // Optional: expose to CSS if you want attribute-driven tweaks
     document.documentElement.setAttribute("data-chip-mode", mode);
   }
 
-  // Convenience: apply the correct layout displays after auth
   function applyAuthedLayout() {
     const appEl = document.getElementById("app");
     if (appEl) show(appEl, "block");
@@ -120,7 +118,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ---------- Profile completeness helpers ----------
-  const REQUIRED_FIELDS = ["name", "title"]; // email comes from auth; region/role optional defaults
+  // Require name, title, and email (email comes from auth / login)
+  const REQUIRED_FIELDS = ["name", "title", "email"];
   function isProfileIncomplete(p) {
     if (!p || typeof p !== "object") return true;
     for (let i = 0; i < REQUIRED_FIELDS.length; i++) {
@@ -135,21 +134,19 @@ document.addEventListener("DOMContentLoaded", () => {
     const { ok, data } = await j("/api/me");
     if (ok && data) {
       const prof = {
-        name: (data.name || data.profile?.name || "").toString(),
+        name:  (data.name || data.profile?.name  || "").toString(),
         title: (data.title || data.profile?.title || "").toString(),
-        role: (data.role || data.profile?.role || data.title || "").toString(),
-        region: (data.region || data.profile?.region || "NA").toString(),
-        email: (data.email || "").toString()
+        email: (data.email || data.profile?.email || "").toString()
       };
       return prof;
     }
-    let name = "", title = "", role = "", region = "NA";
+    let name = "", title = "", email = "";
     try {
       name   = localStorage.getItem("profileName")  || localStorage.getItem("chip_name")  || "";
       title  = localStorage.getItem("profileTitle") || localStorage.getItem("chip_title") || "";
+      email  = localStorage.getItem("profileEmail") || "";
     } catch {}
-    role = title;
-    return { name, title, role, region, email: "" };
+    return { name, title, email };
   }
 
   async function enforceProfileCompleteness(opts) {
@@ -158,6 +155,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const incomplete = isProfileIncomplete(prof);
     if (incomplete) {
       if (profileHint) profileHint.textContent = MESSAGES.profile;
+      // Pre-fill email on the profile form if we have it
+      if (profileForm) {
+        const emailInput = profileForm.querySelector('input[name="email"]');
+        if (emailInput && prof.email) emailInput.value = prof.email;
+      }
       show(profileModal, "flex");
       hide(chipBox);
       hide(toolbar);
@@ -232,6 +234,13 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
+      // Auto-populate profile email field from login
+      if (profileForm) {
+        const emailInput = profileForm.querySelector('input[name="email"]');
+        if (emailInput) emailInput.value = email;
+      }
+      try { localStorage.setItem("profileEmail", email); } catch {}
+
       hide(loginModal);
 
       const check = await enforceProfileCompleteness();
@@ -253,18 +262,19 @@ document.addEventListener("DOMContentLoaded", () => {
       const fd = new FormData(profileForm);
       const name   = (fd.get("name")   || "").toString().trim();
       const title  = (fd.get("title")  || "").toString().trim();
-      const role   = (fd.get("role")   || title).toString().trim();
-      const region = (fd.get("region") || "NA").toString().trim();
-      if (!name || !title) { alert("Please complete all fields."); return; }
+      const email  = (fd.get("email")  || "").toString().trim();
+
+      if (!name || !title || !email) { alert("Please complete all fields."); return; }
 
       try {
         localStorage.setItem("profileName", name);
         localStorage.setItem("profileTitle", title);
         localStorage.setItem("chip_name", name);
         localStorage.setItem("chip_title", title);
+        localStorage.setItem("profileEmail", email);
       } catch {}
 
-      const ok = await saveProfileJSON({ name, title, role, region });
+      const ok = await saveProfileJSON({ name, title, email });
       if (ok) {
         hide(profileModal);
         enable(startButton);
@@ -388,7 +398,15 @@ document.addEventListener("DOMContentLoaded", () => {
     btnProfile.dataset.wired = "1";
     btnProfile.addEventListener("click", () => {
       console.log("[UI] Profile clicked");
-      if (profileModal) show(profileModal, "flex");
+      if (profileModal) {
+        // Ensure email is prefilled from localStorage if available
+        try {
+          const email = localStorage.getItem("profileEmail") || "";
+          const emailInput = profileForm?.querySelector('input[name="email"]');
+          if (email && emailInput) emailInput.value = email;
+        } catch {}
+        show(profileModal, "flex");
+      }
     });
   }
 
@@ -403,7 +421,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ---------- Initial run ----------
-  // Reflect current mode to buttons/CSS on load
   reflectMode((window.chip && window.chip.getMode && window.chip.getMode()) || "static");
   gate();
 });
