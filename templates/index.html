@@ -38,8 +38,7 @@
       <form id="profileForm" class="stack">
         <input type="text" name="name" placeholder="Full name" required />
         <input type="text" name="title" placeholder="Title" />
-        <input type="text" name="role" placeholder="Role" />
-        <input type="text" name="region" placeholder="Region" />
+        <input type="email" name="email" placeholder="Email (from login)" readonly />
       </form>
       <button id="saveProfileBtn" class="btn" style="margin-top:10px;">Save</button>
     </div>
@@ -96,6 +95,9 @@
         hide(appEl); hide(loginEl); show(profileEl);
         if (staticBtn) staticBtn.disabled = true;
         if (dynamicBtn) dynamicBtn.disabled = true;
+        // auto-populate email field if available
+        const emailInput = q('#profileForm input[name="email"]');
+        if (emailInput && me.email) emailInput.value = me.email;
         return;
       }
 
