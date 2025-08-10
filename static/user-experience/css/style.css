@@ -9,7 +9,6 @@
   --accent-2:#ff9350;
   --border:#2a3040;
 
-  /* New layout vars */
   --topbar-h: 64px;
   --page-pad: 24px;
   --frame-radius: 18px;
@@ -28,13 +27,6 @@ body {
   background: linear-gradient(180deg, #0f1115 0%, #0d1014 100%);
   color: var(--text);
 }
-#app {
-  max-width: 1100px;
-  margin: 40px auto;
-  padding: 0 16px;
-  position: relative;
-  min-height: 70vh;
-}
 button, .btn {
   appearance: none;
   border: 1px solid var(--border);
@@ -44,7 +36,7 @@ button, .btn {
   border-radius: 10px;
   font-weight: 600;
   cursor: pointer;
-  transition: transform .06s, box-shadow .06s, border-color .2s;
+  transition: transform .06s, box-shadow .06s, border-color .2s, filter .2s;
   box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 8px 24px rgba(0,0,0,.35);
 }
 button:hover { transform: translateY(-1px); border-color: #36415a; }
@@ -61,7 +53,14 @@ input, select {
 }
 input::placeholder { color: #8f98a6; }
 
-#status { margin: 8px 0 16px; color: var(--muted); font-size: 14px; min-height: 18px; }
+/* Accent (orange) button */
+.btn--accent {
+  background: linear-gradient(180deg, var(--accent-2), var(--accent));
+  border-color: #ff8a3d;
+  color: #fff;
+  text-shadow: 0 1px 0 rgba(0,0,0,.3);
+}
+.btn--accent:hover { filter: brightness(1.05); }
 
 /* ====== Top bar ====== */
 .topbar {
@@ -115,6 +114,13 @@ input::placeholder { color: #8f98a6; }
 .stack { display: grid; gap: 10px; }
 
 /* ====== Chip stage (light frame) ====== */
+#app {
+  max-width: 1100px;
+  margin: 40px auto;
+  padding: 0 16px;
+  position: relative;
+  min-height: 70vh;
+}
 .chip-box {
   display: grid; place-items: center;
   border: 1px solid var(--frame-border);
@@ -128,72 +134,37 @@ input::placeholder { color: #8f98a6; }
   height: auto;
   display: block;
   object-fit: contain;
-  object-position: 52% center; /* nudge if PNG padded */
+  object-position: 52% center; /* nudge right if PNG has extra left padding */
   filter: drop-shadow(0 12px 32px rgba(0,0,0,.45));
   transform: translateZ(0);
   margin: 0 auto;
 }
 
-/* ====== Chat area (kept) ====== */
-#chatArea {
-  margin-top: 20px;
-  border: 1px dashed #2a3040;
-  border-radius: 12px;
-  min-height: 220px;
-  padding: 16px;
-  background: rgba(31,36,48,.4);
-}
-
-/* ====== Toolbar ====== */
-#bottomTitle {
-  position: fixed; left: 50%; transform: translateX(-50%);
-  bottom: 86px;
-  opacity: .85; color: #fff; letter-spacing: .3px;
-  font-weight: 800; font-size: 18px;
-}
+/* ====== Toolbar (bottom) ====== */
 #askChipToolbar {
   position: fixed; left: 50%; transform: translateX(-50%);
   bottom: 20px;
-  display: none;
+  display: flex;
   gap: 10px;
   background: rgba(20,20,22,0.8);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 14px;
   padding: 10px;
   box-shadow: 0 10px 30px rgba(0,0,0,.4);
+  z-index: 200;
 }
 #askChipToolbar .dropdown { position: relative; }
 #askChipToolbar .dropdown-content {
-  display: none; position: absolute; bottom: 30px;
-  background: rgba(30,30,30,0.9);
-  border-radius: 6px; padding: 6px; min-width: 140px;
-  box-shadow: 0 0 6px #000;
+  display: none; position: absolute; bottom: 36px;
+  background: rgba(30,30,30,0.95);
+  border-radius: 8px; padding: 6px; min-width: 160px;
+  box-shadow: 0 10px 24px rgba(0,0,0,.35);
 }
-#askChipToolbar .dropdown-content div { padding: 6px 8px; cursor: pointer; }
+#askChipToolbar .dropdown-content div { padding: 8px 10px; cursor: pointer; border-radius: 6px; }
 #askChipToolbar .dropdown-content div:hover { background-color: rgba(255,165,0,0.2); }
 #askChipToolbar .dropdown:hover .dropdown-content { display: block; }
 
-/* ====== Whisper-style cue ====== */
-#chipStatusCue{
-  position: fixed; top: 16px; left: 16px;
-  padding: 8px 12px; border-radius: 10px;
-  background: rgba(0,0,0,.6); color: #cfe8cf;
-  font-size: 14px; font-weight: 600; letter-spacing:.2px;
-  box-shadow: 0 6px 16px rgba(0,0,0,.35);
-  opacity: 0; transform: translateY(-6px);
-  transition: opacity .25s ease, transform .25s ease, background .25s ease, color .25s ease;
-  z-index: 1001;
-}
-#chipStatusCue.show{ opacity: 1; transform: translateY(0); }
-#chipStatusCue.think { background: rgba(15,41,66,.7); color:#bfe0ff; }
-#chipStatusCue.listen{ background: rgba(66,41,15,.7); color:#ffd8a6; }
-#chipStatusCue.speak { background: rgba(21,66,15,.7); color:#cfeecf; }
-#chipStatusCue.warn  { background: rgba(66,15,15,.7); color:#ffc9c9; }
-
-/* Hide legacy bottom title text */
-#bottomTitle { display: none !important; }
-
-/* ====== Static/Dynamic buttons (if you re-add later) ====== */
+/* Static/Dynamic (not selected by default) */
 #askChipToolbar #btnModeStatic,
 #askChipToolbar #btnModeDynamic {
   border: 1px solid var(--border);
@@ -203,9 +174,15 @@ input::placeholder { color: #8f98a6; }
   border-radius: 10px;
   font-weight: 700;
 }
-#askChipToolbar #btnModeStatic.active,
-#askChipToolbar #btnModeDynamic.active {
+#askChipToolbar .mode-active {
   outline: 2px solid #ffffff;
   outline-offset: 2px;
   background: #444;
 }
+
+/* ====== Misc ====== */
+.hidden { display: none !important; }
+#bottomTitle { display: none !important; } /* old label removed */
+
+/* Remove unused UI boxes */
+#status, #chatArea { display: none !important; }
