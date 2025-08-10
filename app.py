@@ -16,15 +16,17 @@ import mimetypes
 from uuid import uuid4
 from datetime import datetime
 from urllib.parse import urlparse, quote_plus
+from io import BytesIO
+
 from flask import (
     Flask, request, jsonify, render_template, session, Response,
     stream_with_context, send_file, redirect
 )
 from flask_session import Session
 from werkzeug.utils import secure_filename
-from elevenlabs.client import ElevenLabs
 
-# --- OpenAI (new-style client) ---
+# --- vendor clients ---
+from elevenlabs.client import ElevenLabs
 from openai import OpenAI
 import httpx
 
@@ -54,7 +56,8 @@ except Exception:
 from memory import get_user, save_user, log_conversation, get_connection
 
 # -----------------------------------------------------------------------------
-
+# Flask & sessions
+# -----------------------------------------------------------------------------
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY") or os.getenv("FLASK_SECRET") or "supersecret"
 app.config["SESSION_TYPE"] = "filesystem"
@@ -64,18 +67,22 @@ if os.getenv("SESSION_COOKIE_SECURE", "false").lower() in ("1", "true", "yes"):
     app.config["SESSION_COOKIE_SECURE"] = True
 Session(app)
 
+# -----------------------------------------------------------------------------
+# Global clients & feature flags
+# -----------------------------------------------------------------------------
 voice_id = os.getenv("CHIP_VOICE_ID")
 eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
-# global kill-switch for audio (set TTS_ENABLED=false in Render env to disable)
 TTS_ENABLED = os.getenv("TTS_ENABLED", "true").lower() in ("1", "true", "yes")
 
-# -------- OpenAI client (prevents httpx 'proxies' kwarg crash) --------
+# OpenAI client (avoid proxies kwarg crash)
 oai = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY"),
-    http_client=httpx.Client()  # no proxies kwarg -> avoids TypeError in your env
+    http_client=httpx.Client()
 )
 
-# ---------- helpers ----------
+# -----------------------------------------------------------------------------
+# Helpers (kept here so both app & blueprints can reuse via closures)
+# -----------------------------------------------------------------------------
 def ensure_db_ready():
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -100,7 +107,6 @@ def absolute_fs_path(path: str) -> str:
 def make_office_viewer_url(public_url: str) -> str:
     return f"https://view.officeapps.live.com/op/view.aspx?src={quote_plus(public_url)}"
 
-# ---------- chip core ----------
 def generate_chip_response(user_id, name, question, role, region):
     # Be tolerant: get_user may not contain messages; default to empty
     user = get_user(user_id) or {}
@@ -314,65 +320,6 @@ def upsert_account_row(cur, row):
         row.get("region") or "Americas"
     ))
 
-from io import BytesIO
-
-@app.post("/accounts/upload")
-def accounts_upload():
-    """
-    Multipart form upload:
-      field name: file  (Excel: .xlsx)
-    """
-    try:
-        if not HAS_OPENPYXL:
-            return jsonify({"error": "Excel ingest unavailable: openpyxl not installed"}), 503
-
-        ensure_accounts_table()
-        if "file" not in request.files:
-            return jsonify({"error": "no file"}), 400
-        f = request.files["file"]
-        if not f.filename.lower().endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
-            return jsonify({"error": "please upload an .xlsx file"}), 400
-
-        # Load workbook from uploaded bytes
-        data = f.read()
-        wb = load_workbook(filename=BytesIO(data), data_only=True)
-        ws = wb.active  # first sheet
-
-        # Read headers from row 1
-        header_cells = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
-        headers = [normalize_header((h or "")) for h in header_cells]
-
-        required = {"account_name"}
-        if not required.issubset(set(headers)):
-            missing = ", ".join(sorted(required - set(headers)))
-            return jsonify({"error": f"excel missing required column(s): {missing}"}), 400
-
-        # Build header index map
-        idx = {h: i for i, h in enumerate(headers)}
-
-        keep = ["account_name", "owner", "owner_email", "manager", "pam", "region"]
-        rows_ingested = 0
-
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                # Iterate data rows starting at row 2
-                for values in ws.iter_rows(min_row=2, values_only=True):
-                    def val(key):
-                        i = idx.get(key)
-                        v = (values[i] if i is not None and i < len(values) else "")
-                        return v.strip() if isinstance(v, str) else (v or "")
-                    row = {k: val(k) for k in keep}
-                    if not row["account_name"]:
-                        continue
-                    upsert_account_row(cur, row)
-                    rows_ingested += 1
-            conn.commit()
-
-        return jsonify({"ok": True, "rows": rows_ingested})
-    except Exception as e:
-        app.logger.exception("/accounts/upload failed")
-        return jsonify({"error": "upload failed"}), 500
-
 def find_account_row(q: str):
     """
     Returns the best-matching account row (dict) for a user-provided name.
@@ -413,13 +360,9 @@ def find_account_row(q: str):
             tri = cur.fetchone()
             return tri
 
-@app.get("/accounts/search")
-def accounts_search():
-    q = request.args.get("q","")
-    row = find_account_row(q)
-    return jsonify({"query": q, "result": row})
-
-# ---------- routes ----------
+# -----------------------------------------------------------------------------
+# Routes that remain in app.py
+# -----------------------------------------------------------------------------
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -520,179 +463,11 @@ def api_profile_post():
         app.logger.exception("/api/profile POST failed")
         return jsonify({"error": "profile save failed"}), 500
 
-# ----------- ASK (kept) -----------
-@app.route("/ask", methods=["POST"])
-def ask():
-    try:
-        user_id = session.get("user_id") or request.remote_addr or str(uuid4())
-        data = request.get_json() or {}
-        question = (data.get("question") or "").strip()
-        speak = bool(data.get("speak", False))  # Static=false, Dynamic=true
-
-        if not question:
-            return jsonify({"error": "Missing question."}), 400
-
-        name   = session.get("name", "User")
-        role   = "engineer"
-        region = "NA"
-
-        response_text = generate_chip_response(user_id, name, question, role, region)
-
-        audio_url = None
-        if TTS_ENABLED and speak and response_text:
-            try:
-                voice_settings = {"speed": 0.9}
-                audio = eleven.text_to_speech.convert(
-                    voice_id=voice_id,
-                    model_id="eleven_monolingual_v1",
-                    text=response_text,
-                    optimize_streaming_latency=1,
-                    voice_settings=voice_settings
-                )
-                filename = f"static/audio/{uuid4().hex}.mp3"
-                with open(filename, "wb") as f:
-                    for chunk in audio:
-                        f.write(chunk)
-                audio_url = "/" + filename
-            except Exception as e:
-                print("⚠️ TTS generation failed:", e)
-
-        return jsonify({"response": response_text, "audio": audio_url})
-    except Exception as e:
-        print("🔥 ERROR IN /ask:", str(e))
-        traceback.print_exc()
-        return jsonify({"error": "Something went wrong. Try again later."}), 500
-
-# ----------- CHAT (Text or Live TTS) -----------
-@app.post("/chat")
-def chat():
-    """
-    Accepts: { "message": "...", "lane": "text" | "live" }
-    Returns:
-      {
-        "reply_text": "...",
-        "audio_b64": "...." (only when lane==live and TTS enabled),
-        "visemes": [],      (placeholder for ElevenLabs viseme timestamps),
-        "actions": [ {type, title, url, filename} ]
-      }
-    """
-    try:
-        data = request.get_json(force=True) or {}
-        message = (data.get("message") or "").strip()
-        lane = (data.get("lane") or "live").lower()
-        if not message:
-            return jsonify({"error": "Missing message"}), 400
-
-        user_id = session.get("user_id") or request.remote_addr or str(uuid4())
-        name    = session.get("name", "there")
-        role    = session.get("role", "engineer")
-        region  = session.get("region", "NA")
-
-        # LLM reply (reuse persona + logging)
-        reply_text = generate_chip_response(user_id, name, message, role, region)
-
-        # --- Account Q&A intents ---
-        owner_q = re.search(r"(who\s+(is\s+)?(the\s+)?(account\s+)?owner\s+(for|of)\s+)(?P<acct>.+)", message, re.I)
-        team_q  = re.search(r"(who\s+(is\s+)?(the\s+)?account\s+team\s+(for|of)\s+)(?P<acct>.+)", message, re.I)
-
-        actions = []
-        if owner_q or team_q:
-            acct = (owner_q or team_q).group("acct").strip().rstrip("?!.")
-            acct = re.sub(r"^(the\s+|\"|')+", "", acct, flags=re.I).strip(' "\'')
-            row = find_account_row(acct)
-            if row:
-                acct_name   = row.get("account_name") or "that account"
-                owner       = row.get("owner") or "Unknown"
-                owner_email = row.get("owner_email") or ""
-                manager     = row.get("manager") or ""
-                pam         = row.get("pam") or ""
-
-                if owner_q:
-                    reply_text = f"{acct_name}: {owner}" + (f" ({owner_email})" if owner_email else "")
-                    if owner_email:
-                        actions.append({
-                            "type": "open_url",
-                            "title": "Email owner",
-                            "url": f"mailto:{owner_email}"
-                        })
-                elif team_q:
-                    parts = [f"Owner: {owner}" + (f" ({owner_email})" if owner_email else "")]
-                    if manager: parts.append(f"Manager: {manager}")
-                    if pam:     parts.append(f"PAM: {pam}")
-                    reply_text = f"{acct_name} team — " + "; ".join(parts)
-            # Fall through to TTS + return, skipping doc actions for this path
-
-        # --------- Doc intent & retrieval (present or download) ----------
-        present_intent = bool(re.search(r"\b(show|open|bring up|present|display)\b", message, re.I))
-        need_doc = bool(re.search(r"\b(deck|slides?|doc|document|pdf|download|send|share|presentation|pptx?)\b", message, re.I))
-
-        snippet = None
-        top = None
-        if need_doc or present_intent:
-            hits = repo_search(message, limit=5)
-            if hits:
-                top = hits[0]
-                snippet = top.get("snippet")
-                actions.append({
-                    "type": "download",
-                    "title": top["title"],
-                    "url": f"/repo/file/{top['id']}",
-                    "filename": top["filename"]
-                })
-                actions.append({
-                    "type": "open_url",
-                    "title": "Present now",
-                    "url": f"/repo/view/{top['id']}"
-                })
-
-        if snippet and isinstance(reply_text, str) and len(reply_text) < 220:
-            reply_text = f"{reply_text}\n\n{snippet}"
-
-        # TTS if lane == live
-        audio_b64 = None
-        visemes = None
-        if lane == "live" and TTS_ENABLED and reply_text:
-            try:
-                voice_settings = {"speed": 0.9}
-                audio_stream = eleven.text_to_speech.convert(
-                    voice_id=voice_id,
-                    model_id="eleven_monolingual_v1",
-                    text=reply_text,
-                    optimize_streaming_latency=1,
-                    voice_settings=voice_settings
-                )
-                audio_bytes = b"".join(chunk for chunk in audio_stream)
-                audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-                visemes = []  # populate when switching to viseme_timestamps endpoint
-            except Exception as e:
-                print("⚠️ Chat TTS failed:", e)
-
-        return jsonify({
-            "reply_text": reply_text,
-            "audio_b64": audio_b64,
-            "visemes": visemes,
-            "actions": actions
-        })
-    except Exception:
-        app.logger.exception("/chat crashed")
-        return jsonify({"error": "chat failed"}), 500
-
 # ----------- Repo API (DB-backed) -----------
 @app.post("/repo/upsert")
 def repo_upsert_route():
     """
     Seed or update a document record.
-
-    Body (filename now optional; will default from path):
-    {
-      "id": "flashblade-q3",
-      "title": "FlashBlade//S Q3 Update Slides",
-      "path": "FlashBlade_Q3.pdf",  # filename or relative path OK
-      "filename": "FlashBlade_Q3.pdf",
-      "mime": "application/pdf",
-      "tags": ["flashblade","slides","q3","update"],
-      "keywords": "s3, nfs, smb, rapid restore"
-    }
     """
     try:
         data = request.get_json(force=True) or {}
@@ -797,7 +572,7 @@ def repo_view(doc_id):
     filename = (row["filename"] or "").lower()
 
     # External URLs
-    if path.lower().startswith("http"):
+    if path.lower().startsWith("http"):
         if filename.endswith(".pptx"):
             return redirect(make_office_viewer_url(path), code=302)
         return redirect(path, code=302)
@@ -812,49 +587,6 @@ def repo_view(doc_id):
         return redirect(public_url, code=302)
     else:
         return redirect(f"/repo/file/{doc_id}", code=302)
-
-# ----------- Streaming / voice path (kept) -----------
-@app.route("/ask-chip", methods=["POST"])
-def ask_chip():
-    def generate_stream():
-        try:
-            user_id = session.get("user_id") or request.remote_addr or str(uuid4())
-            name = session.get("name", "User")
-            role = "engineer"
-            region = "NA"
-            if "audio" not in request.files:
-                yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"error": "No audio file uploaded."}).encode() + b"\r\n"
-                return
-            audio_file = request.files["audio"]
-            audio_file.filename = secure_filename(audio_file.filename)
-            audio_path = f"/tmp/{uuid4().hex}.webm"
-            audio_file.save(audio_path)
-
-            # --- Transcribe with new client ---
-            with open(audio_path, "rb") as f:
-                transcript = oai.audio.transcriptions.create(model="whisper-1", file=f).text
-
-            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"transcript": transcript}).encode() + b"\r\n"
-            response_text = generate_chip_response(user_id, name, transcript, role, region)
-            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"response": response_text}).encode() + b"\r\n"
-            if TTS_ENABLED and response_text:
-                voice_settings = {"speed": 0.9}
-                audio_stream = eleven.text_to_speech.convert(
-                    voice_id=voice_id,
-                    model_id="eleven_monolingual_v1",
-                    text=response_text,
-                    optimize_streaming_latency=1,
-                    voice_settings=voice_settings
-                )
-                yield b"--frame\r\nContent-Type: audio/mpeg\r\n\r\n"
-                for chunk in audio_stream:
-                    yield chunk
-                yield b"\r\n--frame--\r\n"
-        except Exception as e:
-            print("🔥 ERROR IN /ask-chip:", str(e))
-            traceback.print_exc()
-            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"error": "Voice processing failed."}).encode() + b"\r\n"
-    return Response(stream_with_context(generate_stream()), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 # ---------- Other endpoints (auth/status/history/health) ----------
 @app.route("/history", methods=["POST"])
@@ -890,89 +622,9 @@ If not, say you couldn't find it.
         traceback.print_exc()
         return jsonify({"error": "History lookup failed"}), 500
 
-@app.route("/greet", methods=["POST"])
-def greet():
-    try:
-        user_id = session.get("user_id")
-        user = get_user(user_id) if user_id else None
-        name = user.get("name", "there") if user else "there"
-        data = request.get_json() or {}
-        prompt = data.get("prompt", f"Say hello to {name}.")
-
-        try:
-            openai_response = oai.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "system", "content": prompt}],
-                max_tokens=60
-            )
-            greeting_text = openai_response.choices[0].message.content.strip()
-        except Exception as e:
-            app.logger.warning("OpenAI greet failed: %s", e)
-            greeting_text = "Howdy. Ready when you are."
-
-        audio_url = None
-        if TTS_ENABLED:
-            voice_settings = {"speed": 0.9}
-            audio = eleven.text_to_speech.convert(
-                voice_id=voice_id,
-                model_id="eleven_monolingual_v1",
-                text=greeting_text,
-                optimize_streaming_latency=1,
-                voice_settings=voice_settings
-            )
-            filename = f"static/audio/{uuid4().hex}.mp3"
-            with open(filename, "wb") as f:
-                for chunk in audio:
-                    f.write(chunk)
-            audio_url = "/" + filename
-        return jsonify({"reply": greeting_text, "audio": audio_url})
-    except Exception as e:
-        print("🔥 ERROR IN /greet:", str(e))
-        traceback.print_exc()
-        return jsonify({"error": "Greeting failed"}), 500
-
-# ---------- NEW: simple health (no DB) ----------
 @app.get("/healthz")
 def healthz():
     return "ok", 200
-
-# ---------- NEW: Dynamic speech endpoint ----------
-@app.post("/api/speak")
-def api_speak():
-    """
-    Expects: { "prompt": "text the user asked Chip to say" }
-    Returns: { "audio_url": "/static/audio/<file>.mp3", "visemes": [] }
-    """
-    try:
-        data = request.get_json(silent=True) or {}
-        prompt = (data.get("prompt") or "").strip()
-        if not prompt:
-            # fall back to something safe so UI doesn't explode
-            prompt = "Howdy. Ready when you are."
-
-        if not TTS_ENABLED:
-            return jsonify({"audio_url": None, "visemes": [], "disabled": True}), 200
-
-        if not voice_id or not os.getenv("ELEVENLABS_API_KEY"):
-            return jsonify({"error": "TTS not configured"}), 503
-
-        voice_settings = {"speed": 0.9}
-        audio = eleven.text_to_speech.convert(
-            voice_id=voice_id,
-            model_id="eleven_monolingual_v1",
-            text=prompt,
-            optimize_streaming_latency=1,
-            voice_settings=voice_settings
-        )
-        out_path = f"static/audio/{uuid4().hex}.mp3"
-        with open(out_path, "wb") as f:
-            for chunk in audio:
-                f.write(chunk)
-        # Standardize key name for the frontend
-        return jsonify({"audio_url": "/" + out_path, "visemes": []}), 200
-    except Exception as e:
-        print("⚠️ /api/speak failed:", e)
-        return jsonify({"error": "speak failed"}), 500
 
 @app.route("/auth/status", methods=["GET"])
 def auth_status():
@@ -1012,6 +664,90 @@ def healthz_db():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+# ---------- Accounts ingest/search ----------
+@app.post("/accounts/upload")
+def accounts_upload():
+    """
+    Multipart form upload:
+      field name: file  (Excel: .xlsx)
+    """
+    try:
+        if not HAS_OPENPYXL:
+            return jsonify({"error": "Excel ingest unavailable: openpyxl not installed"}), 503
+
+        ensure_accounts_table()
+        if "file" not in request.files:
+            return jsonify({"error": "no file"}), 400
+        f = request.files["file"]
+        if not f.filename.lower().endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
+            return jsonify({"error": "please upload an .xlsx file"}), 400
+
+        # Load workbook from uploaded bytes
+        data = f.read()
+        wb = load_workbook(filename=BytesIO(data), data_only=True)
+        ws = wb.active  # first sheet
+
+        # Read headers from row 1
+        header_cells = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+        headers = [normalize_header((h or "")) for h in header_cells]
+
+        required = {"account_name"}
+        if not required.issubset(set(headers)):
+            missing = ", ".join(sorted(required - set(headers)))
+            return jsonify({"error": f"excel missing required column(s): {missing}"}), 400
+
+        # Build header index map
+        idx = {h: i for i, h in enumerate(headers)}
+
+        keep = ["account_name", "owner", "owner_email", "manager", "pam", "region"]
+        rows_ingested = 0
+
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # Iterate data rows starting at row 2
+                for values in ws.iter_rows(min_row=2, values_only=True):
+                    def val(key):
+                        i = idx.get(key)
+                        v = (values[i] if i is not None and i < len(values) else "")
+                        return v.strip() if isinstance(v, str) else (v or "")
+                    row = {k: val(k) for k in keep}
+                    if not row["account_name"]:
+                        continue
+                    upsert_account_row(cur, row)
+                    rows_ingested += 1
+            conn.commit()
+
+        return jsonify({"ok": True, "rows": rows_ingested})
+    except Exception as e:
+        app.logger.exception("/accounts/upload failed")
+        return jsonify({"error": "upload failed"}), 500
+
+@app.get("/accounts/search")
+def accounts_search():
+    q = request.args.get("q","")
+    row = find_account_row(q)
+    return jsonify({"query": q, "result": row})
+
+# -----------------------------------------------------------------------------
+# Register blueprints for chat & voice
+# -----------------------------------------------------------------------------
+from chat_routes import create_chat_blueprint
+from voice_routes import create_voice_blueprint
+
+deps = {
+    "oai": oai,
+    "eleven": eleven,
+    "voice_id": voice_id,
+    "TTS_ENABLED": TTS_ENABLED,
+    "generate_chip_response": generate_chip_response,
+    "find_account_row": find_account_row,
+    "repo_search": repo_search,
+}
+
+app.register_blueprint(create_chat_blueprint(deps))
+app.register_blueprint(create_voice_blueprint(deps))
+
+# -----------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
