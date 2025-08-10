@@ -27,12 +27,24 @@ import openai
 import psycopg2
 import psycopg2.extras as extras  # for RealDictCursor
 
-# NEW: parsers
-import fitz  # PyMuPDF
-from pptx import Presentation
+# --- optional deps with guards ---
+try:
+    import pandas as pd
+    HAS_PANDAS = True
+except Exception:
+    HAS_PANDAS = False
 
-# NEW: excel ingest
-import pandas as pd
+try:
+    import fitz  # PyMuPDF
+    HAS_PYMUPDF = True
+except Exception:
+    HAS_PYMUPDF = False
+
+try:
+    from pptx import Presentation
+    HAS_PPTX = True
+except Exception:
+    HAS_PPTX = False
 
 # only import memory after DATABASE_URL is sanitized
 from memory import get_user, save_user, log_conversation, get_connection
@@ -116,15 +128,15 @@ def generate_chip_response(user_id, name, question, role, region):
 
 # ---------- parse helpers ----------
 def parse_pdf(fs_path: str) -> tuple[str, dict]:
+    if not HAS_PYMUPDF:
+        return "", {"pages": 0, "note": "PyMuPDF not installed"}
     doc = fitz.open(fs_path)
-    texts = []
-    for page in doc:
-        texts.append(page.get_text("text"))
-    content = "\n".join(texts).strip()
-    meta = {"pages": doc.page_count}
-    return content, meta
+    texts = [page.get_text("text") for page in doc]
+    return "\n".join(texts).strip(), {"pages": doc.page_count}
 
 def parse_pptx(fs_path: str) -> tuple[str, dict]:
+    if not HAS_PPTX:
+        return "", {"slides": 0, "note": "python-pptx not installed"}
     prs = Presentation(fs_path)
     slides_text = []
     for i, slide in enumerate(prs.slides, start=1):
@@ -134,11 +146,8 @@ def parse_pptx(fs_path: str) -> tuple[str, dict]:
                 txt = (shape.text or "").strip()
                 if txt:
                     parts.append(txt)
-        slide_txt = f"[Slide {i}]\n" + "\n".join(parts).strip()
-        slides_text.append(slide_txt)
-    content = "\n\n".join(slides_text).strip()
-    meta = {"slides": len(prs.slides)}
-    return content, meta
+        slides_text.append(f"[Slide {i}]\n" + "\n".join(parts).strip())
+    return "\n\n".join(slides_text).strip(), {"slides": len(prs.slides)}
 
 # ---------- documents repo (Postgres) ----------
 def ensure_docs_table():
@@ -302,6 +311,9 @@ def accounts_upload():
       field name: file  (Excel: .xlsx)
     """
     try:
+        if not HAS_PANDAS:
+            return jsonify({"error": "Excel ingest unavailable: pandas/openpyxl not installed"}), 503
+
         ensure_accounts_table()
         if "file" not in request.files:
             return jsonify({"error": "no file"}), 400
@@ -676,6 +688,8 @@ def repo_upsert_route():
         # Try to parse content for PDFs/PPTX when served locally (not http)
         content = ""
         meta = {}
+        if not raw_path.lower().startsWith("http"):  # keep devs from parsing external URLs
+            pass
         if not raw_path.lower().startswith("http"):
             fs_path = absolute_fs_path(raw_path)
             if os.path.exists(fs_path):
