@@ -8,11 +8,13 @@
   --accent:#ff6a00;
   --accent-2:#ff9350;
   --border:#2a3040;
+
+  /* nudge Chip position inside the frame */
   --chip-shift-x: 36px;   /* + = move right,  - = move left  */
-  --chip-shift-y: -22px;  /
+  --chip-shift-y: -22px;  /* - = move up,     + = move down  */
 
   --topbar-h: 64px;
-  --toolbar-h: 96px;           /* NEW: reserve space above bottom toolbar */
+  --toolbar-h: 96px;           /* reserved space above bottom toolbar (updated by JS) */
   --page-pad: 24px;
   --frame-radius: 18px;
   --frame-border: rgba(255,255,255,0.12);
@@ -119,12 +121,13 @@ input::placeholder { color: #8f98a6; }
 /* ====== Chip stage (light frame) ====== */
 #app {
   max-width: 1100px;
-  margin: 0 auto;                     /* was 40px; now sits right under header */
+  margin: 0 auto;                     /* sits right under header */
   padding: 0 16px;
   position: relative;
   min-height: 70vh;
 }
 .chip-box {
+  position: relative;                 /* allows overlay positioning */
   display: grid; place-items: center;
   border: 1px solid var(--frame-border);
   background: var(--frame-bg);
@@ -141,10 +144,24 @@ input::placeholder { color: #8f98a6; }
   display: block;
   object-fit: contain;
   object-position: 50% 42%;
-  transform: translate(var(--chip-shift-x), var(--chip-shift-y));  /* ← updated */
+  transform: translate(var(--chip-shift-x), var(--chip-shift-y));
   filter: drop-shadow(0 12px 32px rgba(0,0,0,.45));
   margin: 0 auto;
 }
+
+/* Mouth overlay (swapped by JS with viseme images) */
+#chipMouthImg {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  transform-origin: 50% 50%;
+  pointer-events: none;
+  width: 160px; height: auto;   /* JS will resize to match avatar */
+  opacity: 0;
+  transition: opacity .12s linear;
+  z-index: 10;
+}
+#chipMouthImg.talking { opacity: .95; }
 
 /* ====== Toolbar (bottom) ====== */
 #askChipToolbar {
