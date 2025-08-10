@@ -6,8 +6,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" href="data:," />
 
+  <!-- Styles -->
   <link rel="stylesheet" href="{{ url_for('static', filename='user-experience/css/style.css') }}?v=20250809-fix" />
-  <script src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250809-fix" defer></script>
+
+  <!-- Scripts (viseme first, then main) -->
+  <script defer src="{{ url_for('static', filename='user-experience/js/chip-viseme.js') }}?v=20250809-fix"></script>
+  <script defer src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250809-fix"></script>
 </head>
 <body>
 
@@ -58,6 +62,8 @@
   <div id="app" style="display:none">
     <div class="chip-box" id="chipBox">
       <img id="chipImage" src="{{ url_for('static', filename='chip/img/chip.png') }}" alt="Chip" />
+      <!-- Mouth overlay (chip-viseme.js will control src/position) -->
+      <img id="chipMouthImg" alt="" />
     </div>
   </div>
 
