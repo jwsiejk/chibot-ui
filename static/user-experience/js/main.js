@@ -1,8 +1,20 @@
 // main.js — Zoom-style: Static uses /static/chip/audio/* mp3s, Dynamic uses ElevenLabs via /greet
 document.addEventListener("DOMContentLoaded", () => {
   const $ = (id) => document.getElementById(id);
+  
+// --- Dynamically size the chip box above the toolbar ---
+function setToolbarHeightVar(extra = 16) {
+  const el = document.getElementById('askChipToolbar');
+  if (!el) return;
+  const h = Math.ceil(el.getBoundingClientRect().height) || 0;
+  const finalPx = Math.max(h + extra, 64); // little breathing room
+  document.documentElement.style.setProperty('--toolbar-h', finalPx + 'px');
+}
+window.addEventListener('load', setToolbarHeightVar);
+window.addEventListener('resize', setToolbarHeightVar);
+window.addEventListener('orientationchange', setToolbarHeightVar);
 
-  // ---------- Static audio location + filenames ----------
+    // ---------- Static audio location + filenames ----------
   const STATIC_AUDIO_BASE = "/static/chip/audio/";
   const GREETING_FILES = ["greeting-static.mp3", "greeting.mp3", "Greeting.mp3"];
   const ANSWER_FILES   = ["answer-static.mp3", "answer.mp3", "Answer.mp3"]; // reserved for later
@@ -82,6 +94,7 @@ document.addEventListener("DOMContentLoaded", () => {
     show(appEl, "block");
     show(chipBox, "grid");
     show(toolbar, "flex");
+    setToolbarHeightVar();
     if (btnChat) {
       btnChat.disabled = true;
       btnChat.title = "Chat is coming soon";
