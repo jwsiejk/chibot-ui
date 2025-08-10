@@ -157,10 +157,14 @@ input::placeholder { color: #8f98a6; }
   transform-origin: 50% 50%;
   pointer-events: none;
   width: 160px; height: auto;   /* JS will resize to match avatar */
-  opacity: 0;
+
+  /* SHOW neutral mouth even when not talking */
+  opacity: .95;
   transition: opacity .12s linear;
   z-index: 10;
 }
+
+/* Talking state left intact for future use if you want to dim/brighten during speech */
 #chipMouthImg.talking { opacity: .95; }
 
 /* ====== Toolbar (bottom) ====== */
