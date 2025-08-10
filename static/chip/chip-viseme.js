@@ -11,15 +11,12 @@
     m:       "mouth_m.png",       // closed
     ee:      "mouth_ee.png",
     aa:      "mouth_aa.png",
-    oh:      "mouth_oh.png",
     f:       "mouth_f.png",
     l:       "mouth_l.png",
-    r:       "mouth_r.png",
     s:       "mouth_s.png",
     uh:      "mouth_uh.png",
     d:       "mouth_d.png",
-    "w-oo":  "mouth_woo.png"
-  };
+   };
 
   // Position and scale of the mouth overlay relative to chipImage rect
   const anchor = { x: 0.535, y: 0.525 }; // center of mouth as % of image
