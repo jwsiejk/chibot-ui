@@ -154,6 +154,16 @@ def login_basic():
         print("🔥 Login error:", str(e))
         return jsonify({"error": "Login failed"}), 500
 
+# --- API aliases so the frontend can call /api/login and /api/logout ---
+@app.post("/api/login")
+def api_login_alias():
+    # forward to the primary login endpoint (expects {"email": "..."} )
+    return login()
+
+@app.post("/api/logout")
+def api_logout_alias():
+    return logout()
+
 # Legacy profile save
 @app.route("/profile", methods=["POST"])
 def save_profile_legacy():
