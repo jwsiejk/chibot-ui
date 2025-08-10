@@ -12,9 +12,10 @@ import json
 import traceback
 import re
 import base64
+import mimetypes
 from uuid import uuid4
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus
 from flask import (
     Flask, request, jsonify, render_template, session, Response,
     stream_with_context, send_file, redirect
@@ -25,6 +26,10 @@ from elevenlabs.client import ElevenLabs
 import openai
 import psycopg2
 import psycopg2.extras as extras  # for RealDictCursor
+
+# NEW: parsers
+import fitz  # PyMuPDF
+from pptx import Presentation
 
 # only import memory after DATABASE_URL is sanitized
 from memory import get_user, save_user, log_conversation, get_connection
@@ -62,6 +67,14 @@ def _merge_profile_fields(row: dict):
     complete = bool(email and name and title)
     return email, name, title, complete
 
+def absolute_fs_path(path: str) -> str:
+    if os.path.isabs(path):
+        return path
+    return os.path.join(app.root_path, path.lstrip("/"))
+
+def make_office_viewer_url(public_url: str) -> str:
+    return f"https://view.officeapps.live.com/op/view.aspx?src={quote_plus(public_url)}"
+
 # ---------- chip core ----------
 def generate_chip_response(user_id, name, question, role, region):
     # Be tolerant: get_user may not contain messages; default to empty
@@ -98,11 +111,37 @@ def generate_chip_response(user_id, name, question, role, region):
     log_conversation(user_id, question, answer)
     return answer
 
+# ---------- parse helpers ----------
+def parse_pdf(fs_path: str) -> tuple[str, dict]:
+    doc = fitz.open(fs_path)
+    texts = []
+    for page in doc:
+        texts.append(page.get_text("text"))
+    content = "\n".join(texts).strip()
+    meta = {"pages": doc.page_count}
+    return content, meta
+
+def parse_pptx(fs_path: str) -> tuple[str, dict]:
+    prs = Presentation(fs_path)
+    slides_text = []
+    for i, slide in enumerate(prs.slides, start=1):
+        parts = []
+        for shape in slide.shapes:
+            if hasattr(shape, "text") and getattr(shape, "has_text_frame", False):
+                txt = (shape.text or "").strip()
+                if txt:
+                    parts.append(txt)
+        slide_txt = f"[Slide {i}]\n" + "\n".join(parts).strip()
+        slides_text.append(slide_txt)
+    content = "\n\n".join(slides_text).strip()
+    meta = {"slides": len(prs.slides)}
+    return content, meta
+
 # ---------- documents repo (Postgres) ----------
 def ensure_docs_table():
     """
     Create documents table + GIN FTS index.
-    Uses a generated tsvector for English search over title, tags, filename, keywords.
+    Includes parsed content + meta. Search vector covers title/tags/filename/keywords/content.
     """
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -115,27 +154,31 @@ def ensure_docs_table():
                   mime TEXT DEFAULT 'application/pdf',
                   tags TEXT[] DEFAULT '{}',
                   keywords TEXT DEFAULT '',
+                  content TEXT DEFAULT '',
+                  meta JSONB DEFAULT '{}'::jsonb,
                   updated_at TIMESTAMPTZ DEFAULT now(),
                   search tsvector GENERATED ALWAYS AS (
                     setweight(to_tsvector('english', coalesce(title,'')),    'A') ||
                     setweight(to_tsvector('english', array_to_string(coalesce(tags,'{}'::text[]),' ')), 'B') ||
                     setweight(to_tsvector('english', coalesce(filename,'')), 'C') ||
-                    setweight(to_tsvector('english', coalesce(keywords,'')), 'C')
+                    setweight(to_tsvector('english', coalesce(keywords,'')), 'C') ||
+                    setweight(to_tsvector('english', coalesce(content,'')),  'D')
                   ) STORED
                 );
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS documents_search_idx ON public.documents USING GIN (search);")
             conn.commit()
 
-def repo_upsert(id:str, title:str, path:str, filename:str, mime:str=None, tags=None, keywords:str=""):
+def repo_upsert(id:str, title:str, path:str, filename:str, mime:str=None, tags=None, keywords:str="", content:str="", meta:dict|None=None):
     ensure_docs_table()
     tags = tags or []
     mime = mime or "application/pdf"
+    meta = meta or {}
     with get_connection() as conn:
         with conn.cursor(cursor_factory=extras.RealDictCursor) as cur:
             cur.execute("""
-                INSERT INTO public.documents (id, title, path, filename, mime, tags, keywords, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s, now())
+                INSERT INTO public.documents (id, title, path, filename, mime, tags, keywords, content, meta, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb, now())
                 ON CONFLICT (id) DO UPDATE SET
                     title=EXCLUDED.title,
                     path=EXCLUDED.path,
@@ -143,9 +186,11 @@ def repo_upsert(id:str, title:str, path:str, filename:str, mime:str=None, tags=N
                     mime=EXCLUDED.mime,
                     tags=EXCLUDED.tags,
                     keywords=EXCLUDED.keywords,
+                    content=EXCLUDED.content,
+                    meta=EXCLUDED.meta,
                     updated_at=now()
                 RETURNING id, title, path, filename, mime, tags, keywords, updated_at;
-            """, (id, title, path, filename, mime, tags, keywords))
+            """, (id, title, path, filename, mime, tags, keywords, content, json.dumps(meta)))
             row = cur.fetchone()
             conn.commit()
             return row
@@ -159,7 +204,7 @@ def repo_get(doc_id:str):
 
 def repo_search(q:str, limit:int=10):
     """
-    Full-text first; fall back to ILIKE if tsquery empty.
+    Full-text (title/tags/filename/keywords/content) with snippet; fallback to ILIKE.
     """
     ensure_docs_table()
     q = (q or "").strip()
@@ -167,30 +212,21 @@ def repo_search(q:str, limit:int=10):
         return []
     with get_connection() as conn:
         with conn.cursor(cursor_factory=extras.RealDictCursor) as cur:
-            # plainto_tsquery handles multi-word nicely; if stopwords collapse to empty, fallback later
             cur.execute("""
-                WITH qry AS (
-                  SELECT plainto_tsquery('english', %s) AS tsq
-                )
+                WITH qry AS ( SELECT plainto_tsquery('english', %s) AS tsq )
                 SELECT id, title, filename, mime, tags, path,
-                       ts_rank_cd(search, (SELECT tsq FROM qry)) AS rank
+                       ts_rank_cd(search, (SELECT tsq FROM qry)) AS rank,
+                       CASE WHEN (SELECT tsq FROM qry) <> ''::tsquery
+                         THEN ts_headline('english', content, (SELECT tsq FROM qry),
+                              'ShortWord=3, MaxFragments=1, MinWords=5, MaxWords=20')
+                         ELSE NULL
+                       END AS snippet
                 FROM public.documents, qry
-                WHERE (SELECT tsq FROM qry) @@ search
-                ORDER BY rank DESC, updated_at DESC
+                WHERE ((SELECT tsq FROM qry) <> ''::tsquery AND (SELECT tsq FROM qry) @@ search)
+                   OR (title ILIKE '%'||%s||'%' OR filename ILIKE '%'||%s||'%' OR keywords ILIKE '%'||%s||'%')
+                ORDER BY rank DESC NULLS LAST, updated_at DESC
                 LIMIT %s;
-            """, (q, limit))
-            rows = cur.fetchall()
-            if rows:
-                return rows
-            # fallback: ILIKE across title/filename/keywords
-            pat = f"%{q}%"
-            cur.execute("""
-                SELECT id, title, filename, mime, tags, path, 0.0 AS rank
-                FROM public.documents
-                WHERE title ILIKE %s OR filename ILIKE %s OR keywords ILIKE %s
-                ORDER BY updated_at DESC
-                LIMIT %s;
-            """, (pat, pat, pat, limit))
+            """, (q, q, q, q, limit))
             return cur.fetchall()
 
 # ---------- routes ----------
@@ -365,18 +401,35 @@ def chat():
         # LLM reply (reuse persona + logging)
         reply_text = generate_chip_response(user_id, name, message, role, region)
 
-        # Action detection → DB search
+        # Intent & retrieval
         actions = []
-        if re.search(r"\b(deck|slides?|doc|document|pdf|download|send|share|presentation|pptx?)\b", message, re.I):
+        present_intent = bool(re.search(r"\b(show|open|bring up|present|display)\b", message, re.I))
+        need_doc = bool(re.search(r"\b(deck|slides?|doc|document|pdf|download|send|share|presentation|pptx?)\b", message, re.I))
+
+        snippet = None
+        top = None
+        if need_doc or present_intent:
             hits = repo_search(message, limit=5)
             if hits:
                 top = hits[0]
+                snippet = top.get("snippet")
+                # Download action
                 actions.append({
                     "type": "download",
                     "title": top["title"],
                     "url": f"/repo/file/{top['id']}",
                     "filename": top["filename"]
                 })
+                # Present/Open action
+                actions.append({
+                    "type": "open_url",
+                    "title": "Present now",
+                    "url": f"/repo/view/{top['id']}"
+                })
+
+        # If we have a helpful snippet and the reply is short, append it
+        if snippet and isinstance(reply_text, str) and len(reply_text) < 220:
+            reply_text = f"{reply_text}\n\n{snippet}"
 
         # TTS if lane == live
         audio_b64 = None
@@ -413,11 +466,11 @@ def repo_upsert_route():
     """
     Seed or update a document record.
 
-    Body:
+    Body (filename now optional; will default from path):
     {
       "id": "flashblade-q3",
       "title": "FlashBlade//S Q3 Update Slides",
-      "path": "FlashBlade_Q3.pdf",  # can be just a filename now
+      "path": "FlashBlade_Q3.pdf",  # filename or relative path OK
       "filename": "FlashBlade_Q3.pdf",
       "mime": "application/pdf",
       "tags": ["flashblade","slides","q3","update"],
@@ -426,7 +479,7 @@ def repo_upsert_route():
     """
     try:
         data = request.get_json(force=True) or {}
-        for k in ("id", "title", "path", "filename"):
+        for k in ("id", "title", "path"):
             if not data.get(k):
                 return jsonify({"error": f"missing field: {k}"}), 400
 
@@ -435,14 +488,36 @@ def repo_upsert_route():
         if not (raw_path.lower().startswith("/") or raw_path.lower().startswith("http")):
             raw_path = f"/static/user-experience/downloads/{raw_path}"
 
+        filename = (data.get("filename") or os.path.basename(raw_path)).strip()
+        mime = (data.get("mime") or mimetypes.guess_type(filename)[0] or "application/octet-stream").strip()
+        tags = data.get("tags") or []
+        keywords = (data.get("keywords") or "").strip()
+
+        # Try to parse content for PDFs/PPTX when served locally (not http)
+        content = ""
+        meta = {}
+        if not raw_path.lower().startswith("http"):
+            fs_path = absolute_fs_path(raw_path)
+            if os.path.exists(fs_path):
+                try:
+                    if filename.lower().endswith(".pdf"):
+                        content, meta = parse_pdf(fs_path)
+                    elif filename.lower().endswith(".pptx"):
+                        content, meta = parse_pptx(fs_path)
+                except Exception as e:
+                    app.logger.warning(f"Parse failed for {filename}: {e}")
+
+        # Upsert row with parsed content/meta
         row = repo_upsert(
             id=data["id"].strip(),
             title=data["title"].strip(),
             path=raw_path,
-            filename=data["filename"].strip(),
-            mime=(data.get("mime") or "application/pdf").strip(),
-            tags=data.get("tags") or [],
-            keywords=(data.get("keywords") or "").strip()
+            filename=filename,
+            mime=mime,
+            tags=tags,
+            keywords=keywords,
+            content=content,
+            meta=meta
         )
         return jsonify({"ok": True, "doc": row}), 200
     except Exception:
@@ -459,8 +534,10 @@ def repo_search_route():
             "id": r["id"],
             "title": r["title"],
             "url": f"/repo/file/{r['id']}",
+            "view_url": f"/repo/view/{r['id']}",
             "filename": r["filename"],
-            "tags": r.get("tags") or []
+            "tags": r.get("tags") or [],
+            "snippet": r.get("snippet") or ""
         } for r in rows]
         return jsonify({"results": results})
     except Exception:
@@ -487,6 +564,37 @@ def repo_file(doc_id):
     except Exception:
         app.logger.exception("/repo/file failed")
         return jsonify({"error": "file error"}), 500
+
+@app.get("/repo/view/<doc_id>")
+def repo_view(doc_id):
+    """
+    Open the doc for viewing:
+      - PPTX: Office Online Viewer
+      - PDF: browser-native viewer (direct URL)
+    """
+    row = repo_get(doc_id)
+    if not row:
+        return jsonify({"error": "not found"}), 404
+
+    path = row["path"]
+    filename = (row["filename"] or "").lower()
+
+    # External URLs
+    if path.lower().startswith("http"):
+        if filename.endswith(".pptx"):
+            return redirect(make_office_viewer_url(path), code=302)
+        return redirect(path, code=302)
+
+    # Local paths → make public URL
+    public_url = request.host_url.rstrip("/") + "/" + path.lstrip("/")
+
+    if filename.endswith(".pptx"):
+        return redirect(make_office_viewer_url(public_url), code=302)
+    elif filename.endswith(".pdf"):
+        # let the browser open the PDF inline
+        return redirect(public_url, code=302)
+    else:
+        return redirect(f"/repo/file/{doc_id}", code=302)
 
 # ----------- Streaming / voice path (kept) -----------
 @app.route("/ask-chip", methods=["POST"])
