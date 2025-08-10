@@ -12,7 +12,7 @@ const visemeMap = {
   "r": "mouth_r.png",
   "s": "mouth_s.png",
   "uh": "mouth_uh.png",
-  "w-oo": "mouth_w-oo.png",
+  "w-oo": "mouth_woo.png",
   "neutral": "mouth_neutral.png"
 };
 
