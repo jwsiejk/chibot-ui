@@ -10,6 +10,7 @@
   --border:#2a3040;
 
   --topbar-h: 64px;
+  --toolbar-h: 96px;           /* NEW: reserve space above bottom toolbar */
   --page-pad: 24px;
   --frame-radius: 18px;
   --frame-border: rgba(255,255,255,0.12);
@@ -116,7 +117,7 @@ input::placeholder { color: #8f98a6; }
 /* ====== Chip stage (light frame) ====== */
 #app {
   max-width: 1100px;
-  margin: 40px auto;
+  margin: 0 auto;                     /* was 40px; now sits right under header */
   padding: 0 16px;
   position: relative;
   min-height: 70vh;
@@ -126,17 +127,21 @@ input::placeholder { color: #8f98a6; }
   border: 1px solid var(--frame-border);
   background: var(--frame-bg);
   border-radius: var(--frame-radius);
-  min-height: calc(100vh - var(--topbar-h) - 2 * var(--page-pad));
+  /* Fill space between header and toolbar */
+  min-height: calc(100vh - var(--topbar-h) - var(--toolbar-h) - 2 * var(--page-pad));
+  margin-top: 8px;
+  margin-bottom: 8px;
   padding: 24px;
 }
 #chipImage {
-  width: min(70%, 520px);
+  width: min(68%, 520px);              /* slightly smaller for balance */
   height: auto;
   display: block;
   object-fit: contain;
-  object-position: 52% center; /* nudge right if PNG has extra left padding */
+  /* Nudge Chip a bit right & higher so he centers visually in the frame */
+  object-position: 58% 42%;
+  transform: translateY(-18px);
   filter: drop-shadow(0 12px 32px rgba(0,0,0,.45));
-  transform: translateZ(0);
   margin: 0 auto;
 }
 
