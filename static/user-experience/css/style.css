@@ -8,6 +8,15 @@
   --accent:#ff6a00;
   --accent-2:#ff9350;
   --border:#2a3040;
+
+  /* New layout vars */
+  --topbar-h: 64px;
+  --page-pad: 24px;
+  --frame-radius: 18px;
+  --frame-border: rgba(255,255,255,0.12);
+  --frame-bg: rgba(255,255,255,0.04);
+  --menu-bg: #111418;
+  --menu-border: rgba(255,255,255,0.10);
 }
 
 /* ====== Base ====== */
@@ -20,11 +29,11 @@ body {
   color: var(--text);
 }
 #app {
-  max-width: 1100px;
-  margin: 40px auto;
-  padding: 0 16px;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 var(--page-pad) var(--page-pad);
   position: relative;
-  min-height: 70vh;
+  min-height: calc(100vh - var(--topbar-h));
 }
 button, .btn {
   appearance: none;
@@ -54,6 +63,34 @@ input::placeholder { color: #8f98a6; }
 
 #status { margin: 8px 0 16px; color: var(--muted); font-size: 14px; min-height: 18px; }
 
+/* ====== Top bar ====== */
+.topbar {
+  height: var(--topbar-h);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 var(--page-pad);
+}
+.topbar .brand { font-weight: 700; letter-spacing:.2px; opacity: .9; }
+.topbar .actions { display: flex; gap: 12px; align-items: center; }
+
+/* Dropdown */
+.dropdown { position: relative; }
+.dropdown .menu {
+  position: absolute; right: 0; top: 110%;
+  min-width: 220px; padding: 8px;
+  background: var(--menu-bg);
+  border: 1px solid var(--menu-border);
+  border-radius: 12px;
+  list-style: none; margin: 0;
+  box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  z-index: 50;
+}
+.dropdown .menu li { margin: 2px 0; }
+.dropdown .menu button {
+  width: 100%; text-align: left; padding: 10px 12px; border-radius: 8px;
+  background: transparent; border: 1px solid transparent; color: var(--text);
+}
+.dropdown .menu button:hover { background: rgba(255,255,255,.06); }
+
 /* ====== Modals ====== */
 .modal {
   display: none;
@@ -77,20 +114,34 @@ input::placeholder { color: #8f98a6; }
 .modal p.hint { margin: 4px 0 12px; color: var(--muted); font-size: 14px; }
 .stack { display: grid; gap: 10px; }
 
-/* ====== Chip hero ====== */
-.chip-box {
-  position: absolute; inset: 0;
+/* ====== Chip stage (the light box) ====== */
+.chip-stage {
+  min-height: calc(100vh - var(--topbar-h) - var(--page-pad));
   display: grid; place-items: center;
-  pointer-events: none; /* decorative */
 }
-#chipImage {
-  max-width: min(520px, 72vw);
-  width: auto; height: auto;
-  transform: translateY(-6vh);
+.chip-frame {
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--frame-border);
+  background: var(--frame-bg);
+  border-radius: var(--frame-radius);
+  display: grid; place-items: center;
+  padding: 24px;
+}
+#chipImage,
+.chip-img {
+  width: min(70%, 520px);
+  height: auto;
+  display: block;
+  object-fit: contain;
+  /* slight nudge right in case PNG has extra left padding */
+  object-position: 52% center; /* adjust 50–55% as needed */
+  margin: 0 auto;
   filter: drop-shadow(0 12px 32px rgba(0,0,0,.45));
+  transform: translateZ(0);
 }
 
-/* ====== Chat area ====== */
+/* ====== Chat area (kept) ====== */
 #chatArea {
   margin-top: 20px;
   border: 1px dashed #2a3040;
@@ -100,41 +151,7 @@ input::placeholder { color: #8f98a6; }
   background: rgba(31,36,48,.4);
 }
 
-/* ====== Bottom title ====== */
-#bottomTitle {
-  position: fixed; left: 0; bottom: 80px; width: 100%;
-  text-align: center; color: #ffb25e; font-weight: 700; font-size: 28px;
-  letter-spacing: .3px; text-shadow: 0 1px 0 rgba(0,0,0,.4);
-  pointer-events: none; z-index: 998;
-}
-
-/* ====== Toolbar (centered) ====== */
-#askChipToolbar {
-  display: none; /* shown after auth by JS */
-  position: fixed; left: 0; bottom: 0; width: 100%;
-  background: rgba(30,30,30,0.95);
-  padding: 14px 20px;
-  display: flex; justify-content: center; align-items: center; gap: 16px;
-  z-index: 999; box-shadow: 0 -2px 10px rgba(0,0,0,0.6);
-  min-height: 64px;
-}
-#askChipToolbar #startButton {
-  font-weight: 700; border: none; padding: 10px 16px; border-radius: 10px;
-  background: linear-gradient(180deg, var(--accent), var(--accent-2)); color: #111;
-  box-shadow: 0 8px 30px rgba(255,106,0,.25);
-}
-#askChipToolbar .dropdown { position: relative; }
-#askChipToolbar .dropdown-content {
-  display: none; position: absolute; bottom: 30px;
-  background: rgba(30,30,30,0.9);
-  border-radius: 6px; padding: 6px; min-width: 140px;
-  box-shadow: 0 0 6px #000;
-}
-#askChipToolbar .dropdown-content div { padding: 6px 8px; cursor: pointer; }
-#askChipToolbar .dropdown-content div:hover { background-color: rgba(255,165,0,0.2); }
-#askChipToolbar .dropdown:hover .dropdown-content { display: block; }
-
-/* ====== Whisper-style cue ====== */
+/* ====== Status cue ====== */
 #chipStatusCue{
   position: fixed; top: 16px; left: 16px;
   padding: 8px 12px; border-radius: 10px;
@@ -151,32 +168,15 @@ input::placeholder { color: #8f98a6; }
 #chipStatusCue.speak { background: rgba(21,66,15,.7); color:#cfeecf; }
 #chipStatusCue.warn  { background: rgba(66,15,15,.7); color:#ffc9c9; }
 
-/* ====== (Optional) Legacy “record” UI you had ====== */
-#recordBtn {
-  position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
-  z-index: 10; padding: 12px 24px; font-size: 16px;
-  background-color: orange; color: orange; border: none; border-radius: 10px;
-  cursor: pointer; font-weight: bold;
-  box-shadow: 0 0 10px rgba(255,165,0,0.4);
-}
-#recordBtn.blinking { animation: blink-animation 2s ease-in-out infinite; }
-@keyframes blink-animation { 0%,100%{opacity:1} 50%{opacity:.3} }
-#recordPrompt {
-  position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%);
-  font-size: 16px; color: rgba(255,255,255,0.3); transition: opacity 1s ease; pointer-events: none;
-}
-#recordPrompt.ready { color: rgba(255,255,255,0.9); }
-#waveform {
-  position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%);
-  width: 200px; height: 40px; background: transparent; pointer-events: none;
-}
-@keyframes pulseDots { 0%{opacity:.2} 33%{opacity:.5} 66%{opacity:.8} 100%{opacity:1} }
-#recordPrompt.listening::after { content: "..."; animation: pulseDots 1.5s infinite; }
+/* ====== Legacy UI (hidden now) ====== */
+#bottomTitle { display: none !important; }
+#askChipToolbar { display: none !important; } /* replaced by top-right dropdown */
 
-/* Small utility */
+#recordBtn, #recordPrompt, #waveform { display: none !important; }
+
 .hidden { display: none !important; }
 
-/* ====== NEW: Static/Dynamic buttons + hide legacy Start ====== */
+/* ====== Static/Dynamic buttons (if you re-add later) ====== */
 #askChipToolbar #btnModeStatic,
 #askChipToolbar #btnModeDynamic {
   border: 1px solid var(--border);
@@ -192,6 +192,3 @@ input::placeholder { color: #8f98a6; }
   outline-offset: 2px;
   background: #444;
 }
-
-/* Hide Start button (kept in DOM for safety, but visually replaced) */
-#askChipToolbar #startButton { display: none !important; }
