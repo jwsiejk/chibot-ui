@@ -29,10 +29,10 @@ import psycopg2.extras as extras  # for RealDictCursor
 
 # --- optional deps with guards ---
 try:
-    import pandas as pd
-    HAS_PANDAS = True
+  from openpyxl import load_workbook
+    HAS_OPENPYXL = True
 except Exception:
-    HAS_PANDAS = False
+    HAS_OPENPYXL = False
 
 try:
     import fitz  # PyMuPDF
@@ -304,6 +304,8 @@ def upsert_account_row(cur, row):
         row.get("region") or "Americas"
     ))
 
+from io import BytesIO
+
 @app.post("/accounts/upload")
 def accounts_upload():
     """
@@ -311,39 +313,52 @@ def accounts_upload():
       field name: file  (Excel: .xlsx)
     """
     try:
-        if not HAS_PANDAS:
-            return jsonify({"error": "Excel ingest unavailable: pandas/openpyxl not installed"}), 503
+        if not HAS_OPENPYXL:
+            return jsonify({"error": "Excel ingest unavailable: openpyxl not installed"}), 503
 
         ensure_accounts_table()
         if "file" not in request.files:
             return jsonify({"error": "no file"}), 400
         f = request.files["file"]
-        if not f.filename.lower().endswith((".xlsx", ".xls")):
+        if not f.filename.lower().endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
             return jsonify({"error": "please upload an .xlsx file"}), 400
 
-        df = pd.read_excel(f, engine="openpyxl")
-        df.columns = [normalize_header(c) for c in df.columns]
+        # Load workbook from uploaded bytes
+        data = f.read()
+        wb = load_workbook(filename=BytesIO(data), data_only=True)
+        ws = wb.active  # first sheet
+
+        # Read headers from row 1
+        header_cells = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+        headers = [normalize_header((h or "")) for h in header_cells]
 
         required = {"account_name"}
-        if not required.issubset(set(df.columns)):
-            return jsonify({"error": f"excel missing required column(s): {', '.join(sorted(required - set(df.columns)))}"}), 400
+        if not required.issubset(set(headers)):
+            missing = ", ".join(sorted(required - set(headers)))
+            return jsonify({"error": f"excel missing required column(s): {missing}"}), 400
+
+        # Build header index map
+        idx = {h: i for i, h in enumerate(headers)}
 
         keep = ["account_name", "owner", "owner_email", "manager", "pam", "region"]
-        for col in keep:
-            if col not in df.columns:
-                df[col] = None
-        df = df[keep].fillna("")
+        rows_ingested = 0
 
         with get_connection() as conn:
             with conn.cursor() as cur:
-                for _, r in df.iterrows():
-                    row = {k: (r[k].strip() if isinstance(r[k], str) else r[k]) for k in keep}
+                # Iterate data rows starting at row 2
+                for values in ws.iter_rows(min_row=2, values_only=True):
+                    def val(key):
+                        i = idx.get(key)
+                        v = (values[i] if i is not None and i < len(values) else "")
+                        return v.strip() if isinstance(v, str) else (v or "")
+                    row = {k: val(k) for k in keep}
                     if not row["account_name"]:
                         continue
                     upsert_account_row(cur, row)
+                    rows_ingested += 1
             conn.commit()
 
-        return jsonify({"ok": True, "rows": int(len(df))})
+        return jsonify({"ok": True, "rows": rows_ingested})
     except Exception as e:
         app.logger.exception("/accounts/upload failed")
         return jsonify({"error": "upload failed"}), 500
