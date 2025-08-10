@@ -1,24 +1,24 @@
 // chip-viseme.js – Viseme-driven mouth overlay for Chip
 // Uses image layers in /static/chip/img/visemes/*
-// Works with a viseme timeline if provided; otherwise falls back to RMS-driven mouth swaps.
+// If no viseme timeline is provided, falls back to RMS-based mouth swaps.
 
 ;(function (global) {
   const PATH = "/static/chip/img/visemes/";
 
-  // Map viseme keys -> filenames (adjust to match your assets if needed)
+  // Map viseme keys -> filenames (adjust to your asset names if needed)
   const MAP = {
-    "neutral": "mouth_neutral.png",
-    "m":       "mouth_m.png",       // closed
-    "ee":      "mouth_ee.png",
-    "aa":      "mouth_aa.png",
-    "oh":      "mouth_oh.png",
-    "f":       "mouth_f.png",
-    "l":       "mouth_l.png",
-    "r":       "mouth_r.png",
-    "s":       "mouth_s.png",
-    "uh":      "mouth_uh.png",
-    "d":       "mouth_d.png",
-    "w-oo":    "mouth_woo.png"
+    neutral: "mouth_neutral.png",
+    m:       "mouth_m.png",       // closed
+    ee:      "mouth_ee.png",
+    aa:      "mouth_aa.png",
+    oh:      "mouth_oh.png",
+    f:       "mouth_f.png",
+    l:       "mouth_l.png",
+    r:       "mouth_r.png",
+    s:       "mouth_s.png",
+    uh:      "mouth_uh.png",
+    d:       "mouth_d.png",
+    "w-oo":  "mouth_woo.png"
   };
 
   // Position and scale of the mouth overlay relative to chipImage rect
@@ -44,29 +44,32 @@
     return mouthImg;
   }
 
+  // FIX: position relative to the chipBox, not the viewport
   function layout() {
     const img = document.getElementById("chipImage");
-    const el = ensureMouth();
-    if (!img || !el) return;
+    const box = document.getElementById("chipBox");
+    const el  = ensureMouth();
+    if (!img || !el || !box) return;
 
-    const r = img.getBoundingClientRect();
-    if (!r.width || !r.height) return;
+    const rImg = img.getBoundingClientRect();
+    const rBox = box.getBoundingClientRect();
+    if (!rImg.width || !rImg.height) return;
 
-    const cx = r.left + r.width  * anchor.x;
-    const cy = r.top  + r.height * anchor.y;
-    const w  = r.width * size.w;
-    const h  = r.width * size.h;
+    const cx = (rImg.left - rBox.left) + rImg.width  * anchor.x;
+    const cy = (rImg.top  - rBox.top)  + rImg.height * anchor.y;
+    const w  = rImg.width * size.w;
+    const h  = rImg.width * size.h;
 
-    el.style.left = `${cx}px`;
-    el.style.top = `${cy}px`;
-    el.style.width = `${w}px`;
+    el.style.left   = `${cx}px`;
+    el.style.top    = `${cy}px`;
+    el.style.width  = `${w}px`;
     el.style.height = `${h}px`;
     el.classList.remove("talking");
   }
 
   function setMouth(key) {
     const el = ensureMouth();
-    const file = MAP[key] || MAP["neutral"];
+    const file = MAP[key] || MAP.neutral;
     el.src = PATH + file;
   }
 
@@ -81,21 +84,20 @@
     const timers = [];
     visemes.forEach(({ viseme, start }) => {
       const key = (viseme || "neutral").toLowerCase();
-      const file = MAP[key];
-      if (!file) return;
+      if (!MAP[key]) return;
       const t = setTimeout(() => setMouth(key), Math.max(0, (start || 0) * 1000));
       timers.push(t);
     });
     audioEl.addEventListener("ended", () => timers.forEach(clearTimeout), { once: true });
   }
 
-  // Fallback when we don't have a timeline: simple RMS analyzer → swap images by loudness
+  // Fallback: RMS analyzer → pick mouth by loudness
   function driveByRMS(audioEl) {
     try {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       audioCtx.resume();
 
-      const source = audioCtx.createMediaElementSource(audioEl);
+      const source   = audioCtx.createMediaElementSource(audioEl);
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 512;
       source.connect(analyser);
@@ -113,17 +115,13 @@
         }
         const rms = Math.sqrt(sum / data.length);
 
-        // thresholds → choose a mouth shape
         const key =
-          rms < 0.03 ? "m" :         // mostly closed
+          rms < 0.03 ? "m" :
           rms < 0.06 ? "ee" :
           rms < 0.10 ? "aa" :
-                       "oh";         // wide
+                       "oh";
 
-        if (key !== lastKey) {
-          setMouth(key);
-          lastKey = key;
-        }
+        if (key !== lastKey) { setMouth(key); lastKey = key; }
         rafId = requestAnimationFrame(loop);
       };
       loop();
@@ -134,7 +132,7 @@
     }
   }
 
-  // Public: play audio and animate mouth (visemes if provided; otherwise RMS)
+  // Public: play audio and animate mouth (visemes if provided; else RMS)
   async function play(url, opts = {}) {
     preload();
     layout();
@@ -152,9 +150,8 @@
       driveByRMS(audio);
     }
 
-    // Cleanup on end
-    audio.addEventListener("ended", () => reset(), { once: true });
-    audio.addEventListener("error", () => reset(), { once: true });
+    audio.addEventListener("ended", reset, { once: true });
+    audio.addEventListener("error", reset, { once: true });
 
     await audio.play();
     return true;
@@ -170,6 +167,5 @@
   }
   window.addEventListener("resize", layout);
 
-  // Expose globally (works whether or not scripts use modules)
   global.ChipViseme = { play, layout, setAnchor, setSize, map: MAP, path: PATH };
 })(window);
