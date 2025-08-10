@@ -7,11 +7,11 @@
   <link rel="icon" href="data:," />
 
   <!-- Styles -->
-  <link rel="stylesheet" href="{{ url_for('static', filename='user-experience/css/style.css') }}?v=20250809-fix" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='user-experience/css/style.css') }}?v=20250810-chat" />
 
   <!-- Scripts (viseme first, then main) -->
-  <script defer src="{{ url_for('static', filename='chip/chip-viseme.js') }}?v=20250809-fix"></script>
-  <script defer src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250809-fix"></script>
+  <script defer src="{{ url_for('static', filename='chip/chip-viseme.js') }}?v=20250810-chat"></script>
+  <script defer src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250810-chat"></script>
 </head>
 <body>
 
@@ -65,6 +65,15 @@
       <!-- Mouth overlay (chip-viseme.js will control src/position) -->
       <img id="chipMouthImg" alt="" />
     </div>
+
+    <!-- Chat panel (simple, docked) -->
+    <section id="chatPanel" aria-label="Chat with Chip" hidden>
+      <div id="chatLog" class="chat-log" aria-live="polite"></div>
+      <div class="chat-composer">
+        <input id="chatInput" type="text" placeholder="Type a message…" autocomplete="off" />
+        <button id="chatSendBtn" class="btn">Send</button>
+      </div>
+    </section>
   </div>
 
   <!-- Bottom toolbar -->
@@ -73,7 +82,15 @@
     <button id="btnModeDynamic">Dynamic</button>
 
     <button id="btnMic"  title="Hold to talk">🎤 Mic</button>
-    <button id="btnAsk"  title="Open chat">💬 Chat</button>
+
+    <!-- Chat with caret -->
+    <div class="dropdown" id="chatDropdown">
+      <button id="chatMenuBtn" title="Choose chat mode">💬 Chat ▾</button>
+      <div class="dropdown-content" id="chatMenu">
+        <div class="menuitem" data-lane="live">🔊 Chat Live (TTS)</div>
+        <div class="menuitem" data-lane="text">💬 Chat Text</div>
+      </div>
+    </div>
 
     <div class="dropdown">
       <button title="More">⋯ More</button>
@@ -86,3 +103,4 @@
 
 </body>
 </html>
+
