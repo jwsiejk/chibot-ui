@@ -24,7 +24,7 @@
     const img=chip(), st=stage(), el=ensure(); if(!img||!st) return;
     const ir=img.getBoundingClientRect(), sr=st.getBoundingClientRect();
     if(!ir.width||!ir.height){ requestAnimationFrame(layout); return; }
-    let w=ir.width*size.w, h=ir.width*size.h; if(w<120){const s=120/w; w=120; h*=s;}
+    let w=ir.width*size.w, h=ir.width*size.h; if(w<120){const s=60/w; w=60; h*=s;}
     const cx=(ir.left-sr.left)+ir.width*anchor.x+offset.x, cy=(ir.top-sr.top)+ir.height*anchor.y+offset.y;
     el.style.left=cx+"px"; el.style.top=cy+"px"; el.style.width=w+"px"; el.style.height=h+"px";
   }
