@@ -17,7 +17,7 @@ openai==1.43.0
 elevenlabs==1.5.0   # Keep at 1.x for current import style in app.py
 
 # --- Document parsing ---
-PyMuPDF==1.24.4     # fitz for PDFs
+PyMuPDF==1.26.3   # fitz for PDFs
 python-pptx==0.6.23 # for PPTX decks
 
 # --- Excel ingest ---
