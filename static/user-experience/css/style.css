@@ -8,6 +8,8 @@
   --accent:#ff6a00;
   --accent-2:#ff9350;
   --border:#2a3040;
+  --chip-shift-x: 36px;   /* + = move right,  - = move left  */
+  --chip-shift-y: -22px;  /
 
   --topbar-h: 64px;
   --toolbar-h: 96px;           /* NEW: reserve space above bottom toolbar */
@@ -134,13 +136,12 @@ input::placeholder { color: #8f98a6; }
   padding: 24px;
 }
 #chipImage {
-  width: min(68%, 520px);              /* slightly smaller for balance */
+  width: min(68%, 520px);
   height: auto;
   display: block;
   object-fit: contain;
-  /* Nudge Chip a bit right & higher so he centers visually in the frame */
-  object-position: 58% 42%;
-  transform: translateY(-18px);
+  object-position: 50% 42%;
+  transform: translate(var(--chip-shift-x), var(--chip-shift-y));  /* ← updated */
   filter: drop-shadow(0 12px 32px rgba(0,0,0,.45));
   margin: 0 auto;
 }
