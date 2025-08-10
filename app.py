@@ -29,7 +29,7 @@ import psycopg2.extras as extras  # for RealDictCursor
 
 # --- optional deps with guards ---
 try:
-  from openpyxl import load_workbook
+    from openpyxl import load_workbook
     HAS_OPENPYXL = True
 except Exception:
     HAS_OPENPYXL = False
