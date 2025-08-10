@@ -5,14 +5,29 @@
   <title>Ask Chip</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" href="data:," />
-
-  <link rel="stylesheet" href="{{ url_for('static', filename='user-experience/css/style.css') }}?v=20250809-merge" />
-  <script src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250809h" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='user-experience/css/style.css') }}?v=20250809-ui2" />
+  <script src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250809-ui2" defer></script>
 </head>
 <body>
 
   <!-- Subtle status cue -->
   <div id="chipStatusCue" aria-live="polite">Ready.</div>
+
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="brand">Chip</div>
+    <div class="actions">
+      <div class="dropdown">
+        <button id="askMenuBtn" class="btn ask-menu">Ask Chip ▾</button>
+        <ul id="askMenu" class="menu" hidden>
+          <li><button id="menuAsk">Ask Chip</button></li>
+          <li><button id="menuProfile">Profile</button></li>
+          <li><button id="menuHistory">History</button></li>
+          <li><button id="menuLogout">Log out</button></li>
+        </ul>
+      </div>
+    </div>
+  </header>
 
   <!-- Login Modal -->
   <div id="loginModal" class="modal">
@@ -45,108 +60,19 @@
   </div>
 
   <!-- Main Content -->
-  <div id="app">
-    <div class="chip-box" id="chipBox" style="display:none">
-      <img id="chipImage" src="{{ url_for('static', filename='chip/img/chip.png') }}" alt="Chip" />
-    </div>
+  <div id="app" style="display:none">
+    <!-- Chip stage (light frame that fills down the page) -->
+    <section id="chipStage" class="chip-stage">
+      <div class="chip-frame">
+        <img id="chipImage" class="chip-img" src="{{ url_for('static', filename='chip/img/chip.png') }}" alt="Chip" />
+      </div>
+    </section>
 
     <div id="status"></div>
     <div id="chatArea"></div>
   </div>
 
-  <!-- Auth boot (unchanged behavior, adjusted for Static/Dynamic buttons) -->
-  <script>
-  (async function bootAuth() {
-    const q = s => document.querySelector(s);
-    const loginEl   = q('#loginModal');
-    const profileEl = q('#profileModal');
-    const appEl     = q('#app');
-    const chipBox   = q('#chipBox');
-    const toolbar   = q('#askChipToolbar');
-    const cueEl     = q('#chipStatusCue');
-
-    // NEW: static/dynamic buttons replace old startButton
-    const staticBtn  = q('#staticBtn');
-    const dynamicBtn = q('#dynamicBtn');
-
-    function show(el, asDisplay) {
-      if (!el) return;
-      if (asDisplay) el.style.display = asDisplay;
-      else el.style.removeProperty('display');
-    }
-    function hide(el){ if(el){ el.style.display='none'; }}
-
-    function cue(text, cls=""){
-      if (!cueEl) return;
-      cueEl.className = ""; cueEl.textContent = text || "";
-      if (cls) cueEl.classList.add(cls); void cueEl.offsetWidth;
-      cueEl.classList.add("show");
-      if (!["think","listen"].includes(cls)) {
-        clearTimeout(cueEl._t); cueEl._t = setTimeout(()=>cueEl.classList.remove("show"), 1200);
-      }
-    }
-
-    try {
-      const r = await fetch('/api/me', { credentials: 'include' });
-      if (!r.ok) { hide(appEl); hide(profileEl); show(loginEl); return; }
-      const me = await r.json();
-
-      if (!me.profileComplete) {
-        hide(appEl); hide(loginEl); show(profileEl);
-        if (staticBtn) staticBtn.disabled = true;
-        if (dynamicBtn) dynamicBtn.disabled = true;
-        // auto-populate email field if available
-        const emailInput = q('#profileForm input[name="email"]');
-        if (emailInput && me.email) emailInput.value = me.email;
-        return;
-      }
-
-      hide(loginEl); hide(profileEl); show(appEl);
-
-      if (staticBtn) staticBtn.disabled = false;
-      if (dynamicBtn) dynamicBtn.disabled = false;
-
-      show(chipBox, 'grid');
-      show(toolbar, 'flex');
-
-      cue("Hi.");
-      // Preserve previous cue behavior that was hooked to Start:
-      if (dynamicBtn) dynamicBtn.addEventListener("click", () => cue("Listening…","listen"));
-      if (staticBtn)  staticBtn.addEventListener("click",  () => cue("Listening…","listen"));
-
-      const btnAsk = q("#btnAsk");
-      if (btnAsk) btnAsk.addEventListener("click", ()=> cue("Thinking…","think"));
-    } catch {
-      hide(appEl); hide(profileEl); show(loginEl);
-    }
-  })();
-  </script>
-
-  <!-- Bottom title -->
-  <div id="bottomTitle">Ask Chip</div>
-
-  <!-- Toolbar -->
-  <div id="askChipToolbar" style="display:none">
-    <!-- REPLACED: Start button -> Static & Dynamic -->
-    <button id="staticBtn" class="btn" data-role="static" aria-pressed="false">Static</button>
-    <button id="dynamicBtn" class="btn" data-role="dynamic" aria-pressed="false">Dynamic</button>
-
-    <button id="btnMic"  title="Hold to talk">🎤 Mic</button>
-    <button id="btnAsk"  title="Type a question">💬 Ask</button>
-    <div class="dropdown">
-      <button title="More">⋯ More</button>
-      <div class="dropdown-content">
-        <div id="btnHistory">Conversation History</div>
-        <div id="btnProfile">Edit Profile</div>
-        <div id="btnLogout">Log out</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Optional floating controls -->
-  <button id="recordBtn" class="hidden">Hold to Record</button>
-  <div id="recordPrompt" class="idle hidden">Hold the button to speak</div>
-  <canvas id="waveform" class="hidden"></canvas>
+  <!-- (Old bottom title/toolbar removed; replaced by top-right menu) -->
 
 </body>
 </html>
