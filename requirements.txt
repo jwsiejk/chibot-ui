@@ -10,3 +10,5 @@ python-dotenv>=1.0.0
 flask_cors>=3.0.10
 alembic==1.13.2
 SQLAlchemy>=2.0
+pymupdf
+python-pptx
