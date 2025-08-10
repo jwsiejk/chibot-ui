@@ -21,8 +21,6 @@ PyMuPDF==1.24.4     # fitz for PDFs
 python-pptx==0.6.23 # for PPTX decks
 
 # --- Excel ingest ---
-numpy==2.0.1        # pin ensures pandas gets a wheel
-pandas==2.2.2
 openpyxl==3.1.5     # pandas Excel engine
 
 # --- Other ---
