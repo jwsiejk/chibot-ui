@@ -29,11 +29,11 @@ body {
   color: var(--text);
 }
 #app {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 0 var(--page-pad) var(--page-pad);
+  max-width: 1100px;
+  margin: 40px auto;
+  padding: 0 16px;
   position: relative;
-  min-height: calc(100vh - var(--topbar-h));
+  min-height: 70vh;
 }
 button, .btn {
   appearance: none;
@@ -72,9 +72,9 @@ input::placeholder { color: #8f98a6; }
 .topbar .brand { font-weight: 700; letter-spacing:.2px; opacity: .9; }
 .topbar .actions { display: flex; gap: 12px; align-items: center; }
 
-/* Dropdown */
-.dropdown { position: relative; }
-.dropdown .menu {
+/* Header Dropdown */
+.dropdown.nav { position: relative; }
+.dropdown.nav .menu {
   position: absolute; right: 0; top: 110%;
   min-width: 220px; padding: 8px;
   background: var(--menu-bg);
@@ -84,12 +84,12 @@ input::placeholder { color: #8f98a6; }
   box-shadow: 0 10px 30px rgba(0,0,0,.35);
   z-index: 50;
 }
-.dropdown .menu li { margin: 2px 0; }
-.dropdown .menu button {
+.dropdown.nav .menu li { margin: 2px 0; }
+.dropdown.nav .menu button {
   width: 100%; text-align: left; padding: 10px 12px; border-radius: 8px;
   background: transparent; border: 1px solid transparent; color: var(--text);
 }
-.dropdown .menu button:hover { background: rgba(255,255,255,.06); }
+.dropdown.nav .menu button:hover { background: rgba(255,255,255,.06); }
 
 /* ====== Modals ====== */
 .modal {
@@ -114,31 +114,24 @@ input::placeholder { color: #8f98a6; }
 .modal p.hint { margin: 4px 0 12px; color: var(--muted); font-size: 14px; }
 .stack { display: grid; gap: 10px; }
 
-/* ====== Chip stage (the light box) ====== */
-.chip-stage {
-  min-height: calc(100vh - var(--topbar-h) - var(--page-pad));
+/* ====== Chip stage (light frame) ====== */
+.chip-box {
   display: grid; place-items: center;
-}
-.chip-frame {
-  width: 100%;
-  height: 100%;
   border: 1px solid var(--frame-border);
   background: var(--frame-bg);
   border-radius: var(--frame-radius);
-  display: grid; place-items: center;
+  min-height: calc(100vh - var(--topbar-h) - 2 * var(--page-pad));
   padding: 24px;
 }
-#chipImage,
-.chip-img {
+#chipImage {
   width: min(70%, 520px);
   height: auto;
   display: block;
   object-fit: contain;
-  /* slight nudge right in case PNG has extra left padding */
-  object-position: 52% center; /* adjust 50–55% as needed */
-  margin: 0 auto;
+  object-position: 52% center; /* nudge if PNG padded */
   filter: drop-shadow(0 12px 32px rgba(0,0,0,.45));
   transform: translateZ(0);
+  margin: 0 auto;
 }
 
 /* ====== Chat area (kept) ====== */
@@ -151,7 +144,36 @@ input::placeholder { color: #8f98a6; }
   background: rgba(31,36,48,.4);
 }
 
-/* ====== Status cue ====== */
+/* ====== Toolbar ====== */
+#bottomTitle {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: 86px;
+  opacity: .85; color: #fff; letter-spacing: .3px;
+  font-weight: 800; font-size: 18px;
+}
+#askChipToolbar {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: 20px;
+  display: none;
+  gap: 10px;
+  background: rgba(20,20,22,0.8);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 14px;
+  padding: 10px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.4);
+}
+#askChipToolbar .dropdown { position: relative; }
+#askChipToolbar .dropdown-content {
+  display: none; position: absolute; bottom: 30px;
+  background: rgba(30,30,30,0.9);
+  border-radius: 6px; padding: 6px; min-width: 140px;
+  box-shadow: 0 0 6px #000;
+}
+#askChipToolbar .dropdown-content div { padding: 6px 8px; cursor: pointer; }
+#askChipToolbar .dropdown-content div:hover { background-color: rgba(255,165,0,0.2); }
+#askChipToolbar .dropdown:hover .dropdown-content { display: block; }
+
+/* ====== Whisper-style cue ====== */
 #chipStatusCue{
   position: fixed; top: 16px; left: 16px;
   padding: 8px 12px; border-radius: 10px;
@@ -168,13 +190,8 @@ input::placeholder { color: #8f98a6; }
 #chipStatusCue.speak { background: rgba(21,66,15,.7); color:#cfeecf; }
 #chipStatusCue.warn  { background: rgba(66,15,15,.7); color:#ffc9c9; }
 
-/* ====== Legacy UI (hidden now) ====== */
+/* Hide legacy bottom title text */
 #bottomTitle { display: none !important; }
-#askChipToolbar { display: none !important; } /* replaced by top-right dropdown */
-
-#recordBtn, #recordPrompt, #waveform { display: none !important; }
-
-.hidden { display: none !important; }
 
 /* ====== Static/Dynamic buttons (if you re-add later) ====== */
 #askChipToolbar #btnModeStatic,
