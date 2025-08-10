@@ -13,6 +13,12 @@
   --chip-shift-x: 36px;   /* + = move right,  - = move left  */
   --chip-shift-y: -22px;  /* - = move up,     + = move down  */
 
+  /* NEW: fine-tune mouth position/scale/stacking */
+  --mouth-offset-x: -6px;   /* move left/right from face center */
+  --mouth-offset-y: 18px;   /* move up/down from face center */
+  --mouth-scale: 1;         /* overall mouth scale */
+  --mouth-z: 1000;          /* ensure mouth sits above chip.png */
+
   --topbar-h: 64px;
   --toolbar-h: 96px;           /* reserved space above bottom toolbar (updated by JS) */
   --page-pad: 24px;
@@ -137,14 +143,25 @@ input::placeholder { color: #8f98a6; }
   margin-top: 8px;
   margin-bottom: 8px;
   padding: 24px;
+
+  /* NEW: ensure mouth overlay is never clipped */
+  overflow: visible;
 }
+
 #chipImage {
   width: min(68%, 520px);
   height: auto;
   display: block;
   object-fit: contain;
   object-position: 50% 42%;
+
+  /* Chip placement */
   transform: translate(var(--chip-shift-x), var(--chip-shift-y));
+
+  /* Ensure the image sits under overlays even when transformed (stacking context) */
+  position: relative;
+  z-index: 0;
+
   filter: drop-shadow(0 12px 32px rgba(0,0,0,.45));
   margin: 0 auto;
 }
@@ -152,16 +169,22 @@ input::placeholder { color: #8f98a6; }
 /* Mouth overlay (swapped by JS with viseme images) */
 #chipMouthImg {
   position: absolute;
-  left: 50%; top: 50%;
-  transform: translate(-50%, -50%);
+
+  /* Center relative to frame, then fine-tune via CSS vars */
+  left: calc(50% + var(--mouth-offset-x));
+  top: calc(50% + var(--mouth-offset-y));
+  transform: translate(-50%, -50%) scale(var(--mouth-scale));
   transform-origin: 50% 50%;
+
   pointer-events: none;
-  width: 160px; height: auto;   /* JS will resize to match avatar */
+  width: 160px; height: auto;   /* JS can still resize if needed */
 
   /* SHOW neutral mouth even when not talking */
   opacity: .95;
   transition: opacity .12s linear;
-  z-index: 10;
+
+  /* Always above chip image */
+  z-index: var(--mouth-z);
 }
 
 /* Talking state left intact for future use if you want to dim/brighten during speech */
@@ -213,3 +236,6 @@ input::placeholder { color: #8f98a6; }
 
 /* Remove unused UI boxes */
 #status, #chatArea { display: none !important; }
+
+/* NOTE: Disabling specific visemes (r/oh/woo) requires a JS map change.
+   If you’d like, I can patch the viseme router so those never get selected. */
