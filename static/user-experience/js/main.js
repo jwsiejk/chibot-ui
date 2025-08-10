@@ -1,4 +1,4 @@
-// main.js — Zoom-style: Static uses /static/chip/audio/* mp3s, Dynamic uses ElevenLabs via /greet
+// main.js — Chat Live/Text + existing Static/Dynamic; 2025-08-10 chat
 document.addEventListener("DOMContentLoaded", () => {
   const $ = (id) => document.getElementById(id);
 
@@ -29,14 +29,24 @@ document.addEventListener("DOMContentLoaded", () => {
   const appEl        = $("app");
   const chipBox      = $("chipBox");
 
+  // Chat UI
+  const chatPanel    = $("chatPanel");
+  const chatLog      = $("chatLog");
+  const chatInput    = $("chatInput");
+  const chatSendBtn  = $("chatSendBtn");
+
   // Bottom toolbar
   const toolbar      = $("askChipToolbar");
   const btnStatic    = $("btnModeStatic");
   const btnDynamic   = $("btnModeDynamic");
   const btnMic       = $("btnMic");
-  const btnChat      = $("btnAsk");      // visible for familiarity; functionally disabled for now
   const btnHistory   = $("btnHistory");
   const btnLogout    = $("btnLogout");
+
+  // Chat lane dropdown elements
+  const chatDropdown = $("chatDropdown");
+  const chatMenuBtn  = $("chatMenuBtn");
+  const chatMenu     = $("chatMenu");
 
   // Top-right nav (Ask Chip ▾ → Profile)
   const navMenuBtn   = $("navMenuBtn");
@@ -45,6 +55,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Session mode (null until user clicks a mode)
   let sessionMode = null; // 'static' | 'dynamic' | null
+
+  // Chat lane (persisted): 'live' (TTS) or 'text'
+  let chatLane = (localStorage.getItem("chatLane") === "text") ? "text" : "live";
 
   // Helpers
   const show = (el, d) => { if (!el) return; d ? el.style.display = d : el.style.removeProperty("display"); };
@@ -96,20 +109,13 @@ document.addEventListener("DOMContentLoaded", () => {
     show(toolbar, "flex");
     setToolbarHeightVar();
     // Position the mouth overlay relative to the current avatar size
-    // Position the mouth overlay relative to the current avatar size
     if (window.ChipViseme && typeof window.ChipViseme.layout === "function") {
-  // anchor = center of mouth as % of avatar (x, y)
-  window.ChipViseme.setAnchor(0.49, 0.46);
-
-  // size = mouth box as % of avatar width (w, h)
-  window.ChipViseme.setSize(0.095, 0.075);
-
-  // reflow after applying the calibration
-  window.ChipViseme.layout();
-    }
-    if (btnChat) {
-      btnChat.disabled = true;
-      btnChat.title = "Chat is coming soon";
+      // anchor = center of mouth as % of avatar (x, y)
+      window.ChipViseme.setAnchor(0.49, 0.46);
+      // size = mouth box as % of avatar width (w, h)
+      window.ChipViseme.setSize(0.095, 0.075);
+      // reflow after applying the calibration
+      window.ChipViseme.layout();
     }
   }
 
@@ -194,7 +200,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function startStaticSession() {
     try {
-      for (const name of GREETING_FILES) {
+      for (let i = 0; i < GREETING_FILES.length; i++) {
+        const name = GREETING_FILES[i];
         const url = STATIC_AUDIO_BASE + name;
         try { await tryPlayWithMouth(url); return; } catch (_) {}
       }
@@ -203,7 +210,6 @@ document.addEventListener("DOMContentLoaded", () => {
       console.warn(e?.message || e);
       alert((e && e.message) || "Couldn’t play the static greeting. Check your /static/chip/audio/ files.");
     }
-    // Reserved: trigger ANSWER_FILES later on prompt
   }
 
   async function startDynamicSession() {
@@ -240,9 +246,173 @@ document.addEventListener("DOMContentLoaded", () => {
   // Mic placeholder (kept)
   btnMic?.addEventListener("click", () => alert("Voice input coming soon."));
 
-  // Chat: intentionally disabled for now (future text chat)
-  btnChat?.addEventListener("click", () => {
-    alert("Chat is coming soon. For now, use Static or Dynamic to start a session.");
+  // ---------- Chat dropdown + panel ----------
+  function updateChatButtonLabel() {
+    if (!chatMenuBtn) return;
+    chatMenuBtn.textContent = (chatLane === "text") ? "💬 Chat (Text) ▾" : "💬 Chat (Live) ▾";
+  }
+  updateChatButtonLabel();
+
+  function toggleChatMenu(forceOpen) {
+    if (!chatMenu) return;
+    if (typeof forceOpen === "boolean") {
+      chatMenu.style.display = forceOpen ? "block" : "none";
+      return;
+    }
+    chatMenu.style.display = (chatMenu.style.display === "block") ? "none" : "block";
+  }
+
+  // open/close menu
+  chatMenuBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    // also reveal the chat panel when clicking Chat (so user sees the composer)
+    if (chatPanel) {
+      chatPanel.hidden = false;
+      chatInput?.focus();
+    }
+    toggleChatMenu();
+  });
+  document.addEventListener("click", (e) => {
+    if (!chatMenu) return;
+    if (chatMenu.style.display === "block" && !chatMenu.contains(e.target) && e.target !== chatMenuBtn) {
+      toggleChatMenu(false);
+    }
+  });
+
+  // choose lane
+  chatMenu?.addEventListener("click", (e) => {
+    const t = e.target;
+    if (!t || !t.getAttribute) return;
+    const lane = t.getAttribute("data-lane");
+    if (!lane) return;
+    chatLane = (lane === "text") ? "text" : "live";
+    try { localStorage.setItem("chatLane", chatLane); } catch {}
+    updateChatButtonLabel();
+    toggleChatMenu(false);
+    if (chatPanel) { chatPanel.hidden = false; chatInput?.focus(); }
+  });
+
+  // ---------- Chat plumbing ----------
+  function appendMessage(role, text, lane) {
+    if (!chatLog) return null;
+    const el = document.createElement("div");
+    el.className = "msg " + role; // "user" | "assistant"
+    const icon = lane ? (lane === "text" ? "💬 " : "🔊 ") : (role === "user" ? "🧑 " : "");
+    el.textContent = icon + (text || "");
+    chatLog.appendChild(el);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    return el;
+  }
+
+  function appendActions(actions) {
+    if (!actions || !actions.length || !chatLog) return;
+    const wrap = document.createElement("div");
+    wrap.className = "action-row";
+    for (let i = 0; i < actions.length; i++) {
+      const a = actions[i];
+      if (!a || !a.type) continue;
+      const btn = document.createElement("button");
+      btn.className = "action";
+      btn.textContent = a.title || (a.type === "download" ? "Download" : "Open");
+      if (a.type === "download") {
+        btn.addEventListener("click", () => triggerDownload(a.url, a.filename));
+      } else if (a.type === "open_url") {
+        btn.addEventListener("click", () => window.open(a.url, "_blank", "noopener"));
+      } else if (a.type === "show_toast") {
+        btn.addEventListener("click", () => alert(a.message || "Done"));
+      }
+      wrap.appendChild(btn);
+    }
+    chatLog.appendChild(wrap);
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
+  function triggerDownload(url, filename) {
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    if (filename) a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function playAudioFromBase64(b64, onended) {
+    if (!b64) { if (onended) onended(); return null; }
+    const audio = new Audio("data:audio/mpeg;base64," + b64);
+    if (onended) audio.addEventListener("ended", onended, { once: true });
+    audio.play().catch(console.error);
+    return audio;
+    // If you prefer to use ChipViseme.play, convert to Blob URL and pass it in:
+    // const blob = b64ToBlob(b64, "audio/mpeg"); const url = URL.createObjectURL(blob); window.ChipViseme.play(url);
+  }
+
+  function driveVisemes(visemes) {
+    if (!visemes || !visemes.length) return;
+    if (window.ChipViseme && typeof window.ChipViseme.drive === "function") {
+      try { window.ChipViseme.drive(visemes); } catch (e) { console.warn("Viseme drive failed:", e); }
+    }
+  }
+
+  async function sendChat(message) {
+    if (!message || !message.trim()) return;
+    const okGate = await gate(); if (!okGate.ok) return;
+    if (chatPanel) chatPanel.hidden = false;
+
+    appendMessage("user", message, null);
+    const thinking = appendMessage("assistant", "…", chatLane);
+
+    try {
+      const res = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: message.trim(), lane: chatLane })
+      });
+      const data = await res.json();
+
+      // text
+      thinking.textContent = (chatLane === "live" ? "🔊 " : "💬 ") + (data.reply_text || "");
+
+      // audio + visemes (Live lane)
+      if (data.audio_b64) {
+        playAudioFromBase64(data.audio_b64, function(){});
+      }
+      if (data.visemes && data.visemes.length) {
+        driveVisemes(data.visemes);
+      }
+
+      // actions (download/open_url/etc.)
+      appendActions(data.actions || []);
+    } catch (e) {
+      thinking.textContent = "Sorry—something went sideways.";
+      console.error(e);
+    }
+  }
+
+  // Compose handlers
+  chatSendBtn?.addEventListener("click", () => {
+    if (!chatInput) return;
+    const val = chatInput.value;
+    if (val && val.trim()) { sendChat(val); chatInput.value = ""; }
+  });
+  chatInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      const val = chatInput.value;
+      if (val && val.trim()) { sendChat(val); chatInput.value = ""; }
+    }
+    if (e.key === "Enter" && e.ctrlKey) {
+      e.preventDefault();
+      // quick override to Live (TTS) for this message
+      const prev = chatLane;
+      chatLane = "live";
+      updateChatButtonLabel();
+      const val = chatInput.value;
+      if (val && val.trim()) { sendChat(val); chatInput.value = ""; }
+      chatLane = prev;
+      updateChatButtonLabel();
+    }
   });
 
   // ---------- “Ask Chip ▾” (Profile) ----------
