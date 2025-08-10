@@ -1,20 +1,20 @@
 // main.js — Zoom-style: Static uses /static/chip/audio/* mp3s, Dynamic uses ElevenLabs via /greet
 document.addEventListener("DOMContentLoaded", () => {
   const $ = (id) => document.getElementById(id);
-  
-// --- Dynamically size the chip box above the toolbar ---
-function setToolbarHeightVar(extra = 16) {
-  const el = document.getElementById('askChipToolbar');
-  if (!el) return;
-  const h = Math.ceil(el.getBoundingClientRect().height) || 0;
-  const finalPx = Math.max(h + extra, 64); // little breathing room
-  document.documentElement.style.setProperty('--toolbar-h', finalPx + 'px');
-}
-window.addEventListener('load', setToolbarHeightVar);
-window.addEventListener('resize', setToolbarHeightVar);
-window.addEventListener('orientationchange', setToolbarHeightVar);
 
-    // ---------- Static audio location + filenames ----------
+  // --- Dynamically size the chip box above the toolbar ---
+  function setToolbarHeightVar(extra = 16) {
+    const el = document.getElementById('askChipToolbar');
+    if (!el) return;
+    const h = Math.ceil(el.getBoundingClientRect().height) || 0;
+    const finalPx = Math.max(h + extra, 64); // little breathing room
+    document.documentElement.style.setProperty('--toolbar-h', finalPx + 'px');
+  }
+  window.addEventListener('load', setToolbarHeightVar);
+  window.addEventListener('resize', setToolbarHeightVar);
+  window.addEventListener('orientationchange', setToolbarHeightVar);
+
+  // ---------- Static audio location + filenames ----------
   const STATIC_AUDIO_BASE = "/static/chip/audio/";
   const GREETING_FILES = ["greeting-static.mp3", "greeting.mp3", "Greeting.mp3"];
   const ANSWER_FILES   = ["answer-static.mp3", "answer.mp3", "Answer.mp3"]; // reserved for later
@@ -95,6 +95,10 @@ window.addEventListener('orientationchange', setToolbarHeightVar);
     show(chipBox, "grid");
     show(toolbar, "flex");
     setToolbarHeightVar();
+    // Position the mouth overlay relative to the current avatar size
+    if (window.ChipViseme && typeof window.ChipViseme.layout === "function") {
+      window.ChipViseme.layout();
+    }
     if (btnChat) {
       btnChat.disabled = true;
       btnChat.title = "Chat is coming soon";
@@ -162,34 +166,6 @@ window.addEventListener('orientationchange', setToolbarHeightVar);
     });
   }
 
-  // ---------- Audio helpers (Static) ----------
-  function playAudio(url) {
-    return new Promise((resolve, reject) => {
-      const a = new Audio(url);
-      const onError = () => { cleanup(); reject(new Error("audio load/play error: " + url)); };
-      const onCanPlay = () => {
-        a.play().then(() => { cleanup(); resolve(url); }).catch(onError);
-      };
-      const cleanup = () => {
-        a.removeEventListener("error", onError);
-        a.removeEventListener("canplaythrough", onCanPlay);
-      };
-      a.addEventListener("error", onError, { once: true });
-      a.addEventListener("canplaythrough", onCanPlay, { once: true });
-      a.load();
-    });
-  }
-
-  async function playFirstAvailable(base, names) {
-    const errors = [];
-    for (const name of names) {
-      const url = base + name;
-      try { await playAudio(url); return url; }
-      catch (e) { errors.push(url); }
-    }
-    throw new Error("No static audio found. Tried:\n" + errors.join("\n"));
-  }
-
   // ---------- Session logic ----------
   function reflectMode(mode) {
     sessionMode = mode; // 'static' | 'dynamic'
@@ -198,15 +174,28 @@ window.addEventListener('orientationchange', setToolbarHeightVar);
     document.documentElement.setAttribute("data-chip-mode", mode);
   }
 
+  async function tryPlayWithMouth(url, opts) {
+    if (window.ChipViseme && typeof window.ChipViseme.play === "function") {
+      await window.ChipViseme.play(url, opts || {});
+      return url;
+    }
+    // Fallback: just play the audio
+    await new Audio(url).play();
+    return url;
+  }
+
   async function startStaticSession() {
     try {
-      const used = await playFirstAvailable(STATIC_AUDIO_BASE, GREETING_FILES);
-      console.log("[Static] Played greeting from:", used);
+      for (const name of GREETING_FILES) {
+        const url = STATIC_AUDIO_BASE + name;
+        try { await tryPlayWithMouth(url); return; } catch (_) {}
+      }
+      throw new Error("No static audio found.");
     } catch (e) {
       console.warn(e?.message || e);
-      alert(e?.message || "Couldn’t play the static greeting. Check your /static/chip/audio/ files.");
+      alert((e && e.message) || "Couldn’t play the static greeting. Check your /static/chip/audio/ files.");
     }
-    // Reserve answer playback for later (ANSWER_FILES)
+    // Reserved: trigger ANSWER_FILES later on prompt
   }
 
   async function startDynamicSession() {
@@ -216,7 +205,7 @@ window.addEventListener('orientationchange', setToolbarHeightVar);
       const audioUrl = data?.audio;
       const text = data?.reply || "Hello!";
       if (audioUrl) {
-        try { await new Audio(audioUrl).play(); }
+        try { await tryPlayWithMouth(audioUrl); }
         catch (e) { console.warn("Dynamic audio failed:", e); alert(text); }
       } else {
         alert(text); // TTS disabled globally
