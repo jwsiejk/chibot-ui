@@ -107,12 +107,12 @@ document.addEventListener("DOMContentLoaded", () => {
       console.warn("[profile] /api/profile fetch failed", e);
     }
 
-    // Fallback from localStorage if API fails
+    // Fallback to localStorage if API fails
     try {
-      if (nameI)  nameI.value  = localStorage.getItem("profileName")  || "";
-      if (titleI) titleI.value = localStorage.getItem("profileTitle") || "";
-      if (emailI) emailI.value = localStorage.getItem("profileEmail") || "";
-    } catch {}
+      if (nameI)  nameI.value  = localStorage.getItem('profileName')  || '';
+      if (titleI) titleI.value = localStorage.getItem('profileTitle') || '';
+      if (emailI) emailI.value = localStorage.getItem('profileEmail') || '';
+    } catch (_) {}
   }
 
   // App layout once authenticated & complete
@@ -171,6 +171,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const res = await enforceProfileCompleteness({ applyLayout: true });
     if (!res.ok) return;
     setStatus("Ready.");
+    return res;
   }
   window.chipGate = gate;
 
@@ -261,26 +262,46 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // ---------- Toolbar: Ask / Mic / History (unchanged minimal wiring) ----------
+  // ---------- Toolbar: Ask / Mic / History ----------
   if (btnAsk && !btnAsk.dataset.wired) {
     btnAsk.dataset.wired = "1";
     btnAsk.addEventListener("click", async () => {
       const res = await enforceProfileCompleteness({ applyLayout: true });
       if (!res.ok) return;
 
-      const mode = document.documentElement.getAttribute("data-chip-mode") || "static";
-      let q = "";
-      if (mode === "dynamic") {
-        q = prompt("Ask Chip:");
-        if (!q) return;
-        setStatus("Thinking…");
-      } else {
+      const question = prompt("Chat with Chip:");
+      if (!question) return;
+      try {
+        cue("Thinking…","think");
+        setStatus("Sending to Chip…");
+        const { ok, data, status } = await j("/ask", {
+          method: "POST",
+          body: JSON.stringify({ question })
+        });
+        if (!ok) {
+          cue("Error","warn");
+          alert((data && data.error) || `Ask failed (${status})`);
+          return;
+        }
+        const reply = (data && data.response) || "(no reply)";
         setStatus("Playing answer…");
+        cue("Speaking…","speak");
+        const chatArea = document.getElementById("chatArea");
+        if (chatArea) {
+          const p = document.createElement("p");
+          p.textContent = reply;
+          chatArea.appendChild(p);
+        }
+        if (data && data.audio) {
+          try { const audio = new Audio(data.audio); await audio.play(); } catch(e){ console.warn("Audio play failed", e); }
+        }
+        cue("Answer ready.");
+        setStatus("Done.");
+      } catch (e) {
+        console.error("Ask error", e);
+        cue("Error","warn");
+        alert("Something went wrong. Try again.");
       }
-      if (window.chip?.playAnswer) {
-        await window.chip.playAnswer(q);
-      }
-      setStatus(mode === "dynamic" ? "Answer ready." : "Answer finished.");
     });
   }
 
@@ -311,35 +332,29 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // ---------- Mode buttons ----------
-  function reflectMode(mode) {
-    if (btnModeStatic)  btnModeStatic.classList.toggle("active", mode === "static");
-    if (btnModeDynamic) btnModeDynamic.classList.toggle("active", mode === "dynamic");
-    document.documentElement.setAttribute("data-chip-mode", mode);
+  // ---------- Top-right nav menu ----------
+  const navMenuBtn = document.getElementById("navMenuBtn");
+  const navMenu = document.getElementById("navMenu");
+  const navProfile = document.getElementById("navProfile");
+  function toggleNavMenu(forceOpen){
+    if(!navMenu) return;
+    const open = (forceOpen===undefined) ? navMenu.hidden : !forceOpen;
+    navMenu.hidden = open;
   }
-  reflectMode(document.documentElement.getAttribute("data-chip-mode") || "static");
-
-  if (btnModeStatic && !btnModeStatic.dataset.wired) {
-    btnModeStatic.dataset.wired = "1";
-    btnModeStatic.addEventListener("click", async () => {
-      reflectMode("static");
-      const res = await enforceProfileCompleteness({ applyLayout: true });
-      if (!res.ok) return;
-      setStatus("Playing greeting (static)...");
-      await window.chip?.playGreeting?.();
-      setStatus("Greeting finished.");
+  if (navMenuBtn && !navMenuBtn.dataset.wired){
+    navMenuBtn.dataset.wired = "1";
+    navMenuBtn.addEventListener("click",(e)=>{ e.stopPropagation(); toggleNavMenu(); });
+    document.addEventListener("click",(e)=>{
+      if(!navMenu?.hidden && !navMenu.contains(e.target) && e.target!==navMenuBtn) toggleNavMenu(false);
     });
   }
-
-  if (btnModeDynamic && !btnModeDynamic.dataset.wired) {
-    btnModeDynamic.dataset.wired = "1";
-    btnModeDynamic.addEventListener("click", async () => {
-      reflectMode("dynamic");
-      const res = await enforceProfileCompleteness({ applyLayout: true });
-      if (!res.ok) return;
-      setStatus("Warming up Chip…");
-      await window.chip?.playGreeting?.();
-      setStatus("Greeting complete.");
+  if (navProfile && !navProfile.dataset.wired){
+    navProfile.dataset.wired = "1";
+    navProfile.addEventListener("click", async ()=>{
+      toggleNavMenu(false);
+      setProfileModalMode("edit");
+      await loadProfileIntoForm();
+      show(profileModal, "flex");
     });
   }
 
