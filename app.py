@@ -688,19 +688,17 @@ def repo_upsert_route():
         # Try to parse content for PDFs/PPTX when served locally (not http)
         content = ""
         meta = {}
-        if not raw_path.lower().startsWith("http"):  # keep devs from parsing external URLs
-            pass
         if not raw_path.lower().startswith("http"):
             fs_path = absolute_fs_path(raw_path)
             if os.path.exists(fs_path):
                 try:
                     if filename.lower().endswith(".pdf"):
-                        content, meta = parse_pdf(fs_path)
-                    elif filename.lower().endswith(".pptx"):
-                        content, meta = parse_pptx(fs_path)
-                except Exception as e:
-                    app.logger.warning(f"Parse failed for {filename}: {e}")
-
+                    content, meta = parse_pdf(fs_path)
+                elif filename.lower().endswith(".pptx"):
+                    content, meta = parse_pptx(fs_path)
+               except Exception as e:
+                   app.logger.warning(f"Parse failed for {filename}: {e}")
+            
         # Upsert row with parsed content/meta
         row = repo_upsert(
             id=data["id"].strip(),
