@@ -31,6 +31,9 @@ import psycopg2.extras as extras  # for RealDictCursor
 import fitz  # PyMuPDF
 from pptx import Presentation
 
+# NEW: excel ingest
+import pandas as pd
+
 # only import memory after DATABASE_URL is sanitized
 from memory import get_user, save_user, log_conversation, get_connection
 
@@ -229,6 +232,156 @@ def repo_search(q:str, limit:int=10):
             """, (q, q, q, q, limit))
             return cur.fetchall()
 
+# ---------- Accounts (Excel) ----------
+def ensure_pg_trgm():
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+            conn.commit()
+
+def ensure_accounts_table():
+    ensure_pg_trgm()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS public.accounts (
+                  id SERIAL PRIMARY KEY,
+                  account_name TEXT UNIQUE NOT NULL,
+                  owner TEXT,
+                  owner_email TEXT,
+                  manager TEXT,
+                  pam TEXT,
+                  region TEXT DEFAULT 'Americas',
+                  updated_at TIMESTAMPTZ DEFAULT now()
+                );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS accounts_name_lower_idx ON public.accounts (lower(account_name));")
+            cur.execute("CREATE INDEX IF NOT EXISTS accounts_name_trgm_idx ON public.accounts USING GIN (account_name gin_trgm_ops);")
+            conn.commit()
+
+def normalize_header(h: str) -> str:
+    h = (h or "").strip().lower()
+    if h in ("account", "account name", "account names", "customer", "customer name"):
+        return "account_name"
+    if h in ("account owner", "owner"):
+        return "owner"
+    if h in ("owner email", "email", "owner_email"):
+        return "owner_email"
+    if h in ("manager", "mgr"):
+        return "manager"
+    if h in ("pam", "account pam", "account_pam"):
+        return "pam"
+    if h in ("region",):
+        return "region"
+    return h.replace(" ", "_")
+
+def upsert_account_row(cur, row):
+    cur.execute("""
+        INSERT INTO public.accounts (account_name, owner, owner_email, manager, pam, region, updated_at)
+        VALUES (%s,%s,%s,%s,%s,%s, now())
+        ON CONFLICT (account_name) DO UPDATE SET
+          owner = EXCLUDED.owner,
+          owner_email = EXCLUDED.owner_email,
+          manager = EXCLUDED.manager,
+          pam = EXCLUDED.pam,
+          region = COALESCE(EXCLUDED.region, public.accounts.region),
+          updated_at = now();
+    """, (
+        row.get("account_name"),
+        row.get("owner"),
+        row.get("owner_email"),
+        row.get("manager"),
+        row.get("pam"),
+        row.get("region") or "Americas"
+    ))
+
+@app.post("/accounts/upload")
+def accounts_upload():
+    """
+    Multipart form upload:
+      field name: file  (Excel: .xlsx)
+    """
+    try:
+        ensure_accounts_table()
+        if "file" not in request.files:
+            return jsonify({"error": "no file"}), 400
+        f = request.files["file"]
+        if not f.filename.lower().endswith((".xlsx", ".xls")):
+            return jsonify({"error": "please upload an .xlsx file"}), 400
+
+        df = pd.read_excel(f, engine="openpyxl")
+        df.columns = [normalize_header(c) for c in df.columns]
+
+        required = {"account_name"}
+        if not required.issubset(set(df.columns)):
+            return jsonify({"error": f"excel missing required column(s): {', '.join(sorted(required - set(df.columns)))}"}), 400
+
+        keep = ["account_name", "owner", "owner_email", "manager", "pam", "region"]
+        for col in keep:
+            if col not in df.columns:
+                df[col] = None
+        df = df[keep].fillna("")
+
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                for _, r in df.iterrows():
+                    row = {k: (r[k].strip() if isinstance(r[k], str) else r[k]) for k in keep}
+                    if not row["account_name"]:
+                        continue
+                    upsert_account_row(cur, row)
+            conn.commit()
+
+        return jsonify({"ok": True, "rows": int(len(df))})
+    except Exception as e:
+        app.logger.exception("/accounts/upload failed")
+        return jsonify({"error": "upload failed"}), 500
+
+def find_account_row(q: str):
+    """
+    Returns the best-matching account row (dict) for a user-provided name.
+    Uses exact ILIKE first, then trigram similarity.
+    """
+    ensure_accounts_table()
+    q = (q or "").strip()
+    if not q:
+        return None
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT *, 1.0 AS score
+                FROM public.accounts
+                WHERE lower(account_name) = lower(%s)
+                LIMIT 1;
+            """, (q,))
+            exact = cur.fetchone()
+            if exact:
+                return exact
+            cur.execute("""
+                SELECT *, 0.9 AS score
+                FROM public.accounts
+                WHERE lower(account_name) LIKE lower(%s)
+                ORDER BY updated_at DESC
+                LIMIT 1;
+            """, (f"%{q}%",))
+            like = cur.fetchone()
+            if like:
+                return like
+            cur.execute("""
+                SELECT *, similarity(account_name, %s) AS score
+                FROM public.accounts
+                WHERE account_name % %s
+                ORDER BY similarity(account_name, %s) DESC
+                LIMIT 1;
+            """, (q, q, q))
+            tri = cur.fetchone()
+            return tri
+
+@app.get("/accounts/search")
+def accounts_search():
+    q = request.args.get("q","")
+    row = find_account_row(q)
+    return jsonify({"query": q, "result": row})
+
 # ---------- routes ----------
 @app.route("/")
 def index():
@@ -401,8 +554,38 @@ def chat():
         # LLM reply (reuse persona + logging)
         reply_text = generate_chip_response(user_id, name, message, role, region)
 
-        # Intent & retrieval
+        # --- Account Q&A intents ---
+        owner_q = re.search(r"(who\s+(is\s+)?(the\s+)?(account\s+)?owner\s+(for|of)\s+)(?P<acct>.+)", message, re.I)
+        team_q  = re.search(r"(who\s+(is\s+)?(the\s+)?account\s+team\s+(for|of)\s+)(?P<acct>.+)", message, re.I)
+
         actions = []
+        if owner_q or team_q:
+            acct = (owner_q or team_q).group("acct").strip().rstrip("?!.")
+            acct = re.sub(r"^(the\s+|\"|')+", "", acct, flags=re.I).strip(' "\'')
+            row = find_account_row(acct)
+            if row:
+                acct_name   = row.get("account_name") or "that account"
+                owner       = row.get("owner") or "Unknown"
+                owner_email = row.get("owner_email") or ""
+                manager     = row.get("manager") or ""
+                pam         = row.get("pam") or ""
+
+                if owner_q:
+                    reply_text = f"{acct_name}: {owner}" + (f" ({owner_email})" if owner_email else "")
+                    if owner_email:
+                        actions.append({
+                            "type": "open_url",
+                            "title": "Email owner",
+                            "url": f"mailto:{owner_email}"
+                        })
+                elif team_q:
+                    parts = [f"Owner: {owner}" + (f" ({owner_email})" if owner_email else "")]
+                    if manager: parts.append(f"Manager: {manager}")
+                    if pam:     parts.append(f"PAM: {pam}")
+                    reply_text = f"{acct_name} team — " + "; ".join(parts)
+            # Fall through to TTS + return, skipping doc actions for this path
+
+        # --------- Doc intent & retrieval (present or download) ----------
         present_intent = bool(re.search(r"\b(show|open|bring up|present|display)\b", message, re.I))
         need_doc = bool(re.search(r"\b(deck|slides?|doc|document|pdf|download|send|share|presentation|pptx?)\b", message, re.I))
 
@@ -413,21 +596,18 @@ def chat():
             if hits:
                 top = hits[0]
                 snippet = top.get("snippet")
-                # Download action
                 actions.append({
                     "type": "download",
                     "title": top["title"],
                     "url": f"/repo/file/{top['id']}",
                     "filename": top["filename"]
                 })
-                # Present/Open action
                 actions.append({
                     "type": "open_url",
                     "title": "Present now",
                     "url": f"/repo/view/{top['id']}"
                 })
 
-        # If we have a helpful snippet and the reply is short, append it
         if snippet and isinstance(reply_text, str) and len(reply_text) < 220:
             reply_text = f"{reply_text}\n\n{snippet}"
 
@@ -739,6 +919,7 @@ def healthz_db():
     try:
         ensure_db_ready()
         ensure_docs_table()
+        ensure_accounts_table()
         return jsonify({"ok": True}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
