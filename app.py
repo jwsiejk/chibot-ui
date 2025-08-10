@@ -711,8 +711,8 @@ def repo_upsert_route():
                      content, meta = parse_pdf(fs_path)
                     elif filename.lower().endswith(".pptx"):
                      content, meta = parse_pptx(fs_path)
-               except Exception as e:
-                    app.logger.warning(f"Parse failed for {filename}: {e}")
+                    except Exception as e:
+                     app.logger.warning(f"Parse failed for {filename}: {e}")
             
         # Upsert row with parsed content/meta
         row = repo_upsert(
