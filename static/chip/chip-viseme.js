@@ -6,24 +6,27 @@
   const PATH = "/static/chip/img/visemes/";
 
   // Map viseme keys -> filenames (adjust to your asset names if needed)
+  // NOTE: Removed r, oh, and woo so they never render.
   const MAP = {
     neutral: "mouth_neutral.png",
     m:       "mouth_m.png",       // closed
     ee:      "mouth_ee.png",
     aa:      "mouth_aa.png",
     f:       "mouth_f.png",
-    oh:      "mouth_oh.png",
     l:       "mouth_l.png",
     s:       "mouth_s.png",
     uh:      "mouth_uh.png",
-    r:       "mouth_r.png",
-    "w-oo":  "mouth_woo.png",
     d:       "mouth_d.png",
-   };
+  };
 
   // Position and scale of the mouth overlay relative to chipImage rect
-  const anchor = { x: 0.535, y: 0.525 }; // center of mouth as % of image
-  const size   = { w: 0.16,  h: 0.11  }; // box size as % of image width
+  // anchor = percentage position ON the image; size = box size as % of image width
+  const anchor = { x: 0.535, y: 0.525 };
+  const size   = { w: 0.16,  h: 0.11  };
+
+  // Extra pixel offsets to fine-tune placement on screen
+  // Negative x moves mouth to SCREEN LEFT (your left). Tweak here if needed.
+  const offset = { x: -12, y: 0 }; // << moved left ~12px per your request
 
   let audioCtx = null;
   let rafId = null;
@@ -44,7 +47,7 @@
     return mouthImg;
   }
 
-  // FIX: position relative to the chipBox, not the viewport
+  // Position relative to chipBox, not viewport
   function layout() {
     const img = document.getElementById("chipImage");
     const box = document.getElementById("chipBox");
@@ -55,8 +58,8 @@
     const rBox = box.getBoundingClientRect();
     if (!rImg.width || !rImg.height) return;
 
-    const cx = (rImg.left - rBox.left) + rImg.width  * anchor.x;
-    const cy = (rImg.top  - rBox.top)  + rImg.height * anchor.y;
+    const cx = (rImg.left - rBox.left) + rImg.width  * anchor.x + offset.x;
+    const cy = (rImg.top  - rBox.top)  + rImg.height * anchor.y + offset.y;
     const w  = rImg.width * size.w;
     const h  = rImg.width * size.h;
 
@@ -64,7 +67,6 @@
     el.style.top    = `${cy}px`;
     el.style.width  = `${w}px`;
     el.style.height = `${h}px`;
-    el.classList.remove("talking");
   }
 
   function setMouth(key) {
@@ -83,15 +85,22 @@
   function scheduleVisemes(visemes, audioEl) {
     const timers = [];
     visemes.forEach(({ viseme, start }) => {
-      const key = (viseme || "neutral").toLowerCase();
-      if (!MAP[key]) return;
-      const t = setTimeout(() => setMouth(key), Math.max(0, (start || 0) * 1000));
+      const k = (viseme || "neutral").toLowerCase();
+
+      // Block unwanted visemes explicitly
+      if (k === "r" || k === "oh" || k === "w-oo" || k === "woo") return;
+
+      // Only schedule if we have a mapped asset
+      if (!MAP[k]) return;
+
+      const t = setTimeout(() => setMouth(k), Math.max(0, (start || 0) * 1000));
       timers.push(t);
     });
     audioEl.addEventListener("ended", () => timers.forEach(clearTimeout), { once: true });
   }
 
   // Fallback: RMS analyzer → pick mouth by loudness
+  // (No longer selects "oh" — routes highest band to "aa" instead.)
   function driveByRMS(audioEl) {
     try {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -116,12 +125,15 @@
         const rms = Math.sqrt(sum / data.length);
 
         const key =
-          rms < 0.03 ? "m" :
+          rms < 0.03 ? "m"  :
           rms < 0.06 ? "ee" :
           rms < 0.10 ? "aa" :
-                       "oh";
+                       "aa"; // previously "oh" — blocked per request
 
-        if (key !== lastKey) { setMouth(key); lastKey = key; }
+        if (MAP[key] && key !== lastKey) {
+          setMouth(key);
+          lastKey = key;
+        }
         rafId = requestAnimationFrame(loop);
       };
       loop();
@@ -159,6 +171,7 @@
 
   function setAnchor(x, y) { anchor.x = x; anchor.y = y; layout(); }
   function setSize(w, h)   { size.w = w;   size.h = h;   layout(); }
+  function setOffset(dx, dy) { offset.x = dx|0; offset.y = dy|0; layout(); } // optional external tweak
 
   // Re-layout on resize / avatar resize
   if ("ResizeObserver" in window) {
@@ -167,5 +180,12 @@
   }
   window.addEventListener("resize", layout);
 
-  global.ChipViseme = { play, layout, setAnchor, setSize, map: MAP, path: PATH };
+  // Ensure neutral mouth is visible on page load (before any speech)
+  window.addEventListener("DOMContentLoaded", () => {
+    preload();
+    layout();
+    setMouth("neutral");
+  });
+
+  global.ChipViseme = { play, layout, setAnchor, setSize, setOffset, map: MAP, path: PATH };
 })(window);
