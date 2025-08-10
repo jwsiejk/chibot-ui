@@ -412,11 +412,12 @@ def chat():
 def repo_upsert_route():
     """
     Seed or update a document record.
+
     Body:
     {
       "id": "flashblade-q3",
       "title": "FlashBlade//S Q3 Update Slides",
-      "path": "/static/downloads/FlashBlade_Q3.pdf",
+      "path": "FlashBlade_Q3.pdf",  # can be just a filename now
       "filename": "FlashBlade_Q3.pdf",
       "mime": "application/pdf",
       "tags": ["flashblade","slides","q3","update"],
@@ -425,13 +426,19 @@ def repo_upsert_route():
     """
     try:
         data = request.get_json(force=True) or {}
-        for k in ("id","title","path","filename"):
+        for k in ("id", "title", "path", "filename"):
             if not data.get(k):
                 return jsonify({"error": f"missing field: {k}"}), 400
+
+        # Auto-prefix path if it’s just a filename or doesn’t start with / or http
+        raw_path = data["path"].strip()
+        if not (raw_path.lower().startswith("/") or raw_path.lower().startswith("http")):
+            raw_path = f"/static/user-experience/downloads/{raw_path}"
+
         row = repo_upsert(
             id=data["id"].strip(),
             title=data["title"].strip(),
-            path=data["path"].strip(),
+            path=raw_path,
             filename=data["filename"].strip(),
             mime=(data.get("mime") or "application/pdf").strip(),
             tags=data.get("tags") or [],
