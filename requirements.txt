@@ -1,25 +1,21 @@
-# Core
 Flask==3.0.3
 Flask-Session==0.8.0
-Flask-Cors==4.0.1        # <-- rename from flask_cors
+Flask-Cors==4.0.1
 gunicorn==21.2.0
 itsdangerous==2.1.2
 authlib==1.2.1
 
-# DB / migrations
 psycopg2-binary==2.9.9
 SQLAlchemy==2.0.31
 alembic==1.13.2
 python-dotenv==1.0.1
 
-# LLM / TTS
 openai==1.43.0
-elevenlabs==1.5.0        
+elevenlabs==1.5.0
 
-# Document parsing
-PyMuPDF==1.24.4           # for PDFs (import fitz)
-python-pptx==0.6.23       # for PPTX
+PyMuPDF==1.24.4
+python-pptx==0.6.23
 
-# Excel ingest
+numpy==2.0.1
 pandas==2.2.2
 openpyxl==3.1.5
