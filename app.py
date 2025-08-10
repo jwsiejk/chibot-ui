@@ -19,6 +19,7 @@ from flask_session import Session
 from werkzeug.utils import secure_filename
 from elevenlabs.client import ElevenLabs
 import openai
+import psycopg2.extras as extras  # for RealDictCursor
 
 # only import memory after DATABASE_URL is sanitized
 from memory import get_user, save_user, log_conversation, get_connection
@@ -81,11 +82,27 @@ def ensure_db_ready():
         print("🔥 DB connectivity check failed:", e)
         raise
 
+# ---------- helpers for profile fields / completeness ----------
+def _merge_profile_fields(row: dict):
+    """Return merged (email, name, title) from columns or JSONB profile; plus completeness."""
+    if not row:
+        return "", "", "", False
+    prof = row.get("profile") or {}
+    email = (row.get("email") or prof.get("email") or "").strip().lower()
+    name  = (row.get("name")  or prof.get("name")  or "").strip()
+    title = (row.get("title") or prof.get("title") or "").strip()
+    complete = bool(email and name and title)
+    return email, name, title, complete
+
+# ---------- chip core ----------
 def generate_chip_response(user_id, name, question, role, region):
-    user = get_user(user_id)
-    messages = user["messages"] if user else []
+    # Be tolerant: get_user may not contain messages; default to empty
+    user = get_user(user_id) or {}
+    messages = user.get("messages", [])
+    if not isinstance(messages, list):
+        messages = []
     messages.append({"role": "user", "content": question})
-    messages = messages[-6:]
+    messages = messages[-6:]  # keep it small
 
     system_prompt = {
         "role": "system",
@@ -106,11 +123,15 @@ def generate_chip_response(user_id, name, question, role, region):
     )
 
     answer = response.choices[0].message.content
-    # Keep your existing persistence calls
-    save_user(user_id, json.dumps(messages), role, region, name)
+    # Persist minimal profile + messages into JSONB for continuity
+    try:
+        save_user(user_id, {"name": name, "title": role, "messages": messages})
+    except Exception as e:
+        print("⚠️ save_user (messages) failed:", e)
     log_conversation(user_id, question, answer)
     return answer
 
+# ---------- routes ----------
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -145,22 +166,22 @@ def login_basic():
         print("🔥 Login error:", str(e))
         return jsonify({"error": "Login failed"}), 500
 
+# Legacy profile save (kept, but aligned with new logic)
 @app.route("/profile", methods=["POST"])
-def save_profile():
+def save_profile_legacy():
     try:
         user_id = session.get("user_id")
         data = request.get_json() or {}
-        name = data.get("name", "")
-        title = data.get("title", "")
+        name = (data.get("name") or "").strip()
+        title = (data.get("title") or "").strip()
 
-        existing = get_user(user_id)
-        messages = existing.get("messages", []) if existing else []
+        # store messages if you pass them along; otherwise keep empty
+        existing = get_user(user_id) or {}
+        messages = existing.get("messages", []) if isinstance(existing, dict) else []
 
-        profile = {"name": name, "role": title, "messages": messages}
-
-        save_user(user_id, profile)
-        session["name"] = name
-        session["role"] = title
+        save_user(user_id, {"name": name, "title": title, "messages": messages})
+        session["name"] = name or user_id
+        session["role"] = title or session.get("role", "engineer")
         return jsonify({"success": True})
     except Exception as e:
         print("🔥 Profile save error:", str(e))
@@ -271,11 +292,11 @@ def retrieve_history():
         if not query:
             return jsonify({"error": "Missing query"}), 400
 
-        user = get_user(user_id)
-        if not user or not user.get("messages"):
+        user = get_user(user_id) or {}
+        past_dialogue = (user.get("messages") or [])[-12:]
+        if not past_dialogue:
             return jsonify({"response": "I don’t have any past conversations to look at yet."})
 
-        past_dialogue = user["messages"][-12:]
         flat_history = "\n".join([f"{m['role']}: {m['content']}" for m in past_dialogue])
 
         prompt = f"""
@@ -344,7 +365,7 @@ def auth_status():
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"authenticated": False})
-        user = get_user(user_id)
+        user = get_user(user_id) or {}
         return jsonify({
             "authenticated": True,
             "user_id": user_id,
@@ -408,7 +429,7 @@ def login():
 
 @app.get("/api/me")
 def api_me():
-    """Return 401 if not logged in; otherwise indicate whether profile exists."""
+    """Return 401 if not logged in; otherwise indicate whether profile is complete (name+title+email)."""
     try:
         user = session.get("user_id")
         if not user:
@@ -416,13 +437,24 @@ def api_me():
 
         email = (user or "").strip().lower()
         try:
-            row = get_user(email)
+            with get_connection() as conn, conn.cursor(cursor_factory=extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT email, name, title, profile
+                    FROM public.users
+                    WHERE email = %s
+                """, (email,))
+                row = cur.fetchone()
         except Exception:
             app.logger.exception("get_user failed for %s", email)
             return jsonify({"email": email, "profileComplete": False, "note": "db_unavailable"}), 200
 
-        profile_complete = bool(row)
-        return jsonify({"email": email, "profileComplete": profile_complete}), 200
+        email_m, name_m, title_m, complete = _merge_profile_fields(row or {"email": email})
+        return jsonify({
+            "email": email_m or email,
+            "name": name_m,
+            "title": title_m,
+            "profileComplete": bool(complete)
+        }), 200
     except Exception:
         app.logger.exception("/api/me crashed")
         return jsonify({"error": "temporary"}), 200
@@ -433,18 +465,17 @@ def api_profile_get():
         email = session.get("user_id")
         if not email:
             return jsonify({"error": "unauthenticated"}), 401
-        row = get_user(email)
-        if not row:
-            return jsonify({"exists": False}), 200
+        with get_connection() as conn, conn.cursor(cursor_factory=extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT email, name, title, profile
+                FROM public.users WHERE email = %s
+            """, (email,))
+            row = cur.fetchone()
+        email_m, name_m, title_m, complete = _merge_profile_fields(row or {"email": email})
         return jsonify({
-            "exists": True,
-            "profile": {
-                "email": email,
-                "name": row.get("name") if isinstance(row, dict) else (row[1] if len(row) > 1 else None),
-                "company": row.get("company") if isinstance(row, dict) else (row[2] if len(row) > 2 else None),
-                "role": row.get("role") if isinstance(row, dict) else (row[3] if len(row) > 3 else None),
-                "region": row.get("region") if isinstance(row, dict) else (row[4] if len(row) > 4 else None),
-            }
+            "exists": bool(row),
+            "profile": {"email": email_m, "name": name_m, "title": title_m},
+            "profileComplete": bool(complete)
         }), 200
     except Exception:
         app.logger.exception("/api/profile GET failed")
@@ -453,29 +484,25 @@ def api_profile_get():
 @app.post("/api/profile")
 def api_profile_post():
     try:
-        email = session.get("user_id")
+        email = (session.get("user_id") or "").strip().lower()
         if not email:
             return jsonify({"error": "unauthenticated"}), 401
 
         data = request.get_json(force=True) or {}
-        name = (data.get("name") or "").strip()
-        company = (data.get("company") or "").strip()
-        role = (data.get("role") or "").strip()
-        region = (data.get("region") or "NA").strip() or "NA"
+        name  = (data.get("name")  or "").strip()
+        title = (data.get("title") or "").strip()
 
-        if not name:
-            return jsonify({"error": "name required"}), 400
+        if not name or not title:
+            return jsonify({"error": "name and title are required"}), 400
 
-        existing = get_user(email) or {}
-        messages = existing.get("messages", []) if isinstance(existing, dict) else []
+        # Persist via memory.py (merges JSONB profile)
+        row = save_user(email, {"name": name, "title": title})
 
-        profile = {"name": name, "company": company, "role": role, "region": region, "messages": messages}
-        save_user(email, profile)
-
-        session["name"] = name or email
-        session["role"] = role or session.get("role", "engineer")
-        session["region"] = region or session.get("region", "NA")
-        return jsonify({"ok": True}), 200
+        # compute completeness for response
+        complete = bool(row.get("email") and row.get("name") and row.get("title"))
+        session["name"]  = name or email
+        session["role"]  = title or session.get("role", "engineer")
+        return jsonify({"ok": True, "profileComplete": complete, "user": row}), 200
     except Exception:
         app.logger.exception("/api/profile POST failed")
         return jsonify({"error": "profile save failed"}), 500
@@ -492,17 +519,13 @@ def api_login():
             return jsonify({"error": "Unauthorized domain"}), 403
 
         session["user_id"] = email
-        user = get_user(email)
-        if user:
-            session["name"] = user.get("name", email)
-            session["role"] = user.get("role", "engineer")
-            session["region"] = user.get("region", "NA")
-            return jsonify({"first_time": False, "name": user.get("name", ""), "title": user.get("role", "")}), 200
-        else:
-            session["name"] = email
-            session["role"] = "engineer"
-            session["region"] = "NA"
-            return jsonify({"first_time": True}), 200
+        user = get_user(email) or {}
+        session["name"] = user.get("name", email)
+        session["role"] = user.get("role", "engineer")
+        session["region"] = user.get("region", "NA")
+        return jsonify({"first_time": False if user else True,
+                        "name": user.get("name", ""),
+                        "title": user.get("role", "")}), 200
     except Exception:
         app.logger.exception("/api/login failed")
         return jsonify({"error": "Login failed"}), 500
