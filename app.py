@@ -23,7 +23,11 @@ from flask import (
 from flask_session import Session
 from werkzeug.utils import secure_filename
 from elevenlabs.client import ElevenLabs
-import openai
+
+# --- OpenAI (new-style client) ---
+from openai import OpenAI
+import httpx
+
 import psycopg2
 import psycopg2.extras as extras  # for RealDictCursor
 
@@ -64,6 +68,12 @@ voice_id = os.getenv("CHIP_VOICE_ID")
 eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 # global kill-switch for audio (set TTS_ENABLED=false in Render env to disable)
 TTS_ENABLED = os.getenv("TTS_ENABLED", "true").lower() in ("1", "true", "yes")
+
+# -------- OpenAI client (prevents httpx 'proxies' kwarg crash) --------
+oai = OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY"),
+    http_client=httpx.Client()  # no proxies kwarg -> avoids TypeError in your env
+)
 
 # ---------- helpers ----------
 def ensure_db_ready():
@@ -112,7 +122,7 @@ def generate_chip_response(user_id, name, question, role, region):
         ),
     }
 
-    response = openai.chat.completions.create(
+    response = oai.chat.completions.create(
         model="gpt-4o",
         messages=[system_prompt] + messages,
         max_tokens=80
@@ -703,7 +713,7 @@ def repo_upsert_route():
         # Try to parse content for PDFs/PPTX when served locally (not http)
         content = ""
         meta = {}
-        if not raw_path.lower().startsWith("http"):
+        if not raw_path.lower().startswith("http"):
             fs_path = absolute_fs_path(raw_path)
             if os.path.exists(fs_path):
                 try:
@@ -819,9 +829,11 @@ def ask_chip():
             audio_file.filename = secure_filename(audio_file.filename)
             audio_path = f"/tmp/{uuid4().hex}.webm"
             audio_file.save(audio_path)
-            client = openai.OpenAI(api_key=openai.api_key)
+
+            # --- Transcribe with new client ---
             with open(audio_path, "rb") as f:
-                transcript = client.audio.transcriptions.create(model="whisper-1", file=f).text
+                transcript = oai.audio.transcriptions.create(model="whisper-1", file=f).text
+
             yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"transcript": transcript}).encode() + b"\r\n"
             response_text = generate_chip_response(user_id, name, transcript, role, region)
             yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"response": response_text}).encode() + b"\r\n"
@@ -867,7 +879,7 @@ Current user query: "What did we talk about last time?"
 If something in the history matches what the user is referring to, summarize or clarify the key detail.
 If not, say you couldn't find it.
 """
-        response = openai.chat.completions.create(
+        response = oai.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "system", "content": prompt}],
             max_tokens=150
@@ -886,12 +898,18 @@ def greet():
         name = user.get("name", "there") if user else "there"
         data = request.get_json() or {}
         prompt = data.get("prompt", f"Say hello to {name}.")
-        openai_response = openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=60
-        )
-        greeting_text = openai_response.choices[0].message.content.strip()
+
+        try:
+            openai_response = oai.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "system", "content": prompt}],
+                max_tokens=60
+            )
+            greeting_text = openai_response.choices[0].message.content.strip()
+        except Exception as e:
+            app.logger.warning("OpenAI greet failed: %s", e)
+            greeting_text = "Howdy. Ready when you are."
+
         audio_url = None
         if TTS_ENABLED:
             voice_settings = {"speed": 0.9}
