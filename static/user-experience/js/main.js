@@ -96,8 +96,16 @@ document.addEventListener("DOMContentLoaded", () => {
     show(toolbar, "flex");
     setToolbarHeightVar();
     // Position the mouth overlay relative to the current avatar size
+    // Position the mouth overlay relative to the current avatar size
     if (window.ChipViseme && typeof window.ChipViseme.layout === "function") {
-      window.ChipViseme.layout();
+  // anchor = center of mouth as % of avatar (x, y)
+  window.ChipViseme.setAnchor(0.49, 0.46);
+
+  // size = mouth box as % of avatar width (w, h)
+  window.ChipViseme.setSize(0.095, 0.075);
+
+  // reflow after applying the calibration
+  window.ChipViseme.layout();
     }
     if (btnChat) {
       btnChat.disabled = true;
