@@ -12,9 +12,12 @@
     ee:      "mouth_ee.png",
     aa:      "mouth_aa.png",
     f:       "mouth_f.png",
+    oh:      "mouth_oh.png",
     l:       "mouth_l.png",
     s:       "mouth_s.png",
     uh:      "mouth_uh.png",
+    r:       "mouth_r.png",
+    "w-oo":  "mouth_woo.png",
     d:       "mouth_d.png",
    };
 
