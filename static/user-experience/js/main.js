@@ -1,6 +1,11 @@
-// main.js — toolbar Chat, working top-right "Ask Chip ▾" (orange) menu, and proper profile gating
+// main.js — Zoom-style: Static uses /static/chip/audio/* mp3s, Dynamic uses ElevenLabs via /greet
 document.addEventListener("DOMContentLoaded", () => {
   const $ = (id) => document.getElementById(id);
+
+  // ---------- Static audio location + filenames ----------
+  const STATIC_AUDIO_BASE = "/static/chip/audio/";
+  const GREETING_FILES = ["greeting-static.mp3", "greeting.mp3", "Greeting.mp3"];
+  const ANSWER_FILES   = ["answer-static.mp3", "answer.mp3", "Answer.mp3"]; // reserved for later
 
   // Core elements
   const loginModal   = $("loginModal");
@@ -17,25 +22,23 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnStatic    = $("btnModeStatic");
   const btnDynamic   = $("btnModeDynamic");
   const btnMic       = $("btnMic");
-  const btnChat      = $("btnAsk");
+  const btnChat      = $("btnAsk");      // visible for familiarity; functionally disabled for now
   const btnHistory   = $("btnHistory");
   const btnLogout    = $("btnLogout");
 
-  // Top-right nav (orange) — Ask Chip ▾
+  // Top-right nav (Ask Chip ▾ → Profile)
   const navMenuBtn   = $("navMenuBtn");
   const navMenu      = $("navMenu");
   const navProfile   = $("navProfile");
 
+  // Session mode (null until user clicks a mode)
+  let sessionMode = null; // 'static' | 'dynamic' | null
+
   // Helpers
   const show = (el, d) => { if (!el) return; d ? el.style.display = d : el.style.removeProperty("display"); };
   const hide = (el) => { if (el) el.style.display = "none"; };
-
   async function j(path, opts = {}) {
-    const r = await fetch(path, {
-      credentials: "include",
-      headers: { "Content-Type": "application/json", ...(opts.headers||{}) },
-      ...opts
-    });
+    const r = await fetch(path, { credentials: "include", headers: { "Content-Type": "application/json", ...(opts.headers||{}) }, ...opts });
     const ct = r.headers.get("content-type") || "";
     let data = null; try { data = ct.includes("application/json") ? await r.json() : null; } catch {}
     return { ok: r.ok, status: r.status, data, raw: r };
@@ -53,7 +56,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (saveBtn) saveBtn.textContent = (mode === "gate") ? "Save & Continue" : "Save changes";
   }
-
   async function loadProfileIntoForm() {
     if (!profileForm) return;
     const getI = (n) => profileForm.querySelector(`input[name="${n}"]`);
@@ -69,7 +71,6 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
     } catch {}
-    // local fallback
     try {
       if (nameI)  nameI.value  = localStorage.getItem("profileName")  || "";
       if (titleI) titleI.value = localStorage.getItem("profileTitle") || "";
@@ -81,15 +82,16 @@ document.addEventListener("DOMContentLoaded", () => {
     show(appEl, "block");
     show(chipBox, "grid");
     show(toolbar, "flex");
+    if (btnChat) {
+      btnChat.disabled = true;
+      btnChat.title = "Chat is coming soon";
+    }
   }
 
   async function enforceProfileCompleteness({ applyLayout = true } = {}) {
     try {
       const { ok, status, data } = await j("/api/me");
-      if (!ok) {
-        if (status === 401) { hide(appEl); show(loginModal, "flex"); return { ok:false, reason:"unauthenticated" }; }
-        hide(appEl); show(loginModal, "flex"); return { ok:false, reason:"server" };
-      }
+      if (!ok) { if (status === 401) { hide(appEl); show(loginModal, "flex"); return { ok:false, reason:"unauthenticated" }; } hide(appEl); show(loginModal, "flex"); return { ok:false, reason:"server" }; }
       if (!data?.profileComplete) {
         setProfileModalMode("gate");
         await loadProfileIntoForm();
@@ -118,14 +120,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const fd = new FormData(loginForm);
       const email = (fd.get("email") || "").toString().trim().toLowerCase();
       if (!email) return;
-
       const { ok, data, status } = await j("/api/login", { method: "POST", body: JSON.stringify({ email }) });
       if (!ok) { alert((data && data.error) || `Login failed (${status})`); return; }
-
       try { localStorage.setItem("profileEmail", email); } catch {}
       const emailInput = profileForm?.querySelector('input[name="email"]');
       if (emailInput) emailInput.value = email;
-
       hide(loginModal);
       await gate();
     });
@@ -141,69 +140,111 @@ document.addEventListener("DOMContentLoaded", () => {
       const title = (fd.get("title") || "").toString().trim();
       const email = (fd.get("email") || "").toString().trim();
       if (!name || !title || !email) { alert("Please complete all fields."); return; }
-
       try { localStorage.setItem("profileName", name); localStorage.setItem("profileTitle", title); localStorage.setItem("profileEmail", email); } catch {}
       const r = await j("/api/profile", { method:"POST", body: JSON.stringify({ name, title, email }) });
       if (!r.ok || !r.data?.ok) { alert(r.data?.error || "Could not save profile. Please try again."); return; }
-
       hide(profileModal);
       if ((profileModal?.dataset.mode || "edit") === "gate") applyAuthedLayout();
       alert("Profile saved.");
     });
   }
 
-  // ---------- Bottom toolbar ----------
-  // Static/Dynamic: not selected by default; clicking toggles mode-active class
+  // ---------- Audio helpers (Static) ----------
+  function playAudio(url) {
+    return new Promise((resolve, reject) => {
+      const a = new Audio(url);
+      const onError = () => { cleanup(); reject(new Error("audio load/play error: " + url)); };
+      const onCanPlay = () => {
+        a.play().then(() => { cleanup(); resolve(url); }).catch(onError);
+      };
+      const cleanup = () => {
+        a.removeEventListener("error", onError);
+        a.removeEventListener("canplaythrough", onCanPlay);
+      };
+      a.addEventListener("error", onError, { once: true });
+      a.addEventListener("canplaythrough", onCanPlay, { once: true });
+      a.load();
+    });
+  }
+
+  async function playFirstAvailable(base, names) {
+    const errors = [];
+    for (const name of names) {
+      const url = base + name;
+      try { await playAudio(url); return url; }
+      catch (e) { errors.push(url); }
+    }
+    throw new Error("No static audio found. Tried:\n" + errors.join("\n"));
+  }
+
+  // ---------- Session logic ----------
   function reflectMode(mode) {
+    sessionMode = mode; // 'static' | 'dynamic'
     btnStatic?.classList.toggle("mode-active", mode === "static");
     btnDynamic?.classList.toggle("mode-active", mode === "dynamic");
     document.documentElement.setAttribute("data-chip-mode", mode);
   }
-  btnStatic?.addEventListener("click", () => reflectMode("static"));
-  btnDynamic?.addEventListener("click", () => reflectMode("dynamic"));
 
-  // Mic (placeholder)
-  btnMic?.addEventListener("click", () => alert("Voice input coming soon. Use Chat for now."));
-
-  // Chat → /ask
-  btnChat?.addEventListener("click", async () => {
-    const okGate = await gate(); if (!okGate.ok) return;
-    const question = prompt("Chat with Chip:");
-    if (!question) return;
+  async function startStaticSession() {
     try {
-      const { ok, data, status } = await j("/ask", { method:"POST", body: JSON.stringify({ question }) });
-      if (!ok) { alert((data && data.error) || `Chat failed (${status})`); return; }
-      const reply = data?.response || "(no reply)";
-      // Play audio if present; also show quick alert with text
-      if (data?.audio) {
-        try { await new Audio(data.audio).play(); } catch {}
+      const used = await playFirstAvailable(STATIC_AUDIO_BASE, GREETING_FILES);
+      console.log("[Static] Played greeting from:", used);
+    } catch (e) {
+      console.warn(e?.message || e);
+      alert(e?.message || "Couldn’t play the static greeting. Check your /static/chip/audio/ files.");
+    }
+    // Reserve answer playback for later (ANSWER_FILES)
+  }
+
+  async function startDynamicSession() {
+    try {
+      const { ok, data, status } = await j("/greet", { method: "POST", body: JSON.stringify({}) });
+      if (!ok) { alert((data && data.error) || `Greeting failed (${status})`); return; }
+      const audioUrl = data?.audio;
+      const text = data?.reply || "Hello!";
+      if (audioUrl) {
+        try { await new Audio(audioUrl).play(); }
+        catch (e) { console.warn("Dynamic audio failed:", e); alert(text); }
+      } else {
+        alert(text); // TTS disabled globally
       }
-      alert(reply);
-    } catch { alert("Something went wrong. Try again."); }
+    } catch (e) {
+      console.error("Dynamic session error:", e);
+      alert("Couldn’t start dynamic session. Try again.");
+    }
+  }
+
+  // ---------- Toolbar: start sessions ----------
+  btnStatic?.addEventListener("click", async () => {
+    const okGate = await gate(); if (!okGate.ok) return;
+    reflectMode("static");
+    await startStaticSession();
   });
 
-  // More menu
-  btnHistory?.addEventListener("click", async () => {
-    const { ok, data } = await j("/history", { method:"POST", body: JSON.stringify({ query: "What did we talk about last time?" }) });
-    alert(ok ? (data?.response || "No history yet.") : "No history yet.");
-  });
-  btnLogout?.addEventListener("click", async () => {
-    await j("/api/logout", { method:"POST" });
-    location.reload();
+  btnDynamic?.addEventListener("click", async () => {
+    const okGate = await gate(); if (!okGate.ok) return;
+    reflectMode("dynamic");
+    await startDynamicSession();
   });
 
-  // ---------- Top-right nav (Ask Chip ▾) ----------
+  // Mic placeholder (kept)
+  btnMic?.addEventListener("click", () => alert("Voice input coming soon."));
+
+  // Chat: intentionally disabled for now (future text chat)
+  btnChat?.addEventListener("click", () => {
+    alert("Chat is coming soon. For now, use Static or Dynamic to start a session.");
+  });
+
+  // ---------- “Ask Chip ▾” (Profile) ----------
   function toggleNavMenu(forceOpen) {
     if (!navMenu) return;
     if (typeof forceOpen === "boolean") { navMenu.hidden = !forceOpen; return; }
-    navMenu.hidden = !navMenu.hidden; // <-- FIXED: actually toggles
+    navMenu.hidden = !navMenu.hidden;
   }
   navMenuBtn?.addEventListener("click", (e) => { e.stopPropagation(); toggleNavMenu(); });
   document.addEventListener("click", (e) => {
     if (!navMenu?.hidden && !navMenu.contains(e.target) && e.target !== navMenuBtn) toggleNavMenu(false);
   });
-
-  // Profile (EDIT MODE) from dropdown
   navProfile?.addEventListener("click", async () => {
     toggleNavMenu(false);
     setProfileModalMode("edit");
@@ -211,6 +252,6 @@ document.addEventListener("DOMContentLoaded", () => {
     show(profileModal, "flex");
   });
 
-  // ---------- Initial gate ----------
+  // ---------- Boot ----------
   (async () => { await gate(); })();
 });
