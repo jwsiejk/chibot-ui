@@ -2,7 +2,7 @@
   const PATH="/static/chip/img/visemes/";
   const MAP={neutral:"mouth_neutral.png",m:"mouth_m.png",ee:"mouth_ee.png",aa:"mouth_aa.png",f:"mouth_f.png",l:"mouth_l.png",s:"mouth_s.png",uh:"mouth_uh.png",d:"mouth_d.png"};
   const anchor={x:.535,y:.525};
-  const size={w:.22,h:.22*(76/219)};     // keeps your PNG aspect
+  const size={w:.15,h:.15*(76/219)};     // keeps your PNG aspect
   const offset={x:-28,y:16};              // left & down
   let mouth=null,ctx=null,raf=0;
 
