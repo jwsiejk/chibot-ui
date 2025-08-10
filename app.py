@@ -703,7 +703,7 @@ def repo_upsert_route():
         # Try to parse content for PDFs/PPTX when served locally (not http)
         content = ""
         meta = {}
-        if not raw_path.lower().startswith("http"):
+        if not raw_path.lower().startsWith("http"):
             fs_path = absolute_fs_path(raw_path)
             if os.path.exists(fs_path):
                 try:
@@ -913,6 +913,49 @@ def greet():
         traceback.print_exc()
         return jsonify({"error": "Greeting failed"}), 500
 
+# ---------- NEW: simple health (no DB) ----------
+@app.get("/healthz")
+def healthz():
+    return "ok", 200
+
+# ---------- NEW: Dynamic speech endpoint ----------
+@app.post("/api/speak")
+def api_speak():
+    """
+    Expects: { "prompt": "text the user asked Chip to say" }
+    Returns: { "audio_url": "/static/audio/<file>.mp3", "visemes": [] }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        prompt = (data.get("prompt") or "").strip()
+        if not prompt:
+            # fall back to something safe so UI doesn't explode
+            prompt = "Howdy. Ready when you are."
+
+        if not TTS_ENABLED:
+            return jsonify({"audio_url": None, "visemes": [], "disabled": True}), 200
+
+        if not voice_id or not os.getenv("ELEVENLABS_API_KEY"):
+            return jsonify({"error": "TTS not configured"}), 503
+
+        voice_settings = {"speed": 0.9}
+        audio = eleven.text_to_speech.convert(
+            voice_id=voice_id,
+            model_id="eleven_monolingual_v1",
+            text=prompt,
+            optimize_streaming_latency=1,
+            voice_settings=voice_settings
+        )
+        out_path = f"static/audio/{uuid4().hex}.mp3"
+        with open(out_path, "wb") as f:
+            for chunk in audio:
+                f.write(chunk)
+        # Standardize key name for the frontend
+        return jsonify({"audio_url": "/" + out_path, "visemes": []}), 200
+    except Exception as e:
+        print("⚠️ /api/speak failed:", e)
+        return jsonify({"error": "speak failed"}), 500
+
 @app.route("/auth/status", methods=["GET"])
 def auth_status():
     try:
@@ -950,3 +993,7 @@ def healthz_db():
         return jsonify({"ok": True}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=True)
