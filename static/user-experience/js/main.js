@@ -1,4 +1,4 @@
-// main.js — Chat Live/Text + existing Static/Dynamic; 2025-08-10 chat + guide/debug
+// main.js — Chat Live/Text + Static/Dynamic + guide/debug/suggestions; 2025-08-10
 document.addEventListener("DOMContentLoaded", () => {
   const $ = (id) => document.getElementById(id);
 
@@ -100,6 +100,15 @@ document.addEventListener("DOMContentLoaded", () => {
     _chipUX.guideVisible = showNow;
   }
 
+  function _openChatComposer(hintText) {
+    if (chatPanel) chatPanel.hidden = false;
+    if (chatInput) {
+      if (hintText) chatInput.placeholder = hintText;
+      chatInput.focus();
+    }
+    _chipStep("composer", "opened");
+  }
+
   function _chipSetState(next) {
     _chipUX.state = next;
     _chipStep("state", next);
@@ -112,6 +121,7 @@ document.addEventListener("DOMContentLoaded", () => {
         break;
       case "listening":
         _chipGuide("Listening… ask your question.");
+        _openChatComposer("Type your question…");
         break;
       case "thinking":
         _chipGuide("Chip is thinking…");
@@ -121,6 +131,7 @@ document.addEventListener("DOMContentLoaded", () => {
         break;
       case "followup":
         _chipGuide("Do you have a follow-up?");
+        _chipScheduleIdleNudge();
         break;
       default:
         _chipGuide("Press Start or Chat to speak with Chip.");
@@ -141,6 +152,20 @@ document.addEventListener("DOMContentLoaded", () => {
         _chipGuide(`Ask your question — Chip waiting (${t}s)`);
       }
     }, 1000);
+  }
+
+  // Nudge if idle on followup/listening
+  let _chipIdleTimer = null;
+  function _chipScheduleIdleNudge(ms = 20000) {
+    if (_chipIdleTimer) { clearTimeout(_chipIdleTimer); _chipIdleTimer = null; }
+    _chipIdleTimer = setTimeout(() => {
+      if (_chipUX.state !== "followup" && _chipUX.state !== "listening") return;
+      _chipGuide("Still there? Keep chatting or end?");
+      _chipRenderSuggestions(["Explain a bit more", "Give me a quick example", "End chat"]);
+    }, ms);
+  }
+  function _chipClearIdleNudge() {
+    if (_chipIdleTimer) { clearTimeout(_chipIdleTimer); _chipIdleTimer = null; }
   }
 
   // Session mode (null until user clicks a mode)
@@ -212,7 +237,7 @@ document.addEventListener("DOMContentLoaded", () => {
   async function enforceProfileCompleteness({ applyLayout = true } = {}) {
     try {
       const { ok, status, data } = await j("/api/me");
-      // NEW: set admin + initial guide regardless of completeness
+      // NEW: set admin + initial debug step + initial idle guide
       if (data) {
         _chipSetAdmin(!!data.isAdmin);
         _chipStep("me", data);
@@ -231,6 +256,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (applyLayout) {
         applyAuthedLayout();
         _chipSetState("idle");
+        _chipGuide("Press Start or Chat to speak with Chip.");
       }
       return { ok:true };
     } catch {
@@ -329,10 +355,10 @@ document.addEventListener("DOMContentLoaded", () => {
         try { await tryPlayWithMouth(audioUrl); }
         catch (e) { console.warn("Dynamic audio failed:", e); alert(text); }
       } else {
-        // TTS disabled globally → still show text
-        alert(text);
+        alert(text); // TTS disabled globally
       }
-      _chipStartWaitingCountdown(); // moves to listening after 7s
+      _openChatComposer("Type your question…");
+      _chipStartWaitingCountdown();
     } catch (e) {
       console.error("Dynamic session error:", e);
       _chipStep("greet-error", String(e));
@@ -457,8 +483,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (onended) audio.addEventListener("ended", onended, { once: true });
     audio.play().catch(console.error);
     return audio;
-    // If you prefer to use ChipViseme.play, convert to Blob URL and pass it in:
-    // const blob = b64ToBlob(b64, "audio/mpeg"); const url = URL.createObjectURL(blob); window.ChipViseme.play(url);
   }
 
   function driveVisemes(visemes) {
@@ -468,10 +492,44 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // Suggestions (chips) under assistant replies
+  function _chipRenderSuggestions(suggestions) {
+    if (!Array.isArray(suggestions) || !suggestions.length || !chatLog) return;
+    const wrap = document.createElement("div");
+    wrap.className = "suggestion-row";
+    suggestions.forEach((s) => {
+      const b = document.createElement("button");
+      b.className = "suggestion";
+      b.textContent = s;
+      b.addEventListener("click", () => {
+        if (/end chat/i.test(s)) { _chipEndConversation(); return; }
+        // Let server handle intent if it's a doc/account action; otherwise just send the text
+        sendChat(s);
+      });
+      wrap.appendChild(b);
+    });
+    chatLog.appendChild(wrap);
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
+  async function _chipEndConversation() {
+    try {
+      _chipStep("end", "user requested");
+      // Friendly audible wrap-up (fire/forget)
+      fetch("/api/speak", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ prompt: "Anytime. I’ll be right here when you need me." }) }).catch(()=>{});
+    } finally {
+      _chipClearIdleNudge();
+      _chipSetState("idle");
+      _chipGuide("Press Start or Chat to speak with Chip.");
+    }
+  }
+
   async function sendChat(message) {
     if (!message || !message.trim()) return;
     const okGate = await gate(); if (!okGate.ok) return;
     if (chatPanel) chatPanel.hidden = false;
+
+    _chipClearIdleNudge();
 
     appendMessage("user", message, null);
     const thinking = appendMessage("assistant", "…", chatLane);
@@ -496,7 +554,9 @@ document.addEventListener("DOMContentLoaded", () => {
       // audio + visemes (Live lane)
       let audioObj = null;
       if (data.audio_b64) {
-        audioObj = playAudioFromBase64(data.audio_b64, function(){ _chipSetState("followup"); });
+        audioObj = new Audio("data:audio/mpeg;base64," + data.audio_b64);
+        audioObj.addEventListener("ended", () => { _chipSetState("followup"); }, { once: true });
+        audioObj.play().catch(console.error);
       }
       if (data.visemes && data.visemes.length) {
         driveVisemes(data.visemes);
@@ -505,8 +565,18 @@ document.addEventListener("DOMContentLoaded", () => {
       // actions (download/open_url/etc.)
       appendActions(data.actions || []);
 
+      // suggestions under reply
+      if (Array.isArray(data.suggestions)) {
+        _chipRenderSuggestions(data.suggestions);
+      }
+
+      // respect server end-of-conversation
+      if (data.end === true) {
+        _chipEndConversation();
+        return;
+      }
+
       if (!audioObj && !data.audio_b64) {
-        // no audio → move to follow-up immediately
         _chipSetState("followup");
       }
     } catch (e) {
