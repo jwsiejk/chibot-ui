@@ -1,7 +1,12 @@
 print("✅ Chip app starting...")
 
+import os 
+if os.getenv("DISABLE_EVENTLET", "0") != "1":
+    import eventlet  # type: ignore
+    eventlet.monkey_patch(all=True)
+
 # --- Normalize DATABASE_URL before importing anything that might use it ---
-import os
+
 _raw_db = (os.getenv("DATABASE_URL") or "").strip()
 if (_raw_db.startswith('"') and _raw_db.endswith('"')) or (_raw_db.startswith("'") and _raw_db.endswith("'")):
     _raw_db = _raw_db[1:-1].strip()
@@ -83,11 +88,9 @@ voice_id = os.getenv("CHIP_VOICE_ID")
 eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 TTS_ENABLED = os.getenv("TTS_ENABLED", "true").lower() in ("1", "true", "yes")
 
-# OpenAI client (avoid proxies kwarg crash)
-oai = OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY"),
-    http_client=httpx.Client()
-)
+# OpenAI client (no custom httpx client)
+from openai import OpenAI
+oai = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # -----------------------------------------------------------------------------
 # Admins (env-driven; default to your address)
