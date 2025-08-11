@@ -13,6 +13,9 @@ import traceback
 import re
 import base64
 import mimetypes
+import threading
+from threading import Lock
+import requests
 from uuid import uuid4
 from datetime import datetime
 from urllib.parse import urlparse, quote_plus
@@ -24,6 +27,9 @@ from flask import (
 )
 from flask_session import Session
 from werkzeug.utils import secure_filename
+
+# --- websocket support ---
+from flask_sock import Sock
 
 # --- vendor clients ---
 from elevenlabs.client import ElevenLabs
@@ -66,6 +72,9 @@ app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
 if os.getenv("SESSION_COOKIE_SECURE", "false").lower() in ("1", "true", "yes"):
     app.config["SESSION_COOKIE_SECURE"] = True
 Session(app)
+
+# WebSocket sock (adds /ws/* routes we define below)
+sock = Sock(app)
 
 # -----------------------------------------------------------------------------
 # Global clients & feature flags
@@ -886,6 +895,147 @@ deps = {
 
 app.register_blueprint(create_chat_blueprint(deps))
 app.register_blueprint(create_voice_blueprint(deps))
+
+# -----------------------------------------------------------------------------
+# 🔊 Streaming WebSocket bridge → ElevenLabs realtime (uses your tts_bridge.py)
+# -----------------------------------------------------------------------------
+# Import your realtime ElevenLabs bridge (supports both locations)
+try:
+    from server.tts_bridge import ElevenLabsRealtimeClient
+except Exception:
+    from tts_bridge import ElevenLabsRealtimeClient  # project root
+
+# Store the last final text for the frontend's /chat/summary call
+_LAST_FINAL = {"text": ""}
+_LAST_FINAL_LOCK = Lock()
+
+def _assistant_reply_text(user_text: str) -> str:
+    """
+    Reuse your existing /chat handler to get the assistant text (no audio).
+    Adjust payload/keys if your /chat contract differs.
+    """
+    try:
+        base = os.getenv("CHAT_BACKEND_URL")
+        if not base:
+            # request may be available under Flask-Sock; fallback to host_url if present.
+            try:
+                base = request.host_url.rstrip("/")
+            except Exception:
+                base = "http://127.0.0.1:5000"
+        url = f"{base}/chat"
+        r = requests.post(url, json={
+            "message": user_text,
+            "lane": "live",
+            "language": "en",
+            "domain": "pure-storage"
+        }, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+        text = (data.get("reply_text") or data.get("reply") or "Okay.").strip()
+        return text or "Okay."
+    except Exception as e:
+        print("⚠️ _assistant_reply_text failed:", e)
+        return "Okay."
+
+@sock.route("/ws/chat")
+def ws_chat(ws):
+    """
+    Frontend sends:  {type:"user_text", text:"..."} or {type:"abort"}
+    Server streams:  {type:"final_text", "text": "..."} (once)
+                     {type:"audio_chunk", "b16":"<base64 int16le>", "sr":24000} (many)
+                     {type:"end"} (once)
+    """
+    loop = None
+    try:
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        tts = ElevenLabsRealtimeClient()
+        active_thread = None
+
+        def synth_and_stream(reply_text: str):
+            async def run():
+                await tts.connect()
+                await tts.send_text(reply_text, flush=True)
+                async for b16, is_final in tts.iter_audio():
+                    ws.send(json.dumps({"type": "audio_chunk", "b16": b16, "sr": 24000}))
+                await tts.close()
+                ws.send(json.dumps({"type": "end"}))
+            try:
+                loop.run_until_complete(run())
+            except Exception as e:
+                try:
+                    ws.send(json.dumps({"type": "error", "message": str(e)}))
+                    ws.send(json.dumps({"type": "end"}))
+                except Exception:
+                    pass
+
+        while True:
+            raw = ws.receive()
+            if raw is None:
+                break
+
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                continue
+
+            mtype = msg.get("type")
+            if mtype == "abort":
+                # Stop any in-flight synthesis immediately.
+                try:
+                    loop.run_until_complete(tts.close())
+                except Exception:
+                    pass
+                try:
+                    ws.send(json.dumps({"type": "end"}))
+                except Exception:
+                    pass
+                continue
+
+            if mtype == "user_text":
+                user_text = (msg.get("text") or "").strip()
+                if not user_text:
+                    ws.send(json.dumps({"type": "end"}))
+                    continue
+
+                reply_text = _assistant_reply_text(user_text)
+
+                # cache for /chat/summary
+                with _LAST_FINAL_LOCK:
+                    _LAST_FINAL["text"] = reply_text
+
+                ws.send(json.dumps({"type": "final_text", "text": reply_text}))
+
+                if active_thread and active_thread.is_alive():
+                    try:
+                        loop.run_until_complete(tts.close())
+                    except Exception:
+                        pass
+                active_thread = threading.Thread(target=synth_and_stream, args=(reply_text,), daemon=True)
+                active_thread.start()
+
+    finally:
+        try:
+            if loop is not None:
+                loop.close()
+        except Exception:
+            pass
+    return ""
+
+@app.post("/chat/summary")
+def chat_summary():
+    """
+    Minimal helper for the frontend's streaming path: returns the last final_text.
+    This is per-process best-effort (not per-user). Good enough for demo/POC.
+    """
+    try:
+        with _LAST_FINAL_LOCK:
+            text = _LAST_FINAL.get("text", "")
+        # Keep the contract similar to /chat response
+        return jsonify({"reply_text": text, "reply": text})
+    except Exception:
+        return jsonify({"reply_text": "", "reply": ""})
 
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
