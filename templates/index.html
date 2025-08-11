@@ -22,14 +22,15 @@
     <div class="actions">
       <div class="dropdown nav">
         <button id="navMenuBtn" class="btn btn--accent">Ask Chip ▾</button>
-        <ul id="navMenu" class="menu" hidden>
-          <li><button id="navProfile">Profile</button></li>
-        </ul>
-      </div>
+        <div id="navMenu" hidden class="menu">
+      <button id="navProfile">Profile</button>
+      <button id="navHistory">Conversation history</button>
+      <button id="navLogout">Logout</button>
     </div>
-  </header>
+  </div>
+</header>
 
-  <!-- Login Modal -->
+   <!-- Login Modal -->
   <div id="loginModal" class="modal">
     <div class="modal-content">
       <h2>Welcome to Ask Chip</h2>
@@ -76,7 +77,7 @@
       </div>
     </section>
   </div>
-
+    
   <!-- Bottom toolbar -->
   <div id="askChipToolbar">
       <!-- Renamed for clarity with the guide text -->
@@ -93,26 +94,8 @@
         <div class="menuitem" data-lane="text">💬 Chat Text</div>
       </div>
     </div>
-
-    <div id="askChipWrap" class="ask-chip">
-    <button id="navMenuBtn">Ask Chip ▾</button>
-    <div id="navMenu" hidden class="menu">
-      <button id="navProfile">Profile</button>
-      <button id="navHistory">Conversation history</button>
-      <button id="navLogout">Logout</button>
-    </div>
-  </div>
-</header>
-
-    <div class="dropdown">
-      <button title="More">⋯ More</button>
-      <div class="dropdown-content">
-        <div id="btnHistory">Conversation History</div>
-        <div id="btnLogout">Log out</div>
-      </div>
-    </div>
-  </div>
-
+   
+    
   <!-- User Guide panel (top-left) -->
   <div id="guidePanel" style="
     position:fixed; top:16px; left:16px; z-index:2000;
