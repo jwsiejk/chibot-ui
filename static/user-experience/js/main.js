@@ -112,11 +112,11 @@ document.addEventListener("DOMContentLoaded", () => {
         _chipGuide("Chip is saying hello — how can he help?");
         break;
       case "waiting":
-        _chipGuide(`Ask your question — Chip waiting (${_chipUX.waitingSeconds}s)`);
+        _chipGuide(`Get ready… Chip will start listening in ${_chipUX.waitingSeconds}s. Speak after the tone.`);
         break;
       case "listening":
-        _chipGuide("Listening… ask your question.");
-        _openChatComposer("Type your question…");
+        _chipGuide("Now listening — start talking after the tone. (Pause to send)");
+        _openChatComposer("You can also type your question…");
         _vm_armVAD(); // auto-arm mic
         break;
       case "thinking":
@@ -146,7 +146,7 @@ document.addEventListener("DOMContentLoaded", () => {
         _chipUX.waitingTimer = null;
         _chipSetState("listening");
       } else {
-        _chipGuide(`Ask your question — Chip waiting (${t}s)`);
+        _chipGuide(`Get ready… Chip will start listening in ${t}s. Speak after the tone.`);
       }
     }, 1000);
   }
@@ -257,9 +257,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  async function gate() {
+  // ---- PATCH: gate() defaults to NO layout changes during active session ----
+  async function gate(opts = { applyLayout: false }) {
     hide(profileModal);
-    return await enforceProfileCompleteness({ applyLayout: true });
+    return await enforceProfileCompleteness(opts);
   }
 
   // ---------- Login ----------
@@ -276,7 +277,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const emailInput = profileForm?.querySelector('input[name="email"]');
       if (emailInput) emailInput.value = email;
       hide(loginModal);
-      await gate();
+      await gate({ applyLayout: true });
       _chipGuide("Press Start or Chat to speak with Chip.");
     });
   }
@@ -376,7 +377,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ---------- Toolbar: start sessions ----------
   btnStatic?.addEventListener("click", async () => {
-    const okGate = await gate(); if (!okGate.ok) return;
+    const okGate = await gate({ applyLayout: true }); if (!okGate.ok) return;
     reflectMode("static");
     _chipGuide("Press Start or Chat to speak with Chip.");
     _chipSetState("idle");
@@ -384,10 +385,27 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   btnDynamic?.addEventListener("click", async () => {
-    const okGate = await gate(); if (!okGate.ok) return;
+    const okGate = await gate({ applyLayout: true }); if (!okGate.ok) return;
     reflectMode("dynamic");
     await startDynamicSession();
   });
+
+  // ---------- Tiny tone so users know *exactly* when to speak/stop ----------
+  function _uiBeep(freq = 880, ms = 90, gain = 0.05) {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      const ctx = _vm_ctx || new Ctx();
+      if (ctx.state === "suspended") ctx.resume();
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      g.gain.value = gain;
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start();
+      setTimeout(() => { try { osc.stop(); osc.disconnect(); g.disconnect(); } catch {} }, ms);
+    } catch {}
+  }
 
   // ---------- Voice client (auto-mic VAD + barge‑in → POST /api/voice-once) ----------
   let _vm_stream = null;          // MediaStream (mic)
@@ -437,7 +455,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function _vm_armVAD() {
     try {
-      const okGate = await gate(); if (!okGate.ok) return;
+      const okGate = await gate(); if (!okGate.ok) return; // layout-free check
       await _vm_ensureMic();
       _vm_stopPlayback(); // barge‑in: stop Chip if speaking
       _vm_updateMicUI(true, false);
@@ -514,6 +532,8 @@ document.addEventListener("DOMContentLoaded", () => {
     _vm_rec.start();
     _vm_recording = true;
     _vm_updateMicUI(true, true);
+    _uiBeep(1020, 80); // start tone
+    _chipGuide("Recording… speak now. (Chip stops when you pause)");
     setTimeout(() => { if (_vm_recording) _vm_stopRecording(); }, _vm_cfg.maxRecordMs);
   }
 
@@ -522,6 +542,7 @@ document.addEventListener("DOMContentLoaded", () => {
     _vm_recording = false;
     try { _vm_rec?.stop(); } catch {}
     _vm_updateMicUI(true, false); // still armed for next turn
+    _uiBeep(660, 60); // end tone
   }
 
   // ---- PATCHED: normalize reply_text/reply and accept audio URL or audio_b64 ----
@@ -733,7 +754,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function sendChat(message) {
     if (!message || !message.trim()) return;
-    const okGate = await gate(); if (!okGate.ok) return;
+    const okGate = await gate(); if (!okGate.ok) return; // layout-free check
     if (chatPanel) chatPanel.hidden = false;
 
     _chipClearIdleNudge();
@@ -839,7 +860,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ---------- Boot ----------
   (async () => {
-    const g = await gate();
+    const g = await gate({ applyLayout: true });
     if (g && g.ok) {
       _chipGuide("Press Start or Chat to speak with Chip.");
       _chipStep("boot", "ready");
