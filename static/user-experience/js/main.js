@@ -524,6 +524,7 @@ document.addEventListener("DOMContentLoaded", () => {
     _vm_updateMicUI(true, false); // still armed for next turn
   }
 
+  // ---- PATCHED: normalize reply_text/reply and accept audio URL or audio_b64 ----
   async function _vm_onRecordingComplete() {
     try {
       const blob = new Blob(_vm_chunks, { type: "audio/webm" });
@@ -538,23 +539,38 @@ document.addEventListener("DOMContentLoaded", () => {
       _chipStep("← /api/voice-once", data);
 
       if (data.transcript) appendMessage("user", data.transcript, "live");
-      appendMessage("assistant", data.reply_text || "", "live");
+
+      // normalize text
+      const text = (data.reply_text ?? data.reply ?? "").trim();
+      appendMessage("assistant", text || "👍", "live");
 
       if (Array.isArray(data.actions) && data.actions.length) appendActions(data.actions);
       if (Array.isArray(data.suggestions)) _chipRenderSuggestions(data.suggestions);
 
-      if (data.audio_b64) {
+      // handle either audio_b64 or audio (URL)
+      let played = false;
+      if (data.audio_b64 || data.audio) {
         _vm_disarmVAD(); // don’t listen while Chip talks
         _chipSetState("responding");
-        _vm_playback = new Audio("data:audio/mpeg;base64," + data.audio_b64);
-        _vm_playback.addEventListener("ended", () => {
-          _vm_playback = null;
-          _chipSetState("followup"); // auto‑arm resumes
-        }, { once: true });
-        try { await _vm_playback.play(); } catch {}
-      } else {
-        _chipSetState("followup");
+        try {
+          if (data.audio_b64) {
+            _vm_playback = new Audio("data:audio/mpeg;base64," + data.audio_b64);
+            _vm_playback.addEventListener("ended", () => {
+              _vm_playback = null;
+              _chipSetState("followup"); // auto‑arm resumes there
+            }, { once: true });
+            await _vm_playback.play();
+            played = true;
+          } else if (data.audio) {
+            await tryPlayWithMouth(data.audio);
+            played = true;
+            _chipSetState("followup");
+          }
+        } catch (e) {
+          console.error("voice-once playback error:", e);
+        }
       }
+      if (!played) _chipSetState("followup");
 
       if (Array.isArray(data.visemes) && data.visemes.length) {
         try { driveVisemes(data.visemes); } catch {}
@@ -739,13 +755,25 @@ document.addEventListener("DOMContentLoaded", () => {
       _chipStep("← /chat", data);
       _chipSetState("responding");
 
-      thinking.textContent = (chatLane === "live" ? "🔊 " : "💬 ") + (data.reply_text || "");
+      // normalize text
+      const text = (data.reply_text ?? data.reply ?? "").trim();
+      thinking.textContent = (chatLane === "live" ? "🔊 " : "💬 ") + (text || "");
 
+      // audio: handle either base64 or URL
       let audioObj = null;
-      if (data.audio_b64) {
-        audioObj = new Audio("data:audio/mpeg;base64," + data.audio_b64);
-        audioObj.addEventListener("ended", () => { _chipSetState("followup"); }, { once: true });
-        audioObj.play().catch(console.error);
+      if (data.audio_b64 || data.audio) {
+        try {
+          if (data.audio_b64) {
+            audioObj = new Audio("data:audio/mpeg;base64," + data.audio_b64);
+            audioObj.addEventListener("ended", () => { _chipSetState("followup"); }, { once: true });
+            audioObj.play().catch(console.error);
+          } else if (data.audio) {
+            await tryPlayWithMouth(data.audio);
+            _chipSetState("followup");
+          }
+        } catch (e) {
+          console.error("chat playback error:", e);
+        }
       }
       if (data.visemes && data.visemes.length) {
         driveVisemes(data.visemes);
@@ -759,7 +787,7 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      if (!audioObj && !data.audio_b64) _chipSetState("followup");
+      if (!audioObj && !data.audio_b64 && !data.audio) _chipSetState("followup");
     } catch (e) {
       thinking.textContent = "Sorry—something went sideways.";
       console.error(e);
