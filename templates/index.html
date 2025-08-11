@@ -11,7 +11,8 @@
 
   <!-- Scripts (viseme first, then main) -->
   <script defer src="{{ url_for('static', filename='chip/chip-viseme.js') }}?v=20250810-chat"></script>
-  <script defer src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250810-chat"></script>
+  <script type="module" src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250810-chat"></script>
+
 </head>
 <body>
 
