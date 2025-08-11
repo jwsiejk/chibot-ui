@@ -102,6 +102,8 @@ _DEFAULT_PERSONA = (
     "Brevity: Default to ~20 words unless the user asks for more. If they say “more”, expand naturally.\n"
     "Helpfulness: Answer directly first. Offer a follow-up only when it truly helps "
     "(ambiguity, likely next step, or the user seems stuck). Otherwise keep quiet.\n"
+    "Small talk: If the user mixes casual remarks (e.g., weather, greetings) with a question, "
+    "start with one short friendly clause acknowledging it, then pivot to the answer.\n"
     "Guardrails: Do not invent data. If unsure, say so and propose the next action. "
     "Stay professional; no sarcasm or slang overload.\n"
     "Closers (occasionally, when appropriate): “Want me to dig deeper?”, "
@@ -112,7 +114,6 @@ _DEFAULT_PERSONA = (
 _PERSONA_CACHE = {"text": None, "mtime": 0, "path": None}
 
 def _persona_path() -> str:
-    # Allow env override; otherwise use /static/chip/persona.txt inside the app root
     env_path = os.getenv("CHIP_PERSONA_PATH")
     if env_path:
         return env_path
@@ -131,6 +132,77 @@ def load_persona() -> str:
         return _PERSONA_CACHE["text"] or _DEFAULT_PERSONA
     except Exception:
         return _DEFAULT_PERSONA
+
+# -----------------------------------------------------------------------------
+# Weather-aware small-talk helper
+# -----------------------------------------------------------------------------
+_OMAH A_LAT = 41.2565
+_OMAH A_LON = -95.9345
+_SMALLTALK_WEATHER_RE = re.compile(
+    r"\b(weather|outside|nice out|nice outside|sunny|cloudy|rain(y)?|snow|snowing|windy|hot|cold|freezing|chilly|beautiful day)\b",
+    re.IGNORECASE
+)
+
+def _fetch_omaha_temp_f(timeout=3.5):
+    """Return current temperature in °F from Open-Meteo for Omaha, NE (or None if unavailable)."""
+    try:
+        url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": _OMAHA_LAT,
+            "longitude": _OMAHA_LON,
+            "current": "temperature_2m",
+            "temperature_unit": "fahrenheit",
+            "timezone": "auto",
+        }
+        r = httpx.get(url, params=params, timeout=timeout)
+        r.raise_for_status()
+        js = r.json() or {}
+        cur = js.get("current") or {}
+        t = cur.get("temperature_2m")
+        return float(t) if isinstance(t, (int, float)) else None
+    except Exception as e:
+        print("ℹ️ Omaha weather lookup failed:", str(e))
+        return None
+
+def _temp_feel_phrase(t_f):
+    """Map temperature to a short human phrase. Returns something like 'cold here in Omaha (32°F)'."""
+    if t_f is None:
+        return None
+    t = float(t_f)
+    if t <= 35:  feel = "cold"
+    elif t <= 50: feel = "chilly"
+    elif t <= 70: feel = "mild"
+    elif t <= 85: feel = "warm"
+    else:        feel = "hot"
+    return f"{feel} here in Omaha ({round(t)}°F)"
+
+def _smalltalk_context_if_any(user_text: str, name: str):
+    """
+    If the user mixes weather small talk with a question, return a system message
+    that nudges Chip to acknowledge it briefly with *real* Omaha conditions,
+    then pivot to the answer.
+    """
+    if not user_text or not _SMALLTALK_WEATHER_RE.search(user_text):
+        return None
+    t = _fetch_omaha_temp_f()
+    feel = _temp_feel_phrase(t)
+    if feel:
+        return {
+            "role": "system",
+            "content": (
+                f"User mentioned weather in passing. Start your reply with one short, friendly clause "
+                f"acknowledging them by name ({name}) and briefly noting Omaha conditions: “{feel}”. "
+                f"Example openers: “Glad it’s nice there, {name} — {feel}.” then pivot to answer the question."
+            )
+        }
+    else:
+        return {
+            "role": "system",
+            "content": (
+                f"User mentioned weather in passing. Start with one short, friendly clause acknowledging it by name ({name}), "
+                f"then pivot to answer the question. Keep it concise."
+            )
+        }
 
 # -----------------------------------------------------------------------------
 # Helpers (kept here so both app & blueprints can reuse via closures)
@@ -177,17 +249,20 @@ def generate_chip_response(user_id, name, question, role, region):
     if end_triggers.search(question or ""):
         return "Anytime. I’ll be right here when you need me."
 
-    # --- Persona (loaded from static/chip/persona.txt, with fallback) ---
+    # --- Persona (loaded from static/chip/persona.txt, with fallback) + small-talk context ---
     persona_text = load_persona()
     system_messages = [
         {"role": "system", "content": persona_text},
         {"role": "system", "content": f"The user's name is {name}."}
     ]
+    st_ctx = _smalltalk_context_if_any(question or "", name or "there")
+    if st_ctx:
+        system_messages.append(st_ctx)
 
     response = oai.chat.completions.create(
         model="gpt-4o",
         messages=system_messages + messages,
-        max_tokens=150  # allow ~20 words + some wiggle room
+        max_tokens=150  # ~20 words + a little wiggle room
     )
 
     answer = response.choices[0].message.content
@@ -552,8 +627,6 @@ def repo_upsert_route():
         # Try to parse content for PDFs/PPTX when served locally (not http)
         content = ""
         meta = {}
-        if not raw_path.lower().startsWith("http"):  # fix: Python method is startswith
-            pass  # (left intentionally; the correct impl is below)
         if not raw_path.lower().startswith("http"):
             fs_path = absolute_fs_path(raw_path)
             if os.path.exists(fs_path):
