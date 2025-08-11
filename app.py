@@ -81,6 +81,18 @@ oai = OpenAI(
 )
 
 # -----------------------------------------------------------------------------
+# Admins (env-driven; default to your address)
+# -----------------------------------------------------------------------------
+ADMIN_EMAILS = {
+    e.strip().lower()
+    for e in (os.getenv("ADMIN_EMAILS") or "jwsiejk@purestorage.com").split(",")
+    if e.strip()
+}
+
+def _is_admin(email: str) -> bool:
+    return (email or "").strip().lower() in ADMIN_EMAILS
+
+# -----------------------------------------------------------------------------
 # Helpers (kept here so both app & blueprints can reuse via closures)
 # -----------------------------------------------------------------------------
 def ensure_db_ready():
@@ -414,11 +426,13 @@ def api_me():
             """, (email,))
             row = cur.fetchone()
         email_m, name_m, title_m, complete = _merge_profile_fields(row or {"email": email})
+        is_admin = _is_admin(email_m or email)
         return jsonify({
             "email": email_m or email,
             "name": name_m,
             "title": title_m,
-            "profileComplete": bool(complete)
+            "profileComplete": bool(complete),
+            "isAdmin": bool(is_admin)
         }), 200
     except Exception:
         app.logger.exception("/api/me crashed")
@@ -572,7 +586,7 @@ def repo_view(doc_id):
     filename = (row["filename"] or "").lower()
 
     # External URLs
-    if path.lower().startsWith("http"):
+    if path.lower().startswith("http"):
         if filename.endswith(".pptx"):
             return redirect(make_office_viewer_url(path), code=302)
         return redirect(path, code=302)
