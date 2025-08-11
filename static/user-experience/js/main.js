@@ -1,19 +1,16 @@
-// main.js — imports, wiring, boot sequence (patched: clean disconnect; streaming-safe)
-import { $, show, hide, setToolbarHeightVar, _getQueryParam } from "./core/dom.js";
-import { _chipGuide, _chipSetState, _chipStartWaitingCountdown, _chipStep, setRenderSuggestions, setArmVADHook, _chipScheduleIdleNudge, _chipClearIdleNudge } from "./core/state.js";
+// main.js — dynamic-only boot, Start button, mic/VAD wiring (ES module)
+
+import { $, show, hide, setToolbarHeightVar } from "./core/dom.js";
+import { _chipGuide, _chipSetState, _chipStartWaitingCountdown, _chipStep, setRenderSuggestions, setArmVADHook, _chipClearIdleNudge } from "./core/state.js";
 import { j } from "./core/api.js";
-import { setProfileModalMode, loadProfileIntoForm, applyAuthedLayout, enforceProfileCompleteness, gate, wireLoginAndProfileHandlers } from "./auth/profile.js";
-import { appendMessage, appendActions, _chipRenderSuggestions, updateChatButtonLabel, toggleChatMenu, wireChatMenu } from "./chat/ui.js";
-import { sendChat, _limitWords, _isEndTrigger, handleVoiceOnceResponse, wireChatLane, setArmVAD as setArmVADForSend, _chipEndConversation } from "./chat/send.js";
+import { setProfileModalMode, loadProfileIntoForm, gate, wireLoginAndProfileHandlers } from "./auth/profile.js";
+import { appendMessage, appendActions, _chipRenderSuggestions, updateChatButtonLabel, wireChatMenu } from "./chat/ui.js";
+import { sendChat, handleVoiceOnceResponse, wireChatLane, setArmVAD as setArmVADForSend, _chipEndConversation } from "./chat/send.js";
 import { tryPlayWithMouth, _vm_stopPlayback } from "./voice/playback.js";
 import { _vm_armVAD, _vm_disarmVAD, setMicUIUpdater, setGuide as setVoiceGuide, setRecordCallbacks } from "./voice/vad.js";
-import { _vm_startRecording, _vm_stopRecording, setStream as setRecordStream } from "./voice/record.js";
+import { _vm_stopRecording, setStream as setRecordStream } from "./voice/record.js";
 
-// ---- Static audio files ----
-const STATIC_AUDIO_BASE = "/static/chip/audio/";
-const GREETING_FILES = ["greeting-static.mp3", "greeting.mp3", "Greeting.mp3"];
-
-// Chat lane persisted
+// Persisted chat lane (text vs live)
 let chatLane = (localStorage.getItem("chatLane") === "text") ? "text" : "live";
 const getChatLane = () => chatLane;
 const setChatLane = (lane) => { chatLane = (lane === "text") ? "text" : "live"; try { localStorage.setItem("chatLane", chatLane); } catch {} };
@@ -23,19 +20,19 @@ window.addEventListener("resize", setToolbarHeightVar);
 window.addEventListener("orientationchange", setToolbarHeightVar);
 
 document.addEventListener("DOMContentLoaded", () => {
-  // Expose suggestion renderer to state (for idle nudges)
+  // Suggestion renderer (idle nudges etc.)
   setRenderSuggestions((sugs) => _chipRenderSuggestions(sugs, (s) => {
     if (/end chat/i.test(s)) { _chipEndConversation(); return; }
     sendChat(s);
   }));
 
-  // Chat lane wiring
+  // Chat lane + UI
   wireChatLane(getChatLane, setChatLane);
   setArmVADForSend(() => _vm_armVAD());
   updateChatButtonLabel(getChatLane());
   wireChatMenu(getChatLane, setChatLane, () => { /* no-op */ });
 
-  // Voice UI hooks
+  // Mic UI / VAD
   setMicUIUpdater((on, recording=false) => {
     const btnMic = $("btnMic");
     if (!btnMic) return;
@@ -47,52 +44,33 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   setVoiceGuide((text) => _chipGuide(text));
   setRecordCallbacks(
+    async () => { /* onStartRecording */ },
     async () => {
-      // onStartRecording
-    },
-    async () => {
-      // onStopRecording
+      // onStopRecording → deliver clip to /api/voice-once
       await _vm_stopRecording(async (blob, durMs) => {
         await handleVoiceOnceResponse({ blob, durMs });
       });
     }
   );
 
-  // Arm VAD hook used by state transitions
+  // Arming VAD should barge-in any playback first
   setArmVADHook(async () => {
     const okGate = await gate(); if (!okGate.ok) return;
     await navigator.mediaDevices.getUserMedia({ audio: true }).then((s)=> setRecordStream(s));
-    _vm_stopPlayback(); // barge-in (also flushes streaming player if active)
+    _vm_stopPlayback(); // barge-in: flush streaming & <audio>
     await _vm_armVAD();
   });
 
-  // Toolbar: start sessions
-  $("btnStatic")?.addEventListener("click", async () => {
+  // Start = dynamic greet
+  $("btnStart")?.addEventListener("click", async () => {
     const okGate = await gate({ applyLayout: true }); if (!okGate.ok) return;
-    document.documentElement.setAttribute("data-chip-mode", "static");
-    $("btnModeStatic")?.classList.add("mode-active");
-    $("btnModeDynamic")?.classList.remove("mode-active");
-    _chipGuide("Press Start or Chat to speak with Chip.");
-    _chipSetState("idle");
-    await startStaticSession();
-  });
-
-  $("btnDynamic")?.addEventListener("click", async () => {
-    const okGate = await gate({ applyLayout: true }); if (!okGate.ok) return;
-    document.documentElement.setAttribute("data-chip-mode", "dynamic");
-    $("btnModeDynamic")?.classList.add("mode-active");
-    $("btnModeStatic")?.classList.remove("mode-active");
     await startDynamicSession();
   });
 
-  // Mic button
+  // Mic button toggle (simple VAD arm/disarm)
   $("btnMic")?.addEventListener("click", async () => {
-    // Stop early if recording (record.js handles onComplete callback)
-    // We only toggle VAD here
     const btnMic = $("btnMic");
-    if (btnMic?.classList.contains("recording")) {
-      return;
-    }
+    if (btnMic?.classList.contains("recording")) return; // recording stops via record.js
     const armed = btnMic?.classList.contains("armed");
     if (armed) { _vm_disarmVAD(); return; }
     await _vm_armVAD();
@@ -111,6 +89,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const val = input.value;
       if (val && val.trim()) { sendChat(val); input.value = ""; }
     }
+    // Ctrl+Enter → send as "live" then restore lane
     if (e.key === "Enter" && e.ctrlKey) {
       e.preventDefault();
       const prev = getChatLane();
@@ -123,7 +102,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // “Ask Chip ▾” → Profile
+  // “Ask Chip ▾” → Profile modal
   function toggleNavMenu(forceOpen) {
     const navMenu = $("navMenu"); if (!navMenu) return;
     if (typeof forceOpen === "boolean") { navMenu.hidden = !forceOpen; return; }
@@ -141,52 +120,32 @@ document.addEventListener("DOMContentLoaded", () => {
     show($("profileModal"), "flex");
   });
 
-  // Disconnect button
+  // Disconnect
   $("btnDisconnect")?.addEventListener("click", () => {
     try {
       _chipStep("disconnect", "teardown");
       _vm_disarmVAD();
-      _vm_stopPlayback(); // stops any streaming + element playback + visemes
+      _vm_stopPlayback();
       _chipClearIdleNudge();
       _chipSetState("idle");
       _chipGuide("Disconnected. Press Start to begin a new session.");
     } catch (e) { console.warn("disconnect error", e); }
   });
 
-  // Wire login/profile handlers
+  // Auth wiring
   wireLoginAndProfileHandlers();
 
-  // Boot
+  // Boot hint
   (async () => {
     const g = await gate({ applyLayout: true });
     if (g && g.ok) {
-      _chipGuide("Press Start or Chat to speak with Chip.");
+      _chipGuide("Press Start to speak with Chip.");
       _chipStep("boot", "ready");
     }
   })();
 });
 
-// --- Session starters ---
-async function startStaticSession() {
-  try {
-    _chipSetState("greeting");
-    for (let i = 0; i < GREETING_FILES.length; i++) {
-      const url = STATIC_AUDIO_BASE + GREETING_FILES[i];
-      try {
-        await tryPlayWithMouth(url);
-        const chatPanel = $("chatPanel"); if (chatPanel) chatPanel.hidden = false;
-        const chatInput = $("chatInput"); if (chatInput) { chatInput.placeholder = "Type your question…"; chatInput.focus(); }
-        _chipStartWaitingCountdown();
-        return;
-      } catch (_) {}
-    }
-    throw new Error("No static audio found.");
-  } catch (e) {
-    console.warn(e?.message || e);
-    alert((e && e.message) || "Couldn’t play the static greeting. Check your /static/chip/audio/ files.");
-  }
-}
-
+// --- Dynamic session (no static fallback) ---
 async function startDynamicSession() {
   try {
     _chipSetState("greeting");
@@ -195,7 +154,8 @@ async function startDynamicSession() {
 
     if (!ok) {
       _chipStep("greet-failed", { status });
-      await startStaticSession();
+      _chipSetState("idle");
+      _chipGuide("Couldn’t start the greeting. Try again?");
       return;
     }
 
@@ -208,11 +168,7 @@ async function startDynamicSession() {
     }
 
     if (audioUrl) {
-      try {
-        await tryPlayWithMouth(audioUrl);
-      } catch (e) {
-        console.warn("Dynamic greet audio failed, continuing text-only greet.", e);
-      }
+      try { await tryPlayWithMouth(audioUrl); } catch (e) { console.warn("Greet audio failed", e); }
     }
 
     const chatPanel = $("chatPanel"); if (chatPanel) chatPanel.hidden = false;
@@ -223,6 +179,6 @@ async function startDynamicSession() {
     _chipStep("greet", "ready");
   } catch (e) {
     console.warn("startDynamicSession error:", e);
-    try { await startStaticSession(); } catch {}
+    _chipSetState("idle");
   }
 }
