@@ -93,16 +93,38 @@ def save_user(email, name_or_profile, title=None, *_, **__):
         conn.commit()
         return {"email": row["email"], "name": row["name"] or "", "title": row["title"] or ""}
 
+def ensure_logs_table():
+    """
+    Create the logs table if it doesn't exist.
+    """
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.logs (
+                id SERIAL PRIMARY KEY,
+                email TEXT NOT NULL,
+                transcript TEXT,
+                response TEXT,
+                meta JSONB DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ DEFAULT now()
+            )
+        """)
+        conn.commit()
+
 def log_conversation(email, transcript, response):
     """
     Append a log row for observability.
+    Ensures the logs table exists; if insert fails, prints warning instead of crashing.
     """
-    with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO public.logs (email, transcript, response) VALUES (%s, %s, %s)",
-            (email, transcript, response)
-        )
-        conn.commit()
+    try:
+        ensure_logs_table()
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO public.logs (email, transcript, response) VALUES (%s, %s, %s)",
+                (email, transcript, response)
+            )
+            conn.commit()
+    except Exception as e:
+        print("⚠️ log_conversation failed:", e)
 
 def init_db():
     """
@@ -118,13 +140,5 @@ def init_db():
                 profile JSONB
             )
         """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS public.logs (
-                id SERIAL PRIMARY KEY,
-                email TEXT,
-                transcript TEXT,
-                response TEXT,
-                created_at TIMESTAMP DEFAULT NOW()
-            )
-        """)
+        ensure_logs_table()
         conn.commit()
