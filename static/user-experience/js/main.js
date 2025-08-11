@@ -314,21 +314,33 @@ document.addEventListener("DOMContentLoaded", () => {
     document.documentElement.setAttribute("data-chip-mode", mode);
   }
 
+  // Ensure we wait until audio finishes before moving on (prevents UI from prompting too early)
   async function tryPlayWithMouth(url, opts) {
     if (window.ChipViseme && typeof window.ChipViseme.play === "function") {
       await window.ChipViseme.play(url, opts || {});
       return url;
     }
-    await new Audio(url).play();
-    return url;
+    // Fallback: wait for the <audio> to finish (HTMLMediaElement.play() resolves on start, not end)
+    return await new Promise((resolve, reject) => {
+      const a = new Audio(url);
+      a.addEventListener("ended", () => resolve(url), { once: true });
+      a.addEventListener("error", (e) => reject(e));
+      a.play().catch(reject);
+    });
   }
 
   async function startStaticSession() {
     try {
+      _chipSetState("greeting");
       for (let i = 0; i < GREETING_FILES.length; i++) {
         const name = GREETING_FILES[i];
         const url = STATIC_AUDIO_BASE + name;
-        try { await tryPlayWithMouth(url); return; } catch (_) {}
+        try {
+          await tryPlayWithMouth(url);
+          _openChatComposer("Type your question…");
+          _chipStartWaitingCountdown();
+          return;
+        } catch (_) {}
       }
       throw new Error("No static audio found.");
     } catch (e) {
