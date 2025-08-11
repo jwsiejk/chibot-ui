@@ -5,6 +5,9 @@ Flask-Cors==4.0.1
 gunicorn==21.2.0
 itsdangerous==2.1.2
 authlib==1.2.1
+flask-sock
+websockets
+requests
 
 # --- DB / Migrations ---
 psycopg2-binary==2.9.10
