@@ -21,10 +21,12 @@ window.addEventListener("orientationchange", setToolbarHeightVar);
 
 document.addEventListener("DOMContentLoaded", () => {
   // Suggestion renderer (idle nudges etc.)
-  setRenderSuggestions((sugs) => _chipRenderSuggestions(sugs, (s) => {
-    if (/end chat/i.test(s)) { _chipEndConversation(); return; }
-    sendChat(s);
-  }));
+  setRenderSuggestions((sugs) =>
+    _chipRenderSuggestions(sugs, (s) => {
+      if (/end chat/i.test(s)) { _chipEndConversation(); return; }
+      sendChat(s);
+    })
+  );
 
   // Chat lane + UI
   wireChatLane(getChatLane, setChatLane);
@@ -32,16 +34,17 @@ document.addEventListener("DOMContentLoaded", () => {
   updateChatButtonLabel(getChatLane());
   wireChatMenu(getChatLane, setChatLane, () => { /* no-op */ });
 
-  // Mic UI / VAD
-  setMicUIUpdater((on, recording=false) => {
+  // Mic UI / VAD visuals
+  setMicUIUpdater((on, recording = false) => {
     const btnMic = $("btnMic");
     if (!btnMic) return;
     btnMic.classList.toggle("armed", !!on);
     btnMic.classList.toggle("recording", !!recording);
-    if (recording) btnMic.textContent = "🎙️ Recording… (tap to stop)";
-    else if (on)   btnMic.textContent = "🎤 Listening…";
-    else           btnMic.textContent = "🎤 Mic";
+    if (recording)      btnMic.textContent = "🎙️ Recording… (tap to stop)";
+    else if (on)        btnMic.textContent = "🎤 Listening…";
+    else                btnMic.textContent = "🎤 Mic";
   });
+
   setVoiceGuide((text) => _chipGuide(text));
   setRecordCallbacks(
     async () => { /* onStartRecording */ },
@@ -56,7 +59,13 @@ document.addEventListener("DOMContentLoaded", () => {
   // Arming VAD should barge-in any playback first
   setArmVADHook(async () => {
     const okGate = await gate(); if (!okGate.ok) return;
-    await navigator.mediaDevices.getUserMedia({ audio: true }).then((s)=> setRecordStream(s));
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setRecordStream(s);
+    } catch (err) {
+      console.warn("getUserMedia failed:", err);
+      return;
+    }
     _vm_stopPlayback(); // barge-in: flush streaming & <audio>
     await _vm_armVAD();
   });
@@ -84,11 +93,13 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("chatInput")?.addEventListener("keydown", (e) => {
     const input = $("chatInput"); if (!input) return;
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       const val = input.value;
       if (val && val.trim()) { sendChat(val); input.value = ""; }
     }
+
     // Ctrl+Enter → send as "live" then restore lane
     if (e.key === "Enter" && e.ctrlKey) {
       e.preventDefault();
@@ -102,17 +113,23 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // “Ask Chip ▾” → Profile modal
+  // “Ask Chip ▾” menu + items (Profile, History, Logout)
   function toggleNavMenu(forceOpen) {
     const navMenu = $("navMenu"); if (!navMenu) return;
     if (typeof forceOpen === "boolean") { navMenu.hidden = !forceOpen; return; }
     navMenu.hidden = !navMenu.hidden;
   }
-  $("navMenuBtn")?.addEventListener("click", (e) => { e.stopPropagation(); toggleNavMenu(); });
+  $("navMenuBtn")?.addEventListener("click", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    toggleNavMenu();
+  });
   document.addEventListener("click", (e) => {
     const navMenu = $("navMenu");
-    if (!navMenu?.hidden && !navMenu.contains(e.target) && e.target !== $("navMenuBtn")) toggleNavMenu(false);
+    if (!navMenu?.hidden && !navMenu.contains(e.target) && e.target !== $("navMenuBtn")) {
+      toggleNavMenu(false);
+    }
   });
+
   $("navProfile")?.addEventListener("click", async () => {
     toggleNavMenu(false);
     setProfileModalMode("edit");
@@ -120,7 +137,19 @@ document.addEventListener("DOMContentLoaded", () => {
     show($("profileModal"), "flex");
   });
 
-  // Disconnect
+  $("navHistory")?.addEventListener("click", async () => {
+    toggleNavMenu(false);
+    const { ok, data } = await j("/history", { method: "POST", body: "{}" });
+    if (ok && data?.response) appendMessage("chip", data.response);
+  });
+
+  $("navLogout")?.addEventListener("click", async () => {
+    toggleNavMenu(false);
+    try { await fetch("/logout", { method: "POST" }); } catch {}
+    location.reload();
+  });
+
+  // End session (optional button)
   $("btnDisconnect")?.addEventListener("click", () => {
     try {
       _chipStep("disconnect", "teardown");
@@ -144,6 +173,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   })();
 });
+
 
 // --- Dynamic session (no static fallback) ---
 async function startDynamicSession() {
