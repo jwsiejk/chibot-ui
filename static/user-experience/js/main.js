@@ -466,13 +466,19 @@ document.addEventListener("DOMContentLoaded", () => {
   let _vm_an = null;              // AnalyserNode
   let _vm_raf = 0;                // RAF id
   let _vm_preroll = [];           // pre-roll buffers
+  let _vm_rec_startedAt = 0;      // NEW: track start time to measure speech length
+
   const _vm_cfg = {
-    vadThreshold: 0.015,          // rough ~ -36 dBFS
+    vadThreshold: 0.015,          // rough ~ -36 dBFS (will be auto-calibrated)
     vadAttackMs: 120,
     vadReleaseMs: 700,
     maxRecordMs: 15000,
     preRollMs: 300,
-    analyserSize: 1024
+    analyserSize: 1024,
+    // NEW: anti-noise controls
+    minSpeechMs: 600,             // ignore < 600ms spurts
+    speechConfidenceMin: 0.6,     // ASR confidence gate
+    defaultVadThreshold: 0.015
   };
 
   // === NEW: simple response mutex to avoid overlapping replies ===
@@ -568,6 +574,36 @@ document.addEventListener("DOMContentLoaded", () => {
     else           btnMic.textContent = "🎤 Mic";
   }
 
+  // NEW: quick noise-floor calibration to raise/lower VAD threshold
+  async function _vm_calibrateNoise(ms = 400) {
+    try {
+      if (!_vm_an) return;
+      const buf = new Float32Array(_vm_an.fftSize);
+      const start = performance.now();
+      let n = 0, accum = 0;
+      return await new Promise((resolve) => {
+        const tick = () => {
+          _vm_an.getFloatTimeDomainData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i++) { const s = buf[i]; sum += s*s; }
+          const rms = Math.sqrt(sum / buf.length);
+          accum += rms; n++;
+          if (performance.now() - start >= ms) {
+            const avg = accum / Math.max(1,n);
+            // Raise threshold above ambient; clamp to a sane min/max
+            const newThresh = Math.min(Math.max(avg * 2.5, _vm_cfg.defaultVadThreshold), 0.05);
+            _vm_cfg.vadThreshold = newThresh;
+            _chipStep("vad-calibrated", { avgRMS: avg.toFixed(5), threshold: newThresh.toFixed(5) });
+            resolve();
+            return;
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+    } catch {}
+  }
+
   async function _vm_armVAD() {
     try {
       const okGate = await gate(); if (!okGate.ok) return; // layout-free check
@@ -584,6 +620,9 @@ document.addEventListener("DOMContentLoaded", () => {
       _vm_an = _vm_ctx.createAnalyser();
       _vm_an.fftSize = _vm_cfg.analyserSize;
       _vm_src.connect(_vm_an);
+
+      // Calibrate before arming
+      await _vm_calibrateNoise(400);
 
       _vm_vad_on = true;
       let speakOn = 0, speakOff = 0, speaking = false;
@@ -645,6 +684,7 @@ document.addEventListener("DOMContentLoaded", () => {
     _vm_rec.addEventListener("dataavailable", (e) => { if (e?.data?.size) _vm_chunks.push(e.data); });
     _vm_rec.addEventListener("stop", _vm_onRecordingComplete, { once: true });
     _vm_rec.start();
+    _vm_rec_startedAt = performance.now(); // track speech length
     _vm_recording = true;
     _vm_updateMicUI(true, true);
     _uiBeep(1020, 80); // start tone
@@ -673,17 +713,34 @@ document.addEventListener("DOMContentLoaded", () => {
   // ---- PATCHED: normalize reply_text/reply and accept audio URL or audio_b64 ----
   async function _vm_onRecordingComplete() {
     try {
+      // Ignore ultra‑short bursts (background bumps, coughs)
+      const durMs = Math.max(0, performance.now() - (_vm_rec_startedAt || performance.now()));
+      if (durMs < _vm_cfg.minSpeechMs) {
+        _chipStep("voice-skip", { reason: "short-speech", durMs });
+        await _handleCanned("no_audio");
+        return;
+      }
+
       const blob = new Blob(_vm_chunks, { type: "audio/webm" });
       const fd = new FormData();
       fd.append("audio", blob, "clip.webm");
       fd.append("language", "en"); // NEW: force English on ASR/server side
 
       _chipSetState("thinking");
-      _chipStep("POST /api/voice-once →", { size: blob.size });
+      _chipStep("POST /api/voice-once →", { size: blob.size, durMs });
 
       const res = await fetch("/api/voice-once", { method: "POST", body: fd, credentials: "include" });
       const data = await res.json().catch(() => ({}));
       _chipStep("← /api/voice-once", data);
+
+      // Confidence gate (treat low confidence as noise/unsure)
+      const conf = typeof data.confidence === "number" ? data.confidence : null;
+      if (conf !== null && conf < _vm_cfg.speechConfidenceMin) {
+        const fallback = (data.transcript || "").trim() ? "unsure" : "no_audio";
+        if (data.transcript) appendMessage("user", data.transcript, "live");
+        await _handleCanned(fallback);
+        return;
+      }
 
       // End trigger honored immediately
       if (data.transcript && _isEndTrigger(data.transcript)) {
