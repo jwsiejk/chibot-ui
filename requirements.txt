@@ -9,6 +9,7 @@ flask-sock
 websockets
 requests
 eventlet>=0.33.3
+httpx<0.28
 
 # --- DB / Migrations ---
 psycopg2-binary==2.9.10
