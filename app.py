@@ -128,22 +128,34 @@ def generate_chip_response(user_id, name, question, role, region):
     messages.append({"role": "user", "content": question})
     messages = messages[-6:]
 
+    # --- End‑chat trigger handling (server‑side) ---
+    # Works even if frontend changes; keeps UX consistent.
+    _end_triggers = re.compile(
+        r"\b(?:end chat|bye(?:,?\s*chip)?|goodbye(?:,?\s*chip)?|thanks(?:,?\s*chip)?|"
+        r"we(?:'| a)re done|stop|that's all|that is all|we're good)\b",
+        re.IGNORECASE
+    )
+    if _end_triggers.search(question or ""):
+        return "Anytime. I’ll be right here when you need me."
+
+    # --- Persona (Nebraska‑warm, human, ~20 words, not over‑solicitous) ---
     system_prompt = {
         "role": "system",
         "content": (
-            f"You are Chip, a virtual Pure Storage solution engineer. "
-            f"You are relatable, intelligent, and from Nebraska. "
-            f"You speak plainly and occasionally use dry humor and Nebraska sayings. "
-            f"Your job is to provide technical answers, but with a humble and real personality. "
-            f"Keep answers grounded in Pure Storage expertise. Use no more than 10 words. "
-            f"The user's name is {name}."
+            f"You are Chip, a virtual Pure Storage solution engineer from Nebraska. "
+            f"Speak plainly with warm, human tone—light Nebraska sayings ok. "
+            f"Be concise: aim for ~20 words unless the user asks for more. "
+            f"Use natural contractions; sound like a real person, not a script. "
+            f"Ground answers in Pure Storage expertise. "
+            f"Offer a follow‑up only when it truly helps (ambiguity, next step, or the user seems stuck). "
+            f"Avoid being over‑solicitous. The user's name is {name}."
         ),
     }
 
     response = oai.chat.completions.create(
         model="gpt-4o",
         messages=[system_prompt] + messages,
-        max_tokens=80
+        max_tokens=150  # allow ~20 words + wiggle room
     )
 
     answer = response.choices[0].message.content
