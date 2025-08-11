@@ -13,14 +13,17 @@ import { _vm_startRecording, _vm_stopRecording, setStream as setRecordStream } f
 const STATIC_AUDIO_BASE = "/static/chip/audio/";
 const GREETING_FILES = ["greeting-static.mp3", "greeting.mp3", "Greeting.mp3"];
 
+// Keep a handle for any active response stream (for disconnect/teardown)
+let respRelease = null;
+
 // Chat lane persisted
 let chatLane = (localStorage.getItem("chatLane") === "text") ? "text" : "live";
 const getChatLane = () => chatLane;
 const setChatLane = (lane) => { chatLane = (lane === "text") ? "text" : "live"; try { localStorage.setItem("chatLane", chatLane); } catch {} };
 
-window.addEventListener('load', setToolbarHeightVar);
-window.addEventListener('resize', setToolbarHeightVar);
-window.addEventListener('orientationchange', setToolbarHeightVar);
+window.addEventListener("load", setToolbarHeightVar);
+window.addEventListener("resize", setToolbarHeightVar);
+window.addEventListener("orientationchange", setToolbarHeightVar);
 
 document.addEventListener("DOMContentLoaded", () => {
   // Expose suggestion renderer to state (for idle nudges)
@@ -151,10 +154,10 @@ document.addEventListener("DOMContentLoaded", () => {
       _vm_disarmVAD();
       _vm_stopPlayback();
       _chipClearIdleNudge();
-      respRelease?.();
+      if (typeof respRelease === "function") { try { respRelease(); } catch {} }
+      respRelease = null;
       _chipSetState("idle");
       _chipGuide("Disconnected. Press Start to begin a new session.");
-      const stream = navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? null : null; // placeholder
       // If we have an existing stream from record.js, those tracks were stopped there
     } catch (e) { console.warn("disconnect error", e); }
   });
@@ -198,4 +201,39 @@ async function startDynamicSession() {
     _chipSetState("greeting");
     _chipStep("POST /greet →", {});
     const { ok, data, status } = await j("/greet", { method: "POST", body: JSON.stringify({}) });
-    if (!ok) { _chipStep("greet-failed", {
+
+    if (!ok) {
+      _chipStep("greet-failed", { status });
+      // Fall back to static if server-side greet fails
+      await startStaticSession();
+      return;
+    }
+
+    // Expecting { audio?: string, reply?: string }
+    const audioUrl = data && data.audio;
+    const reply = data && data.reply;
+
+    if (reply && typeof reply === "string") {
+      appendMessage("chip", reply);
+    }
+
+    if (audioUrl) {
+      try {
+        await tryPlayWithMouth(audioUrl);
+      } catch (e) {
+        console.warn("Dynamic greet audio failed, continuing text-only greet.", e);
+      }
+    }
+
+    const chatPanel = $("chatPanel"); if (chatPanel) chatPanel.hidden = false;
+    const chatInput = $("chatInput"); if (chatInput) { chatInput.placeholder = "Ask me anything about Pure Storage…"; chatInput.focus(); }
+
+    _chipStartWaitingCountdown();
+    _chipSetState("idle");
+    _chipStep("greet", "ready");
+  } catch (e) {
+    console.warn("startDynamicSession error:", e);
+    // As a safety, try static
+    try { await startStaticSession(); } catch {}
+  }
+}
