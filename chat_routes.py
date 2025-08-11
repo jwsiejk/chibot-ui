@@ -23,7 +23,87 @@ def create_chat_blueprint(deps):
 
     bp = Blueprint("chat_bp", __name__)
 
-    # ----------- ASK (text + optional one-shot TTS mp3) -----------
+    # ----------------- Helpers -----------------
+    END_PAT = re.compile(
+        r"\b("
+        r"(that'?s\s+)?all( for now)?"
+        r"|stop( here)?"
+        r"|end( chat| conversation)?"
+        r"|thanks( a lot| so much)?"
+        r"|thank you"
+        r"|bye|goodbye|that'?ll be it|we'?re done|finished|i'?m done"
+        r")\b",
+        re.I
+    )
+
+    DOC_NEED_PAT = re.compile(r"\b(deck|slides?|doc|document|pdf|presentation|pptx?)\b", re.I)
+    PRESENT_PAT  = re.compile(r"\b(show|open|bring up|present|display)\b", re.I)
+
+    OWNER_PAT = re.compile(r"(who\s+(is\s+)?(the\s+)?(account\s+)?owner\s+(for|of)\s+)(?P<acct>.+)", re.I)
+    TEAM_PAT  = re.compile(r"(who\s+(is\s+)?(the\s+)?account\s+team\s+(for|of)\s+)(?P<acct>.+)", re.I)
+
+    def is_end_intent(msg: str) -> bool:
+        if not msg:
+            return False
+        return bool(END_PAT.search(msg))
+
+    def clean_account_name(raw: str) -> str:
+        s = (raw or "").strip().rstrip("?!.")
+        s = re.sub(r"^(the\s+|\"|')+", "", s, flags=re.I).strip(' "\'')
+        return s
+
+    def build_suggestions(message: str, reply_text: str, top_hit: dict | None) -> list[str]:
+        """
+        Provide 2–4 small follow-ups that feel helpful and human.
+        Always include 'End chat' as the final safety exit.
+        """
+        sugs: list[str] = []
+
+        # If we presented/found a doc, offer natural continuations
+        if top_hit:
+            title = top_hit.get("title") or "that doc"
+            if not PRESENT_PAT.search(message or ""):
+                sugs.append(f"Open {title}")
+            sugs.append("Summarize this for me")
+            sugs.append("Send me the download")
+        else:
+            # General-purpose follow-ups to keep flow natural
+            sugs.extend([
+                "Give me a quick example",
+                "Explain a bit more",
+            ])
+
+        # If user asked about an account owner/team, offer next steps
+        if OWNER_PAT.search(message or "") or TEAM_PAT.search(message or ""):
+            sugs.append("Email the owner")
+            sugs.append("Show account team again")
+
+        # Keep list short and purposeful
+        sugs = sugs[:3]
+
+        # Always add a graceful exit
+        sugs.append("End chat")
+        return sugs
+
+    def maybe_make_tts(text: str) -> str | None:
+        if not (TTS_ENABLED and text and voice_id and eleven):
+            return None
+        try:
+            voice_settings = {"speed": 0.9}
+            audio_stream = eleven.text_to_speech.convert(
+                voice_id=voice_id,
+                model_id="eleven_monolingual_v1",
+                text=text,
+                optimize_streaming_latency=1,
+                voice_settings=voice_settings
+            )
+            audio_bytes = b"".join(chunk for chunk in audio_stream)
+            return base64.b64encode(audio_bytes).decode("utf-8")
+        except Exception as e:
+            print("⚠️ TTS failed:", e)
+            return None
+
+    # ----------------- /ask (one-shot) -----------------
     @bp.route("/ask", methods=["POST"])
     def ask():
         try:
@@ -36,36 +116,28 @@ def create_chat_blueprint(deps):
                 return jsonify({"error": "Missing question."}), 400
 
             name   = session.get("name", "User")
-            role   = "engineer"
-            region = "NA"
+            role   = session.get("role", "engineer")
+            region = session.get("region", "NA")
 
             response_text = gen_reply(user_id, name, question, role, region)
 
-            audio_url = None
-            if TTS_ENABLED and speak and response_text:
-                try:
-                    voice_settings = {"speed": 0.9}
-                    audio = eleven.text_to_speech.convert(
-                        voice_id=voice_id,
-                        model_id="eleven_monolingual_v1",
-                        text=response_text,
-                        optimize_streaming_latency=1,
-                        voice_settings=voice_settings
-                    )
-                    filename = f"static/audio/{uuid4().hex}.mp3"
-                    with open(filename, "wb") as f:
-                        for chunk in audio:
-                            f.write(chunk)
-                    audio_url = "/" + filename
-                except Exception as e:
-                    print("⚠️ TTS generation failed:", e)
+            audio_b64 = None
+            if speak:
+                audio_b64 = maybe_make_tts(response_text)
 
-            return jsonify({"response": response_text, "audio": audio_url})
+            return jsonify({
+                "response": response_text,
+                "audio_b64": audio_b64,
+                "visemes": [],
+                "actions": [],
+                "suggestions": build_suggestions(question, response_text, None),
+                "end": False
+            })
         except Exception as e:
             print("🔥 ERROR IN /ask:", str(e))
             return jsonify({"error": "Something went wrong. Try again later."}), 500
 
-    # ----------- CHAT (Text or Live TTS) -----------
+    # ----------------- /chat (conversational) -----------------
     @bp.post("/chat")
     def chat():
         """
@@ -73,9 +145,11 @@ def create_chat_blueprint(deps):
         Returns:
           {
             "reply_text": "...",
-            "audio_b64": "...." (only when lane==live and TTS enabled),
-            "visemes": [],      (placeholder for ElevenLabs viseme timestamps),
-            "actions": [ {type, title, url, filename} ]
+            "audio_b64": "...." (when lane==live and TTS enabled),
+            "visemes": [],      (placeholder for future ElevenLabs viseme timestamps),
+            "actions": [ {type, title, url, filename} ],
+            "suggestions": ["...", "...", "End chat"],
+            "end": false
           }
         """
         try:
@@ -90,17 +164,31 @@ def create_chat_blueprint(deps):
             role    = session.get("role", "engineer")
             region  = session.get("region", "NA")
 
-            # LLM reply (reuse persona + logging)
+            # ---- End intent (user wants to exit gracefully) ----
+            if is_end_intent(message):
+                farewell = "Anytime. I’ll be right here when you need me."
+                audio_b64 = maybe_make_tts(farewell) if lane == "live" else None
+                return jsonify({
+                    "reply_text": farewell,
+                    "audio_b64": audio_b64,
+                    "visemes": [],
+                    "actions": [],
+                    "suggestions": ["Start over", "No suggestions", "End chat"],
+                    "end": True
+                })
+
+            # ---- LLM reply (persona + logging happens inside gen_reply) ----
             reply_text = gen_reply(user_id, name, message, role, region)
 
-            # --- Account Q&A intents ---
-            owner_q = re.search(r"(who\s+(is\s+)?(the\s+)?(account\s+)?owner\s+(for|of)\s+)(?P<acct>.+)", message, re.I)
-            team_q  = re.search(r"(who\s+(is\s+)?(the\s+)?account\s+team\s+(for|of)\s+)(?P<acct>.+)", message, re.I)
-
             actions = []
+            top = None
+
+            # ---- Account Q&A intents ----
+            owner_q = OWNER_PAT.search(message)
+            team_q  = TEAM_PAT.search(message)
+
             if owner_q or team_q:
-                acct = (owner_q or team_q).group("acct").strip().rstrip("?!.")
-                acct = re.sub(r"^(the\s+|\"|')+", "", acct, flags=re.I).strip(' "\'')
+                acct = clean_account_name((owner_q or team_q).group("acct"))
                 row = find_account(acct)
                 if row:
                     acct_name   = row.get("account_name") or "that account"
@@ -123,17 +211,13 @@ def create_chat_blueprint(deps):
                         if pam:     parts.append(f"PAM: {pam}")
                         reply_text = f"{acct_name} team — " + "; ".join(parts)
 
-            # --------- Doc intent & retrieval (present or download) ----------
-            present_intent = bool(re.search(r"\b(show|open|bring up|present|display)\b", message, re.I))
-            need_doc = bool(re.search(r"\b(deck|slides?|doc|document|pdf|download|send|share|presentation|pptx?)\b", message, re.I))
-
-            snippet = None
-            top = None
-            if need_doc or present_intent:
+            # ---- Doc retrieval intents ----
+            need_doc = bool(DOC_NEED_PAT.search(message)) or bool(PRESENT_PAT.search(message))
+            if need_doc:
                 hits = repo_search(message, limit=5)
                 if hits:
                     top = hits[0]
-                    snippet = top.get("snippet")
+                    # Offer both present and download actions
                     actions.append({
                         "type": "download",
                         "title": top["title"],
@@ -146,33 +230,28 @@ def create_chat_blueprint(deps):
                         "url": f"/repo/view/{top['id']}"
                     })
 
-            if snippet and isinstance(reply_text, str) and len(reply_text) < 220:
-                reply_text = f"{reply_text}\n\n{snippet}"
+                    # If the LLM reply is short, enrich with snippet
+                    snippet = top.get("snippet")
+                    if snippet and isinstance(reply_text, str) and len(reply_text) < 220:
+                        reply_text = f"{reply_text}\n\n{snippet}"
 
-            # TTS if lane == live
+            # ---- TTS for live lane ----
             audio_b64 = None
             visemes = None
-            if lane == "live" and TTS_ENABLED and reply_text:
-                try:
-                    voice_settings = {"speed": 0.9}
-                    audio_stream = eleven.text_to_speech.convert(
-                        voice_id=voice_id,
-                        model_id="eleven_monolingual_v1",
-                        text=reply_text,
-                        optimize_streaming_latency=1,
-                        voice_settings=voice_settings
-                    )
-                    audio_bytes = b"".join(chunk for chunk in audio_stream)
-                    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-                    visemes = []  # populate when switching to viseme_timestamps endpoint
-                except Exception as e:
-                    print("⚠️ Chat TTS failed:", e)
+            if lane == "live":
+                audio_b64 = maybe_make_tts(reply_text)
+                visemes = []  # populate when switching to viseme_timestamps endpoint
+
+            # ---- Suggestions to keep it human & flowing ----
+            suggestions = build_suggestions(message, reply_text, top)
 
             return jsonify({
                 "reply_text": reply_text,
                 "audio_b64": audio_b64,
                 "visemes": visemes,
-                "actions": actions
+                "actions": actions,
+                "suggestions": suggestions,
+                "end": False
             })
         except Exception:
             import traceback as _tb
@@ -180,4 +259,3 @@ def create_chat_blueprint(deps):
             return jsonify({"error": "chat failed"}), 500
 
     return bp
-
