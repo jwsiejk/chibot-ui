@@ -114,6 +114,7 @@ _DEFAULT_PERSONA = (
 _PERSONA_CACHE = {"text": None, "mtime": 0, "path": None}
 
 def _persona_path() -> str:
+    # Allow env override; otherwise use /static/chip/persona.txt inside the app root
     env_path = os.getenv("CHIP_PERSONA_PATH")
     if env_path:
         return env_path
@@ -136,8 +137,8 @@ def load_persona() -> str:
 # -----------------------------------------------------------------------------
 # Weather-aware small-talk helper
 # -----------------------------------------------------------------------------
-_OMAH A_LAT = 41.2565
-_OMAH A_LON = -95.9345
+_OMAHA_LAT = 41.2565
+_OMAHA_LON = -95.9345
 _SMALLTALK_WEATHER_RE = re.compile(
     r"\b(weather|outside|nice out|nice outside|sunny|cloudy|rain(y)?|snow|snowing|windy|hot|cold|freezing|chilly|beautiful day)\b",
     re.IGNORECASE
@@ -262,7 +263,7 @@ def generate_chip_response(user_id, name, question, role, region):
     response = oai.chat.completions.create(
         model="gpt-4o",
         messages=system_messages + messages,
-        max_tokens=150  # ~20 words + a little wiggle room
+        max_tokens=150  # allow ~20 words + some wiggle room
     )
 
     answer = response.choices[0].message.content
