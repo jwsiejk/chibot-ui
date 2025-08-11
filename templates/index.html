@@ -17,7 +17,7 @@
 
   <!-- Top bar -->
   <header class="topbar">
-    <div class="brand">Chip</div>
+    <!-- Removed the white "Chip" brand label -->
     <div class="actions">
       <div class="dropdown nav">
         <button id="navMenuBtn" class="btn btn--accent">Ask Chip ▾</button>
@@ -79,7 +79,8 @@
   <!-- Bottom toolbar -->
   <div id="askChipToolbar">
     <button id="btnModeStatic">Static</button>
-    <button id="btnModeDynamic">Dynamic</button>
+    <!-- Renamed for clarity with the guide text -->
+    <button id="btnModeDynamic">Start</button>
 
     <button id="btnMic"  title="Hold to talk">🎤 Mic</button>
 
@@ -101,6 +102,26 @@
     </div>
   </div>
 
+  <!-- User Guide panel (top-left) -->
+  <div id="guidePanel" style="
+    position:fixed; top:16px; left:16px; z-index:2000;
+    background:rgba(0,0,0,0.6); color:#fff; padding:12px 14px;
+    border-radius:12px; font-size:14px; line-height:1.35; max-width:320px;
+    backdrop-filter: blur(4px); display:none;
+  ">
+    <!-- populated by main.js -->
+  </div>
+
+  <!-- Admin Debug panel (bottom-left) -->
+  <div id="debugPanel" style="
+    position:fixed; bottom:16px; left:16px; z-index:2000;
+    background:rgba(0,0,0,0.7); color:#9EE37D; padding:12px 14px;
+    border-radius:12px; font:12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    width:480px; max-height:40vh; overflow:auto; display:none; white-space:pre-wrap;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  ">
+    <!-- populated by main.js -->
+  </div>
+
 </body>
 </html>
-
