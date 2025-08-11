@@ -1,4 +1,4 @@
-// main.js — imports, wiring, boot sequence
+// main.js — imports, wiring, boot sequence (patched: clean disconnect; streaming-safe)
 import { $, show, hide, setToolbarHeightVar, _getQueryParam } from "./core/dom.js";
 import { _chipGuide, _chipSetState, _chipStartWaitingCountdown, _chipStep, setRenderSuggestions, setArmVADHook, _chipScheduleIdleNudge, _chipClearIdleNudge } from "./core/state.js";
 import { j } from "./core/api.js";
@@ -12,9 +12,6 @@ import { _vm_startRecording, _vm_stopRecording, setStream as setRecordStream } f
 // ---- Static audio files ----
 const STATIC_AUDIO_BASE = "/static/chip/audio/";
 const GREETING_FILES = ["greeting-static.mp3", "greeting.mp3", "Greeting.mp3"];
-
-// Keep a handle for any active response stream (for disconnect/teardown)
-let respRelease = null;
 
 // Chat lane persisted
 let chatLane = (localStorage.getItem("chatLane") === "text") ? "text" : "live";
@@ -65,7 +62,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setArmVADHook(async () => {
     const okGate = await gate(); if (!okGate.ok) return;
     await navigator.mediaDevices.getUserMedia({ audio: true }).then((s)=> setRecordStream(s));
-    _vm_stopPlayback(); // barge-in
+    _vm_stopPlayback(); // barge-in (also flushes streaming player if active)
     await _vm_armVAD();
   });
 
@@ -90,15 +87,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Mic button
   $("btnMic")?.addEventListener("click", async () => {
-    // Stop early if recording
-    // (record.js handles onComplete callback)
+    // Stop early if recording (record.js handles onComplete callback)
     // We only toggle VAD here
     const btnMic = $("btnMic");
     if (btnMic?.classList.contains("recording")) {
-      // record.js will call our onStopRecording path
       return;
     }
-    // Toggle armed
     const armed = btnMic?.classList.contains("armed");
     if (armed) { _vm_disarmVAD(); return; }
     await _vm_armVAD();
@@ -152,13 +146,10 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       _chipStep("disconnect", "teardown");
       _vm_disarmVAD();
-      _vm_stopPlayback();
+      _vm_stopPlayback(); // stops any streaming + element playback + visemes
       _chipClearIdleNudge();
-      if (typeof respRelease === "function") { try { respRelease(); } catch {} }
-      respRelease = null;
       _chipSetState("idle");
       _chipGuide("Disconnected. Press Start to begin a new session.");
-      // If we have an existing stream from record.js, those tracks were stopped there
     } catch (e) { console.warn("disconnect error", e); }
   });
 
@@ -204,7 +195,6 @@ async function startDynamicSession() {
 
     if (!ok) {
       _chipStep("greet-failed", { status });
-      // Fall back to static if server-side greet fails
       await startStaticSession();
       return;
     }
@@ -233,7 +223,6 @@ async function startDynamicSession() {
     _chipStep("greet", "ready");
   } catch (e) {
     console.warn("startDynamicSession error:", e);
-    // As a safety, try static
     try { await startStaticSession(); } catch {}
   }
 }
