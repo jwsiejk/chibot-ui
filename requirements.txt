@@ -8,6 +8,7 @@ authlib==1.2.1
 flask-sock
 websockets
 requests
+eventlet>=0.33.3
 
 # --- DB / Migrations ---
 psycopg2-binary==2.9.10
