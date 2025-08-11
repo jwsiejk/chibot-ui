@@ -1,4 +1,4 @@
-// main.js — Chat Live/Text + existing Static/Dynamic; 2025-08-10 chat
+// main.js — Chat Live/Text + existing Static/Dynamic; 2025-08-10 chat + guide/debug
 document.addEventListener("DOMContentLoaded", () => {
   const $ = (id) => document.getElementById(id);
 
@@ -52,6 +52,96 @@ document.addEventListener("DOMContentLoaded", () => {
   const navMenuBtn   = $("navMenuBtn");
   const navMenu      = $("navMenu");
   const navProfile   = $("navProfile");
+
+  // ----- NEW: Guide & Debug overlays -----
+  const guidePanelEl = $("guidePanel");
+  const debugPanelEl = $("debugPanel");
+
+  const _chipUX = {
+    isAdmin: false,
+    debugVisible: false,
+    guideVisible: false,
+    state: "idle",            // idle | greeting | waiting | listening | thinking | responding | followup
+    waitingTimer: null,
+    waitingSeconds: 7
+  };
+
+  function _getQueryParam(key) {
+    try {
+      const url = new URL(window.location.href);
+      return url.searchParams.get(key);
+    } catch { return null; }
+  }
+
+  function _chipSetAdmin(val) {
+    _chipUX.isAdmin = !!val;
+    _chipUX.debugVisible = _chipUX.isAdmin || _getQueryParam("debug") === "1";
+    if (debugPanelEl) debugPanelEl.style.display = _chipUX.debugVisible ? "block" : "none";
+  }
+
+  function _chipStep(phase, details) {
+    if (!_chipUX.debugVisible || !debugPanelEl) return;
+    const time = new Date().toLocaleTimeString();
+    let line = `[${time}] ${phase}`;
+    if (details && typeof details === "object") {
+      try { line += `\n${JSON.stringify(details, null, 2)}`; } catch {}
+    } else if (details) {
+      line += `\n${details}`;
+    }
+    debugPanelEl.textContent += ((debugPanelEl.textContent ? "\n" : "") + line);
+    debugPanelEl.scrollTop = debugPanelEl.scrollHeight;
+  }
+
+  function _chipGuide(text) {
+    if (!guidePanelEl) return;
+    guidePanelEl.textContent = text || "";
+    const showNow = !!text;
+    guidePanelEl.style.display = showNow ? "block" : "none";
+    _chipUX.guideVisible = showNow;
+  }
+
+  function _chipSetState(next) {
+    _chipUX.state = next;
+    _chipStep("state", next);
+    switch (next) {
+      case "greeting":
+        _chipGuide("Chip is saying hello — how can he help?");
+        break;
+      case "waiting":
+        _chipGuide(`Ask your question — Chip waiting (${_chipUX.waitingSeconds}s)`);
+        break;
+      case "listening":
+        _chipGuide("Listening… ask your question.");
+        break;
+      case "thinking":
+        _chipGuide("Chip is thinking…");
+        break;
+      case "responding":
+        _chipGuide("Chip is responding…");
+        break;
+      case "followup":
+        _chipGuide("Do you have a follow-up?");
+        break;
+      default:
+        _chipGuide("Press Start or Chat to speak with Chip.");
+    }
+  }
+
+  function _chipStartWaitingCountdown() {
+    if (_chipUX.waitingTimer) { clearInterval(_chipUX.waitingTimer); _chipUX.waitingTimer = null; }
+    let t = _chipUX.waitingSeconds;
+    _chipSetState("waiting");
+    _chipUX.waitingTimer = setInterval(() => {
+      t -= 1;
+      if (t <= 0) {
+        clearInterval(_chipUX.waitingTimer);
+        _chipUX.waitingTimer = null;
+        _chipSetState("listening");
+      } else {
+        _chipGuide(`Ask your question — Chip waiting (${t}s)`);
+      }
+    }, 1000);
+  }
 
   // Session mode (null until user clicks a mode)
   let sessionMode = null; // 'static' | 'dynamic' | null
@@ -122,7 +212,15 @@ document.addEventListener("DOMContentLoaded", () => {
   async function enforceProfileCompleteness({ applyLayout = true } = {}) {
     try {
       const { ok, status, data } = await j("/api/me");
-      if (!ok) { if (status === 401) { hide(appEl); show(loginModal, "flex"); return { ok:false, reason:"unauthenticated" }; } hide(appEl); show(loginModal, "flex"); return { ok:false, reason:"server" }; }
+      // NEW: set admin + initial guide regardless of completeness
+      if (data) {
+        _chipSetAdmin(!!data.isAdmin);
+        _chipStep("me", data);
+      }
+      if (!ok) {
+        if (status === 401) { hide(appEl); show(loginModal, "flex"); return { ok:false, reason:"unauthenticated" }; }
+        hide(appEl); show(loginModal, "flex"); return { ok:false, reason:"server" };
+      }
       if (!data?.profileComplete) {
         setProfileModalMode("gate");
         await loadProfileIntoForm();
@@ -130,7 +228,10 @@ document.addEventListener("DOMContentLoaded", () => {
         hide(toolbar);
         return { ok:false, reason:"incomplete" };
       }
-      if (applyLayout) applyAuthedLayout();
+      if (applyLayout) {
+        applyAuthedLayout();
+        _chipSetState("idle");
+      }
       return { ok:true };
     } catch {
       hide(appEl); show(loginModal, "flex");
@@ -158,6 +259,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (emailInput) emailInput.value = email;
       hide(loginModal);
       await gate();
+      _chipGuide("Press Start or Chat to speak with Chip.");
     });
   }
 
@@ -176,6 +278,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!r.ok || !r.data?.ok) { alert(r.data?.error || "Could not save profile. Please try again."); return; }
       hide(profileModal);
       if ((profileModal?.dataset.mode || "edit") === "gate") applyAuthedLayout();
+      _chipGuide("Press Start or Chat to speak with Chip.");
+      _chipSetState("idle");
       alert("Profile saved.");
     });
   }
@@ -214,18 +318,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function startDynamicSession() {
     try {
+      _chipSetState("greeting");
+      _chipStep("POST /greet →", {});
       const { ok, data, status } = await j("/greet", { method: "POST", body: JSON.stringify({}) });
-      if (!ok) { alert((data && data.error) || `Greeting failed (${status})`); return; }
+      if (!ok) { _chipStep("greet-failed", { status, data }); alert((data && data.error) || `Greeting failed (${status})`); _chipSetState("idle"); return; }
+      _chipStep("← /greet", data);
       const audioUrl = data?.audio;
       const text = data?.reply || "Hello!";
       if (audioUrl) {
         try { await tryPlayWithMouth(audioUrl); }
         catch (e) { console.warn("Dynamic audio failed:", e); alert(text); }
       } else {
-        alert(text); // TTS disabled globally
+        // TTS disabled globally → still show text
+        alert(text);
       }
+      _chipStartWaitingCountdown(); // moves to listening after 7s
     } catch (e) {
       console.error("Dynamic session error:", e);
+      _chipStep("greet-error", String(e));
+      _chipSetState("idle");
       alert("Couldn’t start dynamic session. Try again.");
     }
   }
@@ -234,6 +345,8 @@ document.addEventListener("DOMContentLoaded", () => {
   btnStatic?.addEventListener("click", async () => {
     const okGate = await gate(); if (!okGate.ok) return;
     reflectMode("static");
+    _chipGuide("Press Start or Chat to speak with Chip.");
+    _chipSetState("idle");
     await startStaticSession();
   });
 
@@ -364,6 +477,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const thinking = appendMessage("assistant", "…", chatLane);
 
     try {
+      _chipSetState("thinking");
+      _chipStep("POST /chat →", { message: message.trim(), lane: chatLane });
+
       const res = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -371,12 +487,16 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       const data = await res.json();
 
+      _chipStep("← /chat", data);
+      _chipSetState("responding");
+
       // text
       thinking.textContent = (chatLane === "live" ? "🔊 " : "💬 ") + (data.reply_text || "");
 
       // audio + visemes (Live lane)
+      let audioObj = null;
       if (data.audio_b64) {
-        playAudioFromBase64(data.audio_b64, function(){});
+        audioObj = playAudioFromBase64(data.audio_b64, function(){ _chipSetState("followup"); });
       }
       if (data.visemes && data.visemes.length) {
         driveVisemes(data.visemes);
@@ -384,9 +504,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // actions (download/open_url/etc.)
       appendActions(data.actions || []);
+
+      if (!audioObj && !data.audio_b64) {
+        // no audio → move to follow-up immediately
+        _chipSetState("followup");
+      }
     } catch (e) {
       thinking.textContent = "Sorry—something went sideways.";
       console.error(e);
+      _chipStep("chat-error", String(e));
+      _chipSetState("idle");
     }
   }
 
@@ -433,5 +560,11 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // ---------- Boot ----------
-  (async () => { await gate(); })();
+  (async () => {
+    const g = await gate();
+    if (g && g.ok) {
+      _chipGuide("Press Start or Chat to speak with Chip.");
+      _chipStep("boot", "ready");
+    }
+  })();
 });
