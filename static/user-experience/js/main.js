@@ -1,4 +1,4 @@
-// main.js — Chat Live/Text + Static/Dynamic + guide/debug/suggestions; 2025-08-10
+// main.js — Chat Live/Text + Static/Dynamic + Voice (auto-mic + VAD + barge‑in) + guide/debug/suggestions; 2025-08-11
 document.addEventListener("DOMContentLoaded", () => {
   const $ = (id) => document.getElementById(id);
 
@@ -7,7 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const el = document.getElementById('askChipToolbar');
     if (!el) return;
     const h = Math.ceil(el.getBoundingClientRect().height) || 0;
-    const finalPx = Math.max(h + extra, 64); // little breathing room
+    const finalPx = Math.max(h + extra, 64);
     document.documentElement.style.setProperty('--toolbar-h', finalPx + 'px');
   }
   window.addEventListener('load', setToolbarHeightVar);
@@ -17,7 +17,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // ---------- Static audio location + filenames ----------
   const STATIC_AUDIO_BASE = "/static/chip/audio/";
   const GREETING_FILES = ["greeting-static.mp3", "greeting.mp3", "Greeting.mp3"];
-  const ANSWER_FILES   = ["answer-static.mp3", "answer.mp3", "Answer.mp3"]; // reserved for later
+  const ANSWER_FILES   = ["answer-static.mp3", "answer.mp3", "Answer.mp3"]; // reserved
 
   // Core elements
   const loginModal   = $("loginModal");
@@ -53,7 +53,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const navMenu      = $("navMenu");
   const navProfile   = $("navProfile");
 
-  // ----- NEW: Guide & Debug overlays -----
+  // ----- Guide & Debug overlays -----
   const guidePanelEl = $("guidePanel");
   const debugPanelEl = $("debugPanel");
 
@@ -67,10 +67,7 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   function _getQueryParam(key) {
-    try {
-      const url = new URL(window.location.href);
-      return url.searchParams.get(key);
-    } catch { return null; }
+    try { return new URL(window.location.href).searchParams.get(key); } catch { return null; }
   }
 
   function _chipSetAdmin(val) {
@@ -85,9 +82,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let line = `[${time}] ${phase}`;
     if (details && typeof details === "object") {
       try { line += `\n${JSON.stringify(details, null, 2)}`; } catch {}
-    } else if (details) {
-      line += `\n${details}`;
-    }
+    } else if (details) { line += `\n${details}`; }
     debugPanelEl.textContent += ((debugPanelEl.textContent ? "\n" : "") + line);
     debugPanelEl.scrollTop = debugPanelEl.scrollHeight;
   }
@@ -122,6 +117,7 @@ document.addEventListener("DOMContentLoaded", () => {
       case "listening":
         _chipGuide("Listening… ask your question.");
         _openChatComposer("Type your question…");
+        _vm_armVAD(); // auto-arm mic
         break;
       case "thinking":
         _chipGuide("Chip is thinking…");
@@ -132,6 +128,7 @@ document.addEventListener("DOMContentLoaded", () => {
       case "followup":
         _chipGuide("Do you have a follow-up?");
         _chipScheduleIdleNudge();
+        _vm_armVAD(); // auto-arm mic for next turn
         break;
       default:
         _chipGuide("Press Start or Chat to speak with Chip.");
@@ -223,13 +220,9 @@ document.addEventListener("DOMContentLoaded", () => {
     show(chipBox, "grid");
     show(toolbar, "flex");
     setToolbarHeightVar();
-    // Position the mouth overlay relative to the current avatar size
     if (window.ChipViseme && typeof window.ChipViseme.layout === "function") {
-      // anchor = center of mouth as % of avatar (x, y)
       window.ChipViseme.setAnchor(0.49, 0.46);
-      // size = mouth box as % of avatar width (w, h)
       window.ChipViseme.setSize(0.095, 0.075);
-      // reflow after applying the calibration
       window.ChipViseme.layout();
     }
   }
@@ -237,7 +230,6 @@ document.addEventListener("DOMContentLoaded", () => {
   async function enforceProfileCompleteness({ applyLayout = true } = {}) {
     try {
       const { ok, status, data } = await j("/api/me");
-      // NEW: set admin + initial debug step + initial idle guide
       if (data) {
         _chipSetAdmin(!!data.isAdmin);
         _chipStep("me", data);
@@ -299,7 +291,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const title = (fd.get("title") || "").toString().trim();
       const email = (fd.get("email") || "").toString().trim();
       if (!name || !title || !email) { alert("Please complete all fields."); return; }
-      try { localStorage.setItem("profileName", name); localStorage.setItem("profileTitle", title); localStorage.setItem("profileEmail", email); } catch {}
+      try {
+        localStorage.setItem("profileName", name);
+        localStorage.setItem("profileTitle", title);
+        localStorage.setItem("profileEmail", email);
+      } catch {}
       const r = await j("/api/profile", { method:"POST", body: JSON.stringify({ name, title, email }) });
       if (!r.ok || !r.data?.ok) { alert(r.data?.error || "Could not save profile. Please try again."); return; }
       hide(profileModal);
@@ -323,7 +319,6 @@ document.addEventListener("DOMContentLoaded", () => {
       await window.ChipViseme.play(url, opts || {});
       return url;
     }
-    // Fallback: just play the audio
     await new Audio(url).play();
     return url;
   }
@@ -382,8 +377,193 @@ document.addEventListener("DOMContentLoaded", () => {
     await startDynamicSession();
   });
 
-  // Mic placeholder (kept)
-  btnMic?.addEventListener("click", () => alert("Voice input coming soon."));
+  // ---------- Voice client (auto-mic VAD + barge‑in → POST /api/voice-once) ----------
+  let _vm_stream = null;          // MediaStream (mic)
+  let _vm_rec = null;             // MediaRecorder
+  let _vm_chunks = [];            // recorded chunks
+  let _vm_recording = false;      // recording flag
+  let _vm_playback = null;        // current playback (Audio)
+  let _vm_vad_on = false;         // VAD armed
+  let _vm_ctx = null;             // AudioContext
+  let _vm_src = null;             // MediaStream source
+  let _vm_an = null;              // AnalyserNode
+  let _vm_raf = 0;                // RAF id
+  let _vm_preroll = [];           // pre-roll buffers
+  const _vm_cfg = {
+    vadThreshold: 0.015,          // rough ~ -36 dBFS
+    vadAttackMs: 120,
+    vadReleaseMs: 700,
+    maxRecordMs: 15000,
+    preRollMs: 300,
+    analyserSize: 1024
+  };
+
+  async function _vm_ensureMic() {
+    if (_vm_stream && _vm_stream.getTracks().some(t => t.readyState === "live")) return _vm_stream;
+    _vm_stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    return _vm_stream;
+  }
+
+  function _vm_stopPlayback() {
+    if (_vm_playback) {
+      try { _vm_playback.pause(); } catch {}
+      _vm_playback = null;
+    }
+    if (window.ChipViseme && typeof window.ChipViseme.stop === "function") {
+      try { window.ChipViseme.stop(); } catch {}
+    }
+  }
+
+  function _vm_updateMicUI(on, recording=false) {
+    if (!btnMic) return;
+    btnMic.classList.toggle("armed", !!on);
+    btnMic.classList.toggle("recording", !!recording);
+    if (recording) btnMic.textContent = "🎙️ Recording… (tap to stop)";
+    else if (on)   btnMic.textContent = "🎤 Listening…";
+    else           btnMic.textContent = "🎤 Mic";
+  }
+
+  async function _vm_armVAD() {
+    try {
+      const okGate = await gate(); if (!okGate.ok) return;
+      await _vm_ensureMic();
+      _vm_stopPlayback(); // barge‑in: stop Chip if speaking
+      _vm_updateMicUI(true, false);
+
+      if (!_vm_ctx) _vm_ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (_vm_ctx.state === "suspended") await _vm_ctx.resume();
+
+      _vm_src && _vm_src.disconnect();
+      _vm_an && _vm_an.disconnect();
+      _vm_src = _vm_ctx.createMediaStreamSource(_vm_stream);
+      _vm_an = _vm_ctx.createAnalyser();
+      _vm_an.fftSize = _vm_cfg.analyserSize;
+      _vm_src.connect(_vm_an);
+
+      _vm_vad_on = true;
+      let speakOn = 0, speakOff = 0, speaking = false;
+      const buf = new Float32Array(_vm_an.fftSize);
+
+      const prerollFrames = Math.ceil((_vm_cfg.preRollMs / 1000) * (_vm_ctx.sampleRate / _vm_an.fftSize));
+      _vm_preroll = [];
+
+      const tick = () => {
+        if (!_vm_vad_on) return;
+        _vm_an.getFloatTimeDomainData(buf);
+
+        // RMS
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) { const s = buf[i]; sum += s * s; }
+        const rms = Math.sqrt(sum / buf.length);
+
+        // keep tiny pre-roll
+        _vm_preroll.push(buf.slice(0));
+        if (_vm_preroll.length > prerollFrames) _vm_preroll.shift();
+
+        const now = performance.now();
+        if (rms >= _vm_cfg.vadThreshold) {
+          speakOn = speakOn || now;
+          speakOff = 0;
+          if (!speaking && (now - speakOn) >= _vm_cfg.vadAttackMs) {
+            speaking = true;
+            _vm_startRecording();
+          }
+        } else {
+          speakOff = speakOff || now;
+          speakOn = 0;
+          if (speaking && (now - speakOff) >= _vm_cfg.vadReleaseMs) {
+            speaking = false;
+            _vm_stopRecording();
+          }
+        }
+        _vm_raf = requestAnimationFrame(tick);
+      };
+      cancelAnimationFrame(_vm_raf);
+      _vm_raf = requestAnimationFrame(tick);
+    } catch (e) {
+      console.warn("VAD arm failed:", e);
+    }
+  }
+
+  function _vm_disarmVAD() {
+    _vm_vad_on = false;
+    cancelAnimationFrame(_vm_raf);
+    _vm_raf = 0;
+    _vm_updateMicUI(false, false);
+  }
+
+  async function _vm_startRecording() {
+    if (_vm_recording) return;
+    _vm_chunks = [];
+    const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+    _vm_rec = new MediaRecorder(_vm_stream, mime ? { mimeType: mime } : undefined);
+    _vm_rec.addEventListener("dataavailable", (e) => { if (e?.data?.size) _vm_chunks.push(e.data); });
+    _vm_rec.addEventListener("stop", _vm_onRecordingComplete, { once: true });
+    _vm_rec.start();
+    _vm_recording = true;
+    _vm_updateMicUI(true, true);
+    setTimeout(() => { if (_vm_recording) _vm_stopRecording(); }, _vm_cfg.maxRecordMs);
+  }
+
+  async function _vm_stopRecording() {
+    if (!_vm_recording) return;
+    _vm_recording = false;
+    try { _vm_rec?.stop(); } catch {}
+    _vm_updateMicUI(true, false); // still armed for next turn
+  }
+
+  async function _vm_onRecordingComplete() {
+    try {
+      const blob = new Blob(_vm_chunks, { type: "audio/webm" });
+      const fd = new FormData();
+      fd.append("audio", blob, "clip.webm");
+
+      _chipSetState("thinking");
+      _chipStep("POST /api/voice-once →", { size: blob.size });
+
+      const res = await fetch("/api/voice-once", { method: "POST", body: fd, credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      _chipStep("← /api/voice-once", data);
+
+      if (data.transcript) appendMessage("user", data.transcript, "live");
+      appendMessage("assistant", data.reply_text || "", "live");
+
+      if (Array.isArray(data.actions) && data.actions.length) appendActions(data.actions);
+      if (Array.isArray(data.suggestions)) _chipRenderSuggestions(data.suggestions);
+
+      if (data.audio_b64) {
+        _vm_disarmVAD(); // don’t listen while Chip talks
+        _chipSetState("responding");
+        _vm_playback = new Audio("data:audio/mpeg;base64," + data.audio_b64);
+        _vm_playback.addEventListener("ended", () => {
+          _vm_playback = null;
+          _chipSetState("followup"); // auto‑arm resumes
+        }, { once: true });
+        try { await _vm_playback.play(); } catch {}
+      } else {
+        _chipSetState("followup");
+      }
+
+      if (Array.isArray(data.visemes) && data.visemes.length) {
+        try { driveVisemes(data.visemes); } catch {}
+      }
+
+      if (data.end === true) {
+        await _chipEndConversation();
+      }
+    } catch (e) {
+      console.error("voice-once error:", e);
+      appendMessage("assistant", "Sorry—voice processing hiccup.", "live");
+      _chipSetState("idle");
+    }
+  }
+
+  // Manual Mic button (toggle): disarm/arm VAD, or stop recording early
+  btnMic?.addEventListener("click", async () => {
+    if (_vm_recording) { await _vm_stopRecording(); return; }
+    if (_vm_vad_on) { _vm_disarmVAD(); return; }
+    await _vm_armVAD();
+  });
 
   // ---------- Chat dropdown + panel ----------
   function updateChatButtonLabel() {
@@ -401,10 +581,8 @@ document.addEventListener("DOMContentLoaded", () => {
     chatMenu.style.display = (chatMenu.style.display === "block") ? "none" : "block";
   }
 
-  // open/close menu
   chatMenuBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
-    // also reveal the chat panel when clicking Chat (so user sees the composer)
     if (chatPanel) {
       chatPanel.hidden = false;
       chatInput?.focus();
@@ -418,7 +596,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // choose lane
   chatMenu?.addEventListener("click", (e) => {
     const t = e.target;
     if (!t || !t.getAttribute) return;
@@ -503,7 +680,6 @@ document.addEventListener("DOMContentLoaded", () => {
       b.textContent = s;
       b.addEventListener("click", () => {
         if (/end chat/i.test(s)) { _chipEndConversation(); return; }
-        // Let server handle intent if it's a doc/account action; otherwise just send the text
         sendChat(s);
       });
       wrap.appendChild(b);
@@ -515,8 +691,11 @@ document.addEventListener("DOMContentLoaded", () => {
   async function _chipEndConversation() {
     try {
       _chipStep("end", "user requested");
-      // Friendly audible wrap-up (fire/forget)
-      fetch("/api/speak", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ prompt: "Anytime. I’ll be right here when you need me." }) }).catch(()=>{});
+      fetch("/api/speak", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ prompt: "Anytime. I’ll be right here when you need me." })
+      }).catch(()=>{});
     } finally {
       _chipClearIdleNudge();
       _chipSetState("idle");
@@ -548,10 +727,8 @@ document.addEventListener("DOMContentLoaded", () => {
       _chipStep("← /chat", data);
       _chipSetState("responding");
 
-      // text
       thinking.textContent = (chatLane === "live" ? "🔊 " : "💬 ") + (data.reply_text || "");
 
-      // audio + visemes (Live lane)
       let audioObj = null;
       if (data.audio_b64) {
         audioObj = new Audio("data:audio/mpeg;base64," + data.audio_b64);
@@ -562,23 +739,15 @@ document.addEventListener("DOMContentLoaded", () => {
         driveVisemes(data.visemes);
       }
 
-      // actions (download/open_url/etc.)
       appendActions(data.actions || []);
+      if (Array.isArray(data.suggestions)) _chipRenderSuggestions(data.suggestions);
 
-      // suggestions under reply
-      if (Array.isArray(data.suggestions)) {
-        _chipRenderSuggestions(data.suggestions);
-      }
-
-      // respect server end-of-conversation
       if (data.end === true) {
         _chipEndConversation();
         return;
       }
 
-      if (!audioObj && !data.audio_b64) {
-        _chipSetState("followup");
-      }
+      if (!audioObj && !data.audio_b64) _chipSetState("followup");
     } catch (e) {
       thinking.textContent = "Sorry—something went sideways.";
       console.error(e);
@@ -601,7 +770,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (e.key === "Enter" && e.ctrlKey) {
       e.preventDefault();
-      // quick override to Live (TTS) for this message
       const prev = chatLane;
       chatLane = "live";
       updateChatButtonLabel();
