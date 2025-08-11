@@ -42,6 +42,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnMic       = $("btnMic");
   const btnHistory   = $("btnHistory");
   const btnLogout    = $("btnLogout");
+  const btnDisconnect = $("btnDisconnect"); // NEW: optional disconnect button
 
   // Chat lane dropdown elements
   const chatDropdown = $("chatDropdown");
@@ -79,11 +80,11 @@ document.addEventListener("DOMContentLoaded", () => {
   function _chipStep(phase, details) {
     if (!_chipUX.debugVisible || !debugPanelEl) return;
     const time = new Date().toLocaleTimeString();
-    let line = `[${time}] ${phase}`;
-    if (details && typeof details === "object") {
-      try { line += `\n${JSON.stringify(details, null, 2)}`; } catch {}
-    } else if (details) { line += `\n${details}`; }
-    debugPanelEl.textContent += ((debugPanelEl.textContent ? "\n" : "") + line);
+    let line = [ `[${time}] ${phase}` ];
+    if (details !== undefined) {
+      try { line.push(typeof details === "string" ? details : JSON.stringify(details, null, 2)); } catch {}
+    }
+    debugPanelEl.textContent += (debugPanelEl.textContent ? "\n" : "") + line.join("\n");
     debugPanelEl.scrollTop = debugPanelEl.scrollHeight;
   }
 
@@ -474,6 +475,74 @@ document.addEventListener("DOMContentLoaded", () => {
     analyserSize: 1024
   };
 
+  // === NEW: simple response mutex to avoid overlapping replies ===
+  let _resp_in_flight = false;
+  function _respAcquire() {
+    if (_resp_in_flight) return false;
+    _resp_in_flight = true;
+    return true;
+  }
+  function _respRelease() { _resp_in_flight = false; }
+
+  // === NEW: Pure-topic classifier + canned lines (with alternates) ===
+  const _pureKeywords = [
+    "pure storage","flasharray","flashblade","fb//s","fb//e","fa//x","fa//c","purity","safemode","safe mode",
+    "evergreen","portworx","px","px-backup","fusion","nvme","nvme/tcp","directflash","s3","object","file",
+    "block","snapshot","replication","px-dbaas","pure1","array","arrays"
+  ];
+
+  const _canned = {
+    offtopic: [
+      "Interesting thought, but my wheelhouse is Pure Storage—FlashArray, FlashBlade, Portworx. Let’s pivot back. What Pure question can I help with?",
+      "Fun angle, but I stick to Pure Storage. Want to talk FlashBlade or FlashArray instead?",
+      "Not my lane—Pure Storage is. What’s your question on arrays, blades, or Portworx?"
+    ],
+    no_audio: [
+      "I didn’t hear anything. Mic might be muted. Want to try again, or type your Pure Storage question?",
+      "No audio picked up. Try again, or type it in.",
+      "Nothing came through—mic on? You can also type your question."
+    ],
+    unsure: [
+      "Not sure I follow. Product, version, and goal? I’ll get specific.",
+      "Hmm—can you share product and version?",
+      "Need a bit more detail. What product are we on?"
+    ]
+  };
+  function _pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+  function _isLikelyEnglish(s){
+    if (!s) return false;
+    const ascii = s.replace(/[^\x00-\x7F]/g,"");
+    return ascii.length / s.length >= 0.75;
+  }
+  function _mentionsPureTopic(s){
+    const t = (s||"").toLowerCase();
+    return _pureKeywords.some(k => t.includes(k));
+  }
+  function _classifyInput(transcript){
+    const t = (transcript||"").trim();
+    if (!t) return "no_audio";
+    if (!_isLikelyEnglish(t)) return "unsure";     // refuse language switching
+    if (!_mentionsPureTopic(t)) return "offtopic";
+    if (t.split(/\s+/).length < 3) return "unsure";
+    return "ok";
+  }
+  async function _handleCanned(kind) {
+    const line = _pick(_canned[kind] || []);
+    if (line) {
+      appendMessage("assistant", line, chatLane === "text" ? "text" : "live");
+      // Optional: ask server TTS to speak it (fire-and-forget)
+      try {
+        const r = await fetch("/api/speak", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ prompt: line, language: "en" })
+        }).then(r=>r.json()).catch(()=>null);
+        if (r && r.audio) { try { await tryPlayWithMouth(r.audio); } catch {} }
+      } catch {}
+    }
+    _chipSetState("followup");
+  }
+
   async function _vm_ensureMic() {
     if (_vm_stream && _vm_stream.getTracks().some(t => t.readyState === "live")) return _vm_stream;
     _vm_stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -607,6 +676,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const blob = new Blob(_vm_chunks, { type: "audio/webm" });
       const fd = new FormData();
       fd.append("audio", blob, "clip.webm");
+      fd.append("language", "en"); // NEW: force English on ASR/server side
 
       _chipSetState("thinking");
       _chipStep("POST /api/voice-once →", { size: blob.size });
@@ -615,15 +685,23 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = await res.json().catch(() => ({}));
       _chipStep("← /api/voice-once", data);
 
-      // If transcript signals end, honor it immediately
+      // End trigger honored immediately
       if (data.transcript && _isEndTrigger(data.transcript)) {
         _chipEndConversation();
         return;
       }
 
+      // CLASSIFY (no_audio/offtopic/unsure/ok)
+      const cls = _classifyInput(data.transcript || "");
+      if (cls !== "ok") {
+        if (data.transcript) appendMessage("user", data.transcript, "live");
+        await _handleCanned(cls);
+        return;
+      }
+
       if (data.transcript) appendMessage("user", data.transcript, "live");
 
-      // normalize text + humane length guard (~20 words)
+      // response mutex starts at playback time; text can render now
       const textRaw = (data.reply_text ?? data.reply ?? "").trim();
       const text = _limitWords(textRaw, 20);
       appendMessage("assistant", text || "👍", "live");
@@ -631,32 +709,34 @@ document.addEventListener("DOMContentLoaded", () => {
       if (Array.isArray(data.actions) && data.actions.length) appendActions(data.actions);
       if (Array.isArray(data.suggestions)) _chipRenderSuggestions(data.suggestions);
 
-      // consider offering a follow-up (governed)
       if (_shouldOfferFollowup({ userText: data.transcript || "", assistantText: text })) {
         _offerFollowupOnce();
       }
 
-      // handle either audio_b64 or audio (URL)
       let played = false;
       if (data.audio_b64 || data.audio) {
         _vm_disarmVAD(); // don’t listen while Chip talks
         _chipSetState("responding");
-        try {
-          if (data.audio_b64) {
-            _vm_playback = new Audio("data:audio/mpeg;base64," + data.audio_b64);
-            _vm_playback.addEventListener("ended", () => {
-              _vm_playback = null;
-              _chipSetState("followup"); // auto‑arm resumes there
-            }, { once: true });
-            await _vm_playback.play();
-            played = true;
-          } else if (data.audio) {
-            await tryPlayWithMouth(data.audio);
-            played = true;
-            _chipSetState("followup");
+        if (!_respAcquire()) {
+          // another playback already happening; just show text and skip audio
+          _chipSetState("followup");
+        } else {
+          try {
+            if (data.audio_b64) {
+              _vm_playback = new Audio("data:audio/mpeg;base64," + data.audio_b64);
+              _vm_playback.addEventListener("ended", () => { _vm_playback = null; _respRelease(); _chipSetState("followup"); }, { once: true });
+              await _vm_playback.play();
+              played = true;
+            } else if (data.audio) {
+              await tryPlayWithMouth(data.audio);
+              played = true;
+              _respRelease();
+              _chipSetState("followup");
+            }
+          } catch (e) {
+            console.error("voice-once playback error:", e);
+            _respRelease();
           }
-        } catch (e) {
-          console.error("voice-once playback error:", e);
         }
       }
       if (!played) _chipSetState("followup");
@@ -811,14 +891,37 @@ document.addEventListener("DOMContentLoaded", () => {
       fetch("/api/speak", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ prompt: "Anytime. I’ll be right here when you need me." })
+        body: JSON.stringify({ prompt: "Anytime. I’ll be right here when you need me.", language: "en" })
       }).catch(()=>{});
     } finally {
       _chipClearIdleNudge();
+      _respRelease();
       _chipSetState("idle");
       _chipGuide("Press Start or Chat to speak with Chip.");
     }
   }
+
+  // === NEW: disconnect that *really* ends session ===
+  function _chipDisconnect() {
+    try {
+      _chipStep("disconnect", "teardown");
+      // Stop mic / VAD / playback
+      _vm_disarmVAD();
+      _vm_stopPlayback();
+      if (_vm_stream) {
+        try { _vm_stream.getTracks().forEach(t => t.stop()); } catch {}
+        _vm_stream = null;
+      }
+      // UI + state
+      _chipClearIdleNudge();
+      _respRelease();
+      _chipSetState("idle");
+      _chipGuide("Disconnected. Press Start to begin a new session.");
+    } catch (e) {
+      console.warn("disconnect error", e);
+    }
+  }
+  btnDisconnect?.addEventListener("click", _chipDisconnect);
 
   async function sendChat(message) {
     if (!message || !message.trim()) return;
@@ -832,6 +935,14 @@ document.addEventListener("DOMContentLoaded", () => {
     _chipClearIdleNudge();
     _fu_turnsSinceOffer = Math.min(_fu_turnsSinceOffer + 1, 99);
 
+    // CLASSIFY typed text before hitting server
+    const cls = _classifyInput(message);
+    if (cls !== "ok") {
+      appendMessage("user", message.trim(), null);
+      await _handleCanned(cls);
+      return;
+    }
+
     appendMessage("user", message, null);
     const thinking = appendMessage("assistant", "…", chatLane);
 
@@ -842,7 +953,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: message.trim(), lane: chatLane })
+        body: JSON.stringify({ message: message.trim(), lane: chatLane, language: "en", domain: "pure-storage" })
       });
       const data = await res.json();
 
@@ -854,22 +965,32 @@ document.addEventListener("DOMContentLoaded", () => {
       const text = _limitWords(textRaw, 20);
       thinking.textContent = (chatLane === "live" ? "🔊 " : "💬 ") + (text || "");
 
-      // audio: handle either base64 or URL
+      // audio: handle either base64 or URL (respect mutex)
       let audioObj = null;
       if (data.audio_b64 || data.audio) {
-        try {
-          if (data.audio_b64) {
-            audioObj = new Audio("data:audio/mpeg;base64," + data.audio_b64);
-            audioObj.addEventListener("ended", () => { _chipSetState("followup"); }, { once: true });
-            audioObj.play().catch(console.error);
-          } else if (data.audio) {
-            await tryPlayWithMouth(data.audio);
-            _chipSetState("followup");
+        if (_respAcquire()) {
+          try {
+            if (data.audio_b64) {
+              audioObj = new Audio("data:audio/mpeg;base64," + data.audio_b64);
+              audioObj.addEventListener("ended", () => { _respRelease(); _chipSetState("followup"); }, { once: true });
+              audioObj.play().catch(console.error);
+            } else if (data.audio) {
+              await tryPlayWithMouth(data.audio);
+              _respRelease();
+              _chipSetState("followup");
+            }
+          } catch (e) {
+            console.error("chat playback error:", e);
+            _respRelease();
           }
-        } catch (e) {
-          console.error("chat playback error:", e);
+        } else {
+          // already speaking; skip audio, keep text
+          _chipSetState("followup");
         }
+      } else {
+        _chipSetState("followup");
       }
+
       if (data.visemes && data.visemes.length) {
         driveVisemes(data.visemes);
       }
@@ -886,8 +1007,6 @@ document.addEventListener("DOMContentLoaded", () => {
         _chipEndConversation();
         return;
       }
-
-      if (!audioObj && !data.audio_b64 && !data.audio) _chipSetState("followup");
     } catch (e) {
       thinking.textContent = "Sorry—something went sideways.";
       console.error(e);
