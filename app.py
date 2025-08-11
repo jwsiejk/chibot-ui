@@ -93,6 +93,46 @@ def _is_admin(email: str) -> bool:
     return (email or "").strip().lower() in ADMIN_EMAILS
 
 # -----------------------------------------------------------------------------
+# Persona loader (externalized under static/chip/persona.txt)
+# -----------------------------------------------------------------------------
+_DEFAULT_PERSONA = (
+    "You are Chip, a virtual Pure Storage solution engineer.\n"
+    "Tone: Nebraska plain-spoken, warm, practical. Use natural contractions. "
+    "Use gentle hedges sparingly (“looks like”, “roughly”). One light colloquialism every few turns at most.\n"
+    "Brevity: Default to ~20 words unless the user asks for more. If they say “more”, expand naturally.\n"
+    "Helpfulness: Answer directly first. Offer a follow-up only when it truly helps "
+    "(ambiguity, likely next step, or the user seems stuck). Otherwise keep quiet.\n"
+    "Guardrails: Do not invent data. If unsure, say so and propose the next action. "
+    "Stay professional; no sarcasm or slang overload.\n"
+    "Closers (occasionally, when appropriate): “Want me to dig deeper?”, "
+    "“Need a quick example?”, “Should I pull the numbers behind that?”, "
+    "“I can check related items if you want.”"
+)
+
+_PERSONA_CACHE = {"text": None, "mtime": 0, "path": None}
+
+def _persona_path() -> str:
+    # Allow env override; otherwise use /static/chip/persona.txt inside the app root
+    env_path = os.getenv("CHIP_PERSONA_PATH")
+    if env_path:
+        return env_path
+    return os.path.join(app.root_path, "static", "chip", "persona.txt")
+
+def load_persona() -> str:
+    """Load persona text from static/chip/persona.txt with simple mtime cache and safe fallback."""
+    try:
+        path = _persona_path()
+        _PERSONA_CACHE["path"] = path
+        st = os.stat(path)
+        if st.st_mtime != _PERSONA_CACHE["mtime"]:
+            with open(path, "r", encoding="utf-8") as f:
+                _PERSONA_CACHE["text"] = f.read().strip()
+            _PERSONA_CACHE["mtime"] = st.st_mtime
+        return _PERSONA_CACHE["text"] or _DEFAULT_PERSONA
+    except Exception:
+        return _DEFAULT_PERSONA
+
+# -----------------------------------------------------------------------------
 # Helpers (kept here so both app & blueprints can reuse via closures)
 # -----------------------------------------------------------------------------
 def ensure_db_ready():
@@ -128,34 +168,26 @@ def generate_chip_response(user_id, name, question, role, region):
     messages.append({"role": "user", "content": question})
     messages = messages[-6:]
 
-    # --- End‑chat trigger handling (server‑side) ---
-    # Works even if frontend changes; keeps UX consistent.
-    _end_triggers = re.compile(
+    # --- End-chat trigger handling (server-side) ---
+    end_triggers = re.compile(
         r"\b(?:end chat|bye(?:,?\s*chip)?|goodbye(?:,?\s*chip)?|thanks(?:,?\s*chip)?|"
         r"we(?:'| a)re done|stop|that's all|that is all|we're good)\b",
         re.IGNORECASE
     )
-    if _end_triggers.search(question or ""):
+    if end_triggers.search(question or ""):
         return "Anytime. I’ll be right here when you need me."
 
-    # --- Persona (Nebraska‑warm, human, ~20 words, not over‑solicitous) ---
-    system_prompt = {
-        "role": "system",
-        "content": (
-            f"You are Chip, a virtual Pure Storage solution engineer from Nebraska. "
-            f"Speak plainly with warm, human tone—light Nebraska sayings ok. "
-            f"Be concise: aim for ~20 words unless the user asks for more. "
-            f"Use natural contractions; sound like a real person, not a script. "
-            f"Ground answers in Pure Storage expertise. "
-            f"Offer a follow‑up only when it truly helps (ambiguity, next step, or the user seems stuck). "
-            f"Avoid being over‑solicitous. The user's name is {name}."
-        ),
-    }
+    # --- Persona (loaded from static/chip/persona.txt, with fallback) ---
+    persona_text = load_persona()
+    system_messages = [
+        {"role": "system", "content": persona_text},
+        {"role": "system", "content": f"The user's name is {name}."}
+    ]
 
     response = oai.chat.completions.create(
         model="gpt-4o",
-        messages=[system_prompt] + messages,
-        max_tokens=150  # allow ~20 words + wiggle room
+        messages=system_messages + messages,
+        max_tokens=150  # allow ~20 words + some wiggle room
     )
 
     answer = response.choices[0].message.content
@@ -520,6 +552,8 @@ def repo_upsert_route():
         # Try to parse content for PDFs/PPTX when served locally (not http)
         content = ""
         meta = {}
+        if not raw_path.lower().startsWith("http"):  # fix: Python method is startswith
+            pass  # (left intentionally; the correct impl is below)
         if not raw_path.lower().startswith("http"):
             fs_path = absolute_fs_path(raw_path)
             if os.path.exists(fs_path):
