@@ -1,8 +1,8 @@
-// chat/send.js — sendChat, voice-once handler, follow-up governor
-import { j } from "../core/api.js";
+// chat/send.js — sendChat, voice-once handler, follow-up governor (patched for streaming)
+import { j, wsConnect } from "../core/api.js";
 import { _chipGuide, _chipSetState, _chipStartWaitingCountdown, _chipStep, _chipClearIdleNudge } from "../core/state.js";
 import { appendMessage, appendActions, _chipRenderSuggestions } from "./ui.js";
-import { tryPlayWithMouth, _vm_stopPlayback, driveVisemes, respAcquire, respRelease } from "../voice/playback.js";
+import { tryPlayWithMouth, _vm_stopPlayback, driveVisemes, respAcquire, respRelease, startStream, pushPCM16Base64, stopStream } from "../voice/playback.js";
 import { gate } from "../auth/profile.js";
 
 let _getChatLane = null;
@@ -135,10 +135,57 @@ export async function _chipEndConversation() {
   } finally {
     _chipClearIdleNudge();
     respRelease();
+    stopStream();
     _chipSetState("idle");
     _chipGuide("Press Start or Chat to speak with Chip.");
   }
 }
+
+/* ---------- Streaming chat WS (optional, gracefully falls back) ---------- */
+
+let _ws = null;
+let _wsReady = false;
+let _streamPrimed = false; // have we called startStream() for current turn?
+
+function _ensureWS() {
+  if (_ws && _ws.isOpen()) return true;
+  _ws = wsConnect((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/chat", {
+    onOpen: () => { _wsReady = true; },
+    onClose: () => { _wsReady = false; _streamPrimed = false; },
+    onError: () => { _wsReady = false; },
+    onMessage: async (msg) => {
+      // Protocol examples from server:
+      // {type:"partial_text", text:"..."}
+      // {type:"final_text", text:"..."}
+      // {type:"audio_chunk", b16:"BASE64_INT16LE", sr:24000}
+      // {type:"end"}  // turn finished
+      try {
+        if (msg.type === "partial_text") {
+          // Optional: live token display (kept minimal)
+          // We avoid flicker; main copy is set in sendChat after first text.
+        } else if (msg.type === "final_text") {
+          // Handled in sendChat promise resolution; ignore here.
+        } else if (msg.type === "audio_chunk") {
+          if (!_streamPrimed) {
+            const ok = await startStream({ sampleRate: msg.sr || 24000, channels: 1 });
+            _streamPrimed = ok;
+          }
+          if (msg.b16) pushPCM16Base64(msg.b16, { sampleRate: msg.sr || 24000 });
+        } else if (msg.type === "end") {
+          stopStream();
+          _streamPrimed = false;
+          respRelease();
+          _chipSetState("followup");
+        }
+      } catch (e) {
+        console.warn("WS onMessage error:", e);
+      }
+    }
+  });
+  return true;
+}
+
+/* -------------------------- sendChat (patched) -------------------------- */
 
 export async function sendChat(message) {
   if (!message || !message.trim()) return;
@@ -160,6 +207,52 @@ export async function sendChat(message) {
   appendMessage("user", message, null);
   const thinking = appendMessage("assistant", "…", _getChatLane());
 
+  // Try streaming path first; gracefully fall back to existing REST
+  let usedStreaming = false;
+  try {
+    _chipSetState("thinking");
+    _chipStep("WS /ws/chat →", { message: message.trim(), lane: _getChatLane() });
+
+    _ensureWS();
+    if (_ws && _ws.isOpen()) {
+      // Start turn and let server stream both text and audio frames back
+      _ws.send({ type: "user_text", text: message.trim(), lane: _getChatLane(), language: "en", domain: "pure-storage", short: true });
+      usedStreaming = true;
+    }
+  } catch {
+    usedStreaming = false;
+  }
+
+  if (usedStreaming) {
+    // We still want a final text line for the turn; ask server for it too.
+    try {
+      const res = await fetch("/chat/summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lastOnly: true })
+      }).then(r => r.ok ? r.json() : null).catch(()=>null);
+
+      _chipSetState("responding");
+      const textRaw = ((res && (res.reply_text ?? res.reply)) || "").trim();
+      const text = _limitWords(textRaw, 20);
+      thinking.textContent = (_getChatLane() === "live" ? "🔊 " : "💬 ") + (text || "");
+      _chipSetState("followup");
+      if (Array.isArray(res?.actions)) appendActions(res.actions);
+      if (Array.isArray(res?.suggestions)) {
+        _chipRenderSuggestions(res.suggestions, (s) => {
+          if (/end chat/i.test(s)) { _chipEndConversation(); return; }
+          sendChat(s);
+        });
+      }
+      if (text && _shouldOfferFollowup({ userText: message, assistantText: text })) _offerFollowupOnce();
+      if (res?.end === true) { _chipEndConversation(); return; }
+      return; // streaming path done
+    } catch (e) {
+      // If summary path fails, we'll still have streamed audio; continue to fallback for text
+    }
+  }
+
+  // --- REST fallback (original path) ---
   try {
     _chipSetState("thinking");
     _chipStep("POST /chat →", { message: message.trim(), lane: _getChatLane() });
@@ -227,9 +320,8 @@ export async function sendChat(message) {
   }
 }
 
-// === Voice-once path ===
+// === Voice-once path (unchanged, still REST) ===
 export async function handleVoiceOnceResponse({ blob, durMs }) {
-  // Ignore ultra‑short bursts
   if (durMs < 600) {
     _chipStep("voice-skip", { reason: "short-speech", durMs });
     await _handleCanned("no_audio");
