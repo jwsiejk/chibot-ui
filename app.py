@@ -151,8 +151,14 @@ def generate_chip_response(user_id, name, question, role, region):
         save_user(user_id, {"name": name, "title": role, "messages": messages})
     except Exception as e:
         print("⚠️ save_user (messages) failed:", e)
-    log_conversation(user_id, question, answer)
+
+    try:
+        log_conversation(user_id, question, answer)
+    except Exception as e:
+        print("⚠️ log_conversation failed:", e)
+
     return answer
+
 
 # ---------- parse helpers ----------
 def parse_pdf(fs_path: str) -> tuple[str, dict]:
