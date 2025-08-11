@@ -153,10 +153,56 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Nudge if idle on followup/listening
   let _chipIdleTimer = null;
-  function _chipScheduleIdleNudge(ms = 20000) {
+
+  // ---- FOLLOW-UP GOVERNOR + HUMANE BEHAVIOR ----
+  let _fu_lastOfferedAt = 0;
+  let _fu_turnsSinceOffer = 99;
+  const _FU_MIN_INTERVAL_MS = 18000; // >= 18s between offers
+  const _FU_MIN_TURNS = 2;           // at least 2 user turns between offers
+  const _FU_BASE_PROB = 0.35;        // base chance; modulated by context
+
+  function _seemsSatisfied(text="") {
+    const s = (text || "").toLowerCase();
+    return /(thanks|got it|perfect|that helps|nice|good stuff)/.test(s);
+  }
+  function _isQuestion(text="") {
+    const t = (text || "").trim();
+    return /\?$/.test(t) || /^(how|why|what|where|when|who)\b/i.test(t);
+  }
+  function _isFollowupWorthy(userText="", assistantText="") {
+    if (!assistantText || assistantText.length < 6) return false;
+    if (/download|attached|opened|scheduled|sent/i.test(assistantText)) return false;
+    if (_isQuestion(userText)) return false; // they just asked; don't pester
+    return true;
+  }
+  function _shouldOfferFollowup({ userText = "", assistantText = "" } = {}) {
+    const now = Date.now();
+    if ((now - _fu_lastOfferedAt) < _FU_MIN_INTERVAL_MS) return false;
+    if (_fu_turnsSinceOffer < _FU_MIN_TURNS) return false;
+    if (_seemsSatisfied(userText) || _isEndTrigger(userText)) return false;
+    if (!_isFollowupWorthy(userText, assistantText)) return false;
+    let p = _FU_BASE_PROB;
+    if (assistantText.split(/\s+/).length < 14) p += 0.15; // short answer → more likely to offer
+    return Math.random() < p;
+  }
+  function _offerFollowupOnce() {
+    _fu_lastOfferedAt = Date.now();
+    _fu_turnsSinceOffer = 0;
+    const prompts = [
+      "Want me to dig a bit deeper?",
+      "Need a quick example?",
+      "Should I pull the numbers behind that?",
+      "I can check related items if you want."
+    ];
+    _chipRenderSuggestions([prompts[Math.floor(Math.random()*prompts.length)], "End chat"]);
+  }
+
+  function _chipScheduleIdleNudge(ms = 18000 + Math.floor(Math.random()*8000)) {
     if (_chipIdleTimer) { clearTimeout(_chipIdleTimer); _chipIdleTimer = null; }
     _chipIdleTimer = setTimeout(() => {
       if (_chipUX.state !== "followup" && _chipUX.state !== "listening") return;
+      // don't nudge if we just offered a follow-up
+      if ((Date.now() - _fu_lastOfferedAt) < 10000) return;
       _chipGuide("Still there? Keep chatting or end?");
       _chipRenderSuggestions(["Explain a bit more", "Give me a quick example", "End chat"]);
     }, ms);
@@ -545,6 +591,16 @@ document.addEventListener("DOMContentLoaded", () => {
     _uiBeep(660, 60); // end tone
   }
 
+  // ---- text/voice helpers ----
+  function _limitWords(text, n = 20) {
+    const words = (text || "").trim().split(/\s+/);
+    return words.length <= n ? (text || "") : words.slice(0, n).join(" ") + "...";
+  }
+  function _isEndTrigger(message="") {
+    const s = (message || "").toLowerCase();
+    return /(end chat|we['’]re done|that['’]s all|thanks[, ]*chip|bye[, ]*chip|goodbye)/.test(s);
+  }
+
   // ---- PATCHED: normalize reply_text/reply and accept audio URL or audio_b64 ----
   async function _vm_onRecordingComplete() {
     try {
@@ -559,14 +615,26 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = await res.json().catch(() => ({}));
       _chipStep("← /api/voice-once", data);
 
+      // If transcript signals end, honor it immediately
+      if (data.transcript && _isEndTrigger(data.transcript)) {
+        _chipEndConversation();
+        return;
+      }
+
       if (data.transcript) appendMessage("user", data.transcript, "live");
 
-      // normalize text
-      const text = (data.reply_text ?? data.reply ?? "").trim();
+      // normalize text + humane length guard (~20 words)
+      const textRaw = (data.reply_text ?? data.reply ?? "").trim();
+      const text = _limitWords(textRaw, 20);
       appendMessage("assistant", text || "👍", "live");
 
       if (Array.isArray(data.actions) && data.actions.length) appendActions(data.actions);
       if (Array.isArray(data.suggestions)) _chipRenderSuggestions(data.suggestions);
+
+      // consider offering a follow-up (governed)
+      if (_shouldOfferFollowup({ userText: data.transcript || "", assistantText: text })) {
+        _offerFollowupOnce();
+      }
 
       // handle either audio_b64 or audio (URL)
       let played = false;
@@ -754,10 +822,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function sendChat(message) {
     if (!message || !message.trim()) return;
+
+    // If user typed an end phrase, honor it immediately
+    if (_isEndTrigger(message)) { _chipEndConversation(); return; }
+
     const okGate = await gate(); if (!okGate.ok) return; // layout-free check
     if (chatPanel) chatPanel.hidden = false;
 
     _chipClearIdleNudge();
+    _fu_turnsSinceOffer = Math.min(_fu_turnsSinceOffer + 1, 99);
 
     appendMessage("user", message, null);
     const thinking = appendMessage("assistant", "…", chatLane);
@@ -776,8 +849,9 @@ document.addEventListener("DOMContentLoaded", () => {
       _chipStep("← /chat", data);
       _chipSetState("responding");
 
-      // normalize text
-      const text = (data.reply_text ?? data.reply ?? "").trim();
+      // normalize text + humane length guard
+      const textRaw = (data.reply_text ?? data.reply ?? "").trim();
+      const text = _limitWords(textRaw, 20);
       thinking.textContent = (chatLane === "live" ? "🔊 " : "💬 ") + (text || "");
 
       // audio: handle either base64 or URL
@@ -802,6 +876,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       appendActions(data.actions || []);
       if (Array.isArray(data.suggestions)) _chipRenderSuggestions(data.suggestions);
+
+      // consider offering a follow-up (governed)
+      if (_shouldOfferFollowup({ userText: message, assistantText: text })) {
+        _offerFollowupOnce();
+      }
 
       if (data.end === true) {
         _chipEndConversation();
