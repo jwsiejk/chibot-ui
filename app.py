@@ -41,6 +41,21 @@ os.makedirs("static/audio", exist_ok=True)
 oai = OpenAI()
 
 # -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+def _profile_complete(user: dict | None) -> bool:
+    """
+    A profile is 'complete' only if required fields exist and are non-empty.
+    (We intentionally don't require messages.)
+    """
+    if not user or not isinstance(user, dict):
+        return False
+    name = (user.get("name") or "").strip()
+    role = (user.get("role") or "").strip()
+    region = (user.get("region") or "").strip()
+    return all([name, role, region])
+
+# -----------------------------------------------------------------------------
 # DB helpers
 # -----------------------------------------------------------------------------
 def init_conversation_table():
@@ -151,21 +166,16 @@ def login_basic():
 
         session["user_id"] = login_name
 
-        user = get_user(login_name)
-        if user:
-            session["name"] = user.get("name", login_name)
-            session["role"] = user.get("role", "engineer")
-            session["region"] = user.get("region", "NA")
-            return jsonify({
-                "first_time": False,
-                "name": user.get("name", ""),
-                "title": user.get("role", "")
-            })
-        else:
-            session["name"] = login_name
-            session["role"] = "engineer"
-            session["region"] = "NA"
-            return jsonify({"first_time": True})
+        user = get_user(login_name) or {}
+        session["name"] = user.get("name", login_name)
+        session["role"] = user.get("role", "engineer")
+        session["region"] = user.get("region", "NA")
+
+        return jsonify({
+            "first_time": not _profile_complete(user),
+            "name": user.get("name", ""),
+            "title": user.get("role", "")
+        })
 
     except Exception as e:
         print("🔥 Login error:", str(e))
@@ -381,19 +391,23 @@ def greet():
 
 @app.route("/auth/status", methods=["GET"])
 def auth_status():
-    """Lightweight session check so the frontend can decide whether to show the login prompt."""
+    """Lightweight session check so the frontend can decide whether to show the login or profile prompt."""
     try:
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"authenticated": False})
-        user = get_user(user_id)
+
+        user = get_user(user_id) or {}
+        complete = _profile_complete(user)
+
         return jsonify({
             "authenticated": True,
             "user_id": user_id,
             "name": (user.get("name") if user else user_id) or user_id,
             "role": (user.get("role") if user else "engineer"),
             "region": (user.get("region") if user else "NA"),
-            "first_time": False if user else True
+            "first_time": not complete,            # <-- only true if profile incomplete
+            "profile_complete": complete           # extra flag if the frontend wants it
         })
     except Exception as e:
         print("🔥 ERROR IN /auth/status:", str(e))
@@ -430,21 +444,16 @@ def login():
 
         session["user_id"] = email
 
-        user = get_user(email)
-        if user:
-            session["name"] = user.get("name", email)
-            session["role"] = user.get("role", "engineer")
-            session["region"] = user.get("region", "NA")
-            return jsonify({
-                "first_time": False,
-                "name": user.get("name", ""),
-                "title": user.get("role", "")
-            })
-        else:
-            session["name"] = email
-            session["role"] = "engineer"
-            session["region"] = "NA"
-            return jsonify({"first_time": True})
+        user = get_user(email) or {}
+        session["name"] = user.get("name", email)
+        session["role"] = user.get("role", "engineer")
+        session["region"] = user.get("region", "NA")
+
+        return jsonify({
+            "first_time": not _profile_complete(user),
+            "name": user.get("name", ""),
+            "title": user.get("role", "")
+        })
 
     except Exception as e:
         print("🔥 /login error:", str(e))
