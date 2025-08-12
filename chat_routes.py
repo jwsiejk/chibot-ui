@@ -1,4 +1,4 @@
-# chat_routes.py — Ask Chip (lean route, no self‑contained logic)
+# chat_routes.py — Ask Chip (lean route, no self-contained logic)
 # Route-only file. All business logic is delegated to app services via deps.
 # This matches our agreed structure and preserves all functionality.
 
@@ -25,7 +25,22 @@ def create_chat_blueprint(deps: dict):
             raise RuntimeError(f"Missing required dependency: {key}")
         return fn
 
-    parse_email_intent     = _need("parse_email_intent")
+    # --- Robust parse_email_intent resolution ---
+    try:
+        parse_email_intent = _need("parse_email_intent")
+    except RuntimeError:
+        try:
+            from services.intents import parse_email_intent
+            current_app.logger.warning(
+                "Dependency 'parse_email_intent' not provided by app — using fallback from services.intents"
+            )
+        except ImportError:
+            def parse_email_intent(text: str):
+                current_app.logger.error(
+                    "No parse_email_intent available — returning None."
+                )
+                return None
+
     handle_account_intents = _need("handle_account_intents")
     fulfill_email_intent   = _need("fulfill_email_intent")
     generate_chip_response = _need("generate_chip_response")
@@ -76,6 +91,6 @@ def create_chat_blueprint(deps: dict):
         reply_text = generate_chip_response(user_id, name, user_text, role, region)
         reply_text = word_cap(str(reply_text))  # app-enforced 30-word cap
         if log_conversation: log_conversation(user_id, user_text, reply_text)
-        return jsonify({"reply_text": reply_text, "reply": reply_text})
+        return jsonify({"reply_text": reply_text, "reply": reply})
 
     return bp
