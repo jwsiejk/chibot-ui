@@ -201,7 +201,7 @@ export function wireLoginAndProfileHandlers() {
 
       const r = await j("/api/profile", {
         method: "POST",
-        body: JSON.stringify({ name, title, email })
+        body: JSON.stringify({ name, title, email, region: "NA" })  // ensure region is set
       });
 
       const saved = !!(r.data?.ok || r.data?.success);
