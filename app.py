@@ -44,10 +44,7 @@ oai = OpenAI()
 # Helpers
 # -----------------------------------------------------------------------------
 def _profile_complete(user: dict | None) -> bool:
-    """
-    A profile is 'complete' only if required fields exist and are non-empty.
-    (We intentionally don't require messages.)
-    """
+    """A profile is complete when name, role, and region are all non-empty."""
     if not user or not isinstance(user, dict):
         return False
     name = (user.get("name") or "").strip()
@@ -154,6 +151,7 @@ def generate_chip_response(user_id, name, question, role, region):
 def index():
     return render_template("index.html")
 
+# ---------- Auth ----------
 @app.route("/login-basic", methods=["POST"])
 def login_basic():
     try:
@@ -181,11 +179,95 @@ def login_basic():
         print("🔥 Login error:", str(e))
         return jsonify({"error": "Login failed"}), 500
 
+@app.route("/login", methods=["POST"])
+def login():
+    # Accepts JSON {"email": "..."} and sets session. Mirrors /login-basic.
+    try:
+        _ = get_connection()
+        data = request.get_json() or {}
+        email = (data.get("email") or "").strip().lower()
+
+        if not email or not (email.endswith("@purestorage.com") or email.endswith("@trace3.com")):
+            return jsonify({"error": "Unauthorized domain"}), 403
+
+        session["user_id"] = email
+
+        user = get_user(email) or {}
+        session["name"] = user.get("name", email)
+        session["role"] = user.get("role", "engineer")
+        session["region"] = user.get("region", "NA")
+
+        return jsonify({
+            "first_time": not _profile_complete(user),
+            "name": user.get("name", ""),
+            "title": user.get("role", "")
+        })
+
+    except Exception as e:
+        print("🔥 /login error:", str(e))
+        return jsonify({"error": "Login failed"}), 500
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    """Clear session and return ok; frontend can redirect to landing screen and show login prompt."""
+    try:
+        session.clear()
+        return jsonify({"ok": True})
+    except Exception as e:
+        print("🔥 ERROR IN /logout:", str(e))
+        return jsonify({"ok": False}), 500
+
+@app.route("/auth/status", methods=["GET"])
+def auth_status():
+    """Let the frontend decide whether to show login or profile."""
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"authenticated": False})
+        user = get_user(user_id) or {}
+        complete = _profile_complete(user)
+        return jsonify({
+            "authenticated": True,
+            "user_id": user_id,
+            "name": (user.get("name") if user else user_id) or user_id,
+            "role": (user.get("role") if user else "engineer"),
+            "region": (user.get("region") if user else "NA"),
+            "first_time": not complete,
+            "profile_complete": complete
+        })
+    except Exception as e:
+        print("🔥 ERROR IN /auth/status:", str(e))
+        return jsonify({"authenticated": False, "error": "status check failed"}), 500
+
+# ---------- Profile ----------
+@app.route("/profile", methods=["GET"])
+def get_profile_route():
+    """Return the saved profile so the frontend can prefill the form."""
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Unauthorized"}), 401
+        user = get_user(user_id) or {}
+        complete = _profile_complete(user)
+        return jsonify({
+            "name": user.get("name", ""),
+            "title": user.get("role", ""),
+            "region": user.get("region", ""),
+            "email": user_id,
+            "profile_complete": complete
+        })
+    except Exception as e:
+        print("🔥 GET /profile error:", str(e))
+        return jsonify({"error": "Failed to load profile"}), 500
+
 @app.route("/profile", methods=["POST"])
 def save_profile_route():
     try:
         _ = get_connection()
         user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Unauthorized"}), 401
+
         data = request.get_json() or {}
         name = (data.get("name") or "").strip() or user_id
         title = (data.get("title") or "").strip() or "engineer"
@@ -205,12 +287,13 @@ def save_profile_route():
         session["name"] = name
         session["role"] = title
         session["region"] = region
-        return jsonify({"success": True})
+        return jsonify({"success": True, "profile_complete": _profile_complete(profile)})
 
     except Exception as e:
         print("🔥 Profile save error:", str(e))
         return jsonify({"error": "Save failed"}), 500
 
+# ---------- Chat / Voice ----------
 @app.route("/ask", methods=["POST"])
 def ask():
     try:
@@ -310,6 +393,7 @@ def ask_chip():
 
     return Response(stream_with_context(generate_stream()), mimetype="multipart/x-mixed-replace; boundary=frame")
 
+# ---------- History / Greet ----------
 @app.route("/history", methods=["POST"])
 def retrieve_history():
     try:
@@ -389,40 +473,7 @@ def greet():
         traceback.print_exc()
         return jsonify({"error": "Greeting failed"}), 500
 
-@app.route("/auth/status", methods=["GET"])
-def auth_status():
-    """Lightweight session check so the frontend can decide whether to show the login or profile prompt."""
-    try:
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"authenticated": False})
-
-        user = get_user(user_id) or {}
-        complete = _profile_complete(user)
-
-        return jsonify({
-            "authenticated": True,
-            "user_id": user_id,
-            "name": (user.get("name") if user else user_id) or user_id,
-            "role": (user.get("role") if user else "engineer"),
-            "region": (user.get("region") if user else "NA"),
-            "first_time": not complete,            # <-- only true if profile incomplete
-            "profile_complete": complete           # extra flag if the frontend wants it
-        })
-    except Exception as e:
-        print("🔥 ERROR IN /auth/status:", str(e))
-        return jsonify({"authenticated": False, "error": "status check failed"}), 500
-
-@app.route("/logout", methods=["POST"])
-def logout():
-    """Clear session and return ok; frontend can redirect to landing screen and show login prompt."""
-    try:
-        session.clear()
-        return jsonify({"ok": True})
-    except Exception as e:
-        print("🔥 ERROR IN /logout:", str(e))
-        return jsonify({"ok": False}), 500
-
+# ---------- Health ----------
 @app.route("/healthz/db", methods=["GET"])
 def healthz_db():
     try:
@@ -431,37 +482,7 @@ def healthz_db():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
-@app.route("/login", methods=["POST"])
-def login():
-    # Accepts JSON {"email": "..."} and sets session. Mirrors /login-basic.
-    try:
-        _ = get_connection()
-        data = request.get_json() or {}
-        email = (data.get("email") or "").strip().lower()
-
-        if not email or not (email.endswith("@purestorage.com") or email.endswith("@trace3.com")):
-            return jsonify({"error": "Unauthorized domain"}), 403
-
-        session["user_id"] = email
-
-        user = get_user(email) or {}
-        session["name"] = user.get("name", email)
-        session["role"] = user.get("role", "engineer")
-        session["region"] = user.get("region", "NA")
-
-        return jsonify({
-            "first_time": not _profile_complete(user),
-            "name": user.get("name", ""),
-            "title": user.get("role", "")
-        })
-
-    except Exception as e:
-        print("🔥 /login error:", str(e))
-        return jsonify({"error": "Login failed"}), 500
-
-# -----------------------------------------------------------------------------
-# API aliases expected by the frontend (prevents 404s like /api/me and /api/login)
-# -----------------------------------------------------------------------------
+# ---------- API aliases used by the frontend ----------
 @app.route("/api/me", methods=["GET"])
 def api_me():
     return auth_status()
@@ -473,3 +494,11 @@ def api_login():
 @app.route("/api/logout", methods=["POST"])
 def api_logout():
     return logout()
+
+@app.route("/api/profile", methods=["GET"])
+def api_get_profile():
+    return get_profile_route()
+
+@app.route("/api/profile", methods=["POST"])
+def api_save_profile():
+    return save_profile_route()
