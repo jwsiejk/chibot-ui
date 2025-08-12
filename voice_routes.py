@@ -22,6 +22,7 @@ _ELEVEN_BASE = "https://api.elevenlabs.io/v1/text-to-speech"
 
 WORD_LIMIT = int(os.getenv("CHAT_WORD_LIMIT", "30"))  # keep parity with chat
 
+# Note: no url_prefix here so existing routes stay exactly the same paths as before
 voice_bp = Blueprint("voice", __name__)
 
 
@@ -65,6 +66,12 @@ def _tts_generate_mp3(text: str) -> str:
         f.write(r.content)
 
     return f"/static/audio/{outfile.name}"
+
+
+@voice_bp.get("/voice/health")
+def voice_health():
+    """Simple health endpoint for quick checks."""
+    return jsonify({"ok": True, "service": "voice"}), 200
 
 
 @voice_bp.post("/greet")
@@ -148,3 +155,12 @@ def api_voice_transcribe():
     except Exception as e:
         current_app.logger.exception("api_voice_transcribe failed")
         return jsonify({"error": "transcribe_failed", "detail": str(e)}), 500
+
+
+# --- Factory expected by app.py ---
+def create_voice_blueprint():
+    """Factory wrapper so app.py can import and register cleanly."""
+    return voice_bp
+
+
+__all__ = ["voice_bp", "create_voice_blueprint"]
