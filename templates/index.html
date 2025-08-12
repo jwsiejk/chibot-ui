@@ -13,24 +13,33 @@
   <script defer src="{{ url_for('static', filename='chip/chip-viseme.js') }}?v=20250810-chat"></script>
   <script type="module" src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250810-chat"></script>
 
+  <!-- Small layout helpers to force right-aligned menu and a tidy top bar -->
+  <style>
+    #topbar{display:flex;align-items:center;gap:.5rem;padding:.5rem 1rem;border-bottom:1px solid #eee}
+    #askChipWrap{margin-left:auto;position:relative}
+    #askChipWrap .menu{position:absolute;right:0;top:100%;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);padding:.25rem;width:220px;z-index:20}
+    #askChipWrap .menu > button{display:block;width:100%;text-align:left;padding:.5rem .75rem;background:none;border:0}
+    #askChipWrap .menu > button:hover{background:#f6f6f6}
+  </style>
 </head>
 <body>
 
   <!-- Top bar -->
-  <header class="topbar">
-    <!-- Removed the white "Chip" brand label -->
-    <div class="actions">
-      <div class="dropdown nav">
-        <button id="navMenuBtn" class="btn btn--accent">Ask Chip ▾</button>
-        <div id="navMenu" hidden class="menu">
-      <button id="navProfile">Profile</button>
-      <button id="navHistory">Conversation history</button>
-      <button id="navLogout">Logout</button>
-    </div>
-  </div>
-</header>
+  <header id="topbar" class="topbar">
+    <div class="brand"><span>Chip</span></div>
 
-   <!-- Login Modal -->
+    <!-- Right-aligned Ask Chip dropdown -->
+    <div id="askChipWrap">
+      <button id="navMenuBtn" class="btn btn--accent">Ask Chip ▾</button>
+      <div id="navMenu" hidden class="menu">
+        <button id="navProfile">Profile</button>
+        <button id="navHistory">Conversation history</button>
+        <button id="navLogout">Logout</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Login Modal -->
   <div id="loginModal" class="modal">
     <div class="modal-content">
       <h2>Welcome to Ask Chip</h2>
@@ -77,25 +86,22 @@
       </div>
     </section>
   </div>
-    
+
   <!-- Bottom toolbar -->
-  <div id="askChipToolbar">
-      <!-- Renamed for clarity with the guide text -->
-    <button id="btnModeDynamic">Start</button>
+  <footer id="askChipToolbar" class="toolbar">
+    <button id="btnStart">Start</button>
     <button id="btnDisconnect" title="End session">End</button>
 
-    <button id="btnMic"  title="Hold to talk">🎤 Mic</button>
-
     <!-- Chat with caret -->
-    <div class="dropdown" id="chatDropdown">
+    <div class="dropdown" id="chatDropdown" style="margin-left:auto">
       <button id="chatMenuBtn" title="Choose chat mode">💬 Chat ▾</button>
       <div class="dropdown-content" id="chatMenu">
         <div class="menuitem" data-lane="live">🔊 Chat Live (TTS)</div>
         <div class="menuitem" data-lane="text">💬 Chat Text</div>
       </div>
     </div>
-   
-    
+  </footer>
+
   <!-- User Guide panel (top-left) -->
   <div id="guidePanel" style="
     position:fixed; top:16px; left:16px; z-index:2000;
