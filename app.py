@@ -1,244 +1,449 @@
 print("✅ Chip app starting...")
 
 import os
-if os.getenv("DISABLE_EVENTLET", "0") != "1":
-    import eventlet  # type: ignore
-    eventlet.monkey_patch(all=True)
-
-# --- Normalize DATABASE_URL before importing anything that might use it ---
-_raw_db = (os.getenv("DATABASE_URL") or "").strip()
-if (_raw_db.startswith('"') and _raw_db.endswith('"')) or (_raw_db.startswith("'") and _raw_db.endswith("'")):
-    _raw_db = _raw_db[1:-1].strip()
-os.environ["DATABASE_URL"] = _raw_db.replace("\n", "").replace("\r", "").replace(" ", "")
-
-# ---------------- standard imports ----------------
 import json
 import traceback
-import re
-import base64
-import mimetypes
-import threading
-from threading import Lock
-import requests
 from uuid import uuid4
 from datetime import datetime
-from urllib.parse import urlparse, quote_plus
-from io import BytesIO
-
 from flask import (
-    Flask, request, jsonify, render_template, session, Response,
-    stream_with_context, send_file, redirect
+    Flask, request, jsonify, render_template, redirect, session,
+    url_for, Response, stream_with_context, g, send_from_directory
 )
 from flask_session import Session
 from werkzeug.utils import secure_filename
 
-# --- websocket support ---
-from flask_sock import Sock
-
-# --- vendor clients ---
 from elevenlabs.client import ElevenLabs
-from openai import OpenAI
-import httpx
-
-import psycopg2
-import psycopg2.extras as extras  # for RealDictCursor
-
-# --- optional deps with guards ---
-try:
-    from openpyxl import load_workbook
-    HAS_OPENPYXL = True
-except Exception:
-    HAS_OPENPYXL = False
-
-try:
-    import fitz  # PyMuPDF
-    HAS_PYMUPDF = True
-except Exception:
-    HAS_PYMUPDF = False
-
-try:
-    from pptx import Presentation
-    HAS_PPTX = True
-except Exception:
-    HAS_PPTX = False
-
-# --- email (Gmail SMTP) ---
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-
-# only import memory after DATABASE_URL is sanitized
 from memory import get_user, save_user, log_conversation, get_connection
 
-# -----------------------------------------------------------------------------
-# Flask & sessions
-# -----------------------------------------------------------------------------
+# ---- OpenAI (standardized) ----
+from openai import OpenAI
+oai = OpenAI()
+
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY") or os.getenv("FLASK_SECRET") or "supersecret"
+app.secret_key = os.getenv("FLASK_SECRET", "supersecret")
 app.config["SESSION_TYPE"] = "filesystem"
-app.config.setdefault("SESSION_COOKIE_HTTPONLY", True)
-app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
-if os.getenv("SESSION_COOKIE_SECURE", "false").lower() in ("1", "true", "yes"):
-    app.config["SESSION_COOKIE_SECURE"] = True
 Session(app)
 
-# WebSocket sock (adds /ws/* routes we define below)
-sock = Sock(app)
-
-# -----------------------------------------------------------------------------
-# Global clients & feature flags
-# -----------------------------------------------------------------------------
 voice_id = os.getenv("CHIP_VOICE_ID")
 eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
-TTS_ENABLED = os.getenv("TTS_ENABLED", "true").lower() in ("1", "true", "yes")
-ELEVEN_MODEL_ID = os.getenv("ELEVEN_MODEL_ID", "eleven_multilingual_v2")
-ELEVEN_OUTPUT_FORMAT = os.getenv("ELEVEN_OUTPUT_FORMAT", "mp3_22050_32")
-ELEVEN_STREAM_LATENCY = os.getenv("ELEVEN_STREAM_LATENCY", "0")
 
-# OpenAI client
-oai = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+# Ensure audio output dir exists
+os.makedirs("static/audio", exist_ok=True)
 
-# -----------------------------------------------------------------------------
-# Admins (env-driven; default to your address)
-# -----------------------------------------------------------------------------
-ADMIN_EMAILS = {
-    e.strip().lower()
-    for e in (os.getenv("ADMIN_EMAILS") or "jwsiejk@purestorage.com").split(",")
-    if e.strip()
-}
+# 🔧 Auto-create conversations table if missing
+def init_conversation_table():
+    import os
+    import psycopg2
+    from memory import get_connection
 
-def _is_admin(email: str) -> bool:
-    return (email or "").strip().lower() in ADMIN_EMAILS
+    if 'DATABASE_URL' not in os.environ:
+        raise ValueError("DATABASE_URL environment variable is not set. Use the internal connection string for Render-managed databases.")
 
-# -----------------------------------------------------------------------------
-# Persona loader (externalized under static/chip/persona.txt)
-# -----------------------------------------------------------------------------
-_DEFAULT_PERSONA = (
-    "You are Chip, a virtual Pure Storage solution engineer.\n"
-    "Tone: Nebraska plain-spoken, warm, practical. Use natural contractions. "
-    "Use gentle hedges sparingly (“looks like”, “roughly”). One light colloquialism every few turns at most.\n"
-    "Brevity: Default to ~20 words unless the user asks for more. If they say “more”, expand naturally.\n"
-    "Helpfulness: Answer directly first. Offer a follow-up only when it truly helps "
-    "(ambiguity, likely next step, or the user seems stuck). Otherwise keep quiet.\n"
-    "Small talk: If the user mixes casual remarks (e.g., weather, greetings) with a question), "
-    "start with one short friendly clause acknowledging it, then pivot to the answer.\n"
-    "Guardrails: Do not invent data. If unsure, say so and propose the next action. "
-    "Stay professional; no sarcasm or slang overload.\n"
-    "Closers (occasionally, when appropriate): “Want me to dig deeper?”, "
-    "“Need a quick example?”, “Should I pull the numbers behind that?”, "
-    "“I can check related items if you want.”"
-)
-
-_PERSONA_CACHE = {"text": None, "mtime": 0, "path": None}
-
-def _persona_path() -> str:
-    env_path = os.getenv("CHIP_PERSONA_PATH")
-    if env_path:
-        return env_path
-    return os.path.join(app.root_path, "static", "chip", "persona.txt")
-
-def load_persona() -> str:
     try:
-        path = _persona_path()
-        _PERSONA_CACHE["path"] = path
-        st = os.stat(path)
-        if st.st_mtime != _PERSONA_CACHE["mtime"]:
-            with open(path, "r", encoding="utf-8") as f:
-                _PERSONA_CACHE["text"] = f.read().strip()
-            _PERSONA_CACHE["mtime"] = st.st_mtime
-        return _PERSONA_CACHE["text"] or _DEFAULT_PERSONA
-    except Exception:
-        return _DEFAULT_PERSONA
+        # Attempt to get a connection from memory module or fallback to psycopg2
+        conn = get_connection() or psycopg2.connect(os.environ['DATABASE_URL'])
+        conn.autocommit = True
 
-# -----------------------------------------------------------------------------
-# Weather-aware small-talk helper
-# -----------------------------------------------------------------------------
-_OMAHA_LAT = 41.2565
-_OMAHA_LON = -95.9345
-_SMALLTALK_WEATHER_RE = re.compile(
-    r"\b(weather|outside|nice out|nice outside|sunny|cloudy|rain(y)?|snow|snowing|windy|hot|cold|freezing|chilly|beautiful day)\b",
-    re.IGNORECASE
-)
-
-def _fetch_omaha_temp_f(timeout=3.5):
-    try:
-        url = "https://api.open-meteo.com/v1/forecast"
-        params = {
-            "latitude": _OMAHA_LAT,
-            "longitude": _OMAHA_LON,
-            "current": "temperature_2m",
-            "temperature_unit": "fahrenheit",
-            "timezone": "auto",
-        }
-        r = httpx.get(url, params=params, timeout=timeout)
-        r.raise_for_status()
-        js = r.json() or {}
-        cur = js.get("current") or {}
-        t = cur.get("temperature_2m")
-        return float(t) if isinstance(t, (int, float)) else None
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id SERIAL PRIMARY KEY,
+                    user_id VARCHAR(100),
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    question TEXT,
+                    answer TEXT
+                )
+            """)
+            conn.commit()
+            print("✅ Conversation table verified.")
     except Exception as e:
-        print("ℹ️ Omaha weather lookup failed:", str(e))
-        return None
+        print("❌ Error creating conversation table:", e)
+        if 'conn' in locals():
+            conn.rollback()
+    finally:
+        if 'conn' in locals() and not conn.closed:
+            conn.close()
+            print("✅ Database connection closed.")
 
-def _temp_feel_phrase(t_f):
-    if t_f is None:
-        return None
-    t = float(t_f)
-    if t <= 35:  feel = "cold"
-    elif t <= 50: feel = "chilly"
-    elif t <= 70: feel = "mild"
-    elif t <= 85: feel = "warm"
-    else:        feel = "hot"
-    return f"{feel} here in Omaha ({round(t)}°F)"
+def ensure_db_ready():
+    # Ping DB without mutating schema. Alembic handles migrations.
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+        print("✅ DB connectivity OK")
+    except Exception as e:
+        print("🔥 DB connectivity check failed:", e)
+        raise
 
-def _smalltalk_context_if_any(user_text: str, name: str):
-    if not user_text or not _SMALLTALK_WEATHER_RE.search(user_text):
-        return None
-    t = _fetch_omaha_temp_f()
-    feel = _temp_feel_phrase(t)
-    if feel:
-        return {
-            "role": "system",
-            "content": (
-                f"User mentioned weather in passing. Start your reply with one short, friendly clause "
-                f"acknowledging them by name ({name}) and briefly noting Omaha conditions: “{feel}”. "
-                f"Then pivot to the answer."
-            )
+def _build_system_prompt(name: str) -> dict:
+    return {
+        "role": "system",
+        "content": (
+            f"You are Chip, a virtual Pure Storage solution engineer. "
+            f"You are relatable, intelligent, and from Nebraska. "
+            f"You speak plainly and occasionally use dry humor and Nebraska sayings. "
+            f"Your job is to provide technical answers, but with a humble and real personality. "
+            f"Keep answers grounded in Pure Storage expertise. Use no more than 10 words. "
+            f"The user's name is {name}."
+        ),
+    }
+
+def generate_chip_response(user_id, name, question, role, region):
+    # Load existing profile
+    existing = get_user(user_id) or {}
+    messages = existing.get("messages", [])
+
+    # Append new user turn and trim history
+    messages.append({"role": "user", "content": question})
+    messages = messages[-6:]
+
+    # Compose system + history
+    system_prompt = _build_system_prompt(name)
+
+    response = oai.chat.completions.create(
+        model="gpt-4o",
+        messages=[system_prompt] + messages,
+        max_tokens=80,
+    )
+
+    answer = response.choices[0].message.content
+
+    # Append assistant turn and persist full profile consistently
+    messages.append({"role": "assistant", "content": answer})
+    profile = {
+        "name": existing.get("name", name),
+        "role": existing.get("role", role),
+        "region": existing.get("region", region),
+        "messages": messages,
+    }
+    save_user(user_id, profile)
+
+    # Also log conversation
+    log_conversation(user_id, question, answer)
+    return answer
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/login-basic", methods=["POST"])
+def login_basic():
+    try:
+        conn = get_connection()
+        data = request.get_json()
+        login_name = (data.get("login") or "").strip().lower()
+
+        if not (login_name.endswith("@purestorage.com") or login_name.endswith("@trace3.com")):
+            return jsonify({"error": "Unauthorized domain"}), 403
+
+        session["user_id"] = login_name
+
+        user = get_user(login_name)
+        if user:
+            session["name"] = user.get("name", login_name)
+            session["role"] = user.get("role", "engineer")
+            session["region"] = user.get("region", "NA")
+            return jsonify({
+                "first_time": False,
+                "name": user.get("name", ""),
+                "title": user.get("role", "")
+            })
+        else:
+            session["name"] = login_name
+            session["role"] = "engineer"
+            session["region"] = "NA"
+            return jsonify({"first_time": True})
+
+    except Exception as e:
+        print("🔥 Login error:", str(e))
+        return jsonify({"error": "Login failed"}), 500
+
+@app.route("/profile", methods=["POST"])
+def save_profile():
+    try:
+        conn = get_connection()
+        user_id = session.get("user_id")
+        data = request.get_json() or {}
+        name = data.get("name", "").strip()
+        title = data.get("title", "").strip()
+        region = data.get("region", "NA")
+
+        # Safely get existing messages from profile or use default
+        existing = get_user(user_id) or {}
+        messages = existing.get("messages", [])
+
+        # Store full profile object
+        profile = {
+            "name": name or existing.get("name") or user_id,
+            "role": title or existing.get("role", "engineer"),
+            "region": region or existing.get("region", "NA"),
+            "messages": messages
         }
-    else:
-        return {
-            "role": "system",
-            "content": (
-                f"User mentioned weather in passing. Start with one short friendly clause acknowledging it by name ({name}), "
-                f"then pivot to the answer. Keep it concise."
+
+        save_user(user_id, profile)
+        session["name"] = profile["name"]
+        session["role"] = profile["role"]
+        session["region"] = profile["region"]
+        return jsonify({"success": True})
+
+    except Exception as e:
+        print("🔥 Profile save error:", str(e))
+        return jsonify({"error": "Save failed"}), 500
+
+@app.route("/ask", methods=["POST"])
+def ask():
+    try:
+        conn = get_connection()
+        user_id = session.get("user_id") or request.remote_addr or str(uuid4())
+
+        if request.is_json:
+            data = request.get_json() or {}
+            question = data.get("question")
+            name = session.get("name", data.get("name", "User"))
+            role = data.get("role", session.get("role", "engineer"))
+            region = data.get("region", session.get("region", "NA"))
+        else:
+            question = request.form.get("question")
+            name = session.get("name", request.form.get("name", "User"))
+            role = request.form.get("role", session.get("role", "engineer"))
+            region = request.form.get("region", session.get("region", "NA"))
+
+        if not question:
+            return jsonify({"error": "Missing question."}), 400
+
+        if request.is_json and data.get("greeting"):
+            response_text = question
+        else:
+            response_text = generate_chip_response(user_id, name, question, role, region)
+
+        voice_settings = {"speed": 0.9}
+        audio = eleven.text_to_speech.convert(
+            voice_id=voice_id,
+            model_id="eleven_monolingual_v1",
+            text=response_text,
+            optimize_streaming_latency=1,
+            voice_settings=voice_settings
+        )
+
+        filename = f"static/audio/{uuid4().hex}.mp3"
+        with open(filename, "wb") as f:
+            for chunk in audio:
+                f.write(chunk)
+
+        return jsonify({"response": response_text, "audio": "/" + filename})
+
+    except Exception as e:
+        print("🔥 ERROR IN /ask:", str(e))
+        traceback.print_exc()
+        return jsonify({"error": "Something went wrong. Try again later."}), 500
+
+@app.route("/ask-chip", methods=["POST"])
+def ask_chip():
+    def generate_stream():
+        try:
+            conn = get_connection()
+            user_id = session.get("user_id") or request.remote_addr or str(uuid4())
+            name = session.get("name", "User")
+            role = session.get("role", "engineer")
+            region = session.get("region", "NA")
+
+            if "audio" not in request.files:
+                yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"error": "No audio file uploaded."}).encode() + b"\r\n"
+                return
+
+            audio_file = request.files["audio"]
+            audio_file.filename = secure_filename(audio_file.filename)
+            audio_path = f"/tmp/{uuid4().hex}.webm"
+            audio_file.save(audio_path)
+
+            # Whisper transcription via standardized client
+            with open(audio_path, "rb") as f:
+                transcript = oai.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=f
+                ).text
+
+            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"transcript": transcript}).encode() + b"\r\n"
+
+            response_text = generate_chip_response(user_id, name, transcript, role, region)
+            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"response": response_text}).encode() + b"\r\n"
+
+            voice_settings = {"speed": 0.9}
+            audio_stream = eleven.text_to_speech.convert(
+                voice_id=voice_id,
+                model_id="eleven_monolingual_v1",
+                text=response_text,
+                optimize_streaming_latency=1,
+                voice_settings=voice_settings
             )
-        }
 
-# -----------------------------------------------------------------------------
-# Helpers, DB functions, route definitions...
-# -----------------------------------------------------------------------------
-# (Keeping everything else exactly as in your original file — unchanged)
+            yield b"--frame\r\nContent-Type: audio/mpeg\r\n\r\n"
+            for chunk in audio_stream:
+                yield chunk
+            yield b"\r\n--frame--\r\n"
 
-# -----------------------------------------------------------------------------
-# Register blueprints for chat & voice
-# -----------------------------------------------------------------------------
-from chat_routes import create_chat_blueprint
-from voice_routes import create_voice_blueprint
-from services.intents import parse_email_intent  # added
+        except Exception as e:
+            print("🔥 ERROR IN /ask-chip:", str(e))
+            traceback.print_exc()
+            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"error": "Voice processing failed."}).encode() + b"\r\n"
 
-deps = {
-    "oai": oai,
-    "eleven": eleven,
-    "voice_id": voice_id,
-    "TTS_ENABLED": TTS_ENABLED,
-    "generate_chip_response": generate_chip_response,
-    "find_account_row": find_account_row,
-    "repo_search": repo_search,
-    "parse_email_intent": parse_email_intent,  # added so chat_routes gets it
-}
+    return Response(stream_with_context(generate_stream()), mimetype="multipart/x-mixed-replace; boundary=frame")
 
-app.register_blueprint(create_chat_blueprint(deps))
-app.register_blueprint(create_voice_blueprint(deps))
+# <!-- PATCH: Persistent Memory + Dynamic Greeting | 2025-08-07 -->
 
-# -----------------------------------------------------------------------------
-# (Rest of your file continues unchanged from here — greet route, websocket, email endpoints, etc.)
+# <!-- PATCH: Conversation History Retrieval | 2025-08-07 -->
+
+@app.route("/history", methods=["POST"])
+def retrieve_history():
+    try:
+        conn = get_connection()
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Unauthorized"}), 401
+
+        query = (request.json or {}).get("query", "").strip()
+        if not query:
+            return jsonify({"error": "Missing query"}), 400
+
+        user = get_user(user_id) or {}
+        if not user.get("messages"):
+            return jsonify({"response": "I don’t have any past conversations to look at yet."})
+
+        past_dialogue = user["messages"][-12:]
+        flat_history = "\n".join([f"{m['role']}: {m['content']}" for m in past_dialogue])
+
+        prompt = f"""
+You are Chip, a helpful Pure Storage AI. The user asked a question that references past conversations.
+
+Conversation history:
+{flat_history}
+
+Current user query: "{query}"
+
+If something in the history matches what the user is referring to, summarize or clarify the key detail.
+If not, say you couldn't find it.
+"""
+
+        response = oai.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": prompt}],
+            max_tokens=150
+        )
+        return jsonify({"response": response.choices[0].message.content.strip()})
+    except Exception as e:
+        print("🔥 ERROR IN /history:", str(e))
+        traceback.print_exc()
+        return jsonify({"error": "History lookup failed"}), 500
+
+@app.route("/greet", methods=["POST"])
+def greet():
+    try:
+        conn = get_connection()
+        user_id = session.get("user_id")
+        user = get_user(user_id) if user_id else None
+        name = user.get("name", "there") if user else "there"
+
+        data = request.get_json() or {}
+        prompt = data.get("prompt", f"Say hello to {name}.")
+
+        openai_response = oai.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": prompt}],
+            max_tokens=60
+        )
+        greeting_text = openai_response.choices[0].message.content.strip()
+
+        voice_settings = {"speed": 0.9}
+        audio = eleven.text_to_speech.convert(
+            voice_id=voice_id,
+            model_id="eleven_monolingual_v1",
+            text=greeting_text,
+            optimize_streaming_latency=1,
+            voice_settings=voice_settings
+        )
+        filename = f"static/audio/{uuid4().hex}.mp3"
+        with open(filename, "wb") as f:
+            for chunk in audio:
+                f.write(chunk)
+
+        return jsonify({"reply": greeting_text, "audio": "/" + filename})
+    except Exception as e:
+        print("🔥 ERROR IN /greet:", str(e))
+        traceback.print_exc()
+        return jsonify({"error": "Greeting failed"}), 500
+
+@app.route("/auth/status", methods=["GET"])
+def auth_status():
+    """
+    Lightweight session check so the frontend can decide whether to show the login prompt.
+    Returns authenticated flag and minimal profile if available.
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"authenticated": False})
+        user = get_user(user_id)
+        return jsonify({
+            "authenticated": True,
+            "user_id": user_id,
+            "name": (user.get("name") if user else user_id) or user_id,
+            "role": (user.get("role") if user else "engineer"),
+            "region": (user.get("region") if user else "NA"),
+            "first_time": False if user else True
+        })
+    except Exception as e:
+        print("🔥 ERROR IN /auth/status:", str(e))
+        return jsonify({"authenticated": False, "error": "status check failed"}), 500
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    """Clear session and return ok; frontend can redirect to landing screen and show login prompt."""
+    try:
+        session.clear()
+        return jsonify({"ok": True})
+    except Exception as e:
+        print("🔥 ERROR IN /logout:", str(e))
+        return jsonify({"ok": False}), 500
+
+@app.route("/healthz/db", methods=["GET"])
+def healthz_db():
+    try:
+        ensure_db_ready()
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/login", methods=["POST"])
+def login():
+    # Accepts JSON {"email": "..."} and sets session. Mirrors /login-basic.
+    try:
+        conn = get_connection()
+        data = request.get_json() or {}
+        email = (data.get("email") or "").strip().lower()
+
+        if not email or not (email.endswith("@purestorage.com") or email.endswith("@trace3.com")):
+            return jsonify({"error": "Unauthorized domain"}), 403
+
+        session["user_id"] = email
+
+        user = get_user(email)
+        if user:
+            session["name"] = user.get("name", email)
+            session["role"] = user.get("role", "engineer")
+            session["region"] = user.get("region", "NA")
+            return jsonify({
+                "first_time": False,
+                "name": user.get("name", ""),
+                "title": user.get("role", "")
+            })
+        else:
+            session["name"] = email
+            session["role"] = "engineer"
+            session["region"] = "NA"
+            return jsonify({"first_time": True})
+
+    except Exception as e:
+        print("🔥 /login error:", str(e))
+        return jsonify({"error": "Login failed"}), 500
