@@ -415,58 +415,96 @@ def ensure_pg_trgm():
             conn.commit()
 
 def ensure_accounts_table():
+    """
+    Define the canonical columns:
+      - account_name (PK unique)
+      - pure_ae, pure_ae_email, pure_pam, pure_rsd, region
+    Also add the new columns if an older table already exists,
+    and best-effort backfill from legacy columns when present.
+    """
     ensure_pg_trgm()
     with get_connection() as conn:
         with conn.cursor() as cur:
+            # Create table if missing (canonical schema)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS public.accounts (
                   id SERIAL PRIMARY KEY,
                   account_name TEXT UNIQUE NOT NULL,
-                  owner TEXT,
-                  owner_email TEXT,
-                  manager TEXT,
-                  pam TEXT,
+                  pure_ae TEXT,
+                  pure_ae_email TEXT,
+                  pure_pam TEXT,
+                  pure_rsd TEXT,
                   region TEXT DEFAULT 'Americas',
                   updated_at TIMESTAMPTZ DEFAULT now()
                 );
             """)
+            # Ensure new columns exist if table was created previously with legacy names
+            cur.execute("ALTER TABLE public.accounts ADD COLUMN IF NOT EXISTS pure_ae TEXT;")
+            cur.execute("ALTER TABLE public.accounts ADD COLUMN IF NOT EXISTS pure_ae_email TEXT;")
+            cur.execute("ALTER TABLE public.accounts ADD COLUMN IF NOT EXISTS pure_pam TEXT;")
+            cur.execute("ALTER TABLE public.accounts ADD COLUMN IF NOT EXISTS pure_rsd TEXT;")
+            cur.execute("ALTER TABLE public.accounts ADD COLUMN IF NOT EXISTS region TEXT DEFAULT 'Americas';")
+            cur.execute("ALTER TABLE public.accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();")
+
+            # Indexes
             cur.execute("CREATE INDEX IF NOT EXISTS accounts_name_lower_idx ON public.accounts (lower(account_name));")
             cur.execute("CREATE INDEX IF NOT EXISTS accounts_name_trgm_idx ON public.accounts USING GIN (account_name gin_trgm_ops);")
+
+            # Best-effort backfill from legacy columns if they exist
+            # owner -> pure_ae, owner_email -> pure_ae_email, pam -> pure_pam, rsd -> pure_rsd
+            for sql in [
+                "UPDATE public.accounts SET pure_ae = COALESCE(pure_ae, owner) WHERE pure_ae IS NULL",
+                "UPDATE public.accounts SET pure_ae_email = COALESCE(pure_ae_email, owner_email) WHERE pure_ae_email IS NULL",
+                "UPDATE public.accounts SET pure_pam = COALESCE(pure_pam, pam) WHERE pure_pam IS NULL",
+                "UPDATE public.accounts SET pure_rsd = COALESCE(pure_rsd, rsd) WHERE pure_rsd IS NULL",
+            ]:
+                try:
+                    cur.execute(sql)
+                except Exception:
+                    pass
+
             conn.commit()
 
 def normalize_header(h: str) -> str:
-    h = (h or "").strip().lower()
-    if h in ("account", "account name", "account names", "customer", "customer name"):
-        return "account_name"
-    if h in ("account owner", "owner"):
-        return "owner"
-    if h in ("owner email", "email", "owner_email"):
-        return "owner_email"
-    if h in ("manager", "mgr"):
-        return "manager"
-    if h in ("pam", "account pam", "account_pam"):
-        return "pam"
-    if h in ("region",):
+    """
+    Map spreadsheet headers (new & legacy) to canonical columns.
+    """
+    h0 = (h or "").strip().lower()
+
+    # Canonical names
+    if h0 in ("pure rsd", "pure_rsd", "rsd"):
+        return "pure_rsd"
+    if h0 in ("pure ae", "pure_ae", "ae", "account owner", "owner"):
+        return "pure_ae"
+    if h0 in ("pure ae email", "pure_ae_email", "ae email", "owner email", "owner_email", "email"):
+        return "pure_ae_email"
+    if h0 in ("pure pam", "pure_pam", "pam"):
+        return "pure_pam"
+    if h0 in ("region",):
         return "region"
-    return h.replace(" ", "_")
+    if h0 in ("account", "account name", "account names", "customer", "customer name"):
+        return "account_name"
+
+    # Fallback: normalize spaces to underscores
+    return h0.replace(" ", "_")
 
 def upsert_account_row(cur, row):
     cur.execute("""
-        INSERT INTO public.accounts (account_name, owner, owner_email, manager, pam, region, updated_at)
+        INSERT INTO public.accounts (account_name, pure_ae, pure_ae_email, pure_pam, pure_rsd, region, updated_at)
         VALUES (%s,%s,%s,%s,%s,%s, now())
         ON CONFLICT (account_name) DO UPDATE SET
-          owner = EXCLUDED.owner,
-          owner_email = EXCLUDED.owner_email,
-          manager = EXCLUDED.manager,
-          pam = EXCLUDED.pam,
+          pure_ae = EXCLUDED.pure_ae,
+          pure_ae_email = EXCLUDED.pure_ae_email,
+          pure_pam = EXCLUDED.pure_pam,
+          pure_rsd = EXCLUDED.pure_rsd,
           region = COALESCE(EXCLUDED.region, public.accounts.region),
           updated_at = now();
     """, (
         row.get("account_name"),
-        row.get("owner"),
-        row.get("owner_email"),
-        row.get("manager"),
-        row.get("pam"),
+        row.get("pure_ae"),
+        row.get("pure_ae_email"),
+        row.get("pure_pam"),
+        row.get("pure_rsd"),
         row.get("region") or "Americas"
     ))
 
@@ -822,6 +860,7 @@ def accounts_upload():
     """
     Multipart form upload:
       field name: file  (Excel: .xlsx)
+    Accepts both new and legacy header names; maps them to canonical fields.
     """
     try:
         if not HAS_OPENPYXL:
@@ -851,7 +890,7 @@ def accounts_upload():
         # Build header index map
         idx = {h: i for i, h in enumerate(headers)}
 
-        keep = ["account_name", "owner", "owner_email", "manager", "pam", "region"]
+        keep = ["account_name", "pure_ae", "pure_ae_email", "pure_pam", "pure_rsd", "region"]
         rows_ingested = 0
 
         with get_connection() as conn:
@@ -900,13 +939,13 @@ def api_accounts():
                 # Prefer exact, then partial, then trigram-ranked
                 cur.execute("""
                     WITH exact AS (
-                        SELECT id, account_name, owner, owner_email, manager, pam, region,
+                        SELECT id, account_name, pure_ae, pure_ae_email, pure_pam, pure_rsd, region,
                                1.0 AS score
                         FROM public.accounts
                         WHERE lower(account_name) = lower(%s)
                     ),
                     partial AS (
-                        SELECT id, account_name, owner, owner_email, manager, pam, region,
+                        SELECT id, account_name, pure_ae, pure_ae_email, pure_pam, pure_rsd, region,
                                0.9 AS score
                         FROM public.accounts
                         WHERE account_name ILIKE %s
@@ -914,7 +953,7 @@ def api_accounts():
                         LIMIT %s
                     ),
                     trigram AS (
-                        SELECT id, account_name, owner, owner_email, manager, pam, region,
+                        SELECT id, account_name, pure_ae, pure_ae_email, pure_pam, pure_rsd, region,
                                similarity(account_name, %s) AS score
                         FROM public.accounts
                         WHERE account_name % %s
@@ -932,7 +971,7 @@ def api_accounts():
                 rows = cur.fetchall()
             else:
                 cur.execute("""
-                    SELECT id, account_name, owner, owner_email, manager, pam, region
+                    SELECT id, account_name, pure_ae, pure_ae_email, pure_pam, pure_rsd, region
                     FROM public.accounts
                     ORDER BY updated_at DESC
                     LIMIT %s;
@@ -1156,17 +1195,17 @@ def email_account_team():
     html = f"""
     <h3>Account team for {row['account_name']}</h3>
     <ul>
-      <li><strong>Owner:</strong> {row.get('owner') or '—'} ({row.get('owner_email') or '—'})</li>
-      <li><strong>Manager:</strong> {row.get('manager') or '—'}</li>
-      <li><strong>PAM:</strong> {row.get('pam') or '—'}</li>
+      <li><strong>Pure AE:</strong> {row.get('pure_ae') or '—'} ({row.get('pure_ae_email') or '—'})</li>
+      <li><strong>Pure PAM:</strong> {row.get('pure_pam') or '—'}</li>
+      <li><strong>Pure RSD:</strong> {row.get('pure_rsd') or '—'}</li>
       <li><strong>Region:</strong> {row.get('region') or '—'}</li>
     </ul>
     """
     plain = (
         f"Account team for {row['account_name']}\n"
-        f"Owner: {row.get('owner') or '—'} ({row.get('owner_email') or '—'})\n"
-        f"Manager: {row.get('manager') or '—'}\n"
-        f"PAM: {row.get('pam') or '—'}\n"
+        f"Pure AE: {row.get('pure_ae') or '—'} ({row.get('pure_ae_email') or '—'})\n"
+        f"Pure PAM: {row.get('pure_pam') or '—'}\n"
+        f"Pure RSD: {row.get('pure_rsd') or '—'}\n"
         f"Region: {row.get('region') or '—'}\n"
     )
     send_email_via_sendgrid(email, subject, html, plain)
