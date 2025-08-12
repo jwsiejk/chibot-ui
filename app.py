@@ -20,7 +20,7 @@ from werkzeug.utils import secure_filename
 from elevenlabs.client import ElevenLabs
 from memory import get_user, save_user, log_conversation, get_connection
 
-# Use the modern OpenAI client
+# Modern OpenAI client
 from openai import OpenAI
 
 # -----------------------------------------------------------------------------
@@ -34,7 +34,7 @@ Session(app)
 voice_id = os.getenv("CHIP_VOICE_ID")
 eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 
-# Ensure audio output dir exists (Render ephemeral FS is fine for runtime assets)
+# Ensure audio output dir exists
 os.makedirs("static/audio", exist_ok=True)
 
 # Single, shared OpenAI client
@@ -416,3 +416,51 @@ def healthz_db():
         return jsonify({"ok": True}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/login", methods=["POST"])
+def login():
+    # Accepts JSON {"email": "..."} and sets session. Mirrors /login-basic.
+    try:
+        _ = get_connection()
+        data = request.get_json() or {}
+        email = (data.get("email") or "").strip().lower()
+
+        if not email or not (email.endswith("@purestorage.com") or email.endswith("@trace3.com")):
+            return jsonify({"error": "Unauthorized domain"}), 403
+
+        session["user_id"] = email
+
+        user = get_user(email)
+        if user:
+            session["name"] = user.get("name", email)
+            session["role"] = user.get("role", "engineer")
+            session["region"] = user.get("region", "NA")
+            return jsonify({
+                "first_time": False,
+                "name": user.get("name", ""),
+                "title": user.get("role", "")
+            })
+        else:
+            session["name"] = email
+            session["role"] = "engineer"
+            session["region"] = "NA"
+            return jsonify({"first_time": True})
+
+    except Exception as e:
+        print("🔥 /login error:", str(e))
+        return jsonify({"error": "Login failed"}), 500
+
+# -----------------------------------------------------------------------------
+# API aliases expected by the frontend (prevents 404s like /api/me and /api/login)
+# -----------------------------------------------------------------------------
+@app.route("/api/me", methods=["GET"])
+def api_me():
+    return auth_status()
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    return login()
+
+@app.route("/api/logout", methods=["POST"])
+def api_logout():
+    return logout()
