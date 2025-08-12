@@ -20,6 +20,53 @@ window.addEventListener("resize", setToolbarHeightVar);
 window.addEventListener("orientationchange", setToolbarHeightVar);
 
 document.addEventListener("DOMContentLoaded", () => {
+  // ========= Ask Chip (UI helpers added) =========
+  // Admin call log (writes only if #adminLog exists)
+  const ac_logAdmin = (event, detail = "") => {
+    const wrap = $("adminLog");
+    if (!wrap) return;
+    const row = document.createElement("div");
+    row.className = "admin-log-row";
+    const ts = new Date().toLocaleTimeString();
+    row.textContent = `[${ts}] ${event}${detail ? " — " + detail : ""}`;
+    wrap.insertBefore(row, wrap.firstChild || null);
+  };
+
+  // Status banner
+  const ac_setTopStatus = (text) => {
+    const el = $("statusBanner");
+    if (el) el.textContent = text || "";
+  };
+
+  // Exclusive chat windows (Text vs Live/TTS)
+  const ac_chatTextEl = $("chatText");
+  const ac_chatTTSEl  = $("chatTTS");
+
+  const ac_show = (el) => { if (el) el.classList.remove("hidden"); };
+  const ac_hide = (el) => { if (el) el.classList.add("hidden"); };
+  const ac_visible = (el) => !!(el && !el.classList.contains("hidden"));
+
+  const ac_openOnlyChat = (which /* 'text' | 'live' */) => {
+    if (which === "text") {
+      ac_show(ac_chatTextEl); ac_hide(ac_chatTTSEl);
+      ac_logAdmin("ui", "opened text, closed tts");
+      try { ac_chatTextEl?.querySelector("input,textarea")?.focus(); } catch {}
+    } else { // 'live'
+      ac_show(ac_chatTTSEl); ac_hide(ac_chatTextEl);
+      ac_logAdmin("ui", "opened tts, closed text");
+    }
+  };
+
+  const ac_toggleChat = (which /* 'text' | 'live' */) => {
+    if (which === "text") {
+      if (ac_visible(ac_chatTextEl)) { ac_hide(ac_chatTextEl); ac_logAdmin("ui", "closed text"); }
+      else ac_openOnlyChat("text");
+    } else {
+      if (ac_visible(ac_chatTTSEl)) { ac_hide(ac_chatTTSEl); ac_logAdmin("ui", "closed tts"); }
+      else ac_openOnlyChat("live");
+    }
+  };
+
   // --- session gate: disable Start while a session is active ---
   let sessionActive = false;
   function setSessionActive(on) {
@@ -44,7 +91,30 @@ document.addEventListener("DOMContentLoaded", () => {
   wireChatLane(getChatLane, setChatLane);
   setArmVADForSend(() => _vm_armVAD());
   updateChatButtonLabel(getChatLane());
-  wireChatMenu(getChatLane, setChatLane, () => { /* no-op */ });
+
+  // Keep existing menu wiring, but when lane changes we also reflect the panel state.
+  wireChatMenu(getChatLane, (lane) => {
+    setChatLane(lane);
+    updateChatButtonLabel(getChatLane());
+    // Show the chosen lane and hide the other
+    ac_openOnlyChat(getChatLane() === "text" ? "text" : "live");
+  }, () => { /* existing no-op retained */ });
+
+  // Additionally, if your HTML menu has explicit lane items, wire them too (harmless if missing)
+  const chatMenu = $("chatMenu");
+  if (chatMenu) {
+    const textItem = chatMenu.querySelector('[data-lane="text"]');
+    const liveItem = chatMenu.querySelector('[data-lane="live"]');
+    textItem && textItem.addEventListener("click", () => {
+      // click-again-to-close behavior
+      if (ac_visible(ac_chatTextEl)) ac_toggleChat("text");
+      else { setChatLane("text"); updateChatButtonLabel(getChatLane()); ac_openOnlyChat("text"); }
+    });
+    liveItem && liveItem.addEventListener("click", () => {
+      if (ac_visible(ac_chatTTSEl)) ac_toggleChat("live");
+      else { setChatLane("live"); updateChatButtonLabel(getChatLane()); ac_openOnlyChat("live"); }
+    });
+  }
 
   // Mic UI / VAD visuals
   setMicUIUpdater((on, recording = false) => {
@@ -89,6 +159,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const okGate = await gate({ applyLayout: true }); if (!okGate.ok) return;
 
     setSessionActive(true);
+    ac_setTopStatus("Connecting…");
+    ac_logAdmin("session", "start clicked");
     _chipGuide("Starting…");
     await startDynamicSession(); // awaits greet audio
 
@@ -189,6 +261,8 @@ document.addEventListener("DOMContentLoaded", () => {
       _chipClearIdleNudge();
       _chipSetState("idle");
       setSessionActive(false);
+      ac_setTopStatus("Disconnected. Press Start to begin a new session.");
+      ac_logAdmin("session", "disconnected");
       _chipGuide("Disconnected. Press Start to begin a new session.");
     } catch (e) { console.warn("disconnect error", e); }
   });
@@ -200,10 +274,15 @@ document.addEventListener("DOMContentLoaded", () => {
   (async () => {
     const g = await gate({ applyLayout: true });
     if (g && g.ok) {
+      ac_setTopStatus("Disconnected. Press Start to begin a new session.");
       _chipGuide("Press Start to speak with Chip.");
       _chipStep("boot", "ready");
     }
   })();
+
+  // Surface unexpected errors in admin log to help with “something went sideways”
+  window.addEventListener("error", (e) => ac_logAdmin("error", e.message || "unknown"));
+  window.addEventListener("unhandledrejection", (e) => ac_logAdmin("promise", (e?.reason && e.reason.message) || String(e?.reason || "unknown")));
 });
 
 
