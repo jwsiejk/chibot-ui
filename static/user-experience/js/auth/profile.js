@@ -1,7 +1,9 @@
-// auth/profile.js — profile gating, layout, handlers
+// auth/profile.js — robust gating + handlers + layout
 import { $, show, hide, setToolbarHeightVar, _getQueryParam } from "../core/dom.js";
 import { _chipSetAdmin, _chipGuide, _chipSetState, _chipStep } from "../core/state.js";
 import { j } from "../core/api.js";
+
+/* ---------------- UI helpers ---------------- */
 
 export function setProfileModalMode(mode) {
   const profileModal = $("profileModal");
@@ -27,37 +29,6 @@ export function setProfileModalMode(mode) {
   if (saveBtn) saveBtn.textContent = (mode === "gate") ? "Save & Continue" : "Save changes";
 }
 
-export async function loadProfileIntoForm() {
-  const profileForm = $("profileForm"); if (!profileForm) return;
-  const getI = (n) => profileForm.querySelector(`input[name="${n}"]`);
-  const nameI = getI("name"), titleI = getI("title"), emailI = getI("email");
-
-  // Try server first
-  try {
-    const r = await fetch("/api/profile", { credentials: "include" });
-    if (r.status === 401) {
-      // Not logged in; let gate() handle showing login
-      return;
-    }
-    if (r.ok) {
-      const js = await r.json();
-      // Support both shapes: {profile:{...}} or flat { name, title, email }
-      const p = (js && (js.profile || js)) || {};
-      if (nameI)  nameI.value  = p.name  || "";
-      if (titleI) titleI.value = p.title || "";
-      if (emailI) emailI.value = p.email || "";
-      return;
-    }
-  } catch { /* fall back to localStorage */ }
-
-  // Fallback to localStorage (best‑effort)
-  try {
-    if (nameI)  nameI.value  = localStorage.getItem("profileName")  || "";
-    if (titleI) titleI.value = localStorage.getItem("profileTitle") || "";
-    if (emailI) emailI.value = localStorage.getItem("profileEmail") || "";
-  } catch {}
-}
-
 export function applyAuthedLayout() {
   const appEl   = $("app");
   const chipBox = $("chipBox");
@@ -68,7 +39,6 @@ export function applyAuthedLayout() {
   show(toolbar, "flex");
   setToolbarHeightVar();
 
-  // Resize/anchor the avatar
   if (window.ChipViseme && typeof window.ChipViseme.layout === "function") {
     window.ChipViseme.setAnchor(0.49, 0.46);
     window.ChipViseme.setSize(0.095, 0.075);
@@ -76,55 +46,85 @@ export function applyAuthedLayout() {
   }
 }
 
+/* ---------------- Data helpers ---------------- */
+
+async function fetchProfilePrefill() {
+  // Only call after we know we're authenticated.
+  const r = await fetch("/api/profile", { credentials: "include" });
+  if (r.status === 401) return null; // let the caller decide to re-gate
+  if (!r.ok) return null;
+  return await r.json();
+}
+
+async function loadProfileIntoForm() {
+  const profileForm = $("profileForm"); if (!profileForm) return;
+  const getI = (n) => profileForm.querySelector(`input[name="${n}"]`);
+  const nameI = getI("name"), titleI = getI("title"), emailI = getI("email");
+
+  const js = await fetchProfilePrefill();
+  if (js) {
+    const p = js.profile || js;
+    if (nameI)  nameI.value  = p.name  || "";
+    if (titleI) titleI.value = p.title || "";
+    if (emailI) emailI.value = p.email || "";
+    return;
+  }
+
+  // Fallback to localStorage
+  try {
+    if (nameI)  nameI.value  = localStorage.getItem("profileName")  || "";
+    if (titleI) titleI.value = localStorage.getItem("profileTitle") || "";
+    if (emailI) emailI.value = localStorage.getItem("profileEmail") || "";
+  } catch {}
+}
+
+/* ---------------- Gating ---------------- */
+
 export async function enforceProfileCompleteness({ applyLayout = true } = {}) {
   const appEl = $("app");
   const loginModal = $("loginModal");
 
+  // Always check /api/me first. Do NOT call /api/profile before this.
+  let me;
   try {
-    const { ok, status, data } = await j("/api/me");
-    if (data) {
-      _chipSetAdmin(!!data.isAdmin, _getQueryParam("debug"));
-      _chipStep("me", data);
-    }
+    const res = await fetch("/api/me", { credentials: "include" });
+    me = res.ok ? await res.json() : null;
+  } catch { me = null; }
 
-    if (!ok) {
-      // Treat any failure as unauth; show login
-      hide(appEl);
-      show(loginModal, "flex");
-      return { ok: false, reason: (status === 401 ? "unauthenticated" : "server") };
-    }
-
-    // Prefer explicit profileComplete; fall back to inverse of first_time if needed
-    const profileComplete = (data?.profileComplete !== undefined)
-      ? !!data.profileComplete
-      : (data?.first_time === false);
-
-    if (!profileComplete) {
-      setProfileModalMode("gate");
-      await loadProfileIntoForm();
-      show($("profileModal"), "flex");
-      hide($("askChipToolbar"));
-      return { ok: false, reason: "incomplete" };
-    }
-
-    if (applyLayout) {
-      applyAuthedLayout();
-      _chipSetState("idle");
-      _chipGuide("Press Start or Chat to speak with Chip.");
-    }
-    return { ok: true };
-  } catch {
+  if (!me || !me.authenticated) {
     hide(appEl);
     show(loginModal, "flex");
-    return { ok: false, reason: "error" };
+    return { ok: false, reason: "unauthenticated" };
   }
+
+  // Frontend expects profileComplete (or first_time === false)
+  const profileComplete = (me.profileComplete !== undefined)
+    ? !!me.profileComplete
+    : (me.first_time === false);
+
+  if (!profileComplete) {
+    setProfileModalMode("gate");
+    await loadProfileIntoForm();
+    show($("profileModal"), "flex");
+    hide($("askChipToolbar"));
+    return { ok: false, reason: "incomplete" };
+  }
+
+  if (applyLayout) {
+    applyAuthedLayout();
+    _chipSetState("idle");
+    _chipGuide("Press Start or Chat to speak with Chip.");
+  }
+  return { ok: true };
 }
 
-// gate() defaults to NO layout changes during active session
+// Convenience wrapper the rest of the app can call
 export async function gate(opts = { applyLayout: false }) {
   hide($("profileModal"));
   return await enforceProfileCompleteness(opts);
 }
+
+/* ---------------- Wire handlers ---------------- */
 
 export function wireLoginAndProfileHandlers() {
   const loginForm   = $("loginForm");
@@ -132,7 +132,7 @@ export function wireLoginAndProfileHandlers() {
   const saveBtn     = $("saveProfileBtn");
   const loginModal  = $("loginModal");
 
-  // --- Login form ---
+  // Login
   if (loginForm && !loginForm.dataset.wired) {
     loginForm.dataset.wired = "1";
     loginForm.addEventListener("submit", async (e) => {
@@ -143,7 +143,7 @@ export function wireLoginAndProfileHandlers() {
 
       const { ok, data, status } = await j("/api/login", {
         method: "POST",
-        body: JSON.stringify({ email })
+        body: JSON.stringify({ email }),
       });
 
       if (!ok) {
@@ -152,16 +152,15 @@ export function wireLoginAndProfileHandlers() {
       }
 
       try { localStorage.setItem("profileEmail", email); } catch {}
-      const emailInput = profileForm?.querySelector('input[name="email"]');
-      if (emailInput) emailInput.value = email;
-
       hide(loginModal);
-      await gate({ applyLayout: true });
-      _chipGuide("Press Start or Chat to speak with Chip.");
+      const r = await gate({ applyLayout: true });
+      if (!r.ok && r.reason === "incomplete") {
+        // profile modal is already shown by gate()
+      }
     });
   }
 
-  // --- Save profile ---
+  // Save profile
   if (saveBtn && !saveBtn.dataset.wired) {
     saveBtn.dataset.wired = "1";
     saveBtn.addEventListener("click", async () => {
@@ -171,7 +170,6 @@ export function wireLoginAndProfileHandlers() {
       const name  = (fd.get("name")  || "").toString().trim();
       const title = (fd.get("title") || "").toString().trim();
       const email = (fd.get("email") || "").toString().trim();
-
       if (!name || !title || !email) { alert("Please complete all fields."); return; }
 
       try {
@@ -192,12 +190,21 @@ export function wireLoginAndProfileHandlers() {
       }
 
       hide($("profileModal"));
-      if ((($("profileModal")?.dataset.mode) || "edit") === "gate") {
-        applyAuthedLayout();
-      }
-      _chipGuide("Press Start or Chat to speak with Chip.");
+      applyAuthedLayout();
       _chipSetState("idle");
+      _chipGuide("Press Start or Chat to speak with Chip.");
       alert("Profile saved.");
     });
   }
+}
+
+/* ---------------- Bootstrap on load ---------------- */
+
+// Run once on page load so we stop calling /api/profile before auth.
+if (!window.__chipProfileBoot) {
+  window.__chipProfileBoot = true;
+  document.addEventListener("DOMContentLoaded", async () => {
+    try { wireLoginAndProfileHandlers(); } catch {}
+    await gate({ applyLayout: true });
+  });
 }
