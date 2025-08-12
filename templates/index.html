@@ -6,12 +6,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" href="data:," />
 
-  <!-- Styles -->
-  <link rel="stylesheet" href="{{ url_for('static', filename='user-experience/css/style.css') }}?v=20250812-ui" />
+  <!-- External CSS (cache-bust the version to ensure the latest file loads) -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='user-experience/css/style.css') }}?v=20250812-ui-guard1" />
 
-  <!-- Scripts (viseme first, then main) -->
+  <!-- Guard CSS: ensures the new layout shows even if the external CSS is cached -->
+  <style id="layout-guard">
+    .layout{display:flex;gap:16px;padding:16px;align-items:flex-start}
+    .chat-col{width:420px;max-width:48vw;display:flex;flex-direction:column;gap:10px}
+    .status-banner{padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);font-weight:700}
+    .chat-window{border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:10px;min-height:220px;background:rgba(255,255,255,.02)}
+    .admin-log{border:1px dashed rgba(255,255,255,.25);border-radius:10px;padding:8px;max-height:28vh;overflow:auto;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .hidden{display:none!important}
+    @media(max-width:980px){.layout{flex-direction:column}.chat-col{width:100%;max-width:none}}
+  </style>
+
+  <!-- Scripts -->
   <script defer src="{{ url_for('static', filename='chip/chip-viseme.js') }}?v=20250810-chat"></script>
-  <script type="module" src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250810-chat"></script>
+  <script type="module" src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=20250812-main-excl"></script>
 </head>
 
 <body>
@@ -51,23 +62,22 @@
         </section>
 
         <section id="chatTTS" class="chat-window hidden" aria-label="Chat (TTS)">
-          <div style="opacity:.7; font-size:14px; margin-bottom:8px;">Live voice chat (press Start → select “Chat Live (TTS)”)</div>
+          <div style="opacity:.7;font-size:14px;margin-bottom:8px;">Live voice chat (press Start → select “Chat Live (TTS)”)</div>
           <div id="ttsOnceControls" class="stack">
             <textarea id="ttsPrompt" rows="2" placeholder="Type something for Chip to say…"></textarea>
             <button id="ttsOnceBtn" class="btn">Speak once</button>
           </div>
-          <audio id="ttsPlayer" controls style="margin-top:8px; width:100%"></audio>
+          <audio id="ttsPlayer" controls style="margin-top:8px;width:100%"></audio>
         </section>
 
         <!-- Bottom: Administrator call log -->
         <div id="adminLog" class="admin-log" aria-label="Administrator Call Log"></div>
       </div>
 
-      <!-- RIGHT COLUMN: existing Chip stage preserved -->
-      <div class="chip-box-right" style="flex:1; min-width:320px;">
+      <!-- RIGHT COLUMN: Chip stage -->
+      <div class="chip-box-right" style="flex:1;min-width:320px;">
         <div id="chipBox" class="chip-box">
           <img id="chipImage" src="{{ url_for('static', filename='chip/chip.png') }}" alt="Chip" />
-          <!-- Optional mouth overlay for visemes -->
           <img id="chipMouthImg" src="{{ url_for('static', filename='chip/mouth/neutral.png') }}" alt="" />
         </div>
       </div>
@@ -92,6 +102,21 @@
     </div>
   </footer>
 
-  <!-- No inline behavior: exclusivity + admin log now live in main.js -->
+  <!-- Optional: once confirmed working, remove this guard via JS to avoid duplicate styles -->
+  <script>
+    // If the external CSS loaded and has .layout with display:flex, remove the guard to avoid duplicates
+    (function(){
+      const test = document.createElement('div');
+      test.className = 'layout';
+      document.body.appendChild(test);
+      const flex = getComputedStyle(test).display;
+      document.body.removeChild(test);
+      if (flex === 'flex') {
+        const guard = document.getElementById('layout-guard');
+        guard && guard.remove();
+      }
+    })();
+  </script>
+
 </body>
 </html>
