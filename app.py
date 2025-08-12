@@ -880,6 +880,70 @@ def accounts_search():
     row = find_account_row(q)
     return jsonify({"query": q, "result": row})
 
+# ---------- NEW: Accounts list/search API (paginated) ----------
+@app.get("/api/accounts")
+def api_accounts():
+    """
+    List accounts with optional fuzzy search.
+    Query params:
+      - q: optional search term (ILIKE + trigram)
+      - limit: max rows (default 50; cap 500)
+    """
+    try:
+        q = (request.args.get("q", "") or "").strip()
+        limit = int(request.args.get("limit", 50))
+        limit = 500 if limit > 500 else (1 if limit < 1 else limit)
+
+        ensure_accounts_table()
+        with get_connection() as conn, conn.cursor(cursor_factory=extras.RealDictCursor) as cur:
+            if q:
+                # Prefer exact, then partial, then trigram-ranked
+                cur.execute("""
+                    WITH exact AS (
+                        SELECT id, account_name, owner, owner_email, manager, pam, region,
+                               1.0 AS score
+                        FROM public.accounts
+                        WHERE lower(account_name) = lower(%s)
+                    ),
+                    partial AS (
+                        SELECT id, account_name, owner, owner_email, manager, pam, region,
+                               0.9 AS score
+                        FROM public.accounts
+                        WHERE account_name ILIKE %s
+                        ORDER BY updated_at DESC
+                        LIMIT %s
+                    ),
+                    trigram AS (
+                        SELECT id, account_name, owner, owner_email, manager, pam, region,
+                               similarity(account_name, %s) AS score
+                        FROM public.accounts
+                        WHERE account_name % %s
+                        ORDER BY similarity(account_name, %s) DESC
+                        LIMIT %s
+                    )
+                    SELECT * FROM exact
+                    UNION ALL
+                    SELECT * FROM partial
+                    UNION ALL
+                    SELECT * FROM trigram
+                    ORDER BY score DESC, account_name ASC
+                    LIMIT %s;
+                """, (q, f"%{q}%", limit, q, q, q, limit, limit))
+                rows = cur.fetchall()
+            else:
+                cur.execute("""
+                    SELECT id, account_name, owner, owner_email, manager, pam, region
+                    FROM public.accounts
+                    ORDER BY updated_at DESC
+                    LIMIT %s;
+                """, (limit,))
+                rows = cur.fetchall()
+
+        return jsonify({"ok": True, "results": rows, "count": len(rows)})
+    except Exception as e:
+        app.logger.exception("/api/accounts failed")
+        return jsonify({"ok": False, "error": "accounts query failed"}), 500
+
 # -----------------------------------------------------------------------------
 # Register blueprints for chat & voice
 # -----------------------------------------------------------------------------
@@ -1039,6 +1103,119 @@ def chat_summary():
         return jsonify({"reply_text": text, "reply": text})
     except Exception:
         return jsonify({"reply_text": "", "reply": ""})
+
+# -----------------------------------------------------------------------------
+# ✉️ Email helpers & endpoints
+# -----------------------------------------------------------------------------
+SENDGRID_KEY = os.getenv("SENDGRID_API_KEY", "")
+FROM_EMAIL = os.getenv("FROM_EMAIL", "chip@your-domain.com")
+
+def send_email_via_sendgrid(to_email: str, subject: str, html: str, plain: str = None):
+    """
+    Minimal SendGrid sender. Requires SENDGRID_API_KEY and FROM_EMAIL.
+    """
+    if not SENDGRID_KEY:
+        raise RuntimeError("SENDGRID_API_KEY not configured")
+    payload = {
+        "personalizations": [{"to": [{"email": to_email}]}],
+        "from": {"email": FROM_EMAIL, "name": "Chip"},
+        "subject": subject,
+        "content": [
+            {"type": "text/plain", "value": plain or "See HTML content."},
+            {"type": "text/html", "value": html}
+        ]
+    }
+    r = httpx.post(
+        "https://api.sendgrid.com/v3/mail/send",
+        json=payload,
+        headers={"Authorization": f"Bearer {SENDGRID_KEY}"},
+        timeout=15
+    )
+    r.raise_for_status()
+
+@app.post("/email/account-team")
+def email_account_team():
+    """
+    Body: { "company": "Acme Corp" }
+    Uses session email as the recipient.
+    """
+    email = (session.get("user_id") or "").strip().lower()
+    if not email:
+        return jsonify({"error":"unauthenticated"}), 401
+
+    data = request.get_json(force=True) or {}
+    company = (data.get("company") or "").strip()
+    if not company:
+        return jsonify({"error":"missing company"}), 400
+
+    row = find_account_row(company)
+    if not row:
+        return jsonify({"error":"no account found"}), 404
+
+    subject = f"Account team for {row['account_name']}"
+    html = f"""
+    <h3>Account team for {row['account_name']}</h3>
+    <ul>
+      <li><strong>Owner:</strong> {row.get('owner') or '—'} ({row.get('owner_email') or '—'})</li>
+      <li><strong>Manager:</strong> {row.get('manager') or '—'}</li>
+      <li><strong>PAM:</strong> {row.get('pam') or '—'}</li>
+      <li><strong>Region:</strong> {row.get('region') or '—'}</li>
+    </ul>
+    """
+    plain = (
+        f"Account team for {row['account_name']}\n"
+        f"Owner: {row.get('owner') or '—'} ({row.get('owner_email') or '—'})\n"
+        f"Manager: {row.get('manager') or '—'}\n"
+        f"PAM: {row.get('pam') or '—'}\n"
+        f"Region: {row.get('region') or '—'}\n"
+    )
+    send_email_via_sendgrid(email, subject, html, plain)
+    return jsonify({"ok": True})
+
+@app.post("/email/repo-link")
+def email_repo_link():
+    """
+    Body: { "doc_id": "flashblade-2025-q2-deck" }
+    Emails a viewable link using /repo/view/<doc_id>.
+    """
+    email = (session.get("user_id") or "").strip().lower()
+    if not email:
+        return jsonify({"error":"unauthenticated"}), 401
+
+    data = request.get_json(force=True) or {}
+    doc_id = (data.get("doc_id") or "").strip()
+    if not doc_id:
+        return jsonify({"error":"missing doc_id"}), 400
+
+    row = repo_get(doc_id)
+    if not row:
+        return jsonify({"error":"not found"}), 404
+
+    public_view = request.host_url.rstrip("/") + f"/repo/view/{doc_id}"
+    subject = f"{row['title']} – link from Chip"
+    html = f"""
+    <p>Here you go:</p>
+    <p><a href="{public_view}">{row['title']}</a></p>
+    <p>Filename: {row['filename']}</p>
+    """
+    plain = f"Here you go:\n{row['title']}\n{public_view}\nFilename: {row['filename']}"
+    send_email_via_sendgrid(email, subject, html, plain)
+    return jsonify({"ok": True})
+
+@app.post("/email/last")
+def email_last():
+    """
+    No body required. Emails the last assistant reply text cached by /ws/chat + /chat/summary path.
+    """
+    email = (session.get("user_id") or "").strip().lower()
+    if not email:
+        return jsonify({"error":"unauthenticated"}), 401
+    with _LAST_FINAL_LOCK:
+        text = _LAST_FINAL.get("text") or ""
+    if not text:
+        return jsonify({"error": "nothing to send"}), 400
+    send_email_via_sendgrid(email, "Notes from Chip", f"<pre>{text}</pre>", text)
+    return jsonify({"ok": True})
 
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
