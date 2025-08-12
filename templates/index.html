@@ -16,7 +16,7 @@
 
 <body>
 
-  <!-- Top bar (unchanged visual class names preserved) -->
+  <!-- Top bar -->
   <header id="topbar" class="topbar">
     <div class="brand">Ask Chip</div>
 
@@ -74,11 +74,11 @@
     </div>
   </div>
 
-  <!-- Toolbar (unchanged) -->
+  <!-- Toolbar -->
   <footer id="askChipToolbar">
     <div class="toolbar-left">
-      <button id="startBtn" class="btn btn--accent">Start</button>
-      <button id="stopBtn" class="btn">Stop</button>
+      <button id="btnStart" class="btn btn--accent">Start</button>
+      <button id="btnDisconnect" class="btn">Stop</button>
       <div class="dropdown">
         <button id="modeBtn" class="btn">Mode</button>
         <div class="dropdown-content">
@@ -92,83 +92,6 @@
     </div>
   </footer>
 
-  <!-- Inline module: exclusivity + admin logging (non-invasive) -->
-  <script type="module">
-  (() => {
-    const $ = (id) => document.getElementById(id);
-
-    function logAdmin(event, detail = "") {
-      const wrap = $("adminLog");
-      if (!wrap) return;
-      const row = document.createElement("div");
-      row.className = "admin-log-row";
-      const ts = new Date().toLocaleTimeString();
-      row.textContent = `[${ts}] ${event}${detail ? " — " + detail : ""}`;
-      wrap.insertBefore(row, wrap.firstChild || null);
-    }
-    window.AskChipExtras = window.AskChipExtras || {};
-    window.AskChipExtras.logAdmin = logAdmin;
-
-    // Ensure hidden CSS safety
-    if (!document.getElementById("hidden-style")) {
-      const style = document.createElement("style");
-      style.id = "hidden-style";
-      style.textContent = `.hidden{display:none !important}`;
-      document.head.appendChild(style);
-    }
-
-    const textPanel = $("chatText");
-    const ttsPanel  = $("chatTTS");
-    const menu      = $("chatMenu");
-    const menuBtn   = $("chatMenuBtn");
-    const textItem  = menu?.querySelector('[data-lane="text"]');
-    const liveItem  = menu?.querySelector('[data-lane="live"]');
-
-    function show(el){ el && el.classList.remove("hidden"); }
-    function hide(el){ el && el.classList.add("hidden"); }
-    function visible(el){ return el && !el.classList.contains("hidden"); }
-
-    function openOnly(which){
-      if (which === "text") {
-        show(textPanel); hide(ttsPanel);
-        logAdmin("ui", "opened text, closed tts");
-        textPanel?.querySelector("input,textarea")?.focus?.();
-      } else if (which === "tts") {
-        show(ttsPanel); hide(textPanel);
-        logAdmin("ui", "opened tts, closed text");
-      }
-    }
-
-    function toggle(which){
-      if (which === "text") {
-        if (visible(textPanel)) { hide(textPanel); logAdmin("ui", "closed text"); }
-        else openOnly("text");
-      } else {
-        if (visible(ttsPanel)) { hide(ttsPanel); logAdmin("ui", "closed tts"); }
-        else openOnly("tts");
-      }
-    }
-
-    // Wire menu toggles (keeps your existing handlers)
-    textItem && textItem.addEventListener("click", () => toggle("text"));
-    liveItem && liveItem.addEventListener("click", () => toggle("tts"));
-
-    // Show/hide menu (preserving your CSS class usage)
-    menuBtn && menuBtn.addEventListener("click", () => {
-      if (!menu) return;
-      const isOpen = menu.style.display !== "none";
-      menu.style.display = isOpen ? "none" : "block";
-    });
-
-    // Log errors so “sideways” is visible
-    window.addEventListener("error", (e) => logAdmin("error", e.message || "unknown"));
-    window.addEventListener("unhandledrejection", (e) => logAdmin("promise", (e.reason && e.reason.message) || String(e.reason)));
-
-    // Default banner text if empty
-    const sb = $("statusBanner");
-    if (sb && !sb.textContent.trim()) sb.textContent = "Disconnected. Press Start to begin a new session.";
-  })();
-  </script>
-
+  <!-- No inline behavior: exclusivity + admin log now live in main.js -->
 </body>
 </html>
