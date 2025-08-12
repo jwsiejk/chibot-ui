@@ -52,6 +52,24 @@ def _profile_complete(user: dict | None) -> bool:
     region = (user.get("region") or "").strip()
     return all([name, role, region])
 
+def _normalize_user(user: dict | None) -> dict:
+    """Normalize legacy fields and default values.
+    - Some older profiles stored the title under 'title' instead of 'role'.
+    - Default region to 'NA' if missing/empty.
+    - Always return a dictionary.
+    """
+    if not user or not isinstance(user, dict):
+        return {}
+    # Migrate legacy 'title' -> 'role'
+    if not (user.get("role") or "").strip():
+        legacy_title = (user.get("title") or "").strip()
+        if legacy_title:
+            user["role"] = legacy_title
+    # Default region
+    if not (user.get("region") or "").strip():
+        user["region"] = "NA"
+    return user
+
 # -----------------------------------------------------------------------------
 # DB helpers
 # -----------------------------------------------------------------------------
@@ -170,7 +188,7 @@ def login_basic():
         session["region"] = user.get("region", "NA")
 
         return jsonify({
-            "first_time": not _profile_complete(user),
+            "first_time": not _profile_complete(_normalize_user(dict(user))),
             "name": user.get("name", ""),
             "title": user.get("role", "")
         })
@@ -198,7 +216,7 @@ def login():
         session["region"] = user.get("region", "NA")
 
         return jsonify({
-            "first_time": not _profile_complete(user),
+            "first_time": not _profile_complete(_normalize_user(dict(user))),
             "name": user.get("name", ""),
             "title": user.get("role", "")
         })
@@ -219,25 +237,26 @@ def logout():
 
 @app.route("/auth/status", methods=["GET"])
 def auth_status():
-    """Let the frontend decide whether to show login or profile."""
+    """Let the frontend decide whether to show login or profile (normalized)."""
     try:
         user_id = session.get("user_id")
         if not user_id:
-            return jsonify({"authenticated": False})
-        user = get_user(user_id) or {}
+            return jsonify({ "authenticated": False })
+        raw = get_user(user_id) or {}
+        user = _normalize_user(dict(raw))  # copy & normalize
         complete = _profile_complete(user)
         return jsonify({
             "authenticated": True,
             "user_id": user_id,
-            "name": (user.get("name") if user else user_id) or user_id,
-            "role": (user.get("role") if user else "engineer"),
-            "region": (user.get("region") if user else "NA"),
-            "first_time": not complete,          # legacy flag some UIs use
-            "profileComplete": complete          # <-- what your frontend checks
+            "name": (user.get("name") or user_id),
+            "role": (user.get("role") or "engineer"),
+            "region": (user.get("region") or "NA"),
+            "first_time": not complete,
+            "profileComplete": complete
         })
     except Exception as e:
         print("🔥 ERROR IN /auth/status:", str(e))
-        return jsonify({"authenticated": False, "error": "status check failed"}), 500
+        return jsonify({ "authenticated": False, "error": "status check failed" }), 500
 
 # ---------- Profile ----------
 @app.route("/profile", methods=["GET"])
@@ -247,11 +266,12 @@ def get_profile_route():
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"error": "Unauthorized"}), 401
-        user = get_user(user_id) or {}
+        raw = get_user(user_id) or {}
+        user = _normalize_user(dict(raw))
         complete = _profile_complete(user)
         return jsonify({
             "name": user.get("name", ""),
-            "title": user.get("role", ""),
+            "title": user.get("role", "") or user.get("title", ""),
             "region": user.get("region", ""),
             "email": user_id,
             "profile_complete": complete
@@ -273,21 +293,31 @@ def save_profile_route():
         title = (data.get("title") or "").strip() or "engineer"
         region = (data.get("region") or "").strip() or "NA"
 
-        existing = get_user(user_id) or {}
+        existing = _normalize_user(get_user(user_id) or {})
         messages = existing.get("messages", [])
 
+        # Normalize and overwrite
         profile = {
             "name": name,
-            "role": title,
+            "role": title,   # canonical storage key
             "region": region,
             "messages": messages
         }
 
+        # Persist
         save_user(user_id, profile)
+        # Keep session synchronized
         session["name"] = name
         session["role"] = title
         session["region"] = region
-        return jsonify({"ok": True, "profile_complete": _profile_complete(profile)})
+
+        return jsonify({
+            "ok": True,
+            "profile_complete": _profile_complete(profile),
+            "profile": {
+                "name": name, "title": title, "region": region, "email": user_id
+            }
+        })
 
     except Exception as e:
         print("🔥 Profile save error:", str(e))
@@ -482,11 +512,10 @@ def healthz_db():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
-# ---------- ES module alias routes (fixes 404s when main.js imports from /<dir>/*.js) ----------
+# ---------- ES module alias routes (serve JS modules from /static/js/* when imported from root) ----------
 def _serve_js_alias(subdir: str, filename: str):
     return send_from_directory(os.path.join("static", "js", subdir), filename, cache_timeout=0)
 
-# IMPORTANT: only add explicit paths to avoid clashing with existing /auth/* API routes
 @app.route("/auth/profile.js")
 def _alias_auth_profile_js():
     return _serve_js_alias("auth", "profile.js")
