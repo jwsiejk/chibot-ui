@@ -1,10 +1,15 @@
 print("✅ Chip app starting...")
 
+# --- Patch eventlet BEFORE importing anything else that uses sockets/threads ---
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import json
 import traceback
 from uuid import uuid4
 from datetime import datetime
+
 from flask import (
     Flask, request, jsonify, render_template, redirect, session,
     url_for, Response, stream_with_context, g, send_from_directory
@@ -15,10 +20,12 @@ from werkzeug.utils import secure_filename
 from elevenlabs.client import ElevenLabs
 from memory import get_user, save_user, log_conversation, get_connection
 
-# ---- OpenAI (standardized) ----
+# Use the modern OpenAI client
 from openai import OpenAI
-oai = OpenAI()
 
+# -----------------------------------------------------------------------------
+# App setup
+# -----------------------------------------------------------------------------
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "supersecret")
 app.config["SESSION_TYPE"] = "filesystem"
@@ -27,23 +34,24 @@ Session(app)
 voice_id = os.getenv("CHIP_VOICE_ID")
 eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 
-# Ensure audio output dir exists
+# Ensure audio output dir exists (Render ephemeral FS is fine for runtime assets)
 os.makedirs("static/audio", exist_ok=True)
 
-# 🔧 Auto-create conversations table if missing
+# Single, shared OpenAI client
+oai = OpenAI()
+
+# -----------------------------------------------------------------------------
+# DB helpers
+# -----------------------------------------------------------------------------
 def init_conversation_table():
-    import os
     import psycopg2
-    from memory import get_connection
 
     if 'DATABASE_URL' not in os.environ:
-        raise ValueError("DATABASE_URL environment variable is not set. Use the internal connection string for Render-managed databases.")
+        raise ValueError("DATABASE_URL is not set.")
 
     try:
-        # Attempt to get a connection from memory module or fallback to psycopg2
         conn = get_connection() or psycopg2.connect(os.environ['DATABASE_URL'])
         conn.autocommit = True
-
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS conversations (
@@ -66,7 +74,6 @@ def init_conversation_table():
             print("✅ Database connection closed.")
 
 def ensure_db_ready():
-    # Ping DB without mutating schema. Alembic handles migrations.
     try:
         conn = get_connection()
         with conn:
@@ -77,6 +84,9 @@ def ensure_db_ready():
         print("🔥 DB connectivity check failed:", e)
         raise
 
+# -----------------------------------------------------------------------------
+# Core AI
+# -----------------------------------------------------------------------------
 def _build_system_prompt(name: str) -> dict:
     return {
         "role": "system",
@@ -91,7 +101,7 @@ def _build_system_prompt(name: str) -> dict:
     }
 
 def generate_chip_response(user_id, name, question, role, region):
-    # Load existing profile
+    # Load existing profile/messages
     existing = get_user(user_id) or {}
     messages = existing.get("messages", [])
 
@@ -99,18 +109,16 @@ def generate_chip_response(user_id, name, question, role, region):
     messages.append({"role": "user", "content": question})
     messages = messages[-6:]
 
-    # Compose system + history
+    # LLM call
     system_prompt = _build_system_prompt(name)
-
     response = oai.chat.completions.create(
         model="gpt-4o",
         messages=[system_prompt] + messages,
         max_tokens=80,
     )
-
     answer = response.choices[0].message.content
 
-    # Append assistant turn and persist full profile consistently
+    # Persist profile with updated history (keep name/role/region in sync)
     messages.append({"role": "assistant", "content": answer})
     profile = {
         "name": existing.get("name", name),
@@ -120,10 +128,13 @@ def generate_chip_response(user_id, name, question, role, region):
     }
     save_user(user_id, profile)
 
-    # Also log conversation
+    # Log Q/A
     log_conversation(user_id, question, answer)
     return answer
 
+# -----------------------------------------------------------------------------
+# Routes
+# -----------------------------------------------------------------------------
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -131,8 +142,8 @@ def index():
 @app.route("/login-basic", methods=["POST"])
 def login_basic():
     try:
-        conn = get_connection()
-        data = request.get_json()
+        _ = get_connection()  # ping
+        data = request.get_json() or {}
         login_name = (data.get("login") or "").strip().lower()
 
         if not (login_name.endswith("@purestorage.com") or login_name.endswith("@trace3.com")):
@@ -161,31 +172,29 @@ def login_basic():
         return jsonify({"error": "Login failed"}), 500
 
 @app.route("/profile", methods=["POST"])
-def save_profile():
+def save_profile_route():
     try:
-        conn = get_connection()
+        _ = get_connection()
         user_id = session.get("user_id")
         data = request.get_json() or {}
-        name = data.get("name", "").strip()
-        title = data.get("title", "").strip()
-        region = data.get("region", "NA")
+        name = (data.get("name") or "").strip() or user_id
+        title = (data.get("title") or "").strip() or "engineer"
+        region = (data.get("region") or "").strip() or "NA"
 
-        # Safely get existing messages from profile or use default
         existing = get_user(user_id) or {}
         messages = existing.get("messages", [])
 
-        # Store full profile object
         profile = {
-            "name": name or existing.get("name") or user_id,
-            "role": title or existing.get("role", "engineer"),
-            "region": region or existing.get("region", "NA"),
+            "name": name,
+            "role": title,
+            "region": region,
             "messages": messages
         }
 
         save_user(user_id, profile)
-        session["name"] = profile["name"]
-        session["role"] = profile["role"]
-        session["region"] = profile["region"]
+        session["name"] = name
+        session["role"] = title
+        session["region"] = region
         return jsonify({"success": True})
 
     except Exception as e:
@@ -195,7 +204,7 @@ def save_profile():
 @app.route("/ask", methods=["POST"])
 def ask():
     try:
-        conn = get_connection()
+        _ = get_connection()
         user_id = session.get("user_id") or request.remote_addr or str(uuid4())
 
         if request.is_json:
@@ -243,7 +252,7 @@ def ask():
 def ask_chip():
     def generate_stream():
         try:
-            conn = get_connection()
+            _ = get_connection()
             user_id = session.get("user_id") or request.remote_addr or str(uuid4())
             name = session.get("name", "User")
             role = session.get("role", "engineer")
@@ -291,14 +300,10 @@ def ask_chip():
 
     return Response(stream_with_context(generate_stream()), mimetype="multipart/x-mixed-replace; boundary=frame")
 
-# <!-- PATCH: Persistent Memory + Dynamic Greeting | 2025-08-07 -->
-
-# <!-- PATCH: Conversation History Retrieval | 2025-08-07 -->
-
 @app.route("/history", methods=["POST"])
 def retrieve_history():
     try:
-        conn = get_connection()
+        _ = get_connection()
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"error": "Unauthorized"}), 401
@@ -340,7 +345,7 @@ If not, say you couldn't find it.
 @app.route("/greet", methods=["POST"])
 def greet():
     try:
-        conn = get_connection()
+        _ = get_connection()
         user_id = session.get("user_id")
         user = get_user(user_id) if user_id else None
         name = user.get("name", "there") if user else "there"
@@ -376,10 +381,7 @@ def greet():
 
 @app.route("/auth/status", methods=["GET"])
 def auth_status():
-    """
-    Lightweight session check so the frontend can decide whether to show the login prompt.
-    Returns authenticated flag and minimal profile if available.
-    """
+    """Lightweight session check so the frontend can decide whether to show the login prompt."""
     try:
         user_id = session.get("user_id")
         if not user_id:
@@ -414,36 +416,3 @@ def healthz_db():
         return jsonify({"ok": True}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
-
-@app.route("/login", methods=["POST"])
-def login():
-    # Accepts JSON {"email": "..."} and sets session. Mirrors /login-basic.
-    try:
-        conn = get_connection()
-        data = request.get_json() or {}
-        email = (data.get("email") or "").strip().lower()
-
-        if not email or not (email.endswith("@purestorage.com") or email.endswith("@trace3.com")):
-            return jsonify({"error": "Unauthorized domain"}), 403
-
-        session["user_id"] = email
-
-        user = get_user(email)
-        if user:
-            session["name"] = user.get("name", email)
-            session["role"] = user.get("role", "engineer")
-            session["region"] = user.get("region", "NA")
-            return jsonify({
-                "first_time": False,
-                "name": user.get("name", ""),
-                "title": user.get("role", "")
-            })
-        else:
-            session["name"] = email
-            session["role"] = "engineer"
-            session["region"] = "NA"
-            return jsonify({"first_time": True})
-
-    except Exception as e:
-        print("🔥 /login error:", str(e))
-        return jsonify({"error": "Login failed"}), 500
