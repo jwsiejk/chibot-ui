@@ -232,8 +232,8 @@ def auth_status():
             "name": (user.get("name") if user else user_id) or user_id,
             "role": (user.get("role") if user else "engineer"),
             "region": (user.get("region") if user else "NA"),
-            "first_time": not complete,
-            "profile_complete": complete
+            "first_time": not complete,          # legacy flag some UIs use
+            "profileComplete": complete          # <-- what your frontend checks
         })
     except Exception as e:
         print("🔥 ERROR IN /auth/status:", str(e))
@@ -287,7 +287,7 @@ def save_profile_route():
         session["name"] = name
         session["role"] = title
         session["region"] = region
-        return jsonify({"success": True, "profile_complete": _profile_complete(profile)})
+        return jsonify({"ok": True, "profile_complete": _profile_complete(profile)})
 
     except Exception as e:
         print("🔥 Profile save error:", str(e))
