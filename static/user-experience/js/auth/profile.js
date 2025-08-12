@@ -1,4 +1,4 @@
-// auth/profile.js — robust gating + handlers + layout
+// auth/profile.js — robust gating + handlers + layout (with exported loadProfileIntoForm)
 import { $, show, hide, setToolbarHeightVar, _getQueryParam } from "../core/dom.js";
 import { _chipSetAdmin, _chipGuide, _chipSetState, _chipStep } from "../core/state.js";
 import { j } from "../core/api.js";
@@ -48,18 +48,44 @@ export function applyAuthedLayout() {
 
 /* ---------------- Data helpers ---------------- */
 
-async function fetchProfilePrefill() {
-  // Only call after we know we're authenticated.
-  const r = await fetch("/api/profile", { credentials: "include" });
-  if (r.status === 401) return null; // let the caller decide to re-gate
-  if (!r.ok) return null;
-  return await r.json();
+async function fetchMe() {
+  try {
+    const r = await fetch("/api/me", { credentials: "include" });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
 }
 
-async function loadProfileIntoForm() {
+async function fetchProfilePrefill() {
+  // Only call after we know we're authenticated.
+  try {
+    const r = await fetch("/api/profile", { credentials: "include" });
+    if (!r.ok) return null; // includes 401
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Exported: safe to call anytime; no-ops if unauthenticated. */
+export async function loadProfileIntoForm() {
   const profileForm = $("profileForm"); if (!profileForm) return;
+
   const getI = (n) => profileForm.querySelector(`input[name="${n}"]`);
   const nameI = getI("name"), titleI = getI("title"), emailI = getI("email");
+
+  const me = await fetchMe();
+  if (!me || !me.authenticated) {
+    // Not logged in yet — avoid calling /api/profile (prevents 401s).
+    try {
+      if (nameI)  nameI.value  = localStorage.getItem("profileName")  || "";
+      if (titleI) titleI.value = localStorage.getItem("profileTitle") || "";
+      if (emailI) emailI.value = localStorage.getItem("profileEmail") || "";
+    } catch {}
+    return;
+  }
 
   const js = await fetchProfilePrefill();
   if (js) {
@@ -70,7 +96,7 @@ async function loadProfileIntoForm() {
     return;
   }
 
-  // Fallback to localStorage
+  // Last-ditch localStorage
   try {
     if (nameI)  nameI.value  = localStorage.getItem("profileName")  || "";
     if (titleI) titleI.value = localStorage.getItem("profileTitle") || "";
@@ -84,12 +110,7 @@ export async function enforceProfileCompleteness({ applyLayout = true } = {}) {
   const appEl = $("app");
   const loginModal = $("loginModal");
 
-  // Always check /api/me first. Do NOT call /api/profile before this.
-  let me;
-  try {
-    const res = await fetch("/api/me", { credentials: "include" });
-    me = res.ok ? await res.json() : null;
-  } catch { me = null; }
+  const me = await fetchMe();
 
   if (!me || !me.authenticated) {
     hide(appEl);
@@ -97,7 +118,7 @@ export async function enforceProfileCompleteness({ applyLayout = true } = {}) {
     return { ok: false, reason: "unauthenticated" };
   }
 
-  // Frontend expects profileComplete (or first_time === false)
+  // Prefer explicit profileComplete; fall back to inverse of first_time.
   const profileComplete = (me.profileComplete !== undefined)
     ? !!me.profileComplete
     : (me.first_time === false);
@@ -200,7 +221,6 @@ export function wireLoginAndProfileHandlers() {
 
 /* ---------------- Bootstrap on load ---------------- */
 
-// Run once on page load so we stop calling /api/profile before auth.
 if (!window.__chipProfileBoot) {
   window.__chipProfileBoot = true;
   document.addEventListener("DOMContentLoaded", async () => {
