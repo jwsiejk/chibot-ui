@@ -1,10 +1,10 @@
-# chat_routes.py — blueprint for chat (with "email me ..." intents)
+# chat_routes.py — blueprint for chat (with "email me ..." + account intents)
 import re
 import json
 import requests
 from flask import Blueprint, request, jsonify, session
 
-# Optional: write chat history to DB so the email actions are in the log, too.
+# Optional: write chat history to DB so the actions are in the log, too.
 try:
     from memory import log_conversation
 except Exception:
@@ -30,7 +30,6 @@ EMAIL_INTENTS = {
     ),
 }
 
-
 def parse_email_intent(text: str):
     t = (text or "").strip()
     if not t:
@@ -44,6 +43,97 @@ def parse_email_intent(text: str):
     m = EMAIL_INTENTS["email_last"].search(t)
     if m:
         return {"type": "email_last"}
+    return None
+
+
+# ----------------------------
+# Account team / contact intents
+# ----------------------------
+ACCOUNT_INTENTS = {
+    "team_for": re.compile(
+        r"\b(?:who\s+is\s+)?(?:the\s+)?account\s+team\s+(?:for|at)\s+(?P<company>.+?)\s*\?*$",
+        re.IGNORECASE),
+    "contact_for": re.compile(
+        r"\b(?:do\s+you\s+have\s+)?(?:the\s+)?contact\s+(?:info|information)\s+(?:for|for\s+the|at)\s+(?P<company>.+?)\s*\?*$",
+        re.IGNORECASE),
+    "contact_followup": re.compile(
+        r"\b(?:do\s+you\s+have\s+their|what(?:'s| is)\s+their)\s+contact\s+(?:info|information|email)\b",
+        re.IGNORECASE),
+}
+
+def _human_join(parts):
+    parts = [p for p in parts if p]
+    if not parts: return ""
+    if len(parts) == 1: return parts[0]
+    return ", ".join(parts[:-1]) + f", and {parts[-1]}"
+
+def _role_piece(label, name, email=None):
+    if not name and not email:
+        return None
+    if name and email:
+        return f"{label} is {name} ({email})"
+    if name:
+        return f"{label} is {name}"
+    if email:
+        return f"{label}: {email}"
+    return None
+
+def compose_team_line(row: dict) -> str:
+    parts = []
+    parts.append(_role_piece("Pure AE", row.get("owner"), row.get("owner_email")))
+    parts.append(_role_piece("Manager", row.get("manager")))
+    parts.append(_role_piece("PAM", row.get("pam")))
+    # Optional RSD fields; only appear if you’ve added them to the table
+    parts.append(_role_piece("RSD", row.get("rsd"), row.get("rsd_email")))
+    txt = _human_join(parts)
+    if row.get("region"):
+        txt = (txt + f". Region: {row['region']}").strip()
+    return txt
+
+def primary_contact_email(row: dict) -> str | None:
+    # Prefer AE email; fall back to RSD email if present; else None
+    return row.get("owner_email") or row.get("rsd_email")
+
+def handle_account_intents(user_text: str, base_url: str) -> str | None:
+    # Try explicit company forms first
+    m = ACCOUNT_INTENTS["team_for"].search(user_text) or ACCOUNT_INTENTS["contact_for"].search(user_text)
+    if m:
+        company = m.group("company").strip(" .?!")
+        r = requests.get(f"{base_url}/accounts/search", params={"q": company}, timeout=15)
+        js = r.json() if r.ok else {}
+        row = (js.get("result") or None)
+        if not row:
+            return f"I couldn’t find “{company}”. Want me to try a broader match?"
+
+        # cache last account for follow-ups
+        session["last_account_name"] = row.get("account_name")
+
+        if ACCOUNT_INTENTS["team_for"].search(user_text):
+            team = compose_team_line(row)
+            opener = "Let me get that for you. " if team else "Here’s what I have. "
+            tail = " Want me to email this to you?" if team else ""
+            return (opener + (team or "I don’t have team details on file.") + tail).strip()
+
+        if ACCOUNT_INTENTS["contact_for"].search(user_text):
+            email = primary_contact_email(row)
+            if email:
+                return f"I have the Pure AE’s email for {row['account_name']}: {email}. Want the rest by email?"
+            return f"I don’t have contacts on file for {row['account_name']}. Want me to email the owner to introduce you?"
+
+    # Follow‑up: “do you have their contact info?”
+    if ACCOUNT_INTENTS["contact_followup"].search(user_text):
+        last_acct = session.get("last_account_name")
+        if not last_acct:
+            return "For which account? If you say the name, I’ll pull the contacts."
+        r = requests.get(f"{base_url}/accounts/search", params={"q": last_acct}, timeout=15)
+        js = r.json() if r.ok else {}
+        row = (js.get("result") or None)
+        if not row:
+            return "I lost the last account. Say the name again and I’ll grab it."
+        email = primary_contact_email(row)
+        if email:
+            return f"The Pure AE’s email is {email}. Want me to email the full team list to you?"
+        return "I don’t have contacts on file. Want me to send an intro email to the owner?"
     return None
 
 
@@ -69,13 +159,15 @@ def create_chat_blueprint(deps: dict):
         if not user_text:
             return jsonify({"reply_text": "Say that again?", "reply": "Say that again?"})
 
-        # Ensure user is known (for email actions)
+        # Session context for personalization + email target
         user_id = (session.get("user_id") or "").strip().lower()
         name = session.get("name") or (user_id or "there")
         role = session.get("role") or "engineer"
         region = session.get("region") or "NA"
 
-        # --------- Fast-path: handle "email me ..." intents BEFORE LLM ----------
+        base = request.host_url.rstrip("/")
+
+        # --------- Fast-path A: "email me ..." intents ----------
         intent = parse_email_intent(user_text)
         if intent:
             if not user_id:
@@ -83,68 +175,35 @@ def create_chat_blueprint(deps: dict):
                 _safe_log(user_id, user_text, reply)
                 return jsonify({"reply_text": reply, "reply": reply})
 
-            base = request.host_url.rstrip("/")
-
             try:
                 if intent["type"] == "acct_team":
                     company = intent["company"]
-                    # We could normalize the company via /accounts/search if desired, but it's optional.
-                    r = requests.post(
-                        f"{base}/email/account-team",
-                        json={"company": company},
-                        timeout=20,
-                    )
-                    if r.ok:
-                        reply = f"I’ve emailed you the team for {company}."
-                    else:
-                        # Surface a friendly message without leaking internals
-                        msg = _friendly_error(r)
-                        reply = msg or f"I couldn’t send the email for {company}."
+                    r = requests.post(f"{base}/email/account-team", json={"company": company}, timeout=20)
+                    reply = "I’ve emailed you the team for {company}." if r.ok else (_friendly_error(r) or f"I couldn’t send the email for {company}.")
                     _safe_log(user_id, user_text, reply)
                     return jsonify({"reply_text": reply, "reply": reply})
 
                 if intent["type"] == "doc_link":
                     title_hint = intent["title"]
-
-                    # Find the best matching document via your repo search API
-                    sr = requests.get(
-                        f"{base}/repo/search",
-                        params={"q": title_hint},
-                        timeout=20,
-                    )
+                    sr = requests.get(f"{base}/repo/search", params={"q": title_hint}, timeout=20)
                     doc = None
                     if sr.ok:
                         js = sr.json() or {}
                         results = js.get("results") or []
                         if results:
                             doc = results[0]
-
                     if not doc:
                         reply = f"I couldn’t find a deck matching “{title_hint}”."
                         _safe_log(user_id, user_text, reply)
                         return jsonify({"reply_text": reply, "reply": reply})
-
-                    # Email the link using your new endpoint
-                    r = requests.post(
-                        f"{base}/email/repo-link",
-                        json={"doc_id": doc["id"]},
-                        timeout=20,
-                    )
-                    if r.ok:
-                        reply = "Sent. Check your inbox."
-                    else:
-                        msg = _friendly_error(r)
-                        reply = msg or "I couldn’t send that email."
+                    r = requests.post(f"{base}/email/repo-link", json={"doc_id": doc["id"]}, timeout=20)
+                    reply = "Sent. Check your inbox." if r.ok else (_friendly_error(r) or "I couldn’t send that email.")
                     _safe_log(user_id, user_text, reply)
                     return jsonify({"reply_text": reply, "reply": reply})
 
                 if intent["type"] == "email_last":
                     r = requests.post(f"{base}/email/last", timeout=20)
-                    if r.ok:
-                        reply = "Emailed."
-                    else:
-                        msg = _friendly_error(r)
-                        reply = msg or "I don’t have anything to email yet."
+                    reply = "Emailed." if r.ok else (_friendly_error(r) or "I don’t have anything to email yet.")
                     _safe_log(user_id, user_text, reply)
                     return jsonify({"reply_text": reply, "reply": reply})
 
@@ -153,7 +212,13 @@ def create_chat_blueprint(deps: dict):
                 _safe_log(user_id, user_text, reply)
                 return jsonify({"reply_text": reply, "reply": reply})
 
-        # --------- Normal path: generate Chip’s response via LLM ----------
+        # --------- Fast-path B: account team / contact intents ----------
+        quick = handle_account_intents(user_text, base)
+        if quick:
+            _safe_log(user_id, user_text, quick)
+            return jsonify({"reply_text": quick, "reply": quick})
+
+        # --------- Normal path: LLM reply ----------
         reply_text = generate_chip_response(user_id, name, user_text, role, region)
         _safe_log(user_id, user_text, reply_text)
         return jsonify({"reply_text": reply_text, "reply": reply_text})
