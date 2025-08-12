@@ -2,7 +2,7 @@ print("✅ Chip app starting...")
 
 # --- Patch eventlet BEFORE importing anything else that uses sockets/threads ---
 import eventlet
-eventlet.monkey_patch()
+eventlet.monkey_patch(os=False)  # avoid greening os.write to prevent mainloop blocking error
 
 import os
 import json
