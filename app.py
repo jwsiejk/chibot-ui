@@ -62,6 +62,11 @@ try:
 except Exception:
     HAS_PPTX = False
 
+# --- email (Gmail SMTP) ---
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
 # only import memory after DATABASE_URL is sanitized
 from memory import get_user, save_user, log_conversation, get_connection
 
@@ -115,7 +120,7 @@ _DEFAULT_PERSONA = (
     "Brevity: Default to ~20 words unless the user asks for more. If they say “more”, expand naturally.\n"
     "Helpfulness: Answer directly first. Offer a follow-up only when it truly helps "
     "(ambiguity, likely next step, or the user seems stuck). Otherwise keep quiet.\n"
-    "Small talk: If the user mixes casual remarks (e.g., weather, greetings) with a question, "
+    "Small talk: If the user mixes casual remarks (e.g., weather, greetings) with a question), "
     "start with one short friendly clause acknowledging it, then pivot to the answer.\n"
     "Guardrails: Do not invent data. If unsure, say so and propose the next action. "
     "Stay professional; no sarcasm or slang overload.\n"
@@ -929,7 +934,6 @@ def greet():
         role = session.get("role") or "engineer"
         region = session.get("region") or "NA"
 
-        # Allow optional prompt override (e.g., { "prompt": "Say hi to ..." })
         data = request.get_json(silent=True) or {}
         user_prompt = (data.get("prompt") or "").strip()
 
@@ -941,7 +945,6 @@ def greet():
 
         reply_text = generate_chip_response(email or "anon@local", name, chip_prompt, role, region) or "Hey there."
 
-        # Default contract: reply_text + reply; optionally audio
         out = {"reply_text": reply_text, "reply": reply_text}
 
         if TTS_ENABLED and voice_id and eleven:
@@ -949,7 +952,6 @@ def greet():
                 audio_dir = _ensure_audio_dir()
                 fname = f"{uuid4().hex}.mp3"
                 abs_fp = os.path.join(audio_dir, fname)
-                # ElevenLabs v1 client; stream to file
                 audio_gen = eleven.text_to_speech.convert(
                     voice_id=voice_id,
                     model_id=ELEVEN_MODEL_ID,
@@ -1084,43 +1086,55 @@ def chat_summary():
         return jsonify({"reply_text": "", "reply": ""})
 
 # -----------------------------------------------------------------------------
-# ✉️ Email helpers & endpoints
+# ✉️ Email helpers & endpoints (Gmail SMTP)
 # -----------------------------------------------------------------------------
-SENDGRID_KEY = os.getenv("SENDGRID_API_KEY", "")
-FROM_EMAIL = os.getenv("FROM_EMAIL", "chip@your-domain.com")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = (os.getenv("EMAIL_USE_TLS", "true").lower() in ("1", "true", "yes"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+FROM_EMAIL = os.getenv("FROM_EMAIL", EMAIL_HOST_USER or "")
 
-def send_email_via_sendgrid(to_email: str, subject: str, html: str, plain: str = None):
-    if not SENDGRID_KEY:
-        raise RuntimeError("SENDGRID_API_KEY not configured")
-    payload = {
-        "personalizations": [{"to": [{"email": to_email}]}],
-        "from": {"email": FROM_EMAIL, "name": "Chip"},
-        "subject": subject,
-        "content": [
-            {"type": "text/plain", "value": plain or "See HTML content."},
-            {"type": "text/html", "value": html}
-        ]
-    }
-    r = httpx.post(
-        "https://api.sendgrid.com/v3/mail/send",
-        json=payload,
-        headers={"Authorization": f"Bearer {SENDGRID_KEY}"},
-        timeout=15
-    )
-    r.raise_for_status()
+def send_email_via_gmail(to_email: str, subject: str, html: str, plain: str = None):
+    """
+    Sends email using Gmail SMTP with TLS.
+    Requires: EMAIL_HOST_USER, EMAIL_HOST_PASSWORD, FROM_EMAIL.
+    """
+    if not (EMAIL_HOST_USER and EMAIL_HOST_PASSWORD and FROM_EMAIL):
+        raise RuntimeError("Gmail SMTP not configured: set EMAIL_HOST_USER, EMAIL_HOST_PASSWORD, and FROM_EMAIL")
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = FROM_EMAIL
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(plain or "See HTML content.", "plain"))
+    msg.attach(MIMEText(html, "html"))
+
+    with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+        if EMAIL_USE_TLS:
+            server.starttls()
+        server.login(EMAIL_HOST_USER, EMAIL_HOST_PASSWORD)
+        server.send_message(msg)
 
 @app.post("/email/account-team")
 def email_account_team():
+    """
+    Body: { "company": "Acme Corp" }
+    Uses session email as the recipient.
+    """
     email = (session.get("user_id") or "").strip().lower()
     if not email:
         return jsonify({"error":"unauthenticated"}), 401
+
     data = request.get_json(force=True) or {}
     company = (data.get("company") or "").strip()
     if not company:
         return jsonify({"error":"missing company"}), 400
+
     row = find_account_row(company)
     if not row:
         return jsonify({"error":"no account found"}), 404
+
     subject = f"Account team for {row['account_name']}"
     html = f"""
     <h3>Account team for {row['account_name']}</h3>
@@ -1138,21 +1152,31 @@ def email_account_team():
         f"Pure RSD: {row.get('pure_rsd') or '—'}\n"
         f"Region: {row.get('region') or '—'}\n"
     )
-    send_email_via_sendgrid(email, subject, html, plain)
-    return jsonify({"ok": True})
+    try:
+        send_email_via_gmail(email, subject, html, plain)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": f"email send failed: {str(e)}"}), 500
 
 @app.post("/email/repo-link")
 def email_repo_link():
+    """
+    Body: { "doc_id": "flashblade-2025-q2-deck" }
+    Emails a viewable link using /repo/view/<doc_id>.
+    """
     email = (session.get("user_id") or "").strip().lower()
     if not email:
         return jsonify({"error":"unauthenticated"}), 401
+
     data = request.get_json(force=True) or {}
     doc_id = (data.get("doc_id") or "").strip()
     if not doc_id:
         return jsonify({"error":"missing doc_id"}), 400
+
     row = repo_get(doc_id)
     if not row:
         return jsonify({"error":"not found"}), 404
+
     public_view = request.host_url.rstrip("/") + f"/repo/view/{doc_id}"
     subject = f"{row['title']} – link from Chip"
     html = f"""
@@ -1161,11 +1185,17 @@ def email_repo_link():
     <p>Filename: {row['filename']}</p>
     """
     plain = f"Here you go:\n{row['title']}\n{public_view}\nFilename: {row['filename']}"
-    send_email_via_sendgrid(email, subject, html, plain)
-    return jsonify({"ok": True})
+    try:
+        send_email_via_gmail(email, subject, html, plain)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": f"email send failed: {str(e)}"}), 500
 
 @app.post("/email/last")
 def email_last():
+    """
+    No body required. Emails the last assistant reply text cached by /ws/chat + /chat/summary path.
+    """
     email = (session.get("user_id") or "").strip().lower()
     if not email:
         return jsonify({"error":"unauthenticated"}), 401
@@ -1173,8 +1203,11 @@ def email_last():
         text = _LAST_FINAL.get("text") or ""
     if not text:
         return jsonify({"error": "nothing to send"}), 400
-    send_email_via_sendgrid(email, "Notes from Chip", f"<pre>{text}</pre>", text)
-    return jsonify({"ok": True})
+    try:
+        send_email_via_gmail(email, "Notes from Chip", f"<pre>{text}</pre>", text)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": f"email send failed: {str(e)}"}), 500
 
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
