@@ -20,6 +20,18 @@ window.addEventListener("resize", setToolbarHeightVar);
 window.addEventListener("orientationchange", setToolbarHeightVar);
 
 document.addEventListener("DOMContentLoaded", () => {
+  // --- session gate: disable Start while a session is active ---
+  let sessionActive = false;
+  function setSessionActive(on) {
+    sessionActive = !!on;
+    const b = $("btnStart");
+    if (b) {
+      b.disabled = sessionActive;
+      b.classList.toggle("disabled", sessionActive);
+      b.setAttribute("aria-disabled", String(sessionActive));
+    }
+  }
+
   // Suggestion renderer (idle nudges etc.)
   setRenderSuggestions((sugs) =>
     _chipRenderSuggestions(sugs, (s) => {
@@ -64,16 +76,35 @@ document.addEventListener("DOMContentLoaded", () => {
       setRecordStream(s);
     } catch (err) {
       console.warn("getUserMedia failed:", err);
+      _chipGuide("I can’t access your mic. Check browser permissions and try again.");
       return;
     }
     _vm_stopPlayback(); // barge-in: flush streaming & <audio>
     await _vm_armVAD();
   });
 
-  // Start = dynamic greet
+  // Start = dynamic greet (guard against double-starts, then auto-arm VAD)
   $("btnStart")?.addEventListener("click", async () => {
+    if (sessionActive) return; // hard gate
     const okGate = await gate({ applyLayout: true }); if (!okGate.ok) return;
-    await startDynamicSession();
+
+    setSessionActive(true);
+    _chipGuide("Starting…");
+    await startDynamicSession(); // awaits greet audio
+
+    // Auto-arm VAD after greet (only if not already armed)
+    const alreadyArmed = $("btnMic")?.classList.contains("armed");
+    _chipGuide("Now listening — start talking after the tone.");
+    if (!alreadyArmed) {
+      _chipStep("vad", "arming-post-greet");
+      try { await _vm_armVAD(); } catch (e) { console.warn("VAD arm failed", e); }
+    }
+
+    // If user says nothing for a while, nudge
+    setTimeout(() => {
+      const stillArmed = $("btnMic")?.classList.contains("armed");
+      if (stillArmed) _chipGuide("I didn’t catch anything—check your mic or click Mic to try again.");
+    }, 8000);
   });
 
   // Mic button toggle (simple VAD arm/disarm)
@@ -149,7 +180,7 @@ document.addEventListener("DOMContentLoaded", () => {
     location.reload();
   });
 
-  // End session (optional button)
+  // End session (reenables Start)
   $("btnDisconnect")?.addEventListener("click", () => {
     try {
       _chipStep("disconnect", "teardown");
@@ -157,6 +188,7 @@ document.addEventListener("DOMContentLoaded", () => {
       _vm_stopPlayback();
       _chipClearIdleNudge();
       _chipSetState("idle");
+      setSessionActive(false);
       _chipGuide("Disconnected. Press Start to begin a new session.");
     } catch (e) { console.warn("disconnect error", e); }
   });
