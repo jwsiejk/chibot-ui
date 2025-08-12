@@ -482,6 +482,47 @@ def healthz_db():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+# ---------- ES module alias routes (fixes 404s when main.js imports from /<dir>/*.js) ----------
+def _serve_js_alias(subdir: str, filename: str):
+    return send_from_directory(os.path.join("static", "js", subdir), filename, cache_timeout=0)
+
+# IMPORTANT: only add explicit paths to avoid clashing with existing /auth/* API routes
+@app.route("/auth/profile.js")
+def _alias_auth_profile_js():
+    return _serve_js_alias("auth", "profile.js")
+
+@app.route("/core/dom.js")
+def _alias_core_dom_js():
+    return _serve_js_alias("core", "dom.js")
+
+@app.route("/core/api.js")
+def _alias_core_api_js():
+    return _serve_js_alias("core", "api.js")
+
+@app.route("/core/state.js")
+def _alias_core_state_js():
+    return _serve_js_alias("core", "state.js")
+
+@app.route("/chat/ui.js")
+def _alias_chat_ui_js():
+    return _serve_js_alias("chat", "ui.js")
+
+@app.route("/chat/send.js")
+def _alias_chat_send_js():
+    return _serve_js_alias("chat", "send.js")
+
+@app.route("/voice/playback.js")
+def _alias_voice_playback_js():
+    return _serve_js_alias("voice", "playback.js")
+
+@app.route("/voice/vad.js")
+def _alias_voice_vad_js():
+    return _serve_js_alias("voice", "vad.js")
+
+@app.route("/voice/record.js")
+def _alias_voice_record_js():
+    return _serve_js_alias("voice", "record.js")
+
 # ---------- API aliases used by the frontend ----------
 @app.route("/api/me", methods=["GET"])
 def api_me():
