@@ -14,14 +14,25 @@
   --chip-shift-y: -22px;  /* - = move up,     + = move down  */
 
   /* NEW: fine-tune mouth position/scale/stacking */
-  /* ... (existing variables preserved) ... */
+  --mouth-offset-x: -6px;   /* move left/right from face center */
+  --mouth-offset-y: 18px;   /* move up/down from face center */
+  --mouth-scale: 1;         /* overall mouth scale */
+  --mouth-z: 1000;          /* ensure mouth sits above chip.png */
+
+  --topbar-h: 64px;
+  --toolbar-h: 96px;           /* reserved space above bottom toolbar (updated by JS) */
+  --page-pad: 24px;
+  --frame-radius: 18px;
+  --frame-border: rgba(255,255,255,0.12);
+  --frame-bg: rgba(255,255,255,0.04);
+  --menu-bg: #111418;
+  --menu-border: rgba(255,255,255,0.10);
 }
 
-/* (rest of your existing styles preserved) */
-
-/* ====== App base ====== */
-html, body {
-  height: 100%;
+/* ====== Base ====== */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
   margin: 0;
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
   background: linear-gradient(180deg, #0f1115 0%, #0d1014 100%);
@@ -53,23 +64,65 @@ input, select {
 }
 input::placeholder { color: #8f98a6; }
 
-/* ... all your existing styles unchanged ... */
-
-/* ==========================================================
-   Ask Chip — Left Column / Chat / Admin Log (ADDED earlier)
-   ========================================================== */
-
-.layout {
-  display: flex;
-  gap: 16px;
-  padding: 16px;
-  align-items: flex-start;
+/* Accent (orange) button */
+.btn--accent {
+  background: linear-gradient(180deg, var(--accent-2), var(--accent));
+  border-color: #ff8a3d;
+  color: #fff;
+  text-shadow: 0 1px 0 rgba(0,0,0,.3);
 }
+.btn--accent:hover { filter: brightness(1.05); }
 
-.chat-col {
-  width: 420px;
-  /* ... existing rules ... */
+/* ====== Top bar ====== */
+.topbar {
+  height: var(--topbar-h);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 var(--page-pad);
 }
+.topbar .brand { font-weight: 700; letter-spacing:.2px; opacity: .9; }
+.topbar .actions { display: flex; gap: 12px; align-items: center; }
+
+/* Header Dropdown */
+.dropdown.nav { position: relative; }
+.dropdown.nav .menu {
+  position: absolute; right: 0; top: 110%;
+  min-width: 220px; padding: 8px;
+  background: var(--menu-bg);
+  border: 1px solid var(--menu-border);
+  border-radius: 12px;
+  list-style: none; margin: 0;
+  box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  z-index: 50;
+}
+.dropdown.nav .menu li { margin: 2px 0; }
+.dropdown.nav .menu button {
+  width: 100%; text-align: left; padding: 10px 12px; border-radius: 8px;
+  background: transparent; border: 1px solid transparent; color: var(--text);
+}
+.dropdown.nav .menu button:hover { background: rgba(255,255,255,.06); }
+
+/* ====== Modals ====== */
+.modal {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.6);
+  backdrop-filter: blur(3px);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal .modal-content {
+  width: 100%; max-width: 440px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 16px 50px rgba(0,0,0,.45);
+}
+.modal h2 { margin: 0 0 8px; font-size: 20px; }
+.modal p.hint { margin: 4px 0 12px; color: var(--muted); font-size: 14px; }
+.stack { display: grid; gap: 10px; }
 
 /* ====== Chip stage (light frame) ====== */
 #app {
@@ -87,6 +140,11 @@ input::placeholder { color: #8f98a6; }
   border-radius: var(--frame-radius);
   /* Fill space between header and toolbar */
   min-height: calc(100vh - var(--topbar-h) - var(--toolbar-h) - 2 * var(--page-pad));
+  margin-top: 8px;
+  margin-bottom: 8px;
+  padding: 24px;
+
+  /* NEW: ensure mouth overlay is never clipped */
   overflow: visible;
 }
 
@@ -96,15 +154,55 @@ input::placeholder { color: #8f98a6; }
   display: block;
   object-fit: contain;
   object-position: 50% 42%;
+
+  /* Chip placement */
   transform: translate(var(--chip-shift-x), var(--chip-shift-y));
+
+  /* Ensure the image sits under overlays even when transformed (stacking context) */
   position: relative;
   z-index: 0;
+
   filter: drop-shadow(0 12px 32px rgba(0,0,0,.45));
   margin: 0 auto;
 }
 
-/* ... mouth overlay and toolbar styles remain ... */
+/* Mouth overlay (swapped by JS with viseme images) */
+#chipMouthImg {
+  position: absolute;
 
+  /* Center relative to frame, then fine-tune via CSS vars */
+  left: calc(50% + var(--mouth-offset-x));
+  top: calc(50% + var(--mouth-offset-y));
+  transform: translate(-50%, -50%) scale(var(--mouth-scale));
+  transform-origin: 50% 50%;
+
+  pointer-events: none;
+  width: 160px; height: auto;   /* JS can still resize if needed */
+
+  /* SHOW neutral mouth even when not talking */
+  opacity: .95;
+  transition: opacity .12s linear;
+
+  /* Always above chip image */
+  z-index: var(--mouth-z);
+}
+
+/* Talking state left intact for future use if you want to dim/brighten during speech */
+#chipMouthImg.talking { opacity: .95; }
+
+/* ====== Toolbar (bottom) ====== */
+#askChipToolbar {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: 20px;
+  display: flex;
+  gap: 10px;
+  background: rgba(20,20,22,0.8);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 14px;
+  padding: 10px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  z-index: 200;
+}
 #askChipToolbar .dropdown { position: relative; }
 #askChipToolbar .dropdown-content {
   display: none; position: absolute; bottom: 36px;
@@ -116,7 +214,87 @@ input::placeholder { color: #8f98a6; }
 #askChipToolbar .dropdown-content div:hover { background-color: rgba(255,165,0,0.2); }
 #askChipToolbar .dropdown:hover .dropdown-content { display: block; }
 
-/* ... admin log and responsive rules kept ... */
+/* Static/Dynamic (not selected by default) */
+#askChipToolbar #btnModeStatic,
+#askChipToolbar #btnModeDynamic {
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 700;
+}
+#askChipToolbar .mode-active {
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+  background: #444;
+}
+
+/* ====== Misc ====== */
+.hidden { display: none !important; }
+#bottomTitle { display: none !important; } /* old label removed */
+
+/* Remove unused UI boxes */
+#status, #chatArea { display: none !important; }
+
+/* NOTE: Disabling specific visemes (r/oh/woo) requires a JS map change.
+   If you’d like, I can patch the viseme router so those never get selected. */
+
+
+/* ==========================================================
+   Ask Chip — Left Column / Chat / Admin Log (ADDED)
+   ========================================================== */
+
+.layout {
+  display: flex;
+  gap: 16px;
+  padding: 16px;
+  align-items: flex-start;
+}
+
+.chat-col {
+  width: 420px;
+  max-width: 48vw;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.status-banner {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.chat-window {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  min-height: 220px;
+  background: var(--panel);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+}
+
+.admin-log {
+  border: 1px dashed rgba(255,255,255,0.25);
+  border-radius: 10px;
+  padding: 8px;
+  background: var(--panel);
+  max-height: 28vh;
+  overflow: auto;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text);
+}
+.admin-log-row { padding: 2px 0; }
+
+/* Responsive */
+@media (max-width: 980px) {
+  .layout { flex-direction: column; }
+  .chat-col { width: 100%; max-width: none; }
+}
 
 
 /* === UI Updates (Zoom-style toolbar & branding) === */
