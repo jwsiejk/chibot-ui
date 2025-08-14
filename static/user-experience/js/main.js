@@ -13,13 +13,32 @@ import { _vm_stopRecording, setStream as setRecordStream } from "./voice/record.
 // Persisted chat lane (text vs live)
 let chatLane = (localStorage.getItem("chatLane") === "text") ? "text" : "live";
 const getChatLane = () => chatLane;
-const setChatLane = (lane) => { chatLane = (lane === "text") ? "text" : "live"; try { localStorage.setItem("chatLane", chatLane); } catch {} };
+const setChatLane = (lane) => {
+  chatLane = (lane === "text") ? "text" : "live";
+  try { localStorage.setItem("chatLane", chatLane); } catch (e) {}
+};
+
 
 window.addEventListener("load", setToolbarHeightVar);
 window.addEventListener("resize", setToolbarHeightVar);
 window.addEventListener("orientationchange", setToolbarHeightVar);
 
 document.addEventListener("DOMContentLoaded", () => {
+  // Toolbar Chat controls
+  const btnChat = $("btnChat");
+  const btnChatText = $("btnChatText");
+  const btnChatLive = $("btnChatLive");
+
+  if (btnChatText) {
+    btnChatText.addEventListener("click", () => { setChatLane("text"); ac_openOnlyChat("text"); });
+  }
+  if (btnChatLive) {
+    btnChatLive.addEventListener("click", () => { setChatLane("live"); ac_openOnlyChat("live"); });
+  }
+  if (btnChat) {
+    btnChat.addEventListener("click", () => { ac_toggleChat(getChatLane()); });
+  }
+
   // ========= Ask Chip (UI helpers added) =========
   // Admin call log (writes only if #adminLog exists)
   const ac_logAdmin = (event, detail = "") => {
