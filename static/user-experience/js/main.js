@@ -1,14 +1,15 @@
 // main.js — dynamic-only boot, Start button, mic/VAD wiring (ES module)
 
-import { $, show, hide, setToolbarHeightVar } from "/core/dom.js";
-import { _chipGuide, _chipSetState, _chipStartWaitingCountdown, _chipStep, setRenderSuggestions, setArmVADHook, _chipClearIdleNudge } from "/core/state.js";
-import { j } from "/core/api.js";
-import { setProfileModalMode, loadProfileIntoForm, gate, wireLoginAndProfileHandlers } from "/auth/profile.js";
-import { appendMessage, appendActions, _chipRenderSuggestions, updateChatButtonLabel, wireChatMenu } from "/chat/ui.js";
-import { sendChat, handleVoiceOnceResponse, wireChatLane, setArmVAD as setArmVADForSend, _chipEndConversation } from "/chat/send.js";
-import { tryPlayWithMouth, _vm_stopPlayback } from "/voice/playback.js";
-import { _vm_armVAD, _vm_disarmVAD, setMicUIUpdater, setGuide as setVoiceGuide, setRecordCallbacks } from "/voice/vad.js";
-import { _vm_stopRecording, setStream as setRecordStream } from "/voice/record.js";
+import { $, show, hide, setToolbarHeightVar } from "./core/dom.js";
+import { _chipGuide, _chipSetState, _chipStartWaitingCountdown, _chipStep, setRenderSuggestions, setArmVADHook, _chipClearIdleNudge } from "./core/state.js";
+import { j } from "./api.js";                          // if api.js sits adjacent; else "./core/api.js"
+import { setProfileModalMode, loadProfileIntoForm, gate, wireLoginAndProfileHandlers } from "./../auth/profile.js";
+import { appendMessage, appendActions, _chipRenderSuggestions, updateChatButtonLabel, wireChatMenu } from "./../chat/ui.js";
+import { sendChat, handleVoiceOnceResponse, wireChatLane, setArmVAD as setArmVADForSend, _chipEndConversation } from "./../chat/send.js";
+import { tryPlayWithMouth, _vm_stopPlayback } from "./../voice/playback.js";
+import { _vm_armVAD, _vm_disarmVAD, setMicUIUpdater, setGuide as setVoiceGuide, setRecordCallbacks } from "./../voice/vad.js";
+import { _vm_stopRecording, setStream as setRecordStream } from "./../voice/record.js";
+
 
 // Persisted chat lane (text vs live)
 let chatLane = (localStorage.getItem("chatLane") === "text") ? "text" : "live";
