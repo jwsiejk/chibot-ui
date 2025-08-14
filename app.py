@@ -9,6 +9,7 @@ import json
 import traceback
 from uuid import uuid4
 from datetime import datetime
+from werkzeug.exceptions import NotFound
 
 from flask import (
     Flask, request, jsonify, render_template, redirect, session,
@@ -519,9 +520,26 @@ def healthz_db():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 # ---------- ES module alias routes (serve JS modules from /static/js/* when imported from root) ----------
-def _serve_js_alias(subdir: str, filename: str):
-    return send_from_directory(os.path.join("static", "js", subdir), filename, cache_timeout=0)
 
+def _serve_js_alias(subdir: str, filename: str):
+    """
+    Try the new tree first: static/user-experience/js/<subdir>/<filename>
+    Fallback to legacy:     static/js/<subdir>/<filename>
+    """
+    # New location (where main.js lives)
+    try:
+        return send_from_directory(
+            os.path.join("static", "user-experience", "js", subdir),
+            filename,
+            cache_timeout=0
+        )
+    except NotFound:
+        # Legacy location (older modules kept here)
+        return send_from_directory(
+            os.path.join("static", "js", subdir),
+            filename,
+            cache_timeout=0
+        )
 @app.route("/auth/profile.js")
 def _alias_auth_profile_js():
     return _serve_js_alias("auth", "profile.js")
