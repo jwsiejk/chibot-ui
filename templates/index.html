@@ -12,7 +12,6 @@
 <body>
 
 <header id="topbar" class="topbar">
-  <div class="brand">Ask Chip</div>
   <div id="askChipWrap" class="actions dropdown nav">
     <button id="navMenuBtn" class="btn small">Ask Chip ▾</button>
     <ul id="navMenu" class="menu" style="display:none">
@@ -38,7 +37,7 @@
       </section>
 
       <section id="chatTTS" class="chat-window hidden">
-        <div style="opacity:.7; font-size:14px; margin-bottom:8px;">Live voice chat (press Start → select “Chat Live (TTS)”)</div>
+        <div style="opacity:.7; font-size:14px; margin-bottom:8p...">Live voice chat (press Start → select “Chat Live (TTS)”)</div>
         <div id="ttsOnceControls" class="stack">
           <textarea id="ttsPrompt" rows="2" placeholder="Type something for Chip to say…"></textarea>
           <button id="ttsOnceBtn" class="btn">Speak once</button>
@@ -49,7 +48,7 @@
       <div id="adminLog" class="admin-log" aria-label="Administrator Call Log"></div>
     </div>
 
-    <!-- Right Column -->
+    <!-- Right Column (Chip box) -->
     <div class="chip-box-right" style="flex:1; min-width:320px;">
       <div id="chipBox" class="chip-box">
         <img id="chipImage" src="{{ url_for('static', filename='chip/chip.png') }}" alt="Chip" />
@@ -64,10 +63,10 @@
     <button id="btnStart" class="btn btn--accent">Start</button>
     <button id="btnDisconnect" class="btn">Stop</button>
     <div class="dropdown">
-      <button id="modeBtn" class="btn">Mode</button>
+      <button id="btnChat" class="btn">Chat ▾</button>
       <div class="dropdown-content">
-        <div id="btnModeStatic">Static Greeting</div>
-        <div id="btnModeDynamic">Dynamic Greeting</div>
+        <div id="btnChatText">Chat</div>
+        <div id="btnChatLive">Chat Live (TTS)</div>
       </div>
     </div>
   </div>
