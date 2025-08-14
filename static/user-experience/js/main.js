@@ -1,28 +1,49 @@
 // main.js — dynamic-only boot, Start button, mic/VAD wiring (ES module)
 
 import { $, show, hide, setToolbarHeightVar } from "./core/dom.js";
-import { _chipGuide, _chipSetState, _chipStartWaitingCountdown, _chipStep, setRenderSuggestions, setArmVADHook, _chipClearIdleNudge } from "./core/state.js";
-import { j } from "./api.js";                          // if api.js sits adjacent; else "./core/api.js"
-import { setProfileModalMode, loadProfileIntoForm, gate, wireLoginAndProfileHandlers } from "./../auth/profile.js";
-import { appendMessage, appendActions, _chipRenderSuggestions, updateChatButtonLabel, wireChatMenu } from "./../chat/ui.js";
-import { sendChat, handleVoiceOnceResponse, wireChatLane, setArmVAD as setArmVADForSend, _chipEndConversation } from "./../chat/send.js";
-import { tryPlayWithMouth, _vm_stopPlayback } from "./../voice/playback.js";
-import { _vm_armVAD, _vm_disarmVAD, setMicUIUpdater, setGuide as setVoiceGuide, setRecordCallbacks } from "./../voice/vad.js";
-import { _vm_stopRecording, setStream as setRecordStream } from "./../voice/record.js";
+import {
+  _chipGuide,
+  _chipSetState,
+  _chipStartWaitingCountdown,
+  _chipStep,
+  setRenderSuggestions,
+  setArmVADHook,
+  _chipClearIdleNudge
+} from "./core/state.js";
+import { j } from "./core/api.js";
+import {
+  setProfileModalMode,
+  loadProfileIntoForm,
+  gate,
+  wireLoginAndProfileHandlers
+} from "./auth/profile.js";
+import {
+  appendMessage,
+  appendActions,
+  _chipRenderSuggestions,
+  updateChatButtonLabel,
+  wireChatMenu
+} from "./chat/ui.js";
+import {
+  sendChat,
+  handleVoiceOnceResponse,
+  wireChatLane,
+  setArmVAD as setArmVADForSend,
+  _chipEndConversation
+} from "./chat/send.js";
+import { tryPlayWithMouth, _vm_stopPlayback } from "./voice/playback.js";
+import {
+  _vm_armVAD,
+  _vm_disarmVAD,
+  setMicUIUpdater,
+  setGuide as setVoiceGuide,
+  setRecordCallbacks
+} from "./voice/vad.js";
+import { _vm_stopRecording, setStream as setRecordStream } from "./voice/record.js";
 
+// Build fingerprint for cache verification
+console.log("UI build ⏱ 2025-08-14-03");
 
-// Persisted chat lane (text vs live)
-let chatLane = (localStorage.getItem("chatLane") === "text") ? "text" : "live";
-const getChatLane = () => chatLane;
-const setChatLane = (lane) => {
-  chatLane = (lane === "text") ? "text" : "live";
-  try { localStorage.setItem("chatLane", chatLane); } catch (e) {}
-};
-
-
-window.addEventListener("load", setToolbarHeightVar);
-window.addEventListener("resize", setToolbarHeightVar);
-window.addEventListener("orientationchange", setToolbarHeightVar);
 
 document.addEventListener("DOMContentLoaded", () => {
   // Toolbar Chat controls
@@ -42,7 +63,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ========= Ask Chip (UI helpers added) =========
   // Admin call log (writes only if #adminLog exists)
-  const ac_logAdmin = (event, detail = "") => {
+  const ac_logAdminin = (event, detail = "") => {
     const wrap = $("adminLog");
     if (!wrap) return;
     const row = document.createElement("div");
@@ -69,20 +90,20 @@ document.addEventListener("DOMContentLoaded", () => {
   const ac_openOnlyChat = (which /* 'text' | 'live' */) => {
     if (which === "text") {
       ac_show(ac_chatTextEl); ac_hide(ac_chatTTSEl);
-      ac_logAdmin("ui", "opened text, closed tts");
+      ac_logAdminin("ui", "opened text, closed tts");
       try { ac_chatTextEl?.querySelector("input,textarea")?.focus(); } catch {}
     } else { // 'live'
       ac_show(ac_chatTTSEl); ac_hide(ac_chatTextEl);
-      ac_logAdmin("ui", "opened tts, closed text");
+      ac_logAdminin("ui", "opened tts, closed text");
     }
   };
 
   const ac_toggleChat = (which /* 'text' | 'live' */) => {
     if (which === "text") {
-      if (ac_visible(ac_chatTextEl)) { ac_hide(ac_chatTextEl); ac_logAdmin("ui", "closed text"); }
+      if (ac_visible(ac_chatTextEl)) { ac_hide(ac_chatTextEl); ac_logAdminin("ui", "closed text"); }
       else ac_openOnlyChat("text");
     } else {
-      if (ac_visible(ac_chatTTSEl)) { ac_hide(ac_chatTTSEl); ac_logAdmin("ui", "closed tts"); }
+      if (ac_visible(ac_chatTTSEl)) { ac_hide(ac_chatTTSEl); ac_logAdminin("ui", "closed tts"); }
       else ac_openOnlyChat("live");
     }
   };
@@ -142,8 +163,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!btnMic) return;
     btnMic.classList.toggle("armed", !!on);
     btnMic.classList.toggle("recording", !!recording);
-    if (recording)      btnMic.textContent = "🎙️ Recording… (tap to stop)";
-    else if (on)        btnMic.textContent = "🎤 Listening…";
+    if (recording)      btnMic.textContent = "🎙️ Recording (tap to stop)";
+    else if (on)        btnMic.textContent = "🎤 Listening";
     else                btnMic.textContent = "🎤 Mic";
   });
 
@@ -179,9 +200,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const okGate = await gate({ applyLayout: true }); if (!okGate.ok) return;
 
     setSessionActive(true);
-    ac_setTopStatus("Connecting…");
-    ac_logAdmin("session", "start clicked");
-    _chipGuide("Starting…");
+    ac_setTopStatus("Connecting");
+    ac_logAdminin("session", "start clicked");
+    _chipGuide("Starting");
     await startDynamicSession(); // awaits greet audio
 
     // Auto-arm VAD after greet (only if not already armed)
@@ -282,7 +303,7 @@ document.addEventListener("DOMContentLoaded", () => {
       _chipSetState("idle");
       setSessionActive(false);
       ac_setTopStatus("Disconnected. Press Start to begin a new session.");
-      ac_logAdmin("session", "disconnected");
+      ac_logAdminin("session", "disconnected");
       _chipGuide("Disconnected. Press Start to begin a new session.");
     } catch (e) { console.warn("disconnect error", e); }
   });
@@ -301,8 +322,8 @@ document.addEventListener("DOMContentLoaded", () => {
   })();
 
   // Surface unexpected errors in admin log to help with “something went sideways”
-  window.addEventListener("error", (e) => ac_logAdmin("error", e.message || "unknown"));
-  window.addEventListener("unhandledrejection", (e) => ac_logAdmin("promise", (e?.reason && e.reason.message) || String(e?.reason || "unknown")));
+  window.addEventListener("error", (e) => ac_logAdminin("error", e.message || "unknown"));
+  window.addEventListener("unhandledrejection", (e) => ac_logAdminin("promise", (e?.reason && e.reason.message) || String(e?.reason || "unknown")));
 });
 
 
@@ -333,7 +354,7 @@ async function startDynamicSession() {
     }
 
     const chatPanel = $("chatPanel"); if (chatPanel) chatPanel.hidden = false;
-    const chatInput = $("chatInput"); if (chatInput) { chatInput.placeholder = "Ask me anything about Pure Storage…"; chatInput.focus(); }
+    const chatInput = $("chatInput"); if (chatInput) { chatInput.placeholder = "Ask me anything about Pure Storage"; chatInput.focus(); }
 
     _chipStartWaitingCountdown();
     _chipSetState("idle");
