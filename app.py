@@ -522,24 +522,25 @@ def healthz_db():
 # ---------- ES module alias routes (serve JS modules from /static/js/* when imported from root) ----------
 
 def _serve_js_alias(subdir: str, filename: str):
-    """
-    Try the new tree first: static/user-experience/js/<subdir>/<filename>
-    Fallback to legacy:     static/js/<subdir>/<filename>
-    """
-    # New location (where main.js lives)
-    try:
-        return send_from_directory(
-            os.path.join("static", "user-experience", "js", subdir),
-            filename,
-            cache_timeout=0
-        )
-    except NotFound:
-        # Legacy location (older modules kept here)
-        return send_from_directory(
-            os.path.join("static", "js", subdir),
-            filename,
-            cache_timeout=0
-        )
+    """Try new tree first (static/user-experience/js), then legacy (static/js). Return 404 if not found; never 500 for NotFound."""
+    bases = [
+        os.path.join("static", "user-experience", "js", subdir),
+        os.path.join("static", "js", subdir),
+    ]
+    for base in bases:
+        try:
+            return send_from_directory(base, filename, cache_timeout=0)
+        except NotFound:
+            continue
+        except Exception as e:
+            try:
+                return jsonify({"error": "alias failure", "detail": str(e)}), 500
+            except Exception:
+                # if jsonify not imported earlier in this scope, avoid raising a new exception
+                from flask import jsonify as _jsonify
+                return _jsonify({"error": "alias failure", "detail": str(e)}), 500
+    from flask import jsonify as _jsonify
+    return _jsonify({"error": f"{subdir}/{filename} not found"}), 404
 @app.route("/auth/profile.js")
 def _alias_auth_profile_js():
     return _serve_js_alias("auth", "profile.js")
