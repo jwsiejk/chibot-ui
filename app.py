@@ -505,6 +505,12 @@ def greet():
 
 # ---------- Health ----------
 @app.route("/healthz/db", methods=["GET"])
+
+@app.get("/healthz")
+def healthz():
+    return "ok", 200
+
+@app.get("/healthz/db")
 def healthz_db():
     try:
         ensure_db_ready()
