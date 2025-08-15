@@ -41,6 +41,16 @@ import {
 } from "./voice/vad.js";
 import { _vm_stopRecording, setStream as setRecordStream } from "./voice/record.js";
 
+// Persisted chat lane (text vs live)  <-- must be before any use
+let chatLane = (localStorage.getItem("chatLane") === "text") ? "text" : "live";
+
+const getChatLane = () => chatLane;
+
+const setChatLane = (lane) => {
+  chatLane = (lane === "text") ? "text" : "live";
+  try { localStorage.setItem("chatLane", chatLane); } catch (e) {}
+};
+
 // Build fingerprint for cache verification
 console.log("UI build ⏱ 2025-08-14-03");
 
