@@ -387,7 +387,7 @@ window.addEventListener("unhandledrejection", (e) =>
 );
 
 // ⬇️ THIS is the ONLY close for your single DOMContentLoaded block.
-});
+
 
 // --- Dynamic session (no static fallback) ---
 async function startDynamicSession() {
