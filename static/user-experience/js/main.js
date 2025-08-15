@@ -51,6 +51,17 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnChatText = $("btnChatText");
   const btnChatLive = $("btnChatLive");
 
+  const MOUTH_BASE = "/static/chip/img/visemes";
+
+function normalizeMouthFile(name) {
+  if (!name) return "mouth_neutral.png";
+  // Map old names (e.g., "neutral.png" or "neutral") to the new filename
+  if (/^neutral(\.png)?$/i.test(name)) return "mouth_neutral.png";
+  // If no extension, assume .png
+  if (!/\.(png|webp|svg)$/i.test(name)) name += ".png";
+  return name;
+}
+
   if (btnChatText) {
     btnChatText.addEventListener("click", () => { setChatLane("text"); ac_openOnlyChat("text"); });
   }
