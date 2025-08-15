@@ -363,30 +363,42 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // Auth wiring
-  wireLoginAndProfileHandlers();
+ wireLoginAndProfileHandlers();
 
-  // Boot hint
-  (async () => {
-    const g = await gate({ applyLayout: true });
-    if (g && g.ok) {
-      ac_setTopStatus("Disconnected. Press Start to begin a new session.");
-      _chipGuide("Press Start to speak with Chip.");
-      _chipStep("boot", "ready");
-    }
-  })();
+// Boot hint
+(async () => {
+  const g = await gate({ applyLayout: true });
+  if (g && g.ok) {
+    ac_setTopStatus("Disconnected. Press Start to begin a new session.");
+    _chipGuide("Press Start to speak with Chip.");
+    _chipStep("boot", "ready");
+  }
+})();
 
-  // Surface unexpected errors in admin log to help with “something went sideways”
-  window.addEventListener("error", (e) => ac_logAdminin("error", e.message || "unknown"));
-  window.addEventListener("unhandledrejection", (e) => ac_logAdminin("promise", (e?.reason && e.reason.message) || String(e?.reason || "unknown")));
-});
+// Surface unexpected errors in admin log to help with “something went sideways”
+window.addEventListener("error", (e) =>
+  ac_logAdmin("error", e.message || "unknown")
+);
+window.addEventListener("unhandledrejection", (e) =>
+  ac_logAdmin(
+    "promise",
+    (e?.reason && e.reason.message) || String(e?.reason || "unknown")
+  )
+);
 
+// ⬇️ this should be the ONLY close for your single DOMContentLoaded block
+}); 
 
 // --- Dynamic session (no static fallback) ---
 async function startDynamicSession() {
   try {
     _chipSetState("greeting");
     _chipStep("POST /greet →", {});
-    const { ok, data, status } = await j("/greet", { method: "POST", body: JSON.stringify({}) });
+
+    const { ok, data, status } = await j("/greet", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
 
     if (!ok) {
       _chipStep("greet-failed", { status });
@@ -397,18 +409,29 @@ async function startDynamicSession() {
 
     // Expecting { audio?: string, reply?: string }
     const audioUrl = data && data.audio;
-    const reply = data && data.reply;
+    const reply    = data && data.reply;
 
-    if (reply && typeof reply === "string") {
+    if (typeof reply === "string" && reply.trim()) {
       appendMessage("chip", reply);
     }
 
     if (audioUrl) {
-      try { await tryPlayWithMouth(audioUrl); } catch (e) { console.warn("Greet audio failed", e); }
+      try {
+        await tryPlayWithMouth(audioUrl);
+      } catch (e) {
+        console.warn("Greet audio failed", e);
+      }
     }
 
-    const chatPanel = $("chatPanel"); if (chatPanel) chatPanel.hidden = false;
-    const chatInput = $("chatInput"); if (chatInput) { chatInput.placeholder = "Ask me anything about Pure Storage"; chatInput.focus(); }
+    // Open chat UI & focus input if present
+    const chatPanel = $("chatPanel");
+    if (chatPanel) chatPanel.hidden = false;
+
+    const chatInput = $("chatInput");
+    if (chatInput) {
+      chatInput.placeholder = "Ask me anything about Pure Storage…";
+      try { chatInput.focus(); } catch {}
+    }
 
     _chipStartWaitingCountdown();
     _chipSetState("idle");
