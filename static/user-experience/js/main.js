@@ -51,6 +51,53 @@ const setChatLane = (lane) => {
   try { localStorage.setItem("chatLane", chatLane); } catch (e) {}
 };
 
+// --- Chip image hardening & mouth normalization ---
+const MOUTH_BASE = "/static/chip/mouth";
+
+function normalizeMouthFile(name) {
+  if (!name) return "mouth_neutral.png";
+  if (/^neutral(\.png)?$/i.test(name)) return "mouth_neutral.png";
+  if (!/\.(png|webp|svg)$/i.test(name)) name += ".png";
+  return name;
+}
+
+function setMouth(name) {
+  const img = document.getElementById("chipMouthImg");
+  if (!img) return;
+  img.src = `${MOUTH_BASE}/${normalizeMouthFile(name)}`;
+}
+
+function rehydrateChip() {
+  const chip = document.getElementById("chipImage");
+  const mouth = document.getElementById("chipMouthImg");
+  if (!chip) return;
+
+  // Make sure Chip never stays hidden
+  chip.classList.remove("hidden");
+  chip.style.display = "block";
+  chip.style.visibility = "visible";
+  chip.style.opacity = "1";
+
+  // If a bad src sneaks in, restore the proper one
+  chip.onerror = () => {
+    chip.src = `/static/chip/chip.png?v=${Date.now()}`;
+    chip.classList.remove("hidden");
+  };
+
+  // Mouth fallback too
+  if (mouth) {
+    mouth.onerror = () => setMouth("mouth_neutral.png");
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  rehydrateChip();
+
+  // Optional: if any script toggles it later, restore on the next frame
+  requestAnimationFrame(rehydrateChip);
+  setTimeout(rehydrateChip, 250);
+});
+
 // Build fingerprint for cache verification
 console.log("UI build ⏱ 2025-08-14-03");
 
