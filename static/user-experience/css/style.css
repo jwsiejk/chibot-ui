@@ -309,3 +309,12 @@ input::placeholder { color: #8f98a6; }
 /* Toolbar Chat dropdown sizing */
 #askChipToolbar .dropdown .dropdown-content{ min-width: 180px; }
 #askChipToolbar #btnChat{ font-weight: 700; }
+
+/* Chip visibility hardening */
+#chipImage {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+.chip-box { display: grid; place-items: center; }
+:root { --chip-shift-x: 0px; --chip-shift-y: 0px; }
