@@ -362,7 +362,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (e) { console.warn("disconnect error", e); }
   });
 
-  // Auth wiring
+ // Auth wiring
 wireLoginAndProfileHandlers();
 
 // Boot hint
@@ -380,7 +380,8 @@ window.addEventListener("error", (e) =>
   ac_logAdmin("error", e.message || "unknown")
 );
 window.addEventListener("unhandledrejection", (e) =>
-  ac_logAdmin("promise",
+  ac_logAdmin(
+    "promise",
     (e?.reason && e.reason.message) || String(e?.reason || "unknown")
   )
 );
