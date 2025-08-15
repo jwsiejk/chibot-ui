@@ -42,17 +42,17 @@ import {
 import { _vm_stopRecording, setStream as setRecordStream } from "./voice/record.js";
 
 // Persisted chat lane (text vs live)  <-- must be before any use
+// Persisted chat lane (text vs live)  <-- must be before any use
 let chatLane = (localStorage.getItem("chatLane") === "text") ? "text" : "live";
-
 const getChatLane = () => chatLane;
-
 const setChatLane = (lane) => {
   chatLane = (lane === "text") ? "text" : "live";
   try { localStorage.setItem("chatLane", chatLane); } catch (e) {}
 };
 
-// --- Chip image hardening & mouth normalization ---
-const MOUTH_BASE = "/static/chip/mouth";
+// --- Chip image hardening & mouth normalization (paths reflect your repo) ---
+const CHIP_SRC   = "/static/chip/img/chip.png";
+const MOUTH_BASE = "/static/chip/img/visemes";
 
 function normalizeMouthFile(name) {
   if (!name) return "mouth_neutral.png";
@@ -68,56 +68,41 @@ function setMouth(name) {
 }
 
 function rehydrateChip() {
-  const chip = document.getElementById("chipImage");
+  const chip  = document.getElementById("chipImage");
   const mouth = document.getElementById("chipMouthImg");
   if (!chip) return;
 
-  // Make sure Chip never stays hidden
+  // keep Chip visible
   chip.classList.remove("hidden");
-  chip.style.display = "block";
+  chip.style.display    = "block";
   chip.style.visibility = "visible";
-  chip.style.opacity = "1";
+  chip.style.opacity    = "1";
 
-  // If a bad src sneaks in, restore the proper one
+  // fix bad src
   chip.onerror = () => {
-    chip.src = `/static/chip/chip.png?v=${Date.now()}`;
+    chip.src = `${CHIP_SRC}?v=${Date.now()}`;
     chip.classList.remove("hidden");
   };
 
-  // Mouth fallback too
   if (mouth) {
     mouth.onerror = () => setMouth("mouth_neutral.png");
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  rehydrateChip();
-
-  // Optional: if any script toggles it later, restore on the next frame
-  requestAnimationFrame(rehydrateChip);
-  setTimeout(rehydrateChip, 250);
-});
-
 // Build fingerprint for cache verification
 console.log("UI build ⏱ 2025-08-14-03");
 
-
+// ===== single DOMContentLoaded =====
 document.addEventListener("DOMContentLoaded", () => {
+  // Chip setup
+  rehydrateChip();
+  requestAnimationFrame(rehydrateChip);
+  setTimeout(rehydrateChip, 250);
+
   // Toolbar Chat controls
-  const btnChat = $("btnChat");
-  const btnChatText = $("btnChatText");
-  const btnChatLive = $("btnChatLive");
-
-  const MOUTH_BASE = "/static/chip/img/visemes";
-
-function normalizeMouthFile(name) {
-  if (!name) return "mouth_neutral.png";
-  // Map old names (e.g., "neutral.png" or "neutral") to the new filename
-  if (/^neutral(\.png)?$/i.test(name)) return "mouth_neutral.png";
-  // If no extension, assume .png
-  if (!/\.(png|webp|svg)$/i.test(name)) name += ".png";
-  return name;
-}
+  const btnChat      = $("btnChat");
+  const btnChatText  = $("btnChatText");
+  const btnChatLive  = $("btnChatLive");
 
   if (btnChatText) {
     btnChatText.addEventListener("click", () => { setChatLane("text"); ac_openOnlyChat("text"); });
@@ -128,6 +113,7 @@ function normalizeMouthFile(name) {
   if (btnChat) {
     btnChat.addEventListener("click", () => { ac_toggleChat(getChatLane()); });
   }
+});
 
   // ========= Ask Chip (UI helpers added) =========
   // Admin call log (writes only if #adminLog exists)
