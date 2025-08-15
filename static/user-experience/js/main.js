@@ -363,7 +363,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // Auth wiring
- wireLoginAndProfileHandlers();
+wireLoginAndProfileHandlers();
 
 // Boot hint
 (async () => {
@@ -380,14 +380,13 @@ window.addEventListener("error", (e) =>
   ac_logAdmin("error", e.message || "unknown")
 );
 window.addEventListener("unhandledrejection", (e) =>
-  ac_logAdmin(
-    "promise",
+  ac_logAdmin("promise",
     (e?.reason && e.reason.message) || String(e?.reason || "unknown")
   )
 );
 
-// ⬇️ this should be the ONLY close for your single DOMContentLoaded block
-}); 
+// ⬇️ THIS is the ONLY close for your single DOMContentLoaded block.
+});
 
 // --- Dynamic session (no static fallback) ---
 async function startDynamicSession() {
@@ -416,14 +415,10 @@ async function startDynamicSession() {
     }
 
     if (audioUrl) {
-      try {
-        await tryPlayWithMouth(audioUrl);
-      } catch (e) {
-        console.warn("Greet audio failed", e);
-      }
+      try { await tryPlayWithMouth(audioUrl); }
+      catch (e) { console.warn("Greet audio failed", e); }
     }
 
-    // Open chat UI & focus input if present
     const chatPanel = $("chatPanel");
     if (chatPanel) chatPanel.hidden = false;
 
