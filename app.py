@@ -529,7 +529,7 @@ def _serve_js_alias(subdir: str, filename: str):
     ]
     for base in bases:
         try:
-            return send_from_directory(base, filename, cache_timeout=0)
+            return send_from_directory(base, filename, max_age=0)
         except NotFound:
             continue
         except Exception as e:
