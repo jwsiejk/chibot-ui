@@ -5,10 +5,13 @@
   <title>Ask Chip</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="{{ url_for('static', filename='user-experience/css/style.css') }}?v=2025-08-14-02" />
-  <script defer src="{{ url_for('static', filename='chip/chip-viseme.js') }}?v=2025-08-14-02"></script>
-  <script type="module" src="{{ url_for('static', filename='user-experience/js/main.js') }}?v=2025-08-14-02"></script>
 
+  {# one token for all static imports #}
+  {% set build = '2025-08-17-r3' %}
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='user-experience/css/style.css') }}?v={{ build }}" />
+  <script defer src="{{ url_for('static', filename='chip/chip-viseme.js') }}?v={{ build }}"></script>
+  <script type="module" src="{{ url_for('static', filename='user-experience/js/main.js') }}?v={{ build }}"></script>
 </head>
 <body>
 
@@ -26,7 +29,7 @@
 <div id="app">
   <div class="layout">
     <!-- Left Column -->
-    <div class="chat-col" id="chatColumn">
+    <section id="chatDock" class="chat-col">
       <div id="statusBanner" class="status-banner">Disconnected. Press Start to begin a new session.</div>
 
       <section id="chatText" class="chat-window hidden">
@@ -47,13 +50,13 @@
       </section>
 
       <div id="adminLog" class="admin-log" aria-label="Administrator Call Log"></div>
-    </div>
+    </section>
 
     <!-- Right Column -->
     <div class="chip-box-right" style="flex:1; min-width:320px;">
       <div id="chipBox" class="chip-box">
-        <img id="chipImage" src="{{ url_for('static', filename='chip/img/chip.png') }}" alt="Chip" />
-        <img id="chipMouthImg" src="{{ url_for('static', filename='chip/img/visemes/mouth_neutral.png') }}" alt="" />
+        <img id="chipImage" src="{{ url_for('static', filename='chip/img/chip.png') }}?v={{ build }}" alt="Chip" />
+        <img id="chipMouthImg" src="{{ url_for('static', filename='chip/img/visemes/mouth_neutral.png') }}?v={{ build }}" alt="" />
       </div>
     </div>
   </div>
