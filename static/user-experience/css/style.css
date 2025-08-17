@@ -125,45 +125,56 @@ input::placeholder { color: #8f98a6; }
 .stack { display: grid; gap: 10px; }
 
 /* ====== Chip stage (light frame) ====== */
-#app {
-  max-width: 1100px;
-  margin: 0 auto;                     /* sits right under header */
-  padding: 0 16px;
+#app{
+  max-width: 1100px;                 /* bump to 1200–1280px if you want more room */
+  margin: 0 auto;                    /* centers the whole layout */
+  padding: 0 var(--page-pad);        /* use your theme spacing var instead of 16px */
   position: relative;
-  min-height: 70vh;
+  min-height: 70vh;                  /* fine as-is; not tied to centering */
 }
+
 .chip-box {
+  /* Center the stage inside its grid cell */
   position: relative;                 /* allows overlay positioning */
-  display: grid; place-items: center;
+  display: grid;
+  place-items: center;                /* center both axes */
+  justify-items: center;
+  align-content: center;
+
+  width: 100%;
+  max-width: 100%;
+
   border: 1px solid var(--frame-border);
   background: var(--frame-bg);
   border-radius: var(--frame-radius);
+
   /* Fill space between header and toolbar */
   min-height: calc(100vh - var(--topbar-h) - var(--toolbar-h) - 2 * var(--page-pad));
-  margin-top: 8px;
-  margin-bottom: 8px;
+  margin: 8px 0;
   padding: 24px;
 
-  /* NEW: ensure mouth overlay is never clipped */
+  /* Ensure mouth overlay is never clipped */
   overflow: visible;
 }
 
 #chipImage {
-  width: min(68%, 520px);
-  height: auto;
   display: block;
-  object-fit: contain;
-  object-position: 50% 42%;
+  width: min(68%, 520px);
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;                     /* center horizontally */
 
-  /* Chip placement */
+  object-fit: contain;
+  object-position: 50% 50%;           /* center the artwork in its box */
+
+  /* Chip placement (tunable via CSS vars; defaults are 0) */
   transform: translate(var(--chip-shift-x), var(--chip-shift-y));
 
-  /* Ensure the image sits under overlays even when transformed (stacking context) */
+  /* Keep the image under overlays even when transformed */
   position: relative;
   z-index: 0;
 
   filter: drop-shadow(0 12px 32px rgba(0,0,0,.45));
-  margin: 0 auto;
 }
 
 /* Mouth overlay (swapped by JS with viseme images) */
@@ -172,7 +183,7 @@ input::placeholder { color: #8f98a6; }
 
   /* Center relative to frame, then fine-tune via CSS vars */
   left: calc(50% + var(--mouth-offset-x));
-  top: calc(50% + var(--mouth-offset-y));
+  top:  calc(50% + var(--mouth-offset-y));
   transform: translate(-50%, -50%) scale(var(--mouth-scale));
   transform-origin: 50% 50%;
 
@@ -317,12 +328,18 @@ input::placeholder { color: #8f98a6; }
 }
 
 /* === UI Updates (Zoom-style toolbar & branding) === */
-.topbar .brand{ display:none; } /* remove white Ask Chip text at top-left */
+.topbar .brand { display: none; } /* remove white Ask Chip text at top-left */
 
 :root{
   /* Center Chip by default inside the chip box */
   --chip-shift-x: 0px;
   --chip-shift-y: 0px;
+
+  /* Fine-tune mouth alignment + stacking (kept from your theme) */
+  --mouth-offset-x: -6px;
+  --mouth-offset-y: 18px;
+  --mouth-scale: 1;
+  --mouth-z: 1000;
 }
 
 /* Toolbar Chat dropdown sizing */
@@ -335,9 +352,12 @@ input::placeholder { color: #8f98a6; }
   visibility: visible !important;
   opacity: 1 !important;
 }
-.chip-box { display: grid; place-items: center; }
+.chip-box {
+  display: grid !important;
+  place-items: center !important;
+  justify-items: center !important;
+}
 :root { --chip-shift-x: 0px; --chip-shift-y: 0px; }
-
 
 /* ====== Layout hard lock and alignment updates (2025-08-17) ====== */
 
@@ -352,15 +372,30 @@ input::placeholder { color: #8f98a6; }
 
 /* Two-column grid with explicit areas */
 #layout{
-  display:grid !important;
+  display: grid !important;
   grid-template-columns: 420px minmax(0, 1fr) !important;
   grid-template-areas: "left right" !important;
-  align-items:start !important;
-  gap:20px !important;
+  align-items: start !important;
+  gap: 20px !important;
 }
-#chatDock{ grid-area:left !important; min-width:0 !important; }
-.chip-box-right{ grid-area:right !important; min-width:0 !important; }
-#chipBox{ display:grid !important; place-items:center !important; min-height:420px !important; }
+#chatDock{ grid-area: left !important; min-width: 0 !important; }
+
+/* Right column wrapper that contains the stage */
+.chip-box-right{
+  grid-area: right !important;
+  min-width: 0 !important;
+  display: grid !important;          /* let the stage center inside */
+}
+
+/* Stage centered inside the right column */
+#chipBox{
+  display: grid !important;
+  place-items: center !important;
+  justify-items: center !important;
+  min-height: 420px !important;
+}
+
+/* Ensure the image itself stays centered */
 #chipImage{ margin: 0 auto !important; }
 
 /* Ensure page content doesn't sit under the toolbar */
