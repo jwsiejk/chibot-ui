@@ -1,6 +1,7 @@
-// auth/profile.js — robust gating + handlers + layout (with exported loadProfileIntoForm)
+
+// auth/profile.js — robust gating + handlers + layout (clean, syntax-safe)
 import { $, show, hide, setToolbarHeightVar, _getQueryParam } from "../core/dom.js";
-import { _chipSetAdmin, _chipGuide, _chipSetState, _chipStep } from "../core/state.js";
+import { _chipGuide, _chipSetState, _chipStep } from "../core/state.js";
 import { j } from "../core/api.js";
 
 /* ---------------- UI helpers ---------------- */
@@ -48,7 +49,6 @@ export function applyAuthedLayout() {
 
 /* ---------------- Data helpers ---------------- */
 
-
 async function fetchMe() {
   try {
     const r = await j("/api/me");
@@ -58,27 +58,12 @@ async function fetchMe() {
     return null;
   }
 }
-);
-    if (!r.ok) return null;
-    return await r.json();
-  } catch {
-    return null;
-  }
-}
-
 
 async function fetchProfilePrefill() {
   try {
     const r = await j("/api/profile");
-    if (!r || !r.ok) return null;
+    if (!r || !r.ok) return null; // includes 401
     return r.data || null;
-  } catch {
-    return null;
-  }
-}
-);
-    if (!r.ok) return null; // includes 401
-    return await r.json();
   } catch {
     return null;
   }
@@ -128,8 +113,11 @@ export async function enforceProfileCompleteness({ applyLayout = true } = {}) {
   const me = await fetchMe();
 
   if (!me || !me.authenticated) {
-    hide(appEl);
-    show(loginModal, "flex");
+    // Only hide app if we actually have a login modal to show.
+    if (loginModal) {
+      hide(appEl);
+      show(loginModal, "flex");
+    }
     return { ok: false, reason: "unauthenticated" };
   }
 
@@ -155,7 +143,6 @@ export async function enforceProfileCompleteness({ applyLayout = true } = {}) {
 }
 
 // Convenience wrapper the rest of the app can call
-
 export async function gate(opts = { applyLayout: false }) {
   const applyLayout = !!(opts && opts.applyLayout);
   const appEl       = $("app");
@@ -205,6 +192,7 @@ export async function gate(opts = { applyLayout: false }) {
   }
   return { ok: true };
 }
+
 /* ---------------- Wire handlers ---------------- */
 
 export function wireLoginAndProfileHandlers() {
