@@ -52,10 +52,10 @@ export function applyAuthedLayout() {
 async function fetchMe() {
   try {
     const r = await j("/api/me");
-    if (!r) return { ok: false, status: 0, data: null };
-    return r; // { ok, status, data }
+    if (!r || !r.ok) return null;
+    return r.data || null;
   } catch {
-    return { ok: false, status: 0, data: null };
+    return null;
   }
 }
 );
@@ -164,32 +164,31 @@ export async function gate(opts = { applyLayout: false }) {
   const hasLogin    = !!loginModal;
   const hasProfile  = !!profileModal;
 
-  // Try to fetch /api/me with status
-  const meRes = await fetchMe(); // { ok, status, data }
-  const me    = meRes && meRes.data ? meRes.data : null;
+  // Fetch current user
+  const me = await fetchMe(); // JSON body or null
 
-  // 1) Explicit unauthenticated only when 401 and login modal exists
-  if (meRes && meRes.status === 401 && hasLogin) {
-    if (appEl) hide(appEl);
-    show(loginModal, "flex");
-    return { ok: false, reason: "unauthenticated" };
-  }
-
-  // 2) Network/other failure OR no modal available -> assume auth to keep UI usable
-  if (!meRes || meRes.status === 0 || (meRes && !meRes.ok && meRes.status !== 401)) {
+  // If we can't confirm auth (endpoint down, null, etc.) keep UI visible
+  if (!me) {
     if (applyLayout) {
-      try { applyAuthedLayout(); } catch(e) { console.warn("applyAuthedLayout failed", e); }
+      try { applyAuthedLayout(); } catch {}
     }
     return { ok: true, assumed: true };
   }
 
-  // 3) If we have a response and it's OK, check profile completeness if the modal exists
-  let profileComplete = true;
-  if (hasProfile) {
-    profileComplete = (me && me.profileComplete !== undefined)
-      ? !!me.profileComplete
-      : (me && me.first_time === false);
+  // Explicit unauthenticated path
+  if (!me.authenticated) {
+    if (hasLogin) {
+      hide(appEl);
+      show(loginModal, "flex");
+    }
+    // If there's no login modal, don't hide the app — fail open
+    return { ok: false, reason: "unauthenticated" };
   }
+
+  // Prefer explicit profileComplete; fall back to inverse of first_time.
+  const profileComplete = (me.profileComplete !== undefined)
+    ? !!me.profileComplete
+    : (me.first_time === false);
 
   if (!profileComplete && hasProfile) {
     setProfileModalMode("gate");
@@ -200,7 +199,7 @@ export async function gate(opts = { applyLayout: false }) {
   }
 
   if (applyLayout) {
-    try { applyAuthedLayout(); } catch(e) { console.warn("applyAuthedLayout failed", e); }
+    try { applyAuthedLayout(); } catch {}
     _chipSetState("idle");
     _chipGuide("Press Start or Chat to speak with Chip.");
   }
