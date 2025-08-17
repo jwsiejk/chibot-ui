@@ -1,22 +1,44 @@
 ;(function(g){
   const PATH="/static/chip/img/visemes/";
-  const MAP={neutral:"mouth_neutral.png",m:"mouth_m.png",ee:"mouth_ee.png",aa:"mouth_aa.png",f:"mouth_f.png",s:"mouth_s.png",uh:"mouth_uh.png",d:"mouth_d.png"};
-  const anchor={x:.535,y:.525};
-  const size={w:.20,h:.20*(76/219)};     // keeps your PNG aspect
-  const offset={x:-28,y:16};              // left & down
-  let mouth=null,ctx=null,raf=0;
+  const MAP={
+    neutral:"mouth_neutral.png",
+    m:"mouth_m.png",
+    ee:"mouth_ee.png",
+    aa:"mouth_aa.png",
+    f:"mouth_f.png",
+    s:"mouth_s.png",
+    uh:"mouth_uh.png",
+    d:"mouth_d.png",
+    l:"mouth_l.png"
+  };
 
-  function stage(){return document.getElementById("chipBox")||document.querySelector(".chip-box")||document.body}
-  function chip(){return document.getElementById("chipImage")||document.querySelector("#chipImage,.chip-image")}
+  const anchor={x:.535,y:.525};
+  const size={w:.20,h:.20*(76/219)};
+  const offset={x:-28,y:16};
+
+  let mouth=null, ctx=null, raf=0;
+
+  function stage(){
+    return document.getElementById("chipBox") ||
+           document.querySelector(".chip-box") ||
+           document.body;
+  }
+  function chip(){
+    return document.getElementById("chipImage") ||
+           document.querySelector("#chipImage,.chip-image");
+  }
 
   function ensure(){
-    if(!mouth){
-      mouth=document.createElement("img");
-      mouth.id="chipMouthImg"; mouth.alt="";
-      mouth.style.position="absolute"; mouth.style.pointerEvents="none"; mouth.style.zIndex="1000";
-      stage().appendChild(mouth);
+    if (!mouth) {
+      mouth = document.getElementById("chipMouthImg") || document.createElement("img");
+      mouth.id = "chipMouthImg";
+      mouth.alt = "";
+      mouth.style.position = "absolute";
+      mouth.style.pointerEvents = "none";
+      mouth.style.zIndex = "1000";
     }
-    if(!mouth.isConnected) stage().appendChild(mouth);
+    const st = stage();
+    if (st && !mouth.isConnected) st.appendChild(mouth);
     return mouth;
   }
 
@@ -24,21 +46,38 @@
     const img=chip(), st=stage(), el=ensure(); if(!img||!st) return;
     const ir=img.getBoundingClientRect(), sr=st.getBoundingClientRect();
     if(!ir.width||!ir.height){ requestAnimationFrame(layout); return; }
-    let w=ir.width*size.w, h=ir.width*size.h; if(w<120){const s=60/w; w=60; h*=s;}
-    const cx=(ir.left-sr.left)+ir.width*anchor.x+offset.x, cy=(ir.top-sr.top)+ir.height*anchor.y+offset.y;
-    el.style.left=cx+"px"; el.style.top=cy+"px"; el.style.width=w+"px"; el.style.height=h+"px";
+
+    let w=ir.width*size.w, h=ir.width*size.h;
+    if(w<60){ const s=60/w; w=60; h*=s; }
+
+    const cx=(ir.left-sr.left)+ir.width*anchor.x+offset.x;
+    const cy=(ir.top -sr.top )+ir.height*anchor.y+offset.y;
+
+    el.style.left=cx+"px";
+    el.style.top =cy+"px";
+    el.style.width = w+"px";
+    el.style.height= h+"px";
   }
 
-  function setMouth(k){ ensure().src=PATH+(MAP[k]||MAP.neutral); }
-  function reset(){ setMouth("neutral"); ensure().classList.remove("talking"); }
+  function setMouth(k){
+    ensure().src = PATH + (MAP[k] || MAP.neutral);
+  }
+  function reset(){
+    setMouth("neutral");
+    ensure().classList.remove("talking");
+  }
 
-  function visemes(v,a){
-    const t=[]; v.forEach(o=>{
-      const k=(o?.viseme||"neutral").toLowerCase();
-      if(k==="r"||k==="oh"||k==="w-oo"||k==="woo"||!MAP[k]) return;
-      t.push(setTimeout(()=>setMouth(k), Math.max(0,(o.start||0)*1000)));
+  function schedule(timeline, audioEl){
+    if (!Array.isArray(timeline) || !timeline.length || !audioEl) return;
+    const timers=[];
+    timeline.forEach(o=>{
+      const key=((o && (o.viseme||o.value||o.v))||"neutral").toString().toLowerCase();
+      const norm = (key==="oh"||key==="oo"||key==="w-oo"||key==="woo") ? "uh" : key;
+      const file = MAP[norm] ? norm : "neutral";
+      const at = Math.max(0, (o.start || o.t || 0) * 1000);
+      timers.push(setTimeout(()=> setMouth(file), at));
     });
-    a.addEventListener("ended",()=>t.forEach(clearTimeout),{once:true});
+    audioEl.addEventListener("ended",()=> timers.forEach(clearTimeout), { once:true });
   }
 
   function rms(a){
@@ -60,7 +99,7 @@
     ensure(); layout(); setMouth("neutral"); ensure().classList.add("talking");
     if(!url) return false;
     const a=new Audio(url); a.crossOrigin="anonymous";
-    (Array.isArray(opt.visemes)&&opt.visemes.length)?visemes(opt.visemes,a):rms(a);
+    if (Array.isArray(opt.visemes) && opt.visemes.length) schedule(opt.visemes, a); else rms(a);
     a.addEventListener("ended",reset,{once:true}); a.addEventListener("error",reset,{once:true});
     await a.play(); return true;
   }
@@ -68,13 +107,26 @@
   function watch(){
     const img=chip(); if(!img) return;
     if("ResizeObserver" in window) new ResizeObserver(layout).observe(img);
-    else{ if(!img.complete) img.addEventListener("load",layout,{once:true}); window.addEventListener("resize",layout); }
+    else{
+      if(!img.complete) img.addEventListener("load",layout,{once:true});
+      window.addEventListener("resize",layout);
+    }
   }
 
   window.addEventListener("DOMContentLoaded",()=>{
-    ["mouth_neutral.png","mouth_m.png","mouth_ee.png","mouth_aa.png","mouth_f.png","mouth_l.png","mouth_s.png","mouth_uh.png","mouth_d.png"].forEach(f=>{const i=new Image(); i.src=PATH+f;});
+    ["mouth_neutral.png","mouth_m.png","mouth_ee.png","mouth_aa.png","mouth_f.png","mouth_l.png","mouth_s.png","mouth_uh.png","mouth_d.png"]
+      .forEach(f=>{ const i=new Image(); i.src=PATH+f; });
     ensure(); watch(); layout(); setMouth("neutral");
   });
 
-  g.ChipViseme={play,layout,setAnchor:(x,y)=>{anchor.x=x;anchor.y=y;layout();},setSize:(w,h)=>{size.w=w;size.h=h;layout();},setOffset:(x,y)=>{offset.x=x|0;offset.y=y|0;layout();},map:MAP,path:PATH};
+  const api = {
+    play, layout, schedule,
+    setAnchor:(x,y)=>{ anchor.x=x; anchor.y=y; layout(); },
+    setSize:(w,h)=>{ size.w=w; size.h=h; layout(); },
+    setOffset:(x,y)=>{ offset.x=x|0; offset.y=y|0; layout(); },
+    map:MAP, path:PATH
+  };
+
+  g.ChipViseme = api;
+  g.chipViseme = api;
 })(window);
