@@ -191,32 +191,56 @@ input::placeholder { color: #8f98a6; }
 #chipMouthImg.talking { opacity: .95; }
 
 /* ====== Toolbar (bottom) ====== */
-#askChipToolbar {
-  position: fixed; left: 50%; transform: translateX(-50%);
+/* ====== Toolbar (bottom) — centered, ~1/3 width cap, snug to buttons ====== */
+#askChipToolbar{
+  position: fixed;
   bottom: 20px;
-  display: flex;
+  left: 50%;
+  transform: translateX(-50%);
+
+  display: inline-flex;            /* shrink to content width */
+  align-items: center;
   gap: 10px;
+  padding: 10px 12px;
+
+  width: fit-content;              /* snug to buttons */
+  max-width: 33vw;                 /* ~1/3 of the viewport width */
+
   background: rgba(20,20,22,0.8);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 14px;
-  padding: 10px;
   box-shadow: 0 10px 30px rgba(0,0,0,0.4);
   z-index: 200;
 }
+
+/* Keep left/right groups compact */
+#askChipToolbar .toolbar-left,
+#askChipToolbar .toolbar-right{
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+#askChipToolbar .toolbar-right #connState{ white-space: nowrap; }
+
+/* Dropdown */
 #askChipToolbar .dropdown { position: relative; }
-#askChipToolbar .dropdown-content {
-  display: none; position: absolute; bottom: 36px;
+#askChipToolbar .dropdown-content{
+  display: none;
+  position: absolute;
+  bottom: 36px; right: 0;          /* anchor to right edge of the button */
   background: rgba(30,30,30,0.95);
-  border-radius: 8px; padding: 6px; min-width: 160px;
+  border-radius: 8px;
+  padding: 6px;
+  min-width: 160px;
   box-shadow: 0 10px 24px rgba(0,0,0,0.35);
 }
-#askChipToolbar .dropdown-content div { padding: 8px 10px; cursor: pointer; border-radius: 6px; }
-#askChipToolbar .dropdown-content div:hover { background-color: rgba(255,165,0,0.2); }
-#askChipToolbar .dropdown:hover .dropdown-content { display: block; }
+#askChipToolbar .dropdown-content div{ padding: 8px 10px; cursor: pointer; border-radius: 6px; }
+#askChipToolbar .dropdown-content div:hover{ background-color: rgba(255,165,0,0.2); }
+#askChipToolbar .dropdown:hover .dropdown-content{ display: block; }
 
-/* Static/Dynamic (not selected by default) */
+/* Static/Dynamic buttons */
 #askChipToolbar #btnModeStatic,
-#askChipToolbar #btnModeDynamic {
+#askChipToolbar #btnModeDynamic{
   border: 1px solid var(--border);
   background: linear-gradient(180deg, var(--panel-2), var(--panel));
   color: var(--text);
@@ -224,11 +248,12 @@ input::placeholder { color: #8f98a6; }
   border-radius: 10px;
   font-weight: 700;
 }
-#askChipToolbar .mode-active {
+#askChipToolbar .mode-active{
   outline: 2px solid #ffffff;
   outline-offset: 2px;
   background: #444;
 }
+
 
 /* ====== Misc ====== */
 .hidden { display: none !important; }
@@ -301,7 +326,7 @@ input::placeholder { color: #8f98a6; }
 }
 
 /* Toolbar Chat dropdown sizing */
-#askChipToolbar .dropdown .dropdown-content{ min-width: 180px; }
+#askChipToolbar .dropdown .dropdown-content{ min-width: 160px; }
 #askChipToolbar #btnChat{ font-weight: 700; }
 
 /* Chip visibility hardening */
@@ -338,15 +363,5 @@ input::placeholder { color: #8f98a6; }
 #chipBox{ display:grid !important; place-items:center !important; min-height:420px !important; }
 #chipImage{ margin: 0 auto !important; }
 
-/* Bottom toolbar: full-width bar across the bottom */
-#askChipToolbar{
-  position: fixed;
-  left:0; right:0; bottom:0;
-  transform: none;
-  border-radius: 0;
-  justify-content: space-between;
-  padding: 12px var(--page-pad);
-}
-
 /* Ensure page content doesn't sit under the toolbar */
-body{ padding-bottom: var(--toolbar-h); }
+body { padding-bottom: var(--toolbar-h, 96px); }
