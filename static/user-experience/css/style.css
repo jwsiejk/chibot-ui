@@ -237,14 +237,9 @@ input::placeholder { color: #8f98a6; }
 /* Remove unused UI boxes */
 #status, #chatArea { display: none !important; }
 
-/* NOTE: Disabling specific visemes (r/oh/woo) requires a JS map change.
-   If you’d like, I can patch the viseme router so those never get selected. */
-
-
 /* ==========================================================
-   Ask Chip — Left Column / Chat / Admin Log (ADDED)
+   Ask Chip — Left Column / Chat / Admin Log
    ========================================================== */
-
 .layout {
   display: flex;
   gap: 16px;
@@ -295,7 +290,6 @@ input::placeholder { color: #8f98a6; }
   .layout { flex-direction: column; }
   .chat-col { width: 100%; max-width: none; }
 }
-
 
 /* === UI Updates (Zoom-style toolbar & branding) === */
 .topbar .brand{ display:none; } /* remove white Ask Chip text at top-left */
