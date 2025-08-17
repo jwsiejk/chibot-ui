@@ -312,3 +312,41 @@ input::placeholder { color: #8f98a6; }
 }
 .chip-box { display: grid; place-items: center; }
 :root { --chip-shift-x: 0px; --chip-shift-y: 0px; }
+
+
+/* ====== Layout hard lock and alignment updates (2025-08-17) ====== */
+
+/* Move Ask Chip menu to the top-right */
+.topbar{
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0 var(--page-pad);
+}
+
+/* Two-column grid with explicit areas */
+#layout{
+  display:grid !important;
+  grid-template-columns: 420px minmax(0, 1fr) !important;
+  grid-template-areas: "left right" !important;
+  align-items:start !important;
+  gap:20px !important;
+}
+#chatDock{ grid-area:left !important; min-width:0 !important; }
+.chip-box-right{ grid-area:right !important; min-width:0 !important; }
+#chipBox{ display:grid !important; place-items:center !important; min-height:420px !important; }
+#chipImage{ margin: 0 auto !important; }
+
+/* Bottom toolbar: full-width bar across the bottom */
+#askChipToolbar{
+  position: fixed;
+  left:0; right:0; bottom:0;
+  transform: none;
+  border-radius: 0;
+  justify-content: space-between;
+  padding: 12px var(--page-pad);
+}
+
+/* Ensure page content doesn't sit under the toolbar */
+body{ padding-bottom: var(--toolbar-h); }
