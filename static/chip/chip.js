@@ -1,5 +1,3 @@
-// chip.js — Chip module: static/dynamic audio, mic capture, and viseme scheduling (2025-08-09)
-// No regressions: retains mic flow to /ask-chip, adds modular API for main.js to call.
 
 (function () {
   const state = {
@@ -14,17 +12,13 @@
     answer:   "/static/chip/audio/answer.mp3"
   };
 
-  // ---------- Mode ----------
-  function getMode() {
-    return state.mode;
-  }
+  function getMode() { return state.mode; }
   function setMode(m) {
     state.mode = (m === "dynamic") ? "dynamic" : "static";
     try { localStorage.setItem("chip_mode", state.mode); } catch {}
     return state.mode;
   }
 
-  // ---------- Audio helpers ----------
   function stopAudio() {
     try {
       if (state.currentAudio) {
@@ -39,39 +33,28 @@
     stopAudio();
     const a = new Audio(path);
     state.currentAudio = a;
-    try {
-      await a.play();
-    } catch (e) {
-      console.warn("[chip] Audio play failed:", e);
-    }
+    try { await a.play(); } catch (e) { console.warn("[chip] Audio play failed:", e); }
     return a;
   }
 
-  // ---------- Viseme scheduling (delegates if chip-viseme.js present) ----------
   function scheduleVisemes(timeline, audioEl) {
     if (!Array.isArray(timeline) || !timeline.length || !audioEl) return;
-    if (window.chipViseme && typeof window.chipViseme.schedule === "function") {
-      window.chipViseme.schedule(timeline, audioEl);
-    }
+    const vis = (window.ChipViseme || window.chipViseme);
+    if (vis && typeof vis.schedule === "function") vis.schedule(timeline, audioEl);
   }
 
-  // ---------- Network helper ----------
   async function j(path, bodyObj) {
     const opts = bodyObj
       ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyObj) }
       : { method: "POST" };
     const r = await fetch(path, opts);
-    let data = null;
-    try { data = await r.json(); } catch {}
+    let data = null; try { data = await r.json(); } catch {}
     return { ok: r.ok, status: r.status, data };
   }
 
-  // ---------- Public actions ----------
   async function playGreeting() {
-    if (getMode() === "static") {
-      return playLocal(AUDIO.greeting);
-    }
-    // Dynamic
+    if (getMode() === "static") return playLocal(AUDIO.greeting);
+
     const { ok, data } = await j("/greet", {});
     if (!ok || !data) return null;
 
@@ -89,10 +72,8 @@
   }
 
   async function playAnswer(questionText) {
-    if (getMode() === "static") {
-      return playLocal(AUDIO.answer);
-    }
-    // Dynamic
+    if (getMode() === "static") return playLocal(AUDIO.answer);
+
     const { ok, data } = await j("/ask", { question: (questionText || "") });
     if (!ok || !data) return null;
 
@@ -109,7 +90,6 @@
     return null;
   }
 
-  // ---------- Optional mic → /ask-chip (kept from prior version; no regressions) ----------
   function initMic() {
     const recordBtn    = document.getElementById("recordBtn");
     const recordPrompt = document.getElementById("recordPrompt");
@@ -215,11 +195,8 @@
     });
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
-    initMic(); // safe if no mic UI present
-  });
+  document.addEventListener("DOMContentLoaded", () => { initMic(); });
 
-  // ---------- Public API ----------
   window.chip = window.chip || {};
   window.chip.playGreeting = playGreeting;
   window.chip.playAnswer   = playAnswer;
