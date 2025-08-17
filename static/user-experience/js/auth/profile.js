@@ -48,9 +48,17 @@ export function applyAuthedLayout() {
 
 /* ---------------- Data helpers ---------------- */
 
+
 async function fetchMe() {
   try {
-    const r = await fetch("/api/me", { credentials: "include" });
+    const r = await j("/api/me");
+    if (!r) return { ok: false, status: 0, data: null };
+    return r; // { ok, status, data }
+  } catch {
+    return { ok: false, status: 0, data: null };
+  }
+}
+);
     if (!r.ok) return null;
     return await r.json();
   } catch {
@@ -58,10 +66,17 @@ async function fetchMe() {
   }
 }
 
+
 async function fetchProfilePrefill() {
-  // Only call after we know we're authenticated.
   try {
-    const r = await fetch("/api/profile", { credentials: "include" });
+    const r = await j("/api/profile");
+    if (!r || !r.ok) return null;
+    return r.data || null;
+  } catch {
+    return null;
+  }
+}
+);
     if (!r.ok) return null; // includes 401
     return await r.json();
   } catch {
@@ -140,11 +155,57 @@ export async function enforceProfileCompleteness({ applyLayout = true } = {}) {
 }
 
 // Convenience wrapper the rest of the app can call
-export async function gate(opts = { applyLayout: false }) {
-  hide($("profileModal"));
-  return await enforceProfileCompleteness(opts);
-}
 
+export async function gate(opts = { applyLayout: false }) {
+  const applyLayout = !!(opts && opts.applyLayout);
+  const appEl       = $("app");
+  const loginModal  = $("loginModal");
+  const profileModal= $("profileModal");
+  const hasLogin    = !!loginModal;
+  const hasProfile  = !!profileModal;
+
+  // Try to fetch /api/me with status
+  const meRes = await fetchMe(); // { ok, status, data }
+  const me    = meRes && meRes.data ? meRes.data : null;
+
+  // 1) Explicit unauthenticated only when 401 and login modal exists
+  if (meRes && meRes.status === 401 && hasLogin) {
+    if (appEl) hide(appEl);
+    show(loginModal, "flex");
+    return { ok: false, reason: "unauthenticated" };
+  }
+
+  // 2) Network/other failure OR no modal available -> assume auth to keep UI usable
+  if (!meRes || meRes.status === 0 || (meRes && !meRes.ok && meRes.status !== 401)) {
+    if (applyLayout) {
+      try { applyAuthedLayout(); } catch(e) { console.warn("applyAuthedLayout failed", e); }
+    }
+    return { ok: true, assumed: true };
+  }
+
+  // 3) If we have a response and it's OK, check profile completeness if the modal exists
+  let profileComplete = true;
+  if (hasProfile) {
+    profileComplete = (me && me.profileComplete !== undefined)
+      ? !!me.profileComplete
+      : (me && me.first_time === false);
+  }
+
+  if (!profileComplete && hasProfile) {
+    setProfileModalMode("gate");
+    await loadProfileIntoForm();
+    show(profileModal, "flex");
+    hide($("askChipToolbar"));
+    return { ok: false, reason: "incomplete" };
+  }
+
+  if (applyLayout) {
+    try { applyAuthedLayout(); } catch(e) { console.warn("applyAuthedLayout failed", e); }
+    _chipSetState("idle");
+    _chipGuide("Press Start or Chat to speak with Chip.");
+  }
+  return { ok: true };
+}
 /* ---------------- Wire handlers ---------------- */
 
 export function wireLoginAndProfileHandlers() {
