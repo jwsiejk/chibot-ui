@@ -1,2 +1,4 @@
-Account,Account Owner,Type,Region,Pure Rep,Pure Type,Email
-Acme Rockets,Jane Doe,Enterprise,Americas,John Smith,Strategic,jane@example.com
+Account Name,Account Owner,Type
+Acme Health,Jane Doe,Enterprise
+Nebraska State University,John Smith,PubSec
+Prairie Tech,Alex Johnson,Commercial

@@ -1,23 +1,30 @@
-# Ask Chip — Full Build (Holistic)
+# Ask Chip — Complete Build
 
-End‑to‑end app with: login/profile, text + voice chat (≤30 words), Chip persona, short‑term memory, ElevenLabs TTS + visemes (with browser fallbacks), SMTP email, and Americas accounts CSV lookup.
+Features: profile gating, Chip persona (≤30 words), conversation memory, mic voice I/O, ElevenLabs TTS (server-side) with browser fallback, visemes, email send API, and Americas CSV account lookup.
+
+## Run Locally
+```
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+export FLASK_ENV=development
+python app.py
+# open http://localhost:5000
+```
 
 ## Render
-- **Build:** `pip install -r requirements.txt`
-- **Start:** `gunicorn -k gthread -w ${WEB_CONCURRENCY:-1} --threads ${WEB_THREADS:-8} --timeout 120 --bind 0.0.0.0:$PORT app:app`
+Build: `pip install -U pip setuptools wheel && pip install --prefer-binary -r requirements.txt`  
+Start: `gunicorn -k gthread -w ${WEB_CONCURRENCY:-1} --threads ${WEB_THREADS:-8} --timeout 120 --graceful-timeout 30 --keep-alive 15 --bind 0.0.0.0:$PORT app:app`
 
-## Slash commands
-- `/team <account>` → looks up owner/type/region from CSV.
+## Endpoints
+- `GET /api/me` — auth state
+- `POST /api/login` — set session email
+- `POST /api/logout`
+- `GET|POST /api/profile`
+- `GET /api/greet`
+- `POST /api/chat` — Chip reply (≤30 words, with memory & profile context)
+- `POST /api/tts` — audio/mpeg from ElevenLabs (fallback to browser speech on client)
+- `POST /api/tts_with_visemes` — `{ audio(base64|null), visemes[], relative:true }`
+- `POST /api/email/send` — server-side SMTP
+- `GET /api/accounts/search?q=...` — CSV lookup
+```
 
-See `.env.example` for required env vars.
-
----
-## Email (server-side SMTP)
-- Endpoint: `POST /api/email/send`
-- Env: `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
-- Body: `{ "to": "...", "subject": "...", "body": "...", "html": "<optional>" }`
-
-## Americas CSV account lookup
-- File: `static/data/americas_accounts.csv` (override with `ACCOUNTS_CSV_PATH`)
-- Endpoint: `GET /api/accounts/search?q=<substring>`
-- Supports both schemas: `Account, Pure Rep, Pure Type` **and** `Account Name, Account Owner, Type`.

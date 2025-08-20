@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ask Chip</title>
-  <link rel="stylesheet" href="/static/css/style.css?v={{ build }}" />
+  <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
   <header class="app-header">
@@ -65,7 +65,6 @@
     </div>
 
     <div class="toolbar">
-      <button id="profileBtn" class="secondary">Profile</button>
       <button id="micBtn" class="secondary" aria-pressed="false" title="Tap to talk">🎤</button>
       <button id="startBtn" class="primary" disabled>Start</button>
       <span class="hint">Start plays Chip’s greeting and opens the conversation.</span>
@@ -79,9 +78,9 @@
     </form>
   </section>
 
-  <script src="/static/js/api.js?v={{ build }}" defer></script>
-  <script src="/static/js/ui.js?v={{ build }}" defer></script>
-  <script src="/static/js/viseme.js?v={{ build }}" defer></script>
-  <script src="/static/js/main.js?v={{ build }}" defer></script>
+  <script src="/static/js/api.js" defer></script>
+  <script src="/static/js/ui.js" defer></script>
+  <script src="/static/js/viseme.js" defer></script>
+  <script src="/static/js/main.js" defer></script>
 </body>
 </html>

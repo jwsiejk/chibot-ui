@@ -13,10 +13,7 @@ const UI = (() => {
     chatView.hidden = section !== "chat";
   }
   function setStatus(text) { appStatus.textContent = text || "Ready"; }
-  function setUser(email) {
-    if (email) { userMenu.hidden = false; userEmail.textContent = email; }
-    else { userMenu.hidden = true; userEmail.textContent = ""; }
-  }
+  function setUser(email) { if (email) { userMenu.hidden = false; userEmail.textContent = email; } else { userMenu.hidden = true; userEmail.textContent = ""; } }
   function appendBubble(role, text) {
     const div = document.createElement("div");
     div.className = "bubble " + (role === "user" ? "from-user" : "from-assistant");
@@ -26,4 +23,4 @@ const UI = (() => {
   }
   function clearChat() { chatLog.innerHTML = ""; }
   return { show, setStatus, setUser, appendBubble, clearChat };
-})();
+})(); 
