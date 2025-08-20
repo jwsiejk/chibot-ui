@@ -1,83 +1,84 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Ask Chip</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="icon" href="data:," />
-
-  {# one token for all static imports #}
-  {% set build = '2025-08-17-r3' %}
-
-  <link rel="stylesheet" href="{{ url_for('static', filename='user-experience/css/style.css') }}?v={{ build }}" />
-  <script defer src="{{ url_for('static', filename='chip/chip-viseme.js') }}?v={{ build }}"></script>
-  <script type="module" src="{{ url_for('static', filename='user-experience/js/main.js') }}?v={{ build }}"></script>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Ask Chip — Full</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
 </head>
 <body>
+  <header class="app-header">
+    <div class="brand">
+      <div class="avatar" id="chipAvatar" title="Chip"></div>
+      <h1>Ask Chip</h1>
+    </div>
+    <div class="status" id="appStatus">Ready</div>
+    <div class="user-menu" id="userMenu" hidden>
+      <span id="userEmail"></span>
+      <button id="logoutBtn" class="link">Logout</button>
+    </div>
+  </header>
 
-<header id="topbar" class="topbar">
-  <div id="askChipWrap" class="actions dropdown nav">
-    <button id="navMenuBtn" class="btn small">Ask Chip ▾</button>
-    <ul id="navMenu" class="menu" style="display:none">
-      <li><button id="navProfile">👤 Edit Profile</button></li>
-      <li><button id="navHistory">📜 Conversation History</button></li>
-      <li><button id="navLogout">🚪 Logout</button></li>
-    </ul>
-  </div>
-</header>
+  <section id="loginView" class="view">
+    <div class="card">
+      <h2>Welcome</h2>
+      <p>Log in with your email to continue.</p>
+      <form id="loginForm">
+        <label>Email</label>
+        <input type="email" id="loginEmail" placeholder="you@company.com" required/>
+        <button id="loginSubmit" type="submit">Log In</button>
+      </form>
+    </div>
+  </section>
 
-<div id="app">
-  <main id="layout" class="layout">
-    <!-- Left Column -->
-    <section id="chatDock" class="chat-col">
-      <div id="statusBanner" class="status-banner">Disconnected. Press Start to begin a new session.</div>
-
-      <section id="chatText" class="chat-window hidden">
-        <div id="chatLog" class="chat-log" aria-live="polite"></div>
-        <div class="chat-composer stack">
-          <input id="chatInput" type="text" placeholder="Type a message…" autocomplete="off" />
-          <button id="chatSendBtn" class="btn btn--accent">Send</button>
+  <section id="profileView" class="view" hidden>
+    <div class="card">
+      <h2>Profile</h2>
+      <p>Please fill out your profile to continue.</p>
+      <form id="profileForm">
+        <div class="grid">
+          <div>
+            <label>Name</label>
+            <input type="text" id="profileName" required/>
+          </div>
+          <div>
+            <label>Title</label>
+            <input type="text" id="profileTitle"/>
+          </div>
+          <div>
+            <label>Region</label>
+            <input type="text" id="profileRegion"/>
+          </div>
         </div>
-      </section>
+        <button id="profileSave" type="submit">Save</button>
+      </form>
+    </div>
+  </section>
 
-      <section id="chatTTS" class="chat-window hidden">
-        <div style="opacity:.7; font-size:14px; margin-bottom:8px;">Live voice chat (press Start → select “Chat Live (TTS)”)</div>
-        <div id="ttsOnceControls" class="stack">
-          <textarea id="ttsPrompt" rows="2" placeholder="Type something for Chip to say…"></textarea>
-          <button id="ttsOnceBtn" class="btn">Speak once</button>
-        </div>
-        <audio id="ttsPlayer" controls style="margin-top:8px; width:100%"></audio>
-      </section>
-
-      <div id="adminLog" class="admin-log" aria-label="Administrator Call Log"></div>
-    </section>
-
-    <!-- Right Column -->
-      <div class="chip-box-right">
-        <div id="chipBox" class="chip-box">
-          <img id="chipImage" ...>
-          <img id="chipMouthImg" ...>
-        </div>
-     </div>
-   </div>
-</div>
-
-<footer id="askChipToolbar">
-  <div class="toolbar-left">
-    <button id="btnStart" class="btn btn--accent">Start</button>
-    <button id="btnDisconnect" class="btn">Stop</button>
-    <div class="dropdown">
-      <button id="btnChat" class="btn">Chat ▾</button>
-      <div class="dropdown-content">
-        <div id="btnChatText">Chat</div>
-        <div id="btnChatLive">Chat Live (TTS)</div>
+  <section id="chatView" class="view" hidden>
+    <div class="stage card">
+      <div class="stage-inner">
+        <img id="chipImage" class="chip-image" alt="Chip"/>
+        <canvas id="visemeCanvas" width="640" height="360" aria-hidden="true"></canvas>
+      </div>
+      <div class="toolbar">
+        <button id="startBtn" class="primary" disabled>Start</button>
+        <button id="micBtn" class="secondary" aria-pressed="false" title="Click to talk">🎤</button>
+        <span class="hint">Talk to Chip or type below.</span>
       </div>
     </div>
-  </div>
-  <div class="toolbar-right">
-    <span id="connState">Disconnected</span>
-  </div>
-</footer>
 
+    <div id="chatLog" class="chat-log" aria-live="polite"></div>
+
+    <form id="composer" class="composer">
+      <textarea id="composerInput" rows="1" placeholder="Ask Chip anything about Pure Storage..."></textarea>
+      <button id="sendBtn" class="primary" type="submit" disabled>Send</button>
+    </form>
+  </section>
+
+  <script src="/static/js/api.js" defer></script>
+  <script src="/static/js/viseme.js" defer></script>
+  <script src="/static/js/ui.js" defer></script>
+  <script src="/static/js/main.js" defer></script>
 </body>
 </html>

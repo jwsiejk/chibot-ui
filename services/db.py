@@ -1,5 +1,4 @@
-import os
-import json
+import os, json
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -7,13 +6,9 @@ def _dsn_from_env():
     url = os.getenv("DATABASE_URL")
     if not url:
         return None
-    # Normalize whitespace and ensure sslmode
     url = "".join(url.split())
     if "sslmode=" not in url:
-        if "?" in url:
-            url += "&sslmode=require"
-        else:
-            url += "?sslmode=require"
+        url = f"{url}&sslmode=require" if "?" in url else f"{url}?sslmode=require"
     return url
 
 def get_connection():
@@ -29,7 +24,8 @@ def init_db():
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("""                        CREATE TABLE IF NOT EXISTS public.users (
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS public.users (
                         email TEXT PRIMARY KEY,
                         name TEXT,
                         title TEXT,
@@ -39,7 +35,8 @@ def init_db():
                         updated_at TIMESTAMPTZ DEFAULT now()
                     );
                 """)
-                cur.execute("""                        CREATE TABLE IF NOT EXISTS public.logs (
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS public.logs (
                         id BIGSERIAL PRIMARY KEY,
                         email TEXT,
                         role TEXT,
@@ -53,30 +50,27 @@ def init_db():
 def get_user(email: str):
     conn = get_connection()
     if not conn:
-        # No DB configured; fake minimal user
         return {"email": email}
     try:
         with conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT email, name, title, region, profile FROM public.users WHERE email = %s", (email,))
                 row = cur.fetchone()
-                if not row:
-                    return None
-                return dict(row)
+                return dict(row) if row else None
     finally:
         conn.close()
 
 def save_user(email: str, name=None, title=None, region=None, profile=None):
     conn = get_connection()
     if not conn:
-        # No DB configured; nothing to persist
         return
     profile_json = json.dumps(profile) if profile is not None else None
     try:
         with conn:
             with conn.cursor() as cur:
-                # Upsert with JSONB merge
-                cur.execute("""                        INSERT INTO public.users (email, name, title, region, profile)
+                cur.execute(
+                    """
+                    INSERT INTO public.users (email, name, title, region, profile)
                     VALUES (%s, %s, %s, %s, %s::jsonb)
                     ON CONFLICT (email) DO UPDATE SET
                         name = EXCLUDED.name,
@@ -84,7 +78,9 @@ def save_user(email: str, name=None, title=None, region=None, profile=None):
                         region = EXCLUDED.region,
                         profile = COALESCE(public.users.profile, '{}'::jsonb) || COALESCE(EXCLUDED.profile, '{}'::jsonb),
                         updated_at = now();
-                """, (email, name, title, region, profile_json))
+                    """,
+                    (email, name, title, region, profile_json)
+                )
     finally:
         conn.close()
 

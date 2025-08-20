@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: ask-chip
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 2 --threads 4 --timeout 120
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: SECRET_KEY
+      - key: DATABASE_URL
+      - key: OPENAI_API_KEY
+      - key: OPENAI_MODEL
+      - key: ELEVEN_API_KEY
+      - key: ELEVEN_VOICE_ID
+      - key: ELEVEN_MODEL_ID

@@ -1,599 +1,143 @@
-print("✅ Chip app starting...")
-
-# --- Patch eventlet BEFORE importing anything else that uses sockets/threads ---
-import eventlet
-eventlet.monkey_patch(os=False)  # avoid greening os.write to prevent mainloop blocking error
-
 import os
-import json
-import traceback
-from uuid import uuid4
-from datetime import datetime
-from werkzeug.exceptions import NotFound
+from flask import Flask, request, session, jsonify, render_template, url_for, Response
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
-from flask import (
-    Flask, request, jsonify, render_template, redirect, session,
-    url_for, Response, stream_with_context, g, send_from_directory
-)
-from flask_session import Session
-from werkzeug.utils import secure_filename
+from services import db as dbsvc
+from services import llm as llmsvc
+from services import tts as ttssvc
 
-from elevenlabs.client import ElevenLabs
-from memory import get_user, save_user, log_conversation, get_connection
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
 
-# Modern OpenAI client
-from openai import OpenAI
+app = Flask(__name__, static_folder="static", template_folder="templates")
+app.secret_key = SECRET_KEY
+app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=False)
 
-# -----------------------------------------------------------------------------
-# App setup
-# -----------------------------------------------------------------------------
-app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET", "supersecret")
-app.config["SESSION_TYPE"] = "filesystem"
-Session(app)
+try:
+    dbsvc.init_db()
+except Exception:
+    pass
 
-voice_id = os.getenv("CHIP_VOICE_ID")
-eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+def current_user_email():
+    return session.get("email")
 
-# Ensure audio output dir exists
-os.makedirs("static/audio", exist_ok=True)
-
-# Single, shared OpenAI client
-oai = OpenAI()
-
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
-def _profile_complete(user: dict | None) -> bool:
-    """A profile is complete when name, role, and region are all non-empty."""
-    if not user or not isinstance(user, dict):
-        return False
-    name = (user.get("name") or "").strip()
-    role = (user.get("role") or "").strip()
-    region = (user.get("region") or "").strip()
-    return all([name, role, region])
-
-def _normalize_user(user: dict | None) -> dict:
-    """Normalize legacy fields and default values.
-    - Some older profiles stored the title under 'title' instead of 'role'.
-    - Default region to 'NA' if missing/empty.
-    - Always return a dictionary.
-    """
-    if not user or not isinstance(user, dict):
-        return {}
-    # Migrate legacy 'title' -> 'role'
-    if not (user.get("role") or "").strip():
-        legacy_title = (user.get("title") or "").strip()
-        if legacy_title:
-            user["role"] = legacy_title
-    # Default region
-    if not (user.get("region") or "").strip():
-        user["region"] = "NA"
-    return user
-
-# -----------------------------------------------------------------------------
-# DB helpers
-# -----------------------------------------------------------------------------
-def init_conversation_table():
-    import psycopg2
-
-    if 'DATABASE_URL' not in os.environ:
-        raise ValueError("DATABASE_URL is not set.")
-
-    try:
-        conn = get_connection() or psycopg2.connect(os.environ['DATABASE_URL'])
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS conversations (
-                    id SERIAL PRIMARY KEY,
-                    user_id VARCHAR(100),
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    question TEXT,
-                    answer TEXT
-                )
-            """)
-            conn.commit()
-            print("✅ Conversation table verified.")
-    except Exception as e:
-        print("❌ Error creating conversation table:", e)
-        if 'conn' in locals():
-            conn.rollback()
-    finally:
-        if 'conn' in locals() and not conn.closed:
-            conn.close()
-            print("✅ Database connection closed.")
-
-def ensure_db_ready():
-    try:
-        conn = get_connection()
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1;")
-        print("✅ DB connectivity OK")
-    except Exception as e:
-        print("🔥 DB connectivity check failed:", e)
-        raise
-
-# -----------------------------------------------------------------------------
-# Core AI
-# -----------------------------------------------------------------------------
-def _build_system_prompt(name: str) -> dict:
-    return {
-        "role": "system",
-        "content": (
-            f"You are Chip, a virtual Pure Storage solution engineer. "
-            f"You are relatable, intelligent, and from Nebraska. "
-            f"You speak plainly and occasionally use dry humor and Nebraska sayings. "
-            f"Your job is to provide technical answers, but with a humble and real personality. "
-            f"Keep answers grounded in Pure Storage expertise. Use no more than 10 words. "
-            f"The user's name is {name}."
-        ),
-    }
-
-def generate_chip_response(user_id, name, question, role, region):
-    # Load existing profile/messages
-    existing = get_user(user_id) or {}
-    messages = existing.get("messages", [])
-
-    # Append new user turn and trim history
-    messages.append({"role": "user", "content": question})
-    messages = messages[-6:]
-
-    # LLM call
-    system_prompt = _build_system_prompt(name)
-    response = oai.chat.completions.create(
-        model="gpt-4o",
-        messages=[system_prompt] + messages,
-        max_tokens=80,
-    )
-    answer = response.choices[0].message.content
-
-    # Persist profile with updated history (keep name/role/region in sync)
-    messages.append({"role": "assistant", "content": answer})
-    profile = {
-        "name": existing.get("name", name),
-        "role": existing.get("role", role),
-        "region": existing.get("region", region),
-        "messages": messages,
-    }
-    save_user(user_id, profile)
-
-    # Log Q/A
-    log_conversation(user_id, question, answer)
-    return answer
-
-# -----------------------------------------------------------------------------
-# Routes
-# -----------------------------------------------------------------------------
 @app.route("/")
 def index():
     return render_template("index.html")
 
-# ---------- Auth ----------
-@app.route("/login-basic", methods=["POST"])
-def login_basic():
-    try:
-        _ = get_connection()  # ping
-        data = request.get_json() or {}
-        login_name = (data.get("login") or "").strip().lower()
-
-        if not (login_name.endswith("@purestorage.com") or login_name.endswith("@trace3.com")):
-            return jsonify({"error": "Unauthorized domain"}), 403
-
-        session["user_id"] = login_name
-
-        user = get_user(login_name) or {}
-        session["name"] = user.get("name", login_name)
-        session["role"] = user.get("role", "engineer")
-        session["region"] = user.get("region", "NA")
-
-        return jsonify({
-            "first_time": not _profile_complete(_normalize_user(dict(user))),
-            "name": user.get("name", ""),
-            "title": user.get("role", "")
-        })
-
-    except Exception as e:
-        print("🔥 Login error:", str(e))
-        return jsonify({"error": "Login failed"}), 500
-
-@app.route("/login", methods=["POST"])
-def login():
-    # Accepts JSON {"email": "..."} and sets session. Mirrors /login-basic.
-    try:
-        _ = get_connection()
-        data = request.get_json() or {}
-        email = (data.get("email") or "").strip().lower()
-
-        if not email or not (email.endswith("@purestorage.com") or email.endswith("@trace3.com")):
-            return jsonify({"error": "Unauthorized domain"}), 403
-
-        session["user_id"] = email
-
-        user = get_user(email) or {}
-        session["name"] = user.get("name", email)
-        session["role"] = user.get("role", "engineer")
-        session["region"] = user.get("region", "NA")
-
-        return jsonify({
-            "first_time": not _profile_complete(_normalize_user(dict(user))),
-            "name": user.get("name", ""),
-            "title": user.get("role", "")
-        })
-
-    except Exception as e:
-        print("🔥 /login error:", str(e))
-        return jsonify({"error": "Login failed"}), 500
-
-@app.route("/logout", methods=["POST"])
-def logout():
-    """Clear session and return ok; frontend can redirect to landing screen and show login prompt."""
-    try:
-        session.clear()
-        return jsonify({"ok": True})
-    except Exception as e:
-        print("🔥 ERROR IN /logout:", str(e))
-        return jsonify({"ok": False}), 500
-
-@app.route("/auth/status", methods=["GET"])
-def auth_status():
-    """Let the frontend decide whether to show login or profile (normalized)."""
-    try:
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({ "authenticated": False })
-        raw = get_user(user_id) or {}
-        user = _normalize_user(dict(raw))  # copy & normalize
-        complete = _profile_complete(user)
-        return jsonify({
-            "authenticated": True,
-            "user_id": user_id,
-            "name": (user.get("name") or user_id),
-            "role": (user.get("role") or "engineer"),
-            "region": (user.get("region") or "NA"),
-            "first_time": not complete,
-            "profileComplete": complete
-        })
-    except Exception as e:
-        print("🔥 ERROR IN /auth/status:", str(e))
-        return jsonify({ "authenticated": False, "error": "status check failed" }), 500
-
-# ---------- Profile ----------
-@app.route("/profile", methods=["GET"])
-def get_profile_route():
-    """Return the saved profile so the frontend can prefill the form."""
-    try:
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-        raw = get_user(user_id) or {}
-        user = _normalize_user(dict(raw))
-        complete = _profile_complete(user)
-        return jsonify({
-            "name": user.get("name", ""),
-            "title": user.get("role", "") or user.get("title", ""),
-            "region": user.get("region", ""),
-            "email": user_id,
-            "profile_complete": complete
-        })
-    except Exception as e:
-        print("🔥 GET /profile error:", str(e))
-        return jsonify({"error": "Failed to load profile"}), 500
-
-@app.route("/profile", methods=["POST"])
-def save_profile_route():
-    try:
-        _ = get_connection()
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-
-        data = request.get_json() or {}
-        name = (data.get("name") or "").strip() or user_id
-        title = (data.get("title") or "").strip() or "engineer"
-        region = (data.get("region") or "").strip() or "NA"
-
-        existing = _normalize_user(get_user(user_id) or {})
-        messages = existing.get("messages", [])
-
-        # Normalize and overwrite
-        profile = {
-            "name": name,
-            "role": title,   # canonical storage key
-            "region": region,
-            "messages": messages
-        }
-
-        # Persist
-        save_user(user_id, profile)
-        # Keep session synchronized
-        session["name"] = name
-        session["role"] = title
-        session["region"] = region
-
-        return jsonify({
-            "ok": True,
-            "profile_complete": _profile_complete(profile),
-            "profile": {
-                "name": name, "title": title, "region": region, "email": user_id
-            }
-        })
-
-    except Exception as e:
-        print("🔥 Profile save error:", str(e))
-        return jsonify({"error": "Save failed"}), 500
-
-# ---------- Chat / Voice ----------
-@app.route("/ask", methods=["POST"])
-def ask():
-    try:
-        _ = get_connection()
-        user_id = session.get("user_id") or request.remote_addr or str(uuid4())
-
-        if request.is_json:
-            data = request.get_json() or {}
-            question = data.get("question")
-            name = session.get("name", data.get("name", "User"))
-            role = data.get("role", session.get("role", "engineer"))
-            region = data.get("region", session.get("region", "NA"))
-        else:
-            question = request.form.get("question")
-            name = session.get("name", request.form.get("name", "User"))
-            role = request.form.get("role", session.get("role", "engineer"))
-            region = request.form.get("region", session.get("region", "NA"))
-
-        if not question:
-            return jsonify({"error": "Missing question."}), 400
-
-        if request.is_json and data.get("greeting"):
-            response_text = question
-        else:
-            response_text = generate_chip_response(user_id, name, question, role, region)
-
-        voice_settings = {"speed": 0.9}
-        audio = eleven.text_to_speech.convert(
-            voice_id=voice_id,
-            model_id="eleven_monolingual_v1",
-            text=response_text,
-            optimize_streaming_latency=1,
-            voice_settings=voice_settings
-        )
-
-        filename = f"static/audio/{uuid4().hex}.mp3"
-        with open(filename, "wb") as f:
-            for chunk in audio:
-                f.write(chunk)
-
-        return jsonify({"response": response_text, "audio": "/" + filename})
-
-    except Exception as e:
-        print("🔥 ERROR IN /ask:", str(e))
-        traceback.print_exc()
-        return jsonify({"error": "Something went wrong. Try again later."}), 500
-
-@app.route("/ask-chip", methods=["POST"])
-def ask_chip():
-    def generate_stream():
-        try:
-            _ = get_connection()
-            user_id = session.get("user_id") or request.remote_addr or str(uuid4())
-            name = session.get("name", "User")
-            role = session.get("role", "engineer")
-            region = session.get("region", "NA")
-
-            if "audio" not in request.files:
-                yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"error": "No audio file uploaded."}).encode() + b"\r\n"
-                return
-
-            audio_file = request.files["audio"]
-            audio_file.filename = secure_filename(audio_file.filename)
-            audio_path = f"/tmp/{uuid4().hex}.webm"
-            audio_file.save(audio_path)
-
-            # Whisper transcription via standardized client
-            with open(audio_path, "rb") as f:
-                transcript = oai.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=f
-                ).text
-
-            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"transcript": transcript}).encode() + b"\r\n"
-
-            response_text = generate_chip_response(user_id, name, transcript, role, region)
-            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"response": response_text}).encode() + b"\r\n"
-
-            voice_settings = {"speed": 0.9}
-            audio_stream = eleven.text_to_speech.convert(
-                voice_id=voice_id,
-                model_id="eleven_monolingual_v1",
-                text=response_text,
-                optimize_streaming_latency=1,
-                voice_settings=voice_settings
-            )
-
-            yield b"--frame\r\nContent-Type: audio/mpeg\r\n\r\n"
-            for chunk in audio_stream:
-                yield chunk
-            yield b"\r\n--frame--\r\n"
-
-        except Exception as e:
-            print("🔥 ERROR IN /ask-chip:", str(e))
-            traceback.print_exc()
-            yield b"--frame\r\nContent-Type: application/json\r\n\r\n" + json.dumps({"error": "Voice processing failed."}).encode() + b"\r\n"
-
-    return Response(stream_with_context(generate_stream()), mimetype="multipart/x-mixed-replace; boundary=frame")
-
-# ---------- History / Greet ----------
-@app.route("/history", methods=["POST"])
-def retrieve_history():
-    try:
-        _ = get_connection()
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"error": "Unauthorized"}), 401
-
-        query = (request.json or {}).get("query", "").strip()
-        if not query:
-            return jsonify({"error": "Missing query"}), 400
-
-        user = get_user(user_id) or {}
-        if not user.get("messages"):
-            return jsonify({"response": "I don’t have any past conversations to look at yet."})
-
-        past_dialogue = user["messages"][-12:]
-        flat_history = "\n".join([f"{m['role']}: {m['content']}" for m in past_dialogue])
-
-        prompt = f"""
-You are Chip, a helpful Pure Storage AI. The user asked a question that references past conversations.
-
-Conversation history:
-{flat_history}
-
-Current user query: "{query}"
-
-If something in the history matches what the user is referring to, summarize or clarify the key detail.
-If not, say you couldn't find it.
-"""
-
-        response = oai.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=150
-        )
-        return jsonify({"response": response.choices[0].message.content.strip()})
-    except Exception as e:
-        print("🔥 ERROR IN /history:", str(e))
-        traceback.print_exc()
-        return jsonify({"error": "History lookup failed"}), 500
-
-@app.route("/greet", methods=["POST"])
-def greet():
-    try:
-        _ = get_connection()
-        user_id = session.get("user_id")
-        user = get_user(user_id) if user_id else None
-        name = user.get("name", "there") if user else "there"
-
-        data = request.get_json() or {}
-        prompt = data.get("prompt", f"Say hello to {name}.")
-
-        openai_response = oai.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=60
-        )
-        greeting_text = openai_response.choices[0].message.content.strip()
-
-        voice_settings = {"speed": 0.9}
-        audio = eleven.text_to_speech.convert(
-            voice_id=voice_id,
-            model_id="eleven_monolingual_v1",
-            text=greeting_text,
-            optimize_streaming_latency=1,
-            voice_settings=voice_settings
-        )
-        filename = f"static/audio/{uuid4().hex}.mp3"
-        with open(filename, "wb") as f:
-            for chunk in audio:
-                f.write(chunk)
-
-        return jsonify({"reply": greeting_text, "audio": "/" + filename})
-    except Exception as e:
-        print("🔥 ERROR IN /greet:", str(e))
-        traceback.print_exc()
-        return jsonify({"error": "Greeting failed"}), 500
-
-# ---------- Health ----------
-@app.route("/healthz/db", methods=["GET"])
-
-@app.get("/healthz")
-def healthz():
-    return "ok", 200
-
-@app.get("/healthz/db")
-def healthz_db():
-    try:
-        ensure_db_ready()
-        return jsonify({"ok": True}), 200
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-# ---------- ES module alias routes (serve JS modules from /static/js/* when imported from root) ----------
-
-def _serve_js_alias(subdir: str, filename: str):
-    """Try new tree first (static/user-experience/js), then legacy (static/js). Return 404 if not found; never 500 for NotFound."""
-    bases = [
-        os.path.join("static", "user-experience", "js", subdir),
-        os.path.join("static", "js", subdir),
-    ]
-    for base in bases:
-        try:
-            return send_from_directory(base, filename, max_age=0)
-        except NotFound:
-            continue
-        except Exception as e:
-            try:
-                return jsonify({"error": "alias failure", "detail": str(e)}), 500
-            except Exception:
-                # if jsonify not imported earlier in this scope, avoid raising a new exception
-                from flask import jsonify as _jsonify
-                return _jsonify({"error": "alias failure", "detail": str(e)}), 500
-    from flask import jsonify as _jsonify
-    return _jsonify({"error": f"{subdir}/{filename} not found"}), 404
-@app.route("/auth/profile.js")
-def _alias_auth_profile_js():
-    return _serve_js_alias("auth", "profile.js")
-
-@app.route("/core/dom.js")
-def _alias_core_dom_js():
-    return _serve_js_alias("core", "dom.js")
-
-@app.route("/core/api.js")
-def _alias_core_api_js():
-    return _serve_js_alias("core", "api.js")
-
-@app.route("/core/state.js")
-def _alias_core_state_js():
-    return _serve_js_alias("core", "state.js")
-
-@app.route("/chat/ui.js")
-def _alias_chat_ui_js():
-    return _serve_js_alias("chat", "ui.js")
-
-@app.route("/chat/send.js")
-def _alias_chat_send_js():
-    return _serve_js_alias("chat", "send.js")
-
-@app.route("/voice/playback.js")
-def _alias_voice_playback_js():
-    return _serve_js_alias("voice", "playback.js")
-
-@app.route("/voice/vad.js")
-def _alias_voice_vad_js():
-    return _serve_js_alias("voice", "vad.js")
-
-@app.route("/voice/record.js")
-def _alias_voice_record_js():
-    return _serve_js_alias("voice", "record.js")
-
-# ---------- API aliases used by the frontend ----------
-@app.route("/api/me", methods=["GET"])
-def api_me():
-    return auth_status()
-
 @app.route("/api/login", methods=["POST"])
 def api_login():
-    return login()
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return jsonify({"ok": False, "error": "Valid email required"}), 400
+    session["email"] = email
+    try:
+        if not dbsvc.get_user(email):
+            dbsvc.save_user(email=email, name=None, title=None, region=None, profile=None)
+    except Exception:
+        pass
+    return jsonify({"ok": True})
 
 @app.route("/api/logout", methods=["POST"])
 def api_logout():
-    return logout()
+    session.pop("email", None)
+    return jsonify({"ok": True})
 
-@app.route("/api/profile", methods=["GET"])
-def api_get_profile():
-    return get_profile_route()
+@app.route("/api/me", methods=["GET"])
+def api_me():
+    email = current_user_email()
+    if not email:
+        return jsonify({"ok": True, "logged_in": False})
+    user = dbsvc.get_user(email) or {"email": email}
+    profile_complete = bool(user.get("name"))
+    return jsonify({"ok": True, "logged_in": True, "profile_complete": profile_complete, "user": user})
 
-@app.route("/api/profile", methods=["POST"])
-def api_save_profile():
-    return save_profile_route()
+@app.route("/api/profile", methods=["GET", "POST"])
+def api_profile():
+    if request.method == "GET":
+        if not current_user_email():
+            return jsonify({"ok": False, "error": "Not authenticated"}), 401
+        user = dbsvc.get_user(current_user_email()) or {"email": current_user_email()}
+        return jsonify({"ok": True, "user": user})
+    if not current_user_email():
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    data = request.get_json(silent=True) or {}
+    name = data.get("name")
+    title = data.get("title")
+    region = data.get("region")
+    profile = data.get("profile")
+    dbsvc.save_user(email=current_user_email(), name=name, title=title, region=region, profile=profile)
+    user = dbsvc.get_user(current_user_email())
+    return jsonify({"ok": True, "user": user})
+
+@app.route("/api/greet", methods=["GET"])
+def api_greet():
+    if not current_user_email():
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    user = dbsvc.get_user(current_user_email()) or {}
+    name = user.get("name") or "there"
+    text = f"Hey {name}! I'm Chip. When you're ready, ask me anything about Pure Storage or your lab setup."
+    audio_rel = "chip/audio/greeting-static.mp3"
+    audio_fs = os.path.join(app.static_folder, audio_rel)
+    audio_url = url_for("static", filename=audio_rel) if os.path.exists(audio_fs) else None
+    return jsonify({"ok": True, "text": text, "audioUrl": audio_url})
+
+def system_prompt():
+    return (
+        "You are Chip, a virtual systems engineer for Pure Storage. "
+        "Speak in 1–2 crisp sentences. Be practical, calm, and specific. "
+        "Never exceed 30 words. Avoid marketing fluff."
+    )
+
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    if not current_user_email():
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    data = request.get_json(silent=True) or {}
+    prompt = (data.get("prompt") or "").strip()
+    if not prompt:
+        return jsonify({"ok": False, "error": "Prompt required"}), 400
+    messages = [{"role":"system","content":system_prompt()},{"role":"user","content":prompt}]
+    reply = llmsvc.reply(messages) or llmsvc.fallback(prompt)
+    try:
+        dbsvc.log_conversation(email=current_user_email(), role="user", message=prompt)
+        dbsvc.log_conversation(email=current_user_email(), role="assistant", message=reply)
+    except Exception:
+        pass
+    return jsonify({"ok": True, "reply": reply})
+
+@app.route("/api/tts", methods=["POST"])
+def api_tts():
+    if not current_user_email():
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "Text required"}), 400
+    text = llmsvc.cap_30_words(text)
+    audio, err = ttssvc.synthesize_tts_bytes(text)
+    if not audio:
+        return jsonify({"ok": False, "error": err or "TTS unavailable"}), 503
+    return Response(audio, mimetype="audio/mpeg")
+
+@app.route("/api/tts_with_visemes", methods=["POST"])
+def api_tts_with_visemes():
+    if not current_user_email():
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "Text required"}), 400
+    text = llmsvc.cap_30_words(text)
+    payload, err = ttssvc.tts_with_visemes(text)
+    if err and payload.get("audio") is None:
+        return jsonify({"ok": True, "fallback": True, "visemes": payload.get("visemes"), "relative": True})
+    return jsonify({"ok": True, **payload})
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=True)
