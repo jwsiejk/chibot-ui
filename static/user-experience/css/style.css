@@ -400,3 +400,73 @@ input::placeholder { color: #8f98a6; }
 
 /* Ensure page content doesn't sit under the toolbar */
 body { padding-bottom: var(--toolbar-h, 96px); }
+
+
+/* ===== Ask Chip overrides (layout + chip visibility) ===== */
+
+/* 1) Keep the left status column fixed-ish and Chip stage centered.
+   This assumes #layout wraps the left status panel and the Chip stage as direct children. */
+#layout {
+  display: grid !important;
+  grid-template-columns: minmax(300px, 420px) 1fr !important;
+  gap: 24px !important;
+  align-items: start !important;
+}
+
+/* If a different wrapper exists, this keeps the first child column at the left width
+   without relying on a specific class name. */
+#layout > :first-child {
+  min-width: 300px !important;
+  max-width: 420px !important;
+}
+
+/* The right column grows naturally. */
+#layout > :nth-child(2) {
+  min-width: 0 !important;
+}
+
+/* 2) Chip stage: keep centered and preserve aspect ratio so it can't collapse. */
+#chipBox {
+  position: relative !important;
+  aspect-ratio: 16 / 9 !important;
+  max-width: 1100px !important;
+  margin: 0 auto !important;
+  overflow: hidden;
+}
+
+/* Make sure the media inside the stage fits cleanly and shows up even when disconnected. */
+#chipBox img,
+#chipBox canvas,
+#chipBox video {
+  display: block !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  height: auto !important;
+  margin: 0 auto !important;
+  object-fit: contain !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  position: relative;
+  z-index: 2;
+}
+
+/* Neutralize any global "disconnected" state that hides Chip. */
+.disconnected #chipBox img,
+.disconnected #chipBox canvas,
+.disconnected #chipBox video {
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+/* Avoid overlays blocking Chip (loaders etc.) */
+#chipBox .overlay,
+#chipBox .loader {
+  pointer-events: none !important;
+  z-index: 1;
+}
+
+/* Keep the status box pinned flush left and full-width inside its column. */
+.status-panel, #statusPanel, .status-box {
+  width: 100% !important;
+  justify-self: start !important;
+}
