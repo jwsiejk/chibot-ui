@@ -325,7 +325,6 @@ function toggleNavMenu(forceOpen) {
   const navMenu = $("navMenu"); if (!navMenu) return;
   // normalize: if inline display:none exists from HTML, remove it so [hidden] works
   if (navMenu.style && navMenu.style.display === 'none') navMenu.style.removeProperty('display');
-  const navMenu = $("navMenu"); if (!navMenu) return;
   if (typeof forceOpen === "boolean") { navMenu.hidden = !forceOpen; navMenu.style.display = navMenu.hidden ? 'none' : 'block'; return; }
   navMenu.hidden = !navMenu.hidden; navMenu.style.display = navMenu.hidden ? 'none' : 'block';
 }
