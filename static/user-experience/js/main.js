@@ -75,9 +75,12 @@ function rehydrateChip() {
   chip.classList.remove("hidden");
   chip.style.display    = "block";
   chip.style.visibility = "visible";
-  chip.style.opacity    = "1";
-
-  // fix bad src
+  \1
+  // ensure src if empty
+  if (!chip.getAttribute("src") || chip.getAttribute("src").trim() === "") {
+    chip.src = `${CHIP_SRC}?v=${Date.now()}`;
+  }
+// fix bad src
   chip.onerror = () => {
     chip.src = `${CHIP_SRC}?v=${Date.now()}`;
     chip.classList.remove("hidden");
@@ -93,6 +96,7 @@ console.log("UI build ⏱ 2025-08-17-r3");
 
 // ===== single DOMContentLoaded =====
 document.addEventListener("DOMContentLoaded", () => {
+  const nm = $("navMenu"); if (nm && nm.style.display === 'none') nm.style.removeProperty('display');
   // Layout / toolbar metrics
   try { setToolbarHeightVar(); } catch {}
 
@@ -319,8 +323,11 @@ $("chatInput")?.addEventListener("keydown", (e) => {
 // “Ask Chip ▾” menu + items (Profile, History, Logout)
 function toggleNavMenu(forceOpen) {
   const navMenu = $("navMenu"); if (!navMenu) return;
-  if (typeof forceOpen === "boolean") { navMenu.hidden = !forceOpen; return; }
-  navMenu.hidden = !navMenu.hidden;
+  // normalize: if inline display:none exists from HTML, remove it so [hidden] works
+  if (navMenu.style && navMenu.style.display === 'none') navMenu.style.removeProperty('display');
+  const navMenu = $("navMenu"); if (!navMenu) return;
+  if (typeof forceOpen === "boolean") { navMenu.hidden = !forceOpen; navMenu.style.display = navMenu.hidden ? 'none' : 'block'; return; }
+  navMenu.hidden = !navMenu.hidden; navMenu.style.display = navMenu.hidden ? 'none' : 'block';
 }
 $("navMenuBtn")?.addEventListener("click", (e) => {
   e.preventDefault(); e.stopPropagation();
