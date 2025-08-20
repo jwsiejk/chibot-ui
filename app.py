@@ -1,45 +1,59 @@
 import os
-import json
 import sys
+import json
+from datetime import datetime
 
-# Ensure the directory containing app.py is on sys.path
+from flask import Flask, request, session, jsonify, render_template, url_for, Response
+
+# --- Ensure we can import local packages ---
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
 
-# Optional: if you ever switch to a `src/` layout, this also helps:
+# Optional support for a src/ layout
 SRC_DIR = os.path.join(APP_DIR, "src")
 if os.path.isdir(SRC_DIR) and SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-# Now your original import should work:
-try:
-    from services.llm_service import generate_reply
-except ModuleNotFoundError as e:
-    # Emit helpful diagnostics if it ever breaks again
-    sys.stderr.write(
-        f"[ImportError] {e}\n"
-        f"cwd={os.getcwd()}\n"
-        f"app_dir={APP_DIR}\n"
-        f"sys.path={sys.path}\n"
-    )
-    raise
-from datetime import datetime
-from flask import Flask, request, session, jsonify, render_template, url_for, Response
+# --- Load .env if available (does nothing if not present) ---
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
     pass
 
+# --- Safe imports with fallbacks so the server can still boot ---
+try:
+    from services.llm_service import generate_reply
+except Exception as e:
+    sys.stderr.write(f"[warning] llm_service import failed: {e}\n")
+    def generate_reply(messages, **kwargs):
+        return "Chip is running, but the LLM service is not available."
+
+try:
+    from services.tts_service import tts_bytes, tts_with_visemes
+except Exception as e:
+    sys.stderr.write(f"[warning] tts_service import failed: {e}\n")
+    def tts_bytes(text, **kwargs): return b""
+    def tts_with_visemes(text, **kwargs): return b"", []
+
+try:
+    from services.email_service import send_email
+except Exception as e:
+    sys.stderr.write(f"[warning] email_service import failed: {e}\n")
+    def send_email(*args, **kwargs): return False
+
+try:
+    from services.accounts_service import search_accounts
+except Exception as e:
+    sys.stderr.write(f"[warning] accounts_service import failed: {e}\n")
+    def search_accounts(*args, **kwargs): return []
+
+# Database helpers
 import memory
-from services.llm_service import generate_reply
-from services.tts_service import tts_bytes, tts_with_visemes
-from services.email_service import send_email
-from services.accounts_service import search_accounts  # app uses the new API
 
+# Flask setup
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
-
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = SECRET_KEY
 app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=False)
