@@ -75,7 +75,7 @@ function rehydrateChip() {
   chip.classList.remove("hidden");
   chip.style.display    = "block";
   chip.style.visibility = "visible";
-  \1
+  chip.style.opacity    = "1";
   // ensure src if empty
   if (!chip.getAttribute("src") || chip.getAttribute("src").trim() === "") {
     chip.src = `${CHIP_SRC}?v=${Date.now()}`;
