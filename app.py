@@ -1,5 +1,29 @@
 import os
 import json
+import sys
+
+# Ensure the directory containing app.py is on sys.path
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if APP_DIR not in sys.path:
+    sys.path.insert(0, APP_DIR)
+
+# Optional: if you ever switch to a `src/` layout, this also helps:
+SRC_DIR = os.path.join(APP_DIR, "src")
+if os.path.isdir(SRC_DIR) and SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+# Now your original import should work:
+try:
+    from services.llm_service import generate_reply
+except ModuleNotFoundError as e:
+    # Emit helpful diagnostics if it ever breaks again
+    sys.stderr.write(
+        f"[ImportError] {e}\n"
+        f"cwd={os.getcwd()}\n"
+        f"app_dir={APP_DIR}\n"
+        f"sys.path={sys.path}\n"
+    )
+    raise
 from datetime import datetime
 from flask import Flask, request, session, jsonify, render_template, url_for, Response
 try:
