@@ -1,3 +1,4 @@
+# services/accounts_service.py
 import os, csv, time
 from typing import List, Dict, Tuple, Optional
 import memory
@@ -5,32 +6,33 @@ from psycopg2 import sql as psql
 
 DEFAULT_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "data", "americas_accounts.csv")
 
-# Public union of headers (actual table/CSV headers + normalized keys)
-headers: List[str] = []
+headers: List[str] = []  # public union of headers/keys
 
-# CSV cache
 _CSV = {"path": None, "mtime": None, "headers": [], "rows": []}
-
-# DB discovery cache
-_DB = {
-    "ready": False,
-    "schema": "public",
-    "table": None,
-    "cols": {"account_name": None, "owner": None, "type": None},
-    "headers": [],
-}
-
-# -------- Helpers
+_DB = {"ready": False, "schema": "public", "table": None,
+       "cols": {"account_name": None, "owner": None, "type": None}, "headers": []}
 
 def _csv_path() -> str:
     return os.getenv("ACCOUNTS_CSV_PATH") or DEFAULT_PATH
 
-def _split_schema_table(name: Optional[str]) -> Tuple[str, Optional[str]]:
-    if not name: return ("public", None)
-    if "." in name:
-        s, t = name.split(".", 1)
-        return (s.strip() or "public", t.strip() or None)
-    return ("public", name)
+def _normalize_row(row: Dict[str, str]) -> Dict[str, str]:
+    r = { (k.strip() if isinstance(k, str) else k): (v.strip() if isinstance(v, str) else v) for k, v in (row or {}).items() }
+    if "Account" in r and "Pure Rep" in r and "Pure Type" in r:
+        norm = {"account_name": r.get("Account",""), "owner": r.get("Pure Rep",""), "type": r.get("Pure Type",""), "source": "GovTop"}
+    else:
+        norm = {"account_name": r.get("Account Name","") or r.get("Account",""),
+                "owner": r.get("Account Owner","") or r.get("Pure Rep",""),
+                "type": r.get("Type","") or r.get("Pure Type",""),
+                "source": "Corporate/Commercial/Enterprise/PubSec"}
+    norm.update({
+        "Account": r.get("Account","") or r.get("Account Name",""),
+        "Account Name": r.get("Account Name","") or r.get("Account",""),
+        "Account Owner": r.get("Account Owner","") or r.get("Pure Rep",""),
+        "Pure Rep": r.get("Pure Rep","") or r.get("Account Owner",""),
+        "Type": r.get("Type","") or r.get("Pure Type",""),
+        "Pure Type": r.get("Pure Type","") or r.get("Type",""),
+    })
+    return norm
 
 def _csv_load(path: Optional[str] = None):
     p = path or _csv_path()
@@ -47,29 +49,12 @@ def _csv_load(path: Optional[str] = None):
         hdrs = list(rdr.fieldnames or [])
     _CSV.update({"path": p, "mtime": mtime, "headers": hdrs, "rows": rows})
 
-def _normalize_row(row: Dict[str, str]) -> Dict[str, str]:
-    r = { (k.strip() if isinstance(k, str) else k): (v.strip() if isinstance(v, str) else v) for k, v in (row or {}).items() }
-    # Two common schemas
-    if "Account" in r and "Pure Rep" in r and "Pure Type" in r:
-        norm = {"account_name": r.get("Account",""),
-                "owner": r.get("Pure Rep",""),
-                "type": r.get("Pure Type",""),
-                "source": "GovTop"}
-    else:
-        norm = {"account_name": r.get("Account Name","") or r.get("Account",""),
-                "owner": r.get("Account Owner","") or r.get("Pure Rep",""),
-                "type": r.get("Type","") or r.get("Pure Type",""),
-                "source": "Corporate/Commercial/Enterprise/PubSec"}
-    # keep originals for callers that expect legacy keys
-    norm.update({
-        "Account": r.get("Account","") or r.get("Account Name",""),
-        "Account Name": r.get("Account Name","") or r.get("Account",""),
-        "Account Owner": r.get("Account Owner","") or r.get("Pure Rep",""),
-        "Pure Rep": r.get("Pure Rep","") or r.get("Account Owner",""),
-        "Type": r.get("Type","") or r.get("Pure Type",""),
-        "Pure Type": r.get("Pure Type","") or r.get("Type",""),
-    })
-    return norm
+def _split_schema_table(name: Optional[str]) -> Tuple[str, Optional[str]]:
+    if not name: return ("public", None)
+    if "." in name:
+        s, t = name.split(".", 1)
+        return (s.strip() or "public", t.strip() or None)
+    return ("public", name)
 
 def _discover_db() -> bool:
     conn = None
@@ -93,7 +78,7 @@ def _discover_db() -> bool:
                     SELECT table_schema, table_name
                     FROM information_schema.tables
                     WHERE table_schema IN ('public')
-                """ )
+                """)
                 rows = cur.fetchall() or []
                 candidates = [(r["table_schema"], r["table_name"]) for r in rows]
 
@@ -117,18 +102,12 @@ def _discover_db() -> bool:
                     col_account = find(["account_name","account"])
                     col_owner   = find(["account_owner","owner","pure_rep","pure rep","rep"])
                     col_type    = find(["type","pure_type","segment"])
-
                     if not col_account:
                         continue
 
-                    _DB.update({
-                        "ready": True,
-                        "schema": schema,
-                        "table": table,
-                        "cols": {"account_name": col_account, "owner": col_owner, "type": col_type},
-                        "headers": cols,
-                    })
-
+                    _DB.update({"ready": True, "schema": schema, "table": table,
+                                "cols": {"account_name": col_account, "owner": col_owner, "type": col_type},
+                                "headers": cols})
                     global headers
                     headers = sorted(set(cols) | {"account_name","owner","type","source"})
                     return True
@@ -143,19 +122,16 @@ def _db_search(q: str, limit: int=25) -> List[Dict[str,str]]:
     if not conn:
         return []
     schema = _DB["schema"]; table = _DB["table"]; c = _DB["cols"]
-
     an = psql.Identifier(c["account_name"])
     ow = psql.Identifier(c["owner"]) if c["owner"] else psql.SQL("NULL::text")
     ty = psql.Identifier(c["type"]) if c["type"] else psql.SQL("NULL::text")
-
     query = psql.SQL("""
         SELECT {an} AS an, {ow} AS ow, {ty} AS ty
         FROM {schema}.{table}
         WHERE {an} ILIKE %s
         ORDER BY {an} ASC
         LIMIT %s
-    """    ).format(an=an, ow=ow, ty=ty, schema=psql.Identifier(schema), table=psql.Identifier(table))
-
+    """).format(an=an, ow=ow, ty=ty, schema=psql.Identifier(schema), table=psql.Identifier(table))
     try:
         with conn:
             with conn.cursor() as cur:
@@ -163,7 +139,6 @@ def _db_search(q: str, limit: int=25) -> List[Dict[str,str]]:
                 rows = cur.fetchall() or []
                 out = []
                 for r in rows:
-                    # RealDictCursor returns dict-like
                     an_val = r.get("an") if isinstance(r, dict) else r[0]
                     ow_val = (r.get("ow") if isinstance(r, dict) else r[1]) if len(r) > 1 else None
                     ty_val = (r.get("ty") if isinstance(r, dict) else r[2]) if len(r) > 2 else None
@@ -189,23 +164,19 @@ def _csv_search(q: str, limit: int=25) -> List[Dict[str,str]]:
     headers = sorted(hdrs)
     return out
 
-# -------- Public API
-
 def reload(path: Optional[str] = None) -> None:
-    """Reset caches and re-discover DB/CSV at next call."""
     _CSV.update({"path": None, "mtime": None, "headers": [], "rows": []})
     _DB.update({"ready": False, "table": None, "headers": [], "cols": {"account_name": None, "owner": None, "type": None}})
     if path:
-        os.environ["ACCOUNTS_CSV_PATH"] = path  # allow hot swap
+        os.environ["ACCOUNTS_CSV_PATH"] = path
 
 def search_accounts(q: str, limit: int=25) -> List[Dict[str,str]]:
-    # Prefer DB; fallback to CSV
     res = _db_search(q, limit=limit)
     if res:
         return res
     return _csv_search(q, limit=limit)
 
-# Backward-compatible names expected by older app.py
+# ---- Backward-compatible exports expected by older app.py ----
 def find_by_account(q: str, limit: int=25) -> List[Dict[str,str]]:
     return search_accounts(q, limit=limit)
 
