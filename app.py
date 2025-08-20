@@ -81,14 +81,43 @@ def api_profile():
     user = memory.get_user(current_user_email())
     return jsonify({"ok": True, "user": user})
 
+
+import random
+
+def chip_dynamic_greet(user):
+    name = (user.get("name") or "there")
+    role = (user.get("title") or "").strip()
+    region = (user.get("region") or "").strip()
+    options = [
+        f"Morning, {name}. Chip here—what are we tackling today?",
+        f"Hey {name}, Chip checking in. Want me to walk through something or sanity‑check a plan?",
+        f"Howdy {name}! Ready to get practical—where should we start?",
+        f"Hi {name}. Chip at your service. Curious what you want to sort out first.",
+        f"Alright {name}, Chip’s on deck. What’s the job today?"
+    ]
+    # Light personalization
+    if region:
+        options.append(f"Hey {name} in {region}—what should we dive into?")
+    if role:
+        options.append(f"Hi {name} ({role}). Want me to get hands‑on, or keep it high‑level?")
+    return random.choice(options)
+
 @app.route("/api/greet", methods=["GET"])
+
 def api_greet():
     email = current_user_email()
     if not email:
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
     user = memory.get_user(email) or {}
-    name = user.get("name") or "there"
-    text = f"Hey {name}! I'm Chip. When you're ready, ask me anything about Pure Storage or your lab setup."
+    text = chip_dynamic_greet(user)
+    # Try to return TTS + visemes for smooth greeting
+    try:
+        data, err = tts_with_visemes(text)
+        if not err and data:
+            return jsonify({"ok": True, "text": text, "audio": data.get("audio"), "visemes": data.get("visemes"), "relative": data.get("relative", True)})
+    except Exception:
+        pass
+    # Fallback to static file if exists
     audio_rel = "chip/audio/greeting-static.mp3"
     audio_fs = os.path.join(app.static_folder, "chip", "audio", "greeting-static.mp3")
     audio_url = url_for("static", filename=audio_rel) if os.path.exists(audio_fs) else None

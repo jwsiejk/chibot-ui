@@ -25,3 +25,12 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .listening{outline:2px solid var(--green);box-shadow:0 0 0 3px rgba(46,204,113,.35)}
 .speaking{outline:2px solid var(--brand);box-shadow:0 0 0 3px rgba(255,106,0,.35)}
 @media (max-width:640px){.bubble{max-width:100%}.chat-log{height:50vh}}
+
+
+/* --- Ask Chip: unified Talk button & guide tweaks --- */
+.talk-btn { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; padding: 12px 16px; }
+.status::before{ content:"●"; display:inline-block; margin-right:8px; font-size:10px; line-height:1; vertical-align:middle; color: var(--muted); }
+.listening .status::before { color: var(--green); }
+.speaking .status::before { color: var(--brand); }
+#guideHint { opacity: .8; }
+#endBtn { margin-left: 4px; }
