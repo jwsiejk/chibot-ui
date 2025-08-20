@@ -53,7 +53,7 @@ except Exception as e:
 import memory
 
 # Flask setup
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
+SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("FLASK_SECRET") or "dev-secret-change-me"
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = SECRET_KEY
 app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=False)
