@@ -470,3 +470,8 @@ body { padding-bottom: var(--toolbar-h, 96px); }
   width: 100% !important;
   justify-self: start !important;
 }
+
+/* ensure any element using [hidden] actually hides */
+[hidden]{display:none !important;}
+/* nav menu hidden fallback */
+#navMenu[hidden]{display:none !important;}
