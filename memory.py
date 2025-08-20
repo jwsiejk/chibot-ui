@@ -1,11 +1,12 @@
-import os, json, psycopg2
-from psycopg2.extras import RealDictCursor
+import os, json
+import psycopg
+from psycopg.rows import dict_row
 
 def _dsn_from_env():
     url = os.getenv("DATABASE_URL")
     if not url:
         return None
-    url = "".join(url.split())
+    url = "".join(url.split())  # trim accidental whitespace
     if "sslmode=" not in url:
         url = url + ("&sslmode=require" if "?" in url else "?sslmode=require")
     return url
@@ -14,7 +15,10 @@ def get_connection():
     dsn = _dsn_from_env()
     if not dsn:
         return None
-    return psycopg2.connect(dsn, cursor_factory=RealDictCursor)
+    conn = psycopg.connect(dsn)
+    # Make all cursors return dict-like rows (so r["role"] keeps working)
+    conn.row_factory = dict_row
+    return conn
 
 def init_db():
     conn = get_connection()
@@ -23,7 +27,8 @@ def init_db():
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("""                    CREATE TABLE IF NOT EXISTS public.users (
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS public.users (
                         email TEXT PRIMARY KEY,
                         name TEXT,
                         title TEXT,
@@ -31,16 +36,17 @@ def init_db():
                         profile JSONB,
                         created_at TIMESTAMPTZ DEFAULT now(),
                         updated_at TIMESTAMPTZ DEFAULT now()
-                    );"""
-                )
-                cur.execute("""                    CREATE TABLE IF NOT EXISTS public.logs (
+                    );
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS public.logs (
                         id BIGSERIAL PRIMARY KEY,
                         email TEXT,
                         role TEXT,
                         message TEXT,
                         created_at TIMESTAMPTZ DEFAULT now()
-                    );"""
-                )
+                    );
+                """)
     finally:
         conn.close()
 
@@ -51,7 +57,10 @@ def get_user(email: str):
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT email, name, title, region, profile FROM public.users WHERE email = %s", (email,))
+                cur.execute(
+                    "SELECT email, name, title, region, profile FROM public.users WHERE email = %s",
+                    (email,),
+                )
                 row = cur.fetchone()
                 return dict(row) if row else None
     finally:
@@ -61,20 +70,24 @@ def save_user(email: str, name=None, title=None, region=None, profile=None):
     conn = get_connection()
     if not conn:
         return
-    import json
     profile_json = json.dumps(profile) if profile is not None else None
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("""                    INSERT INTO public.users (email, name, title, region, profile)
+                cur.execute(
+                    """
+                    INSERT INTO public.users (email, name, title, region, profile)
                     VALUES (%s, %s, %s, %s, %s::jsonb)
                     ON CONFLICT (email) DO UPDATE SET
                         name = EXCLUDED.name,
                         title = EXCLUDED.title,
                         region = EXCLUDED.region,
-                        profile = COALESCE(public.users.profile, '{}'::jsonb) || COALESCE(EXCLUDED.profile, '{}'::jsonb),
+                        profile = COALESCE(public.users.profile, '{}'::jsonb)
+                                  || COALESCE(EXCLUDED.profile, '{}'::jsonb),
                         updated_at = now();
-                """, (email, name, title, region, profile_json))
+                    """,
+                    (email, name, title, region, profile_json),
+                )
     finally:
         conn.close()
 
@@ -85,7 +98,10 @@ def log_conversation(email: str, role: str, message: str):
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("INSERT INTO public.logs (email, role, message) VALUES (%s, %s, %s)", (email, role, message))
+                cur.execute(
+                    "INSERT INTO public.logs (email, role, message) VALUES (%s, %s, %s)",
+                    (email, role, message),
+                )
     finally:
         conn.close()
 
@@ -96,7 +112,16 @@ def get_recent_conversation(email: str, limit: int = 8):
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT role, message, created_at FROM public.logs WHERE email = %s ORDER BY created_at DESC LIMIT %s", (email, limit))
+                cur.execute(
+                    """
+                    SELECT role, message, created_at
+                    FROM public.logs
+                    WHERE email = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (email, limit),
+                )
                 rows = cur.fetchall() or []
                 rows = list(reversed(rows))
                 return [{"role": r["role"], "message": r["message"]} for r in rows]
