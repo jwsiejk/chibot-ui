@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Ask Chip — Full</title>
-  <link rel="stylesheet" href="/static/css/style.css"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ask Chip</title>
+  <link rel="stylesheet" href="/static/css/style.css?v={{ build }}" />
 </head>
 <body>
   <header class="app-header">
@@ -19,18 +19,20 @@
     </div>
   </header>
 
+  <!-- LOGIN VIEW -->
   <section id="loginView" class="view">
     <div class="card">
       <h2>Welcome</h2>
       <p>Log in with your email to continue.</p>
       <form id="loginForm">
         <label>Email</label>
-        <input type="email" id="loginEmail" placeholder="you@company.com" required/>
+        <input type="email" id="loginEmail" placeholder="you@company.com" required />
         <button id="loginSubmit" type="submit">Log In</button>
       </form>
     </div>
   </section>
 
+  <!-- PROFILE VIEW -->
   <section id="profileView" class="view" hidden>
     <div class="card">
       <h2>Profile</h2>
@@ -39,15 +41,15 @@
         <div class="grid">
           <div>
             <label>Name</label>
-            <input type="text" id="profileName" required/>
+            <input type="text" id="profileName" required />
           </div>
           <div>
             <label>Title</label>
-            <input type="text" id="profileTitle"/>
+            <input type="text" id="profileTitle" />
           </div>
           <div>
             <label>Region</label>
-            <input type="text" id="profileRegion"/>
+            <input type="text" id="profileRegion" />
           </div>
         </div>
         <button id="profileSave" type="submit">Save</button>
@@ -55,17 +57,18 @@
     </div>
   </section>
 
+  <!-- CHAT VIEW -->
   <section id="chatView" class="view" hidden>
-    <div class="stage card">
-      <div class="stage-inner">
-        <img id="chipImage" class="chip-image" alt="Chip"/>
-        <canvas id="visemeCanvas" width="640" height="360" aria-hidden="true"></canvas>
-      </div>
-      <div class="toolbar">
-        <button id="startBtn" class="primary" disabled>Start</button>
-        <button id="micBtn" class="secondary" aria-pressed="false" title="Click to talk">🎤</button>
-        <span class="hint">Talk to Chip or type below.</span>
-      </div>
+    <div id="chipStage" class="stage">
+      <img id="chipSprite" alt="Chip" />
+      <canvas id="chipCanvas"></canvas>
+    </div>
+
+    <div class="toolbar">
+      <button id="profileBtn" class="secondary">Profile</button>
+      <button id="micBtn" class="secondary" aria-pressed="false" title="Tap to talk">🎤</button>
+      <button id="startBtn" class="primary" disabled>Start</button>
+      <span class="hint">Start plays Chip’s greeting and opens the conversation.</span>
     </div>
 
     <div id="chatLog" class="chat-log" aria-live="polite"></div>
@@ -76,9 +79,9 @@
     </form>
   </section>
 
-  <script src="/static/js/api.js" defer></script>
-  <script src="/static/js/viseme.js" defer></script>
-  <script src="/static/js/ui.js" defer></script>
-  <script src="/static/js/main.js" defer></script>
+  <script src="/static/js/api.js?v={{ build }}" defer></script>
+  <script src="/static/js/ui.js?v={{ build }}" defer></script>
+  <script src="/static/js/viseme.js?v={{ build }}" defer></script>
+  <script src="/static/js/main.js?v={{ build }}" defer></script>
 </body>
 </html>

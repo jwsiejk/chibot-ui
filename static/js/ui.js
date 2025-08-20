@@ -6,7 +6,6 @@ const UI = (() => {
   const chatLog = document.getElementById("chatLog");
   const userMenu = document.getElementById("userMenu");
   const userEmail = document.getElementById("userEmail");
-  const chipImage = document.getElementById("chipImage");
 
   function show(section) {
     loginView.hidden = section !== "login";
@@ -25,21 +24,6 @@ const UI = (() => {
     chatLog.appendChild(div);
     chatLog.scrollTop = chatLog.scrollHeight;
   }
-  function clearChat(){ chatLog.innerHTML = ""; }
-
-  (function initImage(){
-    const tryPaths = ["/static/chip/img/chip.png","/static/chip/img/chip.jpg","/static/chip/img/chip.jpeg","/static/chip/img/chip.svg"];
-    let idx = 0;
-    function attempt() {
-      if (idx >= tryPaths.length) return;
-      const src = tryPaths[idx++];
-      const img = new Image();
-      img.onload = () => { chipImage.src = src; };
-      img.onerror = attempt;
-      img.src = src;
-    }
-    attempt();
-  })();
-
+  function clearChat() { chatLog.innerHTML = ""; }
   return { show, setStatus, setUser, appendBubble, clearChat };
 })();

@@ -1,38 +1,98 @@
 :root{
-  --bg:#0f1115; --panel:#171a21; --muted:#a6adbb; --text:#e6e8ed;
-  --brand:#ff6a00; --accent:#6ea8fe; --border:#2a2f3a; --green:#2ecc71; --red:#ff4d4f;
+  --bg:#0f1115;
+  --panel:#171a21;
+  --muted:#a6adbb;
+  --text:#e6e8ed;
+  --brand:#ff6a00;
+  --accent:#6ea8fe;
+  --border:#2a2f3a;
+  --green:#2ecc71;
+  --red:#ff4d4f;
 }
 *{box-sizing:border-box}
-body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial,sans-serif;background:var(--bg);color:var(--text)}
-.app-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);background:var(--panel);position:sticky;top:0;z-index:10}
+body{
+  margin:0;
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial,sans-serif;
+  background:var(--bg);
+  color:var(--text);
+}
+.app-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 16px;border-bottom:1px solid var(--border);background:var(--panel);
+  position:sticky;top:0;z-index:10;
+}
 .brand{display:flex;align-items:center;gap:12px}
 .brand h1{font-size:18px;margin:0}
-.avatar{width:32px;height:32px;border-radius:50%;background:radial-gradient(circle at 30% 30%, #fff, #ddd);border:2px solid var(--brand);box-shadow:0 0 0 2px rgba(255,106,0,.25)}
+.avatar{
+  width:32px;height:32px;border-radius:50%;
+  background:radial-gradient(circle at 30% 30%, #fff, #ddd);
+  border:2px solid var(--brand);
+  box-shadow:0 0 0 2px rgba(255,106,0,.25);
+}
 .status{font-size:12px;color:var(--muted)}
 .user-menu{display:flex;align-items:center;gap:8px}
 .link{background:none;border:none;color:var(--accent);cursor:pointer}
-.view{max-width:980px;margin:24px auto;padding:0 16px}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.view{max-width:920px;margin:24px auto;padding:0 16px}
+.card{
+  background:var(--panel);border:1px solid var(--border);border-radius:12px;
+  padding:20px;box-shadow:0 6px 20px rgba(0,0,0,.25);
+}
 form{display:grid;gap:12px}
 label{font-size:12px;color:var(--muted)}
-input, textarea{padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:#0c0e13;color:var(--text);outline:none}
+input, textarea{
+  padding:10px 12px;border-radius:10px;border:1px solid var(--border);
+  background:#0c0e13;color:var(--text);outline:none;
+}
 input:focus, textarea:focus{border-color:var(--accent)}
-button{border:none;border-radius:10px;padding:10px 14px;cursor:pointer;background:#2a2f3a;color:var(--text)}
+button{
+  border:none;border-radius:10px;padding:10px 14px;cursor:pointer;
+  background:#2a2f3a;color:var(--text);
+}
 button.primary{background:var(--brand);color:#111;font-weight:700}
 button.secondary{background:#2a2f3a;color:var(--text);font-weight:600}
 button:disabled{opacity:.5;cursor:not-allowed}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
-.toolbar{display:flex;align-items:center;gap:12px;margin-top:12px}
+.toolbar{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
 .hint{font-size:12px;color:var(--muted)}
-.chat-log{display:flex;flex-direction:column;gap:10px;height:48vh;overflow:auto;background:#0c0e13;border:1px solid var(--border);border-radius:12px;padding:14px;margin-top:12px}
-.bubble{max-width:78%;padding:10px 12px;border-radius:12px;white-space:pre-wrap;line-height:1.35;border:1px solid var(--border)}
+.chat-log{
+  display:flex;flex-direction:column;gap:10px;
+  height:52vh;overflow:auto;background:#0c0e13;border:1px solid var(--border);
+  border-radius:12px;padding:14px;
+}
+.bubble{
+  max-width:78%;padding:10px 12px;border-radius:12px;white-space:pre-wrap;line-height:1.35;
+  border:1px solid var(--border);
+}
 .from-user{align-self:flex-end;background:#17212b}
 .from-assistant{align-self:flex-start;background:#161a20}
-.composer{margin-top:12px;display:flex;gap:8px;align-items:flex-end;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:8px}
+.composer{
+  margin-top:12px;display:flex;gap:8px;align-items:flex-end;
+  background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:8px;
+}
 #composerInput{flex:1;resize:none}
-.stage .stage-inner{position:relative;display:flex;align-items:center;justify-content:center;background:#0c0e13;border:1px solid var(--border);border-radius:12px;min-height:220px;overflow:hidden}
-.chip-image{max-width:100%;height:auto;opacity:.95}
-#visemeCanvas{position:absolute;bottom:18%;width:240px;height:120px;pointer-events:none}
+.stage{
+  position:relative;
+  width:100%;
+  max-width:520px;
+  aspect-ratio: 1 / 1;
+  margin: 12px auto 16px auto;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:#0c0e13;
+  overflow:hidden;
+}
+.stage img{
+  position:absolute;inset:0;
+  width:100%;height:100%;object-fit:contain;opacity:0.95;
+  pointer-events:none;
+}
+.stage canvas{
+  position:absolute;inset:0;width:100%;height:100%;
+  pointer-events:none;
+}
 .listening{outline:2px solid var(--green);box-shadow:0 0 0 3px rgba(46,204,113,.35)}
 .speaking{outline:2px solid var(--brand);box-shadow:0 0 0 3px rgba(255,106,0,.35)}
-@media (max-width:640px){.bubble{max-width:100%}.chat-log{height:40vh}}
+@media (max-width:640px){
+  .bubble{max-width:100%}
+  .chat-log{height:46vh}
+}

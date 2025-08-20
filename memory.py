@@ -7,7 +7,6 @@ def _dsn_from_env():
     url = os.getenv("DATABASE_URL")
     if not url:
         return None
-    # Normalize whitespace and ensure sslmode
     url = "".join(url.split())
     if "sslmode=" not in url:
         if "?" in url:
@@ -38,7 +37,7 @@ def init_db():
                         created_at TIMESTAMPTZ DEFAULT now(),
                         updated_at TIMESTAMPTZ DEFAULT now()
                     );
-                """)
+                """ )
                 cur.execute("""                        CREATE TABLE IF NOT EXISTS public.logs (
                         id BIGSERIAL PRIMARY KEY,
                         email TEXT,
@@ -46,14 +45,13 @@ def init_db():
                         message TEXT,
                         created_at TIMESTAMPTZ DEFAULT now()
                     );
-                """)
+                """ )
     finally:
         conn.close()
 
 def get_user(email: str):
     conn = get_connection()
     if not conn:
-        # No DB configured; fake minimal user
         return {"email": email}
     try:
         with conn:
@@ -69,13 +67,11 @@ def get_user(email: str):
 def save_user(email: str, name=None, title=None, region=None, profile=None):
     conn = get_connection()
     if not conn:
-        # No DB configured; nothing to persist
         return
     profile_json = json.dumps(profile) if profile is not None else None
     try:
         with conn:
             with conn.cursor() as cur:
-                # Upsert with JSONB merge
                 cur.execute("""                        INSERT INTO public.users (email, name, title, region, profile)
                     VALUES (%s, %s, %s, %s, %s::jsonb)
                     ON CONFLICT (email) DO UPDATE SET
@@ -99,5 +95,40 @@ def log_conversation(email: str, role: str, message: str):
                     "INSERT INTO public.logs (email, role, message) VALUES (%s, %s, %s)",
                     (email, role, message)
                 )
+    finally:
+        conn.close()
+
+def get_recent_messages(email: str, limit: int = 10):
+    conn = get_connection()
+    if not conn:
+        return []
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT role, message FROM public.logs WHERE email = %s ORDER BY id DESC LIMIT %s",
+                    (email, limit)
+                )
+                rows = cur.fetchall() or []
+                rows.reverse()
+                return [{"role": r["role"], "message": r["message"]} for r in rows]
+    finally:
+        conn.close()
+
+def get_recent_conversation(email: str, limit: int = 8):
+    conn = get_connection()
+    if not conn:
+        return []
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT role, message, created_at FROM public.logs WHERE email = %s ORDER BY created_at DESC LIMIT %s",
+                    (email, limit)
+                )
+                rows = cur.fetchall() or []
+                # return in chronological order
+                rows = list(reversed(rows))
+                return [{"role": r["role"], "message": r["message"]} for r in rows]
     finally:
         conn.close()

@@ -1,19 +1,23 @@
-# Ask Chip — Full Build (Voice + Visemes + Modular Services)
+# Ask Chip — Full Build (Holistic)
 
-Clean, working Ask Chip with modular `services/` and `server/`, conversational voice, and canvas visemes.
-
-## Local run
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-export FLASK_ENV=development
-python app.py
-# open http://localhost:5000
-```
+End‑to‑end app with: login/profile, text + voice chat (≤30 words), Chip persona, short‑term memory, ElevenLabs TTS + visemes (with browser fallbacks), SMTP email, and Americas accounts CSV lookup.
 
 ## Render
-Build: `pip install -r requirements.txt`  
-Start: `gunicorn app:app`  
-Env: SECRET_KEY, DATABASE_URL (sslmode=require), OPENAI_API_KEY (opt), OPENAI_MODEL (opt), ELEVEN_API_KEY/VOICE_ID (opt), ELEVEN_MODEL_ID (opt)
+- **Build:** `pip install -r requirements.txt`
+- **Start:** `gunicorn -k gthread -w ${WEB_CONCURRENCY:-1} --threads ${WEB_THREADS:-8} --timeout 120 --bind 0.0.0.0:$PORT app:app`
 
-Notes: If ElevenLabs is not configured, browser speechSynthesis is used and visemes run with heuristics.
+## Slash commands
+- `/team <account>` → looks up owner/type/region from CSV.
+
+See `.env.example` for required env vars.
+
+---
+## Email (server-side SMTP)
+- Endpoint: `POST /api/email/send`
+- Env: `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
+- Body: `{ "to": "...", "subject": "...", "body": "...", "html": "<optional>" }`
+
+## Americas CSV account lookup
+- File: `static/data/americas_accounts.csv` (override with `ACCOUNTS_CSV_PATH`)
+- Endpoint: `GET /api/accounts/search?q=<substring>`
+- Supports both schemas: `Account, Pure Rep, Pure Type` **and** `Account Name, Account Owner, Type`.
