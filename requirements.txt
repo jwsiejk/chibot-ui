@@ -1,6 +1,6 @@
-flask>=2.3
-gunicorn>=21.2
-psycopg2-binary>=2.9
-python-dotenv>=1.0
-openai>=1.33
 requests>=2.32
+Flask>=3.0
+gunicorn>=21.2
+openai>=1.33
+psycopg[binary]>=3.1   # if you use Postgres; prefer psycopg v3 on Python 3.13
+python-dotenv>=1.0     # optional
