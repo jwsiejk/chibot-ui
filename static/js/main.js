@@ -14,6 +14,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   const profileName  = document.getElementById("profileName");
   const profileTitle = document.getElementById("profileTitle");
   const profileRegion= document.getElementById("profileRegion");
+  const profileEmail = document.getElementById("profileEmail");
+
 
   const composer      = document.getElementById("composer");
   const composerInput = document.getElementById("composerInput");
@@ -188,10 +190,24 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  
   if (profileBtn) {
-    profileBtn.addEventListener("click", () => {
-      UI.show("profile"); UI.setStatus("Please fill out your profile to continue");
+    profileBtn.addEventListener("click", async () => {
+      try {
+        const res = await API.getProfile();
+        if (res && res.ok && res.user) {
+          const u = res.user || {};
+          if (profileEmail) profileEmail.value = u.email || "";
+          if (profileName)  profileName.value  = u.name  || "";
+          if (profileTitle) profileTitle.value = u.title || "";
+          if (profileRegion)profileRegion.value= u.region|| "";
+        }
+      } catch(_) {}
+      UI.show("profile");
+      UI.setStatus("Edit your profile and Save to continue");
     });
+  }
+);
   }
 
   if (logoutBtn) {
