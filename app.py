@@ -3,6 +3,7 @@ import sys
 import json
 import base64
 import logging
+import inspect
 from datetime import datetime
 
 from flask import Flask, request, session, jsonify, render_template, url_for, Response
@@ -25,9 +26,7 @@ except Exception:
     pass
 
 # ------------------------------------------------------------------------------
-# Normalize environment variables so ElevenLabs works with your existing names.
-# You use CHIP_VOICE_ID and ELEVENLABS_API_KEY; some libs expect ELEVEN_VOICE_ID /
-# ELEVEN_API_KEY. Mirror values BEFORE importing any TTS code that may read env.
+# Normalize ElevenLabs env names BEFORE importing TTS (some libs read env on import)
 # ------------------------------------------------------------------------------
 def _first_env(*names):
     for n in names:
@@ -68,10 +67,6 @@ except Exception as e:
     sys.stderr.write(f"[warning] llm_service import failed: {e}\n")
     def generate_reply(messages, **kwargs):
         return "Chip is running, but the LLM service is not available."
-
-# NOTE: Do NOT register blueprints here; 'app' is not defined yet and
-# your active /api/greet lives in this file.
-# (The old code attempted app.register_blueprint before creating app.)
 
 try:
     from services.tts_service import tts_bytes, tts_with_visemes
@@ -187,7 +182,6 @@ def chip_dynamic_greet(user):
     return random.choice(options)
 
 # ----------------------------- TTS helpers ------------------------------------
-
 def _parse_tts_payload(payload, default_fmt):
     """
     Accept many shapes and return:
@@ -233,6 +227,66 @@ def cap_30_words(s: str) -> str:
     words = (s or "").split()
     return " ".join(words[:30])
 
+# ------------------------ LLM wrapper (signature‑flex) ------------------------
+def _generate_reply_flex(prompt: str, profile: dict, hist):
+    """
+    Call services.llm_service.generate_reply regardless of its current signature.
+    Supports names: profile/user/persona and context_messages/history/messages/context/conversation.
+    Falls back to prompt‑only or messages‑only as needed.
+    """
+    try:
+        sig = inspect.signature(generate_reply)
+        params = sig.parameters
+        kwargs = {}
+
+        # Map profile
+        if 'profile' in params:
+            kwargs['profile'] = profile
+        elif 'user' in params:
+            kwargs['user'] = profile
+        elif 'persona' in params:
+            kwargs['persona'] = profile
+        # Map history
+        if 'context_messages' in params:
+            kwargs['context_messages'] = hist
+        elif 'history' in params:
+            kwargs['history'] = hist
+        elif 'messages' in params:
+            kwargs['messages'] = hist
+        elif 'context' in params:
+            kwargs['context'] = hist
+        elif 'conversation' in params:
+            kwargs['conversation'] = hist
+
+        # First attempt: pass prompt positionally (common case)
+        try:
+            return generate_reply(prompt, **kwargs)
+        except TypeError:
+            pass
+
+        # Second attempt: messages‑only variant (if function defines such a param)
+        messages = []
+        if isinstance(hist, list):
+            messages = hist[:]
+        messages.append({"role": "user", "message": prompt})
+
+        for name in ('messages', 'history', 'context_messages', 'conversation', 'context'):
+            if name in params:
+                try:
+                    return generate_reply(**{name: messages})
+                except TypeError:
+                    continue
+
+        # Last attempt: prompt‑only
+        try:
+            return generate_reply(prompt)
+        except Exception:
+            logging.exception("generate_reply(prompt) failed last attempt")
+            return "I'm having trouble generating a reply right now."
+    except Exception:
+        logging.exception("generate_reply invocation failed")
+        return "I'm having trouble generating a reply right now."
+
 # ------------------------------------------------------------------------------
 # Routes
 # ------------------------------------------------------------------------------
@@ -277,7 +331,7 @@ def api_chat():
         # DB may be missing 'role' after a reset; fall back to empty history.
         hist = []
 
-    reply = generate_reply(prompt, profile=user, context_messages=hist)
+    reply = _generate_reply_flex(prompt, user, hist)
     reply = cap_30_words(reply or "")
 
     try:
