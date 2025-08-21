@@ -1,6 +1,6 @@
 # server/__init__.py
 import logging
-from flask import Flask
+from flask import Flask, jsonify, make_response
 
 log = logging.getLogger(__name__)
 
@@ -28,10 +28,26 @@ def create_app():
         # IMPORTANT: do NOT add a url_prefix here because greet.py already
         # declares the route as "/api/greet". Adding a prefix would double it.
         app.register_blueprint(greet_bp)
-        app.logger.info("Registered greet blueprint at /api/greet")
+        try:
+            app.logger.info("Registered greet blueprint at /api/greet")
+        except Exception:
+            # If app.logger isn't ready for any reason, fall back to stdlib logging
+            log.info("Registered greet blueprint at /api/greet")
 
     except Exception:
         # Use stdlib logger in failure path to avoid referencing app prematurely.
         log.exception("Failed to register greet blueprint")
+
+    # ---- Health / landing routes (resolve 404s at "/" and "/favicon.ico") ----
+
+    @app.route("/", methods=["GET"])
+    def root():
+        # Lightweight: no DB calls or external deps
+        return jsonify(ok=True, service="ask-chip", endpoints=["/api/greet"])
+
+    @app.route("/favicon.ico", methods=["GET"])
+    def favicon():
+        # Silence browser favicon probes (no 404 spam)
+        return make_response(b"", 204)
 
     return app
