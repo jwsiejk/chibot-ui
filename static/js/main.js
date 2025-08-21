@@ -71,23 +71,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function dynamicGreet() {
     UI.setStatus("Greeting…");
-    const res = await API.greet();
-    const greetText = (res && res.text) || "Hey there—Chip here. What are we tackling today?";
-    if (greetText) UI.appendBubble("assistant", greetText);
+    // Ask backend for a dynamic greeting, but ALWAYS synthesize client-side speech
+    let greetText = "Hey—Chip here. What are we tackling today?";
     try {
-      // If backend provided audio/visemes, use it; otherwise synthesize locally
-      if (res && (res.audio || (res.visemes && res.visemes.length))) {
-        await speakWithVisemes(greetText);
-      } else if (res && res.audioUrl) {
-        const audio = new Audio(res.audioUrl);
-        await new Promise((resolve) => {
-          audio.onended = resolve; audio.onerror = resolve;
-          audio.play().catch(() => resolve());
-        });
-      } else {
-        await speakWithVisemes(greetText);
-      }
+      const res = await API.greet({ dynamic: true });
+      if (res && res.text) greetText = res.text;
     } catch (_) {}
+    UI.appendBubble("assistant", greetText);
+    try { await speakWithVisemes(greetText); } catch (_) {}
     greeted = true;
     UI.setStatus("Listening…");
   }
@@ -130,7 +121,6 @@ document.addEventListener("DOMContentLoaded", async () => {
             audioEl.onended = resolve; audioEl.onerror = resolve;
           });
         } else {
-          // Rough timing fallback when using SpeechSynthesis
           const ms = Math.max(800, (text.trim().split(/\s+/).length) * 160);
           await new Promise(r => setTimeout(r, ms));
         }
@@ -142,7 +132,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
     } catch (_) {}
-    // Final fallback: basic browser TTS
+
+    // Final fallback: browser TTS
     if ("speechSynthesis" in window) {
       const u = new SpeechSynthesisUtterance(text);
       speechSynthesis.speak(u);
@@ -254,7 +245,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (profileBtn) {
     profileBtn.addEventListener("click", () => {
       UI.show("profile");
-      UI.setStatus("Edit your profile, then Save.");
+      UI.setStatus("Please fill out your profile to continue");
     });
   }
 
@@ -307,10 +298,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         UI.appendBubble("assistant", reply);
         await speakWithVisemes(reply);
         const fu = chipFollowUp(prompt, reply);
-        if (fu) {
-          UI.appendBubble("assistant", fu);
-          await speakWithVisemes(fu);
-        }
+        if (fu) { UI.appendBubble("assistant", fu); await speakWithVisemes(fu); }
         UI.setStatus("Ready");
       } else {
         UI.appendBubble("assistant", res.error || "Something went wrong.");
@@ -359,15 +347,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     UI.setUser(me.user && me.user.email || "");
     if (!me.profile_complete) {
       UI.show("profile");
+      UI.setStatus("Please fill out your profile to continue");
       const prof = await API.getProfile();
       const u = prof.user || {};
       if (profileName)  profileName.value  = u.name  || "";
-      if (profileTitle) profileTitle.value = u.title || "";
-      if (profileRegion)profileRegion.value= u.region|| "";
+      if (profileTitle) profileTitle.value = u.title || ""
+      if (profileRegion) profileRegion.value = u.region || "";
       if (micBtn) micBtn.disabled = true;
       return;
     }
     UI.show("chat");
+    UI.setStatus("Ready");
     if (micBtn) micBtn.disabled = false;
   }
 

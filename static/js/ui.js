@@ -39,4 +39,4 @@ const UI = (() => {
   function clearChat() { chatLog.innerHTML = ""; }
 
   return { show, setStatus, setUser, appendBubble, clearChat };
-})();
+})(); 
