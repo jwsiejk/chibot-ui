@@ -31,6 +31,13 @@ except Exception as e:
         return "Chip is running, but the LLM service is not available."
 
 try:
+    from routes.greet import bp as greet_bp
+    app.register_blueprint(greet_bp)
+except Exception as e:
+    import sys
+    sys.stderr.write(f"[warning] greet blueprint failed: {e}\n")
+
+try:
     from services.tts_service import tts_bytes, tts_with_visemes
 except Exception as e:
     sys.stderr.write(f"[warning] tts_service import failed: {e}\n")
