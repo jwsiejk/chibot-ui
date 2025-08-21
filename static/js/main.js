@@ -37,7 +37,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // --- Conversation helpers ---
-
   function chipFollowUp(prompt, reply) {
     try {
       if (!prompt) return "";
@@ -45,7 +44,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       const replyEndsQuestion = /[?]$/.test(reply || "");
       if (replyEndsQuestion) return "";
       if (Math.random() < 0.6) return ""; // be selective
-
       const nudges = [
         "Want me to go deeper on that?",
         "Should I lay out the steps?",
@@ -53,25 +51,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         "Need the gotchas before you start?",
         "Want me to sanity‑check your plan?"
       ];
-
-      if (p.includes("install") || p.includes("setup") || p.includes("configure")) {
-        return "Want the exact install steps?";
-      }
-      if (p.includes("troubleshoot") || p.includes("error") || p.includes("fail")) {
-        return "Want the quick triage path?";
-      }
-      if (p.includes("design") || p.includes("architecture")) {
-        return "Want a simple diagram of the flow?";
-      }
+      if (p.includes("install") || p.includes("setup") || p.includes("configure")) return "Want the exact install steps?";
+      if (p.includes("troubleshoot") || p.includes("error") || p.includes("fail")) return "Want the quick triage path?";
+      if (p.includes("design") || p.includes("architecture")) return "Want a simple diagram of the flow?";
       return nudges[Math.floor(Math.random() * nudges.length)];
-    } catch {
-      return "";
-    }
+    } catch { return ""; }
   }
 
   async function dynamicGreet() {
     UI.setStatus("Greeting…");
-    // Ask backend for a dynamic greeting, but ALWAYS synthesize client-side speech
     let greetText = "Hey—Chip here. What are we tackling today?";
     try {
       const res = await API.greet({ dynamic: true });
@@ -91,39 +79,21 @@ document.addEventListener("DOMContentLoaded", async () => {
         body: JSON.stringify({ text })
       });
       const data = await resp.json();
-      if (data.ok) {
-        let audioEl = null;
-        if (data.audio) {
-          const url = "data:audio/mpeg;base64," + data.audio;
-          audioEl = new Audio(url);
-          await new Promise((resolve) => {
-            audioEl.onloadedmetadata = resolve;
-            audioEl.onerror = resolve;
-          });
-          UI.setStatus("Speaking…");
-          if (micBtn) micBtn.classList.add("speaking");
-          audioEl.play().catch(() => {});
-        } else if ("speechSynthesis" in window) {
-          const u = new SpeechSynthesisUtterance(text);
-          UI.setStatus("Speaking…");
-          if (micBtn) micBtn.classList.add("speaking");
-          document.body.classList.add("speaking");
-          speechSynthesis.speak(u);
-        }
+      if (data && data.ok && data.audio) {
+        const url = "data:audio/mpeg;base64," + data.audio;
+        const audioEl = new Audio(url);
+        await new Promise((resolve) => { audioEl.onloadedmetadata = resolve; audioEl.onerror = resolve; });
+        UI.setStatus("Speaking…");
+        if (micBtn) micBtn.classList.add("speaking");
+        document.body.classList.add("speaking");
 
         if (typeof Viseme !== "undefined") {
           const schedule = (data.visemes || []).map(x => ({ t: x.t, v: x.v }));
           Viseme.animate(schedule, audioEl, { relative: data.relative !== false });
         }
 
-        if (audioEl) {
-          await new Promise((resolve) => {
-            audioEl.onended = resolve; audioEl.onerror = resolve;
-          });
-        } else {
-          const ms = Math.max(800, (text.trim().split(/\s+/).length) * 160);
-          await new Promise(r => setTimeout(r, ms));
-        }
+        audioEl.play().catch(() => {});
+        await new Promise((resolve) => { audioEl.onended = resolve; audioEl.onerror = resolve; });
 
         if (typeof Viseme !== "undefined") Viseme.stop();
         if (micBtn) micBtn.classList.remove("speaking");
@@ -132,12 +102,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
     } catch (_) {}
-
-    // Final fallback: browser TTS
-    if ("speechSynthesis" in window) {
-      const u = new SpeechSynthesisUtterance(text);
-      speechSynthesis.speak(u);
-    }
+    UI.setStatus("Audio unavailable — check ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID");
   }
 
   function supportsSpeechRecognition() {
@@ -155,33 +120,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   async function toggleMic() {
-    if (!supportsSpeechRecognition()) {
-      UI.setStatus("Browser speech recognition not available");
-      return;
-    }
+    if (!supportsSpeechRecognition()) { UI.setStatus("Browser speech recognition not available"); return; }
     if (recognizing) {
       try { recognizer && recognizer.stop(); } catch (_) {}
       recognizing = false;
-      if (micBtn) {
-        micBtn.setAttribute("aria-pressed", "false");
-        micBtn.classList.remove("listening");
-      }
+      if (micBtn) { micBtn.setAttribute("aria-pressed", "false"); micBtn.classList.remove("listening"); }
       document.body.classList.remove("listening");
       UI.setStatus("Ready");
       return;
     }
-
     recognizer = getRecognizer();
-    if (!recognizer) {
-      UI.setStatus("SpeechRecognition unavailable");
-      return;
-    }
-
+    if (!recognizer) { UI.setStatus("SpeechRecognition unavailable"); return; }
     recognizing = true;
-    if (micBtn) {
-      micBtn.setAttribute("aria-pressed", "true");
-      micBtn.classList.add("listening");
-    }
+    if (micBtn) { micBtn.setAttribute("aria-pressed", "true"); micBtn.classList.add("listening"); }
     document.body.classList.add("listening");
     UI.setStatus("Listening — go ahead.");
 
@@ -225,7 +176,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // --- Auth / Profile / UI wiring ---
-
   if (loginForm) {
     loginForm.addEventListener("submit", async (ev) => {
       ev.preventDefault();
@@ -233,28 +183,20 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!email) return;
       UI.setStatus("Signing in…");
       const res = await API.login(email);
-      if (res.ok) {
-        UI.setUser(email);
-        await refreshState();
-      } else {
-        UI.setStatus(res.error || "Login failed");
-      }
+      if (res.ok) { UI.setUser(email); await refreshState(); }
+      else { UI.setStatus(res.error || "Login failed"); }
     });
   }
 
   if (profileBtn) {
     profileBtn.addEventListener("click", () => {
-      UI.show("profile");
-      UI.setStatus("Please fill out your profile to continue");
+      UI.show("profile"); UI.setStatus("Please fill out your profile to continue");
     });
   }
 
   if (logoutBtn) {
     logoutBtn.addEventListener("click", async () => {
-      await API.logout();
-      UI.setUser("");
-      UI.show("login");
-      UI.setStatus("Logged out");
+      await API.logout(); UI.setUser(""); UI.show("login"); UI.setStatus("Logged out");
     });
   }
 
@@ -268,12 +210,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       };
       UI.setStatus("Saving profile…");
       const res = await API.saveProfile(payload);
-      if (res.ok) {
-        await refreshState();
-        UI.setStatus("Profile saved");
-      } else {
-        UI.setStatus(res.error || "Save failed");
-      }
+      if (res.ok) { await refreshState(); UI.setStatus("Profile saved"); }
+      else { UI.setStatus(res.error || "Save failed"); }
     });
   }
 
@@ -311,10 +249,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     // First press greets; subsequent presses toggle mic
     micBtn.addEventListener("click", async () => {
       if (!greeted) {
-        micBtn.setAttribute("aria-pressed", "true");
+        micBtn.setAttribute("aria-pressed","true");
         micBtn.classList.add("speaking");
         await dynamicGreet();
-        try { await toggleMic(); } catch (_) {}
+        try { await toggleMic(); } catch(_) {}
         return;
       }
       await toggleMic();
@@ -323,15 +261,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (endBtn) {
     endBtn.addEventListener("click", () => {
-      try {
-        if (recognizer) { recognizer.onend = null; recognizer.onerror = null; recognizer.stop(); }
-      } catch (_) {}
+      try { if (recognizer) { recognizer.onend = null; recognizer.onerror = null; recognizer.stop(); } } catch(_) {}
       recognizing = false;
-      if (micBtn) micBtn.setAttribute("aria-pressed", "false");
-      if (micBtn) {
-        micBtn.classList.remove("listening");
-        micBtn.classList.remove("speaking");
-      }
+      if (micBtn) micBtn.setAttribute("aria-pressed","false");
+      if (micBtn) { micBtn.classList.remove("listening"); micBtn.classList.remove("speaking"); }
       document.body.classList.remove("speaking");
       UI.setStatus("Ended — press “Talk to Chip” to start again.");
     });
@@ -339,11 +272,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function refreshState() {
     const me = await API.me();
-    if (!me.logged_in) {
-      UI.show("login");
-      UI.setUser("");
-      return;
-    }
+    if (!me.logged_in) { UI.show("login"); UI.setUser(""); return; }
     UI.setUser(me.user && me.user.email || "");
     if (!me.profile_complete) {
       UI.show("profile");
@@ -351,21 +280,17 @@ document.addEventListener("DOMContentLoaded", async () => {
       const prof = await API.getProfile();
       const u = prof.user || {};
       if (profileName)  profileName.value  = u.name  || "";
-      if (profileTitle) profileTitle.value = u.title || ""
-      if (profileRegion) profileRegion.value = u.region || "";
+      if (profileTitle) profileTitle.value = u.title || "";
+      if (profileRegion)profileRegion.value= u.region|| "";
       if (micBtn) micBtn.disabled = true;
       return;
     }
     UI.show("chat");
-    UI.setStatus("Ready");
     if (micBtn) micBtn.disabled = false;
+    UI.setStatus("Ready");
   }
 
-  function autoGrow(el) {
-    const min = 38;
-    el.style.height = "auto";
-    el.style.height = Math.max(min, el.scrollHeight) + "px";
-  }
+  function autoGrow(el) { const min = 38; el.style.height = "auto"; el.style.height = Math.max(min, el.scrollHeight) + "px"; }
 
   // Initial state sync
   await refreshState();

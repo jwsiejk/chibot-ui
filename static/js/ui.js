@@ -19,13 +19,8 @@ const UI = (() => {
   }
 
   function setUser(email) {
-    if (email) {
-      userMenu.hidden = false;
-      userEmail.textContent = email;
-    } else {
-      userMenu.hidden = true;
-      userEmail.textContent = "";
-    }
+    if (email) { userMenu.hidden = false; userEmail.textContent = email; }
+    else { userMenu.hidden = true; userEmail.textContent = ""; }
   }
 
   function appendBubble(role, text) {
