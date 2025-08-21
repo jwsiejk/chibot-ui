@@ -1,6 +1,8 @@
 import os
 import sys
 import json
+import base64
+import logging
 from datetime import datetime
 
 from flask import Flask, request, session, jsonify, render_template, url_for, Response
@@ -15,12 +17,51 @@ SRC_DIR = os.path.join(APP_DIR, "src")
 if os.path.isdir(SRC_DIR) and SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-# --- Load .env if available (does nothing if not present) ---
+# --- Load .env if available (no-op if missing) ---
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
     pass
+
+# ------------------------------------------------------------------------------
+# Normalize environment variables so ElevenLabs works with your existing names.
+# You set CHIP_VOICE_ID and ELEVENLABS_API_KEY. Some libs look for ELEVEN_VOICE_ID
+# or ELEVEN_API_KEY instead. Mirror values so both names are present at runtime.
+# This must run BEFORE importing the TTS service (which may read env at import time).
+# ------------------------------------------------------------------------------
+def _first_env(*names):
+    for n in names:
+        v = os.getenv(n)
+        if v and str(v).strip():
+            return str(v).strip()
+    return None
+
+def _ensure_alias(target, *candidates):
+    """If target is not set but a candidate is, copy candidate into target."""
+    if not _first_env(target):
+        val = _first_env(*candidates)
+        if val is not None:
+            os.environ[target] = val
+
+# API keys (both ways)
+_ensure_alias("ELEVEN_API_KEY", "ELEVENLABS_API_KEY")
+_ensure_alias("ELEVENLABS_API_KEY", "ELEVEN_API_KEY")
+
+# Voice ID (map your CHIP_VOICE_ID to common names)
+_ensure_alias("ELEVEN_VOICE_ID", "CHIP_VOICE_ID", "ELEVENLABS_VOICE_ID")
+_ensure_alias("ELEVENLABS_VOICE_ID", "ELEVEN_VOICE_ID", "CHIP_VOICE_ID")
+
+# Model / Output format
+_ensure_alias("ELEVEN_MODEL_ID", "ELEVENLABS_MODEL_ID")
+_ensure_alias("ELEVENLABS_MODEL_ID", "ELEVEN_MODEL_ID")
+_ensure_alias("ELEVEN_OUTPUT_FORMAT", "ELEVENLABS_OUTPUT_FORMAT")
+_ensure_alias("ELEVENLABS_OUTPUT_FORMAT", "ELEVEN_OUTPUT_FORMAT")
+
+def ELEVEN_API_KEY():    return _first_env("ELEVENLABS_API_KEY", "ELEVEN_API_KEY")
+def ELEVEN_VOICE_ID():   return _first_env("CHIP_VOICE_ID", "ELEVEN_VOICE_ID", "ELEVENLABS_VOICE_ID")
+def ELEVEN_MODEL_ID():   return _first_env("ELEVEN_MODEL_ID", "ELEVENLABS_MODEL_ID")
+def ELEVEN_OUT_FORMAT(): return _first_env("ELEVEN_OUTPUT_FORMAT", "ELEVENLABS_OUTPUT_FORMAT") or "mp3_44100_128"
 
 # --- Safe imports with fallbacks so the server can still boot ---
 try:
@@ -31,24 +72,17 @@ except Exception as e:
         return "Chip is running, but the LLM service is not available."
 
 try:
-    from routes.greet import bp as greet_bp
-    app.register_blueprint(greet_bp)
-except Exception as e:
-    import sys
-    sys.stderr.write(f"[warning] greet blueprint failed: {e}\n")
-
-try:
     from services.tts_service import tts_bytes, tts_with_visemes
 except Exception as e:
     sys.stderr.write(f"[warning] tts_service import failed: {e}\n")
-    def tts_bytes(text, **kwargs): return b""
-    def tts_with_visemes(text, **kwargs): return b"", []
+    def tts_bytes(text, **kwargs): return b"", "TTS unavailable"
+    def tts_with_visemes(text, **kwargs): return (b"", []), "TTS unavailable"
 
 try:
     from services.email_service import send_email
 except Exception as e:
     sys.stderr.write(f"[warning] email_service import failed: {e}\n")
-    def send_email(*args, **kwargs): return False
+    def send_email(*args, **kwargs): return False, "Email service unavailable"
 
 try:
     from services.accounts_service import search_accounts
@@ -77,6 +111,11 @@ def current_user_email():
 @app.route("/")
 def index():
     return render_template("index.html")
+
+@app.get("/favicon.ico")
+def favicon():
+    # Avoid 404 noise if favicon is not present
+    return ("", 204)
 
 @app.route("/api/login", methods=["POST"])
 def api_login():
@@ -126,7 +165,6 @@ def api_profile():
     user = memory.get_user(current_user_email())
     return jsonify({"ok": True, "user": user})
 
-
 import random
 
 def chip_dynamic_greet(user):
@@ -140,28 +178,116 @@ def chip_dynamic_greet(user):
         f"Hi {name}. Chip at your service. Curious what you want to sort out first.",
         f"Alright {name}, Chip’s on deck. What’s the job today?"
     ]
-    # Light personalization
     if region:
         options.append(f"Hey {name} in {region}—what should we dive into?")
     if role:
         options.append(f"Hi {name} ({role}). Want me to get hands‑on, or keep it high‑level?")
     return random.choice(options)
 
-@app.route("/api/greet", methods=["GET"])
+# ----------------------------- TTS helpers ------------------------------------
 
+def _normalize_tts_json(payload, fmt=None):
+    """
+    Normalize various possible TTS return shapes into a single JSON shape:
+      { ok: True, audio: <base64 string>, visemes: [...], format: <fmt> }
+    """
+    fmt = fmt or ELEVEN_OUT_FORMAT()
+
+    # bytes -> base64
+    if isinstance(payload, (bytes, bytearray)):
+        return jsonify({"ok": True,
+                        "audio": base64.b64encode(payload).decode("ascii"),
+                        "visemes": [],
+                        "format": fmt})
+
+    # (bytes, list) tuple
+    if isinstance(payload, tuple) and len(payload) == 2 and isinstance(payload[0], (bytes, bytearray)):
+        audio_bytes, visemes = payload
+        return jsonify({"ok": True,
+                        "audio": base64.b64encode(audio_bytes).decode("ascii"),
+                        "visemes": visemes or [],
+                        "format": fmt})
+
+    # dict variants
+    if isinstance(payload, dict):
+        # audio_b64
+        if "audio_b64" in payload and isinstance(payload["audio_b64"], str):
+            result = dict(payload)
+            result["ok"] = True
+            result.setdefault("visemes", [])
+            result.setdefault("format", fmt)
+            # normalize key name to "audio"
+            result["audio"] = result.pop("audio_b64")
+            return jsonify(result)
+
+        # audio_bytes
+        if "audio_bytes" in payload and isinstance(payload["audio_bytes"], (bytes, bytearray)):
+            result = dict(payload)
+            result["ok"] = True
+            result.setdefault("visemes", [])
+            result["audio"] = base64.b64encode(result.pop("audio_bytes")).decode("ascii")
+            result.setdefault("format", fmt)
+            return jsonify(result)
+
+        # already JSON-friendly dict with "audio"
+        result = dict(payload)
+        result["ok"] = True
+        result.setdefault("visemes", [])
+        result.setdefault("format", fmt)
+        return jsonify(result)
+
+    logging.error("Unexpected TTS payload type: %s", type(payload).__name__)
+    return jsonify({"ok": False, "error": "Unexpected TTS payload"}), 500
+
+# ------------------------------------------------------------------------------
+# Routes
+# ------------------------------------------------------------------------------
+
+@app.route("/api/greet", methods=["GET"])
 def api_greet():
     email = current_user_email()
     if not email:
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
     user = memory.get_user(email) or {}
     text = chip_dynamic_greet(user)
-    # Try to return TTS + visemes for smooth greeting
+
+    # Try to return TTS + visemes
     try:
-        data, err = tts_with_visemes(text)
-        if not err and data:
-            return jsonify({"ok": True, "text": text, "audio": data.get("audio"), "visemes": data.get("visemes"), "relative": data.get("relative", True)})
+        payload, err = tts_with_visemes(
+            text,
+            api_key=ELEVEN_API_KEY(),
+            voice_id=ELEVEN_VOICE_ID(),
+            model_id=ELEVEN_MODEL_ID(),
+            output_format=ELEVEN_OUT_FORMAT(),
+        )
+        if not err and payload:
+            # Normalize to { ok, audio (b64), visemes, format }
+            js = _normalize_tts_json(payload, fmt=ELEVEN_OUT_FORMAT())
+            # Merge greeting text alongside normalized audio/visemes
+            # js is a Flask Response; rebuild JSON including text.
+            # Easiest: decode and re-encode because jsonify returns a Response.
+            # Instead, recompute directly from payload to avoid double encoding:
+            if isinstance(payload, (bytes, bytearray)):
+                audio_b64 = base64.b64encode(payload).decode("ascii")
+                return jsonify({"ok": True, "text": text, "audio": audio_b64, "visemes": [], "format": ELEVEN_OUT_FORMAT()})
+            if isinstance(payload, tuple) and len(payload) == 2 and isinstance(payload[0], (bytes, bytearray)):
+                audio_b64 = base64.b64encode(payload[0]).decode("ascii")
+                return jsonify({"ok": True, "text": text, "audio": audio_b64, "visemes": payload[1] or [], "format": ELEVEN_OUT_FORMAT()})
+            if isinstance(payload, dict):
+                result = dict(payload)
+                # normalize keys
+                if "audio_bytes" in result and isinstance(result["audio_bytes"], (bytes, bytearray)):
+                    result["audio"] = base64.b64encode(result.pop("audio_bytes")).decode("ascii")
+                if "audio_b64" in result:
+                    result["audio"] = result.pop("audio_b64")
+                result.setdefault("visemes", [])
+                result.setdefault("format", ELEVEN_OUT_FORMAT())
+                result["ok"] = True
+                result["text"] = text
+                return jsonify(result)
     except Exception:
         pass
+
     # Fallback to static file if exists
     audio_rel = "chip/audio/greeting-static.mp3"
     audio_fs = os.path.join(app.static_folder, "chip", "audio", "greeting-static.mp3")
@@ -182,7 +308,12 @@ def api_chat():
         return jsonify({"ok": False, "error": "Prompt required"}), 400
 
     user = memory.get_user(current_user_email()) or {}
-    hist = memory.get_recent_conversation(current_user_email(), limit=8)
+    try:
+        hist = memory.get_recent_conversation(current_user_email(), limit=8)
+    except Exception:
+        # DB may be missing 'role' column; fall back to empty history.
+        hist = []
+
     reply = generate_reply(prompt, profile=user, context_messages=hist)
     reply = cap_30_words(reply or "")
 
@@ -202,7 +333,30 @@ def api_tts():
     text = cap_30_words((data.get("text") or "").strip())
     if not text:
         return jsonify({"ok": False, "error": "Text required"}), 400
-    audio, err = tts_bytes(text)
+
+    res = tts_bytes(
+        text,
+        api_key=ELEVEN_API_KEY(),
+        voice_id=ELEVEN_VOICE_ID(),
+        model_id=ELEVEN_MODEL_ID(),
+        output_format=ELEVEN_OUT_FORMAT(),
+    )
+
+    audio, err = (None, None)
+    if isinstance(res, tuple) and len(res) == 2:
+        audio, err = res
+    elif isinstance(res, (bytes, bytearray)):
+        audio, err = res, None
+    elif isinstance(res, dict):
+        if "audio_bytes" in res and isinstance(res["audio_bytes"], (bytes, bytearray)):
+            audio = res["audio_bytes"]
+        elif "audio" in res and isinstance(res["audio"], str):
+            try:
+                audio = base64.b64decode(res["audio"])
+            except Exception:
+                audio = None
+        err = res.get("error")
+
     if not audio:
         return jsonify({"ok": False, "error": err or "TTS unavailable"}), 503
     return Response(audio, mimetype="audio/mpeg")
@@ -215,8 +369,18 @@ def api_tts_with_visemes():
     text = cap_30_words((data.get("text") or "").strip())
     if not text:
         return jsonify({"ok": False, "error": "Text required"}), 400
-    payload, err = tts_with_visemes(text)
-    return jsonify({"ok": True, **payload})
+
+    payload, err = tts_with_visemes(
+        text,
+        api_key=ELEVEN_API_KEY(),
+        voice_id=ELEVEN_VOICE_ID(),
+        model_id=ELEVEN_MODEL_ID(),
+        output_format=ELEVEN_OUT_FORMAT(),
+    )
+    if err:
+        return jsonify({"ok": False, "error": err}), 503
+
+    return _normalize_tts_json(payload, fmt=ELEVEN_OUT_FORMAT())
 
 @app.route("/api/email/send", methods=["POST"])
 def api_email_send():
