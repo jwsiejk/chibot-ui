@@ -111,7 +111,6 @@ def index():
 
 @app.get("/favicon.ico")
 def favicon():
-    # Avoid 404 noise if favicon is not present
     return ("", 204)
 
 @app.route("/api/login", methods=["POST"])
@@ -150,7 +149,6 @@ def api_profile():
             return jsonify({"ok": False, "error": "Not authenticated"}), 401
         user = memory.get_user(current_user_email()) or {"email": current_user_email()}
         return jsonify({"ok": True, "user": user})
-    # POST
     if not current_user_email():
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
     data = request.get_json(silent=True) or {}
@@ -190,20 +188,15 @@ def _parse_tts_payload(payload, default_fmt):
     """
     fmt = default_fmt or "mp3_44100_128"
 
-    # bytes -> base64
     if isinstance(payload, (bytes, bytearray)):
         return {"audio": base64.b64encode(payload).decode("ascii"), "visemes": [], "format": fmt}
 
-    # (bytes, list) tuple OR (payload, err)
     if isinstance(payload, tuple) and len(payload) == 2:
         a, b = payload
-        # (bytes, visemes)
         if isinstance(a, (bytes, bytearray)) and (b is None or isinstance(b, (list, tuple))):
             return {"audio": base64.b64encode(a).decode("ascii"), "visemes": list(b or []), "format": fmt}
-        # Assume (payload, err) — recurse on first item
         return _parse_tts_payload(a, fmt)
 
-    # dict variants
     if isinstance(payload, dict):
         result = {"visemes": list(payload.get("visemes") or []), "format": payload.get("format") or fmt}
         if "audio_b64" in payload and isinstance(payload["audio_b64"], str):
@@ -220,7 +213,6 @@ def _parse_tts_payload(payload, default_fmt):
         if "audio_bytes" in payload and isinstance(payload["audio_bytes"], (bytes, bytearray)):
             result["audio"] = base64.b64encode(payload["audio_bytes"]).decode("ascii")
             return result
-
     return None
 
 def cap_30_words(s: str) -> str:
@@ -228,56 +220,88 @@ def cap_30_words(s: str) -> str:
     return " ".join(words[:30])
 
 # ------------------------ LLM wrapper (signature‑flex) ------------------------
+def _to_chat_messages(hist, prompt=None):
+    """
+    Convert a heterogeneous history into OpenAI Chat Completions format:
+      [{"role": "...", "content": "..."}]
+    Accepts:
+      - dicts with keys like role/message/content/text
+      - tuples/lists like (role, message, ...)
+      - bare strings (assumed user)
+    """
+    msgs = []
+    if isinstance(hist, (list, tuple)):
+        for item in hist:
+            role = "user"
+            content = None
+            if isinstance(item, dict):
+                role = (item.get("role") or item.get("speaker") or "user")
+                content = item.get("content")
+                if content is None:
+                    content = item.get("message")
+                if content is None:
+                    content = item.get("text")
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                role, content = item[0], item[1]
+            elif isinstance(item, str):
+                role, content = "user", item
+            if content is None:
+                continue
+            msgs.append({"role": str(role), "content": str(content)})
+    if prompt:
+        msgs.append({"role": "user", "content": str(prompt)})
+    return msgs
+
 def _generate_reply_flex(prompt: str, profile: dict, hist):
     """
     Call services.llm_service.generate_reply regardless of its current signature.
-    Supports names: profile/user/persona and context_messages/history/messages/context/conversation.
-    Falls back to prompt‑only or messages‑only as needed.
+    Maps profile/user/persona and messages/history/context_* to a proper
+    OpenAI-style message list so downstream calls never see null content.
     """
     try:
         sig = inspect.signature(generate_reply)
         params = sig.parameters
-        kwargs = {}
 
-        # Map profile
+        # Prepare normalized history
+        hist_msgs = _to_chat_messages(hist)
+        msgs_with_prompt = _to_chat_messages(hist, prompt=prompt)
+
+        kwargs = {}
+        # Map profile payload
         if 'profile' in params:
             kwargs['profile'] = profile
         elif 'user' in params:
             kwargs['user'] = profile
         elif 'persona' in params:
             kwargs['persona'] = profile
-        # Map history
-        if 'context_messages' in params:
-            kwargs['context_messages'] = hist
-        elif 'history' in params:
-            kwargs['history'] = hist
-        elif 'messages' in params:
-            kwargs['messages'] = hist
-        elif 'context' in params:
-            kwargs['context'] = hist
-        elif 'conversation' in params:
-            kwargs['conversation'] = hist
 
-        # First attempt: pass prompt positionally (common case)
+        # Map history payload (normalized)
+        if 'context_messages' in params:
+            kwargs['context_messages'] = hist_msgs
+        elif 'history' in params:
+            kwargs['history'] = hist_msgs
+        elif 'messages' in params:
+            kwargs['messages'] = hist_msgs
+        elif 'context' in params:
+            kwargs['context'] = hist_msgs
+        elif 'conversation' in params:
+            kwargs['conversation'] = hist_msgs
+
+        # Attempt 1: prompt + normalized history kwargs
         try:
             return generate_reply(prompt, **kwargs)
         except TypeError:
             pass
 
-        # Second attempt: messages‑only variant (if function defines such a param)
-        messages = []
-        if isinstance(hist, list):
-            messages = hist[:]
-        messages.append({"role": "user", "message": prompt})
-
+        # Attempt 2: messages-only variant if function expects a single list arg
         for name in ('messages', 'history', 'context_messages', 'conversation', 'context'):
             if name in params:
                 try:
-                    return generate_reply(**{name: messages})
+                    return generate_reply(**{name: msgs_with_prompt})
                 except TypeError:
                     continue
 
-        # Last attempt: prompt‑only
+        # Attempt 3: prompt-only
         try:
             return generate_reply(prompt)
         except Exception:
@@ -328,8 +352,7 @@ def api_chat():
     try:
         hist = memory.get_recent_conversation(current_user_email(), limit=8)
     except Exception:
-        # DB may be missing 'role' after a reset; fall back to empty history.
-        hist = []
+        hist = []  # fall back cleanly if table was reset
 
     reply = _generate_reply_flex(prompt, user, hist)
     reply = cap_30_words(reply or "")
@@ -353,10 +376,8 @@ def api_tts():
 
     res = tts_bytes(text)  # do NOT pass keywords; service reads env
 
-    # Accept (audio, err) or bytes or dict
     audio = None
     err = None
-
     if isinstance(res, tuple) and len(res) == 2 and isinstance(res[1], (str, type(None))):
         audio, err = res
     elif isinstance(res, (bytes, bytearray)):
@@ -385,7 +406,6 @@ def api_tts_with_visemes():
         return jsonify({"ok": False, "error": "Text required"}), 400
 
     res = tts_with_visemes(text)  # do NOT pass keywords; service reads env
-
     payload = _parse_tts_payload(res, ELEVEN_OUT_FORMAT())
     if not payload:
         return jsonify({"ok": False, "error": "Unexpected TTS payload"}), 500
