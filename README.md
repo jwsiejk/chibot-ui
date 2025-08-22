@@ -22,8 +22,8 @@ Start: `gunicorn -k gthread -w ${WEB_CONCURRENCY:-1} --threads ${WEB_THREADS:-8}
 - `GET|POST /api/profile`
 - `GET /api/greet`
 - `POST /api/chat` — Chip reply (≤30 words, with memory & profile context)
-- `POST /api/tts` — audio/mpeg from ElevenLabs (fallback to browser speech on client)
-- `POST /api/tts_with_visemes` — `{ audio(base64|null), visemes[], relative:true }`
+- `POST /api/voice/tts` — audio/mpeg from ElevenLabs (fallback to browser speech on client)
+- `POST /api/voice/tts_with_visemes` — `{ audio(base64|null), visemes[], relative:true }`
 - `POST /api/email/send` — server-side SMTP
 - `GET /api/accounts/search?q=...` — CSV lookup
 ```

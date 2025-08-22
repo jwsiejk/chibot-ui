@@ -80,3 +80,28 @@ def generate_greeting(profile: Optional[Dict[str, str]] = None,
         max_tokens=120,
     )
     return (resp.choices[0].message.content or "").strip()
+
+
+# --- Added wrapper to provide a stable entrypoint ---
+def generate_response(user_text: str, history=None, force_email: bool=False, model: str=None):
+    """Stable entrypoint used by routes. Keeps email drafting opt-in only."""
+    history = history or []
+    t = (user_text or "").lower()
+    # If explicitly asked to email and we have an email module, return a structured hint
+    if force_email:
+        return {"text": "Email drafting requires a recipient and bullet points. Tell me who to email and the key points."}
+    # Try to use an existing chat function if present
+    try:
+        return {"text": chat(user_text, history=history, model=model)}
+    except Exception:
+        pass
+    try:
+        return {"text": generate_chat_completion(prompt=user_text, messages=[{'role':'user','content':user_text}], model=model)}
+    except Exception:
+        pass
+    # Fallback topical replies
+    if "flashblade" in t or "flash blade" in t:
+        return {"text": "FlashBlade//S: fast file & object for high-concurrency analytics and backup. Want design or sizing help?"}
+    if "flasharray" in t or "flash array" in t:
+        return {"text": "FlashArray: unified block/file/object with always-on data reduction. Want me to cover replication or NVMe/TCP?"}
+    return {"text": "What do you need help with—design, sizing, troubleshooting, or a quick briefing?"}

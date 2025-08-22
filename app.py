@@ -10,6 +10,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 
 from flask import Flask, request, session, jsonify, render_template, url_for, Response
+from routes.voice import voice_bp
+from routes.chat import chat_bp
+from routes.conversation import conversation_bp
 
 # --- Ensure we can import local packages ---
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -95,17 +98,13 @@ import memory
 
 # Flask setup
 SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("FLASK_SECRET") or "dev-secret-change-me"
-
-from routes.greet import bp as greet_bp
-from routes.voice import voice_bp
 app = Flask(__name__, static_folder="static", template_folder="templates")
+
+app.register_blueprint(voice_bp)
+app.register_blueprint(chat_bp)
+app.register_blueprint(conversation_bp)
 app.secret_key = SECRET_KEY
 app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=False)
-
-from routes.conversation import bp as convo_bp
-app.register_blueprint(convo_bp)
-app.register_blueprint(greet_bp)
-app.register_blueprint(voice_bp)
 
 # Init DB (non-fatal if unavailable)
 try:
@@ -389,7 +388,7 @@ def _style_preamble(ss: _SessionState) -> str:
     if ss.depth:   parts.append(f"Depth: {ss.depth}.")
     return " [[ " + " ".join(parts) + " ]]"
 
-@app.post("/api/chat_orchestrated")
+@app.post("/api/chat")
 def api_chat_orchestrated():
     """Chat endpoint with live session memory & Pure-first style."""
     if not current_user_email():
@@ -438,7 +437,57 @@ def api_chat_orchestrated():
 # Routes
 # ------------------------------------------------------------------------------
 
-@app.route("/api/tts", methods=["POST"])
+@app.route("/api/greet", methods=["GET"])
+def api_greet():
+    email = current_user_email()
+    if not email:
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    user = memory.get_user(email) or {}
+    text = chip_dynamic_greet(user)
+
+    # Try to return audio + visemes. Do NOT pass keywords; service reads env.
+    try:
+        res = tts_with_visemes(text)
+        payload = _parse_tts_payload(res, ELEVEN_OUT_FORMAT())
+        if payload:
+            payload.update({"ok": True, "text": text})
+            return jsonify(payload)
+    except Exception:
+        pass
+
+    # Fallback to static file if exists
+    audio_rel = "chip/audio/greeting-static.mp3"
+    audio_fs = os.path.join(app.static_folder, "chip", "audio", "greeting-static.mp3")
+    audio_url = url_for("static", filename=audio_rel) if os.path.exists(audio_fs) else None
+    return jsonify({"ok": True, "text": text, "audioUrl": audio_url})
+
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    if not current_user_email():
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    data = request.get_json(silent=True) or {}
+    prompt = (data.get("prompt") or "").strip()
+    if not prompt:
+        return jsonify({"ok": False, "error": "Prompt required"}), 400
+
+    user = memory.get_user(current_user_email()) or {}
+    try:
+        hist = memory.get_recent_conversation(current_user_email(), limit=8)
+    except Exception:
+        hist = []  # fall back cleanly if table was reset
+
+    reply = _generate_reply_flex(prompt, user, hist)
+    reply = cap_30_words(reply or "")
+
+    try:
+        memory.log_conversation(email=current_user_email(), role="user", message=prompt)
+        memory.log_conversation(email=current_user_email(), role="assistant", message=reply)
+    except Exception:
+        pass
+
+    return jsonify({"ok": True, "reply": reply})
+
+@app.route("/api/voice/tts", methods=["POST"])
 def api_tts():
     if not current_user_email():
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
@@ -469,7 +518,7 @@ def api_tts():
         return jsonify({"ok": False, "error": err or "TTS unavailable"}), 503
     return Response(audio, mimetype="audio/mpeg")
 
-@app.route("/api/tts_with_visemes", methods=["POST"])
+@app.route("/api/voice/tts_with_visemes", methods=["POST"])
 def api_tts_with_visemes():
     if not current_user_email():
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
