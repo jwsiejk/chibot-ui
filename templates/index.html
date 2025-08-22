@@ -97,6 +97,11 @@
   <script src="/static/js/addons-email-intents.js" defer></script>
 
   <script>
+  // Set this to your backend service URL (no trailing slash)
+  window.ASKCHIP_API = "https://ask-chip.onrender.com";
+</script>
+
+  <script>
 /* Ask Chip hotfix: force a stable /api/chat contract */
 window.API = window.API || {};
 window.API.chat = async function(prompt) {
