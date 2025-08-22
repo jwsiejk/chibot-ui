@@ -9,6 +9,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List
 
+from conversation_orchestrator import bp as convo_bp
+app.register_blueprint(convo_bp)
+
 from flask import Flask, request, session, jsonify, render_template, url_for, Response
 
 # --- Ensure we can import local packages ---
