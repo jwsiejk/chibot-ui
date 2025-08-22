@@ -13,6 +13,8 @@ from flask import Flask, request, session, jsonify, render_template, url_for, Re
 from routes.voice import voice_bp
 from routes.chat import chat_bp
 from routes.conversation import conversation_bp
+from flask_cors import CORS
+CORS(app, resources={r"/api/*": {"origins": ["https://chibot-ui.onrender.com"]}})
 
 # --- Ensure we can import local packages ---
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
