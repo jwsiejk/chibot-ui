@@ -1,8 +1,15 @@
+// static/js/main.js — Pure-first conversation, memory, and layout/view fixes
 document.addEventListener("DOMContentLoaded", async () => {
   // --- State ---
   let greeted = false;
   let recognizer = null;
   let recognizing = false;
+  let lastFollowUpAt = 0;
+
+  // Lightweight conversation context (persisted for the tab only)
+  let AC_CTX = {};
+  try { AC_CTX = JSON.parse(sessionStorage.getItem("AC_CTX") || "{}"); } catch (_) { AC_CTX = {}; }
+  function saveCtx() { try { sessionStorage.setItem("AC_CTX", JSON.stringify(AC_CTX)); } catch (_) {} }
 
   // --- Elements ---
   const loginForm    = document.getElementById("loginForm");
@@ -25,7 +32,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const chipCanvas = document.getElementById("chipCanvas");
   const chipSprite = document.getElementById("chipSprite");
 
-  // --- Enforce view: only one of login/profile/chat can be visible
+  // --- Enforce view: only one of login/profile/chat visible ---
   function ac_show(id) {
     const LV = document.getElementById("loginView");
     const PV = document.getElementById("profileView");
@@ -34,7 +41,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (PV) PV.hidden = (id !== "profile");
     if (CV) CV.hidden = (id !== "chat");
   }
-  // Monkey‑patch UI.show to also enforce the 'hidden' attribute reliably
   try {
     if (window.UI && typeof UI.show === "function") {
       const _origShow = UI.show.bind(UI);
@@ -57,7 +63,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     Viseme.init(chipCanvas);
   }
 
-  // --- Helpers ---
+  // --- Helpers (UI) ---
   function scrollChatToBottom() {
     const el = document.getElementById("chatLog");
     if (el) el.scrollTop = el.scrollHeight;
@@ -76,26 +82,80 @@ document.addEventListener("DOMContentLoaded", async () => {
     } catch (_) {}
   }
 
-  // --- Conversation helpers ---
+  // --- Helpers (context & style) ---
+  function ac_detectContext(text) {
+    const t = (text || "").toLowerCase();
+    // Product
+    if (/(^|\W)flash\s*blade(s)?(\W|$)|(^|\W)flashblade(\W|$)/i.test(t)) AC_CTX.product = "FlashBlade";
+    else if (/(^|\W)flash\s*array(\W|$)|(^|\W)flasharray(\W|$)/i.test(t)) AC_CTX.product = "FlashArray";
+    else if (/(^|\W)portworx(\W|$)/i.test(t)) AC_CTX.product = "Portworx";
+
+    // Task
+    if (/(^|\W)(install|installation|set\s*up|setup|deploy|deployment|walk\s*me\s*through)/i.test(t)) AC_CTX.task = "installation";
+    else if (/(^|\W)(troubleshoot|troubleshooting|error|fail|issue|debug|diagnose)/i.test(t)) AC_CTX.task = "troubleshooting";
+    else if (/(^|\W)(design|architecture|size|sizing|capacity|plan|planning)/i.test(t)) AC_CTX.task = "design";
+    else if (/(^|\W)(upgrade|update|patch)/i.test(t)) AC_CTX.task = "upgrade";
+
+    // Depth hints
+    if (/(high\s*level|overview|summary)/i.test(t)) AC_CTX.depth = "high";
+    if (/(step\s*by\s*step|walk\s*through|detailed|deep)/i.test(t)) AC_CTX.depth = "deep";
+
+    // Continuation markers
+    if (/(go ahead|continue|keep going|walk me through it|then|next)/i.test(t)) AC_CTX.continue = true;
+
+    saveCtx();
+  }
+
+  function ac_stylePrefix() {
+    // Pure‑first guardrails and current context for the model
+    let lines = [
+      "STYLE: You are Chip, a Pure Storage expert. Keep personality minimal (short flourish occasionally), 90% product substance.",
+      "Be clear, concise, and conversational. Use short sentences. Respect prior context—continue the current topic without re‑asking.",
+      "If the user asks to 'walk me through it', provide a step‑by‑step with prerequisites, actions, and validation.",
+      "End with one concise follow‑up that keeps momentum (e.g., 'Want the checklist emailed?' or 'Should I go deeper on step 2?')."
+    ];
+    if (AC_CTX.product) lines.push(`Product focus: ${AC_CTX.product}.`);
+    if (AC_CTX.task) lines.push(`Current task: ${AC_CTX.task}.`);
+    if (AC_CTX.depth) lines.push(`Depth: ${AC_CTX.depth}.`);
+    if (AC_CTX.continue) lines.push("This is a continuation; do not switch products unless the user asks.");
+    return `[[${lines.join(" ")}]]`;
+  }
+
+  function ac_applyStyleToPrompt(prompt) {
+    ac_detectContext(prompt); // update context before applying
+    return `${ac_stylePrefix()}\n${prompt}`;
+  }
+
+  function ac_contextualFollowUp(userPrompt, reply) {
+    // Avoid double questions
+    if (/\?\s*$/.test(reply || "")) return "";
+    const now = Date.now();
+    if (now - lastFollowUpAt < 3500) return ""; // avoid stacking
+    lastFollowUpAt = now;
+
+    const prod = AC_CTX.product || "";
+    const task = AC_CTX.task || "";
+    const lower = (userPrompt || "").toLowerCase();
+
+    // Prefer installation guidance if user hinted at it
+    if (task === "installation" || /install|walk.*through|step.*by.*step/.test(lower)) {
+      const p = prod ? ` for ${prod}` : "";
+      return `Want a step‑by‑step install checklist${p}? I can cover prerequisites, network, and validation.`;
+    }
+
+    if (/design|architecture|size|sizing|capacity|plan/.test(lower)) {
+      const p = prod ? ` for ${prod}` : "";
+      return `Should I sketch a simple reference design${p}, or jump to sizing guidance?`;
+    }
+
+    // Generic nudge
+    return "Want me to go deeper on any part, or keep it high level?";
+  }
+
+  // --- Conversation helpers (existing) ---
   function chipFollowUp(prompt, reply) {
-    try {
-      if (!prompt) return "";
-      const p = (prompt || "").toLowerCase();
-      const replyEndsQuestion = /[?]$/.test(reply || "");
-      if (replyEndsQuestion) return "";
-      if (Math.random() < 0.6) return ""; // be selective
-      const nudges = [
-        "Want me to go deeper on that?",
-        "Should I lay out the steps?",
-        "Want a quick checklist?",
-        "Need the gotchas before you start?",
-        "Want me to sanity‑check your plan?"
-      ];
-      if (p.includes("install") || p.includes("setup") || p.includes("configure")) return "Want the exact install steps?";
-      if (p.includes("troubleshoot") || p.includes("error") || p.includes("fail")) return "Want the quick triage path?";
-      if (p.includes("design") || p.includes("architecture")) return "Want a simple diagram of the flow?";
-      return nudges[Math.floor(Math.random() * nudges.length)];
-    } catch { return ""; }
+    // Retain for backward compatibility; replaced by ac_contextualFollowUp
+    return "";
   }
 
   async function dynamicGreet() {
@@ -264,6 +324,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (micBtn) micBtn.classList.remove("listening");
       if (!transcript) { UI.setStatus("Ready"); await ac_resumeListening(); return; }
 
+      ac_detectContext(transcript);
       UI.appendBubble("user", transcript);
       scrollChatToBottom();
 
@@ -273,12 +334,18 @@ document.addEventListener("DOMContentLoaded", async () => {
       } catch (_) {}
 
       UI.setStatus("Thinking…");
-      const res = await API.chat(transcript);
+      const styledPrompt = ac_applyStyleToPrompt(transcript);
+      const res = await API.chat(styledPrompt);
       if (res.ok) {
         const reply = res.reply || "";
+        // Update context based on assistant's chosen product if explicit
+        ac_detectContext(reply);
         UI.appendBubble("assistant", reply);
         scrollChatToBottom();
         await speakWithVisemes(reply);
+
+        const fu = ac_contextualFollowUp(transcript, reply);
+        if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
         await ac_resumeListening();
       } else {
         UI.appendBubble("assistant", res.error || "Something went wrong.");
@@ -294,7 +361,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       document.body.classList.remove("listening");
       const code = e && e.error || "error";
       UI.setStatus(code === "no-speech" ? "Didn't catch that—try again." : "Mic error");
-      // Auto re-arm on transient errors
       if (code === "no-speech" || code === "audio-capture") {
         setTimeout(() => { ac_resumeListening(); }, 300);
       }
@@ -322,16 +388,14 @@ document.addEventListener("DOMContentLoaded", async () => {
         const res = await API.login(email);
         if (res && res.ok) {
           UI.setUser(email);
-          ac_show("chat");              // enforce chat view
-          await refreshState();         // sync server state
+          ac_show("chat");
+          await refreshState();
           UI.setStatus("Ready");
         } else {
           UI.setStatus((res && res.error) || "Login failed");
-          console.warn("Login failed:", res);
         }
       } catch (e) {
         UI.setStatus("Login failed");
-        console.error("Login exception:", e);
       }
     });
   }
@@ -355,10 +419,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (logoutBtn) {
     logoutBtn.addEventListener("click", async () => {
-      await API.logout();
-      UI.setUser("");
-      ac_show("login");                 // enforce login view
-      UI.setStatus("Logged out");
+      await API.logout(); UI.setUser(""); ac_show("login"); UI.setStatus("Logged out");
     });
   }
 
@@ -390,6 +451,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!prompt) return;
       composerInput.value = "";
       sendBtn.disabled = true;
+      ac_detectContext(prompt);
       UI.appendBubble("user", prompt);
       scrollChatToBottom();
 
@@ -399,13 +461,15 @@ document.addEventListener("DOMContentLoaded", async () => {
       } catch (_) {}
 
       UI.setStatus("Thinking…");
-      const res = await API.chat(prompt);
+      const styledPrompt = ac_applyStyleToPrompt(prompt);
+      const res = await API.chat(styledPrompt);
       if (res.ok) {
         const reply = res.reply || "";
+        ac_detectContext(reply);
         UI.appendBubble("assistant", reply);
         scrollChatToBottom();
         await speakWithVisemes(reply);
-        const fu = chipFollowUp(prompt, reply);
+        const fu = ac_contextualFollowUp(prompt, reply);
         if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
         UI.setStatus("Ready");
       } else {
@@ -443,11 +507,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function refreshState() {
     const me = await API.me();
-    if (!me.logged_in) {
-      ac_show("login");
-      UI.setUser("");
-      return;
-    }
+    if (!me.logged_in) { ac_show("login"); UI.setUser(""); return; }
     UI.setUser(me.user && me.user.email || "");
     if (!me.profile_complete) {
       ac_show("profile");
