@@ -206,9 +206,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       UI.show("profile");
       UI.setStatus("Edit your profile and Save to continue");
     });
-  }
-);
-  }
+  } // end if (profileBtn)
 
   if (logoutBtn) {
     logoutBtn.addEventListener("click", async () => {
