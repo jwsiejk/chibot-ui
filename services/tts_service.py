@@ -3,7 +3,6 @@ import logging
 import requests
 
 def _get_env(name: str, *aliases: str) -> str:
-    # Prefer canonical name, then aliases
     val = os.getenv(name)
     if val and val.strip():
         return val.strip()
@@ -14,7 +13,6 @@ def _get_env(name: str, *aliases: str) -> str:
     return ""
 
 def _cfg():
-    # Resolve at call time so app-level aliasing isn't order-dependent.
     api_key = _get_env("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
     voice_id = _get_env("ELEVENLABS_VOICE_ID", "ELEVEN_VOICE_ID", "CHIP_VOICE_ID")
     model_id = _get_env("ELEVENLABS_MODEL_ID", "ELEVEN_MODEL_ID") or "eleven_turbo_v2_5"
@@ -48,6 +46,5 @@ def tts_bytes(text: str, *, format: str = "mp3", voice_id: str | None = None) ->
 
 def tts_with_visemes(text: str, *, format: str = "mp3", voice_id: str | None = None):
     audio = tts_bytes(text, format=format, voice_id=voice_id)
-    # If you enable viseme timestamps, add them here.
-    visemes: list[dict] = []
+    visemes: list[dict] = []  # if you wire timestamps later, populate this
     return audio, visemes
