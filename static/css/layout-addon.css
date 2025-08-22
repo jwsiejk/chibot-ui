@@ -1,75 +1,50 @@
-/* layout-addon.css — responsive chat layout (v2) */
-/* Keeps chat compact on the left, stage flexible on the right. */
-/* Works with dark themes; only layout + sizes, minimal colors. */
 
-:root { --gap: 16px; --chip-side-min: 300px; --chat-min: 300px; --chat-max: 520px; }
+/* layout-addon.css — grid that uses your current DOM structure */
+/* Chat on the left (compact), Chip stage on the right (flexible) */
+
+:root {
+  --gap: 16px;
+  --chat-min: 300px;
+  --chat-max: 520px;
+}
 
 html, body { height: 100%; }
 body { display: flex; flex-direction: column; min-height: 100vh; }
 
-/* Ensure views can grow to fill the screen under the header */
-.view { padding: 16px; }
-#chatView.view { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
-
-/* Two-column layout: chat LEFT (compact), stage RIGHT (flexible) */
-.chat-layout {
+/* Only #chatView gets the grid layout */
+#chatView.view {
+  flex: 1 1 auto;
   display: grid;
-  grid-template-columns: minmax(var(--chat-min), var(--chat-max)) minmax(var(--chip-side-min), 1fr);
+  grid-template-columns: minmax(var(--chat-min), var(--chat-max)) 1fr;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "toolbar stage"
+    "chat    stage"
+    "composer stage";
   gap: var(--gap);
-  flex: 1 1 auto;
   min-height: 0;
 }
 
-/* Chat column uses a column flex model */
-.chat-panel { display: flex; flex-direction: column; min-width: 0; }
-.chat-panel .toolbar { flex: 0 0 auto; }
+/* Map elements to grid areas */
+#chatView .toolbar  { grid-area: toolbar; }
+#chatLog            { grid-area: chat;    min-height: 0; overflow-y: auto; }
+#composer           { grid-area: composer; position: sticky; bottom: 0; }
+#chipStage          { grid-area: stage;   display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; overflow: hidden; }
 
-/* Scrollable chat; smaller text by default */
-.chat-log {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 8px 0;
-  font-size: 0.95rem;
-  line-height: 1.35;
-}
+#chipStage img, #chipStage canvas { max-width: 100%; height: auto; object-fit: contain; }
 
-/* Composer sticky at bottom of chat */
-.composer {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-  padding-top: 8px;
-  position: sticky;
-  bottom: 0;
-  background: transparent;
-  backdrop-filter: none;
-}
-.composer textarea { flex: 1 1 auto; resize: none; font-size: 0.95rem; }
+/* Make chat a little denser */
+#chatLog { font-size: 0.95rem; line-height: 1.35; }
+#composer textarea { font-size: 0.95rem; resize: none; }
 
-/* Stage column scales image/canvas */
-.stage.stage-column, .stage {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-.stage.stage-column img, .stage.stage-column canvas,
-.stage img, .stage canvas {
-  max-width: 100%;
-  height: auto;
-  object-fit: contain;
-}
-
-/* Mobile: stack vertically, stage above chat */
+/* Stack vertically on mobile (stage above chat) */
 @media (max-width: 900px) {
-  .chat-layout {
+  #chatView.view {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "stage"
+      "toolbar"
+      "chat"
+      "composer";
   }
-  .stage.stage-column, .stage { order: -1; margin-bottom: var(--gap); }
 }
