@@ -107,6 +107,92 @@ document.addEventListener("DOMContentLoaded", async () => {
     UI.setStatus("Audio unavailable — check ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID");
   }
 
+  // ---------------- Account Team intent (robust) ----------------
+  // Covers: "account team info/details for/at/on/about/regarding X",
+  // "who covers/owns X", "who is the pure rep/account owner for/at/on/about/regarding X",
+  // and short forms like "team X", "owner X", "rep X".
+  const _ac_ACCOUNT_PATTERNS = [
+    /^\s*(?:do\s+you\s+know\s+)?(?:can\s+you\s+)?(?:what(?:'s| is)\s+)?(?:the\s+)?account\s+team(?:\s+(?:info(?:rmation)?|details)?)?\s+(?:for|at|on|about|regarding)\s+(.+?)\s*[?.!]*$/i,
+    /^\s*who\s+(?:covers|owns)\s+(.+?)\s*[?.!]*$/i,
+    /^\s*who\s+is\s+the\s+(?:pure\s+rep|account\s+owner)\s+(?:for|at|on|about|regarding)\s+(.+?)\s*[?.!]*$/i,
+    /^\s*(?:team|owner|rep)\s+(.+?)\s*[?.!]*$/i
+  ];
+
+  function _ac_matchAccountLookup(text) {
+    const t = (text || "").trim();
+    if (!t) return null;
+    for (let i = 0; i < _ac_ACCOUNT_PATTERNS.length; i++) {
+      const m = t.match(_ac_ACCOUNT_PATTERNS[i]);
+      if (m && m[1]) return m[1].trim();
+    }
+    // Gentle catch‑all for “account team …”
+    if (/account\s+team/i.test(t)) {
+      const m = t.match(/(?:for|at|on|about|regarding)\s+(.+?)\s*[?.!]*$/i);
+      if (m && m[1]) return m[1].trim();
+    }
+    return null;
+  }
+
+  function _ac_pickTeamShape(j) {
+    // Try to pick a single team object from diverse API shapes
+    if (!j) return null;
+    let o = null;
+    if (Array.isArray(j)) o = j[0];
+    else if (Array.isArray(j.results)) o = j.results[0];
+    else if (j.data && Array.isArray(j.data)) o = j.data[0];
+    else if (j.data && typeof j.data === "object") o = j.data;
+    else if (typeof j === "object") o = j;
+    if (!o) return null;
+    return {
+      name: o.account_name || o.AccountName || o.Account || o.name || o.customer || "",
+      owner: o.account_owner || o.AccountOwner || o.owner || "",
+      rep: o.pure_rep || o.PureRep || o.rep || "",
+      type: o.type || o.Type || o.segment || ""
+    };
+  }
+
+  async function ac_tryAccountTeam(userText) {
+    const q = _ac_matchAccountLookup(userText);
+    if (!q) return false;
+
+    let say = "";
+    // 1) Prefer a dedicated route if present
+    try {
+      const res = await fetch(`/api/account_team?name=${encodeURIComponent(q)}`);
+      if (res.ok) {
+        const j = await res.json();
+        if (j && j.ok && j.found) {
+          say = j.rendered || "";
+        } else if (j && typeof j.rendered === "string") {
+          say = j.rendered;
+        }
+      }
+    } catch (_) { /* ignore and try fallback */ }
+
+    // 2) Fallback: generic accounts search
+    if (!say) {
+      try {
+        const r2 = await fetch(`/api/accounts/search?q=${encodeURIComponent(q)}`);
+        if (r2.ok) {
+          const j2 = await r2.json();
+          const t = _ac_pickTeamShape(j2);
+          if (t && (t.name || t.owner || t.rep || t.type)) {
+            say = `Account team for ${t.name || q}${t.owner ? `; Account Owner — ${t.owner}` : ""}${t.rep ? `; Pure Rep — ${t.rep}` : ""}${t.type ? `; Type — ${t.type}` : ""}. Want me to email that to you?`;
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!say) {
+      say = `I couldn’t find an account team for ${q}. If you want, I can try another name or different spelling.`;
+    }
+
+    UI.appendBubble("assistant", say);
+    try { await speakWithVisemes(say); } catch (_) {}
+    return true; // handled
+  }
+  // ---------------- /Account Team intent ----------------
+
   function supportsSpeechRecognition() {
     return "webkitSpeechRecognition" in window || "SpeechRecognition" in window;
   }
@@ -146,6 +232,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!transcript) return;
 
       UI.appendBubble("user", transcript);
+
+      // EARLY EXIT: try account-team intent before sending to /api/chat
+      try {
+        if (await ac_tryAccountTeam(transcript)) return;
+      } catch (_) {}
+
       UI.setStatus("Thinking…");
       const res = await API.chat(transcript);
       if (res.ok) {
@@ -243,6 +335,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       composerInput.value = "";
       sendBtn.disabled = true;
       UI.appendBubble("user", prompt);
+
+      // EARLY EXIT: try account-team intent before sending to /api/chat
+      try {
+        if (await ac_tryAccountTeam(prompt)) { UI.setStatus("Ready"); return; }
+      } catch (_) {}
+
       UI.setStatus("Thinking…");
       const res = await API.chat(prompt);
       if (res.ok) {
