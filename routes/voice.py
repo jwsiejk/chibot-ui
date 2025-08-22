@@ -13,12 +13,13 @@ def tts():
     try:
         audio = tts_bytes(text=text, format=fmt, voice_id=voice_id)
         if not audio:
+            # Not fatal for UX; allows UI to proceed without audio
             return jsonify({'ok': False, 'error': 'tts_not_configured'}), 200
         b64 = base64.b64encode(audio).decode('ascii')
         return jsonify({'ok': True, 'audio': b64, 'format': fmt, 'relative': True})
     except Exception as e:
         current_app.logger.exception('voice.tts failed')
-        return jsonify({'ok': False, 'error': 'tts_failed', 'detail': str(e)}), 500
+        return jsonify({'ok': False, 'error': 'tts_failed', 'detail': str(e)}), 200
 
 @voice_bp.route('/tts_with_visemes', methods=['POST'])
 def tts_with_visemes_route():
@@ -34,4 +35,4 @@ def tts_with_visemes_route():
         return jsonify({'ok': True, 'audio': b64, 'format': fmt, 'visemes': visemes or [], 'relative': True})
     except Exception as e:
         current_app.logger.exception('voice.tts_with_visemes failed')
-        return jsonify({'ok': False, 'error': 'tts_visemes_failed', 'detail': str(e)}), 500
+        return jsonify({'ok': False, 'error': 'tts_visemes_failed', 'detail': str(e)}), 200
