@@ -101,6 +101,7 @@
     document.addEventListener('DOMContentLoaded', function () {
       if (!window.API || typeof API.chat !== 'function') return;
       const legacyChat = API.chat.bind(API);
+
       API.chat = async function (text) {
         try {
           const r = await fetch('/api/chat_orchestrated', {
@@ -108,14 +109,19 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text })
           });
+          // If the orchestrator route exists (not 404), prefer its reply/state
           if (r.status !== 404) {
             const j = await r.json();
-            if (j && j.ok) return { ok: true, reply: j.reply, state: j.state };
+            if (j && j.ok) {
+              // Shape matches the orchestrated route: { ok, reply, state }
+              return { ok: true, reply: j.reply, state: j.state };
+            }
             return { ok: false, error: (j && j.error) || 'orchestrator error' };
           }
         } catch (e) {
-          /* fall through to legacy */
+          // fall through to legacy
         }
+        // Legacy behavior (your original /api/chat), same return shape: { ok, reply }
         return legacyChat(text);
       };
     });
