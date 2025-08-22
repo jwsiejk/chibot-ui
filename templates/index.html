@@ -96,6 +96,30 @@
   <script src="/static/js/main.js" defer></script>
   <script src="/static/js/addons-email-intents.js" defer></script>
 
+  <script>
+/* Ask Chip hotfix: force a stable /api/chat contract */
+window.API = window.API || {};
+window.API.chat = async function(prompt) {
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }) // also accepted by the server: message | text
+    });
+    let json;
+    try { json = await res.json(); } catch { return { ok: false, error: "bad_json" }; }
+    if (json && typeof json.ok === "boolean") return json;
+    return { ok: false, error: "bad_shape", status: res.status, body: json };
+  } catch (e) {
+    return { ok: false, error: "exception", detail: String(e) };
+  }
+};
+
+// Optional: show config status in the console to help debugging
+fetch("/api/health").then(r=>r.json()).then(s=>console.info("[AskChip] health", s)).catch(()=>{});
+</script>
+
+
   <!-- Orchestrator shim: prefer /api/chat (memory + style), else fall back -->
 <script>
   document.addEventListener('DOMContentLoaded', function () {
