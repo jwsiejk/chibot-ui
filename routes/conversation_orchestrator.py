@@ -1,15 +1,18 @@
 # conversation_orchestrator.py
 # Orchestrated chat with per-session memory that reuses your existing LLM path.
-# Drop-in: register the blueprint in app.py (see notes at bottom).
 
-import time
+import time, re
 from dataclasses import dataclass, field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from flask import Blueprint, request, session, jsonify
 
-# Use your existing DB helpers & user store
 import memory
+from services.email_service import send_email  # SMTP already configured in your env :contentReference[oaicite:5]{index=5}
+try:
+    from services.accounts_service import search_accounts
+except Exception:
+    def search_accounts(*args, **kwargs): return []
 
 # ------------------------------ Session memory -------------------------------
 
@@ -21,17 +24,17 @@ class Msg:
 
 @dataclass
 class SessionState:
-    history: List[Msg] = field(default_factory=list)  # optional local echo (not required)
+    history: List[Msg] = field(default_factory=list)  # optional local echo
     product: str = ""   # FlashBlade | FlashArray | Portworx
     task: str = ""      # installation | design | troubleshooting | upgrade
     depth: str = ""     # high | deep
+    last_assistant: str = ""
     last_seen: float = field(default_factory=time.time)
 
 _SESS: Dict[str, SessionState] = {}
 _TTL_SECONDS = 60 * 60  # 1 hour
 
 def _sid() -> str:
-    # Prefer authenticated email; fall back to remote addr
     return session.get("email") or request.remote_addr or "anon"
 
 def _gc_sessions():
@@ -42,18 +45,25 @@ def _gc_sessions():
 
 # ---------------------------- Lightweight heuristics -------------------------
 
+def _norm_product_terms(txt: str) -> str:
+    """Hard normalize common mis-hearings to a product term."""
+    t = (txt or "").lower()
+    # 'flash light' / 'flashlight' / 'flash blade'  → FlashBlade
+    if re.search(r"\bflash\s*light\b", t) or "flashlight" in t:
+        return "FlashBlade"
+    if re.search(r"\bflash\s*blade\b", t) or "flashblade" in t:
+        return "FlashBlade"
+    if re.search(r"\bflash\s*array\b", t) or "flasharray" in t or "purity//fa" in t or "purity/fa" in t:
+        return "FlashArray"
+    if "portworx" in t:
+        return "Portworx"
+    return ""
+
 def infer_from_text(ss: SessionState, text: str):
     t = (text or "").lower()
+    prod = _norm_product_terms(t)
+    if prod: ss.product = prod
 
-    # Product
-    if any(k in t for k in ("flashblade", "flash blade", "fb", "s3 on flashblade")):
-        ss.product = "FlashBlade"
-    if any(k in t for k in ("flasharray", "flash array", "fa", "purity//fa", "purity/fa")):
-        ss.product = "FlashArray"
-    if "portworx" in t:
-        ss.product = "Portworx"
-
-    # Task
     if any(k in t for k in ("install", "installation", "set up", "setup", "deploy", "walk me through", "step by step")):
         ss.task = "installation"
     if any(k in t for k in ("design", "architecture", "size", "sizing", "capacity", "plan")):
@@ -63,7 +73,6 @@ def infer_from_text(ss: SessionState, text: str):
     if any(k in t for k in ("upgrade", "update", "patch")):
         ss.task = "upgrade"
 
-    # Depth
     if "high level" in t or "overview" in t or "summary" in t:
         ss.depth = "high"
     if "step by step" in t or "walk" in t or "detailed" in t or "deep" in t:
@@ -75,7 +84,7 @@ def style_preamble(ss: SessionState) -> str:
         "Honor prior context. Continue the current product/task unless the user explicitly switches.",
         "Be concise. Use short sentences.",
         "If asked to 'walk me through it', give step-by-step: prerequisites, actions, validation.",
-        "End with ONE short follow-up (e.g., 'Want the checklist emailed?' or 'Go deeper on step 2?').",
+        "End with ONE short follow-up only if useful.",
     ]
     if ss.product: parts.append(f"Product focus: {ss.product}.")
     if ss.task:    parts.append(f"Current task: {ss.task}.")
@@ -83,10 +92,6 @@ def style_preamble(ss: SessionState) -> str:
     return " [[ " + " ".join(parts) + " ]]"
 
 def _to_chat_messages(hist, prompt=None) -> List[Dict[str, str]]:
-    """
-    Normalizes a heterogeneous list of items (as stored by memory.*) into
-    OpenAI-style messages. Accepts dicts, tuples, or bare strings.
-    """
     msgs: List[Dict[str, str]] = []
     if isinstance(hist, (list, tuple)):
         for item in hist:
@@ -106,35 +111,79 @@ def _to_chat_messages(hist, prompt=None) -> List[Dict[str, str]]:
     return msgs
 
 # ------------------------------- LLM call path --------------------------------
-# Long-term choice: REUSE your existing services.llm_service.generate_reply so
-# the orchestrator stays in lockstep with /api/chat (same model, safety, keys).
-# This is how your current app.py talks to the model. :contentReference[oaicite:2]{index=2}
-
+# Reuse your existing model path so config stays centralized. :contentReference[oaicite:6]{index=6}
 def call_llm(messages: List[Dict[str, str]]) -> str:
-    """
-    Call services.llm_service.generate_reply with best-effort signature matching.
-    Tries messages/history/context_messages, then falls back to a flattened prompt.
-    """
-    try:
-        from services.llm_service import generate_reply
-    except Exception as e:
-        raise RuntimeError(f"llm_service.generate_reply import failed: {e}")
-
-    # 1) Try chat-style kwargs
+    from services.llm_service import generate_reply
+    # Try chat-style kwargs first
     for kw in ("messages", "history", "context_messages", "conversation", "context"):
         try:
             return generate_reply(**{kw: messages})
         except TypeError:
             continue
-        except Exception as e:
-            raise RuntimeError(f"generate_reply({kw}=...) failed: {e}")
-
-    # 2) Fallback: flatten messages (include system)
+    # Fallback: flatten as a prompt
     flat = "\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in messages if m.get("content"))
-    try:
-        return generate_reply(flat)
-    except Exception as e:
-        raise RuntimeError(f"generate_reply(prompt) failed: {e}")
+    return generate_reply(flat)
+
+# -------------------------- Server-side intents -------------------------------
+
+_ACCOUNT_PATTERNS = [
+    re.compile(r"^\s*(?:do\s+you\s+know\s+)?(?:can\s+you\s+)?(?:what(?:'s| is)\s+)?(?:the\s+)?account\s+team(?:\s+(?:info(?:rmation)?|details)?)?\s+(?:for|at|on|about|regarding)\s+(.+?)\s*[?.!]*$", re.I),
+    re.compile(r"^\s*who\s+(?:covers|owns)\s+(.+?)\s*[?.!]*$", re.I),
+    re.compile(r"^\s*who\s+is\s+the\s+(?:pure\s+rep|account\s+owner)\s+(?:for|at|on|about|regarding)\s+(.+?)\s*[?.!]*$", re.I),
+]
+
+def _maybe_alias_org(q: str) -> List[str]:
+    q = (q or "").strip()
+    alts = [q]
+    # simple aliases
+    if q.lower().startswith("qvc"):
+        alts.append("Qurate Retail Group")
+        alts.append("QVC, Inc.")
+    if "bank" in q.lower() and "chase" in q.lower():
+        alts.append("JPMorgan Chase")
+    return list(dict.fromkeys(alts))  # dedupe
+
+def _render_team(obj: Dict[str, Any]) -> Optional[str]:
+    if not obj: return None
+    name  = obj.get("account_name") or obj.get("AccountName") or obj.get("name") or obj.get("customer")
+    owner = obj.get("account_owner") or obj.get("AccountOwner") or obj.get("owner")
+    rep   = obj.get("pure_rep") or obj.get("PureRep") or obj.get("rep")
+    seg   = obj.get("type") or obj.get("Type") or obj.get("segment")
+    if not any([name, owner, rep, seg]): return None
+    parts = [f"**{name}**"]
+    if owner: parts.append(f"Account Owner — {owner}")
+    if rep:   parts.append(f"Pure Rep — {rep}")
+    if seg:   parts.append(f"Type — {seg}")
+    return "; ".join(parts)
+
+def _search_account_team(q: str) -> Optional[str]:
+    for candidate in _maybe_alias_org(q):
+        results = search_accounts(candidate, limit=5) or []
+        # pick first with any team info
+        for r in results:
+            rendered = _render_team(r)
+            if rendered:
+                return rendered
+    return None
+
+def _match_account_intent(text: str) -> Optional[str]:
+    t = (text or "").strip()
+    for rx in _ACCOUNT_PATTERNS:
+        m = rx.match(t)
+        if m and m.group(1):
+            return m.group(1).strip()
+    if "account team" in t.lower():
+        m = re.search(r"(?:for|at|on|about|regarding)\s+(.+?)\s*[?.!]*$", t, re.I)
+        if m: return m.group(1).strip()
+    return None
+
+def _is_email_history_intent(t: str) -> bool:
+    t = (t or "").lower()
+    return ("email" in t) and ("conversation" in t or "history" in t)
+
+def _is_email_that_intent(t: str) -> bool:
+    t = (t or "").lower()
+    return ("email" in t) and ("that" in t or "it" in t)
 
 # --------------------------------- Blueprint ----------------------------------
 
@@ -142,7 +191,6 @@ bp = Blueprint("conversation_orchestrator", __name__)
 
 @bp.post("/api/chat_orchestrated")
 def chat_orchestrated():
-    # Require auth (same behavior as /api/chat)
     if not session.get("email"):
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
 
@@ -157,26 +205,77 @@ def chat_orchestrated():
     ss.last_seen = time.time()
     _gc_sessions()
 
-    # Pull a small slice of server-side history (DB is the ground truth)
+    # Normalize/track context
+    infer_from_text(ss, text)
+
+    # ---- Server-side intents (no model needed) ----
+    # 1) Email conversation history to the signed-in user
+    if _is_email_history_intent(text):
+        try:
+            hist = memory.get_recent_conversation(session["email"], limit=50) or []
+        except Exception:
+            hist = []
+        if not hist:
+            return jsonify({"ok": True, "reply": "I don’t have any history yet to email."})
+        # Build a simple transcript
+        lines = []
+        for h in hist:
+            role = (h.get("role") or "user").capitalize()
+            msg  = h.get("message") or h.get("content") or ""
+            lines.append(f"{role}: {msg}")
+        plain = "\n".join(lines)
+        html  = "<br>".join([f"<strong>{l.split(':',1)[0]}:</strong> {l.split(':',1)[1].strip()}" for l in lines if ':' in l])
+        to = session["email"]
+        ok = send_email(to=to, subject="Ask Chip — Conversation History", text=plain, html=f"<div>{html}</div>")
+        reply = "I’ve emailed the conversation history to you." if ok else "I couldn’t send the conversation email just now."
+        # log assistant reply
+        try:
+            memory.log_conversation(email=session["email"], role="assistant", message=reply)
+        except Exception:
+            pass
+        ss.last_assistant = reply
+        return jsonify({"ok": True, "reply": reply})
+
+    # 2) Email the last assistant answer (“email that to me”)
+    if _is_email_that_intent(text) and ss.last_assistant:
+        to = session["email"]
+        ok = send_email(to=to, subject="Ask Chip — Details you requested", text=ss.last_assistant, html=f"<div>{ss.last_assistant}</div>")
+        reply = "Sent. Check your inbox."
+        if not ok:
+            reply = "I tried to email that, but it failed just now."
+        try:
+            memory.log_conversation(email=session["email"], role="assistant", message=reply)
+        except Exception:
+            pass
+        ss.last_assistant = reply
+        return jsonify({"ok": True, "reply": reply})
+
+    # 3) Account team lookup
+    acct_q = _match_account_intent(text)
+    if acct_q:
+        rendered = _search_account_team(acct_q)
+        if rendered:
+            reply = f"{rendered}. Want me to email that to you?"
+        else:
+            reply = f"I couldn’t find an account team for {acct_q}. Want me to try another spelling or related brand?"
+        try:
+            memory.log_conversation(email=session["email"], role="user", message=text)
+            memory.log_conversation(email=session["email"], role="assistant", message=reply)
+        except Exception:
+            pass
+        ss.last_assistant = reply
+        return jsonify({"ok": True, "reply": reply, "state": {"product": ss.product, "task": ss.task, "depth": ss.depth}})
+
+    # ---- Model path (Pure-first style + recent DB history) ----
     try:
         hist = memory.get_recent_conversation(session["email"], limit=8)
     except Exception:
         hist = []
-
-    # Update memory from the user's new turn (product/task/depth)
-    infer_from_text(ss, text)
-
-    # Build messages: style preamble + recent history + new user turn
     sys_msg = {"role": "system", "content": style_preamble(ss)}
-    msgs = [sys_msg] + _to_chat_messages(hist, prompt=text)
+    messages = [sys_msg] + _to_chat_messages(hist, prompt=text)
 
-    # Generate using your existing model path
-    try:
-        reply = call_llm(msgs) or ""
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"llm_error: {e}"}), 500
-
-    # Persist the turn in DB history and refresh memory from assistant reply
+    reply = call_llm(messages) or ""
+    # Persist turn and refresh memory from the answer
     try:
         memory.log_conversation(email=session["email"], role="user", message=text)
         memory.log_conversation(email=session["email"], role="assistant", message=reply)
@@ -184,8 +283,7 @@ def chat_orchestrated():
         pass
 
     infer_from_text(ss, reply)
-    ss.last_seen = time.time()
-
+    ss.last_assistant = reply
     return jsonify({"ok": True, "reply": reply, "state": {
         "product": ss.product, "task": ss.task, "depth": ss.depth
     }})
