@@ -5,6 +5,9 @@ import base64
 import logging
 import inspect
 from datetime import datetime
+import time
+from dataclasses import dataclass, field
+from typing import Dict, List
 
 from flask import Flask, request, session, jsonify, render_template, url_for, Response
 
@@ -310,6 +313,118 @@ def _generate_reply_flex(prompt: str, profile: dict, hist):
     except Exception:
         logging.exception("generate_reply invocation failed")
         return "I'm having trouble generating a reply right now."
+
+# ------------------------------------------------------------------------------
+# Orchestrated chat with per-session memory (Pure-first style)
+# ------------------------------------------------------------------------------
+
+@dataclass
+class _Msg:
+    role: str
+    content: str
+    t: float = field(default_factory=time.time)
+
+@dataclass
+class _SessionState:
+    history: List[_Msg] = field(default_factory=list)   # optional local echo
+    product: str = ""    # FlashBlade | FlashArray | Portworx
+    task: str = ""       # installation | design | troubleshooting | upgrade
+    depth: str = ""      # high | deep
+    last_seen: float = field(default_factory=time.time)
+
+_SESS: Dict[str, _SessionState] = {}
+_TTL = 60 * 60  # 1 hour
+
+def _sid_key():
+    # We require auth; email is a stable session key
+    return current_user_email() or request.remote_addr
+
+def _gc_sessions():
+    now = time.time()
+    for k in list(_SESS.keys()):
+        if now - _SESS[k].last_seen > _TTL:
+            _SESS.pop(k, None)
+
+def _infer_from_text(ss: _SessionState, text: str):
+    t = (text or "").lower()
+    if any(k in t for k in ("flashblade", "flash blade", "fb-s3", "s3 on flashblade", "fb")):
+        ss.product = "FlashBlade"
+    if any(k in t for k in ("flasharray", "flash array", "fa", "purity//fa", "purity/fa")):
+        ss.product = "FlashArray"
+    if "portworx" in t:
+        ss.product = "Portworx"
+
+    if any(k in t for k in ("install", "installation", "set up", "setup", "deploy", "walk me through", "step by step")):
+        ss.task = "installation"
+    if any(k in t for k in ("design", "architecture", "size", "sizing", "capacity", "plan")):
+        ss.task = "design"
+    if any(k in t for k in ("troubleshoot", "error", "fail", "issue", "debug", "diagnose")):
+        ss.task = "troubleshooting"
+    if any(k in t for k in ("upgrade", "update", "patch")):
+        ss.task = "upgrade"
+
+    if "high level" in t or "overview" in t or "summary" in t:
+        ss.depth = "high"
+    if "step by step" in t or "walk" in t or "detailed" in t or "deep" in t:
+        ss.depth = "deep"
+
+def _style_preamble(ss: _SessionState) -> str:
+    parts = [
+        "You are Chip, a Pure Storage expert. Be 90% product substance, 10% light personality.",
+        "Honor prior context. Continue the current product/task unless the user explicitly switches.",
+        "Be concise. Use short sentences.",
+        "If asked to 'walk me through it', give step-by-step: prerequisites, actions, validation.",
+        "End with ONE short follow-up (e.g., 'Want the checklist emailed?' or 'Go deeper on step 2?').",
+    ]
+    if ss.product: parts.append(f"Product focus: {ss.product}.")
+    if ss.task:    parts.append(f"Current task: {ss.task}.")
+    if ss.depth:   parts.append(f"Depth: {ss.depth}.")
+    return " [[ " + " ".join(parts) + " ]]"
+
+@app.post("/api/chat_orchestrated")
+def api_chat_orchestrated():
+    """Chat endpoint with live session memory & Pure-first style."""
+    if not current_user_email():
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or data.get("prompt") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "Prompt required"}), 400
+
+    key = _sid_key()
+    ss = _SESS.get(key) or _SessionState()
+    _SESS[key] = ss
+    ss.last_seen = time.time()
+    _gc_sessions()
+
+    # Update memory from user's turn
+    _infer_from_text(ss, text)
+    try:
+        memory.log_conversation(email=current_user_email(), role="user", message=text)
+    except Exception:
+        pass
+
+    # Build styled prompt & include recent DB history (server truth)
+    user = memory.get_user(current_user_email()) or {}
+    styled_prompt = _style_preamble(ss) + "\n" + text
+    try:
+        hist = memory.get_recent_conversation(current_user_email(), limit=8)
+    except Exception:
+        hist = []
+
+    reply = _generate_reply_flex(styled_prompt, user, hist)
+    reply = (reply or "").strip()
+
+    # Store assistant reply in DB history and refresh memory from the model's answer
+    try:
+        memory.log_conversation(email=current_user_email(), role="assistant", message=reply)
+    except Exception:
+        pass
+    _infer_from_text(ss, reply)
+    ss.last_seen = time.time()
+
+    state = {"product": ss.product, "task": ss.task, "depth": ss.depth}
+    return jsonify({"ok": True, "reply": reply, "state": state})
 
 # ------------------------------------------------------------------------------
 # Routes
