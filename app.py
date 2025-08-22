@@ -9,9 +9,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List
 
-from conversation_orchestrator import bp as convo_bp
-app.register_blueprint(convo_bp)
-
 from flask import Flask, request, session, jsonify, render_template, url_for, Response
 
 # --- Ensure we can import local packages ---
@@ -101,6 +98,9 @@ SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("FLASK_SECRET") or "dev-secret
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = SECRET_KEY
 app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=False)
+
+from conversation_orchestrator import bp as convo_bp
+app.register_blueprint(convo_bp)
 
 # Init DB (non-fatal if unavailable)
 try:
