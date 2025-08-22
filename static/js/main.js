@@ -44,13 +44,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   async function ac_resumeListening() {
-    // Safely re-arm the mic after Chip finishes speaking (voice path).
+    // Re-arm mic after TTS; guard against stale recognizer events.
     try {
       if (!supportsSpeechRecognition()) return;
-      // If user already stopped it, respect that.
-      if (recognizing) return;
-      // Avoid racing the audio end; tiny delay is safer in Chrome.
-      await new Promise(r => setTimeout(r, 120));
+      try {
+        if (recognizer) { recognizer.onend = null; recognizer.onerror = null; recognizer.stop(); }
+      } catch (_) {}
+      recognizing = false;
+      await new Promise(r => setTimeout(r, 250)); // give audio stack a breath
       await toggleMic();
     } catch (_) {}
   }
@@ -241,17 +242,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       recognizing = false;
       if (micBtn) micBtn.setAttribute("aria-pressed", "false");
       if (micBtn) micBtn.classList.remove("listening");
-      if (!transcript) return;
+      if (!transcript) { UI.setStatus("Ready"); await ac_resumeListening(); return; }
 
       UI.appendBubble("user", transcript);
       scrollChatToBottom();
 
       // EARLY EXIT: account-team lookup before LLM
       try {
-        if (await ac_tryAccountTeam(transcript)) {
-          await ac_resumeListening();
-          return;
-        }
+        if (await ac_tryAccountTeam(transcript)) { await ac_resumeListening(); return; }
       } catch (_) {}
 
       UI.setStatus("Thinking…");
@@ -269,12 +267,17 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     };
 
-    recognizer.onerror = () => {
+    recognizer.onerror = (e) => {
       recognizing = false;
       if (micBtn) micBtn.setAttribute("aria-pressed", "false");
       if (micBtn) micBtn.classList.remove("listening");
       document.body.classList.remove("listening");
-      UI.setStatus("Mic error");
+      const code = e && e.error || "error";
+      UI.setStatus(code === "no-speech" ? "Didn't catch that—try again." : "Mic error");
+      // Auto re-arm on transient errors
+      if (code === "no-speech" || code === "audio-capture") {
+        setTimeout(() => { ac_resumeListening(); }, 300);
+      }
     };
 
     recognizer.onend = () => {
