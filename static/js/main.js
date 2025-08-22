@@ -16,7 +16,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   const profileRegion= document.getElementById("profileRegion");
   const profileEmail = document.getElementById("profileEmail");
 
-
   const composer      = document.getElementById("composer");
   const composerInput = document.getElementById("composerInput");
   const sendBtn       = document.getElementById("sendBtn");
@@ -36,6 +35,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (chipCanvas && typeof Viseme !== "undefined") {
     Viseme.init(chipCanvas);
+  }
+
+  // --- Helpers ---
+  function scrollChatToBottom() {
+    const el = document.getElementById("chatLog");
+    if (el) el.scrollTop = el.scrollHeight;
+  }
+
+  async function ac_resumeListening() {
+    // Safely re-arm the mic after Chip finishes speaking (voice path).
+    try {
+      if (!supportsSpeechRecognition()) return;
+      // If user already stopped it, respect that.
+      if (recognizing) return;
+      // Avoid racing the audio end; tiny delay is safer in Chrome.
+      await new Promise(r => setTimeout(r, 120));
+      await toggleMic();
+    } catch (_) {}
   }
 
   // --- Conversation helpers ---
@@ -68,6 +85,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (res && res.text) greetText = res.text;
     } catch (_) {}
     UI.appendBubble("assistant", greetText);
+    scrollChatToBottom();
     try { await speakWithVisemes(greetText); } catch (_) {}
     greeted = true;
     UI.setStatus("Listening…");
@@ -108,9 +126,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // ---------------- Account Team intent (robust) ----------------
-  // Covers: "account team info/details for/at/on/about/regarding X",
-  // "who covers/owns X", "who is the pure rep/account owner for/at/on/about/regarding X",
-  // and short forms like "team X", "owner X", "rep X".
   const _ac_ACCOUNT_PATTERNS = [
     /^\s*(?:do\s+you\s+know\s+)?(?:can\s+you\s+)?(?:what(?:'s| is)\s+)?(?:the\s+)?account\s+team(?:\s+(?:info(?:rmation)?|details)?)?\s+(?:for|at|on|about|regarding)\s+(.+?)\s*[?.!]*$/i,
     /^\s*who\s+(?:covers|owns)\s+(.+?)\s*[?.!]*$/i,
@@ -125,7 +140,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       const m = t.match(_ac_ACCOUNT_PATTERNS[i]);
       if (m && m[1]) return m[1].trim();
     }
-    // Gentle catch‑all for “account team …”
     if (/account\s+team/i.test(t)) {
       const m = t.match(/(?:for|at|on|about|regarding)\s+(.+?)\s*[?.!]*$/i);
       if (m && m[1]) return m[1].trim();
@@ -134,7 +148,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function _ac_pickTeamShape(j) {
-    // Try to pick a single team object from diverse API shapes
     if (!j) return null;
     let o = null;
     if (Array.isArray(j)) o = j[0];
@@ -156,7 +169,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!q) return false;
 
     let say = "";
-    // 1) Prefer a dedicated route if present
     try {
       const res = await fetch(`/api/account_team?name=${encodeURIComponent(q)}`);
       if (res.ok) {
@@ -167,9 +179,8 @@ document.addEventListener("DOMContentLoaded", async () => {
           say = j.rendered;
         }
       }
-    } catch (_) { /* ignore and try fallback */ }
+    } catch (_) {}
 
-    // 2) Fallback: generic accounts search
     if (!say) {
       try {
         const r2 = await fetch(`/api/accounts/search?q=${encodeURIComponent(q)}`);
@@ -188,6 +199,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     UI.appendBubble("assistant", say);
+    scrollChatToBottom();
     try { await speakWithVisemes(say); } catch (_) {}
     return true; // handled
   }
@@ -232,10 +244,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!transcript) return;
 
       UI.appendBubble("user", transcript);
+      scrollChatToBottom();
 
-      // EARLY EXIT: try account-team intent before sending to /api/chat
+      // EARLY EXIT: account-team lookup before LLM
       try {
-        if (await ac_tryAccountTeam(transcript)) return;
+        if (await ac_tryAccountTeam(transcript)) {
+          await ac_resumeListening();
+          return;
+        }
       } catch (_) {}
 
       UI.setStatus("Thinking…");
@@ -243,9 +259,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (res.ok) {
         const reply = res.reply || "";
         UI.appendBubble("assistant", reply);
+        scrollChatToBottom();
         await speakWithVisemes(reply);
+        await ac_resumeListening();
       } else {
         UI.appendBubble("assistant", res.error || "Something went wrong.");
+        scrollChatToBottom();
         UI.setStatus("Error");
       }
     };
@@ -282,7 +301,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  
   if (profileBtn) {
     profileBtn.addEventListener("click", async () => {
       try {
@@ -335,8 +353,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       composerInput.value = "";
       sendBtn.disabled = true;
       UI.appendBubble("user", prompt);
+      scrollChatToBottom();
 
-      // EARLY EXIT: try account-team intent before sending to /api/chat
+      // EARLY EXIT: account-team lookup before LLM (typed path too)
       try {
         if (await ac_tryAccountTeam(prompt)) { UI.setStatus("Ready"); return; }
       } catch (_) {}
@@ -346,12 +365,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (res.ok) {
         const reply = res.reply || "";
         UI.appendBubble("assistant", reply);
+        scrollChatToBottom();
         await speakWithVisemes(reply);
         const fu = chipFollowUp(prompt, reply);
-        if (fu) { UI.appendBubble("assistant", fu); await speakWithVisemes(fu); }
+        if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
         UI.setStatus("Ready");
       } else {
         UI.appendBubble("assistant", res.error || "Something went wrong.");
+        scrollChatToBottom();
         UI.setStatus("Error");
       }
     });
