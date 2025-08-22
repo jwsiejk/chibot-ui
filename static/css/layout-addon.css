@@ -1,6 +1,7 @@
-
-/* layout-addon.css — grid that uses your current DOM structure */
+/* layout-addon.css — grid that uses your current DOM structure (v4) */
 /* Chat on the left (compact), Chip stage on the right (flexible) */
+/* Robustly hide elements when [hidden] or .hidden is present. */
+[hidden], .hidden { display: none !important; }
 
 :root {
   --gap: 16px;
@@ -12,7 +13,7 @@ html, body { height: 100%; }
 body { display: flex; flex-direction: column; min-height: 100vh; }
 
 /* Only #chatView gets the grid layout */
-#chatView.view {
+#chatView.view:not([hidden]) {
   flex: 1 1 auto;
   display: grid;
   grid-template-columns: minmax(var(--chat-min), var(--chat-max)) 1fr;
@@ -39,7 +40,7 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 
 /* Stack vertically on mobile (stage above chat) */
 @media (max-width: 900px) {
-  #chatView.view {
+  #chatView.view:not([hidden]) {
     grid-template-columns: 1fr;
     grid-template-areas:
       "stage"
