@@ -1,67 +1,64 @@
 # services/email_service.py
-import os, smtplib, ssl, sys
-from email.message import EmailMessage
+# Render-safe Email sender for Ask Chip using a Google Apps Script Web App webhook.
+# Keeps the public API identical:
+#   send_email(to, subject, html=None, text=None, reply_to=None) -> bool
+#
+# Configure in Render:
+#   EMAIL_WEBHOOK_URL   = https://script.google.com/macros/s/AKfycb.../exec
+#   EMAIL_WEBHOOK_SECRET= <your long random secret>
+#   EMAIL_FROM_NAME     = Ask Chip   (optional)
+#
+# This replaces the SMTP implementation (which does not work on Render).
 
-def _env_bool(v, default=False):
-    if v is None:
-        return default
-    return str(v).strip().lower() in ("1", "true", "yes", "y", "on")
+from __future__ import annotations
+import os, json, urllib.request
 
-def _smtp():
-    host = os.getenv("EMAIL_HOST", "smtp.gmail.com")
-    port = int(os.getenv("EMAIL_PORT", "587"))
-    user = os.getenv("EMAIL_HOST_USER")  # e.g. your full gmail address
-    pwd  = os.getenv("EMAIL_HOST_PASSWORD")  # Gmail App Password recommended
-    use_tls = _env_bool(os.getenv("EMAIL_USE_TLS", "true"), True)
-    use_ssl = _env_bool(os.getenv("EMAIL_USE_SSL", "false"), False)
+WEBHOOK_URL   = (os.environ.get("EMAIL_WEBHOOK_URL") or "").strip()
+WEBHOOK_SECRET= (os.environ.get("EMAIL_WEBHOOK_SECRET") or "").strip()
+FROM_NAME     = (os.environ.get("EMAIL_FROM_NAME") or "Ask Chip").strip()
 
-    if not (host and port and user and pwd):
-        raise RuntimeError("SMTP not configured (missing host/port/user/password)")
+def _post_json(url: str, payload: dict, timeout: int = 20) -> tuple[int, str]:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.getcode(), resp.read().decode("utf-8")
 
-    if use_ssl:
-        server = smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=60)
-    else:
-        server = smtplib.SMTP(host, port, timeout=60)
-        if use_tls:
-            server.starttls(context=ssl.create_default_context())
-
-    server.login(user, pwd)
-    return server
-
-def send_email(to, subject, html=None, text=None, reply_to=None):
+def send_email(to, subject, html=None, text=None, reply_to=None) -> bool:
     """
-    Send an email. Returns True on success, False on failure.
-    `to` can be a string or a list of addresses.
+    Send an email via Apps Script webhook.
+    Returns True on success, False on failure.
     """
+    # normalize recipients
     if isinstance(to, str):
         to = [to]
-
-    from_addr = os.getenv("FROM_EMAIL") or os.getenv("EMAIL_HOST_USER")
-    if not from_addr:
-        sys.stderr.write("[warning] send_email: FROM_EMAIL/EMAIL_HOST_USER not set\n")
+    to = [addr for addr in (to or []) if addr]
+    if not to or not subject:
         return False
-    if not html and not text:
-        text = ""  # ensure there is at least a plain part
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = from_addr
-    msg["To"] = ", ".join(to)
-    if reply_to:
-        msg["Reply-To"] = reply_to
-
-    if html and text:
-        msg.set_content(text)
-        msg.add_alternative(html, subtype="html")
-    elif html:
-        msg.add_alternative(html, subtype="html")
-    else:
-        msg.set_content(text or "")
-
-    try:
-        with _smtp() as s:
-            s.send_message(msg)
-        return True
-    except Exception as e:
-        sys.stderr.write(f"[warning] send_email failed: {e}\n")
+    if not WEBHOOK_URL or not WEBHOOK_SECRET:
+        # Not configured
         return False
+
+    base = {
+        "secret": WEBHOOK_SECRET,
+        "from_name": FROM_NAME,
+        "subject": subject,
+        "html": html or "",
+        "text": text or "",
+        "reply_to": reply_to or "",
+    }
+
+    # Send one-by-one to keep the webhook simple and to respect quotas
+    for addr in to:
+        payload = dict(base, to=addr)
+        try:
+            status, body = _post_json(WEBHOOK_URL, payload)
+            if status != 200 or '"ok": true' not in body:
+                return False
+        except Exception:
+            return False
+    return True
