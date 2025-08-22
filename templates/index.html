@@ -96,14 +96,14 @@
   <script src="/static/js/main.js" defer></script>
   <script src="/static/js/addons-email-intents.js" defer></script>
 
-  <!-- Orchestrator shim: prefer /api/chat_orchestrated (memory + style), else fall back -->
+  <!-- Orchestrator shim: prefer /api/chat (memory + style), else fall back -->
 <script>
   document.addEventListener('DOMContentLoaded', function () {
     if (!window.API || typeof API.chat !== 'function') return;
     const legacyChat = API.chat.bind(API);
     API.chat = async function (text) {
       try {
-        const r = await fetch('/api/chat_orchestrated', {
+        const r = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text })

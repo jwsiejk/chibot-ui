@@ -187,9 +187,9 @@ def _is_email_that_intent(t: str) -> bool:
 
 # --------------------------------- Blueprint ----------------------------------
 
-bp = Blueprint("conversation_orchestrator", __name__)
+bp = Blueprint("conversation", __name__)
 
-@bp.post("/api/chat_orchestrated")
+@bp.post("/api/chat")
 def chat_orchestrated():
     if not session.get("email"):
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
