@@ -1,8 +1,19 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, session
+import memory
 from services.llm_service import generate_response
 import logging
 
 conversation_bp = Blueprint("conversation", __name__, url_prefix="/api")
+
+
+def _db_history():
+    try:
+        email = session.get("email")
+        if not email: return []
+        return memory.get_recent_conversation(email, limit=10)
+    except Exception:
+        return []
+
 
 def _extract_text_and_history():
     text, history = "", []
