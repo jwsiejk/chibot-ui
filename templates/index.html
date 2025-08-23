@@ -93,6 +93,7 @@
   <script src="/static/js/api.js" defer></script>
   <script src="/static/js/ui.js" defer></script>
   <script src="/static/js/viseme.js" defer></script>
+  <script src="/static/js/realtime.js"></script>
   <script src="/static/js/main.js" defer></script>
   <script src="/static/js/addons-email-intents.js" defer></script>
 
@@ -146,5 +147,39 @@ fetch("/api/health").then(r=>r.json()).then(s=>console.info("[AskChip] health", 
     };
   });
 </script>
+<audio id="chipAudio" hidden></audio>
+
+<script>
+// Open SSE stream for chat; return a Promise that resolves with the full reply
+function startStream(text) {
+  return new Promise((resolve) => {
+    const esc = encodeURIComponent(text || "");
+    const es = new EventSource(`/api/chat/stream?q=${esc}`);
+    let buf = "";
+
+    es.addEventListener("token", (ev) => {
+      try { const d = JSON.parse(ev.data); if (d && d.delta) { buf += d.delta; } } catch {}
+      // TODO: optionally render live text buf into the UI
+    });
+    es.addEventListener("tool_call", (ev) => {
+      // Optionally surface "Using tool ..." in the UI
+      // console.log("tool_call", ev.data);
+    });
+    es.addEventListener("tool_result", (ev) => {
+      // Optionally surface tool result/confirmation
+      // console.log("tool_result", ev.data);
+    });
+    es.addEventListener("interrupted", () => {
+      es.close(); resolve({ ok: false, interrupted: true, reply: buf.trim() });
+    });
+    es.addEventListener("done", async () => {
+      es.close();
+      resolve({ ok: true, reply: buf.trim() });
+    });
+    es.onerror = () => { try { es.close(); } catch {} resolve({ ok:false, error:"stream_error", reply: buf.trim() }); };
+  });
+}
+</script>
+
 </body>
 </html>
