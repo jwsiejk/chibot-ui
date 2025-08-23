@@ -1,4 +1,4 @@
-// static/js/main.js — Pure-first conversation, memory, and layout/view fixes
+// static/js/main.js — Known-good copy (no triage). EOF marker at end for verification.
 document.addEventListener("DOMContentLoaded", async () => {
   // --- State ---
   let greeted = false;
@@ -174,7 +174,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function speakWithVisemes(text) {
     try {
-      const resp = await fetch("/api/voice/tts_with_visemes", { credentials: 'include', 
+      const resp = await fetch("/api/voice/tts_with_visemes", { credentials: 'include',
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text })
@@ -337,4 +337,198 @@ document.addEventListener("DOMContentLoaded", async () => {
       const styledPrompt = ac_applyStyleToPrompt(transcript);
       const res = await API.chat(styledPrompt);
       if (res.ok) {
-        const reply = res.reply |
+        const reply = res.reply || "";
+        ac_detectContext(reply);
+        UI.appendBubble("assistant", reply);
+        scrollChatToBottom();
+        await speakWithVisemes(reply);
+
+        const fu = ac_contextualFollowUp(transcript, reply);
+        if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
+        await ac_resumeListening();
+      } else {
+        UI.appendBubble("assistant", res.error || "Something went wrong.");
+        scrollChatToBottom();
+        UI.setStatus("Error");
+      }
+    };
+
+    recognizer.onerror = (e) => {
+      recognizing = false;
+      if (micBtn) micBtn.setAttribute("aria-pressed", "false");
+      if (micBtn) micBtn.classList.remove("listening");
+      document.body.classList.remove("listening");
+      const code = e && e.error || "error";
+      UI.setStatus(code === "no-speech" ? "Didn't catch that—try again." : "Mic error");
+      if (code === "no-speech" || code === "audio-capture") {
+        setTimeout(() => { ac_resumeListening(); }, 300);
+      }
+    };
+
+    recognizer.onend = () => {
+      recognizing = false;
+      if (micBtn) micBtn.setAttribute("aria-pressed", "false");
+      if (micBtn) micBtn.classList.remove("listening");
+      document.body.classList.remove("listening");
+      UI.setStatus("Ready");
+    };
+
+    recognizer.start();
+  }
+
+  // --- Auth / Profile / UI wiring ---
+  if (loginForm) {
+    loginForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const email = (loginEmail && loginEmail.value || "").trim();
+      if (!email) return;
+      UI.setStatus("Signing in…");
+      try {
+        const res = await API.login(email);
+        if (res && res.ok) {
+          UI.setUser(email);
+          ac_show("chat");
+          await refreshState();
+          UI.setStatus("Ready");
+        } else {
+          UI.setStatus((res && res.error) || "Login failed");
+        }
+      } catch (e) {
+        UI.setStatus("Login failed");
+      }
+    });
+  }
+
+  if (profileBtn) {
+    profileBtn.addEventListener("click", async () => {
+      try {
+        const res = await API.getProfile();
+        if (res && res.ok && res.user) {
+          const u = res.user || {};
+          if (profileEmail) profileEmail.value = u.email || "";
+          if (profileName)  profileName.value  = u.name  || "";
+          if (profileTitle) profileTitle.value = u.title || "";
+          if (profileRegion)profileRegion.value= u.region|| "";
+        }
+      } catch(_) {}
+      UI.show("profile");
+      UI.setStatus("Edit your profile and Save to continue");
+    });
+  } // end if (profileBtn)
+
+  if (logoutBtn) {
+    logoutBtn.addEventListener("click", async () => {
+      await API.logout(); UI.setUser(""); ac_show("login"); UI.setStatus("Logged out");
+    });
+  }
+
+  if (profileForm) {
+    profileForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const payload = {
+        name:   (profileName  && profileName.value  || "").trim(),
+        title:  (profileTitle && profileTitle.value || "").trim(),
+        region: (profileRegion&& profileRegion.value|| "").trim()
+      };
+      UI.setStatus("Saving profile…");
+      const res = await API.saveProfile(payload);
+      if (res.ok) { await refreshState(); UI.setStatus("Profile saved"); }
+      else { UI.setStatus(res.error || "Save failed"); }
+    });
+  }
+
+  if (composer) {
+    composerInput.addEventListener("input", () => {
+      const hasText = (composerInput.value || "").trim().length > 0;
+      sendBtn.disabled = !hasText;
+      autoGrow(composerInput);
+    });
+
+    composer.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const prompt = (composerInput.value || "").trim();
+      if (!prompt) return;
+      composerInput.value = "";
+      sendBtn.disabled = true;
+      ac_detectContext(prompt);
+      UI.appendBubble("user", prompt);
+      scrollChatToBottom();
+
+      // EARLY EXIT: account-team lookup before LLM (typed path too)
+      try {
+        if (await ac_tryAccountTeam(prompt)) { UI.setStatus("Ready"); return; }
+      } catch (_) {}
+
+      UI.setStatus("Thinking…");
+      const styledPrompt = ac_applyStyleToPrompt(prompt);
+      const res = await API.chat(styledPrompt);
+      if (res.ok) {
+        const reply = res.reply || "";
+        ac_detectContext(reply);
+        UI.appendBubble("assistant", reply);
+        scrollChatToBottom();
+        await speakWithVisemes(reply);
+        const fu = ac_contextualFollowUp(prompt, reply);
+        if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
+        UI.setStatus("Ready");
+      } else {
+        UI.appendBubble("assistant", res.error || "Something went wrong.");
+        scrollChatToBottom();
+        UI.setStatus("Error");
+      }
+    });
+  }
+
+  if (micBtn) {
+    // First press greets; subsequent presses toggle mic
+    micBtn.addEventListener("click", async () => {
+      if (!greeted) {
+        micBtn.setAttribute("aria-pressed","true");
+        micBtn.classList.add("speaking");
+        await dynamicGreet();
+        try { await toggleMic(); } catch(_) {}
+        return;
+      }
+      await toggleMic();
+    });
+  }
+
+  if (endBtn) {
+    endBtn.addEventListener("click", () => {
+      try { if (recognizer) { recognizer.onend = null; recognizer.onerror = null; recognizer.stop(); } } catch(_) {}
+      recognizing = false;
+      if (micBtn) micBtn.setAttribute("aria-pressed","false");
+      if (micBtn) { micBtn.classList.remove("listening"); micBtn.classList.remove("speaking"); }
+      document.body.classList.remove("speaking");
+      UI.setStatus("Ended — press “Talk to Chip” to start again.");
+    });
+  }
+
+  async function refreshState() {
+    const me = await API.me();
+    if (!me.logged_in) { ac_show("login"); UI.setUser(""); return; }
+    UI.setUser(me.user && me.user.email || "");
+    if (!me.profile_complete) {
+      ac_show("profile");
+      UI.setStatus("Please fill out your profile to continue");
+      const prof = await API.getProfile();
+      const u = prof.user || {};
+      if (profileName)  profileName.value  = u.name  || "";
+      if (profileTitle) profileTitle.value = u.title || "";
+      if (profileRegion)profileRegion.value= u.region|| "";
+      if (micBtn) micBtn.disabled = true;
+      return;
+    }
+    ac_show("chat");
+    if (micBtn) micBtn.disabled = false;
+    UI.setStatus("Ready");
+  }
+
+  function autoGrow(el) { const min = 38; el.style.height = "auto"; el.style.height = Math.max(min, el.scrollHeight) + "px"; }
+
+  // Initial state sync
+  await refreshState();
+
+  // EOF marker to prove full file loaded:
+  try { console.log("[AskChip] main.js EOF 2025-08-23"); } catch (_) {}
+});
