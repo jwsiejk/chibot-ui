@@ -660,3 +660,129 @@ if __name__ == "__main__":
 def api_orchestrator_health():
     return api_health()
 # --- END: assistant patch ---
+
+
+    # --- BEGIN: server-side cancel + SSE chat stream ---
+    import time, json
+    from flask import Response, stream_with_context
+
+    _CANCEL = {}  # { email: timestamp }
+    def _mark_cancel(email: str):
+        _CANCEL[email] = time.time()
+    def _was_cancelled(email: str, since: float) -> bool:
+        return _CANCEL.get(email, 0) > since
+
+    @app.post("/api/interrupt")
+    def api_interrupt():
+        if not current_user_email():
+            return jsonify({"ok": False, "error": "Not authenticated"}), 401
+        _mark_cancel(current_user_email())
+        return jsonify({"ok": True})
+
+    def _maybe_tool(text: str):
+        t = (text or "").lower()
+        # very simple intents; you can upgrade with LLM/tool-choice later
+        if t.startswith("email ") or " email " in t:
+            # naive parse: email <address> subject: ... body: ...
+            to = None; subject=None; body=None
+            m = re.search(r'email\s+([^\s]+)', t)
+            if m: to = m.group(1)
+            ms = re.search(r'subject:\s*([^;]+)', t)
+            if ms: subject = ms.group(1).strip()
+            mb = re.search(r'body:\s*(.+)', t)
+            if mb: body = mb.group(1).strip()
+            return {"name":"email.send", "args":{"to":to, "subject":subject, "body":body}}
+        if "account" in t or "search" in t:
+            q = None
+            m = re.search(r'for\s+(.+)', t)
+            if m: q = m.group(1).strip()
+            return {"name":"accounts.search", "args":{"q": q or text, "limit":25}}
+        return None
+
+    @app.get("/api/chat/stream")
+    def api_chat_stream():
+        if not current_user_email():
+            return Response("unauthorized", 401)
+        user = current_user_email()
+        started = time.time()
+        text = (request.args.get("q") or "").strip()
+        if not text:
+            return Response("missing q", 400)
+
+        def _events():
+            # Start signal
+            yield "event: start
+data: {}
+
+"
+
+            # Tool detection
+            tool = _maybe_tool(text)
+            if tool:
+                yield f'event: tool_call
+data: {json.dumps(tool)}
+
+'
+                try:
+                    if tool["name"] == "email.send":
+                        ok, err = send_email(tool["args"]["to"], tool["args"]["subject"] or "(no subject)", tool["args"]["body"] or "", None)
+                        data = {"ok": bool(ok), "error": err}
+                    elif tool["name"] == "accounts.search":
+                        res = search_accounts(tool["args"]["q"], limit=tool["args"].get("limit",25))
+                        data = {"ok": True, "results": res}
+                    else:
+                        data = {"ok": False, "error":"unknown tool"}
+                except Exception as e:
+                    data = {"ok": False, "error": str(e)}
+                yield f'event: tool_result
+data: {json.dumps(data)}
+
+'
+                if _was_cancelled(user, started):
+                    yield 'event: interrupted
+data: {}
+
+'
+                    return
+
+            # Generate reply (non-streaming LLM; chunk into phrase-sized tokens)
+            user_profile = memory.get_user(user) or {}
+            # Use your flexible wrapper to get a single reply string
+            reply = _generate_reply_flex(text, user_profile, history=[])
+            reply = (reply or "").strip()
+
+            # Stream "token" chunks
+            if not reply:
+                yield 'event: done
+data: {}
+
+'
+                return
+
+            # naive chunking by sentences/clauses for SSE
+            import re as _re
+            chunks = _re.split(r'(?<=[.!?])\s+', reply)
+            acc = ""
+            for c in chunks:
+                if not c: continue
+                if _was_cancelled(user, started):
+                    yield 'event: interrupted
+data: {}
+
+'
+                    return
+                acc += (c + " ")
+                yield f'event: token
+data: {json.dumps({"delta": c+" "})}
+
+'
+                # small pacing to feel streamed
+                time.sleep(0.05)
+
+            yield 'event: done
+data: {}
+
+'
+
+        return Response(stream_with_context(_events()), mimetype="text/event-stream")
+    # --- END: server-side cancel + SSE chat stream ---
