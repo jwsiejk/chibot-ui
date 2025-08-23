@@ -26,10 +26,6 @@ app.use(
  * If you have a built UI, put it in a folder named "build" (or change below).
  * Serving this is harmless even if you only need the proxy.
  */
-app.use(express.static("build"));
-app.get("*", (_req, res) => {
-  res.sendFile(path.join(__dirname, "build", "index.html"));
-});
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`UI + API proxy running on :${port}`));
