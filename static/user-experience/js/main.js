@@ -354,7 +354,7 @@ $("navHistory")?.addEventListener("click", async () => {
 
 $("navLogout")?.addEventListener("click", async () => {
   toggleNavMenu(false);
-  try { await fetch("/logout", { method: "POST" }); } catch {}
+  try { await fetch("/logout", { credentials: 'include',  method: "POST" }); } catch {}
   location.reload();
 });
 
