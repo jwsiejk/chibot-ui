@@ -174,7 +174,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function speakWithVisemes(text) {
     try {
-      const resp = await fetch("/api/voice/tts_with_visemes", {
+      const resp = await fetch("/api/voice/tts_with_visemes", { credentials: 'include', 
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text })
