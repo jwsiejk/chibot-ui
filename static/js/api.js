@@ -1,6 +1,6 @@
 const API = (() => {
   async function post(url, body) {
-    const res = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body || {})});
+    const res = await fetch(url, { credentials: 'include', method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body || {})});
     return res.json();
   }
   async function get(url) { const res = await fetch(url); return res.json(); }
