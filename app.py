@@ -588,3 +588,10 @@ def api_accounts_search():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
+
+# --- BEGIN: assistant patch (orchestrator health alias) ---
+@app.route("/api/orchestrator/health", methods=["GET"])
+def api_orchestrator_health():
+    return api_health()
+# --- END: assistant patch ---
