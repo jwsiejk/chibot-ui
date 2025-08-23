@@ -74,7 +74,7 @@ def ELEVEN_OUT_FORMAT(): return _first_env("ELEVEN_OUTPUT_FORMAT", "ELEVENLABS_O
 
 # --- Safe imports with fallbacks so the server can still boot ---
 try:
-    from services.llm_service import generate_reply
+    from services.llm_service import generate_reply, generate_response
 except Exception as e:
     sys.stderr.write(f"[warning] llm_service import failed: {e}\n")
     def generate_reply(messages, **kwargs):
@@ -442,7 +442,9 @@ def api_chat_orchestrated():
     except Exception:
         hist = []
 
-    reply = _generate_reply_flex(styled_prompt, user, hist)
+    hist = memory.get_recent_conversation(user, limit=10)
+        resp = generate_response(user_text=text, history=hist)
+        reply = (resp.get('text') if isinstance(resp, dict) else str(resp or '')).strip()
     reply = (reply or "").strip()
 
     # Store assistant reply in DB history and refresh memory from the model's answer
@@ -521,7 +523,9 @@ def api_chat():
     except Exception:
         hist = []  # fall back cleanly if table was reset
 
-    reply = _generate_reply_flex(prompt, user, hist)
+    hist = memory.get_recent_conversation(user, limit=10)
+        resp = generate_response(user_text=text, history=hist)
+        reply = (resp.get('text') if isinstance(resp, dict) else str(resp or '')).strip()
     reply = cap_30_words(reply or "")
 
     try:
@@ -655,112 +659,8 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=port, debug=True)
 
 
-# --- BEGIN: server-side cancel + SSE chat stream (fixed strings) ---
-import time, json, re
-from flask import Response, stream_with_context
-
-_CANCEL = {}  # { email: timestamp }
-def _mark_cancel(email: str):
-    _CANCEL[email] = time.time()
-
-def _was_cancelled(email: str, since: float) -> bool:
-    return _CANCEL.get(email, 0) > since
-
-@app.post("/api/interrupt")
-def api_interrupt():
-    if not current_user_email():
-        return jsonify({"ok": False, "error": "Not authenticated"}), 401
-    _mark_cancel(current_user_email())
-    return jsonify({"ok": True})
-
-def _maybe_tool(text: str):
-    """
-    Extremely simple intent parser to demonstrate tool events.
-    email <address> subject: ... body: ...
-    accounts search for <query>
-    """
-    t = (text or "").lower()
-    # email intent
-    if t.startswith("email ") or " email " in t:
-        to = None; subject = None; body = None
-        m = re.search(r'email\s+([^\s]+)', t)
-        if m: to = m.group(1)
-        ms = re.search(r'subject:\s*([^;]+)', t)
-        if ms: subject = ms.group(1).strip()
-        mb = re.search(r'body:\s*(.+)', t)
-        if mb: body = mb.group(1).strip()
-        return {"name": "email.send", "args": {"to": to, "subject": subject, "body": body}}
-    # accounts search intent
-    if "account" in t or "search" in t:
-        q = None
-        m = re.search(r'for\s+(.+)', t)
-        if m: q = m.group(1).strip()
-        return {"name": "accounts.search", "args": {"q": q or text, "limit": 25}}
-    return None
-
-@app.get("/api/chat/stream")
-def api_chat_stream():
-    if not current_user_email():
-        return Response("unauthorized", 401)
-    user = current_user_email()
-    started = time.time()
-    text = (request.args.get("q") or "").strip()
-    if not text:
-        return Response("missing q", 400)
-
-    def _events():
-        # Start signal
-        yield 'event: start\ndata: {}\n\n'
-
-        # ---- Tool detection & execution (evented) ----
-        tool = _maybe_tool(text)
-        if tool:
-            # announce the call
-            yield 'event: tool_call\ndata: ' + json.dumps(tool) + '\n\n'
-            # run it safely
-            try:
-                if tool["name"] == "email.send":
-                    ok, err = send_email(
-                        tool["args"]["to"],
-                        tool["args"].get("subject") or "(no subject)",
-                        tool["args"].get("body") or "",
-                        None
-                    )
-                    data = {"ok": bool(ok), "error": err}
-                elif tool["name"] == "accounts.search":
-                    res = search_accounts(tool["args"]["q"], limit=tool["args"].get("limit", 25))
-                    data = {"ok": True, "results": res}
-                else:
-                    data = {"ok": False, "error": "unknown tool"}
-            except Exception as e:
-                data = {"ok": False, "error": str(e)}
-            # return the result
-            yield 'event: tool_result\ndata: ' + json.dumps(data) + '\n\n'
-            if _was_cancelled(user, started):
-                yield 'event: interrupted\ndata: {}\n\n'
-                return
-
-        # ---- Generate reply (chunk-streamed for SSE feel) ----
-        user_profile = memory.get_user(user) or {}
-        reply = _generate_reply_flex(text, user_profile, history=[])
-        reply = (reply or "").strip()
-        if not reply:
-            yield 'event: done\ndata: {}\n\n'
-            return
-
-        import re as _re
-        chunks = _re.split(r'(?<=[.!?])\s+', reply)
-        for c in chunks:
-            if not c:
-                continue
-            if _was_cancelled(user, started):
-                yield 'event: interrupted\ndata: {}\n\n'
-                return
-            # stream a small delta
-            yield 'event: token\ndata: ' + json.dumps({"delta": c + " "}) + '\n\n'
-            time.sleep(0.05)
-
-        yield 'event: done\ndata: {}\n\n'
-
-    return Response(stream_with_context(_events()), mimetype="text/event-stream")
-# --- END: server-side cancel + SSE chat stream (fixed strings) ---
+# --- BEGIN: assistant patch (orchestrator health alias) ---
+@app.route("/api/orchestrator/health", methods=["GET"])
+def api_orchestrator_health():
+    return api_health()
+# --- END: assistant patch ---
