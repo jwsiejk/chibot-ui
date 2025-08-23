@@ -607,6 +607,49 @@ def api_accounts_search():
     results = search_accounts(q, limit=25) if q else []
     return jsonify({"ok": True, "results": results})
 
+
+# --- BEGIN: Orchestrator fallback aliases (app-level, additive) ---
+from flask import jsonify
+def _orchestrator_ok_payload(resp):
+    if isinstance(resp, dict):
+        text = resp.get("text") or resp.get("reply") or resp.get("message") or ""
+    elif isinstance(resp, str):
+        text = resp
+    else:
+        text = str(resp)
+    text = (text or "").strip()
+    return {"ok": True, "text": text, "reply": text, "message": text}
+
+def _orchestrate_now(text, history):
+    try:
+        return _orchestrator_ok_payload(_generate_reply_flex(
+            text, memory.get_user(current_user_email()) or {}, history
+        )), 200
+    except Exception:
+        return _orchestrator_ok_payload(
+            "I hit a snag but I’m ready to continue. Want a quick overview or step-by-step?"
+        ), 200
+
+@app.route("/orchestrator", methods=["GET", "POST", "OPTIONS"])
+@app.route("/orchestrate", methods=["GET", "POST", "OPTIONS"])
+@app.route("/conversation", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/v1/orchestrator", methods=["GET", "POST", "OPTIONS"])
+@app.route("/v1/orchestrator", methods=["GET", "POST", "OPTIONS"])
+def app_orchestrator_fallback():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    data = request.get_json(silent=True) or {}
+    text = (data.get("message") or data.get("text") or data.get("prompt") or request.args.get("q") or "").strip()
+    history = data.get("history") or data.get("messages") or []
+    if not isinstance(history, (list, tuple)):
+        history = []
+    if not text:
+        return jsonify(_orchestrator_ok_payload("Tell me what you want to tackle and I’ll jump in.")), 200
+    payload, status = _orchestrate_now(text, history)
+    return jsonify(payload), status
+# --- END: Orchestrator fallback aliases ---
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
