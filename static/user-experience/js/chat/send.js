@@ -113,7 +113,7 @@ async function _handleCanned(kind) {
   if (line) {
     appendMessage("assistant", line, _getChatLane() === "text" ? "text" : "live");
     try {
-      const r = await fetch("/api/speak", {
+      const r = await fetch("/api/speak", { credentials: 'include', 
         method: "POST",
         headers: {"Content-Type":"application/json"},
         body: JSON.stringify({ prompt: line, language: "en" })
@@ -127,7 +127,7 @@ async function _handleCanned(kind) {
 export async function _chipEndConversation() {
   try {
     _chipStep("end", "user requested");
-    fetch("/api/speak", {
+    fetch("/api/speak", { credentials: 'include', 
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({ prompt: "Anytime. I’ll be right here when you need me.", language: "en" })
@@ -226,7 +226,7 @@ export async function sendChat(message) {
   if (usedStreaming) {
     // We still want a final text line for the turn; ask server for it too.
     try {
-      const res = await fetch("/chat/summary", {
+      const res = await fetch("/chat/summary", { credentials: 'include', 
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lastOnly: true })
@@ -257,7 +257,7 @@ export async function sendChat(message) {
     _chipSetState("thinking");
     _chipStep("POST /chat →", { message: message.trim(), lane: _getChatLane() });
 
-    const res = await fetch("/chat", {
+    const res = await fetch("/chat", { credentials: 'include', 
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: message.trim(), lane: _getChatLane(), language: "en", domain: "pure-storage" })
@@ -335,7 +335,7 @@ export async function handleVoiceOnceResponse({ blob, durMs }) {
   _chipSetState("thinking");
   _chipStep("POST /api/voice-once →", { size: blob.size, durMs });
 
-  const res = await fetch("/api/voice-once", { method: "POST", body: fd, credentials: "include" });
+  const res = await fetch("/api/voice-once", { credentials: 'include',  method: "POST", body: fd, credentials: "include" });
   const data = await res.json().catch(() => ({}));
   _chipStep("← /api/voice-once", data);
 
