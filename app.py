@@ -9,7 +9,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List
 
-from flask import Flask, request, session, jsonify, render_template, url_for, Response
+from flask import (
+    Flask, request, session, jsonify, render_template,
+    url_for, Response, stream_with_context
+)
 from routes.voice import voice_bp
 from routes.chat import chat_bp
 from routes.conversation import conversation_bp
@@ -101,6 +104,8 @@ except Exception as e:
 
 # Database helpers
 import memory
+import random
+import re
 
 # Flask setup
 SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("FLASK_SECRET") or "dev-secret-change-me"
@@ -192,8 +197,6 @@ def api_profile():
     memory.save_user(email=current_user_email(), name=name, title=title, region=region, profile=profile)
     user = memory.get_user(current_user_email())
     return jsonify({"ok": True, "user": user})
-
-import random
 
 def chip_dynamic_greet(user):
     name = (user.get("name") or "there")
@@ -344,10 +347,9 @@ def _generate_reply_flex(prompt: str, profile: dict, hist):
         logging.exception("generate_reply invocation failed")
         return "I'm having trouble generating a reply right now."
 
-# ------------------------------------------------------------------------------
-# Orchestrated chat with per-session memory (Pure-first style)
-# ------------------------------------------------------------------------------
-
+# ----------------------------------------------------------------------
+# Conversational chat endpoint (unified) + alias
+# ----------------------------------------------------------------------
 @dataclass
 class _Msg:
     role: str
@@ -366,7 +368,6 @@ _SESS: Dict[str, _SessionState] = {}
 _TTL = 60 * 60  # 1 hour
 
 def _sid_key():
-    # We require auth; email is a stable session key
     return current_user_email() or request.remote_addr
 
 def _gc_sessions():
@@ -411,13 +412,13 @@ def _style_preamble(ss: _SessionState) -> str:
     if ss.depth:   parts.append(f"Depth: {ss.depth}.")
     return " [[ " + " ".join(parts) + " ]]"
 
-@app.post("/api/chat")
-def api_chat_orchestrated():
-    """Chat endpoint with live session memory & Pure-first style."""
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
     if not current_user_email():
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
+
     data = request.get_json(silent=True) or {}
-    text = (data.get("text") or data.get("prompt") or "").strip()
+    text = (data.get("text") or data.get("prompt") or data.get("message") or "").strip()
     if not text:
         return jsonify({"ok": False, "error": "Prompt required"}), 400
 
@@ -427,27 +428,22 @@ def api_chat_orchestrated():
     ss.last_seen = time.time()
     _gc_sessions()
 
-    # Update memory from user's turn
     _infer_from_text(ss, text)
     try:
         memory.log_conversation(email=current_user_email(), role="user", message=text)
     except Exception:
         pass
 
-    # Build styled prompt & include recent DB history (server truth)
-    user = memory.get_user(current_user_email()) or {}
+    user_profile = memory.get_user(current_user_email()) or {}
     styled_prompt = _style_preamble(ss) + "\n" + text
     try:
-        hist = memory.get_recent_conversation(current_user_email(), limit=8)
+        hist = memory.get_recent_conversation(current_user_email(), limit=10)
     except Exception:
         hist = []
 
-    hist = memory.get_recent_conversation(user, limit=10)
-        resp = generate_response(user_text=text, history=hist)
-        reply = (resp.get('text') if isinstance(resp, dict) else str(resp or '')).strip()
-    reply = (reply or "").strip()
+    resp = generate_response(user_text=styled_prompt, history=hist)
+    reply = (resp.get("text") if isinstance(resp, dict) else str(resp or "")).strip()
 
-    # Store assistant reply in DB history and refresh memory from the model's answer
     try:
         memory.log_conversation(email=current_user_email(), role="assistant", message=reply)
     except Exception:
@@ -458,27 +454,27 @@ def api_chat_orchestrated():
     state = {"product": ss.product, "task": ss.task, "depth": ss.depth}
     return jsonify({"ok": True, "reply": reply, "state": state})
 
-# ------------------------------------------------------------------------------
+# Alias for old callers
+@app.route("/api/chat_orchestrated", methods=["POST", "OPTIONS"])
+def api_chat_orchestrated():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    return api_chat()
+
+# ----------------------------------------------------------------------
 # Routes
-# ------------------------------------------------------------------------------
+# ----------------------------------------------------------------------
 
 # === TTS-ONLY dynamic greeting (no static fallback) ===
 def _build_tts_greeting_payload(text: str):
-    """
-    Try viseme-aware TTS first; if unavailable, fall back to plain TTS bytes.
-    Never returns a static URL. If TTS is down, caller should handle the error response.
-    """
-    # Prefer viseme-aware synthesis
     try:
-        res = tts_with_visemes(text)  # may return (bytes, visemes) or dict
+        res = tts_with_visemes(text)
         payload = _parse_tts_payload(res, ELEVEN_OUT_FORMAT())
         if payload and payload.get("audio"):
             payload.update({"ok": True, "text": text})
             return payload, 200
     except Exception:
         pass
-
-    # Fallback to plain TTS bytes (still dynamic)
     try:
         res = tts_bytes(text)
         payload = _parse_tts_payload(res, ELEVEN_OUT_FORMAT())
@@ -487,53 +483,40 @@ def _build_tts_greeting_payload(text: str):
             return payload, 200
     except Exception as e:
         return {"ok": False, "error": f"TTS failure: {e}"}, 503
-
     return {"ok": False, "error": "TTS unavailable"}, 503
 
 @app.route("/api/greet", methods=["GET"])
 @app.route("/api/greeting", methods=["GET"])
 @app.route("/api/voice/greeting", methods=["GET"])
 def api_greet():
-    """
-    TTS-only greeting. Returns:
-      { ok, text, audio: <base64>, format: "...", visemes: [...] }
-    If TTS is unavailable, returns 503 with { ok: False, error: "..."}.
-    """
     email = current_user_email()
     if not email:
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
     user = memory.get_user(email) or {}
     text = chip_dynamic_greet(user)
-
     payload, status = _build_tts_greeting_payload(text)
     return jsonify(payload), status
 
-@app.route("/api/chat", methods=["POST"])
-def api_chat():
+# Legacy short-answer chat (kept for compatibility if some UI path uses it)
+@app.route("/api/chat_short", methods=["POST"])
+def api_chat_short():
     if not current_user_email():
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
     data = request.get_json(silent=True) or {}
-    prompt = (data.get("prompt") or "").strip()
+    prompt = (data.get("prompt") or data.get("text") or data.get("message") or "").strip()
     if not prompt:
         return jsonify({"ok": False, "error": "Prompt required"}), 400
-
-    user = memory.get_user(current_user_email()) or {}
     try:
         hist = memory.get_recent_conversation(current_user_email(), limit=8)
     except Exception:
-        hist = []  # fall back cleanly if table was reset
-
-    hist = memory.get_recent_conversation(user, limit=10)
-        resp = generate_response(user_text=text, history=hist)
-        reply = (resp.get('text') if isinstance(resp, dict) else str(resp or '')).strip()
-    reply = cap_30_words(reply or "")
-
+        hist = []
+    resp = generate_response(user_text=prompt, history=hist)
+    reply = cap_30_words((resp.get("text") if isinstance(resp, dict) else str(resp or "")).strip())
     try:
         memory.log_conversation(email=current_user_email(), role="user", message=prompt)
         memory.log_conversation(email=current_user_email(), role="assistant", message=reply)
     except Exception:
         pass
-
     return jsonify({"ok": True, "reply": reply})
 
 @app.route("/api/voice/tts", methods=["POST"])
@@ -544,9 +527,7 @@ def api_tts():
     text = cap_30_words((data.get("text") or "").strip())
     if not text:
         return jsonify({"ok": False, "error": "Text required"}), 400
-
-    res = tts_bytes(text)  # do NOT pass keywords; service reads env
-
+    res = tts_bytes(text)
     audio = None
     err = None
     if isinstance(res, tuple) and len(res) == 2 and isinstance(res[1], (str, type(None))):
@@ -562,7 +543,6 @@ def api_tts():
             except Exception:
                 audio = None
         err = res.get("error")
-
     if not audio:
         return jsonify({"ok": False, "error": err or "TTS unavailable"}), 503
     return Response(audio, mimetype="audio/mpeg")
@@ -575,12 +555,10 @@ def api_tts_with_visemes():
     text = cap_30_words((data.get("text") or "").strip())
     if not text:
         return jsonify({"ok": False, "error": "Text required"}), 400
-
-    res = tts_with_visemes(text)  # do NOT pass keywords; service reads env
+    res = tts_with_visemes(text)
     payload = _parse_tts_payload(res, ELEVEN_OUT_FORMAT())
     if not payload:
         return jsonify({"ok": False, "error": "Unexpected TTS payload"}), 500
-
     return jsonify({"ok": True, **payload})
 
 @app.route("/api/email/send", methods=["POST"])
@@ -611,9 +589,7 @@ def api_accounts_search():
     results = search_accounts(q, limit=25) if q else []
     return jsonify({"ok": True, "results": results})
 
-
 # --- BEGIN: Orchestrator fallback aliases (app-level, additive) ---
-from flask import jsonify
 def _orchestrator_ok_payload(resp):
     if isinstance(resp, dict):
         text = resp.get("text") or resp.get("reply") or resp.get("message") or ""
@@ -628,7 +604,7 @@ def _orchestrate_now(text, history):
     try:
         return _orchestrator_ok_payload(_generate_reply_flex(
             text, memory.get_user(current_user_email()) or {}, history
-        )), 200
+    )), 200
     except Exception:
         return _orchestrator_ok_payload(
             "I hit a snag but I’m ready to continue. Want a quick overview or step-by-step?"
@@ -653,14 +629,114 @@ def app_orchestrator_fallback():
     return jsonify(payload), status
 # --- END: Orchestrator fallback aliases ---
 
+# --- BEGIN: server-side cancel + SSE chat stream ---
+_CANCEL = {}  # { email: timestamp }
+
+def _mark_cancel(email: str):
+    _CANCEL[email] = time.time()
+
+def _was_cancelled(email: str, since: float) -> bool:
+    return _CANCEL.get(email, 0) > since
+
+@app.post("/api/interrupt")
+def api_interrupt():
+    if not current_user_email():
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    _mark_cancel(current_user_email())
+    return jsonify({"ok": True})
+
+def _maybe_tool(text: str):
+    """
+    Minimal demo intents (uses your send_email/search_accounts):
+      - email <address> subject: ... body: ...
+      - accounts search for <query>
+    """
+    t = (text or "").lower()
+    if t.startswith("email ") or " email " in t:
+        to = subject = body = None
+        m = re.search(r'email\s+([^\s]+)', t)
+        if m: to = m.group(1)
+        ms = re.search(r'subject:\s*([^;]+)', t)
+        if ms: subject = ms.group(1).strip()
+        mb = re.search(r'body:\s*(.+)', t)
+        if mb: body = mb.group(1).strip()
+        return {"name": "email.send", "args": {"to": to, "subject": subject, "body": body}}
+    if "account" in t or "search" in t:
+        q = None
+        m = re.search(r'for\s+(.+)', t)
+        if m: q = m.group(1).strip()
+        return {"name": "accounts.search", "args": {"q": q or text, "limit": 25}}
+    return None
+
+@app.get("/api/chat/stream")
+def api_chat_stream():
+    if not current_user_email():
+        return Response("unauthorized", 401)
+    user = current_user_email()
+    started = time.time()
+    text = (request.args.get("q") or "").strip()
+    if not text:
+        return Response("missing q", 400)
+
+    def _events():
+        yield 'event: start\ndata: {}\n\n'
+
+        tool = _maybe_tool(text)
+        if tool:
+            yield 'event: tool_call\ndata: ' + json.dumps(tool) + '\n\n'
+            try:
+                if tool["name"] == "email.send":
+                    ok, err = send_email(
+                        tool["args"]["to"],
+                        tool["args"].get("subject") or "(no subject)",
+                        tool["args"].get("body") or "",
+                        None
+                    )
+                    data = {"ok": bool(ok), "error": err}
+                elif tool["name"] == "accounts.search":
+                    res = search_accounts(tool["args"]["q"], limit=tool["args"].get("limit", 25))
+                    data = {"ok": True, "results": res}
+                else:
+                    data = {"ok": False, "error": "unknown tool"}
+            except Exception as e:
+                data = {"ok": False, "error": str(e)}
+            yield 'event: tool_result\ndata: ' + json.dumps(data) + '\n\n'
+            if _was_cancelled(user, started):
+                yield 'event: interrupted\ndata: {}\n\n'
+                return
+
+        try:
+            hist = memory.get_recent_conversation(user, limit=10)
+        except Exception:
+            hist = []
+        resp = generate_response(user_text=text, history=hist)
+        reply = (resp.get("text") if isinstance(resp, dict) else str(resp or "")).strip()
+
+        if not reply:
+            yield 'event: done\ndata: {}\n\n'
+            return
+
+        import re as _re
+        chunks = _re.split(r'(?<=[.!?])\s+', reply)
+        for c in chunks:
+            if not c:
+                continue
+            if _was_cancelled(user, started):
+                yield 'event: interrupted\ndata: {}\n\n'
+                return
+            yield 'event: token\ndata: ' + json.dumps({"delta": c + " "}) + '\n\n'
+            time.sleep(0.05)
+
+        yield 'event: done\ndata: {}\n\n'
+
+    return Response(stream_with_context(_events()), mimetype="text/event-stream")
+# --- END: server-side cancel + SSE chat stream ---
+
+# Orchestrator health alias (kept)
+@app.route("/api/orchestrator/health", methods=["GET"])
+def api_orchestrator_health():
+    return api_health()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
-
-
-# --- BEGIN: assistant patch (orchestrator health alias) ---
-@app.route("/api/orchestrator/health", methods=["GET"])
-def api_orchestrator_health():
-    return api_health()
-# --- END: assistant patch ---
