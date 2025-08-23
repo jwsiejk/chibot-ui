@@ -201,7 +201,7 @@ def chip_dynamic_greet(user):
     region = (user.get("region") or "").strip()
     options = [
         f"Morning, {name}. Chip here—what are we tackling today?",
-        f"Hey {name}, Chip checking in. Want me to walk through something or sanity‑check a plan?",
+        f"Hey {name}, Chip checking in. Want me to walk through something or sanity-check a plan?",
         f"Howdy {name}! Ready to get practical—where should we start?",
         f"Hi {name}. Chip at your service. Curious what you want to sort out first.",
         f"Alright {name}, Chip’s on deck. What’s the job today?"
@@ -209,7 +209,7 @@ def chip_dynamic_greet(user):
     if region:
         options.append(f"Hey {name} in {region}—what should we dive into?")
     if role:
-        options.append(f"Hi {name} ({role}). Want me to get hands‑on, or keep it high‑level?")
+        options.append(f"Hi {name} ({role}). Want me to get hands-on, or keep it high-level?")
     return random.choice(options)
 
 # ----------------------------- TTS helpers ------------------------------------
@@ -252,7 +252,7 @@ def cap_30_words(s: str) -> str:
     words = (s or "").split()
     return " ".join(words[:30])
 
-# ------------------------ LLM wrapper (signature‑flex) ------------------------
+# ------------------------ LLM wrapper (signature-flex) ------------------------
 def _to_chat_messages(hist, prompt=None):
     """
     Convert a heterogeneous history into OpenAI Chat Completions format:
@@ -460,29 +460,51 @@ def api_chat_orchestrated():
 # Routes
 # ------------------------------------------------------------------------------
 
+# === TTS-ONLY dynamic greeting (no static fallback) ===
+def _build_tts_greeting_payload(text: str):
+    """
+    Try viseme-aware TTS first; if unavailable, fall back to plain TTS bytes.
+    Never returns a static URL. If TTS is down, caller should handle the error response.
+    """
+    # Prefer viseme-aware synthesis
+    try:
+        res = tts_with_visemes(text)  # may return (bytes, visemes) or dict
+        payload = _parse_tts_payload(res, ELEVEN_OUT_FORMAT())
+        if payload and payload.get("audio"):
+            payload.update({"ok": True, "text": text})
+            return payload, 200
+    except Exception:
+        pass
+
+    # Fallback to plain TTS bytes (still dynamic)
+    try:
+        res = tts_bytes(text)
+        payload = _parse_tts_payload(res, ELEVEN_OUT_FORMAT())
+        if payload and payload.get("audio"):
+            payload.update({"ok": True, "text": text})
+            return payload, 200
+    except Exception as e:
+        return {"ok": False, "error": f"TTS failure: {e}"}, 503
+
+    return {"ok": False, "error": "TTS unavailable"}, 503
+
 @app.route("/api/greet", methods=["GET"])
+@app.route("/api/greeting", methods=["GET"])
+@app.route("/api/voice/greeting", methods=["GET"])
 def api_greet():
+    """
+    TTS-only greeting. Returns:
+      { ok, text, audio: <base64>, format: "...", visemes: [...] }
+    If TTS is unavailable, returns 503 with { ok: False, error: "..."}.
+    """
     email = current_user_email()
     if not email:
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
     user = memory.get_user(email) or {}
     text = chip_dynamic_greet(user)
 
-    # Try to return audio + visemes. Do NOT pass keywords; service reads env.
-    try:
-        res = tts_with_visemes(text)
-        payload = _parse_tts_payload(res, ELEVEN_OUT_FORMAT())
-        if payload:
-            payload.update({"ok": True, "text": text})
-            return jsonify(payload)
-    except Exception:
-        pass
-
-    # Fallback to static file if exists
-    audio_rel = "chip/audio/greeting-static.mp3"
-    audio_fs = os.path.join(app.static_folder, "chip", "audio", "greeting-static.mp3")
-    audio_url = url_for("static", filename=audio_rel) if os.path.exists(audio_fs) else None
-    return jsonify({"ok": True, "text": text, "audioUrl": audio_url})
+    payload, status = _build_tts_greeting_payload(text)
+    return jsonify(payload), status
 
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
