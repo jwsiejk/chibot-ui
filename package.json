@@ -1,5 +1,13 @@
 {
+  "name": "chibot-ui",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "build": "echo \"No build step defined\""
+  },
   "dependencies": {
+    "express": "^4.19.2",
     "http-proxy-middleware": "^3.0.5"
   }
 }
