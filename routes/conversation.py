@@ -11,8 +11,7 @@ def _extract_text_and_history():
     Accept JSON, form-encoded, or query (?q=...).
     Normalize to (text, history list).
     """
-    text = ""
-    history = []
+    text, history = "", []
 
     data = request.get_json(silent=True) or {}
     if isinstance(data, dict):
@@ -26,7 +25,7 @@ def _extract_text_and_history():
                 or "")
 
     if not text:
-        text = request.args.get("q", "").strip()
+        text = (request.args.get("q") or "").strip()
 
     if not isinstance(history, (list, tuple)):
         history = []
