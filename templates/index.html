@@ -132,11 +132,7 @@ fetch("/api/health").then(r=>r.json()).then(s=>console.info("[AskChip] health", 
     const legacyChat = API.chat.bind(API);
     API.chat = async function (text) {
       try {
-        const r = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text })
-        });
+        const r = await fetch('/api/chat', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
         if (r.status !== 404) {
           const j = await r.json();
           if (j && j.ok) return { ok: true, reply: j.reply, state: j.state };
