@@ -13,8 +13,12 @@ from flask import Flask, request, session, jsonify, render_template, url_for, Re
 from routes.voice import voice_bp
 from routes.chat import chat_bp
 from routes.conversation import conversation_bp
-from flask_cors import CORS
-CORS(app, resources={r"/api/*": {"origins": ["https://chibot-ui.onrender.com"]}})
+
+# Optional CORS: import lazily; initialize AFTER app is created
+try:
+    from flask_cors import CORS  # pip package name: Flask-Cors
+except Exception:
+    CORS = None
 
 # --- Ensure we can import local packages ---
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -102,6 +106,12 @@ import memory
 SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("FLASK_SECRET") or "dev-secret-change-me"
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
+# Enable CORS only if package is available (avoid import crashes)
+if CORS:
+    origins = os.getenv("CORS_ORIGINS", "https://chibot-ui.onrender.com")
+    origins = [o.strip() for o in origins.split(",") if o.strip()]
+    CORS(app, resources={r"/api/*": {"origins": origins}})
+
 app.register_blueprint(voice_bp)
 app.register_blueprint(chat_bp)
 app.register_blueprint(conversation_bp)
@@ -124,6 +134,17 @@ def index():
 @app.get("/favicon.ico")
 def favicon():
     return ("", 204)
+
+# --- Health check for Render ---
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    def any_env(*names):
+        return any(os.getenv(n, "").strip() for n in names)
+    return jsonify({
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip()),
+        "eleven_configured": any_env("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
+                              and any_env("ELEVENLABS_VOICE_ID", "ELEVEN_VOICE_ID", "CHIP_VOICE_ID"),
+    })
 
 @app.route("/api/login", methods=["POST"])
 def api_login():
