@@ -1,26 +1,38 @@
-# routes/chat.py — guarded /api/chat (clarify first, never echo, no numbered lists)
-# 2025-08-24 — Drop-in blueprint for Ask Chip
-import re, json, difflib
+
+# routes/chat.py — guarded /api/chat with intent, memory, and style (no lists, anti‑echo)
+import os, re, json, difflib
 from flask import Blueprint, request, jsonify, session
 
 # Optional memory store
 try:
-    import memory  # provides log_conversation(.) and get_recent_conversation(.)
+    import memory  # provides logs, preferences, summaries
 except Exception:  # pragma: no cover
     memory = None  # safe fallback
 
-# LLM entrypoint(s)
+# LLM entrypoints
 try:
-    from services.llm_service import generate_response  # preferred
+    from services.llm_service import generate_smart_response, summarize_session
+except Exception:  # pragma: no cover
+    generate_smart_response = None
+    summarize_session = None
+
+try:
+    from services.llm_service import generate_response  # compat fallback
 except Exception:  # pragma: no cover
     generate_response = None
 
 try:
-    from services.llm_service import generate_reply  # fallback signature
+    from services.llm_service import generate_reply  # last-resort
 except Exception:  # pragma: no cover
     generate_reply = None
 
+try:
+    from services.intents import classify_intent
+except Exception:  # pragma: no cover
+    classify_intent = None
+
 chat_bp = Blueprint("chat", __name__)
+WORD_CAP = int(os.getenv("CHIP_WORD_CAP", "30"))
 
 # ----------------------- helpers -----------------------
 def _norm(s: str) -> str:
@@ -76,32 +88,10 @@ def _is_echo(user: str, reply: str) -> bool:
         return False
     if u == r:
         return True
-    if len(u) <= 16:  # short prompts: be strict
-        return r.startswith(u) or u in r
-    # fuzzy ratio for longer strings
-    ratio = difflib.SequenceMatcher(a=u, b=r).ratio()
-    return ratio >= 0.92
-
-def _call_llm(user_text: str, history):
-    """Call whichever LLM entrypoint is available; always return a plain string."""
-    if callable(generate_response):
-        try:
-            out = generate_response(user_text=user_text, history=history)
-            if isinstance(out, dict):
-                return str(out.get("text") or out.get("reply") or out.get("message") or "").strip()
-            return str(out or "").strip()
-        except Exception:
-            pass
-    if callable(generate_reply):
-        try:
-            out = generate_reply(user_text)  # best-effort
-            if isinstance(out, dict):
-                return str(out.get("text") or out.get("reply") or out.get("message") or "").strip()
-            return str(out or "").strip()
-        except Exception:
-            pass
-    # last resort – safe non-echo stub
-    return "I’m up, but the model isn’t responding yet. Want a quick overview or step‑by‑step?"
+    try:
+        return difflib.SequenceMatcher(None, u, r).ratio() >= 0.95
+    except Exception:
+        return False
 
 def _get_hist(email: str):
     if not (memory and email):
@@ -129,7 +119,7 @@ def api_chat():
         return jsonify({"ok": False, "error": "Prompt required"}), 400
 
     debug = str(request.args.get("debug") or "").lower() in {"1", "true", "yes"}
-    meta = {"path": "chat_guarded", "clarified": False, "anti_echo": False, "anti_list": False}
+    meta = {"path": "chat_guarded", "clarified": False, "anti_echo": False, "anti_list": False, "smart": False}
 
     email = None
     try:
@@ -147,24 +137,86 @@ def api_chat():
         if debug: payload["meta"] = meta
         return jsonify(payload)
 
-    # 2) Get short history for context and call model
+    # 2) Smart context (intent + memory) if available
     hist = _get_hist(email)
-    reply = _call_llm(text, hist)
+    prefs = {}
+    summary = None
+    notes = []
+    try:
+        if memory and email:
+            prefs = memory.get_preferences(email) or {}
+            summary = memory.get_session_summary(email)
+            notes = memory.recall_notes(email, text, k=3) or []
+    except Exception:
+        prefs, summary, notes = {}, None, []
+    # channel hint
+    channel = str(data.get("channel") or prefs.get("channel") or "web").lower()
 
-    # 3) Anti-echo (if model mirrored the user)
+    intent = None
+    if callable(classify_intent):
+        try:
+            intent = classify_intent(text)
+        except Exception:
+            intent = None
+
+    reply = ""
+    if callable(generate_smart_response):
+        try:
+            out = generate_smart_response(
+                user_text=text, history=hist, intent=intent,
+                session_summary=summary, memories=notes, prefs=prefs,
+                channel=channel, word_cap=WORD_CAP
+            )
+            reply = str((out or {}).get("text") or "")
+            meta["smart"] = True
+        except Exception:
+            reply = ""
+
+    # 3) Fall back to legacy responders if needed
+    if not reply and callable(generate_response):
+        try:
+            out = generate_response(user_text=text, history=hist)
+            if isinstance(out, dict):
+                reply = str(out.get("text") or out.get("reply") or out.get("message") or "").strip()
+            else:
+                reply = str(out or "").strip()
+        except Exception:
+            reply = ""
+    if not reply and callable(generate_reply):
+        try:
+            out = generate_reply(text)
+            if isinstance(out, dict):
+                reply = str(out.get("text") or out.get("reply") or out.get("message") or "").strip()
+            else:
+                reply = str(out or "").strip()
+        except Exception:
+            reply = ""
+
+    if not reply:
+        reply = "I can help—do you want a quick overview, step‑by‑step, or troubleshooting?"
+
+    # 4) Anti-echo (if model mirrored the user)
     if _is_echo(text, reply):
         meta["anti_echo"] = True
-        reply = _maybe_clarify(text) or "I can help—do you want a quick overview, step‑by‑step, or troubleshooting?"
+        reply = "I can help—do you want a quick overview, step‑by‑step, or troubleshooting?"
 
-    # 4) Anti-list (spoken style)
+    # 5) Anti-list (spoken style)
     dressed = _anti_list(reply)
     if dressed != reply:
         meta["anti_list"] = True
         reply = dressed
 
-    # 5) Log
+    # 6) Log + lightweight summary update
     _log(email, "user", text)
     _log(email, "assistant", reply)
+    try:
+        if memory and email and callable(summarize_session):
+            msgs = hist + [{"role":"user","message":text},{"role":"assistant","message":reply}]
+            summ = summarize_session(msgs)
+            if summ:
+                memory.set_session_summary(email, summ)
+    except Exception:
+        pass
 
     payload = {"ok": True, "reply": reply}
     if debug: payload["meta"] = meta

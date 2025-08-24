@@ -1,7 +1,8 @@
-# services/llm_service.py
+
+# services/llm_service.py — unified LLM helpers for Chip
 from __future__ import annotations
-import os, json, logging
-from typing import List, Dict, Any
+import os, json, logging, re
+from typing import List, Dict, Any, Optional
 
 # ---- Optional OpenAI client ----
 _OPENAI_OK = False
@@ -9,128 +10,200 @@ try:
     from openai import OpenAI
     _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     _OPENAI_OK = True if os.getenv("OPENAI_API_KEY") else False
-except Exception as e:
+except Exception:
     _OPENAI_OK = False
     _client = None
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+INTENT_MODEL = os.getenv("OPENAI_INTENT_MODEL", MODEL)
 
-# ---- Chip core style ----
-CHIP_SYSTEM = (
-    "You are Chip Tracewell: a friendly, plain‑spoken Pure Storage expert from Nebraska.\n"
-    "- Sound conversational, not like a manual. Short sentences, natural cadence.\n"
-    "- Never use numbered or bulleted lists. No '1.' '2.' or '-' at line starts.\n"
-    "- Keep replies tight. Prefer 2–6 short sentences.\n"
-    "- Focus on Pure Storage. If the user says something off‑topic, steer back politely.\n"
-    "- If the user's intent is ambiguous, ask a quick clarifying question before giving details.\n"
-    "- If asked for steps, write them as sentences separated by newlines or commas (no numbers).\n"
-    "- End with one short, optional follow‑up (e.g., 'Want me to go deeper on HA or keep it high level?')."
-)
-
-def _sanitize_no_lists(text: str) -> str:
-    """Flatten simple 1./- lists into natural sentences; also trim heavy formatting."""
-    if not text:
-        return text
-    lines = [l.strip() for l in str(text).splitlines() if l.strip()]
-    # If most lines look like bullets, join them.
-    bullet_like = sum(1 for l in lines if re_bullet.match(l))
-    if bullet_like >= max(2, len(lines)//2):
-        parts = [re_bullet.sub("", l).strip(" :-") for l in lines]
-        # Turn into spoken flow.
-        flow = []
-        for i, p in enumerate(parts):
-            if i == 0: flow.append(f"First, {p}")
-            elif i == 1: flow.append(f"Next, {p}")
-            elif i == len(parts)-1: flow.append(f"Finally, {p}")
-            else: flow.append(f"Then, {p}")
-        return " ".join(flow)
-    # Otherwise, remove leading bullet tokens and keep paragraphing.
-    cleaned = [re_bullet.sub("", l).strip(" :-") for l in lines]
-    return "\n".join(cleaned)
-
-import re
-re_bullet = re.compile(r'^\s*(?:\d+[\.\)]|[-*•])\s+')
-
-def _messages(system: str, user: str, history: List[Dict[str, str]]|None=None) -> List[Dict[str,str]]:
-    msgs: List[Dict[str,str]] = []
-    if system: msgs.append({"role":"system","content":system})
-    if history:
-        for m in history:
-            role = (m.get("role") or "user").lower()
-            content = m.get("content") or m.get("message") or m.get("text") or ""
-            if content:
-                msgs.append({"role": role, "content": str(content)})
-    msgs.append({"role":"user","content": user})
-    return msgs
-
-def _call_openai(msgs: List[Dict[str,str]], max_tokens: int=300, temperature: float=0.35) -> str:
-    if not _OPENAI_OK or _client is None:
-        return ""  # caller will handle fallback
+# ---------- Core helpers ----------
+def _call_openai(messages: List[Dict[str,str]], max_tokens: int=300, temperature: float=0.35) -> str:
+    if not _OPENAI_OK:
+        return ""
     try:
         resp = _client.chat.completions.create(
             model=MODEL,
-            messages=msgs,
-            temperature=temperature,
+            messages=messages,
             max_tokens=max_tokens,
+            temperature=temperature,
         )
-        text = (resp.choices[0].message.content or "").strip()
-        return _sanitize_no_lists(text)
+        return (resp.choices[0].message.content or "").strip()
     except Exception as e:
-        logging.exception("OpenAI call failed")
+        logging.warning("openai call failed: %s", e)
         return ""
 
-# ---- Public API ----
+def _messages(system: str, user: str, history: Optional[List[Dict[str,str]]]=None) -> List[Dict[str,str]]:
+    msgs: List[Dict[str,str]] = [{"role":"system","content":system}]
+    if history:
+        for h in history:
+            r = h.get("role") or "user"
+            c = h.get("message") or h.get("content") or ""
+            if not c: continue
+            msgs.append({"role": r, "content": c})
+    msgs.append({"role":"user","content": user})
+    return msgs
 
-def generate_reply(prompt: str|None=None, messages: List[Dict[str,str]]|None=None,
-                   history: List[Dict[str,str]]|None=None, context_messages: List[Dict[str,str]]|None=None,
+# ---------- Persona & style ----------
+def _style_rules(word_cap: int, channel: str, tone: str, verbosity: str) -> str:
+    ch_rules = {
+        "web": "Keep one short paragraph or two short paragraphs; link ideas with transitions.",
+        "slack": "One compact paragraph. Avoid heavy formatting.",
+        "whatsapp": "One short message. No code blocks.",
+        "app": "Speak plainly; natural cadence; crisp sentences.",
+    }.get(channel, "Keep one short paragraph.")
+    # Verbosity hint
+    verb = "concise" if (verbosity or "concise").lower() == "concise" else "detailed"
+    return (
+        f"Use at most {word_cap} words unless the user explicitly asked for more. "
+        "Never use numbered or bulleted lists. "
+        f"Adopt a {tone or 'friendly'} tone and keep answers {verb}. " + ch_rules
+    )
+
+CHIP_PERSONA = (
+    "You are Chip Tracewell: a friendly, plain‑spoken Pure Storage expert from Nebraska. "
+    "Be helpful, humble, and precise. Favor short, natural sentences. "
+    "Steer gently back to Pure Storage if the user goes off-topic."
+)
+
+# ---------- Public APIs ----------
+def generate_reply(prompt: Optional[str]=None, messages: Optional[List[Dict[str,str]]]=None,
+                   history: Optional[List[Dict[str,str]]]=None, context_messages: Optional[List[Dict[str,str]]]=None,
                    **kwargs) -> str:
-    """Compatibility wrapper used in a few places."""
     hist = messages or history or context_messages or []
     user = prompt or (hist[-1]["content"] if hist else "")
-    msgs = _messages(CHIP_SYSTEM, user, hist[:-1] if hist else None)
+    msgs = _messages(CHIP_PERSONA, user, hist[:-1] if hist else None)
     out = _call_openai(msgs, max_tokens=kwargs.get("max_tokens", 300), temperature=kwargs.get("temperature", 0.35))
-    if out:
-        return out
+    if out: return out
     return "I'm up, just missing my model key. Tell me the product and your goal, and I’ll help."
 
-def generate_response(user_text: str, history: List[Dict[str,str]]|None=None, **kwargs) -> Dict[str,str]:
-    msgs = _messages(CHIP_SYSTEM, user_text, history or [])
+def generate_response(user_text: str, history: Optional[List[Dict[str,str]]]=None, **kwargs) -> Dict[str,str]:
+    msgs = _messages(CHIP_PERSONA, user_text, history or [])
     out = _call_openai(msgs, max_tokens=kwargs.get("max_tokens", 320))
     if not out:
         return {"text": "Chip is running (fallback). Tell me your goal and product."}
     return {"text": out}
 
-def generate_greeting(profile: Dict[str,Any]|None=None) -> str:
+def generate_greeting(profile: Optional[Dict[str,Any]]=None) -> str:
     name = (profile or {}).get("name") or ""
     region = (profile or {}).get("region") or ""
     who = f"{name} in {region}" if (name and region) else (name or region or "there")
-    msgs = _messages(CHIP_SYSTEM, f"Open with a single friendly line: 'Hey—Chip here.' Then ask what to tackle, addressing {who}.")
+    sys = CHIP_PERSONA + " Respond with one line that starts with 'Hey—Chip here.' Then ask what to tackle, addressing " + who + "."
+    msgs = _messages(sys, "Greet the user.")
     out = _call_openai(msgs, max_tokens=40, temperature=0.3)
     return out or "Hey—Chip here. What are we tackling today?"
 
-def phrase_data(role: str, data: Dict[str,Any], history: List[Dict[str,str]]|None=None, **kwargs) -> str:
-    prompt = f"Phrase this succinctly for a Pure Storage context (one sentence, no lists). ROLE={role}; DATA={json.dumps(data, ensure_ascii=False)}"
-    msgs = _messages(CHIP_SYSTEM, prompt, history or [])
-    out = _call_openai(msgs, max_tokens=60, temperature=0.4)
-    return out or "I can phrase that once my model key is configured."
+def phrase_data(role: str, data: Any, history: Optional[List[Dict[str,str]]]=None, **kwargs) -> str:
+    prompt = f"Phrase this succinctly for {role}: {json.dumps(data, ensure_ascii=False)}"
+    msgs = _messages(CHIP_PERSONA, prompt, history or [])
+    out = _call_openai(msgs, max_tokens=80, temperature=0.35)
+    return out or "Here it is in plain language."
 
-def generate_followup(user_text: str, assistant_text: str, history: List[Dict[str,str]]|None=None, **kwargs) -> Dict[str,str]:
+def generate_followup(user_text: str, assistant_text: str, history: Optional[List[Dict[str,str]]]=None, **kwargs) -> Dict[str,str]:
     prompt = (
-        "Given the last turn, produce one short, natural follow‑up question that continues the same topic. "
-        "No bullets, no lists. If a follow‑up wouldn't add value, return an empty line.\n"
-        f"USER: {user_text}\nASSISTANT: {assistant_text}"
+        "Offer one short, optional follow-up question tailored to the user's last request and your answer. "
+        "No lists; one sentence."
     )
-    msgs = _messages(CHIP_SYSTEM, prompt, history or [])
-    out = _call_openai(msgs, max_tokens=40, temperature=0.3)
-    return {"text": out.strip()} if out else {"text": ""}
+    msgs = _messages(CHIP_PERSONA, prompt + f"\nUSER: {user_text}\nYOU: {assistant_text}", history or [])
+    out = _call_openai(msgs, max_tokens=40, temperature=0.35)
+    return {"text": out or "Want me to go deeper or keep it high level?"}
 
-def generate_nudge(state_hint: Dict[str,Any]|None=None, history: List[Dict[str,str]]|None=None, **kwargs) -> Dict[str,str]:
-    state_hint = state_hint or {}
+def generate_nudge(state_hint: Optional[Dict[str,Any]]=None, history: Optional[List[Dict[str,str]]]=None, **kwargs) -> Dict[str,str]:
     prompt = (
         "Write one gentle nudge to keep momentum (one sentence). "
         "If you can, personalize with product/account from STATE. No lists.\n"
-        f"STATE: {json.dumps(state_hint, ensure_ascii=False)}"
+        f"STATE: {json.dumps(state_hint or {}, ensure_ascii=False)}"
     )
-    msgs = _messages(CHIP_SYSTEM, prompt, history or [])
+    msgs = _messages(CHIP_PERSONA, prompt, history or [])
     out = _call_openai(msgs, max_tokens=40, temperature=0.3)
     return {"text": out or ""}
+
+# ---------- Intelligence pack ----------
+def _anti_list(text: str) -> str:
+    if not text: return ""
+    s = text.replace("\r\n","\n")
+    # remove bullets/number prefixes at line starts
+    s = re.sub(r"(^|\n)\s*([•\-\*]|\d+[\.)])\s*", lambda m: (m.group(1) or ""), s)
+    # remove simple '1. ' within sentences
+    s = re.sub(r"\b\d+\.\s*", "", s)
+    # collapse extra whitespace
+    s = re.sub(r"\n{2,}", "\n", s)
+    s = re.sub(r"\s{3,}", "  ", s)
+    return s.strip()
+
+def _clip_words(text: str, cap: int) -> str:
+    if cap <= 0: return text
+    words = re.findall(r"\S+", text or "")
+    if len(words) <= cap: return text
+    return " ".join(words[:cap])
+
+def generate_smart_response(
+        user_text: str,
+        history: Optional[List[Dict[str,str]]]=None,
+        intent: Optional[Dict[str,Any]]=None,
+        session_summary: Optional[str]=None,
+        memories: Optional[List[str]]=None,
+        prefs: Optional[Dict[str,Any]]=None,
+        channel: str="web",
+        word_cap: int=30,
+        temperature: float=0.35,
+    ) -> Dict[str,str]:
+    """Compose a context-rich prompt with persona, memory, and routing hints."""
+    history = history or []
+    prefs = prefs or {"tone":"friendly","verbosity":"concise","channel":channel}
+    channel = (channel or prefs.get("channel") or "web").lower()
+    style = _style_rules(word_cap, channel, prefs.get("tone","friendly"), prefs.get("verbosity","concise"))
+
+    intent_info = intent or {"intent":"unknown","entities":{},"confidence":0.0}
+    task = intent_info.get("intent","unknown")
+    ents = intent_info.get("entities",{})
+    steer_map = {
+        "how_to": "Give step‑by‑step as short sentences separated by commas or newlines (no numbers).",
+        "troubleshoot": "State likely causes then concise validation steps.",
+        "compare": "Compare 2–3 crisp differences and when to choose each.",
+        "design": "Give key design considerations and one configuration tip.",
+        "upgrade": "Outline preparation, key steps, and rollback note.",
+        "info": "Give a compact overview with 1–2 technical specifics.",
+        "unknown": "Ask one precise clarifying question before answering.",
+    }
+    steer = steer_map.get(task, steer_map["unknown"])
+
+    sys = CHIP_PERSONA + "\n" + style + "\nTask steering: " + steer
+    ctx_parts = []
+    if session_summary: ctx_parts.append("Session summary: " + session_summary)
+    if memories: ctx_parts.append("Long‑term notes: " + " | ".join(memories[:3]))
+    if ents: ctx_parts.append("Entities: " + json.dumps(ents, ensure_ascii=False))
+
+    user_payload = (
+        f"Context: {' | '.join(ctx_parts) if ctx_parts else 'n/a'}\n"
+        f"User: {user_text}"
+    )
+
+    msgs = _messages(sys, user_payload, history)
+    out = _call_openai(msgs, max_tokens=360, temperature=temperature)
+    if not out:
+        out = "I can help. Do you want an overview, how‑to, troubleshooting, or a comparison?"
+
+    out = _anti_list(out)
+    out = _clip_words(out, word_cap)
+    return {"text": out, "intent": intent_info}
+
+def summarize_session(messages: List[Dict[str,str]]) -> str:
+    """Return a 120–150 word running summary suitable for context, or '' if unavailable."""
+    if not _OPENAI_OK or not messages:
+        return ""
+    sys = (
+        "Summarize the conversation so far in 120–150 words. "
+        "Capture user goals, products, prior answers, and open items. "
+        "No bullets; natural sentences."
+    )
+    joined = []
+    for m in messages[-12:]:  # last few only
+        role = m.get("role","user")
+        content = m.get("message") or m.get("content") or ""
+        if not content: continue
+        joined.append(f"{role.upper()}: {content}")
+    text = "\n".join(joined)
+    msgs = _messages(sys, text, None)
+    out = _call_openai(msgs, max_tokens=180, temperature=0.2)
+    return out or ""
