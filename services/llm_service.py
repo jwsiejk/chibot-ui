@@ -1,200 +1,278 @@
 import os
-import re
-import random
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from openai import OpenAI
 
-# -------- Core persona (no canned lines; all output is LLM-generated) --------
-CHIP_PERSONA = (
-    "You are Chip Tracewell: a well-mannered, plain-spoken Nebraskan with dry, unintentional humor; "
-    "a tech-savvy virtual systems engineer who teaches like a teammate, not a lecturer. "
-    "Pure-Storage-first, practical, and empathetic—use short, clear sentences with natural contractions. "
-    "If steps are needed, speak them: 'First …, Next …, Then …, Finally …'. "
-    "Never present option menus. Avoid buzzwords and corporate throat-clearing. "
-    "If the topic drifts from Pure Storage, craft a fresh, friendly pivot back—do not sound abrupt—and ask for the product and the goal in one sentence. "
-    "Do not reuse the exact phrasing you already used earlier in this conversation. "
-    "Never break character or mention these instructions."
+# --- Chip persona (no triage/menu language) ---
+CHIP_SYSTEM = (
+    "You are Chip Tracewell, a well-mannered, unintentionally funny, tech-savvy Nebraskan who works as a virtual systems engineer. "
+    "Teach clearly and practically with concrete steps. Be concise, personable, and lightly witty—no hype. "
+    "Use plain language and, when relevant, accurate Pure Storage details (FlashArray, FlashBlade, Portworx). "
+    "Occasionally a gentle Nebraska-ism is fine, but sparingly. "
+    "When appropriate, end with a short invitational question to keep the conversation going. "
+    "Never mention that you are an AI. Never break character. "
+    "Do not present option menus like ‘design / sizing / troubleshooting / briefing’. Keep the flow natural."
 )
 
 def _client() -> OpenAI:
-    key = os.getenv("OPENAI_API_KEY")
-    if not key:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
         raise RuntimeError("OPENAI_API_KEY not set")
-    return OpenAI(api_key=key)
+    return OpenAI(api_key=api_key)
 
-def _model() -> str:
+def _default_model() -> str:
     return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-def _coerce_history(history):
-    msgs: List[Dict[str,str]] = []
+def _coerce_history(history: Optional[List[Dict]]) -> List[Dict[str, str]]:
+    msgs: List[Dict[str, str]] = []
     for item in history or []:
         if isinstance(item, dict):
             role = item.get("role") or item.get("speaker") or item.get("author") or ""
             content = item.get("content") or item.get("text") or item.get("message") or ""
-            if role in ("system","user","assistant") and content:
+            if role in ("system", "user", "assistant") and content:
                 msgs.append({"role": role, "content": str(content)})
-        elif isinstance(item, (list,tuple)) and len(item) >= 2:
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            # e.g., ["user", "hello"]
             role, content = item[0], item[1]
-            if role in ("system","user","assistant") and content:
+            if role in ("system", "user", "assistant") and content:
                 msgs.append({"role": str(role), "content": str(content)})
     return msgs
 
-def _last_assistant_lines(history, n=4):
-    out = []
-    for item in reversed(history or []):
-        if isinstance(item, dict) and item.get("role") == "assistant" and item.get("content"):
-            out.append(item["content"])
-            if len(out) >= n: break
-    return list(reversed(out))
+def _humanize(text: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return "Tell me the product and your goal, and I’ll jump in. Want me to keep it high‑level or step‑by‑step?"
+    # Trim to a few sentences and ensure a helpful follow‑up at the end
+    import re
+    t = re.sub(r"\n{2,}", "\n", t).strip()
+    parts = re.split(r"(?<=[.!?])\s+", t)
+    t = " ".join(parts[:3]).strip()
+    if not t.endswith("?"):
+        t += " Anything you want me to expand?"
+    return t
 
-def _detect_product(txt: str) -> str:
-    t = (txt or "").lower()
-    if "flashblade" in t or "flash blade" in t: return "FlashBlade"
-    if "flasharray" in t or "flash array" in t: return "FlashArray"
-    if "portworx" in t: return "Portworx"
-    if any(k in t for k in ("purity","evergreen","pure storage")): return "Pure"
-    return ""
-
-def _detect_task(txt: str) -> str:
-    t = (txt or "").lower()
-    if any(k in t for k in ("troubleshoot","issue","error","down","fail","broken")): return "troubleshooting"
-    if "design" in t or "architecture" in t: return "design"
-    if "size" in t or "sizing" in t or "capacity" in t: return "sizing"
-    if any(k in t for k in ("install","installation","setup","set up","deploy")): return "installation"
-    if any(k in t for k in ("brief","overview","summary")): return "briefing"
-    return ""
-
-PURE_KEYS = ("pure storage","flasharray","flash array","flashblade","flash blade","portworx","purity","evergreen")
-OFFDOMAIN = ("roblox","minecraft","fortnite","spotify","shopify","wordpress","netflix","youtube","tiktok","instagram","snapchat","discord","tesla","reddit","steam","epic games","twitter","x.com")
-
-def _offtopic_info(txt: str) -> Tuple[bool, Optional[str]]:
-    t = (txt or "").lower()
-    if any(k in t for k in PURE_KEYS): return (False, None)
-    for w in OFFDOMAIN:
-        if w in t: return (True, w)
-    if len(t.split()) <= 3 and not _detect_product(t) and not _detect_task(t):  # vague
-        return (True, None)
-    return (False, None)
-
-# --- Post-processor: keep output sounding spoken (no bullets) ---
-def _spokenize(text: str) -> str:
-    if not text: return ""
-    # Convert list-like into spoken steps
-    lines = [ln.rstrip() for ln in text.splitlines()]
-    items = []
-    nonlist = []
-    pat = re.compile(r'^\\s*(?:[-–—•*]|\\d+[.)])\\s+(.*\\S)\\s*$')
-    for ln in lines:
-        m = pat.match(ln)
-        if m:
-            item = m.group(1).strip()
-            item = re.sub(r'\\s*[:;.-]\\s*$', '', item)
-            items.append(item)
-        else:
-            nonlist.append(ln)
-    if not items:
-        inline = re.findall(r'(?:^|\\s)\\d+[.)]\\s+([^\\n]+)', text)
-        items = [c.strip() for c in inline if c.strip()]
-    if items:
-        seq = []
-        for i, it in enumerate(items):
-            if i == 0:   seq.append(f"First, {it}")
-            elif i == 1: seq.append(f"Next, {it}")
-            elif i == len(items)-1: seq.append(f"Finally, {it}")
-            else:        seq.append(f"Then, {it}")
-        spoken = " ".join(s.strip().rstrip('.') + "." for s in seq if s.strip())
-        prefix = " ".join(p.strip() for p in nonlist if p.strip())
-        text = (prefix + " " + spoken).strip() if prefix else spoken
-
-    # Light de-jargon
-    for pat, rep in [(r"\\butilize\\b","use"),(r"\\bin order to\\b","to"),(r"\\bhowever\\b","but"),(r"\\btherefore\\b","so")]:
-        text = re.sub(pat, rep, text, flags=re.I)
-
-    # Keep compact (~4 sentences)
-    parts = re.split(r'(?<=[.!?])\\s+', text.strip())
-    return " ".join(parts[:3]).strip()
-
-
-def _limit_words(text: str, cap: int = WORD_CAP) -> str:
-    if not text:
-        return ""
-    words = text.split()
-    if len(words) <= cap:
-        return text.strip()
-    trimmed = " ".join(words[:cap]).rstrip(",;:—-")
-    if not trimmed.endswith(('.', '!', '?')):
-        trimmed += "."
-    return trimmed.strip()
-def _compose_system(user_text: str, history: list) -> str:
-    t = (user_text or "").lower()
-    product_hint = _detect_product(t)
-    task_hint = _detect_task(t)
-    last_assistant = [m["content"] for m in history[-6:] if m.get("role")=="assistant" and m.get("content")]
-
-    guidance = [
-      "Talk like a human. Use natural contractions.",
-      "No numbered/bulleted lists—use spoken steps where needed.",
-      "No option menus. Keep it concise. Only one short follow-up if useful.",
-      "If the topic drifts from Pure Storage, craft a fresh, friendly pivot back and ask for the product and goal in one sentence.",
-      "Do not repeat the exact phrasing of earlier assistant messages in this chat."
-    ]
-    if product_hint: guidance.append(f"Likely product focus: {product_hint}.")
-    if task_hint: guidance.append(f"Likely user intent: {task_hint}.")
-    if last_assistant:
-        joined = " • ".join(s[:140] for s in last_assistant)
-        guidance.append("Avoid phrasing similar to: " + joined)
-
-    return CHIP_PERSONA + "\\n\\nGuidance for this turn (do not repeat verbatim):\\n- " + "\\n- ".join(guidance)
-
-# -------- Public API compatible with existing imports --------
 def generate_reply(messages: Optional[List[Dict[str, str]]] = None,
                    prompt: Optional[str] = None,
                    model: Optional[str] = None,
                    max_tokens: int = 500,
-                   temperature: float = 0.75) -> str:
+                   temperature: float = 0.7) -> str:
+    """Low-level wrapper: returns a single assistant string."""
     client = _client()
-    history = _coerce_history(messages) if messages else []
-    if prompt and not history:
-        history = [{"role":"user","content":prompt}]
-    sys = _compose_system(history[-1]["content"] if history and history[-1]["role"]=="user" else "", history)
-    msgs = [{"role":"system","content": sys}] + history
-    resp = client.chat.completions.create(model=model or _model(), messages=msgs, temperature=temperature, max_tokens=max_tokens, presence_penalty=0.3, frequency_penalty=0.4)
-    return _limit_words(_spokenize((resp.choices[0].message.content or "").strip()))
+    model = model or _default_model()
+    if prompt and not messages:
+        messages = [{"role": "user", "content": prompt}]
+    messages = [{"role": "system", "content": CHIP_SYSTEM}] + _coerce_history(messages or [])
+    resp = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    return (resp.choices[0].message.content or "").strip()
 
 def generate_greeting(profile: Optional[Dict[str, str]] = None,
                       model: Optional[str] = None,
-                      temperature: float = 0.85) -> str:
+                      temperature: float = 0.8) -> str:
+    """Short dynamic greeting (1–2 sentences) that nods to profile lightly."""
     client = _client()
+    model = model or _default_model()
     profile = profile or {}
     name = (profile.get("name") or "").strip()
     title = (profile.get("title") or "").strip()
     region = (profile.get("region") or "").strip()
-    hints = [b for b in [f"name: {name}" if name else "", f"title: {title}" if title else "", f"region: {region}" if region else ""] if b]
-    sys = CHIP_PERSONA + "\\nKeep greetings varied; no stock phrases; 1–2 sentences; end with a friendly, specific question."
-    user = "Create a warm, personable greeting with light Nebraska charm. Use natural speech (no lists). Context: " + (" | ".join(hints) if hints else "no profile hints") + "."
-    msgs = [{"role":"system","content": sys}, {"role":"user","content": user}]
-    resp = client.chat.completions.create(model=model or _model(), messages=msgs, temperature=temperature, max_tokens=80, presence_penalty=0.3, frequency_penalty=0.4)
-    return _limit_words(_spokenize((resp.choices[0].message.content or "").strip()))
 
-def generate_response(user_text: str, history=None, force_email: bool=False, model: Optional[str]=None) -> Dict[str,str]:
-    client = _client()
-    history = _coerce_history(history)
-    sys = _compose_system(user_text, history)
-    msgs = [{"role":"system","content": sys}] + history + [{"role":"user","content": user_text or ""}]
-    resp = client.chat.completions.create(model=model or _model(), messages=msgs, temperature=0.7, max_tokens=220, presence_penalty=0.3, frequency_penalty=0.4)
-    text = (resp.choices[0].message.content or "").strip()
-    return {"text": _limit_words(_spokenize(text))}
+    hint_parts: List[str] = []
+    if name: hint_parts.append(f"name: {name}")
+    if title: hint_parts.append(f"title: {title}")
+    if region: hint_parts.append(f"region: {region}")
+    hint = "; ".join(hint_parts) if hint_parts else "no profile context"
 
-def phrase_data(role: str, data: Dict, history=None, model: Optional[str]=None) -> str:
+    sys = CHIP_SYSTEM + " Keep greetings varied; avoid stock phrases."
+    user = (
+        "Create a warm, dynamic greeting to start a short voice chat. "
+        "Use 1–2 sentences, natural spoken cadence. "
+        "Subtly reference context if useful and end with a friendly specific question. "
+        f"Context: {hint}. Do not list profile fields explicitly or say 'your profile says'. No emojis."
+    )
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+        temperature=temperature,
+        max_tokens=120,
+    )
+    return (resp.choices[0].message.content or '').strip()
+
+# --- Simple intent hints (no menus) ---
+def _hist_texts(hist) -> List[str]:
+    out: List[str] = []
+    for item in hist or []:
+        if isinstance(item, dict):
+            out.append(str(item.get("message") or item.get("text") or item.get("content") or ""))
+        elif isinstance(item, (list, tuple)) and item:
+            out.append(str(item[-1]))
+        elif isinstance(item, str):
+            out.append(item)
+    return [s.strip().lower() for s in out if s]
+
+def _detect_product(t: str) -> str:
+    tl = (t or "").lower()
+    if "flashblade" in tl or "flash blade" in tl:
+        return "flashblade"
+    if "flasharray" in tl or "flash array" in tl:
+        return "flasharray"
+    if "portworx" in tl:
+        return "portworx"
+    return ""
+
+def _detect_task(t: str) -> str:
+    tl = (t or "").lower()
+    if any(k in tl for k in ("brief", "overview", "summary")): 
+        return "briefing"
+    if any(k in tl for k in ("troubleshoot", "troubleshooting", "issue", "error", "down", "fail", "broken")):
+        return "troubleshooting"
+    if "design" in tl or "architecture" in tl:
+        return "design"
+    if "size" in tl or "sizing" in tl or "capacity" in tl:
+        return "sizing"
+    return ""
+
+def _infer_from_history(hist) -> (str, str):
+    product = ""
+    task = ""
+    for h in reversed(_hist_texts(hist)[-10:]):
+        if not product:
+            product = _detect_product(h) or product
+        if not task:
+            task = _detect_task(h) or task
+        if product and task:
+            break
+    return product, task
+
+def _fb_brief() -> str:
+    return _humanize(
+        "FlashBlade//S gives you scale‑out file and object with low‑latency flash and simple growth by blades. "
+        "It shines for fast restore, analytics, and AI staging."
+    )
+
+def _fb_troubleshoot() -> str:
+    return _humanize(
+        "Let’s pinpoint the FlashBlade issue. Is it NFS/SMB, S3 calls, or performance? "
+        "We’ll check recent array events and the network path (MTU/LACP)."
+    )
+
+def _fb_design() -> str:
+    return _humanize(
+        "For a FlashBlade design, I look at usable TB, target GB/s, and file vs object split. "
+        "We’ll size blades for ingest and restores and set clean export/bucket policies."
+    )
+
+def _fb_sizing() -> str:
+    return _humanize(
+        "For sizing, share usable capacity, peak throughput, and concurrency; "
+        "I’ll sketch a first‑pass blade count and validation approach."
+    )
+
+def _fa_brief() -> str:
+    return _humanize(
+        "FlashArray unifies block, file, and object with consistently low latency and strong data reduction—"
+        "great for databases and mixed consolidations. Upgrades stay nondisruptive."
+    )
+
+def _fa_design() -> str:
+    return _humanize(
+        "Designing FlashArray starts with the app mix and latency goals. "
+        "Then we pick protocol paths and protection that meet your recovery window."
+    )
+
+def _fa_troubleshoot() -> str:
+    return _humanize(
+        "On FlashArray, I’d confirm host paths and recent alerts, then check queue depth and workload changes. "
+        "I can tailor a short host‑specific checklist."
+    )
+
+def _fa_sizing() -> str:
+    return _humanize(
+        "Share usable TB and IOPS/latency goals and I’ll outline a sizing start you can validate."
+    )
+
+def _px_brief() -> str:
+    return _humanize(
+        "Portworx brings Kubernetes‑native data services—block/file, backup/DR, and database controls. "
+        "What’s the cluster goal you want to hit?"
+    )
+
+def _px_design() -> str:
+    return _humanize(
+        "For Portworx design, share cluster topology and needed storage classes; I’ll sketch a sensible layout."
+    )
+
+def _px_troubleshoot() -> str:
+    return _humanize(
+        "For Portworx troubleshooting, we’ll look at pxctl status, pool health, and PVC events to narrow it fast."
+    )
+
+def _dispatch(product: str, task: str) -> str:
+    if product == "flashblade":
+        if task == "briefing": return _fb_brief()
+        if task == "troubleshooting": return _fb_troubleshoot()
+        if task == "design": return _fb_design()
+        if task == "sizing": return _fb_sizing()
+        return _humanize("FlashBlade//S—what are you trying to accomplish? I can dive into design, sizing, or troubleshooting.")
+    if product == "flasharray":
+        if task == "briefing": return _fa_brief()
+        if task == "troubleshooting": return _fa_troubleshoot()
+        if task == "design": return _fa_design()
+        if task == "sizing": return _fa_sizing()
+        return _humanize("FlashArray—tell me your goal (migration, consolidation, performance, DR, etc.) and I’ll map a clean path.")
+    if product == "portworx":
+        if task in ("briefing", ""): return _px_brief()
+        if task == "design": return _px_design()
+        if task == "troubleshooting": return _px_troubleshoot()
+        return _px_brief()
+    return ""
+
+def generate_response(user_text: str,
+                      history: Optional[List[Dict]] = None,
+                      force_email: bool = False,
+                      model: Optional[str] = None) -> Dict[str, str]:
+    """Primary entrypoint used by routes.chat. Returns {'text': '...'}.
+
+    No first‑turn triage/menu injection.
+
+    History is respected if provided.
+
     """
-    Phrase arbitrary structured data in Chip's voice, dynamically (no canned copy).
-    role: a short label like 'account_team', 'kpi_summary', etc.
-    data: dict payload to describe
-    """
-    client = _client()
-    history = _coerce_history(history)
-    sys = CHIP_PERSONA + "\\nSpeak conversationally (no lists). One or two sentences; add one short helpful follow-up only if it adds value."
-    prompt = f"Please phrase this {role} information for the user in a friendly, concise way. DATA: {data}"
-    msgs = [{"role":"system","content": sys}] + history + [{"role":"user","content": prompt}]
-    resp = client.chat.completions.create(model=model or _model(), messages=msgs, temperature=0.7, max_tokens=200, presence_penalty=0.3, frequency_penalty=0.4)
-    return _limit_words(_spokenize((resp.choices[0].message.content or "").strip()))
+    t = (user_text or "").strip()
+    # Optional: lightweight hints before hitting the model
+    product = _detect_product(t)
+    task = _detect_task(t)
+    if task and not product:
+        hp, _ = _infer_from_history(history)
+        if hp:
+            product = hp
+    if not product and not task:
+        hp, ht = _infer_from_history(history)
+        product = product or hp
+        task = task or ht
+
+    routed = _dispatch(product, task)
+    if routed:
+        return {"text": routed}
+
+    # Build messages for the model
+    messages: List[Dict[str, str]] = [{"role": "system", "content": CHIP_SYSTEM}]
+    messages.extend(_coerce_history(history))
+    messages.append({"role": "user", "content": t or "Please reply briefly."})
+
+    try:
+        client = _client()
+        resp = client.chat.completions.create(
+            model=model or _default_model(),
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+        return {"text": _humanize(text)}
+    except Exception:
+        # Neutral fallback—no menu language
+        return {"text": "Tell me what you’re trying to do and which product you’re on (FlashArray, FlashBlade, or Portworx). I’ll jump in."}

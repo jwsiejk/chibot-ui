@@ -64,8 +64,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // --- Helpers (UI) ---
-  function clearSilenceNudge() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
-  function startSilenceNudge(state) { clearSilenceNudge(); silenceTimer = setTimeout(async () => { try { const nud = await API.nudge(state || {}); if (nud && nud.ok && nud.text) { UI.appendBubble('assistant', nud.text); scrollChatToBottom(); try { await speakWithVisemes(nud.text); } catch (_) {} } } catch (_) {} }, 12000); }
   function scrollChatToBottom() {
     const el = document.getElementById("chatLog");
     if (el) el.scrollTop = el.scrollHeight;
@@ -120,9 +118,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (AC_CTX.task) lines.push(`Current task: ${AC_CTX.task}.`);
     if (AC_CTX.depth) lines.push(`Depth: ${AC_CTX.depth}.`);
     if (AC_CTX.continue) lines.push("This is a continuation; do not switch products unless the user asks.");
-    lines.push("Talk like a human; never use numbered or bulleted lists—if steps are needed, say them as ‘First…, Next…, Then…, Finally…’. Use contractions and short sentences.");
-lines.push("If the topic drifts from Pure Storage, craft a fresh, friendly pivot back and ask for the product and the goal in one sentence. Don’t reuse prior phrasing.");
-return `[[${lines.join(" ")}]]`;
+    return `[[${lines.join(" ")}]]`;
   }
 
   function ac_applyStyleToPrompt(prompt) {
@@ -164,16 +160,16 @@ return `[[${lines.join(" ")}]]`;
 
   async function dynamicGreet() {
     UI.setStatus("Greeting…");
-    let greetText = "";
+    let greetText = "Hey—Chip here. What are we tackling today?";
     try {
       const res = await API.greet({ dynamic: true });
       if (res && res.text) greetText = res.text;
     } catch (_) {}
-    if (greetText) { UI.appendBubble("assistant", greetText); }
+    UI.appendBubble("assistant", greetText);
     scrollChatToBottom();
-    if (greetText) { try { await speakWithVisemes(greetText); } catch (_) {} }
+    try { await speakWithVisemes(greetText); } catch (_) {}
     greeted = true;
-    UI.setStatus("Listening…"); startSilenceNudge({});
+    UI.setStatus("Listening…");
   }
 
   async function speakWithVisemes(text) {
@@ -203,7 +199,7 @@ return `[[${lines.join(" ")}]]`;
         if (typeof Viseme !== "undefined") Viseme.stop();
         if (micBtn) micBtn.classList.remove("speaking");
         document.body.classList.remove("speaking");
-        UI.setStatus("Ready"); startSilenceNudge({});
+        UI.setStatus("Ready");
         return;
       }
     } catch (_) {}
@@ -252,27 +248,41 @@ return `[[${lines.join(" ")}]]`;
   async function ac_tryAccountTeam(userText) {
     const q = _ac_matchAccountLookup(userText);
     if (!q) return false;
+
+    let say = "";
     try {
-      // try direct endpoint first
       const res = await fetch(`/api/account_team?name=${encodeURIComponent(q)}`);
       if (res.ok) {
         const j = await res.json();
-        let data = {};
         if (j && j.ok && j.found) {
-          data = j.data || j; // pass through for phrasing
-        } else {
-          data = { name: q, found: false };
-        }
-        const phr = await API.phrase("account_team", data);
-        if (phr && phr.ok && phr.text) {
-          UI.appendBubble("assistant", phr.text);
-          scrollChatToBottom();
-          try { await speakWithVisemes(phr.text); } catch (_) {}
-          return true;
+          say = j.rendered || "";
+        } else if (j && typeof j.rendered === "string") {
+          say = j.rendered;
         }
       }
     } catch (_) {}
-    return false;
+
+    if (!say) {
+      try {
+        const r2 = await fetch(`/api/accounts/search?q=${encodeURIComponent(q)}`);
+        if (r2.ok) {
+          const j2 = await r2.json();
+          const t = _ac_pickTeamShape(j2);
+          if (t && (t.name || t.owner || t.rep || t.type)) {
+            say = `Account team for ${t.name || q}${t.owner ? `; Account Owner — ${t.owner}` : ""}${t.rep ? `; Pure Rep — ${t.rep}` : ""}${t.type ? `; Type — ${t.type}` : ""}. Want me to email that to you?`;
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!say) {
+      say = `I couldn’t find an account team for ${q}. If you want, I can try another name or different spelling.`;
+    }
+
+    UI.appendBubble("assistant", say);
+    scrollChatToBottom();
+    try { await speakWithVisemes(say); } catch (_) {}
+    return true; // handled
   }
   // ---------------- /Account Team intent ----------------
 
@@ -297,7 +307,7 @@ return `[[${lines.join(" ")}]]`;
       recognizing = false;
       if (micBtn) { micBtn.setAttribute("aria-pressed", "false"); micBtn.classList.remove("listening"); }
       document.body.classList.remove("listening");
-      UI.setStatus("Ready"); startSilenceNudge({});
+      UI.setStatus("Ready");
       return;
     }
     recognizer = getRecognizer();
@@ -312,10 +322,10 @@ return `[[${lines.join(" ")}]]`;
       recognizing = false;
       if (micBtn) micBtn.setAttribute("aria-pressed", "false");
       if (micBtn) micBtn.classList.remove("listening");
-      if (!transcript) { UI.setStatus("Ready"); startSilenceNudge({}); await ac_resumeListening(); return; }
+      if (!transcript) { UI.setStatus("Ready"); await ac_resumeListening(); return; }
 
       ac_detectContext(transcript);
-      clearSilenceNudge(); UI.appendBubble("user", transcript);
+      UI.appendBubble("user", transcript);
       scrollChatToBottom();
 
       // EARLY EXIT: account-team lookup before LLM
@@ -332,22 +342,9 @@ return `[[${lines.join(" ")}]]`;
         UI.appendBubble("assistant", reply);
         scrollChatToBottom();
         await speakWithVisemes(reply);
-        // dynamic follow-up (server-crafted)
-        if (!/\?\s*$/.test(reply)) {
-          setTimeout(async () => {
-            try {
-              const fu = await API.followup(transcript, reply);
-              if (fu && fu.ok && fu.text && fu.text !== lastFollowUpText) {
-                lastFollowUpText = fu.text;
-                UI.appendBubble("assistant", fu.text);
-                scrollChatToBottom();
-                try { await speakWithVisemes(fu.text); } catch (_) {}
-              }
-            } catch (_) {}
-          }, 1200);
-        }
 
-
+        const fu = ac_contextualFollowUp(transcript, reply);
+        if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
         await ac_resumeListening();
       } else {
         UI.appendBubble("assistant", res.error || "Something went wrong.");
@@ -373,10 +370,10 @@ return `[[${lines.join(" ")}]]`;
       if (micBtn) micBtn.setAttribute("aria-pressed", "false");
       if (micBtn) micBtn.classList.remove("listening");
       document.body.classList.remove("listening");
-      UI.setStatus("Ready"); startSilenceNudge({});
+      UI.setStatus("Ready");
     };
 
-    clearSilenceNudge(); recognizer.start();
+    recognizer.start();
   }
 
   // --- Auth / Profile / UI wiring ---
@@ -392,7 +389,7 @@ return `[[${lines.join(" ")}]]`;
           UI.setUser(email);
           ac_show("chat");
           await refreshState();
-          UI.setStatus("Ready"); startSilenceNudge({});
+          UI.setStatus("Ready");
         } else {
           UI.setStatus((res && res.error) || "Login failed");
         }
@@ -454,12 +451,12 @@ return `[[${lines.join(" ")}]]`;
       composerInput.value = "";
       sendBtn.disabled = true;
       ac_detectContext(prompt);
-      clearSilenceNudge(); UI.appendBubble("user", prompt);
+      UI.appendBubble("user", prompt);
       scrollChatToBottom();
 
       // EARLY EXIT: account-team lookup before LLM (typed path too)
       try {
-        if (await ac_tryAccountTeam(prompt)) { UI.setStatus("Ready"); startSilenceNudge({}); return; }
+        if (await ac_tryAccountTeam(prompt)) { UI.setStatus("Ready"); return; }
       } catch (_) {}
 
       UI.setStatus("Thinking…");
@@ -471,7 +468,9 @@ return `[[${lines.join(" ")}]]`;
         UI.appendBubble("assistant", reply);
         scrollChatToBottom();
         await speakWithVisemes(reply);
-        UI.setStatus("Ready"); startSilenceNudge({});
+        const fu = ac_contextualFollowUp(prompt, reply);
+        if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
+        UI.setStatus("Ready");
       } else {
         UI.appendBubble("assistant", res.error || "Something went wrong.");
         scrollChatToBottom();
@@ -522,7 +521,7 @@ return `[[${lines.join(" ")}]]`;
     }
     ac_show("chat");
     if (micBtn) micBtn.disabled = false;
-    UI.setStatus("Ready"); startSilenceNudge({});
+    UI.setStatus("Ready");
   }
 
   function autoGrow(el) { const min = 38; el.style.height = "auto"; el.style.height = Math.max(min, el.scrollHeight) + "px"; }
