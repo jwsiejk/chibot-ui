@@ -4,11 +4,12 @@ from typing import Dict, List
 import time, json, re
 from flask import Blueprint, request, jsonify, session, current_app
 import memory
+
 from services.llm_service import generate_response, phrase_data, generate_followup, generate_nudge
 
 chat_bp = Blueprint('chat', __name__, url_prefix='/api')
 
-WORD_CAP = int(__import__('os').getenv('CHIP_WORD_CAP','40'))
+WORD_CAP = int(__import__('os').getenv('CHIP_WORD_CAP','30'))
 
 @dataclass
 class _Msg:
@@ -44,23 +45,49 @@ def _gc():
         if now - _SESS[k].last_seen > _TTL_SECONDS:
             _SESS.pop(k, None)
 
-def _infer(ss: SessionState, text: str) -> Dict[str,bool]:
-    t = (text or "").lower()
-    guesses = {}
-    if any(k in t for k in ("flashblade","flash blade","fb")): ss.product, guesses["FlashBlade"] = "FlashBlade", True
-    if any(k in t for k in ("flasharray","flash array","fa","purity//fa","purity/fa")): ss.product, guesses["FlashArray"] = "FlashArray", True
-    if "portworx" in t: ss.product, guesses["Portworx"] = "Portworx", True
+# ---- Input sanitation & intent checks ----
+_STYLE_RE = re.compile(r"^\s*\[\[(?:STYLE|STATE|CONTEXT):.*?\]\]\s*", re.IGNORECASE | re.DOTALL)
+_STYLE_LINE_RE = re.compile(r"^\s*STYLE:.*?(?:\n\n|$)", re.IGNORECASE | re.DOTALL)
 
+def _strip_style_preamble(text: str) -> str:
+    if not text:
+        return text or ""
+    t = _STYLE_RE.sub("", text)
+    t = _STYLE_LINE_RE.sub("", t)
+    # Also remove any leading generic [[ ... ]] block
+    t = re.sub(r"^\s*\[\[.*?\]\]\s*", "", t, flags=re.DOTALL)
+    return t.strip()
+
+def _infer(ss: SessionState, text: str):
+    t = (text or "").lower()
+    if any(k in t for k in ("flashblade","flash blade","fb")): ss.product = "FlashBlade"
+    if any(k in t for k in ("flasharray","flash array","fa")): ss.product = "FlashArray"
+    if "portworx" in t or re.search(r"\bpx\b", t): ss.product = "Portworx"
     if any(k in t for k in ("install","installation","setup","set up","deploy","walk me through","step by step")): ss.task = "installation"
     if any(k in t for k in ("design","architecture","size","sizing","capacity","plan")): ss.task = "design"
     if any(k in t for k in ("troubleshoot","error","fail","issue","debug","diagnose")): ss.task = "troubleshooting"
     if any(k in t for k in ("upgrade","update","patch")): ss.task = "upgrade"
-
     if "high level" in t or "overview" in t or "summary" in t: ss.depth = "high"
     if "step by step" in t or "walk" in t or "detailed" in t or "deep" in t: ss.depth = "deep"
 
-    return guesses
+_prod_re = re.compile(r"\bflash\s*array\b|\bflash\s*blade\b|\bportworx\b|\bpx\b", re.I)
 
+def _maybe_clarify(text: str) -> str | None:
+    l = (text or "").lower()
+    fa = re.search(r"\bflash\s*array\b|\bfa\b", l)
+    fb = re.search(r"\bflash\s*blade\b|\bfb\b", l)
+    px = "portworx" in l or re.search(r"\bpx\b", l)
+    flash_only = ("flash" in l) and not (fa or fb)
+    very_short = len((text or "").split()) <= 3
+    if fa and fb:
+        return "Quick check—do you want FlashArray or FlashBlade? I can help with either."
+    if flash_only and not (px):
+        return "Did you mean FlashArray or FlashBlade? I can tailor it once you pick one."
+    if very_short and not (fa or fb or px):
+        return "Got it. Is that a location or an account? And which product are we working on—FlashArray, FlashBlade, or Portworx?"
+    return None
+
+# ---- Context injection & output shaping ----
 def _state_json(ss: SessionState) -> dict:
     return {
         "product": ss.product, "account": ss.account, "goal": ss.goal,
@@ -78,49 +105,38 @@ def _inject_state(ss: SessionState, hist: List[dict]) -> List[dict]:
         prefix.append({"role":"system","content": f"RUNNING_SUMMARY: {ss.running_summary}"})
     return prefix + (hist or [])
 
-re_bullet = re.compile(r'^\s*(?:\d+[\.\)]|[-*•])\s+')
-def _anti_list(text: str) -> str:
-    if not text: return text
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    bullets = [l for l in lines if re_bullet.match(l)]
-    if len(bullets) >= max(2, len(lines)//2):
-        parts = [re_bullet.sub("", l).strip(" :-") for l in lines]
-        flow = []
-        for i,p in enumerate(parts):
-            if i==0: flow.append(f"First, {p}")
-            elif i==1: flow.append(f"Next, {p}")
-            elif i==len(parts)-1: flow.append(f"Finally, {p}")
-            else: flow.append(f"Then, {p}")
-        return " ".join(flow)
-    cleaned = [re_bullet.sub("", l).strip(" :-") for l in lines]
-    return " ".join(cleaned)
-
 def _limit(text: str, cap: int = WORD_CAP) -> str:
     words = (text or "").split()
     if len(words) <= cap:
         return text or ""
     out = " ".join(words[:cap]).rstrip(",;:—-")
-    if not out.endswith(('.', '!', '?')):
+    if not out.endswith((".", "!", "?")):
         out += "."
     return out
 
-def _maybe_ask_for_product(guesses: Dict[str,bool], text: str) -> str|None:
-    # If ambiguous (e.g., "flashlight" or both FlashArray/FlashBlade hinted), ask a human-like clarifier.
-    lower = (text or "").lower()
-    if "flashlight" in lower or (guesses.get("FlashArray") and guesses.get("FlashBlade")):
-        return "Did you mean FlashArray or FlashBlade? I can tailor the answer once you pick."
-    # If we guessed Portworx plus something else, also clarify.
-    if guesses and len([k for k,v in guesses.items() if v]) > 1:
-        opts = ", ".join([k for k,v in guesses.items() if v])
-        return f"Looks like it could be {opts}. Which one are you asking about?"
-    return None
+_BULLET_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+", re.M)
+def _anti_list(text: str) -> str:
+    if not text: return text
+    # If it looks like a list, convert to spoken transitions
+    items = [m.group(0) for m in re.finditer(r"^\s*(?:[-*•]|\d+[.)])\s+.*", text, flags=re.M)]
+    if len(items) >= 2:
+        parts = []
+        lines = re.findall(r"^\s*(?:[-*•]|\d+[.)])\s+(.*)", text, flags=re.M)
+        for i, item in enumerate(lines):
+            prefix = "First, " if i == 0 else ("Finally, " if i == len(lines)-1 else "Next, ")
+            parts.append(prefix + item.strip())
+        return " ".join(parts)
+    # Otherwise just strip stray markers
+    return _BULLET_RE.sub("", text)
 
+# ----------------------------- Routes -----------------------------
 @chat_bp.route('/chat', methods=['POST'])
 def chat():
     if not session.get("email"):
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
     data = request.get_json(force=True, silent=True) or {}
-    user_text = (data.get('message') or data.get('text') or '').strip()
+    raw_text = (data.get('message') or data.get('text') or '').strip()
+    user_text = _strip_style_preamble(raw_text)
     if not user_text:
         return jsonify({"ok": False, "error": "Prompt required"}), 400
 
@@ -129,21 +145,19 @@ def chat():
     _SESS[key] = ss
     ss.last_seen = time.time()
     _gc()
-    guesses = _infer(ss, user_text)
+    _infer(ss, user_text)
 
     try:
         memory.log_conversation(email=session.get("email"), role="user", message=user_text)
     except Exception:
         pass
 
-    # EARLY CLARIFIER if ambiguous
-    clar = _maybe_ask_for_product(guesses, user_text)
-    if clar:
-        reply = clar
-        try:
-            memory.log_conversation(email=session.get("email"), role="assistant", message=reply)
-        except Exception:
-            pass
+    # If ambiguous, ask a quick clarifier first
+    clarify = _maybe_clarify(user_text)
+    if clarify:
+        reply = clarify
+        try: memory.log_conversation(email=session.get("email"), role="assistant", message=reply)
+        except Exception: pass
         return jsonify({"ok": True, "reply": reply})
 
     try:
