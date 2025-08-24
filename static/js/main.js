@@ -335,7 +335,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       UI.setStatus("Thinking…");
       const styledPrompt = ac_applyStyleToPrompt(transcript);
-      const res = await API.chat(styledPrompt);
+      const res = await API.chat(userText);
       if (res.ok) {
         const reply = res.reply || "";
         ac_detectContext(reply);
@@ -461,7 +461,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       UI.setStatus("Thinking…");
       const styledPrompt = ac_applyStyleToPrompt(prompt);
-      const res = await API.chat(styledPrompt);
+      const res = await API.chat(userText);
       if (res.ok) {
         const reply = res.reply || "";
         ac_detectContext(reply);
