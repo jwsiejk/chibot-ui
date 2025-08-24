@@ -112,8 +112,19 @@ def _spokenize(text: str) -> str:
 
     # Keep compact (~4 sentences)
     parts = re.split(r'(?<=[.!?])\\s+', text.strip())
-    return " ".join(parts[:4]).strip()
+    return " ".join(parts[:3]).strip()
 
+
+def _limit_words(text: str, cap: int = WORD_CAP) -> str:
+    if not text:
+        return ""
+    words = text.split()
+    if len(words) <= cap:
+        return text.strip()
+    trimmed = " ".join(words[:cap]).rstrip(",;:—-")
+    if not trimmed.endswith(('.', '!', '?')):
+        trimmed += "."
+    return trimmed.strip()
 def _compose_system(user_text: str, history: list) -> str:
     t = (user_text or "").lower()
     product_hint = _detect_product(t)
@@ -148,7 +159,7 @@ def generate_reply(messages: Optional[List[Dict[str, str]]] = None,
     sys = _compose_system(history[-1]["content"] if history and history[-1]["role"]=="user" else "", history)
     msgs = [{"role":"system","content": sys}] + history
     resp = client.chat.completions.create(model=model or _model(), messages=msgs, temperature=temperature, max_tokens=max_tokens, presence_penalty=0.3, frequency_penalty=0.4)
-    return _spokenize((resp.choices[0].message.content or "").strip())
+    return _limit_words(_spokenize((resp.choices[0].message.content or "").strip()))
 
 def generate_greeting(profile: Optional[Dict[str, str]] = None,
                       model: Optional[str] = None,
@@ -162,17 +173,17 @@ def generate_greeting(profile: Optional[Dict[str, str]] = None,
     sys = CHIP_PERSONA + "\\nKeep greetings varied; no stock phrases; 1–2 sentences; end with a friendly, specific question."
     user = "Create a warm, personable greeting with light Nebraska charm. Use natural speech (no lists). Context: " + (" | ".join(hints) if hints else "no profile hints") + "."
     msgs = [{"role":"system","content": sys}, {"role":"user","content": user}]
-    resp = client.chat.completions.create(model=model or _model(), messages=msgs, temperature=temperature, max_tokens=120, presence_penalty=0.3, frequency_penalty=0.4)
-    return _spokenize((resp.choices[0].message.content or "").strip())
+    resp = client.chat.completions.create(model=model or _model(), messages=msgs, temperature=temperature, max_tokens=80, presence_penalty=0.3, frequency_penalty=0.4)
+    return _limit_words(_spokenize((resp.choices[0].message.content or "").strip()))
 
 def generate_response(user_text: str, history=None, force_email: bool=False, model: Optional[str]=None) -> Dict[str,str]:
     client = _client()
     history = _coerce_history(history)
     sys = _compose_system(user_text, history)
     msgs = [{"role":"system","content": sys}] + history + [{"role":"user","content": user_text or ""}]
-    resp = client.chat.completions.create(model=model or _model(), messages=msgs, temperature=0.8, max_tokens=600, presence_penalty=0.3, frequency_penalty=0.4)
+    resp = client.chat.completions.create(model=model or _model(), messages=msgs, temperature=0.7, max_tokens=220, presence_penalty=0.3, frequency_penalty=0.4)
     text = (resp.choices[0].message.content or "").strip()
-    return {"text": _spokenize(text)}
+    return {"text": _limit_words(_spokenize(text))}
 
 def phrase_data(role: str, data: Dict, history=None, model: Optional[str]=None) -> str:
     """
@@ -185,5 +196,5 @@ def phrase_data(role: str, data: Dict, history=None, model: Optional[str]=None) 
     sys = CHIP_PERSONA + "\\nSpeak conversationally (no lists). One or two sentences; add one short helpful follow-up only if it adds value."
     prompt = f"Please phrase this {role} information for the user in a friendly, concise way. DATA: {data}"
     msgs = [{"role":"system","content": sys}] + history + [{"role":"user","content": prompt}]
-    resp = client.chat.completions.create(model=model or _model(), messages=msgs, temperature=0.8, max_tokens=200, presence_penalty=0.3, frequency_penalty=0.4)
-    return _spokenize((resp.choices[0].message.content or "").strip())
+    resp = client.chat.completions.create(model=model or _model(), messages=msgs, temperature=0.7, max_tokens=200, presence_penalty=0.3, frequency_penalty=0.4)
+    return _limit_words(_spokenize((resp.choices[0].message.content or "").strip()))

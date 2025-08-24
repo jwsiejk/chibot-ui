@@ -64,6 +64,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // --- Helpers (UI) ---
+  function clearSilenceNudge() { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } }
+  function startSilenceNudge(state) { clearSilenceNudge(); silenceTimer = setTimeout(async () => { try { const nud = await API.nudge(state || {}); if (nud && nud.ok && nud.text) { UI.appendBubble('assistant', nud.text); scrollChatToBottom(); try { await speakWithVisemes(nud.text); } catch (_) {} } } catch (_) {} }, 12000); }
   function scrollChatToBottom() {
     const el = document.getElementById("chatLog");
     if (el) el.scrollTop = el.scrollHeight;
@@ -171,7 +173,7 @@ return `[[${lines.join(" ")}]]`;
     scrollChatToBottom();
     if (greetText) { try { await speakWithVisemes(greetText); } catch (_) {} }
     greeted = true;
-    UI.setStatus("Listening…");
+    UI.setStatus("Listening…"); startSilenceNudge({});
   }
 
   async function speakWithVisemes(text) {
@@ -201,7 +203,7 @@ return `[[${lines.join(" ")}]]`;
         if (typeof Viseme !== "undefined") Viseme.stop();
         if (micBtn) micBtn.classList.remove("speaking");
         document.body.classList.remove("speaking");
-        UI.setStatus("Ready");
+        UI.setStatus("Ready"); startSilenceNudge({});
         return;
       }
     } catch (_) {}
@@ -295,7 +297,7 @@ return `[[${lines.join(" ")}]]`;
       recognizing = false;
       if (micBtn) { micBtn.setAttribute("aria-pressed", "false"); micBtn.classList.remove("listening"); }
       document.body.classList.remove("listening");
-      UI.setStatus("Ready");
+      UI.setStatus("Ready"); startSilenceNudge({});
       return;
     }
     recognizer = getRecognizer();
@@ -310,10 +312,10 @@ return `[[${lines.join(" ")}]]`;
       recognizing = false;
       if (micBtn) micBtn.setAttribute("aria-pressed", "false");
       if (micBtn) micBtn.classList.remove("listening");
-      if (!transcript) { UI.setStatus("Ready"); await ac_resumeListening(); return; }
+      if (!transcript) { UI.setStatus("Ready"); startSilenceNudge({}); await ac_resumeListening(); return; }
 
       ac_detectContext(transcript);
-      UI.appendBubble("user", transcript);
+      clearSilenceNudge(); UI.appendBubble("user", transcript);
       scrollChatToBottom();
 
       // EARLY EXIT: account-team lookup before LLM
@@ -330,9 +332,22 @@ return `[[${lines.join(" ")}]]`;
         UI.appendBubble("assistant", reply);
         scrollChatToBottom();
         await speakWithVisemes(reply);
+        // dynamic follow-up (server-crafted)
+        if (!/\?\s*$/.test(reply)) {
+          setTimeout(async () => {
+            try {
+              const fu = await API.followup(transcript, reply);
+              if (fu && fu.ok && fu.text && fu.text !== lastFollowUpText) {
+                lastFollowUpText = fu.text;
+                UI.appendBubble("assistant", fu.text);
+                scrollChatToBottom();
+                try { await speakWithVisemes(fu.text); } catch (_) {}
+              }
+            } catch (_) {}
+          }, 1200);
+        }
 
-        const fu = ac_contextualFollowUp(transcript, reply);
-        if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
+
         await ac_resumeListening();
       } else {
         UI.appendBubble("assistant", res.error || "Something went wrong.");
@@ -358,10 +373,10 @@ return `[[${lines.join(" ")}]]`;
       if (micBtn) micBtn.setAttribute("aria-pressed", "false");
       if (micBtn) micBtn.classList.remove("listening");
       document.body.classList.remove("listening");
-      UI.setStatus("Ready");
+      UI.setStatus("Ready"); startSilenceNudge({});
     };
 
-    recognizer.start();
+    clearSilenceNudge(); recognizer.start();
   }
 
   // --- Auth / Profile / UI wiring ---
@@ -377,7 +392,7 @@ return `[[${lines.join(" ")}]]`;
           UI.setUser(email);
           ac_show("chat");
           await refreshState();
-          UI.setStatus("Ready");
+          UI.setStatus("Ready"); startSilenceNudge({});
         } else {
           UI.setStatus((res && res.error) || "Login failed");
         }
@@ -439,12 +454,12 @@ return `[[${lines.join(" ")}]]`;
       composerInput.value = "";
       sendBtn.disabled = true;
       ac_detectContext(prompt);
-      UI.appendBubble("user", prompt);
+      clearSilenceNudge(); UI.appendBubble("user", prompt);
       scrollChatToBottom();
 
       // EARLY EXIT: account-team lookup before LLM (typed path too)
       try {
-        if (await ac_tryAccountTeam(prompt)) { UI.setStatus("Ready"); return; }
+        if (await ac_tryAccountTeam(prompt)) { UI.setStatus("Ready"); startSilenceNudge({}); return; }
       } catch (_) {}
 
       UI.setStatus("Thinking…");
@@ -456,9 +471,7 @@ return `[[${lines.join(" ")}]]`;
         UI.appendBubble("assistant", reply);
         scrollChatToBottom();
         await speakWithVisemes(reply);
-        const fu = ac_contextualFollowUp(prompt, reply);
-        if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
-        UI.setStatus("Ready");
+        UI.setStatus("Ready"); startSilenceNudge({});
       } else {
         UI.appendBubble("assistant", res.error || "Something went wrong.");
         scrollChatToBottom();
@@ -509,7 +522,7 @@ return `[[${lines.join(" ")}]]`;
     }
     ac_show("chat");
     if (micBtn) micBtn.disabled = false;
-    UI.setStatus("Ready");
+    UI.setStatus("Ready"); startSilenceNudge({});
   }
 
   function autoGrow(el) { const min = 38; el.style.height = "auto"; el.style.height = Math.max(min, el.scrollHeight) + "px"; }

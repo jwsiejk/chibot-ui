@@ -4,6 +4,7 @@ import json
 import base64
 import logging
 import inspect
+WORD_CAP = int(os.getenv('CHIP_WORD_CAP','30'))
 from datetime import datetime
 import time
 from dataclasses import dataclass, field
@@ -401,6 +402,18 @@ def _style_preamble(ss: _SessionState) -> str:
     if ss.depth:   parts.append(f"Depth: {ss.depth}.")
     return " [[ " + " ".join(parts) + " ]]"
 
+def _cap_words(text: str, cap: int = WORD_CAP) -> str:
+    try:
+        words = (text or "").split()
+        if len(words) <= cap:
+            return text or ""
+        out = " ".join(words[:cap]).rstrip(",;:—-")
+        if not out.endswith(('.', '!', '?')):
+            out += "."
+        return out
+    except Exception:
+        return (text or "")
+
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     if not current_user_email():
@@ -424,83 +437,15 @@ def api_chat():
         pass
 
     user_profile = memory.get_user(current_user_email()) or {}
-    styled_prompt = _style_preamble(ss) + "\n" + text
+    styled_prompt = text
     try:
         hist = memory.get_recent_conversation(current_user_email(), limit=10)
     except Exception:
         hist = []
 
-    resp = generate_response(user_text=styled_prompt, history=hist)
+    resp = generate_response(user_text=text, history=hist)
     reply = (resp.get("text") if isinstance(resp, dict) else str(resp or "")).strip()
-
-    try:
-        memory.log_conversation(email=current_user_email(), role="assistant", message=reply)
-    except Exception:
-        pass
-    _infer_from_text(ss, reply)
-    ss.last_seen = time.time()
-
-    state = {"product": ss.product, "task": ss.task, "depth": ss.depth}
-    return jsonify({"ok": True, "reply": reply, "state": state})
-
-# Alias for old callers
-@app.route("/api/chat_orchestrated", methods=["POST", "OPTIONS"])
-def api_chat_orchestrated():
-    if request.method == "OPTIONS":
-        return ("", 204)
-    return api_chat()
-
-# ----------------------------------------------------------------------
-# Routes
-# ----------------------------------------------------------------------
-
-# === TTS-ONLY dynamic greeting (no static fallback) ===
-def _build_tts_greeting_payload(text: str):
-    try:
-        res = tts_with_visemes(text)
-        payload = _parse_tts_payload(res, ELEVEN_OUT_FORMAT())
-        if payload and payload.get("audio"):
-            payload.update({"ok": True, "text": text})
-            return payload, 200
-    except Exception:
-        pass
-    try:
-        res = tts_bytes(text)
-        payload = _parse_tts_payload(res, ELEVEN_OUT_FORMAT())
-        if payload and payload.get("audio"):
-            payload.update({"ok": True, "text": text})
-            return payload, 200
-    except Exception as e:
-        return {"ok": False, "error": f"TTS failure: {e}"}, 503
-    return {"ok": False, "error": "TTS unavailable"}, 503
-
-@app.route("/api/greet", methods=["GET"])
-@app.route("/api/greeting", methods=["GET"])
-@app.route("/api/voice/greeting", methods=["GET"])
-def api_greet():
-    email = current_user_email()
-    if not email:
-        return jsonify({"ok": False, "error": "Not authenticated"}), 401
-    user = memory.get_user(email) or {}
-    text = chip_dynamic_greet(user)
-    payload, status = _build_tts_greeting_payload(text)
-    return jsonify(payload), status
-
-# Legacy short-answer chat (kept for compatibility if some UI path uses it)
-@app.route("/api/chat_short", methods=["POST"])
-def api_chat_short():
-    if not current_user_email():
-        return jsonify({"ok": False, "error": "Not authenticated"}), 401
-    data = request.get_json(silent=True) or {}
-    prompt = (data.get("prompt") or data.get("text") or data.get("message") or "").strip()
-    if not prompt:
-        return jsonify({"ok": False, "error": "Prompt required"}), 400
-    try:
-        hist = memory.get_recent_conversation(current_user_email(), limit=8)
-    except Exception:
-        hist = []
-    resp = generate_response(user_text=prompt, history=hist)
-    reply = cap_30_words((resp.get("text") if isinstance(resp, dict) else str(resp or "")).strip())
+    reply = _cap_words(reply, WORD_CAP)
     try:
         memory.log_conversation(email=current_user_email(), role="user", message=prompt)
         memory.log_conversation(email=current_user_email(), role="assistant", message=reply)
@@ -749,3 +694,44 @@ def api_phrase():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
+
+@app.route("/api/followup", methods=["POST"])
+def api_followup():
+    if not current_user_email():
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    data = request.get_json(silent=True) or {}
+    user_text = (data.get("user_text") or "").strip()
+    assistant_text = (data.get("assistant_text") or "").strip()
+    try:
+        hist = memory.get_recent_conversation(current_user_email(), limit=10)
+    except Exception:
+        hist = []
+    try:
+        from services.llm_service import generate_followup
+        resp = generate_followup(user_text=user_text, assistant_text=assistant_text, history=hist)
+        return jsonify({"ok": True, "text": resp.get("text","")})
+    except Exception as e:
+        current_app.logger.exception("api_followup failed")
+        return jsonify({"ok": False, "error": "followup_failed", "detail": str(e)}), 500
+
+
+
+@app.route("/api/nudge", methods=["POST"])
+def api_nudge():
+    if not current_user_email():
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    data = request.get_json(silent=True) or {}
+    state = data.get("state") or {}
+    try:
+        hist = memory.get_recent_conversation(current_user_email(), limit=6)
+    except Exception:
+        hist = []
+    try:
+        from services.llm_service import generate_nudge
+        resp = generate_nudge(state_hint=state, history=hist)
+        return jsonify({"ok": True, "text": resp.get("text","")})
+    except Exception as e:
+        current_app.logger.exception("api_nudge failed")
+        return jsonify({"ok": False, "error": "nudge_failed", "detail": str(e)}), 500
+
