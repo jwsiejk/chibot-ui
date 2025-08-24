@@ -1,33 +1,13 @@
-from flask import Blueprint, request, jsonify, session
-from services.llm_service import generate_greeting
+from __future__ import annotations
+from flask import Blueprint, jsonify, session
 import memory
+from services.llm_service import generate_greeting
 
-bp = Blueprint("greet", __name__)
+bp = Blueprint("greet", __name__, url_prefix="/api")
 
-@bp.route("/api/greet", methods=["GET", "POST"])
-def api_greet():
-    email = None
-    try:
-        email = session.get("email")
-    except Exception:
-        email = None
-
-    profile = None
-    try:
-        if email:
-            user = memory.get_user(email)
-            if isinstance(user, dict):
-                profile = {
-                    "email": email,
-                    "name": user.get("name"),
-                    "title": user.get("title"),
-                    "region": user.get("region"),
-                }
-    except Exception:
-        profile = None
-
-    try:
-        text = generate_greeting(profile=profile)
-        return jsonify(ok=True, text=text)
-    except Exception as e:
-        return jsonify(ok=False, error=str(e)), 500
+@bp.route("/greet", methods=["GET"])
+def greet_api():
+    email = session.get("email")
+    profile = memory.get_user(email) if email else {}
+    text = generate_greeting(profile or {})
+    return jsonify({"ok": True, "text": text})

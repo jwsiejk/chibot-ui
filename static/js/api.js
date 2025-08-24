@@ -27,6 +27,7 @@ const API = (() => {
     chat: "/api/chat",
     orchestrator: "/api/orchestrator",
     conversation: "/api/conversation",
+    greet: "/api/greet"
   };
 
   async function orchestrate(payload) {
@@ -43,7 +44,7 @@ const API = (() => {
     me: () => get("/api/me"),
     getProfile: () => get("/api/profile"),
     saveProfile: (data) => post("/api/profile", data),
-    greet: () => get("/api/greet"),
+    greet: () => get(endpoints.greet),
     chat: (prompt) => post(endpoints.chat, { text: prompt }),
     orchestrate: (payload) => orchestrate(payload),
     emailSend: (payload) => post("/api/email/send", payload),

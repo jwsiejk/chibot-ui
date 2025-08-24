@@ -1,14 +1,14 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List
-import time, json
+import time, json, re
 from flask import Blueprint, request, jsonify, session, current_app
 import memory
 from services.llm_service import generate_response, phrase_data, generate_followup, generate_nudge
 
 chat_bp = Blueprint('chat', __name__, url_prefix='/api')
 
-WORD_CAP = int(__import__('os').getenv('CHIP_WORD_CAP','30'))
+WORD_CAP = int(__import__('os').getenv('CHIP_WORD_CAP','40'))
 
 @dataclass
 class _Msg:
@@ -44,17 +44,22 @@ def _gc():
         if now - _SESS[k].last_seen > _TTL_SECONDS:
             _SESS.pop(k, None)
 
-def _infer(ss: SessionState, text: str):
+def _infer(ss: SessionState, text: str) -> Dict[str,bool]:
     t = (text or "").lower()
-    if any(k in t for k in ("flashblade","flash blade","fb")): ss.product = "FlashBlade"
-    if any(k in t for k in ("flasharray","flash array","fa")): ss.product = "FlashArray"
-    if "portworx" in t: ss.product = "Portworx"
+    guesses = {}
+    if any(k in t for k in ("flashblade","flash blade","fb")): ss.product, guesses["FlashBlade"] = "FlashBlade", True
+    if any(k in t for k in ("flasharray","flash array","fa","purity//fa","purity/fa")): ss.product, guesses["FlashArray"] = "FlashArray", True
+    if "portworx" in t: ss.product, guesses["Portworx"] = "Portworx", True
+
     if any(k in t for k in ("install","installation","setup","set up","deploy","walk me through","step by step")): ss.task = "installation"
     if any(k in t for k in ("design","architecture","size","sizing","capacity","plan")): ss.task = "design"
     if any(k in t for k in ("troubleshoot","error","fail","issue","debug","diagnose")): ss.task = "troubleshooting"
     if any(k in t for k in ("upgrade","update","patch")): ss.task = "upgrade"
+
     if "high level" in t or "overview" in t or "summary" in t: ss.depth = "high"
     if "step by step" in t or "walk" in t or "detailed" in t or "deep" in t: ss.depth = "deep"
+
+    return guesses
 
 def _state_json(ss: SessionState) -> dict:
     return {
@@ -73,6 +78,23 @@ def _inject_state(ss: SessionState, hist: List[dict]) -> List[dict]:
         prefix.append({"role":"system","content": f"RUNNING_SUMMARY: {ss.running_summary}"})
     return prefix + (hist or [])
 
+re_bullet = re.compile(r'^\s*(?:\d+[\.\)]|[-*•])\s+')
+def _anti_list(text: str) -> str:
+    if not text: return text
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    bullets = [l for l in lines if re_bullet.match(l)]
+    if len(bullets) >= max(2, len(lines)//2):
+        parts = [re_bullet.sub("", l).strip(" :-") for l in lines]
+        flow = []
+        for i,p in enumerate(parts):
+            if i==0: flow.append(f"First, {p}")
+            elif i==1: flow.append(f"Next, {p}")
+            elif i==len(parts)-1: flow.append(f"Finally, {p}")
+            else: flow.append(f"Then, {p}")
+        return " ".join(flow)
+    cleaned = [re_bullet.sub("", l).strip(" :-") for l in lines]
+    return " ".join(cleaned)
+
 def _limit(text: str, cap: int = WORD_CAP) -> str:
     words = (text or "").split()
     if len(words) <= cap:
@@ -81,6 +103,17 @@ def _limit(text: str, cap: int = WORD_CAP) -> str:
     if not out.endswith(('.', '!', '?')):
         out += "."
     return out
+
+def _maybe_ask_for_product(guesses: Dict[str,bool], text: str) -> str|None:
+    # If ambiguous (e.g., "flashlight" or both FlashArray/FlashBlade hinted), ask a human-like clarifier.
+    lower = (text or "").lower()
+    if "flashlight" in lower or (guesses.get("FlashArray") and guesses.get("FlashBlade")):
+        return "Did you mean FlashArray or FlashBlade? I can tailor the answer once you pick."
+    # If we guessed Portworx plus something else, also clarify.
+    if guesses and len([k for k,v in guesses.items() if v]) > 1:
+        opts = ", ".join([k for k,v in guesses.items() if v])
+        return f"Looks like it could be {opts}. Which one are you asking about?"
+    return None
 
 @chat_bp.route('/chat', methods=['POST'])
 def chat():
@@ -96,12 +129,22 @@ def chat():
     _SESS[key] = ss
     ss.last_seen = time.time()
     _gc()
-    _infer(ss, user_text)
+    guesses = _infer(ss, user_text)
 
     try:
         memory.log_conversation(email=session.get("email"), role="user", message=user_text)
     except Exception:
         pass
+
+    # EARLY CLARIFIER if ambiguous
+    clar = _maybe_ask_for_product(guesses, user_text)
+    if clar:
+        reply = clar
+        try:
+            memory.log_conversation(email=session.get("email"), role="assistant", message=reply)
+        except Exception:
+            pass
+        return jsonify({"ok": True, "reply": reply})
 
     try:
         hist = memory.get_recent_conversation(session.get("email"), limit=10) or []
@@ -111,7 +154,7 @@ def chat():
     aug_hist = _inject_state(ss, hist)
     resp = generate_response(user_text=user_text, history=aug_hist)
     reply = (resp.get("text") if isinstance(resp, dict) else str(resp or "")).strip()
-    reply = _limit(reply)
+    reply = _anti_list(_limit(reply))
 
     # lightweight running summary update
     try:
