@@ -334,7 +334,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       } catch (_) {}
 
       UI.setStatus("Thinking…");
-      const styledPrompt = ac_applyStyleToPrompt(transcript);
       const res = await API.chat(userText);
       if (res.ok) {
         const reply = res.reply || "";
