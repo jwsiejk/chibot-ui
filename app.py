@@ -44,32 +44,30 @@ def _llm_update_state(ss: _SessionState, user_text: str, assistant_text: str, hi
     except Exception:
         return
     prior = _state_json(ss)
-    prompt = (
-        "Update the session state JSON with keys: product, account, goal, constraints, decisions, next_step.
-"
-        "Use only brief, plain phrases. Keep values if unchanged.
-"
-        "Return ONLY a JSON object, nothing else.
 
-"
-        f"PRIOR_STATE: {json.dumps(prior, ensure_ascii=False)}
-"
-        f"USER: {user_text}
-"
-        f"ASSISTANT: {assistant_text}"
-    )
+    # ✅ Valid, closed triple-quoted f-string (no unterminated literal)
+    prompt = f"""Update the session state JSON with keys: product, account, goal, constraints, decisions, next_step.
+Use only brief, plain phrases. Keep values if unchanged.
+Return ONLY a JSON object, nothing else.
+
+PRIOR_STATE: {json.dumps(prior, ensure_ascii=False)}
+USER: {user_text}
+ASSISTANT: {assistant_text}"""
+
     try:
-        updated = generate_reply(messages=[{"role":"user","content": prompt}], max_tokens=160, temperature=0.2)
-        if not updated: return
+        updated = generate_reply(messages=[{"role": "user", "content": prompt}], max_tokens=160, temperature=0.2)
+        if not updated:
+            return
         data = json.loads(updated)
-        ss.product = str(data.get("product") or ss.product or "")
-        ss.account = str(data.get("account") or ss.account or "")
-        ss.goal = str(data.get("goal") or ss.goal or "")
+        ss.product     = str(data.get("product")     or ss.product     or "")
+        ss.account     = str(data.get("account")     or ss.account     or "")
+        ss.goal        = str(data.get("goal")        or ss.goal        or "")
         ss.constraints = str(data.get("constraints") or ss.constraints or "")
-        ss.decisions = str(data.get("decisions") or ss.decisions or "")
-        ss.next_step = str(data.get("next_step") or ss.next_step or "")
+        ss.decisions   = str(data.get("decisions")   or ss.decisions   or "")
+        ss.next_step   = str(data.get("next_step")   or ss.next_step   or "")
     except Exception:
         pass
+
 
 def _llm_update_summary(ss: _SessionState, email: str):
     """Refresh running_summary every few turns: 5–7 short spoken lines; no bullets/numbers."""
@@ -78,29 +76,36 @@ def _llm_update_summary(ss: _SessionState, email: str):
     except Exception:
         return
     try:
-        hist = memory.get_recent_conversation(email, limit=16) if hasattr(memory, "get_recent_conversation") else [] if hasattr(memory, "get_recent_conversation") else [], limit=10) if hasattr(memory, "get_recent_conversation") else []
-    aug_hist = _inject_state_and_summary(ss, hist or [])
-    resp = generate_response(user_text=text, history=aug_hist)
-        reply = (resp.get("text") if isinstance(resp, dict) else str(resp or "")).strip()
+        # ✅ Use email (not 'user') and a larger window to summarize
+        hist = memory.get_recent_conversation(email, limit=16) if hasattr(memory, "get_recent_conversation") else []
+    except Exception:
+        hist = []
 
-        if not reply:
-            yield 'event: done\ndata: {}\n\n'
-            return
+    # Build a compact textual transcript excerpt
+    lines = []
+    for m in hist[-12:]:
+        role = (m.get("role") or "").lower()
+        msg = (m.get("message") or m.get("text") or m.get("content") or "")[:300]
+        if role in ("user", "assistant"):
+            lines.append(f"{role.upper()}: {msg}")
+    convo = "\n".join(lines)
 
-        import re as _re
-        chunks = _re.split(r'(?<=[.!?])\s+', reply)
-        for c in chunks:
-            if not c:
-                continue
-            if _was_cancelled(user, started):
-                yield 'event: interrupted\ndata: {}\n\n'
-                return
-            yield 'event: token\ndata: ' + json.dumps({"delta": c + " "}) + '\n\n'
-            time.sleep(0.05)
+    prompt = f"""Summarize the conversation so far into 5–7 short spoken lines (no bullets or numbers).
+Capture decisions, key numbers, blockers, and the current goal. Write in compact, natural speech.
 
-        yield 'event: done\ndata: {}\n\n'
+PRIOR_SUMMARY: {ss.running_summary or ""}
+CONVERSATION:
+{convo}"""
 
-    return Response(stream_with_context(_events()), mimetype="text/event-stream")
+    try:
+        new_sum = generate_reply(messages=[{"role": "user", "content": prompt}], max_tokens=220, temperature=0.3)
+        if new_sum:
+            ss.running_summary = new_sum.strip()
+            ss.last_summary_at = time.time()
+            ss.turns = 0
+    except Exception:
+        pass
+
 # --- END: server-side cancel + SSE chat stream ---
 
 # Orchestrator health alias (kept)
