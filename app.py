@@ -28,6 +28,8 @@ try:
     from routes.chat import chat_bp
 except Exception:
     chat_bp = None
+
+
 try:
     from routes.conversation import conversation_bp
 except Exception:
@@ -126,6 +128,7 @@ except Exception as e:
 import memory
 import random
 import re
+import importlib
 
 # Flask setup
 SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("FLASK_SECRET") or "dev-secret-change-me"
@@ -133,17 +136,43 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 
 # Enable CORS only if package is available (avoid import crashes)
 if CORS:
+    # You can comma-separate multiple origins in CORS_ORIGINS (e.g., https://chibot-ui.onrender.com,http://localhost:5173)
     origins = os.getenv("CORS_ORIGINS", "https://chibot-ui.onrender.com")
     origins = [o.strip() for o in origins.split(",") if o.strip()]
-    CORS(app, resources={r"/api/*": {"origins": origins}})
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": origins}},
+        supports_credentials=True,   # <-- important for session cookies
+    )
 
-# Register blueprints if available
-if voice_bp: app.register_blueprint(voice_bp)
-if chat_bp: app.register_blueprint(chat_bp)
-if conversation_bp: app.register_blueprint(conversation_bp)
+# Register blueprints (safe & idempotent)
+def _register_bp(mod_path: str, attr: str, name: str):
+    try:
+        # Avoid duplicate registration if reloader/import order causes double import
+        if name in app.blueprints:
+            app.logger.info("Blueprint already registered: %s", name)
+            return True
+        mod = importlib.import_module(mod_path)
+        bp = getattr(mod, attr)
+        app.register_blueprint(bp)
+        app.logger.info("Registered blueprint: %s (%s.%s)", name, mod_path, attr)
+        return True
+    except Exception as e:
+        app.logger.warning("Blueprint '%s' not registered: %s", name, e)
+        return False
+
+# --- Register blueprints ---
+_register_bp("routes.voice",         "voice_bp",        "voice")
+_register_bp("routes.chat",          "chat_bp",         "chat")
+_register_bp("routes.greet",         "bp",              "greet")        # provides /api/greet
+_register_bp("routes.conversation",  "conversation_bp", "conversation") # SSE + orchestrator aliases
 
 app.secret_key = SECRET_KEY
-app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=False)
+# Consider making SECURE configurable; keep False for local dev if needed
+app.config.update(
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "0") == "1",
+)
 
 # Init DB (non-fatal if unavailable)
 try:
