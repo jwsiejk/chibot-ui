@@ -1,10 +1,18 @@
-// static/js/main.js — loop-guard + dedupe + raw prompts (2025‑08‑24b)
+// static/js/main.js — stabilized (single-init, dedupe, in-flight guard) — 2025‑08‑24c
 document.addEventListener("DOMContentLoaded", async () => {
+  // Prevent double-initialization if the script is loaded twice
+  if (window.__CHIP_MAIN_INITIALIZED__) {
+    try { console.debug("[Chip] main.js already initialized; skipping re-init"); } catch (_){}
+    return;
+  }
+  window.__CHIP_MAIN_INITIALIZED__ = true;
+
   // --- State ---
   let greeted = false;
   let recognizer = null;
   let recognizing = false;
   let lastFollowUpAt = 0;
+  let inFlight = false;
 
   // Voice dedupe
   const DUP_WINDOW_MS = 1800;
@@ -112,7 +120,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     saveCtx();
   }
 
-  // Keep for compatibility but do not send style blocks anymore
+  // Keep the helper for compatibility; callers now pass raw text to API.chat
   function ac_applyStyleToPrompt(s) { ac_detectContext(s); return s; }
 
   function shouldAddFollowUp(userPrompt, reply) {
@@ -282,6 +290,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     return r;
   }
 
+  function beginSend() {
+    if (inFlight) { console.debug("[Chip] send suppressed (in-flight)"); return false; }
+    inFlight = true;
+    if (sendBtn) sendBtn.disabled = true;
+    return true;
+  }
+  function endSend() {
+    inFlight = false;
+    if (sendBtn) sendBtn.disabled = false;
+  }
+
   async function toggleMic() {
     if (!supportsSpeechRecognition()) { UI.setStatus("Browser speech recognition not available"); return; }
     if (recognizing) {
@@ -301,19 +320,18 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     recognizer.onresult = async (ev) => {
       let transcript = (ev.results && ev.results[0] && ev.results[0][0] && ev.results[0][0].transcript || "").trim();
-      // Deduplicate rapid repeats from the recognizer
       const now = Date.now();
       if (transcript && transcript.toLowerCase() === (lastHeard || "").toLowerCase() && (now - lastHeardAt) < DUP_WINDOW_MS) {
         console.debug("[Chip] dedup voice repeat:", transcript);
         transcript = ""; // ignore duplicate
-      } else {
-        lastHeard = transcript; lastHeardAt = now;
-      }
+      } else { lastHeard = transcript; lastHeardAt = now; }
 
       recognizing = false;
       if (micBtn) micBtn.setAttribute("aria-pressed", "false");
       if (micBtn) micBtn.classList.remove("listening");
       if (!transcript) { UI.setStatus("Ready"); await ac_resumeListening(); return; }
+
+      if (inFlight) { console.debug("[Chip] ignoring voice input while a request is in flight"); return; }
 
       ac_detectContext(transcript);
       if (transcript !== lastUserBubble) {
@@ -328,22 +346,26 @@ document.addEventListener("DOMContentLoaded", async () => {
       } catch (_) {}
 
       UI.setStatus("Thinking…");
-      const res = await API.chat(transcript);
-      if (res && res.ok && (res.reply || "").trim()) {
-        const reply = (res.reply || "").trim();
-        ac_detectContext(reply);
-        UI.appendBubble("assistant", reply);
-        scrollChatToBottom();
-        await speakWithVisemes(reply);
-
-        const fu = ac_contextualFollowUp(transcript, reply);
-        if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
-        await ac_resumeListening();
-      } else {
-        const err = (res && (res.error || res.body)) || "Something went wrong.";
-        UI.appendBubble("assistant", err);
-        scrollChatToBottom();
-        UI.setStatus("Error");
+      if (!beginSend()) return;
+      try {
+        const res = await API.chat(transcript);
+        if (res && res.ok && (res.reply || "").trim()) {
+          const reply = (res.reply || "").trim();
+          ac_detectContext(reply);
+          UI.appendBubble("assistant", reply);
+          scrollChatToBottom();
+          await speakWithVisemes(reply);
+          const fu = ac_contextualFollowUp(transcript, reply);
+          if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
+          await ac_resumeListening();
+        } else {
+          const err = (res && (res.error || res.body)) || "Something went wrong.";
+          UI.appendBubble("assistant", err);
+          scrollChatToBottom();
+          UI.setStatus("Error");
+        }
+      } finally {
+        endSend();
       }
     };
 
@@ -434,7 +456,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (composer) {
     composerInput.addEventListener("input", () => {
       const hasText = (composerInput.value || "").trim().length > 0;
-      sendBtn.disabled = !hasText;
+      sendBtn.disabled = !hasText || inFlight;
       autoGrow(composerInput);
     });
 
@@ -443,36 +465,42 @@ document.addEventListener("DOMContentLoaded", async () => {
       const prompt = (composerInput.value || "").trim();
       if (!prompt) return;
       composerInput.value = "";
-      sendBtn.disabled = true;
+      if (!beginSend()) return;
+
       ac_detectContext(prompt);
-      UI.appendBubble("user", prompt);
-      lastUserBubble = prompt;
+      if (prompt !== lastUserBubble) {
+        UI.appendBubble("user", prompt);
+        lastUserBubble = prompt;
+      }
       scrollChatToBottom();
 
       // EARLY EXIT: account-team lookup before LLM (typed path too)
       try {
-        if (await ac_tryAccountTeam(prompt)) { UI.setStatus("Ready"); sendBtn.disabled = false; return; }
+        if (await ac_tryAccountTeam(prompt)) { UI.setStatus("Ready"); endSend(); return; }
       } catch (_) {}
 
       UI.setStatus("Thinking…");
-      const res = await API.chat(prompt);  // send raw text
-      if (res && res.ok && (res.reply || "").trim()) {
-        const reply = (res.reply || "").trim();
-        ac_detectContext(reply);
-        UI.appendBubble("assistant", reply);
-        scrollChatToBottom();
-        await speakWithVisemes(reply);
-        const fu = ac_contextualFollowUp(prompt, reply);
-        if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
-        UI.setStatus("Ready");
-      } else {
-        const err = (res && (res.error || res.body)) || "Something went wrong.";
-        UI.appendBubble("assistant", err);
-        scrollChatToBottom();
-        UI.setStatus("Error");
+      try {
+        const res = await API.chat(prompt);  // send raw text
+        if (res && res.ok && (res.reply || "").trim()) {
+          const reply = (res.reply || "").trim();
+          ac_detectContext(reply);
+          UI.appendBubble("assistant", reply);
+          scrollChatToBottom();
+          await speakWithVisemes(reply);
+          const fu = ac_contextualFollowUp(prompt, reply);
+          if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
+          UI.setStatus("Ready");
+        } else {
+          const err = (res && (res.error || res.body)) || "Something went wrong.";
+          UI.appendBubble("assistant", err);
+          scrollChatToBottom();
+          UI.setStatus("Error");
+        }
+      } finally {
+        endSend();
+        composerInput.focus();
       }
-      sendBtn.disabled = false;
-      composerInput.focus();
     });
   }
 
@@ -527,5 +555,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   await refreshState();
 
   // EOF marker to prove full file loaded:
-  try { console.log("[AskChip] main.js EOF 2025-08-24b"); } catch (_) {}
+  try { console.log("[AskChip] main.js EOF 2025-08-24c"); } catch (_) {}
 });
