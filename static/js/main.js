@@ -1,10 +1,16 @@
-// static/js/main.js — fixed 2025‑08‑24
+// static/js/main.js — loop-guard + dedupe + raw prompts (2025‑08‑24b)
 document.addEventListener("DOMContentLoaded", async () => {
   // --- State ---
   let greeted = false;
   let recognizer = null;
   let recognizing = false;
   let lastFollowUpAt = 0;
+
+  // Voice dedupe
+  const DUP_WINDOW_MS = 1800;
+  let lastHeard = "";
+  let lastHeardAt = 0;
+  let lastUserBubble = "";
 
   // Lightweight conversation context (persisted for the tab only)
   let AC_CTX = {};
@@ -106,64 +112,44 @@ document.addEventListener("DOMContentLoaded", async () => {
     saveCtx();
   }
 
-  function ac_stylePrefix() {
-    // Pure-first guardrails and current context for the model (kept here but no longer sent)
-    let lines = [
-      "STYLE: You are Chip, a Pure Storage expert. Keep personality minimal (short flourish occasionally), 90% product substance.",
-      "Be clear, concise, and conversational. Use short sentences. Respect prior context—continue the current topic without re-asking.",
-      "If the user asks to 'walk me through it', provide a step-by-step with prerequisites, actions, and validation.",
-      "End with one concise follow-up that keeps momentum (e.g., 'Want the checklist emailed?' or 'Should I go deeper on step 2?')."
-    ];
-    if (AC_CTX.product) lines.push(`Product focus: ${AC_CTX.product}.`);
-    if (AC_CTX.task) lines.push(`Current task: ${AC_CTX.task}.`);
-    if (AC_CTX.depth) lines.push(`Depth: ${AC_CTX.depth}.`);
-    if (AC_CTX.continue) lines.push("This is a continuation; do not switch products unless the user asks.");
-    return `[[${lines.join(" ")}]]`;
-  }
+  // Keep for compatibility but do not send style blocks anymore
+  function ac_applyStyleToPrompt(s) { ac_detectContext(s); return s; }
 
-  // Keep the helper for compatibility; callers now pass raw text to API.chat
-  function ac_applyStyleToPrompt(prompt) {
-    ac_detectContext(prompt); // update context before applying
-    return `${ac_stylePrefix()}\n${prompt}`;
+  function shouldAddFollowUp(userPrompt, reply) {
+    if (!reply || reply.trim().length < 12) return false;
+    if (/\b(fallback|error|sorry)\b/i.test(reply)) return false;
+    if (/\?\s*$/.test(reply)) return false; // already ends with a question
+    const now = Date.now();
+    if (now - lastFollowUpAt < 3500) return false;
+    lastFollowUpAt = now;
+    return true;
   }
 
   function ac_contextualFollowUp(userPrompt, reply) {
-    // Avoid double questions
-    if (/\?\s*$/.test(reply || "")) return "";
-    const now = Date.now();
-    if (now - lastFollowUpAt < 3500) return ""; // avoid stacking
-    lastFollowUpAt = now;
-
+    if (!shouldAddFollowUp(userPrompt, reply)) return "";
     const prod = AC_CTX.product || "";
     const task = AC_CTX.task || "";
     const lower = (userPrompt || "").toLowerCase();
 
-    // Prefer installation guidance if user hinted at it
     if (task === "installation" || /install|walk.*through|step.*by.*step/.test(lower)) {
       const p = prod ? ` for ${prod}` : "";
       return `Want a step-by-step install checklist${p}? I can cover prerequisites, network, and validation.`;
     }
-
     if (/design|architecture|size|sizing|capacity|plan/.test(lower)) {
       const p = prod ? ` for ${prod}` : "";
       return `Should I sketch a simple reference design${p}, or jump to sizing guidance?`;
     }
-
-    // Generic nudge
     return "Want me to go deeper on any part, or keep it high level?";
   }
 
   // --- Conversation helpers (existing) ---
-  function chipFollowUp(prompt, reply) {
-    // Retain for backward compatibility; replaced by ac_contextualFollowUp
-    return "";
-  }
+  function chipFollowUp(prompt, reply) { return ""; }
 
   async function dynamicGreet() {
     UI.setStatus("Greeting…");
     let greetText = "Hey—Chip here. What are we tackling today?";
     try {
-      const res = await API.greet({ dynamic: true });
+      const res = await API.greet();
       if (res && res.text) greetText = res.text;
     } catch (_) {}
     UI.appendBubble("assistant", greetText);
@@ -176,8 +162,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function speakWithVisemes(text) {
     try {
       const resp = await fetch("/api/voice/tts_with_visemes", { credentials: 'include',
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text })
       });
       const data = await resp.json();
@@ -188,15 +173,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         UI.setStatus("Speaking…");
         if (micBtn) micBtn.classList.add("speaking");
         document.body.classList.add("speaking");
-
         if (typeof Viseme !== "undefined") {
           const schedule = (data.visemes || []).map(x => ({ t: x.t, v: x.v }));
           Viseme.animate(schedule, audioEl, { relative: data.relative !== false });
         }
-
         audioEl.play().catch(() => {});
         await new Promise((resolve) => { audioEl.onended = resolve; audioEl.onerror = resolve; });
-
         if (typeof Viseme !== "undefined") Viseme.stop();
         if (micBtn) micBtn.classList.remove("speaking");
         document.body.classList.remove("speaking");
@@ -207,7 +189,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     UI.setStatus("Audio unavailable — check ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID");
   }
 
-  // ---------------- Account Team intent (robust) ----------------
+  // ---------------- Account Team intent ----------------
   const _ac_ACCOUNT_PATTERNS = [
     /^\s*(?:do\s+you\s+know\s+)?(?:can\s+you\s+)?(?:what(?:'s| is)\s+)?(?:the\s+)?account\s+team(?:\s+(?:info(?:rmation)?|details)?)?\s+(?:for|at|on|about|regarding)\s+(.+?)\s*[?.!]*$/i,
     /^\s*who\s+(?:covers|owns)\s+(.+?)\s*[?.!]*$/i,
@@ -276,9 +258,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       } catch (_) {}
     }
 
-    if (!say) {
-      say = `I couldn’t find an account team for ${q}. If you want, I can try another name or different spelling.`;
-    }
+    if (!say) say = `I couldn’t find an account team for ${q}. Want to try another name?`;
 
     UI.appendBubble("assistant", say);
     scrollChatToBottom();
@@ -297,6 +277,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const r = new SR();
     r.lang = "en-US";
     r.interimResults = false;
+    r.continuous = false;  // one result event
     r.maxAlternatives = 1;
     return r;
   }
@@ -319,14 +300,26 @@ document.addEventListener("DOMContentLoaded", async () => {
     UI.setStatus("Listening — go ahead.");
 
     recognizer.onresult = async (ev) => {
-      const transcript = (ev.results && ev.results[0] && ev.results[0][0] && ev.results[0][0].transcript || "").trim();
+      let transcript = (ev.results && ev.results[0] && ev.results[0][0] && ev.results[0][0].transcript || "").trim();
+      // Deduplicate rapid repeats from the recognizer
+      const now = Date.now();
+      if (transcript && transcript.toLowerCase() === (lastHeard || "").toLowerCase() && (now - lastHeardAt) < DUP_WINDOW_MS) {
+        console.debug("[Chip] dedup voice repeat:", transcript);
+        transcript = ""; // ignore duplicate
+      } else {
+        lastHeard = transcript; lastHeardAt = now;
+      }
+
       recognizing = false;
       if (micBtn) micBtn.setAttribute("aria-pressed", "false");
       if (micBtn) micBtn.classList.remove("listening");
       if (!transcript) { UI.setStatus("Ready"); await ac_resumeListening(); return; }
 
       ac_detectContext(transcript);
-      UI.appendBubble("user", transcript);
+      if (transcript !== lastUserBubble) {
+        UI.appendBubble("user", transcript);
+        lastUserBubble = transcript;
+      }
       scrollChatToBottom();
 
       // EARLY EXIT: account-team lookup before LLM
@@ -335,10 +328,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       } catch (_) {}
 
       UI.setStatus("Thinking…");
-      // FIX: send the actual transcript (not undefined userText)
       const res = await API.chat(transcript);
-      if (res.ok) {
-        const reply = res.reply || "";
+      if (res && res.ok && (res.reply || "").trim()) {
+        const reply = (res.reply || "").trim();
         ac_detectContext(reply);
         UI.appendBubble("assistant", reply);
         scrollChatToBottom();
@@ -348,7 +340,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
         await ac_resumeListening();
       } else {
-        UI.appendBubble("assistant", res.error || "Something went wrong.");
+        const err = (res && (res.error || res.body)) || "Something went wrong.";
+        UI.appendBubble("assistant", err);
         scrollChatToBottom();
         UI.setStatus("Error");
       }
@@ -453,6 +446,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       sendBtn.disabled = true;
       ac_detectContext(prompt);
       UI.appendBubble("user", prompt);
+      lastUserBubble = prompt;
       scrollChatToBottom();
 
       // EARLY EXIT: account-team lookup before LLM (typed path too)
@@ -461,10 +455,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       } catch (_) {}
 
       UI.setStatus("Thinking…");
-      // FIX: remove style preamble; send raw prompt to server
-      const res = await API.chat(prompt);
-      if (res.ok) {
-        const reply = res.reply || "";
+      const res = await API.chat(prompt);  // send raw text
+      if (res && res.ok && (res.reply || "").trim()) {
+        const reply = (res.reply || "").trim();
         ac_detectContext(reply);
         UI.appendBubble("assistant", reply);
         scrollChatToBottom();
@@ -473,7 +466,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
         UI.setStatus("Ready");
       } else {
-        UI.appendBubble("assistant", res.error || "Something went wrong.");
+        const err = (res && (res.error || res.body)) || "Something went wrong.";
+        UI.appendBubble("assistant", err);
         scrollChatToBottom();
         UI.setStatus("Error");
       }
@@ -533,5 +527,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   await refreshState();
 
   // EOF marker to prove full file loaded:
-  try { console.log("[AskChip] main.js EOF 2025-08-24 FIX"); } catch (_) {}
+  try { console.log("[AskChip] main.js EOF 2025-08-24b"); } catch (_) {}
 });
