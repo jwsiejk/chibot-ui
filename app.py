@@ -55,7 +55,8 @@ def _llm_update_state(ss: _SessionState, user_text: str, assistant_text: str, hi
         f"PRIOR_STATE: {json.dumps(prior, ensure_ascii=False)}
 "
         f"USER: {user_text}
-ASSISTANT: {assistant_text}"
+"
+        f"ASSISTANT: {assistant_text}"
     )
     try:
         updated = generate_reply(messages=[{"role":"user","content": prompt}], max_tokens=160, temperature=0.2)
@@ -77,7 +78,7 @@ def _llm_update_summary(ss: _SessionState, email: str):
     except Exception:
         return
     try:
-        hist = memory.get_recent_conversation(user, limit=10) if hasattr(memory, "get_recent_conversation") else [], limit=10) if hasattr(memory, "get_recent_conversation") else []
+        hist = memory.get_recent_conversation(email, limit=16) if hasattr(memory, "get_recent_conversation") else [] if hasattr(memory, "get_recent_conversation") else [], limit=10) if hasattr(memory, "get_recent_conversation") else []
     aug_hist = _inject_state_and_summary(ss, hist or [])
     resp = generate_response(user_text=text, history=aug_hist)
         reply = (resp.get("text") if isinstance(resp, dict) else str(resp or "")).strip()
