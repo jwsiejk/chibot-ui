@@ -241,7 +241,6 @@ def generate_response(user_text: str,
     History is respected if provided.
 
     """
-<<<<<<< HEAD
     t = (user_text or "").strip()
     # Optional: lightweight hints before hitting the model
     product = _detect_product(t)
@@ -277,78 +276,3 @@ def generate_response(user_text: str,
     except Exception:
         # Neutral fallback—no menu language
         return {"text": "Tell me what you’re trying to do and which product you’re on (FlashArray, FlashBlade, or Portworx). I’ll jump in."}
-=======
-    Phrase arbitrary structured data in Chip's voice, dynamically (no canned copy).
-    role: a short label like 'account_team', 'kpi_summary', etc.
-    data: dict payload to describe
-    """
-    client = _client()
-    history = _coerce_history(history)
-    sys = CHIP_PERSONA + "\\nSpeak conversationally (no lists). One or two sentences; add one short helpful follow-up only if it adds value."
-    prompt = f"Please phrase this {role} information for the user in a friendly, concise way. DATA: {data}"
-    msgs = [{"role":"system","content": sys}] + history + [{"role":"user","content": prompt}]
-    resp = client.chat.completions.create(model=model or _model(), messages=msgs, temperature=0.7, max_tokens=200, presence_penalty=0.3, frequency_penalty=0.4)
-    return _limit_words(_spokenize((resp.choices[0].message.content or "").strip()))
-
-# --- Dynamic follow-up and nudge generators (no canned lines) ---
-def generate_followup(user_text: str,
-                      assistant_text: str,
-                      history=None,
-                      model: Optional[str] = None) -> Dict[str,str]:
-    """Return a single short, persona-consistent follow-up, or empty text.
-    Rules: <= 16 words; natural speech; no lists; not a restatement; no 'anything else' cliché; no menus.
-    """
-    client = _client()
-    history = _coerce_history(history)
-    sys = CHIP_PERSONA + (
-        "\nKeep this follow-up very short. No numbered/bulleted lists; no menus. "
-        "Offer one clear next step (e.g., go deeper on a subtopic, move to next step, email a brief checklist), "
-        "but phrase it freshly and conversationally."
-    )
-    prompt = (
-        "Based on the prior user message and your last reply, craft ONE short follow-up question or offer "
-        "(<=16 words). Natural speech. No clichés like 'anything else'. No repeating your last sentence. "
-        "Do not include greetings. If a follow-up would be noisy, return just the word: SILENT.\n\n"
-        f"USER: {user_text}\nASSISTANT: {assistant_text}"
-    )
-    msgs = [{"role":"system","content": sys}] + history + [{"role":"user","content": prompt}]
-    resp = client.chat.completions.create(
-        model=model or _model(), messages=msgs, temperature=0.7, max_tokens=40, presence_penalty=0.3, frequency_penalty=0.5
-    )
-    text = (resp.choices[0].message.content or "").strip()
-    text = _spokenize(text)
-    if not text or text.upper().strip() == "SILENT":
-        return {"text": ""}
-    # enforce cap
-    return {"text": _limit_words(text, cap=int(os.getenv("CHIP_FOLLOWUP_CAP","16")))}
-
-def generate_nudge(state_hint: Dict=None, history=None, model: Optional[str]=None) -> Dict[str,str]:
-    """Return a single short, gentle nudge if the user is silent.
-    Rules: <= 14 words; friendly; no pressure; Pure-first; ask for product+goal in one sentence, but phrase it freshly.
-    """
-    client = _client()
-    history = _coerce_history(history)
-    state_hint = state_hint or {}
-    prod = state_hint.get("product","")
-    task = state_hint.get("task","")
-    depth = state_hint.get("depth","")
-
-    sys = CHIP_PERSONA + (
-        "\nCraft a gentle, friendly nudge for silence. Natural speech, <=14 words. "
-        "Do not reuse phrasing used earlier in this chat. No menus. No lists."
-    )
-    hint_bits = []
-    if prod: hint_bits.append(f"product: {prod}")
-    if task: hint_bits.append(f"task: {task}")
-    if depth: hint_bits.append(f"depth: {depth}")
-    prompt = "Context: " + (", ".join(hint_bits) if hint_bits else "none") + ". Nudge only."
-
-    msgs = [{"role":"system","content": sys}, {"role":"user","content": prompt}]
-    resp = client.chat.completions.create(
-        model=model or _model(), messages=msgs, temperature=0.7, max_tokens=30, presence_penalty=0.3, frequency_penalty=0.6
-    )
-    text = (resp.choices[0].message.content or "").strip()
-    text = _spokenize(text)
-    return {"text": _limit_words(text, cap=int(os.getenv("CHIP_NUDGE_CAP","14")))}
-
->>>>>>> cff6bc0262a3a5be528cdb90fa95271d173af028
