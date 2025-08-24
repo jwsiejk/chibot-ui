@@ -828,9 +828,9 @@ def api_chat_stream():
             add_trace(tr, "final", {"reply_preview": ""})
             end_trace(tr, "ok", {"len": 0, "stream": True})
             add_trace(tr, "final", {"reply_preview": reply[:400]})
-        end_trace(tr, "ok", {"len": len(reply), "stream": True})
-        yield 'event: done\ndata: {}\n\n'
-            return
+            end_trace(tr, "ok", {"len": len(reply), "stream": True})
+              yield 'event: done\ndata: {}\n\n'
+              return
 
         if _is_echo_like(text, reply):
             add_trace(tr, "anti_echo_retry", {"reason": "echo detected"})
