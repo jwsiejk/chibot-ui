@@ -1,4 +1,4 @@
-// static/js/main.js — Known-good copy (no triage). EOF marker at end for verification.
+// static/js/main.js — fixed 2025‑08‑24
 document.addEventListener("DOMContentLoaded", async () => {
   // --- State ---
   let greeted = false;
@@ -107,7 +107,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function ac_stylePrefix() {
-    // Pure-first guardrails and current context for the model
+    // Pure-first guardrails and current context for the model (kept here but no longer sent)
     let lines = [
       "STYLE: You are Chip, a Pure Storage expert. Keep personality minimal (short flourish occasionally), 90% product substance.",
       "Be clear, concise, and conversational. Use short sentences. Respect prior context—continue the current topic without re-asking.",
@@ -121,6 +121,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     return `[[${lines.join(" ")}]]`;
   }
 
+  // Keep the helper for compatibility; callers now pass raw text to API.chat
   function ac_applyStyleToPrompt(prompt) {
     ac_detectContext(prompt); // update context before applying
     return `${ac_stylePrefix()}\n${prompt}`;
@@ -334,7 +335,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       } catch (_) {}
 
       UI.setStatus("Thinking…");
-      const res = await API.chat(userText);
+      // FIX: send the actual transcript (not undefined userText)
+      const res = await API.chat(transcript);
       if (res.ok) {
         const reply = res.reply || "";
         ac_detectContext(reply);
@@ -455,12 +457,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       // EARLY EXIT: account-team lookup before LLM (typed path too)
       try {
-        if (await ac_tryAccountTeam(prompt)) { UI.setStatus("Ready"); return; }
+        if (await ac_tryAccountTeam(prompt)) { UI.setStatus("Ready"); sendBtn.disabled = false; return; }
       } catch (_) {}
 
       UI.setStatus("Thinking…");
-      const styledPrompt = ac_applyStyleToPrompt(prompt);
-      const res = await API.chat(userText);
+      // FIX: remove style preamble; send raw prompt to server
+      const res = await API.chat(prompt);
       if (res.ok) {
         const reply = res.reply || "";
         ac_detectContext(reply);
@@ -475,6 +477,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         scrollChatToBottom();
         UI.setStatus("Error");
       }
+      sendBtn.disabled = false;
+      composerInput.focus();
     });
   }
 
@@ -529,5 +533,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   await refreshState();
 
   // EOF marker to prove full file loaded:
-  try { console.log("[AskChip] main.js EOF 2025-08-23"); } catch (_) {}
+  try { console.log("[AskChip] main.js EOF 2025-08-24 FIX"); } catch (_) {}
 });
