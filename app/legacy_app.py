@@ -1,6 +1,6 @@
+from __future__ import annotations
 # Auto-generated legacy app wrapper to preserve behavior without regressions
 def create_app():
-    from __future__ import annotations
 
     import os
     import sys
