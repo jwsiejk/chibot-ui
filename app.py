@@ -77,7 +77,7 @@ def ELEVEN_OUT_FORMAT(): return _first_env("ELEVEN_OUTPUT_FORMAT", "ELEVENLABS_O
 
 # --- Safe imports with fallbacks so the server can still boot ---
 try:
-    from services.llm_service import generate_reply, generate_response
+    from services.llm_service import generate_reply, generate_response, generate_greeting
 except Exception as e:
     sys.stderr.write(f"[warning] llm_service import failed: {e}\n")
     def generate_reply(messages, **kwargs):
@@ -199,21 +199,10 @@ def api_profile():
     return jsonify({"ok": True, "user": user})
 
 def chip_dynamic_greet(user):
-    name = (user.get("name") or "there")
-    role = (user.get("title") or "").strip()
-    region = (user.get("region") or "").strip()
-    options = [
-        f"Morning, {name}. Chip here—what are we tackling today?",
-        f"Hey {name}, Chip checking in. Want me to walk through something or sanity-check a plan?",
-        f"Howdy {name}! Ready to get practical—where should we start?",
-        f"Hi {name}. Chip at your service. Curious what you want to sort out first.",
-        f"Alright {name}, Chip’s on deck. What’s the job today?"
-    ]
-    if region:
-        options.append(f"Hey {name} in {region}—what should we dive into?")
-    if role:
-        options.append(f"Hi {name} ({role}). Want me to get hands-on, or keep it high-level?")
-    return random.choice(options)
+    try:
+        return generate_greeting(user)
+    except Exception:
+        return ""
 
 # ----------------------------- TTS helpers ------------------------------------
 def _parse_tts_payload(payload, default_fmt):
@@ -736,6 +725,26 @@ def api_chat_stream():
 @app.route("/api/orchestrator/health", methods=["GET"])
 def api_orchestrator_health():
     return api_health()
+
+
+@app.route("/api/phrase", methods=["POST"])
+def api_phrase():
+    if not current_user_email():
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    try:
+        data = request.get_json(silent=True) or {}
+        role = (data.get("role") or "").strip() or "info"
+        payload = data.get("data") or {}
+        hist = memory.get_recent_conversation(current_user_email(), limit=6) or []
+        try:
+            from services.llm_service import phrase_data
+        except Exception:
+            return jsonify({"ok": False, "error": "phrase_unavailable"}), 500
+        text = phrase_data(role, payload, history=hist)
+        return jsonify({"ok": True, "text": text})
+    except Exception as e:
+        current_app.logger.exception("api_phrase failed")
+        return jsonify({"ok": False, "error": "phrase_failed", "detail": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))

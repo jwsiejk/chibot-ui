@@ -118,7 +118,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (AC_CTX.task) lines.push(`Current task: ${AC_CTX.task}.`);
     if (AC_CTX.depth) lines.push(`Depth: ${AC_CTX.depth}.`);
     if (AC_CTX.continue) lines.push("This is a continuation; do not switch products unless the user asks.");
-    return `[[${lines.join(" ")}]]`;
+    lines.push("Talk like a human; never use numbered or bulleted lists—if steps are needed, say them as ‘First…, Next…, Then…, Finally…’. Use contractions and short sentences.");
+lines.push("If the topic drifts from Pure Storage, craft a fresh, friendly pivot back and ask for the product and the goal in one sentence. Don’t reuse prior phrasing.");
+return `[[${lines.join(" ")}]]`;
   }
 
   function ac_applyStyleToPrompt(prompt) {
@@ -160,14 +162,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function dynamicGreet() {
     UI.setStatus("Greeting…");
-    let greetText = "Hey—Chip here. What are we tackling today?";
+    let greetText = "";
     try {
       const res = await API.greet({ dynamic: true });
       if (res && res.text) greetText = res.text;
     } catch (_) {}
-    UI.appendBubble("assistant", greetText);
+    if (greetText) { UI.appendBubble("assistant", greetText); }
     scrollChatToBottom();
-    try { await speakWithVisemes(greetText); } catch (_) {}
+    if (greetText) { try { await speakWithVisemes(greetText); } catch (_) {} }
     greeted = true;
     UI.setStatus("Listening…");
   }
@@ -248,41 +250,27 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function ac_tryAccountTeam(userText) {
     const q = _ac_matchAccountLookup(userText);
     if (!q) return false;
-
-    let say = "";
     try {
+      // try direct endpoint first
       const res = await fetch(`/api/account_team?name=${encodeURIComponent(q)}`);
       if (res.ok) {
         const j = await res.json();
+        let data = {};
         if (j && j.ok && j.found) {
-          say = j.rendered || "";
-        } else if (j && typeof j.rendered === "string") {
-          say = j.rendered;
+          data = j.data || j; // pass through for phrasing
+        } else {
+          data = { name: q, found: false };
+        }
+        const phr = await API.phrase("account_team", data);
+        if (phr && phr.ok && phr.text) {
+          UI.appendBubble("assistant", phr.text);
+          scrollChatToBottom();
+          try { await speakWithVisemes(phr.text); } catch (_) {}
+          return true;
         }
       }
     } catch (_) {}
-
-    if (!say) {
-      try {
-        const r2 = await fetch(`/api/accounts/search?q=${encodeURIComponent(q)}`);
-        if (r2.ok) {
-          const j2 = await r2.json();
-          const t = _ac_pickTeamShape(j2);
-          if (t && (t.name || t.owner || t.rep || t.type)) {
-            say = `Account team for ${t.name || q}${t.owner ? `; Account Owner — ${t.owner}` : ""}${t.rep ? `; Pure Rep — ${t.rep}` : ""}${t.type ? `; Type — ${t.type}` : ""}. Want me to email that to you?`;
-          }
-        }
-      } catch (_) {}
-    }
-
-    if (!say) {
-      say = `I couldn’t find an account team for ${q}. If you want, I can try another name or different spelling.`;
-    }
-
-    UI.appendBubble("assistant", say);
-    scrollChatToBottom();
-    try { await speakWithVisemes(say); } catch (_) {}
-    return true; // handled
+    return false;
   }
   // ---------------- /Account Team intent ----------------
 
