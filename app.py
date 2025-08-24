@@ -174,6 +174,30 @@ app.config.update(
     SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "0") == "1",
 )
 
+# --- Admin Call Trace (optional, safe if missing) ------------------------------
+try:
+    from admin_trace import trace_bp, begin_trace, add_trace, end_trace  # external blueprint
+    if "trace" not in app.blueprints:
+        app.register_blueprint(trace_bp)
+    # Let blueprint read current user from session
+    def _get_current_user():
+        try:
+            e = session.get("email")
+            if e:
+                return {"email": e}
+        except Exception:
+            pass
+        return None
+    app.config["GET_CURRENT_USER_FUNC"] = _get_current_user
+    _TRACE_AVAILABLE = True
+except Exception as _e:
+    sys.stderr.write(f"[warning] admin_trace unavailable: {_e}\n")
+    _TRACE_AVAILABLE = False
+    # No-op fallbacks keep code paths safe when blueprint isn't present
+    def begin_trace(*args, **kwargs): return {"trace_id": "no-trace", "events": []}
+    def add_trace(*args, **kwargs): pass
+    def end_trace(*args, **kwargs): pass
+
 # Init DB (non-fatal if unavailable)
 try:
     memory.init_db()
@@ -554,7 +578,7 @@ def api_chat():
         hist = []
 
     # Inject pinned state + running summary; persona-only (no style preamble injection)
-    aug_hist = _inject_state_and_summary(ss, hist or [])
+    add_trace(tr, "pre_llm", {"state": _state_json(ss), "history_preview": [{"role": (h.get("role") if isinstance(h, dict) else None), "content": (h.get("content") if isinstance(h, dict) else str(h))[:200]} for h in (aug_hist or [])]})
     resp = generate_response(user_text=text, history=aug_hist)
     reply = (resp.get("text") if isinstance(resp, dict) else str(resp or "")).strip()
     reply = _cap_words(reply, WORD_CAP)
@@ -573,10 +597,15 @@ def api_chat():
 
     
 
-    # Anti-echo guard: if the model mirrors the user, ask a clarifying question instead.
+    # Anti-echo guard + retry: if the model mirrors the user, retry once with a strict no-echo system prompt.
     try:
         if _is_echo_like(text, reply):
-            reply = _clarify_from_state(ss, text)
+            add_trace(tr, "anti_echo_retry", {"reason": "echo detected"})
+            _retry = _retry_no_echo(text, aug_hist)
+            if _retry:
+                reply = _retry
+            if _is_echo_like(text, reply):
+                reply = _clarify_from_state(ss, text)
     except Exception:
         pass
 # Update state + roll summary occasionally
@@ -587,6 +616,9 @@ def api_chat():
             _llm_update_summary(ss, current_user_email())
     except Exception:
         pass
+    add_trace(tr, "final", {"reply_preview": reply[:400]})
+    end_trace(tr, "ok", {"len": len(reply)})
+
 
     try:
         memory.log_conversation(email=current_user_email(), role="assistant", message=reply)
@@ -753,6 +785,9 @@ def api_chat_stream():
     if not text:
         return Response("missing q", 400)
 
+    tr = begin_trace(current_user_email(), route="/api/chat/stream")
+    add_trace(tr, "incoming", {"text": text})
+
     def _events():
         yield 'event: start\ndata: {}\n\n'
 
@@ -784,12 +819,26 @@ def api_chat_stream():
             hist = memory.get_recent_conversation(user, limit=10)
         except Exception:
             hist = []
+        add_trace(tr, "pre_llm", {"history_len": len(hist)})
         resp = generate_response(user_text=text, history=hist)
         reply = (resp.get("text") if isinstance(resp, dict) else str(resp or "")).strip()
+        add_trace(tr, "llm_response", {"reply_preview": reply[:400]})
 
         if not reply:
-            yield 'event: done\ndata: {}\n\n'
+            add_trace(tr, "final", {"reply_preview": ""})
+            end_trace(tr, "ok", {"len": 0, "stream": True})
+            add_trace(tr, "final", {"reply_preview": reply[:400]})
+        end_trace(tr, "ok", {"len": len(reply), "stream": True})
+        yield 'event: done\ndata: {}\n\n'
             return
+
+        if _is_echo_like(text, reply):
+            add_trace(tr, "anti_echo_retry", {"reason": "echo detected"})
+            _retry = _retry_no_echo(text, hist)
+            if _retry:
+                reply = _retry
+            if _is_echo_like(text, reply):
+                reply = _clarify_from_state(_SESS.get(_sid_key()) or _SessionState(), text)
 
         import re as _re
         chunks = _re.split(r'(?<=[.!?])\s+', reply)
@@ -802,6 +851,8 @@ def api_chat_stream():
             yield 'event: token\ndata: ' + json.dumps({"delta": c + " "}) + '\n\n'
             time.sleep(0.05)
 
+        add_trace(tr, "final", {"reply_preview": reply[:400]})
+        end_trace(tr, "ok", {"len": len(reply), "stream": True})
         yield 'event: done\ndata: {}\n\n'
 
     return Response(stream_with_context(_events()), mimetype="text/event-stream")
@@ -869,6 +920,39 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=port, debug=True)
 
 # ----------------- Anti-echo + clarification helpers ---------------------------
+
+# Strong instruction to prevent parroting on retry
+_NO_ECHO_SYSTEM_PROMPT = (
+    "You are Chip, a helpful, concise technical assistant. "
+    "NEVER repeat the user's message verbatim or mirror their phrasing. "
+    "Answer succinctly and concretely. If the request is ambiguous, ask ONE precise clarifying question. "
+    "Do not say 'You said' or 'I hear you'. Keep responses natural and speak in the first person as Chip."
+)
+
+def _retry_no_echo(user_text: str, context_hist):
+    """Retry generation once with a strict no-echo system prompt."""
+    try:
+        msgs = [{"role": "system", "content": _NO_ECHO_SYSTEM_PROMPT}]
+        # context_hist may already be chat-format; if not, coerce to minimal format
+        if isinstance(context_hist, (list, tuple)):
+            for m in context_hist[-8:]:
+                if isinstance(m, dict) and "role" in m and "content" in m:
+                    msgs.append({"role": m["role"], "content": str(m["content"])[:2000]})
+        msgs.append({"role": "user", "content": user_text})
+        try:
+            out = generate_reply(messages=msgs, max_tokens=380, temperature=0.4)
+        except TypeError:
+            # Fallback: try generate_response with system prompt injected into history
+            hist = [{"role": "system", "content": _NO_ECHO_SYSTEM_PROMPT}] + list(context_hist or [])
+            out = generate_response(user_text=user_text, history=hist)
+        if isinstance(out, dict):
+            txt = out.get("text") or out.get("reply") or out.get("message") or ""
+        else:
+            txt = str(out or "")
+        return (txt or "").strip()
+    except Exception:
+        return ""
+
 import difflib as _difflib
 
 def _is_echo_like(a: str, b: str) -> bool:
