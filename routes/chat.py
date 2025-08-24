@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List
-import time, json, re
+import time, json
 from flask import Blueprint, request, jsonify, session, current_app
 import memory
 from services.llm_service import generate_response, phrase_data, generate_followup, generate_nudge
@@ -90,6 +90,7 @@ def chat():
     user_text = (data.get('message') or data.get('text') or '').strip()
     if not user_text:
         return jsonify({"ok": False, "error": "Prompt required"}), 400
+
     key = _sid()
     ss = _SESS.get(key) or SessionState()
     _SESS[key] = ss
@@ -112,12 +113,10 @@ def chat():
     reply = (resp.get("text") if isinstance(resp, dict) else str(resp or "")).strip()
     reply = _limit(reply)
 
-    # update state and running summary
+    # lightweight running summary update
     try:
-        # minimalist in-route summary without extra LLM calls (optional)
         ss.turns = (ss.turns or 0) + 1
         if ss.turns % 3 == 0 and hist:
-            # compress last few exchanges into a one-liner summary (best-effort heuristic)
             last = " ".join((m.get("message") or m.get("text") or m.get("content") or "") for m in hist[-4:])
             ss.running_summary = (ss.running_summary + " " + last).strip()[:1200]
     except Exception:
