@@ -1,4 +1,4 @@
-// static/js/main.js — stabilized (single-init, dedupe, in-flight guard) — 2025‑08‑24c
+// static/js/main.js — anti-duplicate typed sends, single-init, in-flight lock, voice dedupe — 2025‑08‑24d
 document.addEventListener("DOMContentLoaded", async () => {
   // Prevent double-initialization if the script is loaded twice
   if (window.__CHIP_MAIN_INITIALIZED__) {
@@ -301,6 +301,48 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (sendBtn) sendBtn.disabled = false;
   }
 
+  // Centralized typed-send handler (prevents duplicates)
+  async function handleTypedSend(rawText) {
+    const prompt = (rawText || "").trim();
+    if (!prompt) return;
+    if (!beginSend()) return;
+
+    ac_detectContext(prompt);
+    if (prompt !== lastUserBubble) {
+      UI.appendBubble("user", prompt);
+      lastUserBubble = prompt;
+    }
+    scrollChatToBottom();
+
+    // EARLY EXIT: account-team lookup before LLM
+    try {
+      if (await ac_tryAccountTeam(prompt)) { UI.setStatus("Ready"); endSend(); return; }
+    } catch (_) {}
+
+    UI.setStatus("Thinking…");
+    try {
+      const res = await API.chat(prompt);  // send raw text
+      if (res && res.ok && (res.reply || "").trim()) {
+        const reply = (res.reply || "").trim();
+        ac_detectContext(reply);
+        UI.appendBubble("assistant", reply);
+        scrollChatToBottom();
+        await speakWithVisemes(reply);
+        const fu = ac_contextualFollowUp(prompt, reply);
+        if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
+        UI.setStatus("Ready");
+      } else {
+        const err = (res && (res.error || res.body)) || "Something went wrong.";
+        UI.appendBubble("assistant", err);
+        scrollChatToBottom();
+        UI.setStatus("Error");
+      }
+    } finally {
+      endSend();
+      if (composerInput) composerInput.focus();
+    }
+  }
+
   async function toggleMic() {
     if (!supportsSpeechRecognition()) { UI.setStatus("Browser speech recognition not available"); return; }
     if (recognizing) {
@@ -395,7 +437,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // --- Auth / Profile / UI wiring ---
   if (loginForm) {
     loginForm.addEventListener("submit", async (ev) => {
-      ev.preventDefault();
+      ev.preventDefault(); ev.stopImmediatePropagation();
       const email = (loginEmail && loginEmail.value || "").trim();
       if (!email) return;
       UI.setStatus("Signing in…");
@@ -412,7 +454,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       } catch (e) {
         UI.setStatus("Login failed");
       }
-    });
+    }, true); // capture
   }
 
   if (profileBtn) {
@@ -440,7 +482,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (profileForm) {
     profileForm.addEventListener("submit", async (ev) => {
-      ev.preventDefault();
+      ev.preventDefault(); ev.stopImmediatePropagation();
       const payload = {
         name:   (profileName  && profileName.value  || "").trim(),
         title:  (profileTitle && profileTitle.value || "").trim(),
@@ -450,58 +492,37 @@ document.addEventListener("DOMContentLoaded", async () => {
       const res = await API.saveProfile(payload);
       if (res.ok) { await refreshState(); UI.setStatus("Profile saved"); }
       else { UI.setStatus(res.error || "Save failed"); }
-    });
+    }, true);
   }
 
+  // --- Typed input handlers (CAPTURE PHASE to suppress other listeners) ---
   if (composer) {
+    // Keep input autosizing + button enable
     composerInput.addEventListener("input", () => {
       const hasText = (composerInput.value || "").trim().length > 0;
       sendBtn.disabled = !hasText || inFlight;
       autoGrow(composerInput);
     });
 
-    composer.addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      const prompt = (composerInput.value || "").trim();
-      if (!prompt) return;
+    // Capture submit to stop other handlers, then route to our unified sender
+    composer.addEventListener("submit", (ev) => {
+      ev.preventDefault(); ev.stopImmediatePropagation();
+      const text = (composerInput.value || "").trim();
+      if (!text) return;
       composerInput.value = "";
-      if (!beginSend()) return;
+      handleTypedSend(text);
+    }, true); // capture
 
-      ac_detectContext(prompt);
-      if (prompt !== lastUserBubble) {
-        UI.appendBubble("user", prompt);
-        lastUserBubble = prompt;
-      }
-      scrollChatToBottom();
-
-      // EARLY EXIT: account-team lookup before LLM (typed path too)
-      try {
-        if (await ac_tryAccountTeam(prompt)) { UI.setStatus("Ready"); endSend(); return; }
-      } catch (_) {}
-
-      UI.setStatus("Thinking…");
-      try {
-        const res = await API.chat(prompt);  // send raw text
-        if (res && res.ok && (res.reply || "").trim()) {
-          const reply = (res.reply || "").trim();
-          ac_detectContext(reply);
-          UI.appendBubble("assistant", reply);
-          scrollChatToBottom();
-          await speakWithVisemes(reply);
-          const fu = ac_contextualFollowUp(prompt, reply);
-          if (fu) { UI.appendBubble("assistant", fu); scrollChatToBottom(); await speakWithVisemes(fu); }
-          UI.setStatus("Ready");
-        } else {
-          const err = (res && (res.error || res.body)) || "Something went wrong.";
-          UI.appendBubble("assistant", err);
-          scrollChatToBottom();
-          UI.setStatus("Error");
-        }
-      } finally {
-        endSend();
-        composerInput.focus();
-      }
-    });
+    // Also capture button clicks in case some code is bound to 'click'
+    if (sendBtn) {
+      sendBtn.addEventListener("click", (ev) => {
+        ev.preventDefault(); ev.stopImmediatePropagation();
+        const text = (composerInput.value || "").trim();
+        if (!text) return;
+        composerInput.value = "";
+        handleTypedSend(text);
+      }, true);
+    }
   }
 
   if (micBtn) {
@@ -555,5 +576,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   await refreshState();
 
   // EOF marker to prove full file loaded:
-  try { console.log("[AskChip] main.js EOF 2025-08-24c"); } catch (_) {}
+  try { console.log("[AskChip] main.js EOF 2025-08-24d"); } catch (_) {}
 });
