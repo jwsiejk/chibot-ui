@@ -1,35 +1,29 @@
-# Ask Chip — Restructure v2 (Complete)
+# Restructure Summary
 
-**What’s done now**
+This repository was reorganized to prevent app.py bloat while preserving **all behavior**.
 
-1) **Voice endpoints consolidated**
-   - New: `routes/voice.py` with `/api/voice/tts` and `/api/voice/tts_with_visemes`.
-   - Removed inline `/api/tts*` routes from `app.py`.
-   - Front-end and docs updated to use `/api/voice/*`.
+## What changed (no regressions)
+- Original **app.py** is now wrapped as a factory in **app/legacy_app.py** (`create_app()`).
+- Top-level **app.py** is now a thin shim:
+  ```python
+  from app import create_app
+  app = create_app()
+  ```
+- Guardrails added:
+  - `pyproject.toml` (Black + Ruff)
+  - `.pylintrc` with `max-module-lines=400`
+  - `.pre-commit-config.yaml` (Black, Ruff, Pylint)
+- Cleanup: removed caches (`__pycache__`, `.ipynb_checkpoints`), stray binaries.
+- Future-ready folders created:
+  - `app/routes/`, `app/services/`, `app/data/`, `app/utils/` (you can gradually move code here).
 
-2) **Chat endpoint stabilized**
-   - New: `routes/chat.py` registered at `POST /api/chat` (DI-friendly).
-   - Back-compat: `routes/conversation.py` provides `POST /api/chat_orchestrated` if needed.
-   - Removed registration of legacy `conversation_orchestrator` to prevent logic conflicts.
+## Why this is safe
+We didn't rewrite route logic or business logic. The entire previous application code runs inside
+`create_app()`, and we simply return the same Flask `app` object. Deployment entry points like
+`gunicorn -w 4 app:app` continue to work as before.
 
-3) **Loop + greeting bleed fix**
-   - Eliminated the "I don’t have any history yet to email." path.
-   - Email drafting is **opt-in only** (explicit `mode='email'` or user asks to “email/draft”). 
-   - Greeting-style prompts no longer leak into normal chat.
+## Next safe steps (optional)
+- Migrate individual route groups from `app/legacy_app_raw.py` into `app/routes/*.py` Blueprints.
+- Move data access helpers into `app/data/` and update imports gradually.
+- Keep modules under 400 lines; the linter will flag overgrowth.
 
-4) **Docs & tree**
-   - This file and `RESTRUCTURE_TREE.txt` updated.
-   - Minimal `generate_response()` wrapper added to `services/llm_service.py` so routes have a stable entrypoint.
-
-**Security** (per your standing requirement)
-- No secrets in repo; `.env.example` only.
-- DB still uses `sslmode=require` (see `memory.py`).
-- No sample customer data shipped.
-
-**Endpoints**
-
-- `POST /api/chat` → primary chat
-- `POST /api/chat_orchestrated` → compatibility (not recommended)
-- `POST /api/voice/tts` → base64 audio
-- `POST /api/voice/tts_with_visemes` → base64 audio + visemes
-- `GET/POST /api/greet` → greeting
