@@ -526,7 +526,7 @@ CONVERSATION:
         pass
 # ------------------------- /Conversation State Helpers ---------------------------
 
-@app.route("/api/chat", methods=["POST"])
+@app.route("/api/chat_core", methods=["POST"])
 def api_chat():
     if not current_user_email():
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
@@ -559,7 +559,15 @@ def api_chat():
     reply = (resp.get("text") if isinstance(resp, dict) else str(resp or "")).strip()
     reply = _cap_words(reply, WORD_CAP)
 
-    # Update state + roll summary occasionally
+    
+
+    # Anti-echo guard: if the model mirrors the user, ask a clarifying question instead.
+    try:
+        if _is_echo_like(text, reply):
+            reply = _clarify_from_state(ss, text)
+    except Exception:
+        pass
+# Update state + roll summary occasionally
     try:
         _llm_update_state(ss, text, reply, hist or [])
         ss.turns = (ss.turns or 0) + 1
@@ -847,3 +855,32 @@ def api_nudge():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
+# ----------------- Anti-echo + clarification helpers ---------------------------
+import difflib as _difflib
+
+def _is_echo_like(a: str, b: str) -> bool:
+    a = (a or "").strip().lower()
+    b = (b or "").strip().lower()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    try:
+        return _difflib.SequenceMatcher(None, a, b).ratio() >= 0.95
+    except Exception:
+        return False
+
+def _clarify_from_state(ss: "_SessionState", user_text: str) -> str:
+    t = (user_text or "").strip()
+    prod = (ss.product or "").strip()
+    task = (ss.task or "").strip()
+    if prod and task:
+        return f"On {prod} {task}, do you want a quick overview or step-by-step?"
+    if prod:
+        return f"{prod}—want an overview, installation steps, or troubleshooting?"
+    # fallbacks
+    if len(t.split()) <= 3:
+        return "Got it. Product and goal? I can tailor it fast."
+    return "Want me to go deeper, or keep it high level?"
+

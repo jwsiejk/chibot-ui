@@ -43,6 +43,34 @@ def _gc_sessions():
         if now - _SESS[k].last_seen > _TTL_SECONDS:
             _SESS.pop(k, None)
 
+
+
+# --- Anti-echo helper ---
+import difflib as _difflib
+
+def _is_echo_like(a: str, b: str) -> bool:
+    a = (a or "").strip().lower()
+    b = (b or "").strip().lower()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    try:
+        return _difflib.SequenceMatcher(None, a, b).ratio() >= 0.95
+    except Exception:
+        return False
+
+def _clarify_from_state(ss: "SessionState", user_text: str) -> str:
+    t = (user_text or "").strip()
+    prod = (ss.product or "").strip()
+    task = (ss.task or "").strip()
+    if prod and task:
+        return f"On {prod} {task}, do you want a quick overview or step-by-step?"
+    if prod:
+        return f"{prod}—want an overview, installation steps, or troubleshooting?"
+    if len(t.split()) <= 3:
+        return "Got it. Product and goal? I can tailor it fast."
+    return "Want me to go deeper, or keep it high level?"
 # ---------------------------- Lightweight heuristics -------------------------
 
 def _norm_product_terms(txt: str) -> str:
@@ -275,6 +303,14 @@ def chat_orchestrated():
     messages = [sys_msg] + _to_chat_messages(hist, prompt=text)
 
     reply = call_llm(messages) or ""
+
+
+    # Anti-echo guard
+    try:
+        if _is_echo_like(text, reply):
+            reply = _clarify_from_state(ss, text)
+    except Exception:
+        pass
     # Persist turn and refresh memory from the answer
     try:
         memory.log_conversation(email=session["email"], role="user", message=text)

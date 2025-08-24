@@ -257,7 +257,7 @@ export async function sendChat(message) {
     _chipSetState("thinking");
     _chipStep("POST /chat →", { message: message.trim(), lane: _getChatLane() });
 
-    const res = await fetch("/chat", { credentials: 'include', 
+    const res = await fetch("/api/chat", { credentials: 'include', 
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: message.trim(), lane: _getChatLane(), language: "en", domain: "pure-storage" })
