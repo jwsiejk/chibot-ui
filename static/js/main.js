@@ -138,15 +138,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Disabled to prevent static follow‑ups that felt repetitive.
     return "";
   }
-` : "";
-      return `Want a step-by-step install checklist${p}? I can cover prerequisites, network, and validation.`;
-    }
-    if (/design|architecture|size|sizing|capacity|plan/.test(lower)) {
-      const p = prod ? ` for ${prod}` : "";
-      return `Should I sketch a simple reference design${p}, or jump to sizing guidance?`;
-    }
-    return "";
-  }
+
 
   // --- Conversation helpers (existing) ---
   function chipFollowUp(prompt, reply) { return ""; }
@@ -258,13 +250,13 @@ document.addEventListener("DOMContentLoaded", async () => {
           const j2 = await r2.json();
           const t = _ac_pickTeamShape(j2);
           if (t && (t.name || t.owner || t.rep || t.type)) {
-            say = `Account team for ${t.name || q}${t.owner ? `; Account Owner — ${t.owner}` : ""}${t.rep ? `; Pure Rep — ${t.rep}` : ""}${t.type ? `; Type — ${t.type}` : ""}. Want me to email that to you?`;
+            say = `Account team for ${t.name || q}${t.owner ? `; Account Owner — ${t.owner}` : ""}${t.rep ? `; Pure Rep — ${t.rep}` : ""}${t.type ? `; Type — ${t.type}` : ""}.`;
           }
         }
       } catch (_) {}
     }
 
-    if (!say) say = `I couldn’t find an account team for ${q}. Want to try another name?`;
+    if (!say) say = `I couldn’t find an account team for ${q}.`;
 
     UI.appendBubble("assistant", say);
     scrollChatToBottom();
@@ -574,5 +566,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   await refreshState();
 
   // EOF marker to prove full file loaded:
-  try { console.log("[AskChip] main.js EOF 2025-08-24d"); } catch (_) {}
+  try { console.log("[AskChip] main.js EOF 2025-08-24f"); } catch (_) {}
 });
