@@ -1,0 +1,27 @@
+--- a/static/js/main.js+++ b/static/js/main.js@@ -133,21 +133,19 @@     return true;
+   }
+ 
++  
+   function ac_contextualFollowUp(userPrompt, reply) {
+-    if (!shouldAddFollowUp(userPrompt, reply)) return "";
+-    const prod = AC_CTX.product || "";
+-    const task = AC_CTX.task || "";
+-    const lower = (userPrompt || "").toLowerCase();
+-
+-    if (task === "installation" || /install|walk.*through|step.*by.*step/.test(lower)) {
+-      const p = prod ? ` for ${prod}` : "";
++    // Disabled to prevent static follow‑ups that felt repetitive.
++    return "";
++  }
++` : "";
+       return `Want a step-by-step install checklist${p}? I can cover prerequisites, network, and validation.`;
+     }
+     if (/design|architecture|size|sizing|capacity|plan/.test(lower)) {
+       const p = prod ? ` for ${prod}` : "";
+       return `Should I sketch a simple reference design${p}, or jump to sizing guidance?`;
+     }
+-    return "Want me to go deeper on any part, or keep it high level?";
++    return "";
+   }
+ 
+   // --- Conversation helpers (existing) ---

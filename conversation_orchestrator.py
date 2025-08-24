@@ -70,7 +70,7 @@ def _clarify_from_state(ss: "SessionState", user_text: str) -> str:
         return f"{prod}—want an overview, installation steps, or troubleshooting?"
     if len(t.split()) <= 3:
         return "Got it. Product and goal? I can tailor it fast."
-    return "Want me to go deeper, or keep it high level?"
+    return "Should I give a concise summary or step‑by‑step?"
 # ---------------------------- Lightweight heuristics -------------------------
 
 def _norm_product_terms(txt: str) -> str:
@@ -303,6 +303,18 @@ def chat_orchestrated():
     messages = [sys_msg] + _to_chat_messages(hist, prompt=text)
 
     reply = call_llm(messages) or ""
+
+    # Guard against undesired static follow-up phrasing creeping into the reply
+    _BANNED_STATIC = {
+        "want me to go deeper, or keep it high level?",
+        "want me to go deeper on any part, or keep it high level?"
+    }
+    if (reply or '').strip().lower() in _BANNED_STATIC:
+        try:
+            reply = _clarify_from_state(ss, text)
+        except Exception:
+            reply = ''
+
 
 
     # Anti-echo guard

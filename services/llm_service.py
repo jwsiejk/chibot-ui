@@ -106,7 +106,7 @@ def generate_followup(user_text: str, assistant_text: str, history: Optional[Lis
     )
     msgs = _messages(CHIP_PERSONA, prompt + f"\nUSER: {user_text}\nYOU: {assistant_text}", history or [])
     out = _call_openai(msgs, max_tokens=40, temperature=0.35)
-    return {"text": out or "Want me to go deeper or keep it high level?"}
+    return {"text": (out or "").strip()}
 
 def generate_nudge(state_hint: Optional[Dict[str,Any]]=None, history: Optional[List[Dict[str,str]]]=None, **kwargs) -> Dict[str,str]:
     prompt = (
