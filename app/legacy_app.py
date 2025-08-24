@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 # Auto-generated legacy app wrapper to preserve behavior without regressions
 def create_app():
 
@@ -12,11 +13,13 @@ def create_app():
     import time
     from dataclasses import dataclass, field
     from typing import Dict, List
+    from pathlib import Path
 
     from flask import (
         Flask, request, session, jsonify, render_template,
         url_for, Response, stream_with_context, current_app
     )
+    from jinja2 import ChoiceLoader, FileSystemLoader
 
     # Word cap for replies (configurable via env)
     WORD_CAP = int(os.getenv('CHIP_WORD_CAP', '30'))
@@ -30,8 +33,6 @@ def create_app():
         from routes.chat import chat_bp
     except Exception:
         chat_bp = None
-
-
     try:
         from routes.conversation import conversation_bp
     except Exception:
@@ -59,6 +60,37 @@ def create_app():
         load_dotenv()
     except Exception:
         pass
+
+    # --- New: point Flask at root-level templates/static, with package fallback ---
+    package_root = Path(__file__).resolve().parent          # .../app
+    project_root = package_root.parent                      # repo root
+
+    app = Flask(
+        __name__,
+        template_folder=str(project_root / "templates"),    # ./templates
+        static_folder=str(project_root / "static"),         # ./static
+        static_url_path="/static",
+    )
+
+    # Allow both ./templates (primary) and app/templates (fallback)
+    app.jinja_loader = ChoiceLoader([
+        FileSystemLoader(app.template_folder),
+        FileSystemLoader(str(package_root / "templates")),
+    ])
+
+    # Optional: enable CORS if installed
+    if CORS:
+        CORS(app)
+
+    # Optional: log resolved paths for sanity in Render logs
+    app.logger.setLevel(logging.INFO)
+    app.logger.info("Templates: %s | Static: %s", app.template_folder, app.static_folder)
+
+    # NOTE:
+    # - Keep the rest of your existing setup (routes, blueprints, error handlers)
+    #   below this point. Do NOT create a second Flask(__name__) instance later.
+    # - If you previously registered blueprints elsewhere, keep that as-is.
+    # - Make sure there is a single `return app` at the end of create_app().
 
     # ------------------------------------------------------------------------------
     # Normalize ElevenLabs env names BEFORE importing TTS (some libs read env on import)
