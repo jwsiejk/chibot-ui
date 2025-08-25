@@ -125,7 +125,26 @@ def create_app():
     def ELEVEN_MODEL_ID():   return _first_env("ELEVEN_MODEL_ID", "ELEVENLABS_MODEL_ID")
     def ELEVEN_OUT_FORMAT(): return _first_env("ELEVEN_OUTPUT_FORMAT", "ELEVENLABS_OUTPUT_FORMAT") or "mp3_44100_128"
 
-    # --- Safe imports with fallbacks so the server can still boot ---
+    
+
+    # Boot-time visibility into TTS config (masked)
+    def _mask_val(v: str | None):
+        try:
+            if not v:
+                return "missing"
+            s = str(v)
+            if len(s) <= 8:
+                return "****"
+            return ("*"*(len(s)-4)) + s[-4:]
+        except Exception:
+            return "****"
+
+    app.logger.info("TTS cfg: voice_id=%s model=%s key=%s",
+        _mask_val(ELEVEN_VOICE_ID()),
+        ELEVEN_MODEL_ID() or "default",
+        "present" if ELEVEN_API_KEY() else "missing"
+    )
+# --- Safe imports with fallbacks so the server can still boot ---
     try:
         from services.llm_service import generate_reply, generate_response, generate_greeting, phrase_data, generate_followup, generate_nudge
     except Exception as e:
@@ -625,7 +644,17 @@ def create_app():
             memory.log_conversation(email=current_user_email(), role="assistant", message=reply)
         except Exception:
             pass
+        try:
+            _log_event("chat:response", "assistant", fields={"text": reply})
+        except Exception:
+            pass
         return jsonify({"ok": True, "reply": reply})
+
+    # Compatibility alias for UI: /api/chat -> /api/chat_core
+    @app.route("/api/chat", methods=["POST"])
+    def api_chat_alias():
+        return api_chat()
+
 
     @app.route("/api/voice/tts", methods=["POST"])
     def api_tts():
@@ -663,10 +692,22 @@ def create_app():
         text = cap_30_words((data.get("text") or "").strip())
         if not text:
             return jsonify({"ok": False, "error": "Text required"}), 400
+        try:
+            _log_event("voice:request", "tts", fields={"text": text})
+        except Exception:
+            pass
         res = tts_with_visemes(text)
         payload = _parse_tts_payload(res, ELEVEN_OUT_FORMAT())
         if not payload:
+            try:
+                _log_event("error", "tts_failed", fields={"error": "Unexpected TTS payload"})
+            except Exception:
+                pass
             return jsonify({"ok": False, "error": "Unexpected TTS payload"}), 500
+        try:
+            _log_event("voice:response", "tts_ok", fields={"bytes": len((payload.get("audio") or "").encode("ascii"))})
+        except Exception:
+            pass
         return jsonify({"ok": True, **payload})
 
     @app.route("/api/email/send", methods=["POST"])
