@@ -16,10 +16,14 @@ def _norm(s: str) -> str:
 def chat(user_text: str, session_id: str | None = None) -> str:
     """
     Primary entry point. Returns a single assistant reply as a string.
-    Includes a 'parrot trap' to avoid echoing the user verbatim.
+    Includes a simple 'parrot trap' (avoid echoing user verbatim).
     """
+    # If no API key, fall back to a safe deterministic reply instead of crashing.
+    if not os.getenv("OPENAI_API_KEY"):
+        return "I’m here—tell me what you need and I’ll help."
+
     client = _client_lazy()
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # set your preferred default
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     messages = [
         {"role": "system",
@@ -34,19 +38,66 @@ def chat(user_text: str, session_id: str | None = None) -> str:
     )
     reply = (resp.choices[0].message.content or "").strip()
     if _norm(reply) == _norm(user_text):
-        reply = "Got it. Tell me a bit more about what you need so I can help."
+        reply = "Got it—what outcome are you aiming for so I can help?"
     return reply or "I'm here—how can I help you next?"
 
-# --- Backward-compatibility shims (keep old imports working) ---
+# -----------------
+# Back-compat shims
+# -----------------
 def generate_reply(prompt: str, *args, **kwargs) -> str:
     return chat(prompt, *args, **kwargs)
 
 def generate_response(prompt: str, *args, **kwargs) -> str:
     return chat(prompt, *args, **kwargs)
 
-# Some codebases use very generic names:
 def generate(prompt: str, *args, **kwargs) -> str:
     return chat(prompt, *args, **kwargs)
 
 def complete(prompt: str, *args, **kwargs) -> str:
     return chat(prompt, *args, **kwargs)
+
+# -----------------
+# Greeting shim
+# -----------------
+def generate_greeting(
+    name: str | None = None,
+    region: str | None = None,
+    role: str | None = None,
+    company: str | None = None,
+    profile: dict | None = None,
+    **kwargs,
+) -> str:
+    """
+    Backward-compatible helper used by /api/greet routes in legacy code.
+    Works without OpenAI. If a profile dict is passed, we’ll pull fields from it.
+    """
+    # Extract from profile if provided
+    if profile:
+        name   = name   or profile.get("name") or profile.get("full_name") or profile.get("first_name")
+        region = region or profile.get("region") or profile.get("geo")
+        role   = role   or profile.get("role") or profile.get("title")
+        company = company or profile.get("company")
+
+    # Build a friendly, single-sentence greeting that matches your UI style
+    parts = []
+    if name:
+        parts.append(name)
+    if region:
+        parts.append(f"in {region}")
+    who = " ".join(parts).strip()
+
+    if who:
+        base = f"Hey—Chip here. What can I help you with today, {who}?"
+    else:
+        base = "Hey—Chip here. What can I help you with today?"
+
+    # Optionally mention role/company if present
+    extras = []
+    if role:
+        extras.append(role)
+    if company:
+        extras.append(company)
+    if extras:
+        base = base.rstrip("?") + f" ({', '.join(extras)})."
+
+    return base
