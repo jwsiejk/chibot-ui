@@ -1,48 +1,41 @@
-from __future__ import annotations
-from flask import Blueprint, jsonify, request, session, Response, stream_with_context
-import time, json
-from services.call_log import recent, clear, is_admin
+# routes/admin.py
+from flask import Blueprint, Response, jsonify, render_template, session
+import os, json
+from utils.call_log import call_log
 
-admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
+# We render a template, so point to ../templates from routes/
+admin_bp = Blueprint("admin_bp", __name__, template_folder="../templates")
 
-def _guard():
-    email = (session.get("email") or "").lower()
-    if not is_admin(email):
-        return False, jsonify({"ok": False, "error": "forbidden"}), 403
-    return True, email, None
+def _is_admin() -> bool:
+    # Expect ADMIN_EMAILS="a@b.com,c@d.com"
+    admins = [e.strip().lower() for e in (os.getenv("ADMIN_EMAILS") or "").split(",") if e.strip()]
+    if not admins:
+        # If not configured, allow access (helps during setup)
+        return True
+    user_email = (session.get("user", {}) or {}).get("email") or session.get("email") or ""
+    return (user_email or "").lower() in admins
 
-@admin_bp.get("/status")
-def status():
-    ok, payload, code = _guard()
-    if not ok: return payload, code
-    return jsonify({"ok": True, "is_admin": True})
+@admin_bp.before_request
+def require_admin():
+    if not _is_admin():
+        return "Forbidden", 403
 
-@admin_bp.get("/calls/recent")
-def calls_recent():
-    ok, payload, code = _guard()
-    if not ok: return payload, code
-    limit = int(request.args.get("limit", 200))
-    return jsonify({"ok": True, "events": recent(limit=limit)})
+@admin_bp.route("/call-log")
+@admin_bp.route("/call-log/")
+def call_log_page():
+    items = call_log.snapshot(200)
+    return render_template("admin_call_log.html", items=items)
 
-@admin_bp.post("/calls/clear")
-def calls_clear():
-    ok, payload, code = _guard()
-    if not ok: return payload, code
-    n = clear()
-    return jsonify({"ok": True, "cleared": n})
-
-@admin_bp.get("/calls/stream")
-def calls_stream():
-    ok, payload, code = _guard()
-    if not ok: return payload, code
-    def _events():
-        last_len = 0
-        while True:
-            evs = recent(limit=400)
-            if len(evs) > last_len:
-                # send the delta
-                for ev in evs[last_len:]:
-                    yield "event: event\n" + "data: " + json.dumps(ev) + "\n\n"
-                last_len = len(evs)
-            time.sleep(0.7)
-    return Response(stream_with_context(_events()), mimetype="text/event-stream")
+@admin_bp.route("/stream")
+def stream():
+    def gen():
+        q = call_log.subscribe()
+        try:
+            while True:
+                item = q.get()
+                yield f"data: {json.dumps(item)}\n\n"
+        except GeneratorExit:
+            pass
+        finally:
+            call_log.unsubscribe(q)
+    return Response(gen(), mimetype="text/event-stream")
