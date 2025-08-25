@@ -786,7 +786,7 @@ def create_app():
         if not text:
             return jsonify(_orchestrator_ok_payload("Tell me what you want to tackle and I’ll jump in.")), 200
             try:
-            call_log.add("chat", "/orchestrator", user=current_user_email() or "", text=text[:200])
+                call_log.add("chat", "/orchestrator", user=current_user_email() or "", text=text[:200])
         except Exception:
             pass
         payload, status = _orchestrate_now(text, history)
