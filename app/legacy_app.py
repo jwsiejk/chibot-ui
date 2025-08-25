@@ -798,7 +798,7 @@ return jsonify(payload), status
 # --- END: Orchestrator fallback aliases ---
 
     # --- BEGIN: server-side cancel + SSE chat stream ---
-    _CANCEL = {}  # { email: timestamp }
+        _CANCEL = {}  # { email: timestamp }
 
     def _mark_cancel(email: str):
         _CANCEL[email] = time.time()
