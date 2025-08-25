@@ -1,42 +1,26 @@
+# routes/voice.py
 from flask import Blueprint, request, jsonify, current_app
-import base64
-from services.tts_service import tts_bytes, tts_with_visemes
-from services.call_log import log_event
+from services.tts_bridge import synthesize_with_visemes
+from utils.call_log import call_log
 
-voice_bp = Blueprint('voice', __name__, url_prefix='/api/voice')
+voice_bp = Blueprint("voice_bp", __name__)
 
-@voice_bp.route('/tts', methods=['POST'])
-def tts():
-    data = request.get_json(force=True, silent=True) or {}
-    text = (data.get('text') or data.get('message') or data.get('prompt') or '').strip()
-    fmt = (data.get('format') or 'mp3').lower()
-    voice_id = data.get('voice') or data.get('voice_id')
-    try:
-        log_event('tts_request', route='/api/voice/tts', text=text[:120], format=fmt, voice_id=voice_id)
-        audio = tts_bytes(text=text, format=fmt, voice_id=voice_id)
-        if not audio:
-            # Not fatal for UX; allows UI to proceed without audio
-            return jsonify({'ok': False, 'error': 'tts_not_configured'}), 200
-        b64 = base64.b64encode(audio).decode('ascii')
-        return jsonify({'ok': True, 'audio': b64, 'format': fmt, 'relative': True})
-    except Exception as e:
-        current_app.logger.exception('voice.tts failed')
-        return jsonify({'ok': False, 'error': 'tts_failed', 'detail': str(e)}), 200
+# Final URL will be /api/voice/tts_with_visemes (and with trailing /)
+@voice_bp.route("/tts_with_visemes", methods=["POST"])
+@voice_bp.route("/tts_with_visemes/", methods=["POST"])
+def tts_with_visemes():
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    call_log.add("voice:request", "tts", text=text)
 
-@voice_bp.route('/tts_with_visemes', methods=['POST'])
-def tts_with_visemes_route():
-    data = request.get_json(force=True, silent=True) or {}
-    text = (data.get('text') or data.get('message') or data.get('prompt') or '').strip()
-    fmt = (data.get('format') or 'mp3').lower()
-    voice_id = data.get('voice') or data.get('voice_id')
-    try:
-        log_event('tts_request', route='/api/voice/tts_with_visemes', text=text[:120], format=fmt, voice_id=voice_id)
-    audio, visemes = tts_with_visemes(text=text, format=fmt, voice_id=voice_id)
-        if not audio:
-            return jsonify({'ok': False, 'error': 'tts_not_configured'}), 200
-        b64 = base64.b64encode(audio).decode('ascii')
-        log_event('tts_result', route='/api/voice/tts_with_visemes', ok=bool(audio), bytes=len(audio) if audio else 0)
-        return jsonify({'ok': True, 'audio': b64, 'format': fmt, 'visemes': visemes or [], 'relative': True})
-    except Exception as e:
-        current_app.logger.exception('voice.tts_with_visemes failed')
-        return jsonify({'ok': False, 'error': 'tts_visemes_failed', 'detail': str(e)}), 200
+    if not text:
+        return jsonify({"ok": False, "error": "No text to synthesize"}), 400
+
+    audio_b64, visemes, err = synthesize_with_visemes(text)
+    if err:
+        current_app.logger.warning("TTS failed: %s", err)
+        call_log.add("error", "tts_failed", error=err)
+        return jsonify({"ok": False, "error": err, "audio_base64": None, "visemes": None}), 200
+
+    call_log.add("voice:response", "tts_ok", size=len(audio_b64) if audio_b64 else 0)
+    return jsonify({"ok": True, "audio_base64": audio_b64, "visemes": visemes})
