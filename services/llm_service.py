@@ -77,9 +77,24 @@ def generate_reply(prompt: Optional[str]=None, messages: Optional[List[Dict[str,
     if out: return out
     return "I'm up, just missing my model key. Tell me the product and your goal, and I’ll help."
 
+
+# --- Anti-echo guard ---
+def _anti_echo(user_text: str, out: str) -> str:
+    try:
+        import difflib, re
+        a = re.sub(r"\s+", " ", (user_text or "").strip()).lower()
+        b = re.sub(r"\s+", " ", (out or "").strip()).lower()
+        if not a or not b:
+            return out
+        if a == b or difflib.SequenceMatcher(None, a, b).ratio() >= 0.97:
+            return "Understood. Do you want a concise answer or step-by-step guidance?"
+        return out
+    except Exception:
+        return out
 def generate_response(user_text: str, history: Optional[List[Dict[str,str]]]=None, **kwargs) -> Dict[str,str]:
     msgs = _messages(CHIP_PERSONA, user_text, history or [])
     out = _call_openai(msgs, max_tokens=kwargs.get("max_tokens", 320))
+    out = _anti_echo(user_text, out or "")
     if not out:
         return {"text": "Chip is running (fallback). Tell me your goal and product."}
     return {"text": out}

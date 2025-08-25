@@ -72,6 +72,7 @@
     </div>
 
     <div class="toolbar">
+      <button id="adminLogBtn" hidden>Admin Log</button>
       <button id="micBtn" class="primary talk-btn" aria-pressed="false" title="Start a voice conversation">
         <span>Talk to Chip</span>
         <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" focusable="false">
@@ -179,6 +180,73 @@ function startStream(text) {
     es.onerror = () => { try { es.close(); } catch {} resolve({ ok:false, error:"stream_error", reply: buf.trim() }); };
   });
 }
+</script>
+
+
+<style>
+#adminLogPanel{position:fixed; right:16px; bottom:16px; width:420px; max-height:55vh; background:var(--panel);
+  border:1px solid var(--border); border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,.35); display:flex; flex-direction:column; overflow:hidden; z-index:30;}
+#adminLogPanel header{display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:rgba(255,255,255,0.03); border-bottom:1px solid var(--border);}
+#adminLogPanel header .controls button{margin-left:8px;}
+#adminLogBody{padding:8px 10px; overflow:auto; font:12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; white-space:pre-wrap;}
+.log-row{border-bottom:1px dashed var(--border); padding:6px 0;}
+.log-row .meta{opacity:0.7;}
+</style>
+
+<script>
+(async function initAdminLog(){
+  let isAdmin = false;
+  try {
+    const r = await fetch('/api/health', {credentials:'include'});
+    const j = await r.json();
+    isAdmin = !!j.is_admin;
+  } catch (e) { isAdmin = false; }
+  const btn = document.getElementById('adminLogBtn');
+  const panel = document.getElementById('adminLogPanel');
+  const body = document.getElementById('adminLogBody');
+  const refresh = document.getElementById('adminRefresh');
+  const clearBtn = document.getElementById('adminClear');
+  const closeBtn = document.getElementById('adminClose');
+  if (!btn || !panel) return;
+  if (!isAdmin) return;
+
+  btn.hidden = false;
+  btn.addEventListener('click', async ()=>{
+    panel.hidden = false;
+    await refreshLogs();
+  });
+  closeBtn.addEventListener('click', ()=>{ panel.hidden = true; });
+
+  async function fetchLogs() {
+    const r = await fetch('/api/admin/calls/recent?limit=200', {credentials:'include'});
+    if (!r.ok) return [];
+    const j = await r.json();
+    return (j && j.events) || [];
+  }
+
+  function render(evs) {
+    body.innerHTML = '';
+    for (const ev of evs.slice().reverse()) {
+      const ts = new Date(ev.ts*1000).toLocaleTimeString();
+      const meta = [ts, ev.kind, ev.route || ''].filter(Boolean).join(' · ');
+      const fields = ev.fields ? JSON.stringify(ev.fields, null, 0) : '';
+      const row = document.createElement('div');
+      row.className = 'log-row';
+      row.innerHTML = '<div class="meta">'+meta+'</div>' + (fields? '<div>'+fields+'</div>':'');
+      body.appendChild(row);
+    }
+  }
+
+  async function refreshLogs(){ const evs = await fetchLogs(); render(evs); }
+  refresh.addEventListener('click', refreshLogs);
+  clearBtn.addEventListener('click', async ()=>{
+    if (!confirm('Clear call log?')) return;
+    await fetch('/api/admin/calls/clear', {method:'POST', credentials:'include'});
+    await refreshLogs();
+  });
+
+  await refreshLogs();
+})();
 </script>
 
 </body>

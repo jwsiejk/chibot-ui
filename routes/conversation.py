@@ -2,6 +2,7 @@ from __future__ import annotations
 from flask import Blueprint, request, jsonify, session, Response, stream_with_context
 import memory, json, time, re as _re
 from services.llm_service import generate_response
+from services.call_log import log_event
 from services.email_service import send_email
 from services.accounts_service import search_accounts
 

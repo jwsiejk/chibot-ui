@@ -18,6 +18,10 @@ def _cfg():
     model_id = _get_env("ELEVENLABS_MODEL_ID", "ELEVEN_MODEL_ID") or "eleven_turbo_v2_5"
     return api_key, voice_id, model_id
 
+def _is_placeholder(v: str) -> bool:
+    v = (v or '').strip()
+    return (not v) or v.lower() in {'your_voice_id','voice_id'} or len(v) < 8
+
 def tts_bytes(text: str, *, format: str = "mp3", voice_id: str | None = None) -> bytes:
     api_key, default_voice, model_id = _cfg()
     vid = (voice_id or default_voice or "").strip()

@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app
 import base64
 from services.tts_service import tts_bytes, tts_with_visemes
+from services.call_log import log_event
 
 voice_bp = Blueprint('voice', __name__, url_prefix='/api/voice')
 
@@ -11,6 +12,7 @@ def tts():
     fmt = (data.get('format') or 'mp3').lower()
     voice_id = data.get('voice') or data.get('voice_id')
     try:
+        log_event('tts_request', route='/api/voice/tts', text=text[:120], format=fmt, voice_id=voice_id)
         audio = tts_bytes(text=text, format=fmt, voice_id=voice_id)
         if not audio:
             # Not fatal for UX; allows UI to proceed without audio
@@ -28,10 +30,12 @@ def tts_with_visemes_route():
     fmt = (data.get('format') or 'mp3').lower()
     voice_id = data.get('voice') or data.get('voice_id')
     try:
-        audio, visemes = tts_with_visemes(text=text, format=fmt, voice_id=voice_id)
+        log_event('tts_request', route='/api/voice/tts_with_visemes', text=text[:120], format=fmt, voice_id=voice_id)
+    audio, visemes = tts_with_visemes(text=text, format=fmt, voice_id=voice_id)
         if not audio:
             return jsonify({'ok': False, 'error': 'tts_not_configured'}), 200
         b64 = base64.b64encode(audio).decode('ascii')
+        log_event('tts_result', route='/api/voice/tts_with_visemes', ok=bool(audio), bytes=len(audio) if audio else 0)
         return jsonify({'ok': True, 'audio': b64, 'format': fmt, 'visemes': visemes or [], 'relative': True})
     except Exception as e:
         current_app.logger.exception('voice.tts_with_visemes failed')
