@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Admin Call Log</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#0f1115; color:#e6e6e6; margin:20px; }
+    .wrap { max-width: 1100px; margin: 0 auto; }
+    h1 { font-weight: 600; }
+    .bar { display:flex; gap:12px; align-items:center; margin-bottom:14px; }
+    .log { background:#1a1f2b; border-radius:14px; padding:14px; max-height:70vh; overflow:auto; }
+    .row { display:grid; grid-template-columns: 210px 220px 1fr; gap:12px; padding:8px 10px; border-bottom:1px solid #2a3142; }
+    .row:nth-child(odd) { background:#161b24; }
+    .ts { font-family: ui-monospace, Menlo, Consolas, monospace; opacity: .9; }
+    .kind { font-weight:600; }
+    .msg  { white-space: pre-wrap; word-break: break-word; }
+    .pill { padding:2px 8px; border-radius:999px; background:#2c3446; display:inline-block; }
+    .error { background:#a33; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Admin Call Log</h1>
+  <div class="bar">
+    <span class="pill">Live</span>
+    <em>Only visible to admins.</em>
+  </div>
+  <div id="log" class="log">
+    {% for e in items %}
+      <div class="row">
+        <div class="ts">{{ e.ts }}</div>
+        <div class="kind">{{ e.kind }}</div>
+        <div class="msg">{{ e.msg }}{% if e.text %} — {{ e.text }}{% endif %}{% if e.error %} — <span class="pill error">error</span> {{ e.error }}{% endif %}</div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+<script>
+const el = document.getElementById('log');
+const es = new EventSource(location.pathname.replace(/\/call-log\/?$/, '/stream'));
+es.onmessage = (ev) => {
+  try {
+    const e = JSON.parse(ev.data);
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <div class="ts">${e.ts}</div>
+      <div class="kind">${e.kind}</div>
+      <div class="msg">${(e.msg||'')}${e.text ? ' — ' + e.text : ''}${e.error ? ' — <span class="pill error">error</span> ' + e.error : ''}</div>
+    `;
+    el.prepend(row);
+  } catch {}
+};
+</script>
+</body>
+</html>
