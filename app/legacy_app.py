@@ -78,9 +78,7 @@ def create_app():
         FileSystemLoader(str(package_root / "templates")),
     ])
 
-    # Optional: enable CORS if installed
-    if CORS:
-        CORS(app)
+    # Optional: enable CORS if installed (configured later with origins)
 
     # Optional: log resolved paths for sanity in Render logs
     app.logger.setLevel(logging.INFO)
@@ -166,7 +164,7 @@ def create_app():
 
     # Flask setup
     SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("FLASK_SECRET") or "dev-secret-change-me"
-    app = Flask(__name__, static_folder="static", template_folder="templates")
+    app.secret_key = SECRET_KEY
 
     # Enable CORS only if package is available (avoid import crashes)
     if CORS:
