@@ -263,7 +263,7 @@ def create_app():
         call_log.clear()
         return jsonify({"ok": True})
 
-@app.route("/api/login", methods=["POST"])
+    @app.route("/api/login", methods=["POST"])
     def api_login():
         data = request.get_json(silent=True) or {}
         email = (data.get("email") or "").strip().lower()
@@ -309,6 +309,7 @@ def create_app():
         memory.save_user(email=current_user_email(), name=name, title=title, region=region, profile=profile)
         user = memory.get_user(current_user_email())
         return jsonify({"ok": True, "user": user})
+
 
     def chip_dynamic_greet(user):
         try:
