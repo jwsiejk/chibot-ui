@@ -135,16 +135,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   
   function ac_contextualFollowUp(userPrompt, reply) {
-    // Disabled to prevent static follow‑ups that felt repetitive.
-    return "";
-  }
-` : "";
-      return `Want a step-by-step install checklist${p}? I can cover prerequisites, network, and validation.`;
-    }
-    if (/design|architecture|size|sizing|capacity|plan/.test(lower)) {
-      const p = prod ? ` for ${prod}` : "";
-      return `Should I sketch a simple reference design${p}, or jump to sizing guidance?`;
-    }
+    // Disabled to prevent static follow-ups that felt repetitive.
     return "";
   }
 
