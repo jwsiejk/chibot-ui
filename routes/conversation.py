@@ -36,9 +36,12 @@ def _extract_text_and_history():
 
 def _safe_orchestrate(text, history):
     try:
-        return _ok_payload(text), 200  # passthrough placeholder
+        # Use LLM to generate a real response instead of echoing the user
+        resp = generate_response(text, history=history)
+        return _ok_payload(resp), 200
     except Exception:
         return _ok_payload("I hit a snag but I’m ready to continue. Want a quick overview or step-by-step?"), 200
+
 
 @conversation_bp.route("/conversation", methods=["GET","POST","OPTIONS"])
 @conversation_bp.route("/orchestrator", methods=["GET","POST","OPTIONS"])
