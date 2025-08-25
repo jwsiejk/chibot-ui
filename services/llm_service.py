@@ -14,90 +14,49 @@ def _norm(s: str) -> str:
     return (s or "").strip().lower()
 
 def chat(user_text: str, session_id: str | None = None) -> str:
+    """Minimal, safe default chat call to OpenAI that returns a single string.
+
+    - Model is configurable via OPENAI_MODEL (default: gpt-4o-mini)
+    - Temperature via OPENAI_TEMPERATURE (default: 0.3)
+    - Optional system prompt via CHIP_SYSTEM_PROMPT (kept short)
     """
-    Primary entry point. Returns a single assistant reply as a string.
-    Includes a simple 'parrot trap' (avoid echoing user verbatim).
-    """
-    # If no API key, fall back to a safe deterministic reply instead of crashing.
-    if not os.getenv("OPENAI_API_KEY"):
-        return "I’m here—tell me what you need and I’ll help."
+    text = (user_text or "").strip()
+    if not text:
+        return "Tell me what you want to tackle and I’ll jump in."
 
-    client = _client_lazy()
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+    try:
+        temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.3"))
+    except Exception:
+        temperature = 0.3
+    system_prompt = os.getenv("CHIP_SYSTEM_PROMPT", "You are Chip, a helpful Pure Storage virtual systems engineer. Answer briefly and clearly.").strip()
 
-    messages = [
-        {"role": "system",
-         "content": "You are Chip, a Pure Storage virtual systems engineer. Be concise, helpful, and proactive."},
-        {"role": "user", "content": user_text},
-    ]
+    try:
+        client = _client_lazy()
+        resp = client.chat.completions.create(
+            model=model,
+            temperature=temperature,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text},
+            ],
+        )
+        msg = (resp.choices[0].message.content or "").strip()
+        return msg or "I didn’t catch that—want to try again?"
+    except Exception:
+        # Keep errors from bubbling into the UI; upstream code will log if needed.
+        return "I'm having trouble generating a reply right now."
 
-    resp = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.6,
-    )
-    reply = (resp.choices[0].message.content or "").strip()
-    if _norm(reply) == _norm(user_text):
-        reply = "Got it—what outcome are you aiming for so I can help?"
-    return reply or "I'm here—how can I help you next?"
-
-# -----------------
-# Back-compat shims
-# -----------------
+# --- Backward-compatibility shims (keep old imports working) ---
 def generate_reply(prompt: str, *args, **kwargs) -> str:
     return chat(prompt, *args, **kwargs)
 
 def generate_response(prompt: str, *args, **kwargs) -> str:
     return chat(prompt, *args, **kwargs)
 
+# Some codebases use very generic names:
 def generate(prompt: str, *args, **kwargs) -> str:
     return chat(prompt, *args, **kwargs)
 
 def complete(prompt: str, *args, **kwargs) -> str:
     return chat(prompt, *args, **kwargs)
-
-# -----------------
-# Greeting shim
-# -----------------
-def generate_greeting(
-    name: str | None = None,
-    region: str | None = None,
-    role: str | None = None,
-    company: str | None = None,
-    profile: dict | None = None,
-    **kwargs,
-) -> str:
-    """
-    Backward-compatible helper used by /api/greet routes in legacy code.
-    Works without OpenAI. If a profile dict is passed, we’ll pull fields from it.
-    """
-    # Extract from profile if provided
-    if profile:
-        name   = name   or profile.get("name") or profile.get("full_name") or profile.get("first_name")
-        region = region or profile.get("region") or profile.get("geo")
-        role   = role   or profile.get("role") or profile.get("title")
-        company = company or profile.get("company")
-
-    # Build a friendly, single-sentence greeting that matches your UI style
-    parts = []
-    if name:
-        parts.append(name)
-    if region:
-        parts.append(f"in {region}")
-    who = " ".join(parts).strip()
-
-    if who:
-        base = f"Hey—Chip here. What can I help you with today, {who}?"
-    else:
-        base = "Hey—Chip here. What can I help you with today?"
-
-    # Optionally mention role/company if present
-    extras = []
-    if role:
-        extras.append(role)
-    if company:
-        extras.append(company)
-    if extras:
-        base = base.rstrip("?") + f" ({', '.join(extras)})."
-
-    return base
