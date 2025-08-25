@@ -193,12 +193,12 @@ def create_app():
             app.logger.warning("Blueprint '%s' not registered: %s", name, e)
             return False
 
-    # --- Register blueprints ---
+       # --- Register blueprints ---
     _register_bp("routes.voice",         "voice_bp",        "voice")
     _register_bp("routes.chat",          "chat_bp",         "chat")
     _register_bp("routes.greet",         "bp",              "greet")        # provides /api/greet
     _register_bp("routes.conversation",  "conversation_bp", "conversation")
-_register_bp("routes.admin",         "admin_bp",        "admin") # SSE + orchestrator aliases
+    _register_bp("routes.admin",         "admin_bp",        "admin")        # SSE + orchestrator aliases
 
     app.secret_key = SECRET_KEY
     # Consider making SECURE configurable; keep False for local dev if needed
