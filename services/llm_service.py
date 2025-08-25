@@ -15,11 +15,11 @@ def _norm(s: str) -> str:
 
 def chat(user_text: str, session_id: str | None = None) -> str:
     """
-    Returns a single assistant reply (string). Contains a parrot trap:
-    if the model replies with the same text as the user, we substitute a safe prompt.
+    Primary entry point. Returns a single assistant reply as a string.
+    Includes a 'parrot trap' to avoid echoing the user verbatim.
     """
     client = _client_lazy()
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # adjust as needed
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # set your preferred default
 
     messages = [
         {"role": "system",
@@ -33,9 +33,20 @@ def chat(user_text: str, session_id: str | None = None) -> str:
         temperature=0.6,
     )
     reply = (resp.choices[0].message.content or "").strip()
-
-    # Parrot trap here as well, so any route calling llm_service.chat is safe
     if _norm(reply) == _norm(user_text):
-        reply = "Got it. What outcome are you aiming for so I can help?"
-
+        reply = "Got it. Tell me a bit more about what you need so I can help."
     return reply or "I'm here—how can I help you next?"
+
+# --- Backward-compatibility shims (keep old imports working) ---
+def generate_reply(prompt: str, *args, **kwargs) -> str:
+    return chat(prompt, *args, **kwargs)
+
+def generate_response(prompt: str, *args, **kwargs) -> str:
+    return chat(prompt, *args, **kwargs)
+
+# Some codebases use very generic names:
+def generate(prompt: str, *args, **kwargs) -> str:
+    return chat(prompt, *args, **kwargs)
+
+def complete(prompt: str, *args, **kwargs) -> str:
+    return chat(prompt, *args, **kwargs)
