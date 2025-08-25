@@ -793,11 +793,11 @@ except Exception:
 if not text:
     return jsonify(_orchestrator_ok_payload("Tell me what you want to tackle and I’ll jump in.")), 200
 
-payload, status = _orchestrate_now(text, history)
-return jsonify(payload), status
-# --- END: Orchestrator fallback aliases ---
+ payload, status = _orchestrate_now(text, history)
+        return jsonify(payload), status
+    # --- END: Orchestrator fallback aliases ---
 
-   # --- BEGIN: server-side cancel + SSE chat stream ---
+    # --- BEGIN: server-side cancel + SSE chat stream ---
     _CANCEL = {}  # { email: timestamp }
 
     def _mark_cancel(email: str):
