@@ -161,6 +161,7 @@ def create_app():
     import random
     import re
     import importlib
+    from utils.call_log import call_log
 
     # Flask setup
     SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("FLASK_SECRET") or "dev-secret-change-me"
@@ -216,6 +217,14 @@ def create_app():
     def current_user_email():
         return session.get("email")
 
+    def _is_admin():
+        admins = [e.strip().lower() for e in (os.getenv("ADMIN_EMAILS") or "").split(",") if e.strip()]
+        # If not configured, allow during setup
+        if not admins:
+            return True
+        email = (session.get("email") or "").strip().lower()
+        return email in admins
+
     @app.route("/")
     def index():
         return render_template("index.html")
@@ -233,9 +242,28 @@ def create_app():
             "openai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip()),
             "eleven_configured": any_env("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
                                   and any_env("ELEVENLABS_VOICE_ID", "ELEVEN_VOICE_ID", "CHIP_VOICE_ID"),
+            "database_configured": bool(os.getenv("DATABASE_URL","").strip()),
+            "is_admin": _is_admin(),
         })
+    
+    @app.get("/api/admin/calls/recent")
+    def api_admin_calls_recent():
+        if not _is_admin():
+            return jsonify({"ok": False, "error": "not_admin"}), 403
+        try:
+            limit = int(request.args.get("limit") or 200)
+        except Exception:
+            limit = 200
+        return jsonify(call_log.recent(limit))
 
-    @app.route("/api/login", methods=["POST"])
+    @app.post("/api/admin/calls/clear")
+    def api_admin_calls_clear():
+        if not _is_admin():
+            return jsonify({"ok": False, "error": "not_admin"}), 403
+        call_log.clear()
+        return jsonify({"ok": True})
+
+@app.route("/api/login", methods=["POST"])
     def api_login():
         data = request.get_json(silent=True) or {}
         email = (data.get("email") or "").strip().lower()
@@ -635,6 +663,10 @@ def create_app():
 
     @app.route("/api/voice/tts", methods=["POST"])
     def api_tts():
+        try:
+            call_log.add("tts", "/api/voice/tts", user=current_user_email() or "")
+        except Exception:
+            pass
         if not current_user_email():
             return jsonify({"ok": False, "error": "Not authenticated"}), 401
         data = request.get_json(silent=True) or {}
@@ -663,6 +695,10 @@ def create_app():
 
     @app.route("/api/voice/tts_with_visemes", methods=["POST"])
     def api_tts_with_visemes():
+        try:
+            call_log.add("tts", "/api/voice/tts_with_visemes", user=current_user_email() or "")
+        except Exception:
+            pass
         if not current_user_email():
             return jsonify({"ok": False, "error": "Not authenticated"}), 401
         data = request.get_json(silent=True) or {}
@@ -716,10 +752,19 @@ def create_app():
 
     def _orchestrate_now(text, history):
         try:
+            try:
+                profile = memory.get_user(current_user_email()) or {}
+            except Exception:
+                profile = {}
             return _orchestrator_ok_payload(_generate_reply_flex(
-                text, memory.get_user(current_user_email()) or {}, history
-        )), 200
+                text, profile, history
+            )), 200
         except Exception:
+            # Log admin-level insight
+            try:
+                call_log.add("error", "orchestrate", error="generate_reply_failed")
+            except Exception:
+                pass
             return _orchestrator_ok_payload(
                 "I hit a snag but I’m ready to continue. Want a quick overview or step-by-step?"
             ), 200
@@ -739,6 +784,10 @@ def create_app():
             history = []
         if not text:
             return jsonify(_orchestrator_ok_payload("Tell me what you want to tackle and I’ll jump in.")), 200
+            try:
+            call_log.add("chat", "/orchestrator", user=current_user_email() or "", text=text[:200])
+        except Exception:
+            pass
         payload, status = _orchestrate_now(text, history)
         return jsonify(payload), status
     # --- END: Orchestrator fallback aliases ---
