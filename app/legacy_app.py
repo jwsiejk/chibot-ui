@@ -1029,4 +1029,12 @@ def create_app():
             return "Got it. Product and goal? I can tailor it fast."
         return "Should I give a concise summary or step‑by‑step?"
 
+def create_app():
+    app = Flask(__name__, static_folder="static", template_folder="templates")
+    # ... all your existing routes/blueprints ...
+
+    # add right before the return:
+    from .legacy_admin_patch import extend_app
+    extend_app(app)
+
     return app
