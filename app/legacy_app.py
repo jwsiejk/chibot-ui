@@ -797,14 +797,21 @@ payload, status = _orchestrate_now(text, history)
 return jsonify(payload), status
 # --- END: Orchestrator fallback aliases ---
 
-    # --- BEGIN: server-side cancel + SSE chat stream ---
-        _CANCEL = {}  # { email: timestamp }
+   # --- BEGIN: server-side cancel + SSE chat stream ---
+    _CANCEL = {}  # { email: timestamp }
 
     def _mark_cancel(email: str):
         _CANCEL[email] = time.time()
 
     def _was_cancelled(email: str, since: float) -> bool:
         return _CANCEL.get(email, 0) > since
+
+    @app.post("/api/interrupt")
+    def api_interrupt():
+        if not current_user_email():
+            return jsonify({"ok": False, "error": "Not authenticated"}), 401
+        _mark_cancel(current_user_email())
+        return jsonify({"ok": True})
 
     @app.post("/api/interrupt")
     def api_interrupt():
