@@ -781,17 +781,21 @@ def create_app():
         data = request.get_json(silent=True) or {}
         text = (data.get("message") or data.get("text") or data.get("prompt") or request.args.get("q") or "").strip()
         history = data.get("history") or data.get("messages") or []
-        if not isinstance(history, (list, tuple)):
-            history = []
-        if not text:
-            return jsonify(_orchestrator_ok_payload("Tell me what you want to tackle and I’ll jump in.")), 200
-            try:
-                call_log.add("chat", "/orchestrator", user=current_user_email() or "", text=text[:200])
-        except Exception:
-            pass
-        payload, status = _orchestrate_now(text, history)
-        return jsonify(payload), status
-    # --- END: Orchestrator fallback aliases ---
+if not isinstance(history, (list, tuple)):
+    history = []
+
+# best-effort logging (do this before any early return)
+try:
+    call_log.add("chat", "/orchestrator", user=current_user_email() or "", text=(text or "")[:200])
+except Exception:
+    pass
+
+if not text:
+    return jsonify(_orchestrator_ok_payload("Tell me what you want to tackle and I’ll jump in.")), 200
+
+payload, status = _orchestrate_now(text, history)
+return jsonify(payload), status
+# --- END: Orchestrator fallback aliases ---
 
     # --- BEGIN: server-side cancel + SSE chat stream ---
     _CANCEL = {}  # { email: timestamp }
