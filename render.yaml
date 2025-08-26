@@ -3,8 +3,8 @@ services:
     name: ask-chip
     env: python
     plan: starter
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --workers 2 --threads 4 --timeout 120
+    buildCommand: pip install -U pip setuptools wheel && pip install --prefer-binary -r requirements.txt
+    startCommand: gunicorn -k gthread -w ${WEB_CONCURRENCY:-2} --threads ${WEB_THREADS:-4} --timeout 120 app:app
     autoDeploy: true
     healthCheckPath: /api/health
     envVars:
@@ -12,6 +12,9 @@ services:
       - key: DATABASE_URL
       - key: OPENAI_API_KEY
       - key: OPENAI_MODEL
-      - key: ELEVEN_API_KEY
-      - key: ELEVEN_VOICE_ID
-      - key: ELEVEN_MODEL_ID
+      - key: EMAIL_WEBHOOK_URL
+      - key: EMAIL_WEBHOOK_SECRET
+      - key: ELEVENLABS_API_KEY
+      - key: ELEVENLABS_VOICE_ID
+      - key: ELEVENLABS_MODEL_ID
+      - key: ADMIN_EMAILS
