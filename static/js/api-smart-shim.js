@@ -1,52 +1,59 @@
-/* Smart API Shim - single Render service (Flask) */
-(function () {
-  var API_ORIGIN = (window.__ASKCHIP_API_ORIGIN || '').replace(/\/$/, '');
-  var sameOrigin = !API_ORIGIN;
-  function stripApi(path){ return path.replace(/^\/api(?=\/|$)/,''); }
-  var _fetch = window.fetch && window.fetch.bind(window);
-  if (_fetch) {
-    window.fetch = function(input, init){
-      var first = input;
-      if (typeof input === 'string' && input.startsWith('/api/') && !API_ORIGIN) {
-        // same origin; try as-is; on 404 we will retry stripped
-      } else if (typeof input === 'string' && input.startsWith('/api/') && API_ORIGIN) {
-        first = API_ORIGIN + input;
+// static/js/api_smart-shim.js
+(function(){
+  const VER = '2025-08-26b';
+  try {
+    const prev = window.__AskChipShimVersion;
+    window.__AskChipShimVersion = VER;
+    const base = window.location.origin;
+    console.log('[AskChip Smart Shim] active v%s. API_ORIGIN=%s', VER, base);
+
+    const origFetch = window.fetch;
+    window.fetch = async function(input, init){
+      const url = (typeof input === 'string') ? input : input.url;
+      const method = (init && init.method) || 'GET';
+      const isVoice = /\/api\/voice\//.test(url);
+      let resp = await origFetch(input, init);
+      if(!isVoice) return resp;
+
+      // Clone + normalize JSON payload for voice endpoints
+      try {
+        const copy = resp.clone();
+        const data = await copy.json();
+        const normalized = normalizeTTS(data);
+        return new Response(JSON.stringify(normalized), {
+          status: resp.status,
+          headers: {'Content-Type': 'application/json'}
+        });
+      } catch (e) {
+        console.warn('[AskChip Smart Shim] could not normalize voice response:', e);
+        return resp;
       }
-      var p = _fetch(first, init);
-      try {
-        var urlStr = (typeof first==='string') ? first : (first && first.url) || '';
-        var isSame = !API_ORIGIN && /^\/api\/.+/.test(urlStr);
-        if (!isSame) return p;
-      } catch(e){ return p; }
-      return p.then(function(res){
-        if (res && res.status===404) {
-          var path = (typeof input==='string') ? input : (input && input.url) || '';
-          var alt = stripApi(path);
-          var req = (typeof input==='string') ? alt : new Request(alt, input);
-          return _fetch(req, init);
-        }
-        return res;
-      });
     };
-  }
-  if (typeof window.WebSocket==='function') {
-    var _WS = window.WebSocket;
-    window.WebSocket = function(url, protocols){
-      try {
-        if (typeof url==='string' && url.startsWith('/api/')) {
-          if (API_ORIGIN) {
-            var http = new URL(API_ORIGIN);
-            var scheme = (http.protocol==='https:' ? 'wss://' : 'ws://');
-            return new _WS(scheme + http.host + url, protocols);
-          } else {
-            try { return new _WS(url, protocols); } catch(e) { return new _WS(stripApi(url), protocols); }
-          }
-        }
-      } catch(e){}
-      return new _WS(url, protocols);
+
+    function normalizeTTS(d){
+      if (d && d.ok){
+        if (!d.audio && d.audio_base64){ d.audio = d.audio_base64; }
+        if (!d.visemes && d.marks){ d.visemes = d.marks; }
+      }
+      return d;
+    }
+
+    // Quick manual test: paste __askchip_shim_test() into the console
+    window.__askchip_shim_test = async function(){
+      const r = await fetch('/api/voice/tts_with_visemes', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ text: 'Shim test: you should hear this.' })
+      }).then(r=>r.json());
+      console.log('[shim test] response:', r);
+      if (r && r.ok && r.audio){
+        const a = new Audio('data:audio/mpeg;base64,' + r.audio);
+        a.play();
+      } else {
+        console.warn('[shim test] no playable audio');
+      }
     };
-    for (var k in _WS) try{ window.WebSocket[k]=_WS[k]; }catch{}
-    window.WebSocket.prototype = _WS.prototype;
+  } catch (e){
+    console.error('[AskChip Smart Shim] failed to load:', e);
   }
-  console.log('[AskChip Smart Shim] active. API_ORIGIN='+(API_ORIGIN||'(same-origin)'));
 })();
