@@ -34,7 +34,6 @@ def _tts_impl():
         "mime": "audio/mpeg",
     })
 
-# Register a bunch of aliases so any frontend path works.
 _aliases = [
     "tts_with_visemes",
     "tts",
@@ -50,9 +49,7 @@ for ix, path in enumerate(_aliases):
 
 @voice_bp.route("/health", methods=["GET"])
 def health():
-    # Minimal health so the UI can confirm voice pipeline readiness
     try:
-        configured = True
-        return jsonify({"ok": True, "configured": configured})
+        return jsonify({"ok": True, "configured": True})
     except Exception as e:
         return jsonify({"ok": False, "configured": False, "error": str(e)}), 200

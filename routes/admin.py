@@ -3,8 +3,6 @@ from flask import Blueprint, Response, render_template_string, session
 import os, json
 from utils.call_log import call_log
 
-admin_bp = Blueprint("admin_bp", __name__)
-
 _HTML = """<!doctype html>
 <meta charset="utf-8"/>
 <title>Ask Chip — Admin Call Log</title>
@@ -22,15 +20,15 @@ small{opacity:.7}
 </header>
 <main>
   <pre id="log"></pre>
-  <p><small>Tip: keep this tab open while testing. It streams live events via <code>/admin/stream</code>.</small></p>
+  <p><small>Streams live events via <code>…/stream</code>.</small></p>
 </main>
 <script>
 (function(){
   const out = document.getElementById('log');
   const status = document.getElementById('status');
-  function line(s){ out.textContent += s + "\\n"; out.scrollTop = out.scrollHeight; }
+  function line(s){ out.textContent += s + "\n"; out.scrollTop = out.scrollHeight; }
   function connect(){
-    const es = new EventSource('/admin/stream');
+    const es = new EventSource('stream');
     status.textContent = 'connected';
     es.onmessage = (ev)=>{
       try{
@@ -45,29 +43,37 @@ small{opacity:.7}
 </script>
 """
 
-def _is_admin() -> bool:
+def _is_admin(session_obj) -> bool:
     admins = [e.strip().lower() for e in (os.getenv("ADMIN_EMAILS") or "").split(",") if e.strip()]
     if not admins:
         return True
-    user_email = (session.get("user", {}) or {}).get("email") or session.get("email") or ""
+    user_email = (session_obj.get("user", {}) or {}).get("email") or session_obj.get("email") or ""
     return (user_email or "").lower() in admins
 
-@admin_bp.route("/", methods=["GET"])
-def admin_index():
-    if not _is_admin():
-        return ("Forbidden (not in ADMIN_EMAILS)", 403)
-    return render_template_string(_HTML)
+def create_admin_blueprint(name="admin_bp"):
+    bp = Blueprint(name, __name__)
 
-@admin_bp.route("/stream", methods=["GET"])
-def stream():
-    def gen():
-        q = call_log.subscribe()
-        try:
-            while True:
-                item = q.get()
-                yield f"data: {json.dumps(item)}\\n\\n"
-        except GeneratorExit:
-            pass
-        finally:
-            call_log.unsubscribe(q)
-    return Response(gen(), mimetype="text/event-stream")
+    @bp.route("/", methods=["GET"])
+    def admin_index():
+        if not _is_admin(session):
+            return ("Forbidden (not in ADMIN_EMAILS)", 403)
+        return render_template_string(_HTML)
+
+    @bp.route("/stream", methods=["GET"])
+    def stream():
+        def gen():
+            q = call_log.subscribe()
+            try:
+                while True:
+                    item = q.get()
+                    yield f"data: {json.dumps(item)}\n\n"
+            except GeneratorExit:
+                pass
+            finally:
+                call_log.unsubscribe(q)
+        return Response(gen(), mimetype="text/event-stream")
+    return bp
+
+# Backwards-compat import: apps that did `from routes.admin import admin_bp`
+# will still work.
+admin_bp = create_admin_blueprint("admin_bp")
