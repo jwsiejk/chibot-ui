@@ -40,6 +40,20 @@ def create_app():
         except Exception as e:
             app.logger.warning("Skipping blueprint %s.%s: %s", mod_path, attr, e)
 
+    from routes.voice import voice_bp
+    app.register_blueprint(voice_bp, url_prefix='/api/voice')
+
+    from routes.admin import create_admin_blueprint
+    app.register_blueprint(create_admin_blueprint('admin_ui'),  url_prefix='/admin')
+    app.register_blueprint(create_admin_blueprint('admin_api'), url_prefix='/api/admin')
+
+    from routes.tools import tools_bp
+    app.register_blueprint(tools_bp)  # registers /askchip-diagnostics.html and /admin-log.html
+
+    from routes.profile import profile_bp
+    app.register_blueprint(profile_bp, url_prefix='/api')  # exposes /api/profile (GET/POST)
+
+
     # Chat (REST) — final route: /api/chat
     _register("routes.chat", "chat_bp", url_prefix="/api/chat")
 
