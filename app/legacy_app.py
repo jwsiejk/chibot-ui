@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import os, logging
@@ -8,6 +7,7 @@ from flask import Flask, jsonify, render_template, request, session
 import memory
 from utils.call_log import call_log
 
+
 def _bool_env(*names: str) -> bool:
     for n in names:
         v = os.getenv(n, "").strip()
@@ -15,8 +15,14 @@ def _bool_env(*names: str) -> bool:
             return True
     return False
 
+
 def create_app():
-    app = Flask(__name__, template_folder="../templates", static_folder="../static", static_url_path="/static")
+    app = Flask(
+        __name__,
+        template_folder="../templates",
+        static_folder="../static",
+        static_url_path="/static",
+    )
     app.secret_key = os.getenv("SECRET_KEY") or os.getenv("FLASK_SECRET") or "dev-secret-change-me"
     app.logger.setLevel(logging.INFO)
     app.json.sort_keys = False
@@ -27,47 +33,90 @@ def create_app():
     except Exception as e:
         app.logger.warning("DB init skipped: %s", e)
 
-    # --- Blueprint registry helpers ---
-    def _register(mod_path: str, attr: str, url_prefix: str | None = None):
+    # --- Helper: safe dynamic blueprint registration with duplicate guard ---
+    def _register(mod_path: str, attr: str, url_prefix: str | None = None, name: str | None = None):
+        """
+        Import a blueprint by module + attribute and register it only if a blueprint
+        with the same (intended) name is not already registered.
+        """
         try:
             mod = __import__(mod_path, fromlist=[attr])
             bp = getattr(mod, attr)
-            if url_prefix:
-                app.register_blueprint(bp, url_prefix=url_prefix)
+            bp_name = name or getattr(bp, "name", attr)
+            if bp_name in app.blueprints:
+                app.logger.info(
+                    "Skipping blueprint %s.%s: name '%s' already registered",
+                    mod_path, attr, bp_name
+                )
+                return
+            if name:
+                app.register_blueprint(bp, url_prefix=url_prefix, name=name)
             else:
-                app.register_blueprint(bp)
+                # Passing url_prefix=None is fine; Flask treats it as no prefix
+                app.register_blueprint(bp, url_prefix=url_prefix)
             app.logger.info("Registered blueprint %s as %s", mod_path, url_prefix or "(inline)")
         except Exception as e:
             app.logger.warning("Skipping blueprint %s.%s: %s", mod_path, attr, e)
 
-    from routes.voice import voice_bp
-    app.register_blueprint(voice_bp, url_prefix='/api/voice')
+    # --- Core blueprints (guarded to avoid duplicate registration warnings) ---
 
-    from routes.admin import create_admin_blueprint
-    app.register_blueprint(create_admin_blueprint('admin_ui'),  url_prefix='/admin')
-    app.register_blueprint(create_admin_blueprint('admin_api'), url_prefix='/api/admin')
+    # Voice API: register once at /api/voice
+    try:
+        from routes.voice import voice_bp as _voice_bp
+        if "voice_bp" not in app.blueprints:
+            app.register_blueprint(_voice_bp, url_prefix="/api/voice")
+        else:
+            app.logger.info("voice_bp already registered; skipping duplicate")
+    except Exception as e:
+        app.logger.warning("Skipping voice blueprint: %s", e)
 
-    from routes.tools import tools_bp
-    app.register_blueprint(tools_bp)  # registers /askchip-diagnostics.html and /admin-log.html
+    # Admin UI (factory) — mounted at both /admin and /api/admin with unique names
+    try:
+        from routes.admin import create_admin_blueprint as _cab
+        if "admin_ui" not in app.blueprints:
+            app.register_blueprint(_cab("admin_ui"), url_prefix="/admin")
+        else:
+            app.logger.info("admin_ui already registered; skipping duplicate")
+        if "admin_api" not in app.blueprints:
+            app.register_blueprint(_cab("admin_api"), url_prefix="/api/admin")
+        else:
+            app.logger.info("admin_api already registered; skipping duplicate")
+    except Exception as e:
+        app.logger.warning("Skipping admin blueprints: %s", e)
 
-    from routes.profile import profile_bp
-    app.register_blueprint(profile_bp, url_prefix='/api')  # exposes /api/profile (GET/POST)
+    # Tools (diagnostics + static admin viewer)
+    try:
+        from routes.tools import tools_bp as _tools_bp
+        if "tools_bp" not in app.blueprints:
+            app.register_blueprint(_tools_bp)  # /askchip-diagnostics.html, /admin-log.html
+        else:
+            app.logger.info("tools_bp already registered; skipping duplicate")
+    except Exception as e:
+        app.logger.warning("Skipping tools blueprint: %s", e)
 
+    # Profile API (safe session-first GET/POST /api/profile) — prefer blueprint over inline routes
+    try:
+        from routes.profile import profile_bp as _profile_bp
+        if "profile_bp" not in app.blueprints:
+            app.register_blueprint(_profile_bp, url_prefix="/api")
+        else:
+            app.logger.info("profile_bp already registered; skipping duplicate")
+    except Exception as e:
+        app.logger.warning("Skipping profile blueprint: %s", e)
+
+    # --- Additional feature blueprints via dynamic loader (kept from your file) ---
 
     # Chat (REST) — final route: /api/chat
     _register("routes.chat", "chat_bp", url_prefix="/api/chat")
 
-    # Conversation (SSE stream) — provides /api/conversation
+    # Conversation (SSE stream) — provides /api/conversation (the blueprint defines its own prefixes)
     _register("routes.conversation", "conversation_bp", url_prefix=None)
 
     # Greet — already scoped to /api in the file
     _register("routes.greet", "bp", url_prefix=None)
 
-    # Voice (ElevenLabs bridge) — final routes under /api/voice/*
-    _register("routes.voice", "voice_bp", url_prefix="/api/voice")
-
-    # Admin page & SSE stream under /admin; JSON helpers are provided below
-    _register("routes.admin", "admin_bp", url_prefix="/admin")
+    # NOTE: We intentionally DO NOT re-register routes.voice or routes.admin here to avoid duplicates.
+    # (They are already registered above with guards / factory.)
 
     # ---------- Health ----------
     @app.get("/api/health")
@@ -84,7 +133,7 @@ def create_app():
     def health():
         return jsonify({"ok": True})
 
-    # ---------- Auth + Profile ----------
+    # ---------- Auth + Profile (login/me/logout) ----------
     def current_user_email() -> str | None:
         return (session.get("user", {}) or {}).get("email") or session.get("email")
 
@@ -117,24 +166,8 @@ def create_app():
         profile_complete = bool((user or {}).get("name"))
         return jsonify({"ok": True, "logged_in": True, "profile_complete": profile_complete, "user": user})
 
-    @app.route("/api/profile", methods=["GET", "POST"])
-    def api_profile():
-        email = current_user_email()
-        if not email:
-            return jsonify({"ok": False, "error": "Not authenticated"}), 401
-        if request.method == "GET":
-            user = memory.get_user(email) or {"email": email}
-            return jsonify({"ok": True, "user": user})
-        data = request.get_json(silent=True) or {}
-        memory.save_user(
-            email=email,
-            name=data.get("name"),
-            title=data.get("title"),
-            region=data.get("region"),
-            profile=data.get("profile"),
-        )
-        user = memory.get_user(email) or {"email": email}
-        return jsonify({"ok": True, "user": user})
+    # NOTE: Inline /api/profile endpoints were removed to avoid colliding with the blueprint.
+    # The profile routes now live under routes.profile (registered above).
 
     # ---------- Email + Accounts ----------
     @app.post("/api/email/send")
@@ -188,18 +221,7 @@ def create_app():
     def api_nudge():
         return jsonify({"ok": True, "text": "I can summarize or dive deeper—what would help most?"})
 
-    
-
-    # ---------- Voice health (for diagnostics page) ----------
-    @app.get("/api/voice/health")
-    def api_voice_health():
-        return jsonify({
-            "ok": True,
-            "configured": _bool_env("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
-                          and _bool_env("ELEVENLABS_VOICE_ID", "ELEVEN_VOICE_ID", "CHIP_VOICE_ID"),
-            "model": os.getenv("ELEVENLABS_MODEL_ID", "eleven_turbo_v2")
-        })
-# ---------- Admin: call log JSON (UI & stream live under /admin/*) ----------
+    # ---------- Admin: call log JSON (UI & stream live under /admin/*) ----------
     @app.get("/api/admin/calls/recent")
     def api_admin_calls_recent():
         try:
