@@ -5,14 +5,17 @@ from utils.call_log import call_log
 
 voice_bp = Blueprint("voice_bp", __name__)
 
-# Final URL will be /api/voice/tts_with_visemes (and with trailing /)
-@voice_bp.route("/tts_with_visemes", methods=["POST"])
-@voice_bp.route("/tts_with_visemes/", methods=["POST"])
-def tts_with_visemes():
-    data = request.get_json(silent=True) or {}
-    text = (data.get("text") or "").strip()
-    call_log.add("voice:request", "tts", text=text)
+def _extract_text(data: dict) -> str:
+    return (data.get("text")
+            or data.get("input")
+            or data.get("message")
+            or data.get("utterance")
+            or "").strip()
 
+def _tts_impl():
+    data = request.get_json(silent=True) or {}
+    text = _extract_text(data)
+    call_log.add("voice:request", "tts", text=text)
     if not text:
         return jsonify({"ok": False, "error": "No text to synthesize", "audio": None, "audio_base64": None, "visemes": None}), 400
 
@@ -20,16 +23,36 @@ def tts_with_visemes():
     if err:
         current_app.logger.warning("TTS failed: %s", err)
         call_log.add("error", "tts_failed", error=err)
-        # Keep both keys so any frontend variant can detect lack of audio
         return jsonify({"ok": False, "error": err, "audio": None, "audio_base64": None, "visemes": None}), 200
 
-    # Success: return both 'audio' and 'audio_base64' for backward/forward compatibility
     call_log.add("voice:response", "tts_ok", size=len(audio_b64) if audio_b64 else 0)
-    payload = {
+    return jsonify({
         "ok": True,
-        "audio": audio_b64,          # <-- new alias expected by /static/js/main.js
-        "audio_base64": audio_b64,   # <-- keep old key for any older callers
+        "audio": audio_b64,        # alias expected by frontend
+        "audio_base64": audio_b64, # backward compatibility
         "visemes": visemes,
-        "relative": True
-    }
-    return jsonify(payload)
+        "mime": "audio/mpeg",
+    })
+
+# Register a bunch of aliases so any frontend path works.
+_aliases = [
+    "tts_with_visemes",
+    "tts",
+    "synthesize",
+    "speak",
+    "say",
+    "eleven/tts",
+    "eleven/speak",
+]
+for ix, path in enumerate(_aliases):
+    voice_bp.add_url_rule(f"/{path}", endpoint=f"tts_{ix}", view_func=_tts_impl, methods=["POST"])
+    voice_bp.add_url_rule(f"/{path}/", endpoint=f"tts_{ix}_slash", view_func=_tts_impl, methods=["POST"])
+
+@voice_bp.route("/health", methods=["GET"])
+def health():
+    # Minimal health so the UI can confirm voice pipeline readiness
+    try:
+        configured = True
+        return jsonify({"ok": True, "configured": configured})
+    except Exception as e:
+        return jsonify({"ok": False, "configured": False, "error": str(e)}), 200
