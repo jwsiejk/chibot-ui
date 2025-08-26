@@ -1,18 +1,30 @@
 # routes/tools.py
-from flask import Blueprint, Response
+from flask import Blueprint, render_template_string, jsonify
 
-tools_bp = Blueprint("tools_bp", __name__)
+tools_bp = Blueprint('tools_bp', __name__)
 
-_DIAG = b"""<!doctype html>
-<meta charset=\"utf-8\"><title>Ask Chip — Diagnostics</title>
-<style>body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0f1115;color:#eaeef2;margin:0}main{padding:16px}.card{border:1px solid #222;background:#0a0c10;border-radius:10px;padding:12px;margin:12px 0}code{background:#11161c;padding:2px 4px;border-radius:4px}.ok{color:#9fda9b}.bad{color:#ff9b9b}</style>
+_DIAG = """<!doctype html>
+<meta charset="utf-8"/>
+<title>Ask Chip — Diagnostics</title>
+<style>
+body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0f1115;color:#eaeef2;margin:0}
+main{padding:16px}
+.card{border:1px solid #222;background:#0a0c10;border-radius:10px;padding:12px;margin:12px 0}
+code{background:#11161c;padding:2px 4px;border-radius:4px}
+.ok{color:#9fda9b}.bad{color:#ff9b9b}
+</style>
 <main>
   <h2>Diagnostics</h2>
-  <div class=\"card\"><strong>Health</strong><pre id=\"health\">…</pre></div>
-  <div class=\"card\">
+  <div class="card"><strong>Health</strong><pre id="health">…</pre></div>
+  <div class="card">
     <strong>TTS Smoke Test</strong>
-    <button id=\"btn\">Speak test line</button>
-    <pre id=\"tts\">…</pre>
+    <button id="btn">Speak test line</button>
+    <pre id="tts">…</pre>
+  </div>
+  <div class="card">
+    <strong>Chat Smoke Test</strong>
+    <button id="ask">Ask</button>
+    <pre id="asko">…</pre>
   </div>
 </main>
 <script>
@@ -24,7 +36,7 @@ async function getJson(paths){
 }
 (async()=>{
   try{
-    const h = await getJson(['/api/health','/health','/api/voice/health','/api/openai/health']);
+    const h = await getJson(['/api/health','/health']);
     document.getElementById('health').textContent = JSON.stringify(h, null, 2);
   }catch(e){
     document.getElementById('health').textContent = 'health check failed: ' + e;
@@ -47,13 +59,41 @@ document.getElementById('btn').onclick = async ()=>{
     pre.textContent = 'TTS failed: ' + e;
   }
 };
-</script>"""
+document.getElementById('ask').onclick = async ()=>{
+  const pre = document.getElementById('asko');
+  try{
+    const r = await fetch('/api/ask', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text: 'What can you do?' })
+    }).then(r=>r.json());
+    pre.textContent = JSON.stringify(r, null, 2);
+  }catch(e){
+    pre.textContent = 'Ask failed: ' + e;
+  }
+};
+</script>
+"""
 
-_ADMIN = b"""<!doctype html>
-<meta charset=\"utf-8\"><title>Ask Chip — Admin Log (Static Tool)</title>
-<style>body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0f1115;color:#eaeef2;margin:0}header{padding:12px 16px;border-bottom:1px solid #222}main{padding:12px 16px}.status{font-size:12px;opacity:.8}pre{background:#0a0c10;border:1px solid #222;padding:12px;border-radius:8px;max-height:72vh;overflow:auto}small{opacity:.7}a{color:#7cb1ff}</style>
-<header><strong>Admin Log (Static Tool)</strong><span class=\"status\" id=\"status\">connecting…</span></header>
-<main><pre id=\"log\"></pre><p><small>Tries <code>/admin/stream</code> then <code>/api/admin/stream</code>.</small></p></main>
+_ADMIN_LOG = """<!doctype html>
+<meta charset="utf-8"/>
+<title>Ask Chip — Admin Log (Tool)</title>
+<style>
+body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0f1115;color:#eaeef2;margin:0}
+header{padding:12px 16px;border-bottom:1px solid #222}
+main{padding:12px 16px}
+.status{font-size:12px;opacity:.8}
+pre{background:#0a0c10;border:1px solid #222;padding:12px;border-radius:8px;max-height:72vh;overflow:auto}
+small{opacity:.7}
+</style>
+<header>
+  <strong>Admin Log (Tool)</strong>
+  <span class="status" id="status">connecting…</span>
+</header>
+<main>
+  <pre id="log"></pre>
+  <p><small>Tries <code>/admin/stream</code> then <code>/api/admin/stream</code>.</small></p>
+</main>
 <script>
 (function(){
   const out = document.getElementById('log');
@@ -76,12 +116,13 @@ _ADMIN = b"""<!doctype html>
   }
   connect('/admin/stream');
 })();
-</script>"""
+</script>
+"""
 
 @tools_bp.route('/askchip-diagnostics.html', methods=['GET'])
-def diagnostics_html():
-    return Response(_DIAG, mimetype='text/html; charset=utf-8')
+def diag_page():
+    return render_template_string(_DIAG)
 
-@tools_bp.route('/admin-log.html', methods=['GET'])
-def admin_log_html():
-    return Response(_ADMIN, mimetype='text/html; charset=utf-8')
+@tools_bp.route('/tools/admin-log', methods=['GET'])
+def admin_log_tool():
+    return render_template_string(_ADMIN_LOG)
