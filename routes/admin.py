@@ -1,5 +1,5 @@
 # routes/admin.py
-from flask import Blueprint, Response, jsonify, render_template, session
+from flask import Blueprint, Response, render_template, session
 import os, json
 from utils.call_log import call_log
 
@@ -15,16 +15,12 @@ def _is_admin() -> bool:
     user_email = (session.get("user", {}) or {}).get("email") or session.get("email") or ""
     return (user_email or "").lower() in admins
 
-@admin_bp.before_request
-def require_admin():
+@admin_bp.route("/")
+def admin_index():
     if not _is_admin():
-        return "Forbidden", 403
-
-@admin_bp.route("/call-log")
-@admin_bp.route("/call-log/")
-def call_log_page():
-    items = call_log.snapshot(200)
-    return render_template("admin_call_log.html", items=items)
+        # Minimal 403 to avoid leaking anything
+        return ("Forbidden (not in ADMIN_EMAILS)", 403)
+    return render_template("admin_call_log.html")
 
 @admin_bp.route("/stream")
 def stream():

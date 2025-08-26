@@ -14,13 +14,22 @@ def tts_with_visemes():
     call_log.add("voice:request", "tts", text=text)
 
     if not text:
-        return jsonify({"ok": False, "error": "No text to synthesize"}), 400
+        return jsonify({"ok": False, "error": "No text to synthesize", "audio": None, "audio_base64": None, "visemes": None}), 400
 
     audio_b64, visemes, err = synthesize_with_visemes(text)
     if err:
         current_app.logger.warning("TTS failed: %s", err)
         call_log.add("error", "tts_failed", error=err)
-        return jsonify({"ok": False, "error": err, "audio_base64": None, "visemes": None}), 200
+        # Keep both keys so any frontend variant can detect lack of audio
+        return jsonify({"ok": False, "error": err, "audio": None, "audio_base64": None, "visemes": None}), 200
 
+    # Success: return both 'audio' and 'audio_base64' for backward/forward compatibility
     call_log.add("voice:response", "tts_ok", size=len(audio_b64) if audio_b64 else 0)
-    return jsonify({"ok": True, "audio_base64": audio_b64, "visemes": visemes})
+    payload = {
+        "ok": True,
+        "audio": audio_b64,          # <-- new alias expected by /static/js/main.js
+        "audio_base64": audio_b64,   # <-- keep old key for any older callers
+        "visemes": visemes,
+        "relative": True
+    }
+    return jsonify(payload)
