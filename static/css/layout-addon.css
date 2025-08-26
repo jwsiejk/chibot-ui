@@ -1,0 +1,62 @@
+/* layout-addon.css — v5
+   Chat left (compact), Chip stage right (flexible), toolbar within the chat column.
+   Works with your existing DOM; no HTML changes required.
+*/
+
+/* Always hide elements with the hidden attribute/class */
+[hidden], .hidden { display: none !important; }
+
+:root {
+  --gap: 20px;
+  --chat-min: 320px;
+  --chat-max: 440px;   /* narrower chat column */
+  --stage-min: 560px;  /* bigger stage box */
+}
+
+/* Allow the app to fill the viewport under the header */
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; min-height: 100vh; }
+.view { padding: 16px; }
+
+/* Center the whole chat area, keep it off hard edges */
+#chatView.view:not([hidden]) {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(var(--chat-min), var(--chat-max)) minmax(var(--stage-min), 1fr);
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "toolbar stage"
+    "chat    stage"
+    "composer stage";
+  gap: var(--gap);
+  max-width: 1440px;
+  margin: 0 auto;
+  min-height: 0;
+}
+
+/* Map elements to grid areas */
+#chatView .toolbar  { grid-area: toolbar; align-self: start; }
+#chatLog            { grid-area: chat;    min-height: 0; overflow-y: auto; }
+#composer           { grid-area: composer; position: sticky; bottom: 0; }
+
+/* Chat density and comfortable scroll */
+#chatLog { font-size: 0.95rem; line-height: 1.35; }
+#composer textarea { font-size: 0.95rem; resize: none; }
+
+/* Stage: larger and centered */
+#chipStage { grid-area: stage; display: flex; align-items: center; justify-content: center;
+  min-width: 0; min-height: 520px; overflow: hidden; }
+#chipStage img, #chipStage canvas { max-width: 100%; max-height: 640px; height: auto; object-fit: contain; }
+
+/* Mobile: stack vertically, put stage above chat */
+@media (max-width: 900px) {
+  #chatView.view:not([hidden]) {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "stage"
+      "toolbar"
+      "chat"
+      "composer";
+  }
+  #chipStage { min-height: 360px; }
+}

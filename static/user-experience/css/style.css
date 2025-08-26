@@ -1,0 +1,477 @@
+/* ====== Theme Vars ====== */
+:root {
+  --bg:#0f1115;
+  --panel:#181b22;
+  --panel-2:#1f2430;
+  --text:#e8ecf1;
+  --muted:#a7b0bd;
+  --accent:#ff6a00;
+  --accent-2:#ff9350;
+  --border:#2a3040;
+
+  /* nudge Chip position inside the frame */
+  --chip-shift-x: 36px;   /* + = move right,  - = move left  */
+  --chip-shift-y: -22px;  /* - = move up,     + = move down  */
+
+  /* NEW: fine-tune mouth position/scale/stacking */
+  --mouth-offset-x: -6px;   /* move left/right from face center */
+  --mouth-offset-y: 18px;   /* move up/down from face center */
+  --mouth-scale: 1;         /* overall mouth scale */
+  --mouth-z: 1000;          /* ensure mouth sits above chip.png */
+
+  --topbar-h: 64px;
+  --toolbar-h: 96px;           /* reserved space above bottom toolbar (updated by JS) */
+  --page-pad: 24px;
+  --frame-radius: 18px;
+  --frame-border: rgba(255,255,255,0.12);
+  --frame-bg: rgba(255,255,255,0.04);
+  --menu-bg: #111418;
+  --menu-border: rgba(255,255,255,0.10);
+}
+
+/* ====== Base ====== */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  background: linear-gradient(180deg, #0f1115 0%, #0d1014 100%);
+  color: var(--text);
+}
+button, .btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform .06s, box-shadow .06s, border-color .2s, filter .2s;
+  box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 8px 24px rgba(0,0,0,.35);
+}
+button:hover { transform: translateY(-1px); border-color: #36415a; }
+button:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+
+input, select {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  outline: none;
+}
+input::placeholder { color: #8f98a6; }
+
+/* Accent (orange) button */
+.btn--accent {
+  background: linear-gradient(180deg, var(--accent-2), var(--accent));
+  border-color: #ff8a3d;
+  color: #fff;
+  text-shadow: 0 1px 0 rgba(0,0,0,.3);
+}
+.btn--accent:hover { filter: brightness(1.05); }
+
+/* ====== Top bar ====== */
+.topbar {
+  height: var(--topbar-h);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 var(--page-pad);
+}
+.topbar .brand { font-weight: 700; letter-spacing:.2px; opacity: .9; }
+.topbar .actions { display: flex; gap: 12px; align-items: center; }
+
+/* Header Dropdown */
+.dropdown.nav { position: relative; }
+.dropdown.nav .menu {
+  position: absolute; right: 0; top: 110%;
+  min-width: 220px; padding: 8px;
+  background: var(--menu-bg);
+  border: 1px solid var(--menu-border);
+  border-radius: 12px;
+  list-style: none; margin: 0;
+  box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  z-index: 50;
+}
+.dropdown.nav .menu li { margin: 2px 0; }
+.dropdown.nav .menu button {
+  width: 100%; text-align: left; padding: 10px 12px; border-radius: 8px;
+  background: transparent; border: 1px solid transparent; color: var(--text);
+}
+.dropdown.nav .menu button:hover { background: rgba(255,255,255,.06); }
+
+/* ====== Modals ====== */
+.modal {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.6);
+  backdrop-filter: blur(3px);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal .modal-content {
+  width: 100%; max-width: 440px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 16px 50px rgba(0,0,0,.45);
+}
+.modal h2 { margin: 0 0 8px; font-size: 20px; }
+.modal p.hint { margin: 4px 0 12px; color: var(--muted); font-size: 14px; }
+.stack { display: grid; gap: 10px; }
+
+/* ====== Chip stage (light frame) ====== */
+#app{
+  max-width: 1100px;                 /* bump to 1200–1280px if you want more room */
+  margin: 0 auto;                    /* centers the whole layout */
+  padding: 0 var(--page-pad);        /* use your theme spacing var instead of 16px */
+  position: relative;
+  min-height: 70vh;                  /* fine as-is; not tied to centering */
+}
+
+.chip-box {
+  /* Center the stage inside its grid cell */
+  position: relative;                 /* allows overlay positioning */
+  display: grid;
+  place-items: center;                /* center both axes */
+  justify-items: center;
+  align-content: center;
+
+  width: 100%;
+  max-width: 100%;
+
+  border: 1px solid var(--frame-border);
+  background: var(--frame-bg);
+  border-radius: var(--frame-radius);
+
+  /* Fill space between header and toolbar */
+  min-height: calc(100vh - var(--topbar-h) - var(--toolbar-h) - 2 * var(--page-pad));
+  margin: 8px 0;
+  padding: 24px;
+
+  /* Ensure mouth overlay is never clipped */
+  overflow: visible;
+}
+
+#chipImage {
+  display: block;
+  width: min(68%, 520px);
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;                     /* center horizontally */
+
+  object-fit: contain;
+  object-position: 50% 50%;           /* center the artwork in its box */
+
+  /* Chip placement (tunable via CSS vars; defaults are 0) */
+  transform: translate(var(--chip-shift-x), var(--chip-shift-y));
+
+  /* Keep the image under overlays even when transformed */
+  position: relative;
+  z-index: 0;
+
+  filter: drop-shadow(0 12px 32px rgba(0,0,0,.45));
+}
+
+/* Mouth overlay (swapped by JS with viseme images) */
+#chipMouthImg {
+  position: absolute;
+
+  /* Center relative to frame, then fine-tune via CSS vars */
+  left: calc(50% + var(--mouth-offset-x));
+  top:  calc(50% + var(--mouth-offset-y));
+  transform: translate(-50%, -50%) scale(var(--mouth-scale));
+  transform-origin: 50% 50%;
+
+  pointer-events: none;
+  width: 160px; height: auto;   /* JS can still resize if needed */
+
+  /* SHOW neutral mouth even when not talking */
+  opacity: .95;
+  transition: opacity .12s linear;
+
+  /* Always above chip image */
+  z-index: var(--mouth-z);
+}
+
+/* Talking state left intact for future use if you want to dim/brighten during speech */
+#chipMouthImg.talking { opacity: .95; }
+
+/* ====== Toolbar (bottom) ====== */
+/* ====== Toolbar (bottom) — centered, ~1/3 width cap, snug to buttons ====== */
+#askChipToolbar{
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+
+  display: inline-flex;            /* shrink to content width */
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+
+  width: fit-content;              /* snug to buttons */
+  max-width: 33vw;                 /* ~1/3 of the viewport width */
+
+  background: rgba(20,20,22,0.8);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  z-index: 200;
+}
+
+/* Keep left/right groups compact */
+#askChipToolbar .toolbar-left,
+#askChipToolbar .toolbar-right{
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+#askChipToolbar .toolbar-right #connState{ white-space: nowrap; }
+
+/* Dropdown */
+#askChipToolbar .dropdown { position: relative; }
+#askChipToolbar .dropdown-content{
+  display: none;
+  position: absolute;
+  bottom: 36px; right: 0;          /* anchor to right edge of the button */
+  background: rgba(30,30,30,0.95);
+  border-radius: 8px;
+  padding: 6px;
+  min-width: 160px;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+}
+#askChipToolbar .dropdown-content div{ padding: 8px 10px; cursor: pointer; border-radius: 6px; }
+#askChipToolbar .dropdown-content div:hover{ background-color: rgba(255,165,0,0.2); }
+#askChipToolbar .dropdown:hover .dropdown-content{ display: block; }
+
+/* Static/Dynamic buttons */
+#askChipToolbar #btnModeStatic,
+#askChipToolbar #btnModeDynamic{
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 700;
+}
+#askChipToolbar .mode-active{
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+  background: #444;
+}
+
+
+/* ====== Misc ====== */
+.hidden { display: none !important; }
+#bottomTitle { display: none !important; } /* old label removed */
+
+/* Remove unused UI boxes */
+#status, #chatArea { display: none !important; }
+
+/* ==========================================================
+   Ask Chip — Left Column / Chat / Admin Log
+   ========================================================== */
+.layout {
+  display: flex;
+  gap: 16px;
+  padding: 16px;
+  align-items: flex-start;
+}
+
+.chat-col {
+  width: 420px;
+  max-width: 48vw;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.status-banner {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.chat-window {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  min-height: 220px;
+  background: var(--panel);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+}
+
+.admin-log {
+  border: 1px dashed rgba(255,255,255,0.25);
+  border-radius: 10px;
+  padding: 8px;
+  background: var(--panel);
+  max-height: 28vh;
+  overflow: auto;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text);
+}
+.admin-log-row { padding: 2px 0; }
+
+/* Responsive */
+@media (max-width: 980px) {
+  .layout { flex-direction: column; }
+  .chat-col { width: 100%; max-width: none; }
+}
+
+/* === UI Updates (Zoom-style toolbar & branding) === */
+.topbar .brand { display: none; } /* remove white Ask Chip text at top-left */
+
+:root{
+  /* Center Chip by default inside the chip box */
+  --chip-shift-x: 0px;
+  --chip-shift-y: 0px;
+
+  /* Fine-tune mouth alignment + stacking (kept from your theme) */
+  --mouth-offset-x: -6px;
+  --mouth-offset-y: 18px;
+  --mouth-scale: 1;
+  --mouth-z: 1000;
+}
+
+/* Toolbar Chat dropdown sizing */
+#askChipToolbar .dropdown .dropdown-content{ min-width: 160px; }
+#askChipToolbar #btnChat{ font-weight: 700; }
+
+/* Chip visibility hardening */
+#chipImage {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+.chip-box {
+  display: grid !important;
+  place-items: center !important;
+  justify-items: center !important;
+}
+:root { --chip-shift-x: 0px; --chip-shift-y: 0px; }
+
+/* ====== Layout hard lock and alignment updates (2025-08-17) ====== */
+
+/* Move Ask Chip menu to the top-right */
+.topbar{
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0 var(--page-pad);
+}
+
+/* Two-column grid with explicit areas */
+#layout{
+  display: grid !important;
+  grid-template-columns: 420px minmax(0, 1fr) !important;
+  grid-template-areas: "left right" !important;
+  align-items: start !important;
+  gap: 20px !important;
+}
+#chatDock{ grid-area: left !important; min-width: 0 !important; }
+
+/* Right column wrapper that contains the stage */
+.chip-box-right{
+  grid-area: right !important;
+  min-width: 0 !important;
+  display: grid !important;          /* let the stage center inside */
+}
+
+/* Stage centered inside the right column */
+#chipBox{
+  display: grid !important;
+  place-items: center !important;
+  justify-items: center !important;
+  min-height: 420px !important;
+}
+
+/* Ensure the image itself stays centered */
+#chipImage{ margin: 0 auto !important; }
+
+/* Ensure page content doesn't sit under the toolbar */
+body { padding-bottom: var(--toolbar-h, 96px); }
+
+
+/* ===== Ask Chip overrides (layout + chip visibility) ===== */
+
+/* 1) Keep the left status column fixed-ish and Chip stage centered.
+   This assumes #layout wraps the left status panel and the Chip stage as direct children. */
+#layout {
+  display: grid !important;
+  grid-template-columns: minmax(300px, 420px) 1fr !important;
+  gap: 24px !important;
+  align-items: start !important;
+}
+
+/* If a different wrapper exists, this keeps the first child column at the left width
+   without relying on a specific class name. */
+#layout > :first-child {
+  min-width: 300px !important;
+  max-width: 420px !important;
+}
+
+/* The right column grows naturally. */
+#layout > :nth-child(2) {
+  min-width: 0 !important;
+}
+
+/* 2) Chip stage: keep centered and preserve aspect ratio so it can't collapse. */
+#chipBox {
+  position: relative !important;
+  aspect-ratio: 16 / 9 !important;
+  max-width: 1100px !important;
+  margin: 0 auto !important;
+  overflow: hidden;
+}
+
+/* Make sure the media inside the stage fits cleanly and shows up even when disconnected. */
+#chipBox img,
+#chipBox canvas,
+#chipBox video {
+  display: block !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  height: auto !important;
+  margin: 0 auto !important;
+  object-fit: contain !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  position: relative;
+  z-index: 2;
+}
+
+/* Neutralize any global "disconnected" state that hides Chip. */
+.disconnected #chipBox img,
+.disconnected #chipBox canvas,
+.disconnected #chipBox video {
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+/* Avoid overlays blocking Chip (loaders etc.) */
+#chipBox .overlay,
+#chipBox .loader {
+  pointer-events: none !important;
+  z-index: 1;
+}
+
+/* Keep the status box pinned flush left and full-width inside its column. */
+.status-panel, #statusPanel, .status-box {
+  width: 100% !important;
+  justify-self: start !important;
+}
+
+/* ensure any element using [hidden] actually hides */
+[hidden]{display:none !important;}
+/* nav menu hidden fallback */
+#navMenu[hidden]{display:none !important;}
