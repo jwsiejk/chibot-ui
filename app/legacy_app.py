@@ -2,7 +2,6 @@ from __future__ import annotations
 
 # Auto-generated legacy app wrapper to preserve behavior without regressions
 def create_app():
-
     import os
     import sys
     import json
@@ -78,17 +77,9 @@ def create_app():
         FileSystemLoader(str(package_root / "templates")),
     ])
 
-    # Optional: enable CORS if installed (configured later with origins)
-
     # Optional: log resolved paths for sanity in Render logs
     app.logger.setLevel(logging.INFO)
     app.logger.info("Templates: %s | Static: %s", app.template_folder, app.static_folder)
-
-    # NOTE:
-    # - Keep the rest of your existing setup (routes, blueprints, error handlers)
-    #   below this point. Do NOT create a second Flask(__name__) instance later.
-    # - If you previously registered blueprints elsewhere, keep that as-is.
-    # - Make sure there is a single `return app` at the end of create_app().
 
     # ------------------------------------------------------------------------------
     # Normalize ElevenLabs env names BEFORE importing TTS (some libs read env on import)
@@ -194,14 +185,13 @@ def create_app():
             app.logger.warning("Blueprint '%s' not registered: %s", name, e)
             return False
 
-       # --- Register blueprints ---
+    # --- Register blueprints ---
     _register_bp("routes.voice",         "voice_bp",        "voice")
     _register_bp("routes.chat",          "chat_bp",         "chat")
     _register_bp("routes.greet",         "bp",              "greet")        # provides /api/greet
     _register_bp("routes.conversation",  "conversation_bp", "conversation")
     _register_bp("routes.admin",         "admin_bp",        "admin")        # SSE + orchestrator aliases
 
-    app.secret_key = SECRET_KEY
     # Consider making SECURE configurable; keep False for local dev if needed
     app.config.update(
         SESSION_COOKIE_SAMESITE="Lax",
@@ -245,7 +235,7 @@ def create_app():
             "database_configured": bool(os.getenv("DATABASE_URL","").strip()),
             "is_admin": _is_admin(),
         })
-    
+
     @app.get("/api/admin/calls/recent")
     def api_admin_calls_recent():
         if not _is_admin():
@@ -309,7 +299,6 @@ def create_app():
         memory.save_user(email=current_user_email(), name=name, title=title, region=region, profile=profile)
         user = memory.get_user(current_user_email())
         return jsonify({"ok": True, "user": user})
-
 
     def chip_dynamic_greet(user):
         try:
@@ -632,16 +621,14 @@ def create_app():
                 # As a last resort, keep it empty to avoid repetition
                 reply = ""
 
-
-    
-
         # Anti-echo guard: if the model mirrors the user, ask a clarifying question instead.
         try:
             if _is_echo_like(text, reply):
                 reply = _clarify_from_state(ss, text)
         except Exception:
             pass
-    # Update state + roll summary occasionally
+
+        # Update state + roll summary occasionally
         try:
             _llm_update_state(ss, text, reply, hist or [])
             ss.turns = (ss.turns or 0) + 1
@@ -655,12 +642,11 @@ def create_app():
         except Exception:
             pass
         return jsonify({"ok": True, "reply": reply})
+
     # Alias to ensure UI /api/chat hits the same handler
     @app.route("/api/chat", methods=["POST"])
     def api_chat_alias():
         return api_chat()
-
-
 
     @app.route("/api/voice/tts", methods=["POST"])
     def api_tts():
@@ -781,19 +767,19 @@ def create_app():
         data = request.get_json(silent=True) or {}
         text = (data.get("message") or data.get("text") or data.get("prompt") or request.args.get("q") or "").strip()
         history = data.get("history") or data.get("messages") or []
-if not isinstance(history, (list, tuple)):
-    history = []
+        if not isinstance(history, (list, tuple)):
+            history = []
 
-# best-effort logging (do this before any early return)
-try:
-    call_log.add("chat", "/orchestrator", user=current_user_email() or "", text=(text or "")[:200])
-except Exception:
-    pass
+        # best-effort logging (do this before any early return)
+        try:
+            call_log.add("chat", "/orchestrator", user=current_user_email() or "", text=(text or "")[:200])
+        except Exception:
+            pass
 
-if not text:
-    return jsonify(_orchestrator_ok_payload("Tell me what you want to tackle and I’ll jump in.")), 200
+        if not text:
+            return jsonify(_orchestrator_ok_payload("Tell me what you want to tackle and I’ll jump in.")), 200
 
- payload, status = _orchestrate_now(text, history)
+        payload, status = _orchestrate_now(text, history)
         return jsonify(payload), status
     # --- END: Orchestrator fallback aliases ---
 
@@ -805,13 +791,6 @@ if not text:
 
     def _was_cancelled(email: str, since: float) -> bool:
         return _CANCEL.get(email, 0) > since
-
-    @app.post("/api/interrupt")
-    def api_interrupt():
-        if not current_user_email():
-            return jsonify({"ok": False, "error": "Not authenticated"}), 401
-        _mark_cancel(current_user_email())
-        return jsonify({"ok": True})
 
     @app.post("/api/interrupt")
     def api_interrupt():
@@ -979,7 +958,6 @@ if not text:
         except Exception:
             return False
 
-
     def _clarify_from_state(ss: "_SessionState", user_text: str) -> str:
         """
         Build a quick, varied clarifying question without any static catch‑all phrasing.
@@ -1030,23 +1008,5 @@ if not text:
         # Fallback: return the first (still not the banned phrase)
         ss.last_clarify = base[0]
         return base[0]
-        prod = (ss.product or "").strip()
-        task = (ss.task or "").strip()
-        if prod and task:
-            return f"On {prod} {task}, do you want a quick overview or step-by-step?"
-        if prod:
-            return f"{prod}—want an overview, installation steps, or troubleshooting?"
-        # fallbacks
-        if len(t.split()) <= 3:
-            return "Got it. Product and goal? I can tailor it fast."
-        return "Should I give a concise summary or step‑by‑step?"
-
-def create_app():
-    app = Flask(__name__, static_folder="static", template_folder="templates")
-    # ... all your existing routes/blueprints ...
-
-    # add right before the return:
-    from .legacy_admin_patch import extend_app
-    extend_app(app)
 
     return app
