@@ -1,1 +1,0 @@
-# Initializes auth package
