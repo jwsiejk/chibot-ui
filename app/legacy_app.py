@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import json
+import time
+import datetime as _dt
 import logging
-from flask import Flask, jsonify, render_template, request, session
+from flask import Flask, jsonify, render_template, request, session, Response, stream_with_context, g
 from werkzeug.exceptions import HTTPException
 
 # Optional services
@@ -336,5 +338,93 @@ def create_app():
     @app.get("/")
     def index():
         return render_template("index.html")
+
+
+# ---------- Admin allow-list helper ----------
+def _is_admin_email(email: str | None) -> bool:
+    allowed = [e.strip().lower() for e in (os.getenv("ADMIN_EMAILS","")).split(",") if e.strip()]
+    return bool(email and email.lower() in allowed)
+
+# ---------- Admin Call Log page (uses templates/admin_call_log.html) ----------
+@app.get("/admin/call-log")
+def admin_call_log_page():
+    email = (session.get("user", {}) or {}).get("email") or session.get("email")
+    if not _is_admin_email(email):
+        return render_template("admin_call_log.html", items=[]), 403
+    try:
+        items = call_log.recent(int(request.args.get("limit") or 200))
+    except Exception:
+        items = []
+    return render_template("admin_call_log.html", items=items)
+
+# ---------- Admin Call Log SSE stream ----------
+@app.get("/admin/stream")
+def admin_log_stream():
+    email = (session.get("user", {}) or {}).get("email") or session.get("email")
+    if not _is_admin_email(email):
+        return jsonify({"ok": False, "error": "Forbidden"}), 403
+
+    def gen():
+        yield ":ok\n\n"  # keep-alive for proxies
+        last_ts = ""
+        while True:
+            try:
+                items = call_log.recent(500)
+                for e in items:
+                    ts = (e.get("ts") or "")
+                    if ts <= last_ts:
+                        continue
+                    kind = e.get("kind") or (f'{e.get("method","")} {e.get("path","")}'.strip())
+                    msg  = e.get("msg") or f'{e.get("method","")} {e.get("path","")} [{e.get("status","")}] {e.get("ms","")}ms'
+                    payload = {"ts": ts or _dt.datetime.utcnow().isoformat()+"Z",
+                               "kind": kind, "msg": msg, "text": e.get("text"), "error": e.get("error")}
+                    yield "data: " + json.dumps(payload) + "\n\n"
+                    last_ts = ts
+            except Exception:
+                yield ":heartbeat\n\n"
+            time.sleep(2)
+
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return Response(stream_with_context(gen()), mimetype="text/event-stream", headers=headers)
+
+# ---------- Generic request capture -> call_log (so the views have data) ----------
+def _calllog_add(entry: dict):
+    for fn in ("add", "append", "push", "log", "write", "put"):
+        m = getattr(call_log, fn, None)
+        if callable(m):
+            try:
+                m(entry)
+                return
+            except Exception:
+                pass
+
+@app.before_request
+def _start_timer_for_log():
+    try:
+        g._t0 = time.time()
+    except Exception:
+        pass
+
+@app.after_request
+def _capture_call(resp):
+    try:
+        p = (request.path or "")
+        if not p.startswith("/api"):
+            return resp
+        if p.startswith("/api/admin/calls"):
+            return resp
+        entry = {
+            "ts": _dt.datetime.utcnow().isoformat() + "Z",
+            "method": request.method,
+            "path": p,
+            "status": resp.status_code,
+            "ms": int(max(0, (time.time() - getattr(g, "_t0", time.time())) * 1000)),
+            "email": (session.get("user", {}) or {}).get("email") or session.get("email"),
+            "ip": request.headers.get("X-Forwarded-For", request.remote_addr),
+            "qs": request.query_string.decode() if request.query_string else "",
+        }
+        _calllog_add(entry)
+    finally:
+        return resp
 
     return app
