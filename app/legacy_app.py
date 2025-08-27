@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import logging
 from flask import Flask, jsonify, render_template, request, session
 from werkzeug.exceptions import HTTPException
@@ -172,6 +173,62 @@ def create_app():
             "is_admin": _is_admin_flag(),
         })
 
+    # ---------- Server-side enforcement: require complete profile for protected endpoints ----------
+    @app.before_request
+    def _require_profile_for_protected():
+        # Allow CORS preflight and non-protected routes
+        if request.method == "OPTIONS":
+            return None
+
+        p = (request.path or "").rstrip("/")
+        # Explicitly protect LLM-related endpoints only
+        protected_starts = ("/api/chat", "/api/conversation", "/api/greet", "/api/voice")
+        if not any(p.startswith(s) for s in protected_starts):
+            return None
+
+        email = _current_user_email()
+        if not email:
+            # Let existing auth logic handle missing auth (401/redirect) elsewhere
+            return None
+
+        try:
+            user = memory.get_user(email) or {}
+        except Exception:
+            user = {}
+
+        required = ("email", "name", "title", "region")
+        if not all(user.get(k) for k in required):
+            return jsonify({"ok": False, "status": 428, "error": "PROFILE_INCOMPLETE"}), 428
+
+        return None
+
+    # ---------- After-request fixup: ensure /api/profile GET always includes session email ----------
+    @app.after_request
+    def _ensure_profile_email(resp):
+        try:
+            if request.method == "GET" and (request.path or "").rstrip("/") == "/api/profile":
+                # Only touch JSON responses
+                ctype = (resp.content_type or "")
+                if "application/json" in ctype:
+                    body = resp.get_data(as_text=True) or ""
+                    data = json.loads(body) if body else {}
+                    email = _current_user_email()
+                    if email:
+                        if isinstance(data, dict):
+                            # Common shapes: { ... email? ... }, or { user: {...} }
+                            if "user" in data and isinstance(data["user"], dict):
+                                data["user"].setdefault("email", email)
+                            else:
+                                data.setdefault("email", email)
+                            # Re-encode JSON
+                            resp.set_data(json.dumps(data))
+                            # Flask will keep the status/code/headers; ensure content-type is still json
+                            resp.headers["Content-Type"] = "application/json; charset=utf-8"
+            return resp
+        except Exception:
+            # Never break the response if anything goes wrong here
+            return resp
+
     # ---------- Auth + Profile (login/me/logout) ----------
     @app.post("/api/login")
     def api_login():
@@ -180,12 +237,8 @@ def create_app():
         if not email or "@" not in email:
             return jsonify({"ok": False, "error": "Valid email required"}), 400
         session["email"] = email
-        try:
-            user = memory.get_user(email) or {}
-            if not user:
-                memory.save_user(email=email, name=None, title=None, region=None, profile=None)
-        except Exception:
-            pass
+        # IMPORTANT: Do not create/update the user here; this can clobber an existing profile with NULLs.
+        # New users will be created when they POST /api/profile with real data.
         return jsonify({"ok": True})
 
     @app.post("/api/logout")
@@ -199,7 +252,8 @@ def create_app():
         if not email:
             return jsonify({"ok": True, "logged_in": False})
         user = memory.get_user(email) or {"email": email}
-        profile_complete = bool((user or {}).get("name"))
+        required = ("email", "name", "title", "region")
+        profile_complete = all((user or {}).get(k) for k in required)
         return jsonify({"ok": True, "logged_in": True, "profile_complete": profile_complete, "user": user})
 
     # NOTE: Inline /api/profile endpoints were removed to avoid colliding with the blueprint.
