@@ -50,7 +50,11 @@ def _is_admin(session_obj) -> bool:
     user_email = (session_obj.get("user", {}) or {}).get("email") or session_obj.get("email") or ""
     return (user_email or "").lower() in admins
 
-def create_admin_blueprint(name="admin_bp"):
+def create_admin_blueprint(name: str = "admin_bp"):
+    """Factory: returns a blueprint that serves / (HTML) and /stream (SSE).
+    We intentionally export this factory to allow apps to register it under
+    multiple prefixes (e.g., /admin and /api/admin) with unique names.
+    """
     bp = Blueprint(name, __name__)
 
     @bp.route("/", methods=["GET"])
@@ -72,8 +76,8 @@ def create_admin_blueprint(name="admin_bp"):
             finally:
                 call_log.unsubscribe(q)
         return Response(gen(), mimetype="text/event-stream")
+
     return bp
 
-# Backwards-compat import: apps that did `from routes.admin import admin_bp`
-# will still work.
+# Backwards compatibility: some apps import `admin_bp` directly.
 admin_bp = create_admin_blueprint("admin_bp")

@@ -1,35 +1,30 @@
 # routes/chat.py
-from flask import Blueprint, request, jsonify, current_app, session
-from services import llm_service
+from flask import Blueprint, request, jsonify
+from services.openai_fallback import generate_reply
 from utils.call_log import call_log
 
-chat_bp = Blueprint("chat_bp", __name__)  # url_prefix is applied by your _register_bp()
+chat_bp = Blueprint('chat_bp', __name__)
 
-def _norm(s: str) -> str:
-    return (s or "").strip().lower()
+def _extract_text(data: dict) -> str:
+    return (data.get('text')
+            or data.get('message')
+            or data.get('input')
+            or data.get('prompt')
+            or '').strip()
 
-# IMPORTANT: rule must start with '/', and we allow both /api/chat and /api/chat/
-@chat_bp.route("/", methods=["POST"], strict_slashes=False)
-def chat():
-    data = request.get_json(silent=True) or {}
-    user_text = (data.get("message") or data.get("text") or "").strip()
+def _ask_impl():
+    payload = request.get_json(silent=True) or {}
+    user_text = _extract_text(payload)
+    call_log.add('chat:request', 'ask', text=user_text)
     if not user_text:
-        return jsonify({"ok": False, "error": "Empty message"}), 400
+        return jsonify({'ok': False, 'error': 'empty_input'}), 200
+    reply, err = generate_reply(user_text)
+    if err:
+        call_log.add('warn', 'openai_error', error=err)
+    call_log.add('chat:response', 'ask_ok', size=len(reply))
+    return jsonify({'ok': True, 'message': reply})
 
-    call_log.add("chat:request", "user", text=user_text)
-
-    try:
-        reply = llm_service.chat(user_text=user_text, session_id=session.get("sid"))
-    except Exception as e:
-        current_app.logger.exception("LLM failure")
-        call_log.add("error", "llm_service.chat exception", error=str(e))
-        reply = "Sorry—I'm having trouble thinking right now. Please try again."
-
-    # Parrot guard
-    if _norm(reply) == _norm(user_text):
-        current_app.logger.warning("Parrot trap triggered (reply == user_text)")
-        call_log.add("warn", "parrot_trap", user_text=user_text, raw_reply=reply)
-        reply = "I hear you. What outcome are you aiming for so I can help?"
-
-    call_log.add("chat:response", "assistant", text=reply)
-    return jsonify({"ok": True, "reply": reply})
+# Multiple aliases so different frontends work without changes
+_aliases = ['ask', 'chat', 'ask_chip', 'message']
+for ix, path in enumerate(_aliases):
+    chat_bp.add_url_rule(f'/api/{path}', endpoint=f'ask_{ix}', view_func=_ask_impl, methods=['POST'])

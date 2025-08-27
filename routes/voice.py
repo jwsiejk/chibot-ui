@@ -28,8 +28,8 @@ def _tts_impl():
     call_log.add("voice:response", "tts_ok", size=len(audio_b64) if audio_b64 else 0)
     return jsonify({
         "ok": True,
-        "audio": audio_b64,        # alias expected by frontend
-        "audio_base64": audio_b64, # backward compatibility
+        "audio": audio_b64,
+        "audio_base64": audio_b64,
         "visemes": visemes,
         "mime": "audio/mpeg",
     })
@@ -50,6 +50,7 @@ for ix, path in enumerate(_aliases):
 @voice_bp.route("/health", methods=["GET"])
 def health():
     try:
-        return jsonify({"ok": True, "configured": True})
+        configured = True
+        return jsonify({"ok": True, "configured": configured})
     except Exception as e:
         return jsonify({"ok": False, "configured": False, "error": str(e)}), 200

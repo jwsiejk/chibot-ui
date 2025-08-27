@@ -3,16 +3,16 @@ from flask import Blueprint, Response
 
 tools_bp = Blueprint("tools_bp", __name__)
 
-_DIAG = b"""<!doctype html>
-<meta charset=\"utf-8\"><title>Ask Chip — Diagnostics</title>
+_DIAG = """<!doctype html>
+<meta charset="utf-8"><title>Ask Chip — Diagnostics</title>
 <style>body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0f1115;color:#eaeef2;margin:0}main{padding:16px}.card{border:1px solid #222;background:#0a0c10;border-radius:10px;padding:12px;margin:12px 0}code{background:#11161c;padding:2px 4px;border-radius:4px}.ok{color:#9fda9b}.bad{color:#ff9b9b}</style>
 <main>
   <h2>Diagnostics</h2>
-  <div class=\"card\"><strong>Health</strong><pre id=\"health\">…</pre></div>
-  <div class=\"card\">
+  <div class="card"><strong>Health</strong><pre id="health">…</pre></div>
+  <div class="card">
     <strong>TTS Smoke Test</strong>
-    <button id=\"btn\">Speak test line</button>
-    <pre id=\"tts\">…</pre>
+    <button id="btn">Speak test line</button>
+    <pre id="tts">…</pre>
   </div>
 </main>
 <script>
@@ -49,11 +49,11 @@ document.getElementById('btn').onclick = async ()=>{
 };
 </script>"""
 
-_ADMIN = b"""<!doctype html>
-<meta charset=\"utf-8\"><title>Ask Chip — Admin Log (Static Tool)</title>
+_ADMIN = """<!doctype html>
+<meta charset="utf-8"><title>Ask Chip — Admin Log (Static Tool)</title>
 <style>body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0f1115;color:#eaeef2;margin:0}header{padding:12px 16px;border-bottom:1px solid #222}main{padding:12px 16px}.status{font-size:12px;opacity:.8}pre{background:#0a0c10;border:1px solid #222;padding:12px;border-radius:8px;max-height:72vh;overflow:auto}small{opacity:.7}a{color:#7cb1ff}</style>
-<header><strong>Admin Log (Static Tool)</strong><span class=\"status\" id=\"status\">connecting…</span></header>
-<main><pre id=\"log\"></pre><p><small>Tries <code>/admin/stream</code> then <code>/api/admin/stream</code>.</small></p></main>
+<header><strong>Admin Log (Static Tool)</strong><span class="status" id="status">connecting…</span></header>
+<main><pre id="log"></pre><p><small>Tries <code>/admin/stream</code> then <code>/api/admin/stream</code>.</small></p></main>
 <script>
 (function(){
   const out = document.getElementById('log');
@@ -80,8 +80,8 @@ _ADMIN = b"""<!doctype html>
 
 @tools_bp.route('/askchip-diagnostics.html', methods=['GET'])
 def diagnostics_html():
-    return Response(_DIAG, mimetype='text/html; charset=utf-8')
+    return Response(_DIAG, content_type='text/html; charset=utf-8')
 
 @tools_bp.route('/admin-log.html', methods=['GET'])
 def admin_log_html():
-    return Response(_ADMIN, mimetype='text/html; charset=utf-8')
+    return Response(_ADMIN, content_type='text/html; charset=utf-8')
