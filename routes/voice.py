@@ -1,7 +1,9 @@
 # routes/voice.py
+from __future__ import annotations
 from flask import Blueprint, request, jsonify, current_app
 from services.tts_bridge import synthesize_with_visemes
 from utils.call_log import call_log
+from utils.text import ensure_text
 
 voice_bp = Blueprint("voice_bp", __name__)
 
@@ -13,33 +15,65 @@ def _extract_text(data: dict) -> str:
             or "").strip()
 
 def _tts_impl():
+    """Text-to-speech endpoint.
+    Accepts JSON like { text, voice_id?, model? } and returns
+    { ok, audio_base64, audio, visemes?, marks? }.
+    Always flattens any non-string `text` to a string so a Python generator
+    can never leak through as "<generator object ...>".
+    """
     data = request.get_json(silent=True) or {}
-    text = _extract_text(data)
-    call_log.add("voice:request", "tts", text=text)
+    # 1) Get text from payload and *guarantee* it is a plain string
+    text_raw = _extract_text(data)
+    text = ensure_text(text_raw)
+    try:
+        safe_preview = (text[:200] + "…") if len(text) > 200 else text
+        call_log.add("voice:request", "tts", text=safe_preview)
+    except Exception:
+        pass
+
     if not text:
-        return jsonify({"ok": False, "error": "No text to synthesize", "audio": None, "audio_base64": None, "visemes": None}), 400
+        return jsonify({"ok": False, "error": "empty_text"}), 200
 
+    # Optional voice/model overrides
+    try:
+        voice_id = (data.get("voice_id") or data.get("voice") or "").strip()
+    except Exception:
+        voice_id = ""
+    try:
+        model = (data.get("model") or data.get("tts_model") or "").strip()
+    except Exception:
+        model = ""
+
+    # 2) Synthesize
     audio_b64, visemes, err = synthesize_with_visemes(text)
-    if err:
-        current_app.logger.warning("TTS failed: %s", err)
-        call_log.add("error", "tts_failed", error=err)
-        return jsonify({"ok": False, "error": err, "audio": None, "audio_base64": None, "visemes": None}), 200
+    if err or not audio_b64:
+        try:
+            call_log.add("voice:response", "tts_error", error=str(err or "unknown"))
+        except Exception:
+            pass
+        return jsonify({"ok": False, "error": str(err or "tts_failed")}), 200
 
-    call_log.add("voice:response", "tts_ok", size=len(audio_b64) if audio_b64 else 0)
-    return jsonify({
+    try:
+        call_log.add("voice:response", "tts_ok", size=len(audio_b64))
+    except Exception:
+        pass
+
+    resp = {
         "ok": True,
+        "audio_base64": audio_b64,  # canonical
+        # compatibility for clients expecting `audio`
         "audio": audio_b64,
-        "audio_base64": audio_b64,
-        "visemes": visemes,
-        "mime": "audio/mpeg",
-    })
+    }
+    if visemes:
+        resp["visemes"] = visemes
+        resp["marks"] = visemes  # compatibility alias
 
+    return jsonify(resp)
+
+# Multiple aliases so different frontends work without changes
 _aliases = [
-    "tts_with_visemes",
     "tts",
-    "synthesize",
     "speak",
-    "say",
     "eleven/tts",
     "eleven/speak",
 ]

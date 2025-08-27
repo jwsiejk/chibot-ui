@@ -327,7 +327,7 @@ def create_app():
             limit = int(request.args.get("limit") or 200)
         except Exception:
             limit = 200
-        return jsonify(call_log.recent(limit))
+        return jsonify({"events": call_log.recent(limit)})
 
     @app.post("/api/admin/calls/clear")
     def api_admin_calls_clear():
