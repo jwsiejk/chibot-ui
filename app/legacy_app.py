@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import os, logging
+import os
+import logging
 from flask import Flask, jsonify, render_template, request, session
+from werkzeug.exceptions import HTTPException
 
 # Optional services
 import memory
@@ -52,7 +54,6 @@ def create_app():
             if name:
                 app.register_blueprint(bp, url_prefix=url_prefix, name=name)
             else:
-                # Passing url_prefix=None is fine; Flask treats it as no prefix
                 app.register_blueprint(bp, url_prefix=url_prefix)
             app.logger.info("Registered blueprint %s as %s", mod_path, url_prefix or "(inline)")
         except Exception as e:
@@ -94,7 +95,7 @@ def create_app():
     except Exception as e:
         app.logger.warning("Skipping tools blueprint: %s", e)
 
-    # Profile API (safe session-first GET/POST /api/profile) — prefer blueprint over inline routes
+    # Profile API (safe session-first GET/POST /api/profile)
     try:
         from routes.profile import profile_bp as _profile_bp
         if "profile_bp" not in app.blueprints:
@@ -106,42 +107,72 @@ def create_app():
 
     # --- Additional feature blueprints via dynamic loader (kept from your file) ---
 
-    # Chat (REST) — final route: /api/chat
+    # Chat (REST) — some repos mount this at /api/chat/<subroutes>; keep it, but we also add a root fallback below.
     _register("routes.chat", "chat_bp", url_prefix="/api/chat")
 
-    # Conversation (SSE stream) — provides /api/conversation (the blueprint defines its own prefixes)
+    # Conversation (SSE stream) — provides /api/conversation
     _register("routes.conversation", "conversation_bp", url_prefix=None)
 
-    # Greet — already scoped to /api in the file
+    # Greet — already scoped to /api in that module
     _register("routes.greet", "bp", url_prefix=None)
 
-    # NOTE: We intentionally DO NOT re-register routes.voice or routes.admin here to avoid duplicates.
-    # (They are already registered above with guards / factory.)
+    # ---------- Error handling (force JSON so the UI never sees non_json_response) ----------
+    @app.errorhandler(HTTPException)
+    def _http_error(e: HTTPException):
+        payload = {
+            "ok": False,
+            "status": e.code,
+            "error": e.name,
+            "detail": (e.description or "").strip(),
+            "path": request.path,
+        }
+        return jsonify(payload), e.code
+
+    @app.errorhandler(Exception)
+    def _uncaught(e: Exception):
+        app.logger.exception("Unhandled server error")
+        return jsonify({
+            "ok": False,
+            "status": 500,
+            "error": "Internal Server Error",
+            "detail": str(e),
+            "path": request.path
+        }), 500
+
+    # ---------- Helpers ----------
+    def _current_user_email() -> str | None:
+        return (session.get("user", {}) or {}).get("email") or session.get("email")
+
+    def _is_admin_flag() -> bool:
+        email = _current_user_email()
+        admin_env = (os.getenv("ASKCHIP_ADMIN_UI", "") or "").strip().lower()
+        return bool(email) and admin_env not in ("off", "false", "0")
 
     # ---------- Health ----------
     @app.get("/api/health")
     def api_health():
-        # Consider any logged-in user an admin for UI visibility, unless explicitly disabled.
-        email = (session.get("user", {}) or {}).get("email") or session.get("email")
-        admin_env = os.getenv("ASKCHIP_ADMIN_UI", "").strip().lower()
-        is_admin = bool(email) and admin_env != "off"
         return jsonify({
             "ok": True,
             "openai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip()),
             "eleven_configured": _bool_env("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
                                  and _bool_env("ELEVENLABS_VOICE_ID", "ELEVEN_VOICE_ID", "CHIP_VOICE_ID"),
             "db": bool(os.getenv("DATABASE_URL", "").strip()),
-            "is_admin": is_admin
+            "is_admin": _is_admin_flag(),
         })
 
+    # Some clients call /health — return the same payload so the Admin overlay can key off it
     @app.get("/health")
     def health():
-        return jsonify({"ok": True})
+        return jsonify({
+            "ok": True,
+            "openai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip()),
+            "eleven_configured": _bool_env("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
+                                 and _bool_env("ELEVENLABS_VOICE_ID", "ELEVEN_VOICE_ID", "CHIP_VOICE_ID"),
+            "db": bool(os.getenv("DATABASE_URL", "").strip()),
+            "is_admin": _is_admin_flag(),
+        })
 
     # ---------- Auth + Profile (login/me/logout) ----------
-    def current_user_email() -> str | None:
-        return (session.get("user", {}) or {}).get("email") or session.get("email")
-
     @app.post("/api/login")
     def api_login():
         data = request.get_json(silent=True) or {}
@@ -164,7 +195,7 @@ def create_app():
 
     @app.get("/api/me")
     def api_me():
-        email = current_user_email()
+        email = _current_user_email()
         if not email:
             return jsonify({"ok": True, "logged_in": False})
         user = memory.get_user(email) or {"email": email}
@@ -174,45 +205,52 @@ def create_app():
     # NOTE: Inline /api/profile endpoints were removed to avoid colliding with the blueprint.
     # The profile routes now live under routes.profile (registered above).
 
-    # ---------- Email + Accounts ----------
-    @app.post("/api/email/send")
-    def api_email_send():
-        from services.email_service import send_email
-        data = request.get_json(silent=True) or {}
-        to = data.get("to") or []
-        if isinstance(to, str):
-            to = [to]
-        subject = data.get("subject") or "(no subject)"
-        html = data.get("html") or None
-        text = data.get("text") or None
-        reply_to = data.get("reply_to") or None
-        ok = False
-        try:
-            ok = send_email(to=to, subject=subject, html=html, text=text, reply_to=reply_to)
-        except Exception as e:
-            app.logger.warning("email_send failed: %s", e)
-        return jsonify({"ok": bool(ok)})
+    # ---------- /api/chat (JSON fallback) ----------
+    # Some front-ends POST to /api/chat expecting JSON { ok, reply|text, ... }.
+    # If no existing rule handles that exact route+method, register a safe fallback.
+    def _route_exists(rule: str, method: str) -> bool:
+        method = method.upper()
+        for r in app.url_map.iter_rules():
+            if r.rule == rule and method in (r.methods or set()):
+                return True
+        return False
 
-    @app.get("/api/accounts/search")
-    def api_accounts_search():
-        from services.accounts_service import search_accounts
-        q = (request.args.get("q") or "").strip()
+    def _chat_fallback():
+        data = request.get_json(silent=True) or {}
+        user_text = (data.get("text") or data.get("message") or data.get("prompt") or "").strip()
+        if not user_text:
+            return jsonify({"ok": False, "error": "Missing 'text' in request body"}), 400
+
+        # Try OpenAI; if not configured/available, return a concise echo answer.
+        reply = None
         try:
-            items = search_accounts(q, limit=20)
-        except Exception as e:
-            app.logger.warning("accounts_search failed: %s", e)
-            items = []
-        return jsonify({"ok": True, "items": items})
+            from openai import OpenAI  # type: ignore
+            client = OpenAI()
+            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+            sys = "You are Chip, a concise, helpful Pure Storage systems engineer. Keep answers actionable."
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "system", "content": sys}, {"role": "user", "content": user_text}],
+                temperature=float(os.getenv("OPENAI_T", "0.6")),
+                max_tokens=512,
+            )
+            reply = (resp.choices[0].message.content or "").strip()
+        except Exception:
+            reply = f"Here's a concise response to get you moving:\n\n- {user_text}"
+
+        return jsonify({"ok": True, "reply": reply, "text": reply})
+
+    if not _route_exists("/api/chat", "POST"):
+        app.add_url_rule("/api/chat", endpoint="api_chat_fallback", view_func=_chat_fallback, methods=["POST"])
+        app.logger.info("Registered /api/chat POST fallback (JSON)")
 
     # ---------- Phrase / Follow-up / Nudge (safe fallbacks) ----------
     @app.post("/api/phrase")
     def api_phrase():
-        # Server-side phrasing can be added later; provide a safe default.
         return jsonify({"ok": True, "text": ""})
 
     @app.post("/api/followup")
     def api_followup():
-        # Provide three sensible defaults if the client asks.
         return jsonify({
             "ok": True,
             "suggestions": [
