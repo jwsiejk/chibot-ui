@@ -119,17 +119,22 @@ def create_app():
     # (They are already registered above with guards / factory.)
 
     # ---------- Health ----------
-    @app.get("/api/health")
-    def api_health():
-        return jsonify({
-            "ok": True,
-            "openai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip()),
-            "eleven_configured": _bool_env("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
-                                 and _bool_env("ELEVENLABS_VOICE_ID", "ELEVEN_VOICE_ID", "CHIP_VOICE_ID"),
-            "db": bool(os.getenv("DATABASE_URL", "").strip()),
-        })
-
-    @app.get("/health")
+    
+@app.get("/api/health")
+def api_health():
+    # Consider any logged-in user an admin for UI visibility, unless explicitly disabled.
+    email = (session.get("user", {}) or {}).get("email") or session.get("email")
+    admin_env = os.getenv("ASKCHIP_ADMIN_UI", "").strip().lower()
+    is_admin = bool(email) and admin_env != "off"
+    return jsonify({
+        "ok": True,
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip()),
+        "eleven_configured": _bool_env("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
+                             and _bool_env("ELEVENLABS_VOICE_ID", "ELEVEN_VOICE_ID", "CHIP_VOICE_ID"),
+        "db": bool(os.getenv("DATABASE_URL", "").strip()),
+        "is_admin": is_admin
+    })
+@app.get("/health")
     def health():
         return jsonify({"ok": True})
 
