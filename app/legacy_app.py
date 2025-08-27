@@ -134,45 +134,52 @@ def api_health():
         "db": bool(os.getenv("DATABASE_URL", "").strip()),
         "is_admin": is_admin
     })
+
+
 @app.get("/health")
-    def health():
-        return jsonify({"ok": True})
+def health():
+    return jsonify({"ok": True})
 
-    # ---------- Auth + Profile (login/me/logout) ----------
-    def current_user_email() -> str | None:
-        return (session.get("user", {}) or {}).get("email") or session.get("email")
 
-    @app.post("/api/login")
-    def api_login():
-        data = request.get_json(silent=True) or {}
-        email = (data.get("email") or "").strip().lower()
-        if not email or "@" not in email:
-            return jsonify({"ok": False, "error": "Valid email required"}), 400
-        session["email"] = email
-        try:
-            user = memory.get_user(email) or {}
-            if not user:
-                memory.save_user(email=email, name=None, title=None, region=None, profile=None)
-        except Exception:
-            pass
-        return jsonify({"ok": True})
+# ---------- Auth + Profile (login/me/logout) ----------
+def current_user_email() -> str | None:
+    return (session.get("user", {}) or {}).get("email") or session.get("email")
 
-    @app.post("/api/logout")
-    def api_logout():
-        session.pop("email", None)
-        return jsonify({"ok": True})
 
-    @app.get("/api/me")
-    def api_me():
-        email = current_user_email()
-        if not email:
-            return jsonify({"ok": True, "logged_in": False})
-        user = memory.get_user(email) or {"email": email}
-        profile_complete = bool((user or {}).get("name"))
-        return jsonify({"ok": True, "logged_in": True, "profile_complete": profile_complete, "user": user})
+@app.post("/api/login")
+def api_login():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return jsonify({"ok": False, "error": "Valid email required"}), 400
+    session["email"] = email
+    try:
+        user = memory.get_user(email) or {}
+        if not user:
+            memory.save_user(email=email, name=None, title=None, region=None, profile=None)
+    except Exception:
+        pass
+    return jsonify({"ok": True})
 
-    # NOTE: Inline /api/profile endpoints were removed to avoid colliding with the blueprint.
-    # The profile routes now live under routes.profile (registered above).
+
+@app.post("/api/logout")
+def api_logout():
+    session.pop("email", None)
+    return jsonify({"ok": True})
+
+
+@app.get("/api/me")
+def api_me():
+    email = current_user_email()
+    if not email:
+        return jsonify({"ok": True, "logged_in": False})
+    user = memory.get_user(email) or {"email": email}
+    profile_complete = bool((user or {}).get("name"))
+    return jsonify({"ok": True, "logged_in": True, "profile_complete": profile_complete, "user": user})
+
+# NOTE: Inline /api/profile endpoints were removed to avoid colliding with the blueprint.
+# The profile routes now live under routes.profile (registered above).
+
 
     # ---------- Email + Accounts ----------
     @app.post("/api/email/send")
