@@ -1,6 +1,6 @@
 # routes/chat.py
 from flask import Blueprint, request, jsonify
-from services.openai_fallback import generate_reply
+from services.reply_service import generate_reply
 from utils.call_log import call_log
 
 chat_bp = Blueprint('chat_bp', __name__)
