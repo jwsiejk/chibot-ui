@@ -1,8 +1,10 @@
 from __future__ import annotations
 from flask import Blueprint, request, jsonify, session, Response, stream_with_context
 import memory, json, time, re as _re
+from utils.text import ensure_text
 from services.llm_service import generate_response
 from services.email_service import send_email
+from utils.call_log import call_log
 from services.accounts_service import search_accounts
 
 conversation_bp = Blueprint("conversation", __name__, url_prefix="/api")
@@ -12,18 +14,15 @@ def _db_history():
         email = session.get("email")
         if not email: return []
         return memory.get_recent_conversation(email, limit=10)
-    except Exception:
-        return []
-
-def _ok_payload(resp):
-    if isinstance(resp, dict):
-        text = resp.get("text") or resp.get("reply") or resp.get("message") or ""
-    elif isinstance(resp, str):
-        text = resp
-    else:
-        text = str(resp)
+    except_ok_payload(resp):
+    # Coalesce any generator/iterable into a single string.
+    try:
+        text = ensure_text(resp)
+    except Exception as e:
+        call_log.add('orchestrator', 'error', error=str(e))
+        text = (str(resp) if not isinstance(resp, dict) else (resp.get("text") or resp.get("reply") or resp.get("message") or ""))
     text = (text or "").strip()
-    return {"ok": True, "text": text, "reply": text, "message": text}
+    return {"ok": True, "text": text, "reply": text, "message": text}xt, "reply": text, "message": text}
 
 def _extract_text_and_history():
     data = request.get_json(silent=True) or {}
@@ -34,11 +33,14 @@ def _extract_text_and_history():
     return text, history
 
 def _safe_orchestrate(text, history):
+    call_log.add('orchestrator', 'request', size=len(text or ''), history=len(history or []))
     try:
         # Use LLM to generate a real response instead of echoing the user
         resp = generate_response(text, history=history)
+        call_log.add('orchestrator', 'ok')
         return _ok_payload(resp), 200
-    except Exception:
+    except Exception as e:
+        call_log.add('orchestrator', 'error', error=str(e))
         return _ok_payload("I hit a snag but I’m ready to continue. Want a quick overview or step-by-step?"), 200
 
 
@@ -117,7 +119,8 @@ def api_chat_stream():
 
         try:
             hist = memory.get_recent_conversation(user, limit=10)
-        except Exception:
+        except Exception as e:
+        call_log.add('orchestrator', 'error', error=str(e))
             hist = []
         resp = generate_response(user_text=text, history=hist)
         reply = (resp.get("text") if isinstance(resp, dict) else str(resp or "")).strip()
