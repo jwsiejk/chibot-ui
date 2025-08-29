@@ -4,6 +4,7 @@ from __future__ import annotations
 from flask import Blueprint, request, jsonify, session, Response
 import json
 import time
+from services.context_guard import resolve_context
 
 # --- optional imports with safe fallbacks ------------------------------------
 try:
@@ -129,6 +130,18 @@ def _extract_text_and_history():
 
 def _safe_orchestrate(text: str, history):
     call_log.add("orchestrator", "request", size=len(text or ""), history=len(history or []))
+    # Context resolution (uses history + session topic)
+    try:
+        session_topic = session.get("chip_topic")
+    except Exception:
+        session_topic = None
+    ctx = resolve_context(text, history=history, session_topic=session_topic)
+    if ctx.get("product"):
+        try:
+            session["chip_topic"] = ctx["product"]
+        except Exception:
+            pass
+    text = (ctx.get("prefix") or "") + ctx.get("fixed_text", text)
     try:
         # Generate the assistant response (may return a generator/iterable/str)
         resp = generate_response(text, history=history)

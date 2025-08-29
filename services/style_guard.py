@@ -94,6 +94,11 @@ def enforce(text: str, max_words: int = DEFAULT_MAX_WORDS) -> Tuple[str, List[st
     # Strip leading/trailing whitespace
     txt = text.strip()
 
+    # 0) Strip any leading "(Context: ...)" if the model echoed our hint
+    m = re.match(r"^\(\s*Context:[^)]+?\)\s*", txt, flags=re.IGNORECASE)
+    if m:
+        txt = txt[m.end():].lstrip()
+
     # 1) Detect and rewrite list blocks
     if _LIST_RE.search(txt):
         items = _split_list_lines(txt)
