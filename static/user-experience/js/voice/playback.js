@@ -173,3 +173,10 @@ export async function _uiBeep(freq = 880, ms = 90, gain = 0.05) {
     setTimeout(() => { try { osc.stop(); osc.disconnect(); g.disconnect(); } catch {} }, ms);
   } catch {}
 }
+
+
+/** Stop any active speech playback and notify listeners to abort TTS fetches. */
+export function cancelActiveSpeech() {
+  try { _vm_stopPlayback(); } catch {}
+  try { window.dispatchEvent(new CustomEvent("chip:tts-cancel")); } catch {}
+}

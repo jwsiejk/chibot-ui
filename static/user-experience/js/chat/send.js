@@ -3,6 +3,7 @@ import { j, wsConnect } from "../core/api.js";
 import { _chipGuide, _chipSetState, _chipStartWaitingCountdown, _chipStep, _chipClearIdleNudge } from "../core/state.js";
 import { appendMessage, appendActions, _chipRenderSuggestions } from "./ui.js";
 import { tryPlayWithMouth, _vm_stopPlayback, driveVisemes, respAcquire, respRelease, startStream, pushPCM16Base64, stopStream } from "../voice/playback.js";
+import { cancelActiveSpeech } from "../voice/playback.js";
 import { gate } from "../auth/profile.js";
 
 let _getChatLane = null;
@@ -10,6 +11,54 @@ let _setChatLane = null;
 let _armVAD = null;
 export function wireChatLane(getFn, setFn) { _getChatLane = getFn; _setChatLane = setFn; }
 export function setArmVAD(fn) { _armVAD = fn; }
+
+function _splitIntoSentences(text) {
+  const parts = (text || "").trim().split(/(?<=[.!?])\s+(?=[A-Z0-9])/g);
+  return parts.filter(s => s && s.trim());
+}
+
+async function _speakReplySentenceLevel(replyText) {
+  const segments = _splitIntoSentences(replyText);
+  if (!segments.length) return;
+
+  const ac = new AbortController();
+  const onCancel = () => ac.abort();
+  window.addEventListener("chip:tts-cancel", onCancel);
+
+  try {
+    for (const seg of segments) {
+      if (ac.signal.aborted) break;
+      const res = await fetch("/api/voice/tts_with_visemes", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: seg }),
+        signal: ac.signal
+      }).catch(() => null);
+      if (!res || ac.signal.aborted) break;
+      const data = await res.json().catch(() => ({}));
+      if (data && data.ok) {
+        if (data.audio) {
+          try { await tryPlayWithMouth(data.audio); } catch {}
+        } else if (data.audio_b64) {
+          try {
+            const a = new Audio("data:audio/mpeg;base64," + data.audio_b64);
+            await a.play();
+            await new Promise(r => a.addEventListener("ended", r, { once: true }));
+          } catch {}
+        }
+        if (Array.isArray(data.visemes)) {
+          try { driveVisemes(data.visemes); } catch {}
+        }
+      }
+    }
+  } finally {
+    window.removeEventListener("chip:tts-cancel", onCancel);
+  }
+}
+
+
+window.addEventListener("chip:bargein", () => { try { cancelActiveSpeech(); } catch {} });
 
 // ---- FOLLOW-UP GOVERNOR + HUMANE BEHAVIOR ----
 let _fu_lastOfferedAt = 0;
@@ -271,7 +320,12 @@ export async function sendChat(message) {
     const text = _limitWords(textRaw, 20);
     thinking.textContent = (_getChatLane() === "live" ? "🔊 " : "💬 ") + (text || "");
 
-    if (data.audio_b64 || data.audio) {
+    
+    // Phase 1: prefer sentence-level TTS with cancel
+    try { await _speakReplySentenceLevel(textRaw); } catch {}
+    _chipSetState("followup");
+    // Skip monolithic audio playback below
+    if (false && (data.audio_b64 || data.audio)) {
       if (respAcquire()) {
         try {
           if (data.audio_b64) {
@@ -378,7 +432,7 @@ export async function handleVoiceOnceResponse({ blob, durMs }) {
   }
 
   let played = false;
-  if (data.audio_b64 || data.audio) {
+  if (false && (data.audio_b64 || data.audio)) {
     _chipSetState("responding");
     if (!respAcquire()) {
       _chipSetState("followup");
