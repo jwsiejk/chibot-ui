@@ -51,7 +51,7 @@ def _ask_impl():
     if err:
         call_log.add('warn', 'openai_error', error=err)
     call_log.add('chat:response', 'ask_ok', size=len(reply), ctx=ctx_data)
-    return jsonify({'ok': True, 'reply': reply, 'message': reply, 'text': reply})
+    return jsonify({'ok': True, 'message': reply})
 
 # Multiple aliases so different frontends work without changes
 _aliases = ['ask', 'chat', 'ask_chip', 'message']

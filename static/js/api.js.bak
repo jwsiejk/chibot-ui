@@ -34,8 +34,6 @@ const API = (() => {
       if (res.status === 401 && (!payload || payload.ok === false)) {
         return { ok: false, error: "unauthorized", status: 401, body: (payload && payload.body) || "" };
       }
-      if (payload && payload.ok && payload.reply == null && payload.message != null) { payload.reply = payload.message; }
-      if (payload && payload.ok && payload.text == null && payload.reply != null) { payload.text = payload.reply; }
       return payload;
     } catch (err) {
       return { ok: false, error: "network_error", detail: String(err && err.message || err) };

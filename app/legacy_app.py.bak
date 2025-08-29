@@ -119,13 +119,7 @@ def create_app():
     # Greet — already scoped to /api in that module
     _register("routes.greet", "bp", url_prefix=None)
 
-    
-    # Accounts search (CSV/DB-backed)
-    _register("routes.accounts", "accounts_bp", url_prefix=None)
-
-    # Email send webhook proxy
-    _register("routes.email_api", "email_bp", url_prefix=None)
-# ---------- Error handling (force JSON so the UI never sees non_json_response) ----------
+    # ---------- Error handling (force JSON so the UI never sees non_json_response) ----------
     @app.errorhandler(HTTPException)
     def _http_error(e: HTTPException):
         payload = {
@@ -259,10 +253,7 @@ def create_app():
         email = _current_user_email()
         if not email:
             return jsonify({"ok": True, "logged_in": False})
-        try:
-            user = memory.get_user(email) or {"email": email}
-        except Exception:
-            user = {"email": email}
+        user = memory.get_user(email) or {"email": email}
         required = ("email", "name", "title", "region")
         profile_complete = all((user or {}).get(k) for k in required)
         return jsonify({"ok": True, "logged_in": True, "profile_complete": profile_complete, "user": user})
