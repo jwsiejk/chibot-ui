@@ -1,8 +1,9 @@
 # routes/chat.py
 from flask import Blueprint, request, jsonify, session
 from services.reply_service import generate_reply
+from services.entity_normalizer import detect_product, detect_intent, normalize_text_to_pure
+from services.session_ctx import get as ctx_get, set as ctx_set
 from utils.call_log import call_log
-from services.context_guard import resolve_context
 
 chat_bp = Blueprint('chat_bp', __name__)
 
@@ -19,21 +20,37 @@ def _ask_impl():
     call_log.add('chat:request', 'ask', text=user_text)
     if not user_text:
         return jsonify({'ok': False, 'error': 'empty_input'}), 200
-    
-    # Context resolution (product memory + misnomer fixes)
+
+    # Load existing session context
+    ctx = ctx_get(session)
+    prior_product = ctx.get('product') if isinstance(ctx, dict) else ''
+    prior_intent = ctx.get('intent') if isinstance(ctx, dict) else ''
+
+    # Detect user intent (e.g., install/config/troubleshoot) and product
+    intent = detect_intent(user_text) or prior_intent
+    # Normalize text toward Pure terms; also returns any inferred updates
     try:
-        history = payload.get("history") or []
-    except Exception:
-        history = []
-    session_topic = session.get("chip_topic")
-    ctx = resolve_context(user_text, history=history, session_topic=session_topic)
-    if ctx.get("product"):
-        session["chip_topic"] = ctx["product"]
-    user_text = (ctx.get("prefix") or "") + ctx.get("fixed_text", user_text)
-reply, err = generate_reply(user_text)
+        normalized, updates = normalize_text_to_pure(user_text, preferred_product=prior_product)
+    except TypeError:
+        # Fallback if function signature is normalize_text_to_pure(text) -> (text, updates)
+        normalized, updates = normalize_text_to_pure(user_text)  # type: ignore
+
+    detected_product = (
+        (updates or {}).get('product')
+        or detect_product(user_text)
+        or prior_product
+    )
+
+    clean_text = normalized or user_text
+
+    # Save updated context back to the session
+    ctx_data = ctx_set(session, {'product': detected_product or '', 'intent': intent or ''})
+
+    # Generate reply with context hinting
+    reply, err = generate_reply(clean_text, ctx=ctx_data)
     if err:
         call_log.add('warn', 'openai_error', error=err)
-    call_log.add('chat:response', 'ask_ok', size=len(reply))
+    call_log.add('chat:response', 'ask_ok', size=len(reply), ctx=ctx_data)
     return jsonify({'ok': True, 'message': reply})
 
 # Multiple aliases so different frontends work without changes
