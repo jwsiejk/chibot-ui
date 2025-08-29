@@ -101,6 +101,23 @@ def enforce(text: str, max_words: int = DEFAULT_MAX_WORDS) -> Tuple[str, List[st
 
     # 1) Detect and rewrite list blocks
     if _LIST_RE.search(txt):
+        # Try robust block rewrite first
+        txt2 = _rewrite_blocks(txt)
+        if txt2 != txt:
+            txt = txt2
+            issues.append('rewrote_numbered_blocks')
+        else:
+            # Legacy path
+            items = _split_list_lines(txt)
+            if items:
+                txt = _rewrite_list_to_inline(items)
+                issues.append('rewrote_list_to_inline')
+            else:
+                # If it had numbering markers but wasn't a clean list, just remove markers
+                txt = re.sub(r"^(?:\d+[\.)]|[a-zA-Z]\)|[-•])\s+", "", txt, flags=re.MULTILINE)
+                txt = re.sub(r"\n+", " ", txt).strip()
+                issues.append('stripped_list_markers')
+
         items = _split_list_lines(txt)
         if items:
             txt = _rewrite_list_to_inline(items)
@@ -130,3 +147,34 @@ def enforce(text: str, max_words: int = DEFAULT_MAX_WORDS) -> Tuple[str, List[st
     txt = re.sub(r"\s{2,}", " ", txt).strip()
 
     return txt, issues
+
+def _extract_numbered_blocks(text: str) -> List[Tuple[int, int, List[str]]]:
+    """Find contiguous blocks of lines that start with list markers and return (start_idx, end_idx, items)."""
+    lines = text.splitlines()
+    blocks = []
+    i = 0
+    while i < len(lines):
+        if re.match(r"^\s*(?:\d+[\.)]|[a-zA-Z]\)|[-•])\s+.+", lines[i] or ""):
+            start = i
+            items = []
+            while i < len(lines) and re.match(r"^\s*(?:\d+[\.)]|[a-zA-Z]\)|[-•])\s+(.+)", lines[i] or ""):
+                m = re.match(r"^\s*(?:\d+[\.)]|[a-zA-Z]\)|[-•])\s+(.+)", lines[i])
+                items.append(m.group(1).strip())
+                i += 1
+            end = i  # exclusive
+            blocks.append((start, end, items))
+        else:
+            i += 1
+    return blocks
+
+def _rewrite_blocks(text: str) -> str:
+    lines = text.splitlines()
+    blocks = _extract_numbered_blocks(text)
+    if not blocks:
+        return text
+    # Rebuild replacing from last to first to keep indexes stable
+    for start, end, items in reversed(blocks):
+        repl = _rewrite_list_to_inline(items)
+        # splice in a single line replacement
+        lines[start:end] = [repl]
+    return "\n".join(lines)

@@ -13,13 +13,13 @@ from typing import List, Tuple, Optional, Dict, Any
 
 # Canonical Pure products (extend as needed)
 PURE_PRODUCTS = {
-    "flashblade": {"aliases": ["flash blade", "fb", "fb//s", "flashblade//s", "fb-s", "flash-blade"]},
-    "flasharray": {"aliases": ["flash array", "fa", "fa-x", "fa//c", "fa//x", "flash-array"]},
-    "portworx": {"aliases": ["px", "px-enterprise", "port works"]},
-    "pure1": {"aliases": ["pure 1", "pureone", "pure-one"]},
-    "air": {"aliases": ["ai copilot", "pure ai", "pure air", "copilot"]},
-    "evergreen": {"aliases": ["ever green", "evergreen//one", "evergreen one", "evergreen//flex"]},
-    "safemode": {"aliases": ["safe mode", "safe-mode"]},
+    "flashblade": {"aliases": ["flash blade", "flashplay", "flash play", "flashplayer", "flash-player", "fb", "fb//s", "flashblade//s", "fb-s", "flash-blade"], "display": "FlashBlade"},
+    "flasharray": {"aliases": ["flash array", "fa", "fa-x", "fa//c", "fa//x", "flash-array"], "display": "FlashArray"},
+    "portworx": {"aliases": ["px", "px-enterprise", "port works"], "display": "Portworx"},
+    "pure1": {"aliases": ["pure 1", "pureone", "pure-one"], "display": "Pure1"},
+    "air": {"aliases": ["ai copilot", "pure ai", "pure air", "copilot"], "display": "AIR"},
+    "evergreen": {"aliases": ["ever green", "evergreen//one", "evergreen one", "evergreen//flex"], "display": "Evergreen"},
+    "safemode": {"aliases": ["safe mode", "safe-mode"], "display": "SafeMode"},
 }
 
 # Common non-Pure confusions -> map back to Pure when history suggests it
@@ -75,7 +75,7 @@ def correct_misnomers(text: str, current_product: Optional[str], history_product
             if current_product == prod or prod in history_products or current_product is None:
                 corrected = re.sub(bad, prod, t)
                 # Rebuild with capitalization for surface form
-                surface = "FlashBlade" if prod == "flashblade" else prod.title()
+                surface = PURE_PRODUCTS.get(prod, {}).get("display", prod.title())
                 fixed = re.sub(bad, surface, text, flags=re.IGNORECASE)
                 return fixed, prod
     return text, None
@@ -86,8 +86,8 @@ def build_context_prefix(product: Optional[str], text: str) -> str:
         return ""
     # Brief, natural anchor; not a numbered list; nudges Pure and install intent
     if is_generic_install_request(text):
-        return f"(Context: We’re discussing Pure Storage {product.title()}. The user is asking for installation steps. Keep it short and on Pure.)\n"
-    return f"(Context: We’re discussing Pure Storage {product.title()}. Keep replies anchored to this product.)\n"
+        disp = PURE_PRODUCTS.get(product, {}).get("display", product.title()); return f"(Context: We’re discussing Pure Storage {disp}. The user is asking for installation steps. Keep it short and on Pure.)\n"
+    disp = PURE_PRODUCTS.get(product, {}).get("display", product.title()); return f"(Context: We’re discussing Pure Storage {disp}. Keep replies anchored to this product.)\n"
 
 def resolve_context(text: str, history: Optional[List[dict]] = None, session_topic: Optional[str] = None) -> Dict[str, Any]:
     """Infer the most likely product/topic and return corrections & prefix."""

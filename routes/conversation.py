@@ -5,6 +5,7 @@ from flask import Blueprint, request, jsonify, session, Response
 import json
 import time
 from services.context_guard import resolve_context
+from services.style_guard import enforce, DEFAULT_MAX_WORDS
 
 # --- optional imports with safe fallbacks ------------------------------------
 try:
@@ -146,6 +147,14 @@ def _safe_orchestrate(text: str, history):
         # Generate the assistant response (may return a generator/iterable/str)
         resp = generate_response(text, history=history)
         body = _ok_payload(resp)
+        # Apply style guard to keep outputs short and flowing
+        try:
+            if isinstance(body, dict):
+                text = (body.get('reply') or body.get('text') or '')
+                fixed, _issues = enforce(text, max_words=DEFAULT_MAX_WORDS)
+                body['text'] = body['reply'] = body['message'] = fixed
+        except Exception:
+            pass
         call_log.add("orchestrator", "ok")
         return jsonify(body), 200
     except Exception as e:

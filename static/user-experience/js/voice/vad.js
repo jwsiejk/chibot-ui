@@ -117,8 +117,8 @@ export async function _vm_armVAD() {
         speakOn = speakOn || now;
         speakOff = 0;
         if (!speaking && (now - speakOn) >= _vm_cfg.vadAttackMs) {
-          speaking = true;
           try { window.dispatchEvent(new CustomEvent('chip:bargein')); } catch {}
+          speaking = true;
           if (typeof _onStartRecording === "function") _onStartRecording();
           _vm_recording = true;
           _vm_updateMicUI(true, true);

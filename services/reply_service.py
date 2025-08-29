@@ -66,10 +66,20 @@ def _call_llm(user_text: str) -> Tuple[str, Optional[str]]:
 
     return "", "llm_service_empty"
 
-def generate_reply(user_text: str, max_words: int = DEFAULT_MAX_WORDS) -> Tuple[str, Optional[str]]:
+def generate_reply(user_text: str, max_words: int = DEFAULT_MAX_WORDS, ctx: Optional[dict] = None) -> Tuple[str, Optional[str]]:
     user_text = (user_text or "").strip()
     if not user_text:
         return "", "empty_input"
+
+    # Lightweight context hint for product/intent
+    if ctx and isinstance(ctx, dict):
+        product = (ctx.get('product') or '').strip()
+        intent  = (ctx.get('intent') or '').strip()
+    else:
+        product = ''
+        intent  = ''
+    if product:
+        user_text = f"(Context: We’re discussing Pure Storage {product}. Keep replies short, conversational, and list‑free.)\n" + user_text
 
     # Try LLM path
     txt, err = _call_llm(user_text)
