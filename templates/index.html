@@ -10,7 +10,8 @@
   <script>
     window.__ASKCHIP_API_ORIGIN = '';  // same-origin (single Render service)
   </script>
-  <script src="/static/js/api-smart-shim.js"></script>
+  <script src="/static/js/api-origin-shim.js"></script>
+  <script type="module" src="/static/user-experience/js/main.js?v=2025-08-30"></script>
 </head>
 <body>
   <header class="app-header">
@@ -94,41 +95,6 @@
       <button id="sendBtn" class="primary" type="submit" disabled>Send</button>
     </form>
   </section>
-
-  <!-- UI loader: default to NEW experiential UI; switch to classic with ?ux=classic -->
-  <script>
-    (function(){
-      try {
-        const ux = new URLSearchParams(location.search).get('ux') || '';
-        if (ux === 'classic') {
-          window.__ASKCHIP_UI_VARIANT = 'classic';
-          // Load legacy UI bundle
-          const scripts = [
-            '/static/js/api.js',
-            '/static/js/ui.js',
-            '/static/js/viseme.js',
-            '/static/js/realtime.js',
-            '/static/js/main.js',
-            '/static/js/addons-email-intents.js'
-          ];
-          scripts.forEach(src => { const s=document.createElement('script'); s.src=src; s.defer=true; document.head.appendChild(s); });
-        } else {
-          window.__ASKCHIP_UI_VARIANT = 'new';
-          const s = document.createElement('script');
-          s.type = 'module';
-          s.src = '/static/user-experience/js/main.js?v=2025-08-30a';
-          document.head.appendChild(s);
-        }
-        console.log('[AskChip] UI variant:', window.__ASKCHIP_UI_VARIANT);
-      } catch (e) {
-        console.warn('UI loader failed; falling back to legacy bundle', e);
-        ['api.js','ui.js','viseme.js','realtime.js','main.js','addons-email-intents.js'].forEach(name=>{
-          const s=document.createElement('script'); s.src='/static/js/'+name; s.defer=true; document.head.appendChild(s);
-        });
-      }
-    })();
-  </script>
-
 
 
   <script>

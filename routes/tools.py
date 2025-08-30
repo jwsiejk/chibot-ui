@@ -85,37 +85,3 @@ def diagnostics_html():
 @tools_bp.route('/admin-log.html', methods=['GET'])
 def admin_log_html():
     return Response(_ADMIN, content_type='text/html; charset=utf-8')
-
-
-@tools_bp.route('/api/version', methods=['GET'])
-def api_version():
-    try:
-        import flask
-        from flask import current_app as app
-        rules = sorted(str(r.rule) for r in app.url_map.iter_rules())
-    except Exception:
-        rules = []
-    try:
-        import pkgutil, sys, hashlib
-        # Compute a quick signature of critical files to ensure deployment freshness
-        import os
-        base = os.path.dirname(os.path.dirname(__file__))
-        important = [
-            os.path.join(base, 'templates', 'index.html'),
-            os.path.join(base, 'routes', 'chat.py'),
-            os.path.join(base, 'app', 'legacy_app.py'),
-        ]
-        h = hashlib.sha256()
-        for p in important:
-            try:
-                with open(p, 'rb') as f:
-                    h.update(f.read())
-            except Exception:
-                pass
-        sig = h.hexdigest()[:16]
-    except Exception:
-        sig = 'na'
-    return Response(
-        'ok\n' + '\n'.join(rules) + '\nSIG:' + sig + '\n',
-        mimetype='text/plain'
-    )
