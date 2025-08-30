@@ -10,13 +10,7 @@
   <script>
     window.__ASKCHIP_API_ORIGIN = '';  // same-origin (single Render service)
   </script>
-  <!-- Script loader: choose dynamic (new) or classic (legacy) UI -->
-  <script>
-    (function(){
-      const usp = new URLSearchParams(location.search);
-      const ux = (usp.get('ux') || 'dynamic').toLowerCase();
-      if (ux === 'classic'){
-  <link rel="stylesheet" href="/static/user-experience/css/style.css" />
+  <script src="/static/js/api-smart-shim.js"></script>
 </head>
 <body>
   <header class="app-header">
@@ -101,6 +95,12 @@
     </form>
   </section>
 
+  <script src="/static/js/api.js" defer></script>
+  <script src="/static/js/ui.js" defer></script>
+  <script src="/static/js/viseme.js" defer></script>
+  <script src="/static/js/realtime.js"></script>
+  <script src="/static/js/main.js" defer></script>
+  <script src="/static/js/addons-email-intents.js" defer></script>
 
   <script>
   // Set this to your backend service URL (no trailing slash)
@@ -253,23 +253,5 @@ function startStream(text) {
 })();
 </script>
 
-
-  <script>
-    (function(){
-      const usp = new URLSearchParams(location.search);
-      const ux = (usp.get('ux') || 'dynamic').toLowerCase();
-      if (ux === 'classic'){
-        var s=document.createElement('script'); s.src='/static/js/api-smart-shim.js'; s.defer=true; document.body.appendChild(s);
-        var s=document.createElement('script'); s.src='/static/js/api.js'; s.defer=true; document.body.appendChild(s);
-        var s=document.createElement('script'); s.src='/static/js/ui.js'; s.defer=true; document.body.appendChild(s);
-        var s=document.createElement('script'); s.src='/static/js/viseme.js'; s.defer=true; document.body.appendChild(s);
-        var s=document.createElement('script'); s.src='/static/js/realtime.js'; s.defer=true; document.body.appendChild(s);
-        var s=document.createElement('script'); s.src='/static/js/main.js'; s.defer=true; document.body.appendChild(s);
-        var s=document.createElement('script'); s.src='/static/js/addons-email-intents.js'; s.defer=true; document.body.appendChild(s);
-      } else {
-        var m=document.createElement('script'); m.type='module'; m.src='/static/user-experience/js/main.js'; document.body.appendChild(m);
-      }
-    })();
-  </script>
 </body>
 </html>
