@@ -189,34 +189,35 @@ function _ensureWS() {
   return true;
 }
 
-/* -------------------------- sendChat (patched) -------------------------- */
-
-export 
-function _splitIntoSentences(text){
-  const parts = (text||"").trim().split(/(?<=[.!?])\s+(?=[A-Z0-9])/g);
+export function _splitIntoSentences(text) {
+  const parts = (text || "").trim().split(/(?<=[.!?])\s+(?=[A-Z0-9])/g);
   return parts.filter(s => s && s.trim());
 }
 
-async function _speakReplySentenceLevel(replyText){
+async function _speakReplySentenceLevel(replyText) {
   const segments = _splitIntoSentences(replyText);
   if (!segments.length) return;
   const ac = new AbortController();
   const onCancel = () => ac.abort();
   window.addEventListener("chip:tts-cancel", onCancel);
   try {
-    for (const seg of segments){
+    for (const seg of segments) {
       if (ac.signal.aborted) break;
       const res = await fetch("/api/voice/tts_with_visemes", {
-        method: "POST", credentials: "include",
+        method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: seg }),
         signal: ac.signal
-      }).catch(()=>null);
+      }).catch(() => null);
+
       if (!res || ac.signal.aborted) break;
-      const data = await res.json().catch(()=>({}));
-      if (data && (data.ok || data.audio || data.audio_b64)){
-        if (data.audio) { try { await tryPlayWithMouth(data.audio); } catch {} }
-        else if (data.audio_b64) {
+
+      const data = await res.json().catch(() => ({}));
+      if (data && (data.ok || data.audio || data.audio_b64)) {
+        if (data.audio) {
+          try { await tryPlayWithMouth(data.audio); } catch {}
+        } else if (data.audio_b64) {
           const a = new Audio("data:audio/mpeg;base64," + data.audio_b64);
           try { await a.play(); } catch {}
           await new Promise(r => a.addEventListener("ended", r, { once: true }));
@@ -228,12 +229,18 @@ async function _speakReplySentenceLevel(replyText){
     window.removeEventListener("chip:tts-cancel", onCancel);
   }
 }
-async function sendChat(message) {
+
+/**
+ * Send a user message to Chip.
+ * Exposed as a named export so main.js can import { sendChat } from './chat/send.js'
+ */
+export async function sendChat(message) {
   if (!message || !message.trim()) return;
 
   if (_isEndTrigger(message)) { _chipEndConversation(); return; }
 
-  const okGate = await gate(); if (!okGate.ok) return;
+  const okGate = await gate();
+  if (!okGate.ok) return;
 
   _chipClearIdleNudge();
   _fu_turnsSinceOffer = Math.min(_fu_turnsSinceOffer + 1, 99);
@@ -248,7 +255,7 @@ async function sendChat(message) {
   appendMessage("user", message, null);
   const thinking = appendMessage("assistant", "…", _getChatLane());
 
-  // Try streaming path first; gracefully fall back to existing REST
+  // --- Try streaming path first; gracefully fall back to REST ---
   let usedStreaming = false;
   try {
     _chipSetState("thinking");
@@ -256,8 +263,15 @@ async function sendChat(message) {
 
     _ensureWS();
     if (_ws && _ws.isOpen()) {
-      // Start turn and let server stream both text and audio frames back
-      _ws.send({ type: "user_text", text: message.trim(), lane: _getChatLane(), language: "en", domain: "pure-storage", short: true });
+      // Let the server stream text/audio frames back
+      _ws.send({
+        type: "user_text",
+        text: message.trim(),
+        lane: _getChatLane(),
+        language: "en",
+        domain: "pure-storage",
+        short: true
+      });
       usedStreaming = true;
     }
   } catch {
@@ -267,31 +281,103 @@ async function sendChat(message) {
   if (usedStreaming) {
     // We still want a final text line for the turn; ask server for it too.
     try {
-      const res = await fetch("/chat/summary", { credentials: 'include', 
+      const res = await fetch("/api/chat/summary", {
+        credentials: "include",
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lastOnly: true })
-      }).then(r => r.ok ? r.json() : null).catch(()=>null);
+      }).then(r => (r.ok ? r.json() : null)).catch(() => null);
 
       _chipSetState("responding");
       const textRaw = ((res && (res.reply_text ?? res.reply)) || "").trim();
       const text = _limitWords(textRaw, 20);
+
       thinking.textContent = (_getChatLane() === "live" ? "🔊 " : "💬 ") + (text || "");
-      _chipSetState("followup");
       if (Array.isArray(res?.actions)) appendActions(res.actions);
+
       if (Array.isArray(res?.suggestions)) {
         _chipRenderSuggestions(res.suggestions, (s) => {
           if (/end chat/i.test(s)) { _chipEndConversation(); return; }
           sendChat(s);
         });
       }
-      if (text && _shouldOfferFollowup({ userText: message, assistantText: text })) _offerFollowupOnce();
-      if (res?.end === true) { _chipEndConversation(); return; }
-      return; // streaming path done
-    } catch (e) {
-      // If summary path fails, we'll still have streamed audio; continue to fallback for text
+
+      if (text && _shouldOfferFollowup({ userText: message, assistantText: text })) {
+        _offerFollowupOnce();
+      }
+
+      _chipSetState("followup");
+      if (res?.end === true) { _chipEndConversation(); }
+      return; // streaming path handled turn
+    } catch {
+      // If summary path fails, we'll still have streamed audio; continue to REST for text
     }
   }
+
+  // --- REST fallback: /api/chat ---
+  try {
+    _chipSetState("thinking");
+
+    // Preflight cleanup (don't let this block the turn if it fails)
+    try {
+      await window.AskChip?.voice?.stop?.();           // cancel any TTS playback
+      if (window.__chipAbortCtl?.abort) window.__chipAbortCtl.abort();
+      window.__chipAbortCtl = new AbortController();
+    } catch (err) {
+      console.warn("[AskChip] send preflight failed (continuing)", err);
+    } finally {
+      if (!window.__chipAbortCtl) window.__chipAbortCtl = new AbortController();
+    }
+
+    const resp = await fetch("/api/chat", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: message.trim(),
+        lane: _getChatLane(),
+        short: true
+      }),
+      signal: window.__chipAbortCtl.signal
+    });
+
+    const data = await resp.json().catch(() => ({}));
+    const textRaw = (data.reply_text ?? data.reply ?? "").trim();
+
+    _chipSetState("responding");
+
+    if (textRaw) {
+      thinking.textContent = textRaw;
+
+      // Speak sentence-by-sentence if we're in live lane
+      if (_getChatLane() === "live") {
+        try { await _speakReplySentenceLevel(textRaw); } catch {}
+      }
+    } else {
+      thinking.textContent = "(no reply)";
+    }
+
+    if (Array.isArray(data.actions)) appendActions(data.actions);
+
+    if (Array.isArray(data.suggestions)) {
+      _chipRenderSuggestions(data.suggestions, (s) => {
+        if (/end chat/i.test(s)) { _chipEndConversation(); return; }
+        sendChat(s);
+      });
+    }
+
+    if (textRaw && _shouldOfferFollowup({ userText: message, assistantText: textRaw })) {
+      _offerFollowupOnce();
+    }
+
+    if (data.end === true) { _chipEndConversation(); return; }
+  } catch (err) {
+    console.error("[AskChip] /api/chat failed", err);
+    thinking.textContent = "Sorry — something went wrong.";
+  } finally {
+    _chipSetState("followup");
+  }
+}
 
   // --- REST fallback (original path) ---
   try {
