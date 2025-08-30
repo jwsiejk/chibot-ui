@@ -111,7 +111,7 @@ def create_app():
     # --- Additional feature blueprints via dynamic loader (kept from your file) ---
 
     # Chat (REST) — some repos mount this at /api/chat/<subroutes>; keep it, but we also add a root fallback below.
-    _register("routes.chat", "chat_bp", url_prefix="/api/chat")
+    _register("routes.chat", "chat_bp", url_prefix=None)
 
     # Conversation (SSE stream) — provides /api/conversation
     _register("routes.conversation", "conversation_bp", url_prefix=None)
@@ -442,5 +442,12 @@ def _wire_admin_log_routes(app):
     app.add_url_rule("/admin/call-log", view_func=admin_call_log_page, methods=["GET"])
     app.add_url_rule("/admin/stream", view_func=admin_log_stream, methods=["GET"])
     app.before_request(_start_timer_for_log)
-    app.after_request(_capture_call)
+    
+    # Mirror admin log at /api/admin/stream as well (for UI fallbacks)
+    try:
+        from routes.admin import create_admin_blueprint
+        app.register_blueprint(create_admin_blueprint("admin_bp_api"), url_prefix="/api/admin")
+    except Exception as e:
+        app.logger.warning("Skipping /api/admin blueprint: %s", e)
+app.after_request(_capture_call)
 

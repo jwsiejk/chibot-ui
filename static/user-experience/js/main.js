@@ -1,3 +1,4 @@
+console.debug("[AskChip UX] main.js loaded v2025-08-30a");
 // main.js — dynamic-only boot, Start button, mic/VAD wiring (ES module)
 
 import { $, show, hide, setToolbarHeightVar } from "./core/dom.js";
