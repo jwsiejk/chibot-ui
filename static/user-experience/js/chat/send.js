@@ -1,13 +1,30 @@
-// chat/send.js — sendChat, voice-once handler, follow-up governor (patched for streaming)
+// chat/send.js — sendChat, voice-once handler, follow-up governor (patched & cleaned)
+
+// Core & UI
 import { j, wsConnect } from "../core/api.js";
 import { _chipGuide, _chipSetState, _chipStartWaitingCountdown, _chipStep, _chipClearIdleNudge } from "../core/state.js";
 import { appendMessage, appendActions, _chipRenderSuggestions } from "./ui.js";
-import { tryPlayWithMouth, _vm_stopPlayback, driveVisemes, respAcquire, respRelease, startStream, pushPCM16Base64, stopStream } from "../voice/playback.js";
-import { cancelActiveSpeech } from "../voice/playback.js";
+
+// Voice
+import {
+  tryPlayWithMouth,
+  _vm_stopPlayback,
+  driveVisemes,
+  respAcquire,
+  respRelease,
+  startStream,
+  pushPCM16Base64,
+  stopStream,
+  cancelActiveSpeech
+} from "../voice/playback.js";
+
+// Auth / profile gate
 import { gate } from "../auth/profile.js";
+
 // Barge-in: stop playback and cancel any in-flight TTS
 window.addEventListener("chip:bargein", () => { try { cancelActiveSpeech(); } catch {} });
 
+/* --------------------------- Chat lane wiring --------------------------- */
 
 let _getChatLane = null;
 let _setChatLane = null;
@@ -15,22 +32,23 @@ let _armVAD = null;
 export function wireChatLane(getFn, setFn) { _getChatLane = getFn; _setChatLane = setFn; }
 export function setArmVAD(fn) { _armVAD = fn; }
 
-// ---- FOLLOW-UP GOVERNOR + HUMANE BEHAVIOR ----
+/* ---------------- FOLLOW-UP GOVERNOR + HUMANE BEHAVIOR ------------------ */
+
 let _fu_lastOfferedAt = 0;
 let _fu_turnsSinceOffer = 99;
 const _FU_MIN_INTERVAL_MS = 18000;
 const _FU_MIN_TURNS = 2;
 const _FU_BASE_PROB = 0.35;
 
-function _seemsSatisfied(text="") {
+function _seemsSatisfied(text = "") {
   const s = (text || "").toLowerCase();
   return /(thanks|got it|perfect|that helps|nice|good stuff)/.test(s);
 }
-function _isQuestion(text="") {
+function _isQuestion(text = "") {
   const t = (text || "").trim();
   return /\?$/.test(t) || /^(how|why|what|where|when|who)\b/i.test(t);
 }
-function _isFollowupWorthy(userText="", assistantText="") {
+function _isFollowupWorthy(userText = "", assistantText = "") {
   if (!assistantText || assistantText.length < 6) return false;
   if (/download|attached|opened|scheduled|sent/i.test(assistantText)) return false;
   if (_isQuestion(userText)) return false;
@@ -61,11 +79,13 @@ function _offerFollowupOnce() {
   });
 }
 
+/* ------------------------------- Helpers -------------------------------- */
+
 export function _limitWords(text, n = 20) {
   const words = (text || "").trim().split(/\s+/);
   return words.length <= n ? (text || "") : words.slice(0, n).join(" ") + "...";
 }
-export function _isEndTrigger(message="") {
+export function _isEndTrigger(message = "") {
   const s = (message || "").toLowerCase();
   return /(end chat|we['’]re done|that['’]s all|thanks[, ]*chip|bye[, ]*chip|goodbye)/.test(s);
 }
@@ -117,7 +137,8 @@ async function _handleCanned(kind) {
   if (line) {
     appendMessage("assistant", line, _getChatLane() === "text" ? "text" : "live");
     try {
-      const r = await fetch("/api/speak", { credentials: 'include', 
+      const r = await fetch("/api/speak", {
+        credentials: 'include',
         method: "POST",
         headers: {"Content-Type":"application/json"},
         body: JSON.stringify({ prompt: line, language: "en" })
@@ -128,10 +149,13 @@ async function _handleCanned(kind) {
   _chipSetState("followup");
 }
 
+/* --------------------------- End conversation --------------------------- */
+
 export async function _chipEndConversation() {
   try {
     _chipStep("end", "user requested");
-    fetch("/api/speak", { credentials: 'include', 
+    fetch("/api/speak", {
+      credentials: 'include',
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({ prompt: "Anytime. I’ll be right here when you need me.", language: "en" })
@@ -145,7 +169,7 @@ export async function _chipEndConversation() {
   }
 }
 
-/* ---------- Streaming chat WS (optional, gracefully falls back) ---------- */
+/* ---------------------- Streaming chat WS (optional) -------------------- */
 
 let _ws = null;
 let _wsReady = false;
@@ -158,18 +182,8 @@ function _ensureWS() {
     onClose: () => { _wsReady = false; _streamPrimed = false; },
     onError: () => { _wsReady = false; },
     onMessage: async (msg) => {
-      // Protocol examples from server:
-      // {type:"partial_text", text:"..."}
-      // {type:"final_text", text:"..."}
-      // {type:"audio_chunk", b16:"BASE64_INT16LE", sr:24000}
-      // {type:"end"}  // turn finished
       try {
-        if (msg.type === "partial_text") {
-          // Optional: live token display (kept minimal)
-          // We avoid flicker; main copy is set in sendChat after first text.
-        } else if (msg.type === "final_text") {
-          // Handled in sendChat promise resolution; ignore here.
-        } else if (msg.type === "audio_chunk") {
+        if (msg.type === "audio_chunk") {
           if (!_streamPrimed) {
             const ok = await startStream({ sampleRate: msg.sr || 24000, channels: 1 });
             _streamPrimed = ok;
@@ -181,6 +195,7 @@ function _ensureWS() {
           respRelease();
           _chipSetState("followup");
         }
+        // 'partial_text' / 'final_text' are intentionally no-ops here
       } catch (e) {
         console.warn("WS onMessage error:", e);
       }
@@ -188,6 +203,8 @@ function _ensureWS() {
   });
   return true;
 }
+
+/* --------------------- Sentence-level speech helper --------------------- */
 
 export function _splitIntoSentences(text) {
   const parts = (text || "").trim().split(/(?<=[.!?])\s+(?=[A-Z0-9])/g);
@@ -230,6 +247,7 @@ async function _speakReplySentenceLevel(replyText) {
   }
 }
 
+/* ------------------------------- sendChat ------------------------------- */
 /**
  * Send a user message to Chip.
  * Exposed as a named export so main.js can import { sendChat } from './chat/send.js'
@@ -263,7 +281,6 @@ export async function sendChat(message) {
 
     _ensureWS();
     if (_ws && _ws.isOpen()) {
-      // Let the server stream text/audio frames back
       _ws.send({
         type: "user_text",
         text: message.trim(),
@@ -279,7 +296,7 @@ export async function sendChat(message) {
   }
 
   if (usedStreaming) {
-    // We still want a final text line for the turn; ask server for it too.
+    // Ask server for a final text summary (optional)
     try {
       const res = await fetch("/api/chat/summary", {
         credentials: "include",
@@ -310,7 +327,7 @@ export async function sendChat(message) {
       if (res?.end === true) { _chipEndConversation(); }
       return; // streaming path handled turn
     } catch {
-      // If summary path fails, we'll still have streamed audio; continue to REST for text
+      // If summary fails, continue to REST for text
     }
   }
 
@@ -318,7 +335,7 @@ export async function sendChat(message) {
   try {
     _chipSetState("thinking");
 
-    // Preflight cleanup (don't let this block the turn if it fails)
+    // Preflight cleanup (do not let this block the turn if it fails)
     try {
       await window.AskChip?.voice?.stop?.();           // cancel any TTS playback
       if (window.__chipAbortCtl?.abort) window.__chipAbortCtl.abort();
@@ -379,58 +396,8 @@ export async function sendChat(message) {
   }
 }
 
-  // --- REST fallback (original path) ---
-  try {
-    _chipSetState("thinking");
-    _chipStep("POST /chat →", { message: message.trim(), lane: _getChatLane() });
+/* --------------------------- Voice-once (REST) -------------------------- */
 
-    const res = await fetch("/api/chat", { credentials: 'include', 
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: message.trim(), lane: _getChatLane(), language: "en", domain: "pure-storage" })
-    });
-    const data = await res.json();
-
-    _chipStep("← /chat", data);
-    _chipSetState("responding");
-
-    const textRaw = (data.reply_text ?? data.reply ?? "").trim();
-    const text = _limitWords(textRaw, 20);
-    thinking.textContent = (_getChatLane() === "live" ? "🔊 " : "💬 ") + (text || "");
-
-    if (true) { // sentence-level TTS path
-        await _speakReplySentenceLevel(textRaw);
-      } else {
-        _chipSetState("followup");
-      }
-
-    if (data.visemes && data.visemes.length) driveVisemes(data.visemes);
-
-    appendActions(data.actions || []);
-    if (Array.isArray(data.suggestions)) {
-      _chipRenderSuggestions(data.suggestions, (s) => {
-        if (/end chat/i.test(s)) { _chipEndConversation(); return; }
-        sendChat(s);
-      });
-    }
-
-    if (_shouldOfferFollowup({ userText: message, assistantText: text })) {
-      _offerFollowupOnce();
-    }
-
-    if (data.end === true) {
-      _chipEndConversation();
-      return;
-    }
-  } catch (e) {
-    thinking.textContent = "Sorry—something went sideways.";
-    console.error(e);
-    _chipStep("chat-error", String(e));
-    _chipSetState("idle");
-  }
-}
-
-// === Voice-once path (unchanged, still REST) ===
 export async function handleVoiceOnceResponse({ blob, durMs }) {
   if (durMs < 600) {
     _chipStep("voice-skip", { reason: "short-speech", durMs });
@@ -445,7 +412,7 @@ export async function handleVoiceOnceResponse({ blob, durMs }) {
   _chipSetState("thinking");
   _chipStep("POST /api/voice-once →", { size: blob.size, durMs });
 
-  const res = await fetch("/api/voice-once", { credentials: 'include',  method: "POST", body: fd, credentials: "include" });
+  const res = await fetch("/api/voice-once", { method: "POST", body: fd, credentials: "include" });
   const data = await res.json().catch(() => ({}));
   _chipStep("← /api/voice-once", data);
 
