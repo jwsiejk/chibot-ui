@@ -13,6 +13,7 @@ from typing import Tuple, Optional
 from . import llm_service  # type: ignore
 from . import openai_fallback  # type: ignore
 from .style_guard import enforce, DEFAULT_MAX_WORDS
+from .folksy import inject as inject_folksy
 
 _ROOT = Path(__file__).resolve().parents[1]
 _PROMPTS = _ROOT / "prompts"
@@ -90,6 +91,12 @@ def generate_reply(user_text: str, max_words: int = DEFAULT_MAX_WORDS, ctx: Opti
 
     # Enforce style regardless of path
     fixed, issues = enforce(txt, max_words=max_words)
+
+    # Light Nebraska personality injection (optional)
+    try:
+        fixed, _used = inject_folksy(fixed, user_text)
+    except Exception:
+        pass
 
     # If we changed anything, append a tiny invisible hint to help debugging in logs (not user-visible)
     # (We won't alter returned text with metadata; logging handled by routes.)

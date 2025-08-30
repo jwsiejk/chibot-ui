@@ -2,7 +2,6 @@
 from flask import Blueprint, request, jsonify, session
 from services.reply_service import generate_reply
 from services.entity_normalizer import detect_product, detect_intent, normalize_text_to_pure
-from services.asr_normalizer import normalize_asr
 from services.session_ctx import get as ctx_get, set as ctx_set
 from utils.call_log import call_log
 

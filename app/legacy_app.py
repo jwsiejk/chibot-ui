@@ -111,11 +111,10 @@ def create_app():
     # --- Additional feature blueprints via dynamic loader (kept from your file) ---
 
     # Chat (REST) — some repos mount this at /api/chat/<subroutes>; keep it, but we also add a root fallback below.
-    _register("routes.chat", "chat_bp", url_prefix=None)  # fixed: do not nest /api/chat twice
+    _register("routes.chat", "chat_bp", url_prefix=None)
 
     # Conversation (SSE stream) — provides /api/conversation
-    # legacy orchestrator removed; replaced with blocker
-    _register("routes.legacy_block", "legacy_block_bp", url_prefix=None)
+    _register("routes.conversation", "conversation_bp", url_prefix=None)
 
     # Greet — already scoped to /api in that module
     _register("routes.greet", "bp", url_prefix=None)

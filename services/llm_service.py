@@ -4,6 +4,7 @@
 # - Falls back to the legacy SDK if needed.
 # - If both fail or no API key is present, falls back to services.openai_fallback.
 import os
+from .folksy import inject as inject_folksy
 from typing import Optional, Dict, Any, Generator, Iterable, Union
 
 try:
@@ -252,6 +253,12 @@ def generate_greeting(profile: Optional[Dict[str, Any]] = None) -> str:
         if name:
             return f"Hey {name}—Chip here. What should we tackle first?"
         return "Hey—Chip here. What should we tackle first?"
+    # Light Nebraska personality (optional)
+    try:
+        txt, _used = inject_folksy(txt, prompt)
+    except Exception:
+        pass
+
     # Clean up any stray quotes/markdown the model might add
     return _norm(txt).strip().strip('"').strip("'")
 

@@ -317,9 +317,6 @@ async function sendChat(message) {
       } else {
         _chipSetState("followup");
       }
-    } else {
-      _chipSetState("followup");
-    }
 
     if (data.visemes && data.visemes.length) driveVisemes(data.visemes);
 
