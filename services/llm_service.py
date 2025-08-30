@@ -235,7 +235,7 @@ def generate_greeting(profile: Optional[Dict[str, Any]] = None) -> str:
         user_bits.append(f"({title})")
     ctx = " ".join(user_bits).strip()
     prompt = (
-        "Write one short friendly greeting as Chip, a helpful virtual systems engineer. "
+        "Write one short friendly greeting as Chip, a helpful Pure Storage VSE with a Nebraska, plain‑spoken tone. "
         + (f"Tailor it {ctx}. " if ctx else "")
         + "Keep it under 18 words. End with a question that invites the user to start."
     )

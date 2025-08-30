@@ -6,7 +6,6 @@ Unified reply service with Chip persona + style guard.
 - Applies style_guard.enforce to keep answers short and flowing (no rigid lists)
 """
 from __future__ import annotations
-import os
 from pathlib import Path
 from typing import Tuple, Optional
 
@@ -28,42 +27,44 @@ def _system_prompt() -> str:
     sty_txt = _read(_PROMPTS / "chip_style.md")
     combined = (sys_txt + "\n\n" + sty_txt).strip()
     if not combined:
-        # Fallback minimal system prompt
         combined = (
-            "You are Chip, a Pure Storage virtual systems engineer. "
-            "Keep answers short, conversational, and tied to Pure Storage where relevant. "
-            "Do not use numbered lists; use transitions like First, Next, Then, Finally."
+            "You are Chip, a Pure Storage virtual systems engineer from Nebraska. "
+            "Keep answers short, conversational, and tied to Pure where relevant. "
+            "Avoid numbered lists."
         )
     return combined
 
+def _with_ctx_prefix(user_text: str, ctx: Optional[dict]) -> str:
+    txt = (user_text or "").strip()
+    if not ctx or not isinstance(ctx, dict):
+        return txt
+    product = (ctx.get("product") or "").strip()
+    intent  = (ctx.get("intent") or "").strip()
+    hints = []
+    if product:
+        hints.append(f"Pure topic: {product}")
+    if intent:
+        hints.append(f"intent: {intent}")
+    if hints:
+        return "[" + "; ".join(hints) + "] " + txt
+    return txt
+
 def _call_llm(user_text: str) -> Tuple[str, Optional[str]]:
-    # Preferred: ask llm_service for a reply, attempting to pass a system prompt.
     sys_prompt = _system_prompt()
+    # Try llm_service.chat with explicit system prompt
     try:
-        # Try llm_service.chat with kwargs if supported
         try:
             txt = llm_service.chat(user_text, system_prompt=sys_prompt)  # type: ignore[arg-type]
             if txt:
                 return txt, None
         except TypeError:
-            # Fallback: try a signature without kwargs
             pass
-
-        # Try a variant function if exposed
         if hasattr(llm_service, "chat_with_system"):
             txt = llm_service.chat_with_system(system_prompt=sys_prompt, user_text=user_text)  # type: ignore[attr-defined]
             if txt:
                 return txt, None
-
-        # Final attempt: prepend a control tag to the user text (works with many basic wrappers)
-        tagged = f"[SYSTEM]\n{sys_prompt}\n[/SYSTEM]\n{user_text}"
-        txt = llm_service.chat(tagged)  # type: ignore[arg-type]
-        if txt:
-            return txt, None
-
     except Exception as e:
-        return "", f"llm_service_error: {type(e).__name__}: {e}"
-
+        return "", f"llm_service_error:{type(e).__name__}:{e}"
     return "", "llm_service_empty"
 
 def generate_reply(user_text: str, max_words: int = DEFAULT_MAX_WORDS, ctx: Optional[dict] = None) -> Tuple[str, Optional[str]]:
@@ -71,26 +72,14 @@ def generate_reply(user_text: str, max_words: int = DEFAULT_MAX_WORDS, ctx: Opti
     if not user_text:
         return "", "empty_input"
 
-    # Lightweight context hint for product/intent
-    if ctx and isinstance(ctx, dict):
-        product = (ctx.get('product') or '').strip()
-        intent  = (ctx.get('intent') or '').strip()
-    else:
-        product = ''
-        intent  = ''
-    if product:
-        user_text = f"(Context: We’re discussing Pure Storage {product}. Keep replies short, conversational, and list‑free.)\n" + user_text
+    prompt = _with_ctx_prefix(user_text, ctx)
 
-    # Try LLM path
-    txt, err = _call_llm(user_text)
+    # Try LLM path first
+    txt, err = _call_llm(prompt)
     if not txt:
-        # Fallback path (openai_fallback itself may call OpenAI or echo mode)
-        txt, fb_err = openai_fallback.generate_reply(f"[Follow Chip's persona and style rules]\n{user_text}")
+        fb, fb_err = openai_fallback.generate_reply("[Follow Chip's persona and style rules]\n" + prompt)
+        txt = fb
         err = err or fb_err
 
-    # Enforce style regardless of path
-    fixed, issues = enforce(txt, max_words=max_words)
-
-    # If we changed anything, append a tiny invisible hint to help debugging in logs (not user-visible)
-    # (We won't alter returned text with metadata; logging handled by routes.)
+    fixed, _issues = enforce(txt, max_words=max_words)
     return fixed, err
