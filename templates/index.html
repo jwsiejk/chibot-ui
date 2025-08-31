@@ -4,17 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ask Chip</title>
-
-  <!-- Your existing CSS + a modern theme layer -->
   <link rel="stylesheet" href="/static/css/style.css" />
   <link rel="stylesheet" href="/static/css/layout-addon.css" />
-  <link rel="stylesheet" href="/static/css/askchip-zoom.css" />
-
+  <link rel="stylesheet" href="/static/css/askchip-zoom.css?v=2025-08-31-ui-r2" />
   <script> window.__ASKCHIP_API_ORIGIN = ''; </script>
 </head>
 <body>
-
-  <!-- Header: status left, Ask Chip menu on the RIGHT -->
   <header id="topbar" role="banner">
     <div id="statusBanner" aria-live="polite">Disconnected. Press Start to begin a new session.</div>
     <div class="spacer"></div>
@@ -26,14 +21,12 @@
     </div>
   </header>
 
-  <!-- Main layout: chat panel (left) + Chip stage (right) -->
   <main id="layout">
     <section id="chatPanel" class="panel" hidden>
       <div id="chatText" class="panel" aria-label="Chat">
         <div id="messages" style="min-height: 300px;"></div>
         <div class="inputRow">
-          <input id="chatInput" type="text" inputmode="text" autocomplete="off"
-                 placeholder="Ask me anything about Pure Storage…" />
+          <input id="chatInput" type="text" inputmode="text" autocomplete="off" placeholder="Ask me anything about Pure Storage…" />
           <button id="chatSendBtn" type="button">Send</button>
         </div>
       </div>
@@ -45,39 +38,27 @@
     <aside id="chipStage" aria-label="Chip">
       <img id="chipImage" alt="Chip" src="/static/chip/img/chip.png" />
       <img id="chipMouthImg" alt="" src="/static/chip/img/visemes/mouth_neutral.png" />
-      <div class="calib-hint">Shift+drag mouth to align • double‑click to toggle calibration mode</div>
+      <div class="calib-hint">Shift+drag mouth to align • mouth double‑click to toggle width • double‑click background to toggle mode</div>
       <audio id="chipAudio" hidden></audio>
     </aside>
   </main>
 
-  <!-- Bottom toolbar — centered group -->
   <div class="zoom-bar" role="toolbar" aria-label="Session controls">
     <div class="zb-group">
-      <button id="zAudio" class="zb" title="Toggle microphone">
-        <span class="icon">🎤</span><span>Audio</span>
-      </button>
-      <button id="zChat" class="zb" title="Show/Hide chat">
-        <span class="icon">💬</span><span>Chat <span id="laneBadge">Text</span></span>
-      </button>
-      <button id="zStart" class="zb primary" title="Start (greet)">
-        <span class="icon">▶️</span><span>Start</span>
-      </button>
-      <button id="zEnd" class="zb danger" title="End session">
-        <span class="icon">⏹</span><span>End</span>
-      </button>
+      <button id="zAudio" class="zb" title="Toggle microphone"><span class="icon">🎤</span><span>Audio</span></button>
+      <button id="zChat"  class="zb" title="Show/Hide chat"><span class="icon">💬</span><span>Chat <span id="laneBadge">Text</span></span></button>
+      <button id="zStart" class="zb primary" title="Start (greet)"><span class="icon">▶️</span><span>Start</span></button>
+      <button id="zEnd"   class="zb danger"  title="End session"><span class="icon">⏹</span><span>End</span></button>
     </div>
   </div>
 
-  <!-- Lane picker popover (right-click Chat or long-press on mobile) -->
   <div id="zChatMenu" class="hidden" role="menu" aria-label="Chat mode">
     <button id="laneText" role="menuitem">Text (type by default)</button>
     <button id="laneLive" role="menuitem">Live (voice by default)</button>
   </div>
 
-  <!-- Profile modal populated by JS -->
   <div id="profileModal" class="hidden" role="dialog" aria-modal="true"></div>
 
-  <!-- Load ES‑module UI -->
-  <script type="module" src="/static/user-experience/js/main.js?v=2025-08-31-ui-r1"></script>
+  <script type="module" src="/static/user-experience/js/main.js?v=2025-08-31-ui-r2"></script>
 </body>
 </html>

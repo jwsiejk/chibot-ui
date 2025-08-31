@@ -1,5 +1,4 @@
-/* askchip-zoom.css — modernized UI for the Zoom-style layout */
-
+/* askchip-zoom.css — r2 */
 :root{
   --ac-bg: #0f1115;
   --ac-panel: rgba(255,255,255,.035);
@@ -17,12 +16,12 @@ html, body { background: var(--ac-bg); color: var(--ac-fg); }
 
 .hidden { display: none !important; }
 
-/* Header (status left, menu right) */
+/* Header */
 #topbar {
   display:flex; align-items:center; gap:.5rem;
   padding:.6rem .9rem; border-bottom:1px solid var(--ac-border);
   background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
-  position: sticky; top: 0; z-index: 5;
+  position: sticky; top: 0; z-index: 50;
 }
 #statusBanner { opacity:.9; }
 #topbar .spacer { flex: 1; }
@@ -36,15 +35,13 @@ html, body { background: var(--ac-bg); color: var(--ac-fg); }
 .menu {
   position:absolute; right:12px; top:54px; min-width:220px;
   background: #141720; border:1px solid var(--ac-border-strong); border-radius:10px; padding:8px;
-  box-shadow: var(--ac-shadow);
+  box-shadow: var(--ac-shadow); z-index: 60;
 }
-.menu button{
-  width:100%; text-align:left; padding:.55rem .6rem; background:transparent; border:none; color:var(--ac-fg); border-radius:8px;
-}
+.menu button{ width:100%; text-align:left; padding:.55rem .6rem; background:transparent; border:none; color:var(--ac-fg); border-radius:8px; }
 .menu button:hover{ background: rgba(255,255,255,.06); }
 
 /* Layout */
-#layout { display:flex; gap:16px; padding:12px 18px 96px; }
+#layout { display:flex; gap:16px; padding:12px 18px 112px; }
 #chatPanel { flex: 0 0 520px; max-width: 520px; }
 .panel {
   background: var(--ac-panel); border: 1px solid var(--ac-border);
@@ -63,18 +60,19 @@ html, body { background: var(--ac-bg); color: var(--ac-fg); }
   position:absolute; width: var(--mouth-width, 120px); height:auto;
   left: var(--mouth-left-pct, 50%); top: var(--mouth-top-pct, 62%);
   transform: translate(-50%, -50%);
-  pointer-events:none; opacity:.98;
+  pointer-events:auto; opacity:.98; z-index: 2;
   filter: drop-shadow(0 1px 0 rgba(0,0,0,.3));
 }
-.calib-hint{ position:absolute; top:8px; right:8px; font-size:11px; opacity:.75; background:rgba(0,0,0,.35); padding:4px 6px; border-radius:8px; display:none; }
+.calib-hint{ position:absolute; top:8px; right:8px; font-size:11px; opacity:.75; background:rgba(0,0,0,.35); padding:4px 6px; border-radius:8px; display:none; z-index:3; }
 .calibrating .calib-hint{ display:block; }
 
-/* Bottom Zoom-style toolbar, centered group */
+/* Bottom toolbar */
 .zoom-bar {
   position: fixed; left:0; right:0; bottom:0;
   background: linear-gradient(180deg, rgba(10,12,16,.92), rgba(7,9,12,.96));
   border-top: 1px solid var(--ac-border);
-  display:flex; align-items:center; justify-content:center; padding:10px 14px; z-index:10;
+  display:flex; align-items:center; justify-content:center; padding:12px 14px; z-index: 1000;
+  pointer-events: auto;
 }
 .zb-group{
   display:flex; gap:14px; align-items:center; justify-content:center; padding:6px 10px;
@@ -83,10 +81,10 @@ html, body { background: var(--ac-bg); color: var(--ac-fg); }
   box-shadow: var(--ac-shadow);
 }
 .zb{
-  display:flex; flex-direction:column; align-items:center; gap:4px; min-width:78px; padding:8px 12px;
+  display:flex; flex-direction:column; align-items:center; gap:4px; min-width:88px; padding:9px 12px;
   background: rgba(255,255,255,.02); border:1px solid transparent; border-radius:12px; color: var(--ac-fg);
   cursor:pointer; transition: transform .06s ease, border-color .15s ease, background .15s ease;
-  font-size:12px;
+  font-size:12px; pointer-events: auto;
 }
 .zb .icon{ font-size:18px; line-height:1; }
 .zb:hover{ border-color: var(--ac-accent); background: rgba(110,168,255,.08); }
@@ -97,10 +95,10 @@ html, body { background: var(--ac-bg); color: var(--ac-fg); }
 
 #laneBadge{ font-size:10px; opacity:.85; margin-left:4px; }
 
-/* Lane picker popover near Chat button */
+/* Lane picker */
 #zChatMenu {
   position: fixed; background:#141720; border:1px solid var(--ac-border-strong); border-radius:10px;
-  padding:6px; min-width:160px; box-shadow: var(--ac-shadow); z-index: 12;
+  padding:6px; min-width:160px; box-shadow: var(--ac-shadow); z-index: 1200;
 }
 #zChatMenu button{ display:block; width:100%; text-align:left; padding:8px; background:transparent; border:none; color:var(--ac-fg); border-radius:8px; }
 #zChatMenu button:hover{ background: rgba(255,255,255,.06); }
