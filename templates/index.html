@@ -4,167 +4,117 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ask Chip</title>
+
+  <!-- Base styles -->
   <link rel="stylesheet" href="/static/css/style.css" />
-  <!-- Layout add-on: chat left (compact), Chip stage right (flexible) -->
   <link rel="stylesheet" href="/static/css/layout-addon.css" />
+
+  <style>
+    :root { color-scheme: dark; }
+    html, body { height: 100%; margin: 0; background: #0f1115; color: #e6e6e6;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+    .hidden { display: none !important; }
+    header#topbar { display:flex; align-items:center; gap:.5rem; padding:.5rem .75rem; border-bottom:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.03); position:sticky; top:0; z-index:10; }
+    #statusBanner { opacity:.8; margin-left:.5rem; }
+    #layout { display:flex; gap:16px; padding:16px; }
+    #chatPanel { flex: 0 0 520px; max-width: 520px; }
+    #chipStage { flex: 1 1 auto; display:flex; align-items:center; justify-content:center; min-height: 60vh; position:relative; }
+    #chipImage { max-width: 420px; width: 100%; height:auto; display:block; }
+    #chipMouthImg { position:absolute; width:120px; height:auto; left:50%; transform:translateX(-50%); bottom:18%; pointer-events:none; }
+    .panel { background: var(--panel, rgba(255,255,255,.03)); border: 1px solid var(--border, rgba(255,255,255,.08)); border-radius: 10px; padding: 12px; }
+    .inputRow { display:flex; gap:8px; margin-top:10px; }
+    .inputRow input, .inputRow textarea { flex:1; }
+    .menu { position:absolute; background: var(--panel, #141720); border:1px solid var(--border, rgba(255,255,255,.12)); border-radius:8px; padding:8px; box-shadow:0 8px 28px rgba(0,0,0,.45); }
+    #navMenu { right:12px; top:46px; min-width:220px; }
+    #chatMenu { right:160px; top:46px; min-width:160px; }
+    #adminLogBtn { position: fixed; right: 16px; bottom: 16px; z-index: 30; }
+  </style>
+
+  <!-- If UI and API are on the same host, leave this empty string -->
+  <script> window.__ASKCHIP_API_ORIGIN = ''; </script>
+</head>
+<body>
+
+  <!-- Top bar -->
+  <header id="topbar" role="banner">
+    <button id="navMenuBtn" aria-haspopup="menu">Ask Chip ▾</button>
+    <div id="statusBanner" aria-live="polite"></div>
+    <div style="flex:1"></div>
+    <button id="btnChat" title="Toggle Chat Panel">Ask Chip ▾</button>
+    <div id="chatMenu" class="menu hidden" role="menu">
+      <button id="btnChatText" data-lane="text" role="menuitem">Text Chat</button>
+      <button id="btnChatLive" data-lane="live" role="menuitem">Live (voice)</button>
+    </div>
+    <button id="btnStart">Start</button>
+    <button id="btnMic">🎤 Mic</button>
+    <button id="btnDisconnect">Disconnect</button>
+
+    <!-- App menu -->
+    <div id="navMenu" class="menu hidden" role="menu">
+      <button id="navProfile" role="menuitem">Profile…</button>
+      <button id="navHistory" role="menuitem">History</button>
+      <button id="navLogout" role="menuitem">Log out</button>
+    </div>
+  </header>
+
+  <!-- Main layout: chat left, Chip stage right -->
+  <main id="layout">
+    <section id="chatPanel" class="panel" hidden>
+      <!-- Text chat -->
+      <div id="chatText" class="panel hidden" aria-label="Text chat">
+        <div id="messages" style="min-height: 220px;"></div>
+        <div class="inputRow">
+          <input id="chatInput" type="text" inputmode="text" autocomplete="off" placeholder="Ask me anything about Pure Storage…" />
+          <button id="chatSendBtn" type="button">Send</button>
+        </div>
+      </div>
+
+      <!-- Live (TTS) chat -->
+      <div id="chatTTS" class="panel hidden" aria-label="Live voice">
+        <p>Press <strong>Mic</strong> to talk. I’ll listen for your question and respond.</p>
+      </div>
+    </section>
+
+    <!-- Chip stage -->
+    <aside id="chipStage" aria-label="Chip">
+      <img id="chipImage" alt="Chip" src="/static/chip/img/chip.png" />
+      <img id="chipMouthImg" alt="" src="/static/chip/img/visemes/mouth_neutral.png" />
+      <audio id="chipAudio" hidden></audio>
+    </aside>
+  </main>
+
+  <!-- Profile modal placeholder (wired by auth/profile.js) -->
+  <div id="profileModal" class="hidden" role="dialog" aria-modal="true"></div>
+
+  <!-- Admin log button & panel (optional, only shown for admins) -->
+  <button id="adminLogBtn" class="hidden">Admin Log</button>
+  <div id="adminLogPanel" class="hidden">
+    <header>
+      <strong>Call Log</strong>
+      <span class="controls">
+        <button id="adminRefresh">Refresh</button>
+        <button id="adminClear">Clear</button>
+        <button id="adminClose">Close</button>
+      </span>
+    </header>
+    <div id="adminLogBody"></div>
+  </div>
+
+  <!-- Health ping (console) -->
   <script>
-    window.__ASKCHIP_API_ORIGIN = '';  // same-origin (single Render service)
-  </script><script>
-    // If you deploy UI and API at different origins, set __ASKCHIP_API_ORIGIN before this script.
-    window.__ASKCHIP_API_ORIGIN = window.__ASKCHIP_API_ORIGIN || '';
-  </script>
-  <script type="module" src="/static/user-experience/js/main.js?v=2025-08-30b"></script>
-
-  <script>
-  // Set this to your backend service URL (no trailing slash)
-  window.ASKCHIP_API = "https://ask-chip.onrender.com";
-</script>
-
-  <script>
-/* Ask Chip hotfix: force a stable /api/chat contract */
-window.API = window.API || {};
-window.API.chat = async function(prompt) {
-  try {
-    const res = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }) // also accepted by the server: message | text
-    });
-    let json;
-    try { json = await res.json(); } catch { return { ok: false, error: "bad_json" }; }
-    if (json && typeof json.ok === "boolean") return json;
-    return { ok: false, error: "bad_shape", status: res.status, body: json };
-  } catch (e) {
-    return { ok: false, error: "exception", detail: String(e) };
-  }
-};
-
-// Optional: show config status in the console to help debugging
-fetch("/api/health").then(r=>r.json()).then(s=>console.info("[AskChip] health", s)).catch(()=>{});
-</script>
-
-
-  <!-- Orchestrator shim: prefer /api/chat (memory + style), else fall back -->
-<script>
-  document.addEventListener('DOMContentLoaded', function () {
-    if (!window.API || typeof API.chat !== 'function') return;
-    const legacyChat = API.chat.bind(API);
-    API.chat = async function (text) {
+    (async () => {
       try {
-        const r = await fetch('/api/orchestrator', { method: 'POST', credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text })
-        });
-        if (r.status !== 404) {
-          const j = await r.json();
-          if (j && j.ok) return { ok: true, reply: j.reply, state: j.state };
-          return { ok: false, error: (j && j.error) || 'orchestrator error' };
-        }
-      } catch (e) {}
-      return legacyChat(text);
-    };
-  });
-</script>
-<audio id="chipAudio" hidden></audio>
+        const h = await fetch("/api/health", { credentials: "include" }).then(r => r.json());
+        console.log("[AskChip] health", h);
+      } catch (e) {
+        console.warn("[AskChip] health check failed", e);
+      }
+    })();
+  </script>
 
-<script>
-// Open SSE stream for chat; return a Promise that resolves with the full reply
-function startStream(text) {
-  return new Promise((resolve) => {
-    const esc = encodeURIComponent(text || "");
-    const es = new EventSource(`/api/chat/stream?q=${esc}`);
-    let buf = "";
+  <!-- Load the ES-module UI last so the DOM exists -->
+  <script type="module" src="/static/user-experience/js/main.js?v=2025-08-30-r7"></script>
 
-    es.addEventListener("token", (ev) => {
-      try { const d = JSON.parse(ev.data); if (d && d.delta) { buf += d.delta; } } catch {}
-      // TODO: optionally render live text buf into the UI
-    });
-    es.addEventListener("tool_call", (ev) => {
-      // Optionally surface "Using tool ..." in the UI
-      // console.log("tool_call", ev.data);
-    });
-    es.addEventListener("tool_result", (ev) => {
-      // Optionally surface tool result/confirmation
-      // console.log("tool_result", ev.data);
-    });
-    es.addEventListener("interrupted", () => {
-      es.close(); resolve({ ok: false, interrupted: true, reply: buf.trim() });
-    });
-    es.addEventListener("done", async () => {
-      es.close();
-      resolve({ ok: true, reply: buf.trim() });
-    });
-    es.onerror = () => { try { es.close(); } catch {} resolve({ ok:false, error:"stream_error", reply: buf.trim() }); };
-  });
-}
-</script>
-
-
-<style>
-#adminLogPanel{position:fixed; right:16px; bottom:16px; width:420px; max-height:55vh; background:var(--panel);
-  border:1px solid var(--border); border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,.35); display:flex; flex-direction:column; overflow:hidden; z-index:30;}
-#adminLogPanel header{display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:rgba(255,255,255,0.03); border-bottom:1px solid var(--border);}
-#adminLogPanel header .controls button{margin-left:8px;}
-#adminLogBody{padding:8px 10px; overflow:auto; font:12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; white-space:pre-wrap;}
-.log-row{border-bottom:1px dashed var(--border); padding:6px 0;}
-.log-row .meta{opacity:0.7;}
-</style>
-
-<script>
-(async function initAdminLog(){
-  let isAdmin = false;
-  try {
-    const r = await fetch('/api/health', {credentials:'include'});
-    const j = await r.json();
-    isAdmin = !!j.is_admin;
-  } catch (e) { isAdmin = false; }
-  const btn = document.getElementById('adminLogBtn');
-  const panel = document.getElementById('adminLogPanel');
-  const body = document.getElementById('adminLogBody');
-  const refresh = document.getElementById('adminRefresh');
-  const clearBtn = document.getElementById('adminClear');
-  const closeBtn = document.getElementById('adminClose');
-  if (!btn || !panel) return;
-  if (!isAdmin) return;
-
-  btn.hidden = false;
-  btn.addEventListener('click', async ()=>{
-    panel.hidden = false;
-    await refreshLogs();
-  });
-  closeBtn.addEventListener('click', ()=>{ panel.hidden = true; });
-
-  async function fetchLogs() {
-    const r = await fetch('/api/admin/calls/recent?limit=200', {credentials:'include'});
-    if (!r.ok) return [];
-    const j = await r.json();
-    return (j && j.events) || [];
-  }
-
-  function render(evs) {
-    body.innerHTML = '';
-    for (const ev of evs.slice().reverse()) {
-      const ts = new Date(ev.ts*1000).toLocaleTimeString();
-      const meta = [ts, ev.kind, ev.route || ''].filter(Boolean).join(' · ');
-      const fields = ev.fields ? JSON.stringify(ev.fields, null, 0) : '';
-      const row = document.createElement('div');
-      row.className = 'log-row';
-      row.innerHTML = '<div class="meta">'+meta+'</div>' + (fields? '<div>'+fields+'</div>':'');
-      body.appendChild(row);
-    }
-  }
-
-  async function refreshLogs(){ const evs = await fetchLogs(); render(evs); }
-  refresh.addEventListener('click', refreshLogs);
-  clearBtn.addEventListener('click', async ()=>{
-    if (!confirm('Clear call log?')) return;
-    await fetch('/api/admin/calls/clear', {method:'POST', credentials:'include'});
-    await refreshLogs();
-  });
-
-  await refreshLogs();
-})();
-</script>
-
+  <!-- Legacy orchestrator shim intentionally removed -->
 </body>
 </html>
