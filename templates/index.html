@@ -5,50 +5,77 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ask Chip</title>
 
-  <!-- Base styles -->
+  <!-- Base styles (your existing bundles) -->
   <link rel="stylesheet" href="/static/css/style.css" />
   <link rel="stylesheet" href="/static/css/layout-addon.css" />
 
   <style>
-    :root { color-scheme: dark; }
+    :root {
+      /* Fine‑tune mouth overlay position for your chip.png */
+      --mouth-top-pct: 62%;
+      --mouth-left-pct: 50%;
+      --mouth-width: 120px;
+      color-scheme: dark;
+    }
     html, body { height: 100%; margin: 0; background: #0f1115; color: #e6e6e6;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
     .hidden { display: none !important; }
-    header#topbar { display:flex; align-items:center; gap:.5rem; padding:.5rem .75rem; border-bottom:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.03); position:sticky; top:0; z-index:10; }
-    #statusBanner { opacity:.8; margin-left:.5rem; }
-    #layout { display:flex; gap:16px; padding:16px; }
+    /* Top status/header */
+    header#topbar {
+      display:flex; align-items:center; gap:.5rem;
+      padding:.5rem .75rem; border-bottom:1px solid rgba(255,255,255,.08);
+      background:rgba(255,255,255,.03); position:sticky; top:0; z-index:5;
+    }
+    #statusBanner { opacity:.85; margin-left:.5rem; }
+    .menu { position:absolute; background:#141720; border:1px solid rgba(255,255,255,.12);
+      border-radius:8px; padding:8px; box-shadow:0 8px 28px rgba(0,0,0,.45); }
+    #navMenu { left:8px; top:46px; min-width:220px; }
+    /* Layout */
+    #layout { display:flex; gap:16px; padding:12px 16px 72px; } /* leave space for bottom bar */
     #chatPanel { flex: 0 0 520px; max-width: 520px; }
     #chipStage { flex: 1 1 auto; display:flex; align-items:center; justify-content:center; min-height: 60vh; position:relative; }
-    #chipImage { max-width: 420px; width: 100%; height:auto; display:block; }
-    #chipMouthImg { position:absolute; width:120px; height:auto; left:50%; transform:translateX(-50%); bottom:18%; pointer-events:none; }
-    .panel { background: var(--panel, rgba(255,255,255,.03)); border: 1px solid var(--border, rgba(255,255,255,.08)); border-radius: 10px; padding: 12px; }
+    #chipImage { max-width: 480px; width: 100%; height:auto; display:block; }
+    #chipMouthImg {
+      position:absolute; width: var(--mouth-width); height:auto;
+      left: var(--mouth-left-pct); top: var(--mouth-top-pct);
+      transform: translate(-50%, -50%);
+      pointer-events:none; opacity:.98;
+    }
+    .panel { background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.08);
+      border-radius: 10px; padding: 12px; }
     .inputRow { display:flex; gap:8px; margin-top:10px; }
     .inputRow input, .inputRow textarea { flex:1; }
-    .menu { position:absolute; background: var(--panel, #141720); border:1px solid var(--border, rgba(255,255,255,.12)); border-radius:8px; padding:8px; box-shadow:0 8px 28px rgba(0,0,0,.45); }
-    #navMenu { right:12px; top:46px; min-width:220px; }
-    #chatMenu { right:160px; top:46px; min-width:160px; }
-    #adminLogBtn { position: fixed; right: 16px; bottom: 16px; z-index: 30; }
+    /* Bottom Zoom-style toolbar */
+    .zoom-bar {
+      position: fixed; left:0; right:0; bottom:0;
+      background: rgba(12,14,18,.95);
+      border-top: 1px solid rgba(255,255,255,.1);
+      display:flex; align-items:center; gap:10px; padding:8px 14px; z-index:10;
+    }
+    .zoom-bar .zb {
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      gap:4px; min-width:70px; padding:6px 10px; border-radius:8px; border:1px solid transparent;
+      background: transparent; color:#e6e6e6; font-size:12px; cursor:pointer;
+    }
+    .zoom-bar .zb .icon { font-size:18px; line-height:1; }
+    .zoom-bar .zb.primary { border-color: rgba(255,255,255,.15); background: rgba(255,255,255,.05); }
+    .zoom-bar .zb.danger { background:#3b181b; border-color:#7e2b33; color:#ffb4b4; }
+    .zoom-bar .zb:disabled { opacity:.45; cursor:not-allowed; }
+    .zoom-bar .spacer { flex:1; }
   </style>
 
-  <!-- If UI and API are on the same host, leave this empty string -->
-  <script> window.__ASKCHIP_API_ORIGIN = ''; </script>
+  <script>
+    // If UI and API are on the same origin, leave this as ''.
+    window.__ASKCHIP_API_ORIGIN = '';
+  </script>
 </head>
 <body>
 
-  <!-- Top bar -->
+  <!-- TOP: App menu + status -->
   <header id="topbar" role="banner">
     <button id="navMenuBtn" aria-haspopup="menu">Ask Chip ▾</button>
-    <div id="statusBanner" aria-live="polite"></div>
+    <div id="statusBanner" aria-live="polite">Disconnected. Press Start to begin a new session.</div>
     <div style="flex:1"></div>
-    <button id="btnChat" title="Toggle Chat Panel">Ask Chip ▾</button>
-    <div id="chatMenu" class="menu hidden" role="menu">
-      <button id="btnChatText" data-lane="text" role="menuitem">Text Chat</button>
-      <button id="btnChatLive" data-lane="live" role="menuitem">Live (voice)</button>
-    </div>
-    <button id="btnStart">Start</button>
-    <button id="btnMic">🎤 Mic</button>
-    <button id="btnDisconnect">Disconnect</button>
-
     <!-- App menu -->
     <div id="navMenu" class="menu hidden" role="menu">
       <button id="navProfile" role="menuitem">Profile…</button>
@@ -57,25 +84,22 @@
     </div>
   </header>
 
-  <!-- Main layout: chat left, Chip stage right -->
+  <!-- MAIN: Chat panel (left) + Chip stage (right) -->
   <main id="layout">
     <section id="chatPanel" class="panel" hidden>
-      <!-- Text chat -->
-      <div id="chatText" class="panel hidden" aria-label="Text chat">
-        <div id="messages" style="min-height: 220px;"></div>
+      <div id="chatText" class="panel" aria-label="Text chat">
+        <div id="messages" style="min-height: 280px;"></div>
         <div class="inputRow">
-          <input id="chatInput" type="text" inputmode="text" autocomplete="off" placeholder="Ask me anything about Pure Storage…" />
+          <input id="chatInput" type="text" inputmode="text" autocomplete="off"
+                 placeholder="Ask me anything about Pure Storage…" />
           <button id="chatSendBtn" type="button">Send</button>
         </div>
       </div>
-
-      <!-- Live (TTS) chat -->
       <div id="chatTTS" class="panel hidden" aria-label="Live voice">
-        <p>Press <strong>Mic</strong> to talk. I’ll listen for your question and respond.</p>
+        <p>Press <strong>Audio</strong> to talk. I’ll listen and respond.</p>
       </div>
     </section>
 
-    <!-- Chip stage -->
     <aside id="chipStage" aria-label="Chip">
       <img id="chipImage" alt="Chip" src="/static/chip/img/chip.png" />
       <img id="chipMouthImg" alt="" src="/static/chip/img/visemes/mouth_neutral.png" />
@@ -83,24 +107,27 @@
     </aside>
   </main>
 
-  <!-- Profile modal placeholder (wired by auth/profile.js) -->
+  <!-- Profile modal populated by JS -->
   <div id="profileModal" class="hidden" role="dialog" aria-modal="true"></div>
 
-  <!-- Admin log button & panel (optional, only shown for admins) -->
-  <button id="adminLogBtn" class="hidden">Admin Log</button>
-  <div id="adminLogPanel" class="hidden">
-    <header>
-      <strong>Call Log</strong>
-      <span class="controls">
-        <button id="adminRefresh">Refresh</button>
-        <button id="adminClear">Clear</button>
-        <button id="adminClose">Close</button>
-      </span>
-    </header>
-    <div id="adminLogBody"></div>
+  <!-- Bottom Zoom-style toolbar -->
+  <div id="zoomBar" class="zoom-bar" role="toolbar" aria-label="Session controls">
+    <button id="zAudio" class="zb" title="Toggle microphone">
+      <span class="icon">🎤</span><span>Audio</span>
+    </button>
+    <button id="zChat" class="zb" title="Show/Hide chat">
+      <span class="icon">💬</span><span>Chat</span>
+    </button>
+    <div class="spacer"></div>
+    <button id="zStart" class="zb primary" title="Start (greet)">
+      <span class="icon">▶️</span><span>Start</span>
+    </button>
+    <button id="zEnd" class="zb danger" title="End session">
+      <span class="icon">⏹</span><span>End</span>
+    </button>
   </div>
 
-  <!-- Health ping (console) -->
+  <!-- Health ping to console (helps during deploys) -->
   <script>
     (async () => {
       try {
@@ -112,9 +139,7 @@
     })();
   </script>
 
-  <!-- Load the ES-module UI last so the DOM exists -->
-  <script type="module" src="/static/user-experience/js/main.js?v=2025-08-30-r7"></script>
-
-  <!-- Legacy orchestrator shim intentionally removed -->
+  <!-- Load ES‑module UI last. -->
+  <script type="module" src="/static/user-experience/js/main.js?v=2025-08-30-zoom-r1"></script>
 </body>
 </html>
