@@ -60,3 +60,12 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
   }
   #chipStage { min-height: 360px; }
 }
+
+
+/* Minimal modal styles */
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; }
+.modal .modal-card { background: #111; color: #eee; padding: 16px; border-radius: 8px; width: min(520px, 94vw); box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+.modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+.modal label { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.modal input, .modal select { padding: 8px; border-radius: 6px; border: 1px solid #333; background: #0c0f14; color: #eaeef2; }
+.modal button.primary { background: #4a8efc; color: #fff; border: 0; padding: 8px 12px; border-radius: 6px; }

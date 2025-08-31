@@ -33,8 +33,18 @@ function bindClick(node, handler){
 let BTN_START, BTN_AUDIO, BTN_END, BTN_CHAT, CHAT_MENU, BADGE;
 let chatPanel, chatText, chatTTS, chipImage, chipMouth;
 
+
+// ---- Feature gating (canonical) ----
+async function loadFeatures() {
+  try {
+    const r = await fetch("/api/features", { credentials: "include" });
+    const j = await r.json();
+    return (j && j.features) ? j.features : {};
+  } catch { return {}; }
+}
+
 /* -------------------------------- Lanes ---------------------------------- */
-let chatLane = (localStorage.getItem("chatLane") === "live") ? "live" : "text";
+let chatLane = "text";
 const getChatLane = () => chatLane;
 const setChatLane = (lane) => { chatLane = (lane === "live") ? "live" : "text"; try{ localStorage.setItem("chatLane", chatLane); }catch{}; refreshLaneUI(); };
 const badge = () => { if (BADGE) BADGE.textContent = chatLane === "live" ? "Live" : "Text"; };

@@ -1,0 +1,21 @@
+method,path,backend_files,path_used_with_other_methods
+GET,/,app/legacy_app.py; routes/admin.py,no
+GET,/admin/call-log,app/legacy_app.py,no
+GET,/admin/stream,app/legacy_app.py,no
+GET,/api/health,app/legacy_app.py,no
+GET,/accounts/search,routes/accounts.py,no
+GET,/stream,routes/admin.py,no
+POST,/chat,routes/chat.py,no
+GET,/conversation,routes/conversation.py; routes/legacy_block.py,no
+OPTIONS,/conversation,routes/conversation.py; routes/legacy_block.py,no
+POST,/conversation,routes/conversation.py; routes/legacy_block.py,no
+GET,/orchestrator,routes/conversation.py; routes/legacy_block.py,no
+OPTIONS,/orchestrator,routes/conversation.py; routes/legacy_block.py,no
+POST,/orchestrator,routes/conversation.py; routes/legacy_block.py,no
+POST,/email/send,routes/email_api.py,no
+GET,/greet,routes/greet.py,no
+GET,/profile,routes/profile.py,no
+POST,/profile,routes/profile.py,no
+GET,/askchip-diagnostics.html,routes/tools.py,no
+GET,/admin-log.html,routes/tools.py,no
+GET,/health,routes/voice.py,no

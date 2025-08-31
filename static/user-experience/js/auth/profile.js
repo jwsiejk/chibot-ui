@@ -49,15 +49,23 @@ export function applyAuthedLayout() {
 
 /* ---------------- Data helpers ---------------- */
 
+
 async function fetchMe() {
   try {
     const r = await j("/api/me");
     if (!r || !r.ok) return null;
-    return r.data || null;
+    const d = r.data || null;
+    if (!d) return null;
+    // Normalize keys across backends
+    if (typeof d.authenticated === "undefined") d.authenticated = !!d.logged_in;
+    if (typeof d.profileComplete === "undefined") d.profileComplete = !!(d.profile_complete ?? d.profileComplete);
+    if (typeof d.first_time === "undefined" && typeof d.profileComplete === "boolean") d.first_time = !d.profileComplete;
+    return d;
   } catch {
     return null;
   }
 }
+
 
 async function fetchProfilePrefill() {
   try {
@@ -168,7 +176,8 @@ export async function gate(opts = { applyLayout: false }) {
       hide(appEl);
       show(loginModal, "flex");
     }
-    // If there's no login modal, don't hide the app — fail open
+    // If there's no login modal, fail open and proceed
+    if (!hasLogin) { try { applyAuthedLayout(); } catch {} return { ok: true, reason: "unauthenticated-fail-open" }; }
     return { ok: false, reason: "unauthenticated" };
   }
 
@@ -265,6 +274,18 @@ export function wireLoginAndProfileHandlers() {
       alert("Profile saved.");
     });
   }
+  // Cancel buttons
+  const cancelProfileBtn = $("cancelProfileBtn");
+  if (cancelProfileBtn && !cancelProfileBtn.dataset.wired) {
+    cancelProfileBtn.dataset.wired = "1";
+    cancelProfileBtn.addEventListener("click", () => { try { hide($("profileModal")); } catch {} });
+  }
+  const cancelLoginBtn = $("cancelLoginBtn");
+  if (cancelLoginBtn && !cancelLoginBtn.dataset.wired) {
+    cancelLoginBtn.dataset.wired = "1";
+    cancelLoginBtn.addEventListener("click", () => { try { hide($("loginModal")); } catch {} });
+  }
+
 }
 
 /* ---------------- Bootstrap on load ---------------- */

@@ -24,7 +24,7 @@
   <main id="layout">
     <section id="chatPanel" class="panel" hidden>
       <div id="chatText" class="panel" aria-label="Chat">
-        <div id="messages" style="min-height: 300px;"></div>
+        <div id="chatLog" style="min-height: 300px;"></div>
         <div class="inputRow">
           <input id="chatInput" type="text" inputmode="text" autocomplete="off" placeholder="Ask me anything about Pure Storage…" />
           <button id="chatSendBtn" type="button">Send</button>
@@ -57,8 +57,57 @@
     <button id="laneLive" role="menuitem">Live (voice by default)</button>
   </div>
 
-  <div id="profileModal" class="hidden" role="dialog" aria-modal="true"></div>
+  
+  <div id="profileModal" class="hidden modal" role="dialog" aria-modal="true" aria-label="Profile">
+    <div class="modal-card">
+      <h3 id="profileHint">Please fill out your profile to continue</h3>
+      <form id="profileForm">
+        <label>
+          <span>Name</span>
+          <input type="text" name="name" placeholder="Your name" required />
+        </label>
+        <label>
+          <span>Title</span>
+          <input type="text" name="title" placeholder="Job title" required />
+        </label>
+        <label>
+          <span>Email</span>
+          <input type="email" name="email" placeholder="you@company.com" required />
+        </label>
+        <label>
+          <span>Region</span>
+          <select name="region">
+            <option value="NA">North America</option>
+            <option value="EMEA">EMEA</option>
+            <option value="APJ">APJ</option>
+          </select>
+        </label>
+        <div class="actions">
+          <button type="button" id="saveProfileBtn" class="primary">Save</button>
+          <button type="button" id="cancelProfileBtn">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
 
   <script type="module" src="/static/user-experience/js/main.js?v=2025-08-31-ui-r2"></script>
+
+  <div id="loginModal" class="hidden modal" role="dialog" aria-modal="true" aria-label="Login">
+    <div class="modal-card">
+      <h3>Log in</h3>
+      <form id="loginForm">
+        <label>
+          <span>Email</span>
+          <input type="email" name="email" placeholder="you@company.com" required />
+        </label>
+        <div class="actions">
+          <button type="submit" class="primary">Continue</button>
+          <button type="button" id="cancelLoginBtn">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
 </body>
 </html>

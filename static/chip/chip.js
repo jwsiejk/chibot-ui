@@ -55,7 +55,7 @@
   async function playGreeting() {
     if (getMode() === "static") return playLocal(AUDIO.greeting);
 
-    const { ok, data } = await j("/greet", {});
+    const { ok, data } = await j("/api/greet", {});
     if (!ok || !data) return null;
 
     const url = data.audio;
@@ -74,7 +74,7 @@
   async function playAnswer(questionText) {
     if (getMode() === "static") return playLocal(AUDIO.answer);
 
-    const { ok, data } = await j("/ask", { question: (questionText || "") });
+    const { ok, data } = await j("/api/voice/tts_with_visemes", { question: (questionText || "") });
     if (!ok || !data) return null;
 
     const url = data.audio;
@@ -124,7 +124,7 @@
           }
 
           try {
-            const res = await fetch("/ask-chip", { method: "POST", body: formData });
+            const res = await fetch("/api/voice/tts_with_visemes", { method: "POST", body: formData });
             const reader = res.body && res.body.getReader ? res.body.getReader() : null;
             const decoder = new TextDecoder();
 
