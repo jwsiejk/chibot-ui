@@ -1,299 +1,149 @@
-
-// auth/profile.js — robust gating + handlers + layout (clean, syntax-safe)
-import { $, show, hide, setToolbarHeightVar, _getQueryParam } from "../core/dom.js";
-import { _chipGuide, _chipSetState, _chipStep } from "../core/state.js";
+// auth/profile.js — gating, login/profile handlers (r5 hotfix)
+import { $, show, hide } from "../core/dom.js";
 import { j } from "../core/api.js";
 
-/* ---------------- UI helpers ---------------- */
+/* ----------------------------- Utilities ----------------------------- */
+const byId = (id) => document.getElementById(id);
+const appEl = () => byId("app") || byId("layout");
+const loginModal = () => byId("loginModal");
+const profileModal = () => byId("profileModal");
 
-export function setProfileModalMode(mode) {
-  const profileModal = $("profileModal");
-  const profileHint  = $("profileHint");
-  const saveBtn      = $("saveProfileBtn");
-  if (!profileModal) return;
-
-  profileModal.dataset.mode = mode; // 'gate' | 'edit'
-
-  const titleEl = profileModal.querySelector("h2");
-  if (titleEl) titleEl.textContent = (mode === "gate") ? "Complete Your Profile" : "Your Profile";
-
-  if (profileHint) {
-    if (mode === "gate") {
-      profileHint.textContent = "Please fill out your profile to continue.";
-      profileHint.style.display = "block";
-    } else {
-      profileHint.textContent = "";
-      profileHint.style.display = "none";
-    }
-  }
-
-  if (saveBtn) saveBtn.textContent = (mode === "gate") ? "Save & Continue" : "Save changes";
+function applyAuthedLayout(){
+  const app = appEl(); if (app) { try { app.removeAttribute("inert"); } catch {} show(app); }
+  hide(loginModal()); hide(profileModal());
 }
 
-export function applyAuthedLayout() {
-  const appEl   = $("app");
-  const chipBox = $("chipBox");
-  const toolbar = $("askChipToolbar");
-
-  show(appEl, "block");
-  show(chipBox, "grid");
-  show(toolbar, "flex");
-  setToolbarHeightVar();
-
-  if (window.ChipViseme && typeof window.ChipViseme.layout === "function") {
-    window.ChipViseme.setAnchor(0.49, 0.46);
-    window.ChipViseme.setSize(0.095, 0.075);
-    window.ChipViseme.layout();
-  }
-}
-
-/* ---------------- Data helpers ---------------- */
-
-
-async function fetchMe() {
+async function fetchMe(){
   try {
     const r = await j("/api/me");
     if (!r || !r.ok) return null;
-    const d = r.data || null;
-    if (!d) return null;
-    // Normalize keys across backends
+    const d = r.data || null; if (!d) return null;
     if (typeof d.authenticated === "undefined") d.authenticated = !!d.logged_in;
     if (typeof d.profileComplete === "undefined") d.profileComplete = !!(d.profile_complete ?? d.profileComplete);
     if (typeof d.first_time === "undefined" && typeof d.profileComplete === "boolean") d.first_time = !d.profileComplete;
     return d;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-
-async function fetchProfilePrefill() {
+async function fetchProfilePrefill(){
   try {
     const r = await j("/api/profile");
-    if (!r || !r.ok) return null; // includes 401
+    if (!r || !r.ok) return null;
     return r.data || null;
-  } catch {
-    return null;
+  } catch { return null; }
+}
+
+/* --------------------------- Exported helpers ------------------------- */
+export function setProfileModalMode(mode = "gate"){
+  const hint = byId("profileHint");
+  if (hint) {
+    hint.textContent = (mode === "gate")
+      ? "Please fill out your profile to continue"
+      : "Edit your profile";
   }
 }
 
-/** Exported: safe to call anytime; no-ops if unauthenticated. */
-export async function loadProfileIntoForm() {
-  const profileForm = $("profileForm"); if (!profileForm) return;
-
-  const getI = (n) => profileForm.querySelector(`input[name="${n}"]`);
-  const nameI = getI("name"), titleI = getI("title"), emailI = getI("email");
-
-  const me = await fetchMe();
-  if (!me || !me.authenticated) {
-    // Not logged in yet — avoid calling /api/profile (prevents 401s).
-    try {
-      if (nameI)  nameI.value  = localStorage.getItem("profileName")  || "";
-      if (titleI) titleI.value = localStorage.getItem("profileTitle") || "";
-      if (emailI) emailI.value = localStorage.getItem("profileEmail") || "";
-    } catch {}
-    return;
+export async function loadProfileIntoForm(){
+  const form = byId("profileForm"); if (!form) return;
+  const name  = form.querySelector('input[name="name"]');
+  const title = form.querySelector('input[name="title"]');
+  const email = form.querySelector('input[name="email"]');
+  const data = await fetchProfilePrefill();
+  if (data){
+    if (name && data.name) name.value = data.name;
+    if (title && data.title) title.value = data.title;
+    if (email && data.email) email.value = data.email;
   }
-
-  const js = await fetchProfilePrefill();
-  if (js) {
-    const p = js.profile || js;
-    if (nameI)  nameI.value  = p.name  || "";
-    if (titleI) titleI.value = p.title || "";
-    if (emailI) emailI.value = p.email || "";
-    return;
-  }
-
-  // Last-ditch localStorage
-  try {
-    if (nameI)  nameI.value  = localStorage.getItem("profileName")  || "";
-    if (titleI) titleI.value = localStorage.getItem("profileTitle") || "";
-    if (emailI) emailI.value = localStorage.getItem("profileEmail") || "";
-  } catch {}
 }
 
-/* ---------------- Gating ---------------- */
+/**
+ * Primary gate used by Start/Send:
+ * - If /api/me is unavailable or errors → FAIL OPEN (returns {ok:true})
+ * - If explicitly unauthenticated and login modal exists → show it and block ({ok:false})
+ * - If authenticated but profile is incomplete and profile modal exists → show it and block
+ * - Otherwise → allow
+ */
+export async function gate(opts = { applyLayout: false }){
+  const applyLayout = !!(opts && opts.applyLayout);
+  const me = await fetchMe(); // may be null
 
-export async function enforceProfileCompleteness({ applyLayout = true } = {}) {
-  const appEl = $("app");
-  const loginModal = $("loginModal");
+  // If we can't reach the endpoint, fail open so buttons still work
+  if (!me) {
+    if (applyLayout) try { applyAuthedLayout(); } catch {}
+    return { ok: true, reason: "me-unavailable-fail-open" };
+  }
 
-  const me = await fetchMe();
-
-  if (!me || !me.authenticated) {
-    // Only hide app if we actually have a login modal to show.
-    if (loginModal) {
-      hide(appEl);
-      show(loginModal, "flex");
+  if (!me.authenticated) {
+    const lm = loginModal();
+    if (lm) {
+      if (applyLayout) { hide(appEl()); }
+      show(lm, "flex");
+      return { ok: false, reason: "unauthenticated" };
     }
-    return { ok: false, reason: "unauthenticated" };
+    // No login modal wired → proceed
+    if (applyLayout) try { applyAuthedLayout(); } catch {}
+    return { ok: true, reason: "unauthenticated-no-modal" };
   }
 
-  // Prefer explicit profileComplete; fall back to inverse of first_time.
+  // Authenticated
   const profileComplete = (me.profileComplete !== undefined)
     ? !!me.profileComplete
     : (me.first_time === false);
 
   if (!profileComplete) {
-    setProfileModalMode("gate");
-    await loadProfileIntoForm();
-    show($("profileModal"), "flex");
-    hide($("askChipToolbar"));
-    return { ok: false, reason: "incomplete" };
+    const pm = profileModal();
+    if (pm) {
+      setProfileModalMode("gate");
+      await loadProfileIntoForm();
+      show(pm, "flex");
+      hide(byId("askChipToolbar"));
+      return { ok: false, reason: "incomplete-profile" };
+    }
   }
 
-  if (applyLayout) {
-    applyAuthedLayout();
-    _chipSetState("idle");
-    _chipGuide("Press Start or Chat to speak with Chip.");
-  }
+  if (applyLayout) try { applyAuthedLayout(); } catch {}
   return { ok: true };
 }
 
-// Convenience wrapper the rest of the app can call
-export async function gate(opts = { applyLayout: false }) {
-  const applyLayout = !!(opts && opts.applyLayout);
-  const appEl       = $("app");
-  const loginModal  = $("loginModal");
-  const profileModal= $("profileModal");
-  const hasLogin    = !!loginModal;
-  const hasProfile  = !!profileModal;
-
-  // Fetch current user
-  const me = await fetchMe(); // JSON body or null
-
-  // If we can't confirm auth (endpoint down, null, etc.) keep UI visible
-  if (!me) {
-    if (applyLayout) {
-      try { applyAuthedLayout(); } catch {}
-    }
-    return { ok: true, assumed: true };
-  }
-
-  // Explicit unauthenticated path
-  if (!me.authenticated) {
-    if (hasLogin) {
-      hide(appEl);
-      show(loginModal, "flex");
-    }
-    // If there's no login modal, fail open and proceed
-    if (!hasLogin) { try { applyAuthedLayout(); } catch {} return { ok: true, reason: "unauthenticated-fail-open" }; }
-    return { ok: false, reason: "unauthenticated" };
-  }
-
-  // Prefer explicit profileComplete; fall back to inverse of first_time.
-  const profileComplete = (me.profileComplete !== undefined)
-    ? !!me.profileComplete
-    : (me.first_time === false);
-
-  if (!profileComplete && hasProfile) {
-    setProfileModalMode("gate");
-    await loadProfileIntoForm();
-    show(profileModal, "flex");
-    hide($("askChipToolbar"));
-    return { ok: false, reason: "incomplete" };
-  }
-
-  if (applyLayout) {
-    try { applyAuthedLayout(); } catch {}
-    _chipSetState("idle");
-    _chipGuide("Press Start or Chat to speak with Chip.");
-  }
-  return { ok: true };
-}
-
-/* ---------------- Wire handlers ---------------- */
-
-export function wireLoginAndProfileHandlers() {
-  const loginForm   = $("loginForm");
-  const profileForm = $("profileForm");
-  const saveBtn     = $("saveProfileBtn");
-  const loginModal  = $("loginModal");
-
-  // Login
-  if (loginForm && !loginForm.dataset.wired) {
-    loginForm.dataset.wired = "1";
-    loginForm.addEventListener("submit", async (e) => {
+export function wireLoginAndProfileHandlers(){
+  // Login form
+  const loginForm = byId("loginForm");
+  if (loginForm) {
+    loginForm.addEventListener("submit", async (e)=>{
       e.preventDefault();
       const fd = new FormData(loginForm);
       const email = (fd.get("email") || "").toString().trim().toLowerCase();
       if (!email) return;
-
-      const { ok, data, status } = await j("/api/login", {
-        method: "POST",
-        body: JSON.stringify({ email }),
-      });
-
-      if (!ok) {
-        alert((data && data.error) || `Login failed (${status})`);
-        return;
-      }
-
-      try { localStorage.setItem("profileEmail", email); } catch {}
-      hide(loginModal);
-      const r = await gate({ applyLayout: true });
-      if (!r.ok && r.reason === "incomplete") {
-        // profile modal is already shown by gate()
-      }
-    });
-  }
-
-  // Save profile
-  if (saveBtn && !saveBtn.dataset.wired) {
-    saveBtn.dataset.wired = "1";
-    saveBtn.addEventListener("click", async () => {
-      if (!profileForm) return;
-
-      const fd = new FormData(profileForm);
-      const name  = (fd.get("name")  || "").toString().trim();
-      const title = (fd.get("title") || "").toString().trim();
-      const email = (fd.get("email") || "").toString().trim();
-      if (!name || !title || !email) { alert("Please complete all fields."); return; }
-
-      try {
-        localStorage.setItem("profileName", name);
-        localStorage.setItem("profileTitle", title);
-        localStorage.setItem("profileEmail", email);
-      } catch {}
-
-      const r = await j("/api/profile", {
-        method: "POST",
-        body: JSON.stringify({ name, title, email, region: "NA" })  // ensure region is set
-      });
-
-      const saved = !!(r.data?.ok || r.data?.success);
-      if (!r.ok || !saved) {
-        alert(r.data?.error || "Could not save profile. Please try again.");
-        return;
-      }
-
-      hide($("profileModal"));
+      try { await fetch("/api/login", { method:"POST", credentials:"include", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ email }) }); }
+      catch {}
       applyAuthedLayout();
-      _chipSetState("idle");
-      _chipGuide("Press Start or Chat to speak with Chip.");
-      alert("Profile saved.");
     });
   }
-  // Cancel buttons
-  const cancelProfileBtn = $("cancelProfileBtn");
-  if (cancelProfileBtn && !cancelProfileBtn.dataset.wired) {
-    cancelProfileBtn.dataset.wired = "1";
-    cancelProfileBtn.addEventListener("click", () => { try { hide($("profileModal")); } catch {} });
+
+  // Profile save
+  const saveBtn = byId("saveProfileBtn");
+  const form    = byId("profileForm");
+  if (saveBtn && form) {
+    saveBtn.addEventListener("click", async ()=>{
+      const fd = new FormData(form);
+      const data = {
+        name : (fd.get("name")  || "").toString().trim(),
+        title: (fd.get("title") || "").toString().trim(),
+        email: (fd.get("email") || "").toString().trim().toLowerCase(),
+      };
+      if (!data.name || !data.title || !data.email) return;
+      try {
+        const r = await fetch("/api/profile", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data)
+        });
+        if (r.ok) {
+          hide(profileModal());
+          show(byId("askChipToolbar"));
+        }
+      } catch {}
+    });
   }
-  const cancelLoginBtn = $("cancelLoginBtn");
-  if (cancelLoginBtn && !cancelLoginBtn.dataset.wired) {
-    cancelLoginBtn.dataset.wired = "1";
-    cancelLoginBtn.addEventListener("click", () => { try { hide($("loginModal")); } catch {} });
-  }
-
-}
-
-/* ---------------- Bootstrap on load ---------------- */
-
-if (!window.__chipProfileBoot) {
-  window.__chipProfileBoot = true;
-  document.addEventListener("DOMContentLoaded", async () => {
-    try { wireLoginAndProfileHandlers(); } catch {}
-    await gate({ applyLayout: true });
-  });
 }

@@ -1,13 +1,21 @@
-// core/dom.js — DOM helpers and layout utilities
+// core/dom.js — DOM helpers and layout utilities (r5 hotfix)
 export const $ = (id) => document.getElementById(id);
 
 export const show = (el, display) => {
   if (!el) return;
+  // Critical: remove the 'hidden' class so CSS `display:none !important` doesn't win
+  try { el.classList.remove("hidden"); } catch {}
+  // Defensive: clear 'inert' if present so clicks are accepted
+  try { el.removeAttribute("inert"); } catch {}
   if (display) el.style.display = display;
   else el.style.removeProperty("display");
 };
 
-export const hide = (el) => { if (el) el.style.display = "none"; };
+export const hide = (el) => {
+  if (!el) return;
+  try { el.classList.add("hidden"); } catch {}
+  el.style.display = "none";
+};
 
 export function setToolbarHeightVar(extra = 16) {
   const el = document.getElementById('askChipToolbar');
