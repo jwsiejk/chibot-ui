@@ -80,7 +80,7 @@ function rehydrateChip() {
   if (!chip.getAttribute("src") || chip.getAttribute("src").trim() === "") {
     chip.src = `${CHIP_SRC}?v=${Date.now()}`;
   }
-// fix bad src
+  // fix bad src
   chip.onerror = () => {
     chip.src = `${CHIP_SRC}?v=${Date.now()}`;
     chip.classList.remove("hidden");
@@ -92,7 +92,7 @@ function rehydrateChip() {
 }
 
 // Build fingerprint for cache verification
-console.log("UI build ⏱ 2025-08-17-r3");
+console.log("UI build ⏱ 2025-08-30-r7");
 
 // ===== single DOMContentLoaded =====
 document.addEventListener("DOMContentLoaded", () => {
@@ -383,6 +383,10 @@ wireLoginAndProfileHandlers();
     ac_setTopStatus("Disconnected. Press Start to begin a new session.");
     _chipGuide("Press Start to speak with Chip.");
     _chipStep("boot", "ready");
+  } else {
+    // Keep layout visible but chat panel hidden pre-login
+    const chatPanel = document.getElementById("chatPanel");
+    if (chatPanel) chatPanel.hidden = true;
   }
 })();
 
