@@ -1,55 +1,31 @@
-// main.js — dynamic-only boot, Start button, mic/VAD wiring (ES module)
+// main.js (Zoom-style wiring) — aligns with Toolbar UI and bottom bar
+// Build stamp
+console.log("UI build ⏱ 2025-08-30-zoom-r1");
 
 import { $, show, hide, setToolbarHeightVar } from "./core/dom.js";
-import {
-  _chipGuide,
-  _chipSetState,
-  _chipStartWaitingCountdown,
-  _chipStep,
-  setRenderSuggestions,
-  setArmVADHook,
-  _chipClearIdleNudge
-} from "./core/state.js";
 import { j } from "./core/api.js";
 import {
-  setProfileModalMode,
-  loadProfileIntoForm,
-  gate,
-  wireLoginAndProfileHandlers
-} from "./auth/profile.js";
+  _chipGuide, _chipSetState, _chipStartWaitingCountdown, _chipStep,
+  setRenderSuggestions, setArmVADHook, _chipClearIdleNudge
+} from "./core/state.js";
 import {
-  appendMessage,
-  appendActions,
-  _chipRenderSuggestions,
-  updateChatButtonLabel,
-  wireChatMenu
+  appendMessage, appendActions, _chipRenderSuggestions, updateChatButtonLabel, wireChatMenu
 } from "./chat/ui.js";
 import {
-  sendChat,
-  handleVoiceOnceResponse,
-  wireChatLane,
-  setArmVAD as setArmVADForSend,
-  _chipEndConversation
+  sendChat, handleVoiceOnceResponse, wireChatLane, setArmVAD as setArmVADForSend, _chipEndConversation
 } from "./chat/send.js";
 import { tryPlayWithMouth, _vm_stopPlayback } from "./voice/playback.js";
-import {
-  _vm_armVAD,
-  _vm_disarmVAD,
-  setMicUIUpdater,
-  setGuide as setVoiceGuide,
-  setRecordCallbacks
-} from "./voice/vad.js";
+import { _vm_armVAD, _vm_disarmVAD, setMicUIUpdater, setGuide as setVoiceGuide, setRecordCallbacks } from "./voice/vad.js";
 import { _vm_stopRecording, setStream as setRecordStream } from "./voice/record.js";
+import { setProfileModalMode, loadProfileIntoForm, gate, wireLoginAndProfileHandlers } from "./auth/profile.js";
 
-// Persisted chat lane (text vs live)  <-- must be before any use
-let chatLane = (localStorage.getItem("chatLane") === "text") ? "text" : "live";
-const getChatLane = () => chatLane;
-const setChatLane = (lane) => {
-  chatLane = (lane === "text") ? "text" : "live";
-  try { localStorage.setItem("chatLane", chatLane); } catch (e) {}
-};
+/* ------------------------------- Helpers -------------------------------- */
+const pick = (...ids) => ids.map(id => document.getElementById(id)).find(Boolean);
+const BTN_START = pick("zStart", "btnStart");
+const BTN_AUDIO = pick("zAudio", "btnMic");
+const BTN_END   = pick("zEnd", "btnDisconnect");
+const BTN_CHAT  = pick("zChat", "btnChat");
 
-// --- Chip image hardening & mouth normalization (paths reflect your repo) ---
 const CHIP_SRC   = "/static/chip/img/chip.png";
 const MOUTH_BASE = "/static/chip/img/visemes";
 
@@ -59,191 +35,163 @@ function normalizeMouthFile(name) {
   if (!/\.(png|webp|svg)$/i.test(name)) name += ".png";
   return name;
 }
-
 function setMouth(name) {
   const img = document.getElementById("chipMouthImg");
   if (!img) return;
   img.src = `${MOUTH_BASE}/${normalizeMouthFile(name)}`;
 }
-
-function rehydrateChip() {
+function calibrateMouth() {
   const chip  = document.getElementById("chipImage");
   const mouth = document.getElementById("chipMouthImg");
+  if (!chip || !mouth) return;
+  // simple center calibration using CSS variables from :root
+  mouth.style.top  = getComputedStyle(document.documentElement).getPropertyValue("--mouth-top-pct") || "62%";
+  mouth.style.left = getComputedStyle(document.documentElement).getPropertyValue("--mouth-left-pct") || "50%";
+}
+function rehydrateChip() {
+  const chip  = document.getElementById("chipImage");
   if (!chip) return;
-
-  // keep Chip visible
   chip.classList.remove("hidden");
   chip.style.display    = "block";
   chip.style.visibility = "visible";
   chip.style.opacity    = "1";
-  // ensure src if empty
-  if (!chip.getAttribute("src") || chip.getAttribute("src").trim() === "") {
-    chip.src = `${CHIP_SRC}?v=${Date.now()}`;
-  }
-  // fix bad src
-  chip.onerror = () => {
-    chip.src = `${CHIP_SRC}?v=${Date.now()}`;
-    chip.classList.remove("hidden");
-  };
-
-  if (mouth) {
-    mouth.onerror = () => setMouth("mouth_neutral.png");
-  }
+  if (!chip.getAttribute("src") || chip.getAttribute("src").trim() === "") chip.src = `${CHIP_SRC}?v=${Date.now()}`;
+  chip.onerror = () => { chip.src = `${CHIP_SRC}?v=${Date.now()}`; chip.classList.remove("hidden"); };
+  calibrateMouth();
 }
 
-// Build fingerprint for cache verification
-console.log("UI build ⏱ 2025-08-30-r7");
-
-// ===== single DOMContentLoaded =====
-document.addEventListener("DOMContentLoaded", () => {
-  const nm = $("navMenu"); if (nm && nm.style.display === 'none') nm.style.removeProperty('display');
-  // Layout / toolbar metrics
-  try { setToolbarHeightVar(); } catch {}
-
-  // Chip setup
-  rehydrateChip();
-  requestAnimationFrame(rehydrateChip);
-  setTimeout(rehydrateChip, 250);
-
-  // Toolbar Chat controls
-  const btnChat      = $("btnChat");
-  const btnChatText  = $("btnChatText");
-  const btnChatLive  = $("btnChatLive");
-
-  if (btnChatText) {
-    btnChatText.addEventListener("click", () => { setChatLane("text"); ac_openOnlyChat("text"); });
-  }
-  if (btnChatLive) {
-    btnChatLive.addEventListener("click", () => { setChatLane("live"); ac_openOnlyChat("live"); });
-  }
-  if (btnChat) {
-    btnChat.addEventListener("click", () => { ac_toggleChat(getChatLane()); });
-  }
-});
-
-// Keep toolbar spacing accurate on resize
-window.addEventListener("resize", () => { try { setToolbarHeightVar(); } catch {} });
-
-// ========= Ask Chip (UI helpers added) =========
-// Admin call log (writes only if #adminLog exists)
-const ac_logAdmin = (event, detail = "") => {
-  const wrap = $("adminLog");
-  if (!wrap) return;
-  const row = document.createElement("div");
-  row.className = "admin-log-row";
-  const ts = new Date().toLocaleTimeString();
-  row.textContent = `[${ts}] ${event}${detail ? " — " + detail : ""}`;
-  wrap.insertBefore(row, wrap.firstChild || null);
-};
-
-// Status banner
-const ac_setTopStatus = (text) => {
-  const el = $("statusBanner");
-  if (el) el.textContent = text || "";
-};
+/* --------------------------- Chat lane wiring --------------------------- */
+let chatLane = (localStorage.getItem("chatLane") === "text") ? "text" : "live";
+const getChatLane = () => chatLane;
+const setChatLane = (lane) => { chatLane = (lane === "text") ? "text" : "live"; try { localStorage.setItem("chatLane", chatLane); } catch {} };
 
 // Exclusive chat windows (Text vs Live/TTS)
-const ac_chatTextEl = $("chatText");
-const ac_chatTTSEl  = $("chatTTS");
-
+const ac_chatTextEl = document.getElementById("chatText");
+const ac_chatTTSEl  = document.getElementById("chatTTS");
 const ac_show = (el) => { if (el) el.classList.remove("hidden"); };
 const ac_hide = (el) => { if (el) el.classList.add("hidden"); };
 const ac_visible = (el) => !!(el && !el.classList.contains("hidden"));
 
-const ac_openOnlyChat = (which /* 'text' | 'live' */) => {
+const ac_openOnlyChat = (which) => {
   if (which === "text") {
     ac_show(ac_chatTextEl); ac_hide(ac_chatTTSEl);
-    ac_logAdmin("ui", "opened text, closed tts");
     try { ac_chatTextEl?.querySelector("input,textarea")?.focus(); } catch {}
-  } else { // 'live'
-    ac_show(ac_chatTTSEl); ac_hide(ac_chatTextEl);
-    ac_logAdmin("ui", "opened tts, closed text");
-  }
+  } else { ac_show(ac_chatTTSEl); ac_hide(ac_chatTextEl); }
+};
+const ac_toggleChat = (which) => {
+  if (which === "text") { if (ac_visible(ac_chatTextEl)) ac_hide(ac_chatTextEl); else ac_openOnlyChat("text"); }
+  else { if (ac_visible(ac_chatTTSEl)) ac_hide(ac_chatTTSEl); else ac_openOnlyChat("live"); }
 };
 
-const ac_toggleChat = (which /* 'text' | 'live' */) => {
-  if (which === "text") {
-    if (ac_visible(ac_chatTextEl)) { ac_hide(ac_chatTextEl); ac_logAdmin("ui", "closed text"); }
-    else ac_openOnlyChat("text");
-  } else {
-    if (ac_visible(ac_chatTTSEl)) { ac_hide(ac_chatTTSEl); ac_logAdmin("ui", "closed tts"); }
-    else ac_openOnlyChat("live");
-  }
-};
+/* ------------------------------- Boot UI -------------------------------- */
+document.addEventListener("DOMContentLoaded", () => {
+  try { setToolbarHeightVar(); } catch {}
+  rehydrateChip(); requestAnimationFrame(rehydrateChip); setTimeout(rehydrateChip, 250);
 
-// --- session gate: disable Start while a session is active ---
+  // Bottom bar wiring
+  BTN_CHAT && BTN_CHAT.addEventListener("click", () => ac_toggleChat(getChatLane()));
+  BTN_START && BTN_START.addEventListener("click", onStartClicked);
+  BTN_AUDIO && BTN_AUDIO.addEventListener("click", onAudioClicked);
+  BTN_END   && BTN_END.addEventListener("click", endSession);
+
+  // App menu
+  const navBtn  = document.getElementById("navMenuBtn");
+  const navMenu = document.getElementById("navMenu");
+  navBtn && navBtn.addEventListener("click", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    navMenu.classList.toggle("hidden");
+  });
+  document.addEventListener("click", (e) => {
+    if (navMenu && !navMenu.classList.contains("hidden") && !navMenu.contains(e.target) && e.target !== navBtn) {
+      navMenu.classList.add("hidden");
+    }
+  });
+
+  document.getElementById("navProfile")?.addEventListener("click", async () => {
+    navMenu?.classList.add("hidden");
+    setProfileModalMode("edit"); await loadProfileIntoForm(); show(document.getElementById("profileModal"), "flex");
+  });
+  document.getElementById("navHistory")?.addEventListener("click", async () => {
+    navMenu?.classList.add("hidden");
+    const { ok, data } = await j("/history", { method:"POST", body:"{}" });
+    if (ok && data?.response) appendMessage("chip", data.response);
+  });
+  document.getElementById("navLogout")?.addEventListener("click", async () => {
+    navMenu?.classList.add("hidden");
+    try { await fetch("/logout", { method:"POST", credentials:"include" }); } catch {}
+    location.reload();
+  });
+});
+
+/* ------------------------------ Session UX ------------------------------ */
 let sessionActive = false;
 function setSessionActive(on) {
   sessionActive = !!on;
-  const b = $("btnStart");
-  if (b) {
-    b.disabled = sessionActive;
-    b.classList.toggle("disabled", sessionActive);
-    b.setAttribute("aria-disabled", String(sessionActive));
-  }
+  if (BTN_START) BTN_START.disabled = sessionActive;
+  if (BTN_END)   BTN_END.disabled   = !sessionActive;
 }
 
-// Suggestion renderer (idle nudges etc.)
-setRenderSuggestions((sugs) =>
-  _chipRenderSuggestions(sugs, (s) => {
-    if (/end chat/i.test(s)) { _chipEndConversation(); return; }
-    sendChat(s);
-  })
-);
-
-// Chat lane + UI
-wireChatLane(getChatLane, setChatLane);
-setArmVADForSend(() => _vm_armVAD());
-updateChatButtonLabel(getChatLane());
-
-// Keep existing menu wiring, but when lane changes we also reflect the panel state.
-wireChatMenu(getChatLane, (lane) => {
-  setChatLane(lane);
-  updateChatButtonLabel(getChatLane());
-  // Show the chosen lane and hide the other
-  ac_openOnlyChat(getChatLane() === "text" ? "text" : "live");
-}, () => { /* existing no-op retained */ });
-
-// Additionally, if your HTML menu has explicit lane items, wire them too (harmless if missing)
-const chatMenu = $("chatMenu");
-if (chatMenu) {
-  const textItem = chatMenu.querySelector('[data-lane="text"]');
-  const liveItem = chatMenu.querySelector('[data-lane="live"]');
-  textItem && textItem.addEventListener("click", () => {
-    // click-again-to-close behavior
-    if (ac_visible(ac_chatTextEl)) ac_toggleChat("text");
-    else { setChatLane("text"); updateChatButtonLabel(getChatLane()); ac_openOnlyChat("text"); }
-  });
-  liveItem && liveItem.addEventListener("click", () => {
-    if (ac_visible(ac_chatTTSEl)) ac_toggleChat("live");
-    else { setChatLane("live"); updateChatButtonLabel(getChatLane()); ac_openOnlyChat("live"); }
-  });
-}
+const setStatus = (t) => { const el = document.getElementById("statusBanner"); if (el) el.textContent = t || ""; };
 
 // Mic UI / VAD visuals
 setMicUIUpdater((on, recording = false) => {
-  const btnMic = $("btnMic");
-  if (!btnMic) return;
-  btnMic.classList.toggle("armed", !!on);
-  btnMic.classList.toggle("recording", !!recording);
-  if (recording)      btnMic.textContent = "🎙️ Recording (tap to stop)";
-  else if (on)        btnMic.textContent = "🎤 Listening";
-  else                btnMic.textContent = "🎤 Mic";
+  if (!BTN_AUDIO) return;
+  BTN_AUDIO.classList.toggle("primary", !!on);
+  BTN_AUDIO.classList.toggle("recording", !!recording);
+  let label = "Audio";
+  if (recording) label = "Recording…";
+  else if (on)   label = "Listening";
+  BTN_AUDIO.querySelector("span:last-child")?.replaceChildren(document.createTextNode(label));
 });
 
 setVoiceGuide((text) => _chipGuide(text));
 setRecordCallbacks(
-  async () => { /* onStartRecording */ },
+  async () => { /* onStartRecording no-op */ },
   async () => {
-    // onStopRecording → deliver clip to /api/voice-once
-    await _vm_stopRecording(async (blob, durMs) => {
-      await handleVoiceOnceResponse({ blob, durMs });
-    });
+    await _vm_stopRecording(async (blob, durMs) => { await handleVoiceOnceResponse({ blob, durMs }); });
   }
 );
 
-// Arming VAD should barge-in any playback first
-setArmVADHook(async () => {
+setArmVADForSend(() => _vm_armVAD());
+wireChatLane(getChatLane, setChatLane);
+updateChatButtonLabel(getChatLane());
+
+wireChatMenu(getChatLane, (lane) => {
+  setChatLane(lane); updateChatButtonLabel(getChatLane());
+  ac_openOnlyChat(getChatLane() === "text" ? "text" : "live");
+}, () => {});
+
+// Suggestions -> send
+setRenderSuggestions((sugs) => _chipRenderSuggestions(sugs, (s) => {
+  if (/end chat/i.test(s)) { _chipEndConversation(); return; }
+  sendChat(s);
+}));
+
+/* ------------------------------ Handlers -------------------------------- */
+async function onStartClicked() {
+  if (sessionActive) return;
+  const okGate = await gate({ applyLayout: true }); if (!okGate.ok) return;
+
+  setSessionActive(TrueFalse(true));
+  setStatus("Connecting");
+  _chipGuide("Starting");
+  await startDynamicSession();
+
+  // Auto-arm VAD
+  _chipGuide("Now listening — start talking after the tone.");
+  try { await _vm_armVAD(); } catch (e) { console.warn("VAD arm failed", e); }
+
+  // If silence, nudge
+  setTimeout(() => {
+    const armed = BTN_AUDIO?.classList.contains("primary");
+    if (armed) _chipGuide("I didn’t catch anything—check your mic or tap Audio to try again.");
+  }, 8000);
+}
+
+async function onAudioClicked() {
+  // toggle VAD
+  const armed = BTN_AUDIO?.classList.contains("primary");
+  if (armed) { _vm_disarmVAD(); return; }
   const okGate = await gate(); if (!okGate.ok) return;
   try {
     const s = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -253,134 +201,34 @@ setArmVADHook(async () => {
     _chipGuide("I can’t access your mic. Check browser permissions and try again.");
     return;
   }
-  _vm_stopPlayback(); // barge-in: flush streaming & <audio>
+  _vm_stopPlayback(); // barge-in
   await _vm_armVAD();
-});
-
-// Start = dynamic greet (guard against double-starts, then auto-arm VAD)
-$("btnStart")?.addEventListener("click", async () => {
-  if (sessionActive) return; // hard gate
-  const okGate = await gate({ applyLayout: true }); if (!okGate.ok) return;
-
-  setSessionActive(true);
-  ac_setTopStatus("Connecting");
-  ac_logAdmin("session", "start clicked");
-  _chipGuide("Starting");
-  await startDynamicSession(); // awaits greet audio
-
-  // Auto-arm VAD after greet (only if not already armed)
-  const alreadyArmed = $("btnMic")?.classList.contains("armed");
-  _chipGuide("Now listening — start talking after the tone.");
-  if (!alreadyArmed) {
-    _chipStep("vad", "arming-post-greet");
-    try { await _vm_armVAD(); } catch (e) { console.warn("VAD arm failed", e); }
-  }
-
-  // If user says nothing for a while, nudge
-  setTimeout(() => {
-    const stillArmed = $("btnMic")?.classList.contains("armed");
-    if (stillArmed) _chipGuide("I didn’t catch anything—check your mic or click Mic to try again.");
-  }, 8000);
-});
-
-// Mic button toggle (simple VAD arm/disarm)
-$("btnMic")?.addEventListener("click", async () => {
-  const btnMic = $("btnMic");
-  if (btnMic?.classList.contains("recording")) return; // recording stops via record.js
-  const armed = btnMic?.classList.contains("armed");
-  if (armed) { _vm_disarmVAD(); return; }
-  await _vm_armVAD();
-});
-
-// Chat compose
-$("chatSendBtn")?.addEventListener("click", () => {
-  const input = $("chatInput"); if (!input) return;
-  const val = input.value;
-  if (val && val.trim()) { sendChat(val); input.value = ""; }
-});
-$("chatInput")?.addEventListener("keydown", (e) => {
-  const input = $("chatInput"); if (!input) return;
-
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    const val = input.value;
-    if (val && val.trim()) { sendChat(val); input.value = ""; }
-  }
-
-  // Ctrl+Enter → send as "live" then restore lane
-  if (e.key === "Enter" && e.ctrlKey) {
-    e.preventDefault();
-    const prev = getChatLane();
-    setChatLane("live");
-    updateChatButtonLabel(getChatLane());
-    const val = input.value;
-    if (val && val.trim()) { sendChat(val); input.value = ""; }
-    setChatLane(prev);
-    updateChatButtonLabel(getChatLane());
-  }
-});
-
-// “Ask Chip ▾” menu + items (Profile, History, Logout)
-function toggleNavMenu(forceOpen) {
-  const navMenu = $("navMenu"); if (!navMenu) return;
-  // normalize: if inline display:none exists from HTML, remove it so [hidden] works
-  if (navMenu.style && navMenu.style.display === 'none') navMenu.style.removeProperty('display');
-  if (typeof forceOpen === "boolean") { navMenu.hidden = !forceOpen; navMenu.style.display = navMenu.hidden ? 'none' : 'block'; return; }
-  navMenu.hidden = !navMenu.hidden; navMenu.style.display = navMenu.hidden ? 'none' : 'block';
 }
-$("navMenuBtn")?.addEventListener("click", (e) => {
-  e.preventDefault(); e.stopPropagation();
-  toggleNavMenu();
-});
-document.addEventListener("click", (e) => {
-  const navMenu = $("navMenu");
-  if (!navMenu?.hidden && !navMenu.contains(e.target) && e.target !== $("navMenuBtn")) {
-    toggleNavMenu(false);
-  }
-});
 
-$("navProfile")?.addEventListener("click", async () => {
-  toggleNavMenu(false);
-  setProfileModalMode("edit");
-  await loadProfileIntoForm();
-  show($("profileModal"), "flex");
-});
+function TrueFalse(v){ return !!v; } // tiny util to keep setSessionActive readable
 
-$("navHistory")?.addEventListener("click", async () => {
-  toggleNavMenu(false);
-  const { ok, data } = await j("/history", { method: "POST", body: "{}" });
-  if (ok && data?.response) appendMessage("chip", data.response);
-});
-
-$("navLogout")?.addEventListener("click", async () => {
-  toggleNavMenu(false);
-  try { await fetch("/logout", { credentials: 'include',  method: "POST" }); } catch {}
-  location.reload();
-});
-
-// End session (reenables Start)
-$("btnDisconnect")?.addEventListener("click", () => {
+function endSession() {
   try {
     _chipStep("disconnect", "teardown");
     _vm_disarmVAD();
     _vm_stopPlayback();
     _chipClearIdleNudge();
     _chipSetState("idle");
-    setSessionActive(false);
-    ac_setTopStatus("Disconnected. Press Start to begin a new session.");
-    ac_logAdmin("session", "disconnected");
+    setSessionActive(FalseTrue(false));
+    setStatus("Disconnected. Press Start to begin a new session.");
     _chipGuide("Disconnected. Press Start to begin a new session.");
   } catch (e) { console.warn("disconnect error", e); }
-});
+}
+function FalseTrue(v){ return !!v; }
 
+/* ---------------------------- Boot experience --------------------------- */
 // Auth wiring
 wireLoginAndProfileHandlers();
 
-// Boot hint
 (async () => {
   const g = await gate({ applyLayout: true });
   if (g && g.ok) {
-    ac_setTopStatus("Disconnected. Press Start to begin a new session.");
+    setStatus("Disconnected. Press Start to begin a new session.");
     _chipGuide("Press Start to speak with Chip.");
     _chipStep("boot", "ready");
   } else {
@@ -390,56 +238,36 @@ wireLoginAndProfileHandlers();
   }
 })();
 
-// Surface unexpected errors in admin log to help with “something went sideways”
-window.addEventListener("error", (e) =>
-  ac_logAdmin("error", e.message || "unknown")
-);
-window.addEventListener("unhandledrejection", (e) =>
-  ac_logAdmin(
-    "promise",
-    (e?.reason && e.reason.message) || String(e?.reason || "unknown")
-  )
-);
+// Always ensure mouth overlay stays calibrated on resize
+window.addEventListener("resize", calibrateMouth);
 
-// --- Dynamic session (no static fallback) ---
+/* -------------------------- Dynamic greet / start ----------------------- */
 async function startDynamicSession() {
   try {
     _chipSetState("greeting");
     _chipStep("POST /greet →", {});
 
-    const { ok, data, status } = await j("/greet", {
-      method: "POST",
-      body: JSON.stringify({})
-    });
+    const { ok, data, status } = await j("/greet", { method:"POST", body: JSON.stringify({}) });
 
     if (!ok) {
       _chipStep("greet-failed", { status });
       _chipSetState("idle");
       _chipGuide("Couldn’t start the greeting. Try again?");
+      setSessionActive(FalseTrue(false));
       return;
     }
 
-    // Expecting { audio?: string, reply?: string }
     const audioUrl = data && data.audio;
     const reply    = data && data.reply;
 
-    if (typeof reply === "string" && reply.trim()) {
-      appendMessage("chip", reply);
-    }
+    if (typeof reply === "string" && reply.trim()) appendMessage("chip", reply);
+    if (audioUrl) { try { await tryPlayWithMouth(audioUrl); } catch (e) { console.warn("Greet audio failed", e); } }
 
-    if (audioUrl) {
-      try { await tryPlayWithMouth(audioUrl); }
-      catch (e) { console.warn("Greet audio failed", e); }
-    }
-
-    const chatPanel = $("chatPanel");
+    const chatPanel = document.getElementById("chatPanel");
     if (chatPanel) chatPanel.hidden = false;
 
-    const chatInput = $("chatInput");
-    if (chatInput) {
-      chatInput.placeholder = "Ask me anything about Pure Storage…";
-      try { chatInput.focus(); } catch {}
-    }
+    const chatInput = document.getElementById("chatInput");
+    if (chatInput) { chatInput.placeholder = "Ask me anything about Pure Storage…"; try { chatInput.focus(); } catch {} }
 
     _chipStartWaitingCountdown();
     _chipSetState("idle");
@@ -447,5 +275,16 @@ async function startDynamicSession() {
   } catch (e) {
     console.warn("startDynamicSession error:", e);
     _chipSetState("idle");
+    setSessionActive(FalseTrue(false));
   }
 }
+
+// Chat compose
+document.getElementById("chatSendBtn")?.addEventListener("click", () => {
+  const input = document.getElementById("chatInput"); if (!input) return;
+  const val = input.value; if (val && val.trim()) { sendChat(val); input.value = ""; }
+});
+document.getElementById("chatInput")?.addEventListener("keydown", (e) => {
+  const input = document.getElementById("chatInput"); if (!input) return;
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const val = input.value; if (val && val.trim()) { sendChat(val); input.value = ""; } }
+});
