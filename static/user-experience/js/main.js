@@ -1,5 +1,5 @@
-// main.js — r2: robust binding + debug hook + lane picker + calibrated mouth
-console.log("UI build ⏱ 2025-08-31-ui-r2");
+// main.js — r3: fix ReferenceError(rehydrateChip), robust binding, lane picker, calibrated mouth
+console.log("UI build ⏱ 2025-08-31-ui-r3");
 
 import { $, show, hide, setToolbarHeightVar } from "./core/dom.js";
 import { j } from "./core/api.js";
@@ -46,6 +46,22 @@ const normalizeMouthFile = (n)=> !n ? "mouth_neutral.png" : (/^neutral(\.png)?$/
 function setMouth(name){ if (chipMouth) chipMouth.src = `${MOUTH_BASE}/${normalizeMouthFile(name)}`; }
 function applyMouthFromStorage(){ if (!chipMouth) return; const t=localStorage.getItem("mouthTopPct"); const l=localStorage.getItem("mouthLeftPct"); const w=localStorage.getItem("mouthWidthPx"); if (t) chipMouth.style.top=t; if (l) chipMouth.style.left=l; if (w) chipMouth.style.width=w; }
 function calibrateMouth(){ if (!chipImage || !chipMouth) return; applyMouthFromStorage(); const cs=getComputedStyle(document.documentElement); chipMouth.style.top=chipMouth.style.top||cs.getPropertyValue("--mouth-top-pct")||"62%"; chipMouth.style.left=chipMouth.style.left||cs.getPropertyValue("--mouth-left-pct")||"50%"; chipMouth.style.width=chipMouth.style.width||cs.getPropertyValue("--mouth-width")||"120px"; }
+
+// ✅ Missing in r2 — restore rehydrateChip so initUI can call it safely.
+function rehydrateChip(){
+  const chip  = el("chipImage");
+  const mouth = el("chipMouthImg");
+  if (!chip) return;
+  chip.classList.remove("hidden");
+  chip.style.display    = "block";
+  chip.style.visibility = "visible";
+  chip.style.opacity    = "1";
+  if (!chip.getAttribute("src") || chip.getAttribute("src").trim() === "") chip.src = `${CHIP_SRC}?v=${Date.now()}`;
+  chip.onerror = () => { chip.src = `${CHIP_SRC}?v=${Date.now()}`; chip.classList.remove("hidden"); };
+  if (mouth) mouth.onerror = () => setMouth("mouth_neutral.png");
+  calibrateMouth();
+}
+
 function enableCalibration(){
   const stage = el("chipStage"); if (!stage || !chipMouth) return;
   stage.classList.add("calibrating");
@@ -137,9 +153,9 @@ function initUI(){
   calibrateMouth();
   el("chipStage")?.addEventListener("dblclick",(e)=>{ if (e.target===chipMouth) return; const st=el("chipStage"); if (!st) return; if (st.classList.contains("calibrating")) st.classList.remove("calibrating"); else enableCalibration(); });
 
-  // Debug helper: quick check if handlers are bound
+  // Debug helper
   window.__chipDebug = () => ({
-    build: "2025-08-31-ui-r2",
+    build: "2025-08-31-ui-r3",
     bound: {
       start: !!(BTN_START && BTN_START.getAttribute("data-bound")),
       audio: !!(BTN_AUDIO && BTN_AUDIO.getAttribute("data-bound")),
