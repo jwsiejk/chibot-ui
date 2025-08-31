@@ -47,7 +47,7 @@ const API = (() => {
     version: () => VERSION,
     // Canonical chat path
     chat: (text) => post(endpoints.chat, { text }),
-    greet: () => post(endpoints.greet, {}),
+    greet: () => get(endpoints.greet),
     // Tools
     emailSend: (payload) => post(endpoints.emailSend, payload),
     accountsSearch: (q) => get(`${endpoints.accountsSearch}?q=${encodeURIComponent(q || "")}`),

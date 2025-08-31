@@ -1,23 +1,16 @@
 from __future__ import annotations
 
 import os
-import json
 import logging
 import importlib
 from datetime import datetime as _dt
 from pathlib import Path
 from typing import Any, Optional, Dict
 
-from flask import (
-    Flask,
-    jsonify,
-    render_template,
-    request,
-    session,
-)
+from flask import Flask, jsonify, render_template, request, session
+from werkzeug.exceptions import HTTPException
 
-# --- Optional internal deps (fail-safe stubs if missing) ---------------------
-
+# Optional internal deps
 try:
     import memory  # type: ignore
 except Exception:  # pragma: no cover
@@ -35,18 +28,10 @@ except Exception:  # pragma: no cover
     call_log = _CallLogStub()  # type: ignore
 
 
-# --- Env helpers -------------------------------------------------------------
-
-def _bool_env(*names: str, default: bool = False) -> bool:
-    """
-    Return True if any of the given env vars are set to a truthy value.
-    """
+def _bool_env(name: str, default: bool = False) -> bool:
     truthy = {"1", "true", "yes", "on"}
-    for n in names:
-        v = os.getenv(n)
-        if v is not None and v.strip().lower() in truthy:
-            return True
-    return default
+    v = os.getenv(name)
+    return default if v is None else v.strip().lower() in truthy
 
 
 def _str_env(name: str, default: str = "") -> str:
@@ -54,14 +39,8 @@ def _str_env(name: str, default: str = "") -> str:
     return default if v is None else v
 
 
-# --- App factory -------------------------------------------------------------
-
 def create_app() -> Flask:
-    """
-    Application factory. Points Flask at repo-root templates/static, registers
-    only the canonical blueprints, and exposes a small /api surface.
-    """
-    # Project root is two levels up: /.../src/app/legacy_app.py -> /.../src
+    """Application factory with repo-root templates/static and canonical API."""
     ROOT = Path(__file__).resolve().parents[1]
 
     app = Flask(
@@ -77,80 +56,72 @@ def create_app() -> Flask:
     app.config.setdefault("TEMPLATES_AUTO_RELOAD", True)
     app.config.setdefault("SECRET_KEY", _str_env("SECRET_KEY", "change-me"))
 
-    # Logging baseline
     if not app.debug and not app.testing:
         logging.basicConfig(level=logging.INFO)
 
-    # -------------------------------------------------------------------------
-    # Small helper to register optional blueprints safely (no legacy convo)
-    # -------------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
     def _register(module_path: str, attr_name: Optional[str] = None, url_prefix: Optional[str] = None) -> None:
-        """
-        Import module and register a Flask Blueprint attribute on it. If attr_name
-        is None, try common attribute names.
-        """
+        """Import module and register its Blueprint attribute safely."""
         try:
             mod = importlib.import_module(module_path)
         except Exception as e:  # pragma: no cover
             app.logger.info("Skipping %s: import failed: %s", module_path, e)
             return
 
-        candidate_names = [attr_name] if attr_name else ["bp", "blueprint", "api_bp", "chat_bp", "profile_bp", "tools_bp", "admin_bp", "email_bp", "voice_bp"]
-        bp_obj = None
-        for nm in candidate_names:
-            if not nm:
-                continue
-            if hasattr(mod, nm):
-                bp_obj = getattr(mod, nm)
+        names = [attr_name] if attr_name else ["bp", "blueprint", "api_bp", "chat_bp", "profile_bp", "tools_bp", "admin_bp", "email_bp", "voice_bp", "auth_bp"]
+        bp = None
+        for nm in names:
+            if nm and hasattr(mod, nm):
+                bp = getattr(mod, nm)
                 break
-        if bp_obj is None:
-            # try: first Blueprint-looking attribute
+        if bp is None:
             for nm in dir(mod):
                 obj = getattr(mod, nm)
                 if getattr(obj, "register", None) and getattr(obj, "name", None) and getattr(obj, "url_prefix", None) is not None:
-                    bp_obj = obj
+                    bp = obj
                     break
-
-        if bp_obj is None:
-            app.logger.info("Skipping %s: no blueprint attribute found", module_path)
+        if bp is None:
+            app.logger.info("Skipping %s: no blueprint found", module_path)
             return
-
         try:
-            if bp_obj.name in app.blueprints:
-                app.logger.info("Blueprint %s already registered; skipping", bp_obj.name)
+            if bp.name in app.blueprints:
+                app.logger.info("Blueprint %s already registered; skipping", bp.name)
             else:
-                app.register_blueprint(bp_obj, url_prefix=url_prefix)
-                app.logger.info("Registered blueprint from %s as %s (url_prefix=%r)", module_path, getattr(bp_obj, "name", "?"), url_prefix)
+                app.register_blueprint(bp, url_prefix=url_prefix)
+                app.logger.info("Registered blueprint from %s as %s (url_prefix=%r)", module_path, getattr(bp, "name", "?"), url_prefix)
         except Exception as e:  # pragma: no cover
             app.logger.warning("Failed registering blueprint %s: %s", module_path, e)
 
-    # -------------------------------------------------------------------------
-    # Core routes & pages
-    # -------------------------------------------------------------------------
-
+    # ------------------------------------------------------------------
+    # Routes
+    # ------------------------------------------------------------------
     @app.get("/")
     def index():
-        # Render repo-root templates/index.html
         return render_template("index.html")
 
     @app.get("/healthz")
     def healthz():
         return jsonify(ok=True, time=_dt.utcnow().isoformat() + "Z")
 
-    # Features used by the UI to decide what to show. Keep it simple & explicit.
+    @app.get("/favicon.ico")
+    def favicon():
+        # Return empty favicon to avoid noisy 404s if no file is present
+        return ("", 204, {"Cache-Control": "max-age=86400"})
+
     @app.get("/api/features")
     def api_features():
         data = {
-            "AUDIO": _bool_env("FEATURE_AUDIO", default=True),       # keep your WS/VAD visible unless you turn it off
-            "HISTORY": _bool_env("FEATURE_HISTORY", default=False),
-            "ADMIN_UI": _bool_env("FEATURE_ADMIN_UI", default=False),
-            "TOOLS": _bool_env("FEATURE_TOOLS", default=False),
-            "EMAIL": _bool_env("FEATURE_EMAIL", default=True),
-            "ACCOUNTS": _bool_env("FEATURE_ACCOUNTS", default=False),
+            "AUDIO": _bool_env("FEATURE_AUDIO", True),
+            "HISTORY": _bool_env("FEATURE_HISTORY", False),
+            "ADMIN_UI": _bool_env("FEATURE_ADMIN_UI", False),
+            "TOOLS": _bool_env("FEATURE_TOOLS", False),
+            "EMAIL": _bool_env("FEATURE_EMAIL", True),
+            "ACCOUNTS": _bool_env("FEATURE_ACCOUNTS", False),
         }
         return jsonify(ok=True, features=data)
 
-    # Session/profile surface for gating
     @app.get("/api/me")
     def api_me():
         email = session.get("email") or session.get("user_email")
@@ -160,81 +131,77 @@ def create_app() -> Flask:
                 profile = memory.get_user(email) or {}
         except Exception:
             profile = {}
-
         profile_complete = bool(profile.get("name") or profile.get("fullname"))
-        # Aliases to keep both old and new frontends happy
-        payload = {
+        return jsonify({
             "ok": True,
             "authenticated": bool(email),
             "profileComplete": profile_complete,
             "first_time": not profile_complete,
             "email": email,
             "profile": profile,
-            # legacy keys
+            # legacy keys for older UIs
             "logged_in": bool(email),
             "profile_complete": profile_complete,
-        }
-        return jsonify(payload)
+        })
 
-    # -------------------------------------------------------------------------
-    # Blueprints (NO conversation/orchestrator registration)
-    # -------------------------------------------------------------------------
-
-    # Diagnostics / tools (optional)
+    # ------------------------------------------------------------------
+    # Blueprints (canonical only — no conversation/orchestrator)
+    # ------------------------------------------------------------------
+    # Tools / diagnostics (optional)
     if _bool_env("FEATURE_TOOLS"):
-        _register("routes.tools", "tools_bp")  # /askchip-diagnostics.html, /admin-log.html
+        _register("routes.tools", "tools_bp")
 
-    # Admin UI & SSE log stream (optional)
+    # Admin UI (optional)
     if _bool_env("FEATURE_ADMIN_UI"):
         _register("routes.admin", "admin_bp")
 
-    # Profile API: the module defines /profile; we mount at /api via url_prefix.
+    # Profile (mount under /api)
     try:
         from routes.profile import profile_bp as _profile_bp  # type: ignore
         if "profile_bp" not in app.blueprints:
             app.register_blueprint(_profile_bp, url_prefix="/api")
         else:
-            app.logger.info("profile_bp already registered; skipping duplicate")
+            app.logger.info("profile_bp already registered; skipping")
     except Exception as e:  # pragma: no cover
         app.logger.info("Profile blueprint not available: %s", e)
 
-    # Greet (module already has url_prefix='/api')
-    _register("routes.greet", "bp", url_prefix=None)
+    # Auth (session-based login/logout)
+    _register("routes.auth", "auth_bp", url_prefix=None)  # blueprint defines url_prefix="/api"
 
-    # Chat (canonical /api/chat). If the module sets its own url_prefix, we don't add another.
-    _register("routes.chat", "chat_bp", url_prefix=None)
+    # Greet and Chat
+    _register("routes.greet", "bp")
+    _register("routes.chat", "chat_bp")
 
-    # Email API (optional; module may already bind under /api)
-    if _bool_env("FEATURE_EMAIL", default=True):
-        _register("routes.email_api", None, url_prefix=None)
+    # Email API (optional)
+    if _bool_env("FEATURE_EMAIL", True):
+        _register("routes.email_api", None)
 
     # Accounts search (optional)
-    if _bool_env("FEATURE_ACCOUNTS"):
-        _register("routes.accounts", None, url_prefix=None)
+    if _bool_env("FEATURE_ACCOUNTS", False):
+        _register("routes.accounts", None)
 
-    # Voice routes (optional; keep your WS/VAD pipeline untouched)
-    if _bool_env("FEATURE_AUDIO", default=True):
-        _register("routes.voice", None, url_prefix=None)
-        # If you expose a WS endpoint via a separate module, it remains as implemented.
+    # Voice (optional; WS handled wherever you implement it)
+    if _bool_env("FEATURE_AUDIO", True):
+        _register("routes.voice", None)
 
-    # -------------------------------------------------------------------------
-    # Error handlers
-    # -------------------------------------------------------------------------
-
+    # ------------------------------------------------------------------
+    # Error handling
+    # ------------------------------------------------------------------
     @app.errorhandler(Exception)
     def _unhandled_error(err: Exception):
+        # Pass through HTTP exceptions (e.g., 404, 405) so they are not mis-logged as 500
+        if isinstance(err, HTTPException):
+            return err
         try:
             app.logger.error("Unhandled server error", exc_info=err)
         finally:
-            # Avoid leaking internals; keep response simple JSON for API routes
             path = request.path or ""
             if path.startswith("/api/"):
                 return jsonify(ok=False, error="server_error"), 500
-            # For page routes, a minimal message; index can surface its own UI
             return "Internal Server Error", 500
 
     return app
 
 
-# Expose module-level 'app' for 'gunicorn app:app'
+# Expose 'app' for 'gunicorn app:app'
 app = create_app()

@@ -228,8 +228,8 @@ window.addEventListener("resize", calibrateMouth);
 /* -------------------------- Dynamic greet / start ----------------------- */
 async function startDynamicSession(){
   try{
-    _chipSetState("greeting"); _chipStep("POST /greet →", {});
-    const { ok, data, status } = await j("/greet", { method:"POST", body: JSON.stringify({}) });
+    _chipSetState("greeting"); _chipStep("GET /api/greet →", {});
+    const { ok, data, status } = await j("/api/greet");
     if (!ok){ _chipStep("greet-failed",{status}); _chipSetState("idle"); _chipGuide("Couldn’t start the greeting. Try again?"); setSessionActive(false); return; }
     const audioUrl=data && data.audio; const reply=data && data.reply;
     if (typeof reply==="string" && reply.trim()) appendMessage("chip", reply);
