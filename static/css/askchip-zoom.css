@@ -1,0 +1,106 @@
+/* askchip-zoom.css — modernized UI for the Zoom-style layout */
+
+:root{
+  --ac-bg: #0f1115;
+  --ac-panel: rgba(255,255,255,.035);
+  --ac-border: rgba(255,255,255,.10);
+  --ac-border-strong: rgba(255,255,255,.20);
+  --ac-muted: rgba(255,255,255,.7);
+  --ac-fg: #e6e6e6;
+  --ac-accent: #6ea8ff;
+  --ac-danger: #ff6b6b;
+  --ac-success: #4cd97b;
+  --ac-shadow: 0 12px 36px rgba(0,0,0,.45);
+}
+
+html, body { background: var(--ac-bg); color: var(--ac-fg); }
+
+.hidden { display: none !important; }
+
+/* Header (status left, menu right) */
+#topbar {
+  display:flex; align-items:center; gap:.5rem;
+  padding:.6rem .9rem; border-bottom:1px solid var(--ac-border);
+  background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+  position: sticky; top: 0; z-index: 5;
+}
+#statusBanner { opacity:.9; }
+#topbar .spacer { flex: 1; }
+#navMenuBtn {
+  margin-left: auto;
+  background: var(--ac-panel); border:1px solid var(--ac-border-strong);
+  color: var(--ac-fg); padding:.45rem .7rem; border-radius:10px; cursor:pointer;
+  transition: all .15s ease;
+}
+#navMenuBtn:hover { border-color: var(--ac-accent); box-shadow: 0 0 0 2px rgba(110,168,255,.16) inset; }
+.menu {
+  position:absolute; right:12px; top:54px; min-width:220px;
+  background: #141720; border:1px solid var(--ac-border-strong); border-radius:10px; padding:8px;
+  box-shadow: var(--ac-shadow);
+}
+.menu button{
+  width:100%; text-align:left; padding:.55rem .6rem; background:transparent; border:none; color:var(--ac-fg); border-radius:8px;
+}
+.menu button:hover{ background: rgba(255,255,255,.06); }
+
+/* Layout */
+#layout { display:flex; gap:16px; padding:12px 18px 96px; }
+#chatPanel { flex: 0 0 520px; max-width: 520px; }
+.panel {
+  background: var(--ac-panel); border: 1px solid var(--ac-border);
+  border-radius: 14px; padding: 12px;
+}
+#messages { font-size: 14px; line-height: 1.45; }
+.inputRow { display:flex; gap:10px; margin-top:12px; }
+.inputRow input { flex:1; border-radius:10px; border:1px solid var(--ac-border-strong); padding:.55rem .7rem; background:#0f1218; color:var(--ac-fg); }
+.inputRow button { border-radius:10px; border:1px solid var(--ac-border); padding:.55rem .9rem; background:#141a22; color:var(--ac-fg); }
+.inputRow button:hover { border-color: var(--ac-accent); }
+
+/* Chip stage */
+#chipStage { flex: 1 1 auto; display:flex; align-items:center; justify-content:center; min-height: 60vh; position:relative; }
+#chipImage { max-width: 520px; width: 100%; height:auto; display:block; }
+#chipMouthImg {
+  position:absolute; width: var(--mouth-width, 120px); height:auto;
+  left: var(--mouth-left-pct, 50%); top: var(--mouth-top-pct, 62%);
+  transform: translate(-50%, -50%);
+  pointer-events:none; opacity:.98;
+  filter: drop-shadow(0 1px 0 rgba(0,0,0,.3));
+}
+.calib-hint{ position:absolute; top:8px; right:8px; font-size:11px; opacity:.75; background:rgba(0,0,0,.35); padding:4px 6px; border-radius:8px; display:none; }
+.calibrating .calib-hint{ display:block; }
+
+/* Bottom Zoom-style toolbar, centered group */
+.zoom-bar {
+  position: fixed; left:0; right:0; bottom:0;
+  background: linear-gradient(180deg, rgba(10,12,16,.92), rgba(7,9,12,.96));
+  border-top: 1px solid var(--ac-border);
+  display:flex; align-items:center; justify-content:center; padding:10px 14px; z-index:10;
+}
+.zb-group{
+  display:flex; gap:14px; align-items:center; justify-content:center; padding:6px 10px;
+  background: rgba(255,255,255,.04); border:1px solid var(--ac-border-strong); border-radius:14px;
+  backdrop-filter: blur(10px);
+  box-shadow: var(--ac-shadow);
+}
+.zb{
+  display:flex; flex-direction:column; align-items:center; gap:4px; min-width:78px; padding:8px 12px;
+  background: rgba(255,255,255,.02); border:1px solid transparent; border-radius:12px; color: var(--ac-fg);
+  cursor:pointer; transition: transform .06s ease, border-color .15s ease, background .15s ease;
+  font-size:12px;
+}
+.zb .icon{ font-size:18px; line-height:1; }
+.zb:hover{ border-color: var(--ac-accent); background: rgba(110,168,255,.08); }
+.zb.primary{ border-color: var(--ac-accent); background: rgba(110,168,255,.12); }
+.zb.danger{ border-color: rgba(255,107,107,.4); background: rgba(255,107,107,.10); color:#ffb6b6; }
+.zb:active{ transform: scale(.98); }
+.zb:disabled{ opacity:.45; cursor:not-allowed; }
+
+#laneBadge{ font-size:10px; opacity:.85; margin-left:4px; }
+
+/* Lane picker popover near Chat button */
+#zChatMenu {
+  position: fixed; background:#141720; border:1px solid var(--ac-border-strong); border-radius:10px;
+  padding:6px; min-width:160px; box-shadow: var(--ac-shadow); z-index: 12;
+}
+#zChatMenu button{ display:block; width:100%; text-align:left; padding:8px; background:transparent; border:none; color:var(--ac-fg); border-radius:8px; }
+#zChatMenu button:hover{ background: rgba(255,255,255,.06); }

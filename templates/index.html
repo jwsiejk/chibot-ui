@@ -5,100 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ask Chip</title>
 
-  <!-- Base styles -->
+  <!-- Your existing CSS + a modern theme layer -->
   <link rel="stylesheet" href="/static/css/style.css" />
   <link rel="stylesheet" href="/static/css/layout-addon.css" />
-
-  <style>
-    :root {
-      /* Tune the mouth overlay for chip.png */
-      --mouth-top-pct: 62%;
-      --mouth-left-pct: 50%;
-      --mouth-width: 120px;
-      color-scheme: dark;
-    }
-    html, body { height: 100%; margin: 0; background: #0f1115; color: #e6e6e6;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
-    .hidden { display: none !important; }
-
-    /* Top header */
-    header#topbar {
-      display:flex; align-items:center; gap:.5rem;
-      padding:.5rem .75rem; border-bottom:1px solid rgba(255,255,255,.08);
-      background:rgba(255,255,255,.03); position:sticky; top:0; z-index:5;
-    }
-    #statusBanner { opacity:.85; margin-left:.5rem; }
-    .menu { position:absolute; background:#141720; border:1px solid rgba(255,255,255,.12);
-      border-radius:8px; padding:8px; box-shadow:0 8px 28px rgba(0,0,0,.45); }
-    #navMenu { left:8px; top:46px; min-width:220px; }
-
-    /* Layout */
-    #layout { display:flex; gap:16px; padding:12px 16px 84px; } /* leave space for bottom bar */
-    #chatPanel { flex: 0 0 520px; max-width: 520px; }
-    #chipStage { flex: 1 1 auto; display:flex; align-items:center; justify-content:center; min-height: 60vh; position:relative; }
-    #chipImage { max-width: 480px; width: 100%; height:auto; display:block; }
-    #chipMouthImg {
-      position:absolute; width: var(--mouth-width); height:auto;
-      left: var(--mouth-left-pct); top: var(--mouth-top-pct);
-      transform: translate(-50%, -50%);
-      pointer-events:none; opacity:.98;
-    }
-    .panel { background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.08);
-      border-radius: 10px; padding: 12px; }
-    .inputRow { display:flex; gap:8px; margin-top:10px; }
-    .inputRow input, .inputRow textarea { flex:1; }
-
-    /* Bottom Zoom-style toolbar */
-    .zoom-bar {
-      position: fixed; left:0; right:0; bottom:0;
-      background: rgba(12,14,18,.95);
-      border-top: 1px solid rgba(255,255,255,.1);
-      display:flex; align-items:center; gap:10px; padding:8px 14px; z-index:10;
-    }
-    .zoom-bar .zb {
-      display:flex; flex-direction:column; align-items:center; justify-content:center;
-      gap:4px; min-width:72px; padding:6px 10px; border-radius:8px; border:1px solid transparent;
-      background: transparent; color:#e6e6e6; font-size:12px; cursor:pointer;
-    }
-    .zoom-bar .zb .icon { font-size:18px; line-height:1; }
-    .zoom-bar .zb.primary { border-color: rgba(255,255,255,.15); background: rgba(255,255,255,.05); }
-    .zoom-bar .zb.danger { background:#3b181b; border-color:#7e2b33; color:#ffb4b4; }
-    .zoom-bar .zb:disabled { opacity:.45; cursor:not-allowed; }
-    .zoom-bar .spacer { flex:1; }
-
-    /* Lane picker popover (attached to Chat) */
-    #zChatMenu {
-      position: fixed;
-      bottom: 56px; /* just above the bar */
-      left: 120px;  /* will be repositioned by JS near Chat button */
-      background:#141720; border:1px solid rgba(255,255,255,.12); border-radius:8px;
-      padding:6px; min-width:160px; box-shadow:0 8px 28px rgba(0,0,0,.45);
-    }
-    #zChatMenu button { display:block; width:100%; text-align:left; padding:8px; background:transparent; border:none; color:#e6e6e6; cursor:pointer; }
-    #zChatMenu button:hover { background: rgba(255,255,255,.06); }
-    #laneBadge { font-size:10px; opacity:.8; margin-left:4px; }
-  </style>
+  <link rel="stylesheet" href="/static/css/askchip-zoom.css" />
 
   <script> window.__ASKCHIP_API_ORIGIN = ''; </script>
 </head>
 <body>
 
-  <!-- TOP header: app menu + status -->
+  <!-- Header: status left, Ask Chip menu on the RIGHT -->
   <header id="topbar" role="banner">
-    <button id="navMenuBtn" aria-haspopup="menu">Ask Chip ▾</button>
     <div id="statusBanner" aria-live="polite">Disconnected. Press Start to begin a new session.</div>
-    <div style="flex:1"></div>
-    <div id="navMenu" class="menu hidden" role="menu">
+    <div class="spacer"></div>
+    <button id="navMenuBtn" aria-haspopup="menu">Ask Chip ▾</button>
+    <div id="navMenu" class="menu hidden" role="menu" aria-label="App">
       <button id="navProfile" role="menuitem">Profile…</button>
       <button id="navHistory" role="menuitem">History</button>
       <button id="navLogout" role="menuitem">Log out</button>
     </div>
   </header>
 
-  <!-- MAIN: chat (always visible) + optional live panel, Chip stage -->
+  <!-- Main layout: chat panel (left) + Chip stage (right) -->
   <main id="layout">
     <section id="chatPanel" class="panel" hidden>
-      <!-- Message log + composer are always visible, even in Live lane -->
       <div id="chatText" class="panel" aria-label="Chat">
         <div id="messages" style="min-height: 300px;"></div>
         <div class="inputRow">
@@ -107,7 +37,6 @@
           <button id="chatSendBtn" type="button">Send</button>
         </div>
       </div>
-      <!-- Live lane helper panel (appears in addition to the log) -->
       <div id="chatTTS" class="panel hidden" aria-label="Live voice">
         <p>Live mode is on. Tap <strong>Audio</strong> to start/stop listening. You can still type at any time.</p>
       </div>
@@ -116,49 +45,39 @@
     <aside id="chipStage" aria-label="Chip">
       <img id="chipImage" alt="Chip" src="/static/chip/img/chip.png" />
       <img id="chipMouthImg" alt="" src="/static/chip/img/visemes/mouth_neutral.png" />
+      <div class="calib-hint">Shift+drag mouth to align • double‑click to toggle calibration mode</div>
       <audio id="chipAudio" hidden></audio>
     </aside>
   </main>
 
-  <!-- Profile modal populated by JS -->
-  <div id="profileModal" class="hidden" role="dialog" aria-modal="true"></div>
-
-  <!-- Bottom Zoom-style toolbar -->
-  <div id="zoomBar" class="zoom-bar" role="toolbar" aria-label="Session controls">
-    <button id="zAudio" class="zb" title="Toggle microphone">
-      <span class="icon">🎤</span><span>Audio</span>
-    </button>
-    <button id="zChat" class="zb" title="Show/Hide chat">
-      <span class="icon">💬</span><span>Chat <span id="laneBadge">Text</span></span>
-    </button>
-    <div class="spacer"></div>
-    <button id="zStart" class="zb primary" title="Start (greet)">
-      <span class="icon">▶️</span><span>Start</span>
-    </button>
-    <button id="zEnd" class="zb danger" title="End session">
-      <span class="icon">⏹</span><span>End</span>
-    </button>
+  <!-- Bottom toolbar — centered group -->
+  <div class="zoom-bar" role="toolbar" aria-label="Session controls">
+    <div class="zb-group">
+      <button id="zAudio" class="zb" title="Toggle microphone">
+        <span class="icon">🎤</span><span>Audio</span>
+      </button>
+      <button id="zChat" class="zb" title="Show/Hide chat">
+        <span class="icon">💬</span><span>Chat <span id="laneBadge">Text</span></span>
+      </button>
+      <button id="zStart" class="zb primary" title="Start (greet)">
+        <span class="icon">▶️</span><span>Start</span>
+      </button>
+      <button id="zEnd" class="zb danger" title="End session">
+        <span class="icon">⏹</span><span>End</span>
+      </button>
+    </div>
   </div>
 
-  <!-- Lane picker popover (hidden by default) -->
+  <!-- Lane picker popover (right-click Chat or long-press on mobile) -->
   <div id="zChatMenu" class="hidden" role="menu" aria-label="Chat mode">
     <button id="laneText" role="menuitem">Text (type by default)</button>
     <button id="laneLive" role="menuitem">Live (voice by default)</button>
   </div>
 
-  <!-- Console health (optional) -->
-  <script>
-    (async () => {
-      try {
-        const h = await fetch("/api/health", { credentials: "include" }).then(r => r.json());
-        console.log("[AskChip] health", h);
-      } catch (e) {
-        console.warn("[AskChip] health check failed", e);
-      }
-    })();
-  </script>
+  <!-- Profile modal populated by JS -->
+  <div id="profileModal" class="hidden" role="dialog" aria-modal="true"></div>
 
-  <!-- Load the ES-module UI -->
-  <script type="module" src="/static/user-experience/js/main.js?v=2025-08-30-lanes-r2"></script>
+  <!-- Load ES‑module UI -->
+  <script type="module" src="/static/user-experience/js/main.js?v=2025-08-31-ui-r1"></script>
 </body>
 </html>
