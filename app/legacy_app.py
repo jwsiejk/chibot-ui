@@ -6,6 +6,7 @@ import time
 import datetime as _dt
 import logging
 from flask import Flask, jsonify, render_template, request, session
+from pathlib import Path
 from werkzeug.exceptions import HTTPException
 
 # Optional services
@@ -27,8 +28,15 @@ def _feature_flags() -> dict:
         "SUMMARY": _bool_env("FEATURE_SUMMARY", "0"),
     }
 
-def create_app() -> Flask:
-    app = Flask(__name__)
+def create_app():
+    # Point Flask at repo-root templates/ and static/
+    ROOT = Path(__file__).resolve().parents[1]  # /opt/render/project/src
+    app = Flask(
+        __name__,
+        template_folder=str(ROOT / "templates"),
+        static_folder=str(ROOT / "static"),
+        static_url_path="/static",
+    )
     app.config["JSON_SORT_KEYS"] = False
     app.logger.setLevel(logging.INFO)
 
@@ -62,6 +70,10 @@ def create_app() -> Flask:
     @app.route("/", methods=["GET"])
     def index():
         return render_template("index.html")
+
+    # If your Render start command is "gunicorn app.legacy_app:app", keep this:
+app = create_app()
+# If your command is "gunicorn app.legacy_app:create_app()", remove or ignore the line above.
 
     # ---- Register blueprints (canonical only) ----
     # Voice API (optional)
