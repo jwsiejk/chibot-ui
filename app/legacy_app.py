@@ -250,6 +250,158 @@ def create_app() -> Flask:
         _register("routes.voice", None)
 
     # ------------------------------------------------------------------
+    # CORS for voice endpoints (to support separate UI origin)
+    # ------------------------------------------------------------------
+    @app.after_request
+    def _voice_cors(resp):
+        try:
+            p = request.path or ""
+            if p.startswith(("/api/voice", "/voice", "/eleven")):
+                resp.headers.setdefault("Access-Control-Allow-Origin", "*")
+                resp.headers.setdefault("Access-Control-Allow-Headers", "Content-Type, Authorization")
+                resp.headers.setdefault("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        except Exception:
+            pass
+        return resp
+
+    # ------------------------------------------------------------------
+    # Voice fallback routes (only if blueprint didn't register expected paths)
+    # ------------------------------------------------------------------
+    def _install_voice_fallbacks() -> None:
+        try:
+            existing_paths = {rule.rule for rule in app.url_map.iter_rules()}
+        except Exception:
+            existing_paths = set()
+
+        def _path_missing(p: str) -> bool:
+            return p not in existing_paths
+
+        def _extract_text(payload: dict) -> str:
+            try:
+                return (
+                    payload.get("text")
+                    or payload.get("input")
+                    or payload.get("message")
+                    or payload.get("utterance")
+                    or ""
+                ).strip()
+            except Exception:
+                return ""
+
+        def _synthesize_local(text: str):
+            # Try project bridge first; fall back to urllib if unavailable.
+            try:
+                from services.tts_bridge import synthesize_with_visemes  # type: ignore
+                return synthesize_with_visemes(text)
+            except Exception:
+                pass
+
+            # Minimal urllib fallback (no visemes)
+            import base64, json as _json, urllib.request, urllib.error
+            api_key = (
+                os.getenv("ELEVENLABS_API_KEY")
+                or os.getenv("ELEVEN_API_KEY")
+            )
+            voice_id = (
+                os.getenv("ELEVENLABS_VOICE_ID")
+                or os.getenv("ELEVEN_VOICE_ID")
+                or os.getenv("CHIP_VOICE_ID")
+                or ""
+            ).strip()
+            model_id = os.getenv("ELEVENLABS_MODEL_ID", "eleven_turbo_v2")
+
+            if not api_key or not voice_id:
+                return None, None, "not_configured"
+
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+            headers = {
+                "accept": "audio/mpeg",
+                "content-type": "application/json",
+                "xi-api-key": api_key,
+            }
+            payload = {
+                "text": text,
+                "model_id": model_id,
+                # Let server defaults handle voice settings if not provided
+            }
+            try:
+                req = urllib.request.Request(url, data=_json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    content = resp.read()
+                audio_b64 = base64.b64encode(content).decode("utf-8")
+                return audio_b64, None, None
+            except urllib.error.HTTPError as e:
+                try:
+                    err_body = e.read().decode("utf-8")
+                except Exception:
+                    err_body = str(e)
+                return None, None, f"HTTP {e.code}: {err_body[:200]}"
+            except Exception as e:
+                return None, None, f"tts_exception: {e!r}"
+
+        def _tts_handler():
+            try:
+                payload = request.get_json(silent=True) or {}
+            except Exception:
+                payload = {}
+            text = _extract_text(payload) or (request.args.get("text") or "").strip()
+
+            if not text:
+                return jsonify({"ok": False, "error": "no_text", "status": 400, "detail": "Provide text/input/message/utterance."}), 400
+
+            audio_b64, visemes, err = _synthesize_local(text)
+            if err:
+                status = 200 if err == "not_configured" else 502
+                return jsonify({"ok": False, "error": "tts_failed", "detail": err, "status": status}), status
+
+            resp = {"ok": True, "audio": audio_b64}
+            if visemes:
+                resp["visemes"] = visemes
+            return jsonify(resp), 200
+
+        # Paths various UIs might probe
+        fallback_paths = [
+            "/api/voice/tts_with_visemes",
+            "/api/voice/speak",
+            "/api/voice/tts",
+            "/voice/speak",
+            "/voice/tts",
+            "/eleven/tts",
+            "/eleven/speak",
+        ]
+        added = 0
+        for ix, path in enumerate(fallback_paths):
+            if _path_missing(path):
+                try:
+                    app.add_url_rule(path, endpoint=f"voice_fallback_{ix}", view_func=_tts_handler, methods=["POST"])
+                    added += 1
+                except Exception:
+                    pass
+
+        # health endpoints (optional)
+        def _health():
+            configured = bool(
+                (os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVEN_API_KEY"))
+                and (os.getenv("ELEVENLABS_VOICE_ID") or os.getenv("ELEVEN_VOICE_ID") or os.getenv("CHIP_VOICE_ID"))
+            )
+            return jsonify({"ok": True, "configured": configured})
+        for p in ("/voice/health", "/api/voice/health"):
+            if _path_missing(p):
+                try:
+                    app.add_url_rule(p, endpoint=f"voice_fallback_health_{p}", view_func=_health, methods=["GET"])
+                except Exception:
+                    pass
+
+        if added:
+            app.logger.info("Installed %d voice fallback route(s).", added)
+
+    # Install fallbacks after any blueprint registration
+    try:
+        _install_voice_fallbacks()
+    except Exception as e:  # pragma: no cover
+        app.logger.warning("Voice fallbacks failed: %s", e)
+
+    # ------------------------------------------------------------------
     # Error handling
     # ------------------------------------------------------------------
     @app.errorhandler(Exception)
