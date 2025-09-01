@@ -6,7 +6,6 @@ import importlib
 from datetime import datetime as _dt
 from pathlib import Path
 from typing import Any, Optional, Dict
-
 from flask import Flask, jsonify, render_template, request, session
 from werkzeug.exceptions import HTTPException
 
@@ -54,8 +53,23 @@ def create_app() -> Flask:
     app.config.setdefault("JSON_SORT_KEYS", False)
     app.config.setdefault("JSON_AS_ASCII", False)
     app.config.setdefault("TEMPLATES_AUTO_RELOAD", True)
-    app.config.setdefault("SECRET_KEY", _str_env("SECRET_KEY", "change-me"))
+  import secrets
 
+# Look up your env var (you said you'll use SECRET_KEY; include legacy names for safety)
+secret = (os.environ.get("SECRET_KEY")
+          or os.environ.get("FLASK_SECRET")
+          or os.environ.get("Flask_Secret"))
+
+if not secret:
+    # In dev you can auto-generate; in prod, fail fast so you don't silently break sessions
+    if app.debug:
+        secret = secrets.token_hex(32)
+        app.logger.warning("Generated dev SECRET_KEY; set SECRET_KEY in env for prod.")
+    else:
+        raise RuntimeError("SECRET_KEY is required (checked SECRET_KEY, FLASK_SECRET, Flask_Secret).")
+
+app.config["SECRET_KEY"] = secret  # <-- direct assignment, not setdefault
+ 
     if not app.debug and not app.testing:
         logging.basicConfig(level=logging.INFO)
 
