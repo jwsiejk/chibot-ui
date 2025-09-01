@@ -1,4 +1,40 @@
-// core/api.js — fetch + websocket helpers (patched for streaming)
+// ---- AskChip host shims (paste at TOP of static/user-experience/js/core/api.js) ----
+const API = window.ASKCHIP_API_BASE;
+const WS  = window.ASKCHIP_WS_BASE;
+
+function absolutize(url) {
+  if (typeof url !== "string") return url;
+  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("ws")) return url;
+  if (url.startsWith("/api/")) return `${API}${url}`;
+  if (url.startsWith("/ws/"))  return `${WS}${url}`;
+  return url;
+}
+
+// Patch fetch so any relative "/api/..." goes to the API host
+const _fetch = window.fetch.bind(window);
+window.fetch = (input, init) => {
+  let url = typeof input === "string" ? input : input.url;
+  const abs = absolutize(url);
+  if (abs !== url) {
+    input = typeof input === "string" ? abs : new Request(abs, input);
+  }
+  return _fetch(input, init);
+};
+
+// Patch EventSource (SSE) to use API host when given "/api/..."
+const _ES = window.EventSource;
+window.EventSource = class extends _ES {
+  constructor(url, opts) { super(absolutize(url), opts); }
+};
+
+// Patch WebSocket so relative "/ws/..." uses the WS host
+const _WS = window.WebSocket;
+window.WebSocket = class extends _WS {
+  constructor(url, ...args) { super(absolutize(url), ...args); }
+};
+// ---- end shim ----
+
+
 
 export async function j(path, opts = {}) {
   const r = await fetch(path, {
