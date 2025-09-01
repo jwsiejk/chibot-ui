@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 import logging
 import importlib
-from datetime import datetime as _dt
+import secrets
+from datetime import datetime as _dt, timedelta
 from pathlib import Path
 from typing import Any, Optional, Dict
+
 from flask import Flask, jsonify, render_template, request, session
 from werkzeug.exceptions import HTTPException
 
@@ -49,34 +51,56 @@ def create_app() -> Flask:
         static_url_path="/static",
     )
 
-    # Basic config
-    app.config.setdefault("JSON_SORT_KEYS", False)
-    app.config.setdefault("JSON_AS_ASCII", False)
-    app.config.setdefault("TEMPLATES_AUTO_RELOAD", True)
-  import secrets
+    # ------------------------------------------------------------------
+    # Base config
+    # ------------------------------------------------------------------
+    app.config["JSON_SORT_KEYS"] = False
+    app.config["JSON_AS_ASCII"] = False
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
 
-# Look up your env var (you said you'll use SECRET_KEY; include legacy names for safety)
-secret = (os.environ.get("SECRET_KEY")
-          or os.environ.get("FLASK_SECRET")
-          or os.environ.get("Flask_Secret"))
+    # ------------------------------------------------------------------
+    # SECRET_KEY (must be set BEFORE any session use)
+    # Supports your legacy env name plus the conventional one.
+    # ------------------------------------------------------------------
+    secret = (
+        os.environ.get("SECRET_KEY")
+        or os.environ.get("FLASK_SECRET")
+        or os.environ.get("Flask_Secret")  # legacy casing you mentioned
+    )
 
-if not secret:
-    # In dev you can auto-generate; in prod, fail fast so you don't silently break sessions
-    if app.debug:
-        secret = secrets.token_hex(32)
-        app.logger.warning("Generated dev SECRET_KEY; set SECRET_KEY in env for prod.")
-    else:
-        raise RuntimeError("SECRET_KEY is required (checked SECRET_KEY, FLASK_SECRET, Flask_Secret).")
+    if not secret:
+        # Dev-only fallback; DO NOT rely on this in production.
+        if app.debug:
+            secret = secrets.token_hex(32)
+            app.logger.warning(
+                "Generated dev SECRET_KEY; set SECRET_KEY (or FLASK_SECRET/Flask_Secret) in env for prod."
+            )
+        else:
+            raise RuntimeError(
+                "SECRET_KEY is required (checked env: SECRET_KEY, FLASK_SECRET, Flask_Secret)."
+            )
 
-app.config["SECRET_KEY"] = secret  # <-- direct assignment, not setdefault
- 
+    # Direct assignment (not setdefault) — Flask predefines SECRET_KEY=None.
+    app.config["SECRET_KEY"] = secret
+
+    # Sensible session cookie defaults
+    app.config.setdefault("SESSION_COOKIE_NAME", "askchip_session")
+    app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
+    app.config.setdefault("SESSION_COOKIE_SECURE", not app.debug)  # True on HTTPS (Render)
+    app.config.setdefault("SESSION_PERMANENT", True)
+    app.config.setdefault("PERMANENT_SESSION_LIFETIME", timedelta(hours=12))
+
     if not app.debug and not app.testing:
         logging.basicConfig(level=logging.INFO)
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _register(module_path: str, attr_name: Optional[str] = None, url_prefix: Optional[str] = None) -> None:
+    def _register(
+        module_path: str,
+        attr_name: Optional[str] = None,
+        url_prefix: Optional[str] = None,
+    ) -> None:
         """Import module and register its Blueprint attribute safely."""
         try:
             mod = importlib.import_module(module_path)
@@ -84,27 +108,52 @@ app.config["SECRET_KEY"] = secret  # <-- direct assignment, not setdefault
             app.logger.info("Skipping %s: import failed: %s", module_path, e)
             return
 
-        names = [attr_name] if attr_name else ["bp", "blueprint", "api_bp", "chat_bp", "profile_bp", "tools_bp", "admin_bp", "email_bp", "voice_bp", "auth_bp"]
+        names = (
+            [attr_name]
+            if attr_name
+            else [
+                "bp",
+                "blueprint",
+                "api_bp",
+                "chat_bp",
+                "profile_bp",
+                "tools_bp",
+                "admin_bp",
+                "email_bp",
+                "voice_bp",
+                "auth_bp",
+            ]
+        )
         bp = None
         for nm in names:
             if nm and hasattr(mod, nm):
                 bp = getattr(mod, nm)
                 break
         if bp is None:
+            # Best-effort scan (works for objects that "look like" Blueprints)
             for nm in dir(mod):
                 obj = getattr(mod, nm)
-                if getattr(obj, "register", None) and getattr(obj, "name", None) and getattr(obj, "url_prefix", None) is not None:
+                if (
+                    getattr(obj, "register", None)
+                    and getattr(obj, "name", None)
+                    and getattr(obj, "url_prefix", None) is not None
+                ):
                     bp = obj
                     break
         if bp is None:
             app.logger.info("Skipping %s: no blueprint found", module_path)
             return
         try:
-            if bp.name in app.blueprints:
+            if getattr(bp, "name", None) in app.blueprints:
                 app.logger.info("Blueprint %s already registered; skipping", bp.name)
             else:
                 app.register_blueprint(bp, url_prefix=url_prefix)
-                app.logger.info("Registered blueprint from %s as %s (url_prefix=%r)", module_path, getattr(bp, "name", "?"), url_prefix)
+                app.logger.info(
+                    "Registered blueprint from %s as %s (url_prefix=%r)",
+                    module_path,
+                    getattr(bp, "name", "?"),
+                    url_prefix,
+                )
         except Exception as e:  # pragma: no cover
             app.logger.warning("Failed registering blueprint %s: %s", module_path, e)
 
@@ -146,17 +195,19 @@ app.config["SECRET_KEY"] = secret  # <-- direct assignment, not setdefault
         except Exception:
             profile = {}
         profile_complete = bool(profile.get("name") or profile.get("fullname"))
-        return jsonify({
-            "ok": True,
-            "authenticated": bool(email),
-            "profileComplete": profile_complete,
-            "first_time": not profile_complete,
-            "email": email,
-            "profile": profile,
-            # legacy keys for older UIs
-            "logged_in": bool(email),
-            "profile_complete": profile_complete,
-        })
+        return jsonify(
+            {
+                "ok": True,
+                "authenticated": bool(email),
+                "profileComplete": profile_complete,
+                "first_time": not profile_complete,
+                "email": email,
+                "profile": profile,
+                # legacy keys for older UIs
+                "logged_in": bool(email),
+                "profile_complete": profile_complete,
+            }
+        )
 
     # ------------------------------------------------------------------
     # Blueprints (canonical only — no conversation/orchestrator)
