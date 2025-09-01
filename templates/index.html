@@ -90,8 +90,8 @@
     </div>
   </div>
 
-
-  <script type="module" src="/static/user-experience/js/main.js"></script>
+  <script src="{{ url_for('static', filename='user-experience/js/config.js') }}"></script>
+  <script src="{{ url_for('static', filename='user-experience/js/main.js') }}" defer></script>
 
   <div id="loginModal" class="hidden modal" role="dialog" aria-modal="true" aria-label="Login">
     <div class="modal-card">
