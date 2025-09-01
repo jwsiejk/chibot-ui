@@ -252,19 +252,29 @@ def create_app() -> Flask:
     # ------------------------------------------------------------------
     # Error handling
     # ------------------------------------------------------------------
-    @app.errorhandler(Exception)
-    def _unhandled_error(err: Exception):
-        # Pass through HTTP exceptions (e.g., 404, 405) so they are not mis-logged as 500
-        if isinstance(err, HTTPException):
-            return err
-        try:
-            app.logger.error("Unhandled server error", exc_info=err)
-        finally:
-            path = request.path or ""
-            if path.startswith("/api/"):
-                return jsonify(ok=False, error="server_error"), 500
-            return "Internal Server Error", 500
+   @app.errorhandler(Exception)
+def _unhandled_error(err: Exception):
+    path = (request.path or "")
+    wants_json = path.startswith(("/api/", "/voice", "/api/voice", "/speak"))
 
+    # If it's a Flask HTTPException (404, 405, etc.)
+    if isinstance(err, HTTPException):
+        if wants_json:
+            payload = {
+                "ok": False,
+                "error": err.name,
+                "status": err.code,
+            }
+            if getattr(err, "description", None) and err.description != err.name:
+                payload["detail"] = err.description
+            return jsonify(payload), err.code
+        return err  # default HTML for non-API paths like normal pages
+
+    # Non-HTTP exceptions (tracebacks)
+    app.logger.error("Unhandled server error", exc_info=err)
+    if wants_json:
+        return jsonify(ok=False, error="server_error"), 500
+    return "Internal Server Error", 500
     return app
 
 
