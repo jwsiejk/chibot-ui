@@ -1,3 +1,4 @@
+# app/legacy_app.py
 from __future__ import annotations
 
 import os
@@ -11,7 +12,7 @@ from typing import Any, Optional, Dict
 from flask import Flask, jsonify, render_template, request, session
 from werkzeug.exceptions import HTTPException
 
-# Optional internal deps
+# Optional internal deps (harmless stubs if modules are absent)
 try:
     import memory  # type: ignore
 except Exception:  # pragma: no cover
@@ -51,16 +52,21 @@ def create_app() -> Flask:
         static_url_path="/static",
     )
 
+    # ------------------------------------------------------------------
     # Base config
+    # ------------------------------------------------------------------
     app.config["JSON_SORT_KEYS"] = False
     app.config["JSON_AS_ASCII"] = False
     app.config["TEMPLATES_AUTO_RELOAD"] = True
 
+    # ------------------------------------------------------------------
     # SECRET_KEY (must be set BEFORE any session use)
+    # Accept several env var names for backward compatibility.
+    # ------------------------------------------------------------------
     secret = (
         os.environ.get("SECRET_KEY")
         or os.environ.get("FLASK_SECRET")
-        or os.environ.get("Flask_Secret")  # legacy casing you mentioned
+        or os.environ.get("Flask_Secret")
     )
 
     if not secret:
@@ -75,8 +81,6 @@ def create_app() -> Flask:
             )
 
     app.config["SECRET_KEY"] = secret
-
-    # Session cookie defaults
     app.config.setdefault("SESSION_COOKIE_NAME", "askchip_session")
     app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
     app.config.setdefault("SESSION_COOKIE_SECURE", not app.debug)
@@ -86,12 +90,10 @@ def create_app() -> Flask:
     if not app.debug and not app.testing:
         logging.basicConfig(level=logging.INFO)
 
-    # Helpers
-    def _register(
-        module_path: str,
-        attr_name: Optional[str] = None,
-        url_prefix: Optional[str] = None,
-    ) -> None:
+    # ------------------------------------------------------------------
+    # Blueprint helper
+    # ------------------------------------------------------------------
+    def _register(module_path: str, attr_name: Optional[str] = None, url_prefix: Optional[str] = None) -> None:
         """Import module and register its Blueprint attribute safely."""
         try:
             mod = importlib.import_module(module_path)
@@ -102,37 +104,26 @@ def create_app() -> Flask:
         names = (
             [attr_name]
             if attr_name
-            else [
-                "bp",
-                "blueprint",
-                "api_bp",
-                "chat_bp",
-                "profile_bp",
-                "tools_bp",
-                "admin_bp",
-                "email_bp",
-                "voice_bp",
-                "auth_bp",
-            ]
+            else ["bp", "blueprint", "api_bp", "chat_bp", "profile_bp", "tools_bp", "admin_bp", "email_bp", "voice_bp", "auth_bp"]
         )
         bp = None
         for nm in names:
             if nm and hasattr(mod, nm):
                 bp = getattr(mod, nm)
                 break
+
         if bp is None:
+            # Best-effort scan for an object that "looks like" a Blueprint
             for nm in dir(mod):
                 obj = getattr(mod, nm)
-                if (
-                    getattr(obj, "register", None)
-                    and getattr(obj, "name", None)
-                    and getattr(obj, "url_prefix", None) is not None
-                ):
+                if getattr(obj, "register", None) and getattr(obj, "name", None) and getattr(obj, "url_prefix", None) is not None:
                     bp = obj
                     break
+
         if bp is None:
             app.logger.info("Skipping %s: no blueprint found", module_path)
             return
+
         try:
             if getattr(bp, "name", None) in app.blueprints:
                 app.logger.info("Blueprint %s already registered; skipping", bp.name)
@@ -140,14 +131,14 @@ def create_app() -> Flask:
                 app.register_blueprint(bp, url_prefix=url_prefix)
                 app.logger.info(
                     "Registered blueprint from %s as %s (url_prefix=%r)",
-                    module_path,
-                    getattr(bp, "name", "?"),
-                    url_prefix,
+                    module_path, getattr(bp, "name", "?"), url_prefix,
                 )
         except Exception as e:  # pragma: no cover
             app.logger.warning("Failed registering blueprint %s: %s", module_path, e)
 
+    # ------------------------------------------------------------------
     # Routes
+    # ------------------------------------------------------------------
     @app.get("/")
     def index():
         return render_template("index.html")
@@ -190,15 +181,15 @@ def create_app() -> Flask:
                 "first_time": not profile_complete,
                 "email": email,
                 "profile": profile,
+                # legacy keys for older UIs
                 "logged_in": bool(email),
                 "profile_complete": profile_complete,
             }
         )
 
-    # Blueprints
+    # Optional routes/blueprints (registered only if present or feature-flagged)
     if _bool_env("FEATURE_TOOLS"):
         _register("routes.tools", "tools_bp")
-
     if _bool_env("FEATURE_ADMIN_UI"):
         _register("routes.admin", "admin_bp")
 
@@ -211,7 +202,7 @@ def create_app() -> Flask:
     except Exception as e:  # pragma: no cover
         app.logger.info("Profile blueprint not available: %s", e)
 
-    _register("routes.auth", "auth_bp", url_prefix=None)
+    _register("routes.auth", "auth_bp", url_prefix=None)   # blueprint defines /api
     _register("routes.greet", "bp")
     _register("routes.chat", "chat_bp")
     if _bool_env("FEATURE_EMAIL", True):
@@ -221,10 +212,15 @@ def create_app() -> Flask:
     if _bool_env("FEATURE_AUDIO", True):
         _register("routes.voice", None)
 
+    # ------------------------------------------------------------------
+    # Error handling (correctly indented inside create_app)
+    # ------------------------------------------------------------------
     @app.errorhandler(Exception)
     def _unhandled_error(err: Exception):
         path = (request.path or "")
         wants_json = path.startswith(("/api/", "/voice", "/api/voice", "/speak"))
+
+        # HTTP exceptions (404, 405, etc.) keep default HTML for pages
         if isinstance(err, HTTPException):
             if wants_json:
                 payload = {"ok": False, "error": err.name, "status": err.code}
@@ -232,6 +228,8 @@ def create_app() -> Flask:
                     payload["detail"] = err.description
                 return jsonify(payload), err.code
             return err
+
+        # Non-HTTP exceptions
         app.logger.error("Unhandled server error", exc_info=err)
         if wants_json:
             return jsonify(ok=False, error="server_error"), 500
@@ -239,4 +237,6 @@ def create_app() -> Flask:
 
     return app
 
+
+# Expose 'app' for gunicorn
 app = create_app()
