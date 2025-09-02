@@ -38,48 +38,6 @@ let _fu_lastOfferedAt = 0;
 let _fu_turnsSinceOffer = 99;
 const _FU_MIN_INTERVAL_MS = 18000;
 const _FU_MIN_TURNS = 2;
-const _FU_BASE_PROB = 0.35;
-
-function _seemsSatisfied(text = "") {
-  const s = (text || "").toLowerCase();
-  return /(thanks|got it|perfect|that helps|nice|good stuff)/.test(s);
-}
-function _isQuestion(text = "") {
-  const t = (text || "").trim();
-  return /\?$/.test(t) || /^(how|why|what|where|when|who)\b/i.test(t);
-}
-function _isFollowupWorthy(userText = "", assistantText = "") {
-  if (!assistantText || assistantText.length < 6) return false;
-  if (/download|attached|opened|scheduled|sent/i.test(assistantText)) return false;
-  if (_isQuestion(userText)) return false;
-  return true;
-}
-function _shouldOfferFollowup({ userText = "", assistantText = "" } = {}) {
-  const now = Date.now();
-  if ((now - _fu_lastOfferedAt) < _FU_MIN_INTERVAL_MS) return false;
-  if (_fu_turnsSinceOffer < _FU_MIN_TURNS) return false;
-  if (_seemsSatisfied(userText) || _isEndTrigger(userText)) return false;
-  if (!_isFollowupWorthy(userText, assistantText)) return false;
-  let p = _FU_BASE_PROB;
-  if (assistantText.split(/\s+/).length < 14) p += 0.15;
-  return Math.random() < p;
-}
-function _offerFollowupOnce() {
-  _fu_lastOfferedAt = Date.now();
-  _fu_turnsSinceOffer = 0;
-  const prompts = [
-    "Want me to dig a bit deeper?",
-    "Need a quick example?",
-    "Should I pull the numbers behind that?",
-    "I can check related items if you want.",
-  ];
-  _chipRenderSuggestions([prompts[Math.floor(Math.random()*prompts.length)], "End chat"], (s) => {
-    if (/end chat/i.test(s)) { _chipEndConversation(); return; }
-    sendChat(s);
-  });
-}
-
-/* ------------------------------- Helpers -------------------------------- */
 
 export function _limitWords(text, n = 20) {
   const words = (text || "").trim().split(/\s+/);
@@ -97,15 +55,13 @@ const _pureKeywords = [
 ];
 
 const _canned = {
-  offtopic: [
-    "Interesting thought, but my wheelhouse is Pure Storage—FlashArray, FlashBlade, Portworx. Let’s pivot back. What Pure question can I help with?",
-    "Fun angle, but I stick to Pure Storage. Want to talk FlashBlade or FlashArray instead?",
-    "Not my lane—Pure Storage is. What’s your question on arrays, blades, or Portworx?"
-  ],
   no_audio: [
-    "I didn’t hear anything. Mic might be muted. Want to try again, or type your Pure Storage question?",
-    "No audio picked up. Try again, or type it in.",
-    "Nothing came through—mic on? You can also type your question."
+    "I didn’t catch that—mind trying again?",
+    "Could you say that once more for me?"
+  ],
+  offtopic: [
+    "I’m tuned for Pure Storage topics. Want to talk Pure hardware or software?",
+    "Let’s focus on Pure for now—what are you working on?"
   ],
   unsure: [
     "Not sure I follow. Product, version, and goal? I’ll get specific.",
@@ -137,13 +93,21 @@ async function _handleCanned(kind) {
   if (line) {
     appendMessage("assistant", line, _getChatLane() === "text" ? "text" : "live");
     try {
-      const r = await fetch("/api/speak", {
+      const r = await fetch("/api/v1/voice/tts-with-visemes", {
         credentials: 'include',
         method: "POST",
         headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ prompt: line, language: "en" })
+        body: JSON.stringify({ text: line })
       }).then(r=>r.json()).catch(()=>null);
-      if (r && r.audio) { try { await tryPlayWithMouth(r.audio); } catch {} }
+      if (r) {
+        if (r.audio) { try { await tryPlayWithMouth(r.audio); } catch {} }
+        else if (r.audio_base64 || r.audio_b64) {
+          try {
+            const a = new Audio("data:audio/mpeg;base64," + (r.audio_base64 || r.audio_b64));
+            await a.play();
+          } catch {}
+        }
+      }
     } catch {}
   }
   _chipSetState("followup");
@@ -154,11 +118,11 @@ async function _handleCanned(kind) {
 export async function _chipEndConversation() {
   try {
     _chipStep("end", "user requested");
-    fetch("/api/speak", {
+    fetch("/api/v1/voice/tts-with-visemes", {
       credentials: 'include',
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ prompt: "Anytime. I’ll be right here when you need me.", language: "en" })
+      body: JSON.stringify({ text: "Anytime. I’ll be right here when you need me." })
     }).catch(()=>{});
   } finally {
     _chipClearIdleNudge();
@@ -174,28 +138,32 @@ export async function _chipEndConversation() {
 let _ws = null;
 let _wsReady = false;
 let _streamPrimed = false; // have we called startStream() for current turn?
+let _pendingThinking = null;
 
 function _ensureWS() {
   if (_ws && _ws.isOpen()) return true;
-  _ws = wsConnect((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/chat", {
+  _ws = wsConnect("/ws/v1/chat", {
     onOpen: () => { _wsReady = true; },
     onClose: () => { _wsReady = false; _streamPrimed = false; },
     onError: () => { _wsReady = false; },
     onMessage: async (msg) => {
       try {
-        if (msg.type === "audio_chunk") {
+        if (msg.type === "partial_text") {
+          if (_pendingThinking) _pendingThinking.textContent = _limitWords(msg.text || "", 20);
+        } else if (msg.type === "final_text") {
+          if (_pendingThinking) { _pendingThinking.textContent = _limitWords(msg.text || "", 20); _pendingThinking = null; }
+        } else if (msg.type === "audio_chunk") {
           if (!_streamPrimed) {
             const ok = await startStream({ sampleRate: msg.sr || 24000, channels: 1 });
             _streamPrimed = ok;
           }
           if (msg.b16) pushPCM16Base64(msg.b16, { sampleRate: msg.sr || 24000 });
         } else if (msg.type === "end") {
-          stopStream();
           _streamPrimed = false;
           respRelease();
           _chipSetState("followup");
         }
-        // 'partial_text' / 'final_text' are intentionally no-ops here
+        // errors are handled below
       } catch (e) {
         console.warn("WS onMessage error:", e);
       }
@@ -220,7 +188,7 @@ async function _speakReplySentenceLevel(replyText) {
   try {
     for (const seg of segments) {
       if (ac.signal.aborted) break;
-      const res = await fetch("/api/voice/tts_with_visemes", {
+      const res = await fetch("/api/v1/voice/tts-with-visemes", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -231,15 +199,15 @@ async function _speakReplySentenceLevel(replyText) {
       if (!res || ac.signal.aborted) break;
 
       const data = await res.json().catch(() => ({}));
-      if (data && (data.ok || data.audio || data.audio_b64)) {
+      if (data && (data.ok || data.audio || data.audio_b64 || data.audio_base64)) {
         if (data.audio) {
           try { await tryPlayWithMouth(data.audio); } catch {}
-        } else if (data.audio_b64) {
-          const a = new Audio("data:audio/mpeg;base64," + data.audio_b64);
-          try { await a.play(); } catch {}
-          await new Promise(r => a.addEventListener("ended", r, { once: true }));
+        } else if (data.audio_b64 || data.audio_base64) {
+          try {
+            const a = new Audio("data:audio/mpeg;base64," + (data.audio_b64 || data.audio_base64));
+            await a.play();
+          } catch {}
         }
-        if (Array.isArray(data.visemes)) { try { driveVisemes(data.visemes); } catch {} }
       }
     }
   } finally {
@@ -247,9 +215,12 @@ async function _speakReplySentenceLevel(replyText) {
   }
 }
 
-/* ------------------------------- sendChat ------------------------------- */
 /**
- * Send a user message to Chip.
+ * sendChat(message)
+ * - classifies for quick canned responses (no network)
+ * - tries WS streaming; if available, WS handles text + TTS; we update the “thinking” bubble from WS text
+ * - falls back to REST /api/v1/chat (and optional sentence-level TTS for live lane)
+ *
  * Exposed as a named export so main.js can import { sendChat } from './chat/send.js'
  */
 export async function sendChat(message) {
@@ -276,11 +247,9 @@ export async function sendChat(message) {
   // --- Try streaming path first; gracefully fall back to REST ---
   let usedStreaming = false;
   try {
-    _chipSetState("thinking");
-    _chipStep("WS /ws/chat →", { message: message.trim(), lane: _getChatLane() });
-
     _ensureWS();
     if (_ws && _ws.isOpen()) {
+      _pendingThinking = thinking;
       _ws.send({
         type: "user_text",
         text: message.trim(),
@@ -296,57 +265,22 @@ export async function sendChat(message) {
   }
 
   if (usedStreaming) {
-    // Ask server for a final text summary (optional)
-    try {
-      const res = await fetch("/api/chat/summary", {
-        credentials: "include",
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lastOnly: true })
-      }).then(r => (r.ok ? r.json() : null)).catch(() => null);
-
-      _chipSetState("responding");
-      const textRaw = ((res && (res.reply_text ?? res.reply)) || "").trim();
-      const text = _limitWords(textRaw, 20);
-
-      thinking.textContent = (_getChatLane() === "live" ? "🔊 " : "💬 ") + (text || "");
-      if (Array.isArray(res?.actions)) appendActions(res.actions);
-
-      if (Array.isArray(res?.suggestions)) {
-        _chipRenderSuggestions(res.suggestions, (s) => {
-          if (/end chat/i.test(s)) { _chipEndConversation(); return; }
-          sendChat(s);
-        });
-      }
-
-      if (text && _shouldOfferFollowup({ userText: message, assistantText: text })) {
-        _offerFollowupOnce();
-      }
-
-      _chipSetState("followup");
-      if (res?.end === true) { _chipEndConversation(); }
-      return; // streaming path handled turn
-    } catch {
-      // If summary fails, continue to REST for text
-    }
+    _pendingThinking = thinking;
+    return; // streaming path handled turn
   }
 
-  // --- REST fallback: /api/chat ---
+  // --- REST fallback: /api/v1/chat ---
   try {
     _chipSetState("thinking");
 
     // Preflight cleanup (do not let this block the turn if it fails)
     try {
       await window.AskChip?.voice?.stop?.();           // cancel any TTS playback
-      if (window.__chipAbortCtl?.abort) window.__chipAbortCtl.abort();
-      window.__chipAbortCtl = new AbortController();
-    } catch (err) {
-      console.warn("[AskChip] send preflight failed (continuing)", err);
-    } finally {
+      try { _vm_stopPlayback(); } catch {}
       if (!window.__chipAbortCtl) window.__chipAbortCtl = new AbortController();
-    }
+    } catch {}
 
-    const resp = await fetch("/api/chat", {
+    const resp = await fetch("/api/v1/chat", {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -374,8 +308,7 @@ export async function sendChat(message) {
       thinking.textContent = "(no reply)";
     }
 
-    if (Array.isArray(data.actions)) appendActions(data.actions);
-
+    if (Array.isArray(data.actions) && data.actions.length) appendActions(data.actions);
     if (Array.isArray(data.suggestions)) {
       _chipRenderSuggestions(data.suggestions, (s) => {
         if (/end chat/i.test(s)) { _chipEndConversation(); return; }
@@ -389,7 +322,7 @@ export async function sendChat(message) {
 
     if (data.end === true) { _chipEndConversation(); return; }
   } catch (err) {
-    console.error("[AskChip] /api/chat failed", err);
+    console.error("[AskChip] /api/v1/chat failed", err);
     thinking.textContent = "Sorry — something went wrong.";
   } finally {
     _chipSetState("followup");
@@ -410,11 +343,39 @@ export async function handleVoiceOnceResponse({ blob, durMs }) {
   fd.append("language", "en");
 
   _chipSetState("thinking");
-  _chipStep("POST /api/voice-once →", { size: blob.size, durMs });
+  _chipStep("POST /api/v1/voice/stt →", { size: blob.size, durMs });
 
-  const res = await fetch("/api/voice-once", { method: "POST", body: fd, credentials: "include" });
+  const res = await fetch("/api/v1/voice/stt", { method: "POST", body: fd, credentials: "include" });
   const data = await res.json().catch(() => ({}));
-  _chipStep("← /api/voice-once", data);
+  _chipStep("← /api/v1/voice/stt", data);
+  // Phase 1 pipeline: if server didn't return reply/audio, synthesize via v1 endpoints
+  if (!data.transcript && data.text) data.transcript = data.text;
+  try {
+    if (!data.reply && (data.transcript || "").trim()) {
+      const respChat = await fetch("/api/v1/chat", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: data.transcript, lane: "live", short: true })
+      });
+      const dj = await respChat.json().catch(() => ({}));
+      data.reply = (dj.reply_text ?? dj.reply ?? dj.text ?? "").trim();
+    }
+  } catch {}
+  try {
+    if (!data.audio_b64 && !data.audio && (data.reply || "").trim()) {
+      const respTTS = await fetch("/api/v1/voice/tts-with-visemes", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: data.reply })
+      });
+      const tj = await respTTS.json().catch(() => ({}));
+      data.audio_b64 = tj.audio_base64 || tj.audio_b64 || null;
+      data.audio = tj.audio || null;
+      data.visemes = tj.visemes || null;
+    }
+  } catch {}
 
   const conf = typeof data.confidence === "number" ? data.confidence : null;
   if (conf !== null && conf < 0.6) {
@@ -429,13 +390,7 @@ export async function handleVoiceOnceResponse({ blob, durMs }) {
     return;
   }
 
-  const cls = _classifyInput(data.transcript || "");
-  if (cls !== "ok") {
-    if (data.transcript) appendMessage("user", data.transcript, "live");
-    await _handleCanned(cls);
-    return;
-  }
-
+  // Show user’s line and quick assistant summary (20 words)
   if (data.transcript) appendMessage("user", data.transcript, "live");
 
   const textRaw = (data.reply_text ?? data.reply ?? "").trim();
@@ -454,15 +409,16 @@ export async function handleVoiceOnceResponse({ blob, durMs }) {
     _offerFollowupOnce();
   }
 
+  // Voice playback (one-shot)
   let played = false;
-  if (data.audio_b64 || data.audio) {
+  if (data.audio_b64 || data.audio || data.audio_base64) {
     _chipSetState("responding");
     if (!respAcquire()) {
       _chipSetState("followup");
     } else {
       try {
-        if (data.audio_b64) {
-          const a = new Audio("data:audio/mpeg;base64," + data.audio_b64);
+        if (data.audio_b64 || data.audio_base64) {
+          const a = new Audio("data:audio/mpeg;base64," + (data.audio_b64 || data.audio_base64));
           a.addEventListener("ended", () => { respRelease(); _chipSetState("followup"); }, { once: true });
           await a.play();
           played = true;
@@ -470,7 +426,6 @@ export async function handleVoiceOnceResponse({ blob, durMs }) {
           await tryPlayWithMouth(data.audio);
           played = true;
           respRelease();
-          _chipSetState("followup");
         }
       } catch (e) {
         console.error("voice-once playback error:", e);
@@ -487,4 +442,37 @@ export async function handleVoiceOnceResponse({ blob, durMs }) {
   if (data.end === true) {
     await _chipEndConversation();
   }
+}
+
+/* -------------------- Follow-up offer + heuristics ---------------------- */
+
+function _isQuestion(text = "") {
+  const t = (text || "").trim();
+  return /\?$/.test(t) || /^(how|why|what|where|when|who)\b/i.test(t);
+}
+function _isFollowupWorthy(userText = "", assistantText = "") {
+  if (!assistantText || assistantText.length < 6) return false;
+  if (/download|attached|opened|scheduled|sent/i.test(assistantText)) return false;
+  if (_isQuestion(userText)) return false;
+  return true;
+}
+function _shouldOfferFollowup({ userText = "", assistantText = "" } = {}) {
+  const now = Date.now();
+  if ((now - _fu_lastOfferedAt) < _FU_MIN_INTERVAL_MS) return false;
+  if (_fu_turnsSinceOffer < _FU_MIN_TURNS) return false;
+  return _isFollowupWorthy(userText, assistantText);
+}
+function _offerFollowupOnce() {
+  _fu_lastOfferedAt = Date.now();
+  _fu_turnsSinceOffer = 0;
+  const prompts = [
+    "Want me to dig a bit deeper?",
+    "Need a quick example?",
+    "Should I pull the numbers behind that?",
+    "I can check related items if you want.",
+  ];
+  _chipRenderSuggestions([prompts[Math.floor(Math.random()*prompts.length)], "End chat"], (s) => {
+    if (/end chat/i.test(s)) { _chipEndConversation(); return; }
+    sendChat(s);
+  });
 }
