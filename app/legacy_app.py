@@ -51,17 +51,12 @@ def create_app() -> Flask:
         static_url_path="/static",
     )
 
-    # ------------------------------------------------------------------
     # Base config
-    # ------------------------------------------------------------------
     app.config["JSON_SORT_KEYS"] = False
     app.config["JSON_AS_ASCII"] = False
     app.config["TEMPLATES_AUTO_RELOAD"] = True
 
-    # ------------------------------------------------------------------
     # SECRET_KEY (must be set BEFORE any session use)
-    # Supports your legacy env name plus the conventional one.
-    # ------------------------------------------------------------------
     secret = (
         os.environ.get("SECRET_KEY")
         or os.environ.get("FLASK_SECRET")
@@ -69,7 +64,6 @@ def create_app() -> Flask:
     )
 
     if not secret:
-        # Dev-only fallback; DO NOT rely on this in production.
         if app.debug:
             secret = secrets.token_hex(32)
             app.logger.warning(
@@ -80,22 +74,19 @@ def create_app() -> Flask:
                 "SECRET_KEY is required (checked env: SECRET_KEY, FLASK_SECRET, Flask_Secret)."
             )
 
-    # Direct assignment (not setdefault) — Flask predefines SECRET_KEY=None.
     app.config["SECRET_KEY"] = secret
 
-    # Sensible session cookie defaults
+    # Session cookie defaults
     app.config.setdefault("SESSION_COOKIE_NAME", "askchip_session")
     app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
-    app.config.setdefault("SESSION_COOKIE_SECURE", not app.debug)  # True on HTTPS (Render)
+    app.config.setdefault("SESSION_COOKIE_SECURE", not app.debug)
     app.config.setdefault("SESSION_PERMANENT", True)
     app.config.setdefault("PERMANENT_SESSION_LIFETIME", timedelta(hours=12))
 
     if not app.debug and not app.testing:
         logging.basicConfig(level=logging.INFO)
 
-    # ------------------------------------------------------------------
     # Helpers
-    # ------------------------------------------------------------------
     def _register(
         module_path: str,
         attr_name: Optional[str] = None,
@@ -130,7 +121,6 @@ def create_app() -> Flask:
                 bp = getattr(mod, nm)
                 break
         if bp is None:
-            # Best-effort scan (works for objects that "look like" Blueprints)
             for nm in dir(mod):
                 obj = getattr(mod, nm)
                 if (
@@ -157,9 +147,7 @@ def create_app() -> Flask:
         except Exception as e:  # pragma: no cover
             app.logger.warning("Failed registering blueprint %s: %s", module_path, e)
 
-    # ------------------------------------------------------------------
     # Routes
-    # ------------------------------------------------------------------
     @app.get("/")
     def index():
         return render_template("index.html")
@@ -170,7 +158,6 @@ def create_app() -> Flask:
 
     @app.get("/favicon.ico")
     def favicon():
-        # Return empty favicon to avoid noisy 404s if no file is present
         return ("", 204, {"Cache-Control": "max-age=86400"})
 
     @app.get("/api/features")
@@ -203,24 +190,18 @@ def create_app() -> Flask:
                 "first_time": not profile_complete,
                 "email": email,
                 "profile": profile,
-                # legacy keys for older UIs
                 "logged_in": bool(email),
                 "profile_complete": profile_complete,
             }
         )
 
-    # ------------------------------------------------------------------
-    # Blueprints (canonical only — no conversation/orchestrator)
-    # ------------------------------------------------------------------
-    # Tools / diagnostics (optional)
+    # Blueprints
     if _bool_env("FEATURE_TOOLS"):
         _register("routes.tools", "tools_bp")
 
-    # Admin UI (optional)
     if _bool_env("FEATURE_ADMIN_UI"):
         _register("routes.admin", "admin_bp")
 
-    # Profile (mount under /api)
     try:
         from routes.profile import profile_bp as _profile_bp  # type: ignore
         if "profile_bp" not in app.blueprints:
@@ -230,47 +211,27 @@ def create_app() -> Flask:
     except Exception as e:  # pragma: no cover
         app.logger.info("Profile blueprint not available: %s", e)
 
-    # Auth (session-based login/logout)
-    _register("routes.auth", "auth_bp", url_prefix=None)  # blueprint defines url_prefix="/api"
-
-    # Greet and Chat
+    _register("routes.auth", "auth_bp", url_prefix=None)
     _register("routes.greet", "bp")
     _register("routes.chat", "chat_bp")
-
-    # Email API (optional)
     if _bool_env("FEATURE_EMAIL", True):
         _register("routes.email_api", None)
-
-    # Accounts search (optional)
     if _bool_env("FEATURE_ACCOUNTS", False):
         _register("routes.accounts", None)
-
-    # Voice (optional; WS handled wherever you implement it)
     if _bool_env("FEATURE_AUDIO", True):
         _register("routes.voice", None)
 
-    # ------------------------------------------------------------------
-    # Error handling
-    # ------------------------------------------------------------------
     @app.errorhandler(Exception)
     def _unhandled_error(err: Exception):
         path = (request.path or "")
         wants_json = path.startswith(("/api/", "/voice", "/api/voice", "/speak"))
-
-        # If it's a Flask HTTPException (404, 405, etc.)
         if isinstance(err, HTTPException):
             if wants_json:
-                payload = {
-                    "ok": False,
-                    "error": err.name,
-                    "status": err.code,
-                }
+                payload = {"ok": False, "error": err.name, "status": err.code}
                 if getattr(err, "description", None) and err.description != err.name:
                     payload["detail"] = err.description
                 return jsonify(payload), err.code
-            return err  # default HTML for non-API paths like normal pages
-
-        # Non-HTTP exceptions (tracebacks)
+            return err
         app.logger.error("Unhandled server error", exc_info=err)
         if wants_json:
             return jsonify(ok=False, error="server_error"), 500
@@ -278,6 +239,4 @@ def create_app() -> Flask:
 
     return app
 
-
-# Expose 'app' for 'gunicorn app:app'
 app = create_app()
