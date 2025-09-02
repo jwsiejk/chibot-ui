@@ -1,10 +1,9 @@
 method,path,frontend_files,path_exists_with_other_methods
-POST,/api/voice/tts_with_visemes,static/chip/chip.js; static/js/api-smart-shim.js; static/js/api_smart-shim.js; static/user-experience/js/chat/send.js,no
-GET,/api/me,static/js/addons-email-intents.js,no
-GET,/api/profile,static/js/addons-email-intents.js,no
-POST,/api/email/send,static/js/addons-email-intents.js,no
-POST,/logout,static/user-experience/js/main.js,no
-POST,/api/speak,static/user-experience/js/chat/send.js,no
-POST,/api/chat/summary,static/user-experience/js/chat/send.js,no
-POST,/api/chat,static/user-experience/js/chat/send.js,no
-POST,/api/voice-once,static/user-experience/js/chat/send.js,no
+POST,/api/voice/tts_with_visemes,static\chip\chip.js; static\js\api-smart-shim.js; static\js\api_smart-shim.js,no
+GET,/api/profile,static\js\addons-email-intents.js,no
+POST,/api/email/send,static\js\addons-email-intents.js,no
+POST,/api/login,static\user-experience\js\auth\profile.js,no
+POST,/api/profile,static\user-experience\js\auth\profile.js,no
+POST,/api/v1/voice/tts-with-visemes,static\user-experience\js\chat\send.js,no
+POST,/api/v1/chat,static\user-experience\js\chat\send.js,no
+POST,/api/v1/voice/stt,static\user-experience\js\chat\send.js,no
