@@ -7,6 +7,7 @@ Ask Chip — ASGI gateway (Option A, same-origin) — Phase 1 (flip to /api/v1)
 - Provides WS at /ws/v1/chat that streams PCM chunks (for low-latency playback).
 - Bridges Flask cookie sessions so /api/v1/* can read/write session (email, chip_ctx, profile).
 - Exposes SSE admin log stream at /api/v1/admin/logs.
+- Serves /static/** directly from ASGI (StaticFiles) to avoid WSGI bridge races on assets.
 
 Start command (Render UI or dash):
   gunicorn -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-1} --bind 0.0.0.0:$PORT app.asgi_gateway:asgi
@@ -25,6 +26,7 @@ from starlette.responses import JSONResponse, StreamingResponse, PlainTextRespon
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from starlette.requests import Request
+from starlette.staticfiles import StaticFiles
 from asgiref.wsgi import WsgiToAsgi
 
 # Project services (re‑use the Flask pipeline logic)
@@ -466,13 +468,6 @@ async def ws_chat(ws: WebSocket):
 
             # Stream PCM audio chunks for the reply (sentence-level could be added later)
             got_audio = False
-            async def _send(gen):
-                nonlocal got_audio
-                async for _ in gen:
-                    pass
-
-            # Use blocking generator, wrap into thread? We'll push chunks in the event loop.
-            # We'll iterate in the loop and send JSON per chunk.
             for evt in _tts_stream_pcm_chunks(reply):
                 if evt.get("type") == "audio_chunk":
                     got_audio = True
@@ -509,10 +504,10 @@ async def sse_logs(_: Request) -> StreamingResponse:
         try:
             # Replay recent
             for evt in call_log.recent(100):
-                yield f"event: message\\ndata: {json.dumps(evt)}\\n\\n".encode("utf-8")
+                yield f"event: message\ndata: {json.dumps(evt)}\n\n".encode("utf-8")
             while True:
                 item = q.get()
-                yield f"event: message\\ndata: {json.dumps(item)}\\n\\n".encode("utf-8")
+                yield f"event: message\ndata: {json.dumps(item)}\n\n".encode("utf-8")
         except asyncio.CancelledError:
             pass
         finally:
@@ -546,6 +541,9 @@ asgi.routes.extend([
     WebSocketRoute("/ws/v1/chat", endpoint=ws_chat),
     WebSocketRoute("/ws/chat", endpoint=ws_chat),  # back-compat while UI flips
 ])
+
+# Serve static assets directly from ASGI (avoids WSGI bridge races/500s)
+asgi.mount("/static", StaticFiles(directory="static", html=False), name="static")
 
 # Mount Flask app at root for UI + any legacy routes
 if _wsgi:
