@@ -67,11 +67,9 @@ def create_app() -> Flask:
         or os.environ.get("FLASK_SECRET")
         or os.environ.get("Flask_Secret")  # legacy casing you mentioned
     )
-
     if not secret:
-        # Dev-only fallback; DO NOT rely on this in production.
         if app.debug:
-            secret = secrets.token_hex(32)
+            secret = secrets.token_hex(32)  # dev-only fallback
             app.logger.warning(
                 "Generated dev SECRET_KEY; set SECRET_KEY (or FLASK_SECRET/Flask_Secret) in env for prod."
             )
@@ -79,8 +77,6 @@ def create_app() -> Flask:
             raise RuntimeError(
                 "SECRET_KEY is required (checked env: SECRET_KEY, FLASK_SECRET, Flask_Secret)."
             )
-
-    # Direct assignment (not setdefault) — Flask predefines SECRET_KEY=None.
     app.config["SECRET_KEY"] = secret
 
     # Sensible session cookie defaults
@@ -130,7 +126,6 @@ def create_app() -> Flask:
                 bp = getattr(mod, nm)
                 break
         if bp is None:
-            # Best-effort scan (works for objects that "look like" Blueprints)
             for nm in dir(mod):
                 obj = getattr(mod, nm)
                 if (
@@ -168,9 +163,22 @@ def create_app() -> Flask:
     def healthz():
         return jsonify(ok=True, time=_dt.utcnow().isoformat() + "Z")
 
+    # Keep the legacy /health some tools call
+    @app.get("/health")
+    def health_alt():
+        return jsonify(configured=True, ok=True)
+
+    # --- aliases used by diagnostics ---
+    @app.get("/api/health")
+    def api_health():
+        return jsonify(ok=True, time=_dt.utcnow().isoformat() + "Z")
+
+    @app.get("/api/voice/health")
+    def api_voice_health():
+        return jsonify(ok=True, service="voice", configured=_bool_env("FEATURE_AUDIO", True))
+
     @app.get("/favicon.ico")
     def favicon():
-        # Return empty favicon to avoid noisy 404s if no file is present
         return ("", 204, {"Cache-Control": "max-age=86400"})
 
     @app.get("/api/features")
@@ -203,8 +211,7 @@ def create_app() -> Flask:
                 "first_time": not profile_complete,
                 "email": email,
                 "profile": profile,
-                # legacy keys for older UIs
-                "logged_in": bool(email),
+                "logged_in": bool(email),           # legacy keys for older UIs
                 "profile_complete": profile_complete,
             }
         )
@@ -212,15 +219,12 @@ def create_app() -> Flask:
     # ------------------------------------------------------------------
     # Blueprints (canonical only — no conversation/orchestrator)
     # ------------------------------------------------------------------
-    # Tools / diagnostics (optional)
     if _bool_env("FEATURE_TOOLS"):
         _register("routes.tools", "tools_bp")
 
-    # Admin UI (optional)
     if _bool_env("FEATURE_ADMIN_UI"):
         _register("routes.admin", "admin_bp")
 
-    # Profile (mount under /api)
     try:
         from routes.profile import profile_bp as _profile_bp  # type: ignore
         if "profile_bp" not in app.blueprints:
@@ -230,53 +234,40 @@ def create_app() -> Flask:
     except Exception as e:  # pragma: no cover
         app.logger.info("Profile blueprint not available: %s", e)
 
-    # Auth (session-based login/logout)
     _register("routes.auth", "auth_bp", url_prefix=None)  # blueprint defines url_prefix="/api"
-
-    # Greet and Chat
     _register("routes.greet", "bp")
     _register("routes.chat", "chat_bp")
 
-    # Email API (optional)
     if _bool_env("FEATURE_EMAIL", True):
         _register("routes.email_api", None)
 
-    # Accounts search (optional)
     if _bool_env("FEATURE_ACCOUNTS", False):
         _register("routes.accounts", None)
 
-    # Voice (optional; WS handled wherever you implement it)
     if _bool_env("FEATURE_AUDIO", True):
         _register("routes.voice", None)
 
     # ------------------------------------------------------------------
-    # Error handling  (FIXED INDENTATION)
+    # Error handling (fixed indentation)
     # ------------------------------------------------------------------
     @app.errorhandler(Exception)
     def _unhandled_error(err: Exception):
         path = (request.path or "")
         wants_json = path.startswith(("/api/", "/voice", "/api/voice", "/speak"))
 
-        # Flask HTTPException (404, 405, etc.)
         if isinstance(err, HTTPException):
             if wants_json:
-                payload = {
-                    "ok": False,
-                    "error": err.name,
-                    "status": err.code,
-                }
+                payload = {"ok": False, "error": err.name, "status": err.code}
                 if getattr(err, "description", None) and err.description != err.name:
                     payload["detail"] = err.description
                 return jsonify(payload), err.code
-            return err  # default HTML for non-API paths
+            return err  # default HTML for page routes
 
-        # Non-HTTP exceptions (tracebacks)
         app.logger.error("Unhandled server error", exc_info=err)
         if wants_json:
             return jsonify(ok=False, error="server_error"), 500
         return "Internal Server Error", 500
 
-    # <-- IMPORTANT: return app must be here, not inside the handler
     return app
 
 
