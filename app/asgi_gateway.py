@@ -1,16 +1,14 @@
-
 from __future__ import annotations
 
 """
-ASGI gateway for Ask Chip — Option A (same service, same origin, no CORS).
+Ask Chip — ASGI gateway (Option A, same-origin) — Phase 1 (flip to /api/v1)
+- Keeps Flask to serve the UI and legacy endpoints while we migrate.
+- Adds *versioned* /api/v1/* on the Starlette side with *full* chat pipeline parity.
+- Provides WS at /ws/v1/chat that streams PCM chunks (for low-latency playback).
+- Bridges Flask cookie sessions so /api/v1/* can read/write session (email, chip_ctx, profile).
+- Exposes SSE admin log stream at /api/v1/admin/logs.
 
-- Starts a Starlette app that:
-  • Exposes versioned REST under /api/v1/*
-  • Exposes a WebSocket chat loop under /ws/v1/chat
-  • Exposes Server‑Sent Events (SSE) admin logs under /api/v1/admin/logs
-  • Mounts the existing Flask WSGI app at "/" for templates/static/legacy routes
-
-Start command (Render):
+Start command (Render UI or dash):
   gunicorn -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-1} --bind 0.0.0.0:$PORT app.asgi_gateway:asgi
 """
 
@@ -19,28 +17,47 @@ import json
 import asyncio
 import base64
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, AsyncGenerator, List
+from typing import Any, Dict, Optional, AsyncGenerator, List, Tuple
 
 import requests
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse, StreamingResponse, PlainTextResponse
-from starlette.routing import Route, WebSocketRoute, Mount
+from starlette.responses import JSONResponse, StreamingResponse, PlainTextResponse, Response
+from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from starlette.requests import Request
 from asgiref.wsgi import WsgiToAsgi
 
-# --------------------------------------------------------------------------------------
-# Helpers
-# --------------------------------------------------------------------------------------
+# Project services (re‑use the Flask pipeline logic)
+try:
+    from services.reply_service import generate_reply            # full chat pipeline
+    from services.entity_normalizer import detect_product, detect_intent, normalize_text_to_pure
+    from services.session_ctx import get as ctx_get, set as ctx_set
+    from services.llm_service import generate_greeting
+except Exception as e:  # pragma: no cover
+    generate_reply = None  # type: ignore
+    detect_product = detect_intent = normalize_text_to_pure = None  # type: ignore
+    def generate_greeting(*_a, **_k): return "Hey—Chip here. What are we tackling today?"  # type: ignore
+
+try:
+    from services.email_service import send_email
+except Exception:
+    def send_email(*_a, **_k): return False  # type: ignore
+
+try:
+    from services.accounts_service import search_accounts
+except Exception:
+    def search_accounts(q: str, limit: int = 20): return []  # type: ignore
+
+from utils.call_log import call_log
+
+# Mount the existing Flask app at "/"
+try:
+    from app.legacy_app import create_app as _create_flask_app
+except Exception:
+    _create_flask_app = None  # type: ignore
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-def _bool_env(key: str, default: bool=False) -> bool:
-    v = os.getenv(key)
-    if v is None:
-        return default
-    return v.lower() in ("1","true","t","yes","y","on")
 
 def _json_error(status: int, code: str, message: str, **extra) -> JSONResponse:
     payload = {"ok": False, "code": code, "error": message}
@@ -49,228 +66,85 @@ def _json_error(status: int, code: str, message: str, **extra) -> JSONResponse:
     return JSONResponse(payload, status_code=status)
 
 def _extract_text(data: Dict[str, Any]) -> str:
-    return (
-        (data.get("text")
-         or data.get("message")
-         or data.get("input")
-         or data.get("prompt")
-         or "").strip()
-    )
+    return (data.get("text")
+            or data.get("message")
+            or data.get("input")
+            or data.get("prompt")
+            or "").strip()
 
-def _b64(data: bytes) -> str:
-    return base64.b64encode(data).decode("utf-8")
+# -----------------------------
+# Flask session bridge (cookie)
+# -----------------------------
 
-# --------------------------------------------------------------------------------------
-# Lightweight in-process call log with async subscribers (SSE + diagnostics)
-# Falls back to this implementation if utils.call_log is missing.
-# --------------------------------------------------------------------------------------
+_flask_app = _create_flask_app() if _create_flask_app else None
+_wsgi = WsgiToAsgi(_flask_app) if _flask_app else None
 
-class _AsyncCallLog:
-    def __init__(self, maxlen: int = 500):
-        from collections import deque
-        self._entries = deque(maxlen=maxlen)
-        self._listeners: List[asyncio.Queue] = []
-        self._lock = asyncio.Lock()
+# Serializer to read/write Flask's signed session cookie
+_flask_cookie_name = None
+_flask_serializer = None
+_flask_cookie_params: Dict[str, Any] = {}
 
-    async def add(self, kind: str, msg: str, **extra) -> Dict[str, Any]:
-        evt = {"ts": _now_iso(), "kind": kind, "message": msg}
-        if extra:
-            evt.update(extra)
-        self._entries.append(evt)
-        # fanout (fire-and-forget)
-        for q in list(self._listeners):
-            try:
-                q.put_nowait(evt)
-            except Exception:
-                pass
-        return evt
-
-    def recent(self, n: int = 100) -> List[Dict[str, Any]]:
-        n = max(0, min(n, 500))
-        return list(self._entries)[-n:]
-
-    async def subscribe(self) -> asyncio.Queue:
-        q: asyncio.Queue = asyncio.Queue()
-        async with self._lock:
-            self._listeners.append(q)
-        return q
-
-    async def unsubscribe(self, q: asyncio.Queue) -> None:
-        async with self._lock:
-            try:
-                self._listeners.remove(q)
-            except ValueError:
-                pass
-
-# Try to use the project's existing call_log if present (threaded version).
-try:
-    from utils.call_log import call_log as _threaded_call_log  # type: ignore
-
-    class _CompatCallLog(_AsyncCallLog):
-        """Adapt the threaded CallLog to our async interface."""
-        async def add(self, kind: str, msg: str, **extra) -> Dict[str, Any]:
-            try:
-                return _threaded_call_log.add(kind, msg, **extra)  # type: ignore
-            except Exception:
-                return await super().add(kind, msg, **extra)
-
-        def recent(self, n: int = 100) -> List[Dict[str, Any]]:
-            try:
-                return _threaded_call_log.recent(n)  # type: ignore
-            except Exception:
-                return super().recent(n)
-
-        async def subscribe(self) -> asyncio.Queue:
-            # Bridge by reading from a background thread and pushing to an asyncio.Queue.
-            import queue, threading
-            q_async: asyncio.Queue = asyncio.Queue()
-            q_sync = _threaded_call_log.subscribe()  # type: ignore
-
-            def pump():
-                try:
-                    while True:
-                        try:
-                            item = q_sync.get(timeout=1.0)
-                            asyncio.run_coroutine_threadsafe(q_async.put(item), asyncio.get_event_loop())
-                        except queue.Empty:
-                            continue
-                except Exception:
-                    pass
-
-            t = threading.Thread(target=pump, daemon=True)
-            t.start()
-            return q_async
-
-        async def unsubscribe(self, q: asyncio.Queue) -> None:
-            # No-op; underlying threaded log manages listeners.
-            return None
-
-    call_log = _CompatCallLog()
-except Exception:
-    call_log = _AsyncCallLog()
-
-# --------------------------------------------------------------------------------------
-# OpenAI helpers (1.x SDK if available)
-# --------------------------------------------------------------------------------------
-
-def _openai_client():
+if _flask_app:
     try:
-        from openai import OpenAI
-        return OpenAI()
+        from flask.sessions import SecureCookieSessionInterface
+        _ssi = SecureCookieSessionInterface()
+        _flask_serializer = _ssi.get_signing_serializer(_flask_app)
+        _flask_cookie_name = _flask_app.session_cookie_name
+        # Copy cookie params (secure/samesite/httponly/path)
+        _flask_cookie_params = dict(
+            httponly=True,
+            secure=bool(_flask_app.config.get("SESSION_COOKIE_SECURE", False)),
+            samesite=_flask_app.config.get("SESSION_COOKIE_SAMESITE", "Lax"),
+            path=_flask_app.config.get("SESSION_COOKIE_PATH", "/"),
+        )
     except Exception:
-        return None
+        _flask_serializer = None
 
-async def _llm_complete(user_text: str, ctx: Optional[Dict[str, Any]]=None) -> str:
-    """Return a short Chip-style reply. Falls back to a simple echo if not configured."""
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    sys_prompt = (
-        "You are Chip, a concise, friendly systems engineer. "
-        "Answer briefly, in natural sentences (no rigid lists), unless asked for details."
-    )
-    client = _openai_client()
-    if client:
-        try:
-            resp = client.chat.completions.create(
-                model=model,
-                temperature=0.6,
-                messages=[
-                    {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": user_text},
-                ],
-            )
-            txt = (resp.choices[0].message.content or "").strip()
-            if txt:
-                return txt
-        except Exception as e:
-            await call_log.add("warn", "openai_error", error=str(e), model=model)
-    # Fallback
-    return f"{user_text}".strip() or "Hi—what should we tackle first?"
-
-# --------------------------------------------------------------------------------------
-# ElevenLabs TTS (with optional visemes) – minimal bridge
-# --------------------------------------------------------------------------------------
-
-def _eleven_keys():
-    key = (os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVEN_API_KEY") or os.getenv("XI_API_KEY") or "").strip()
-    voice = (os.getenv("ELEVENLABS_VOICE_ID") or os.getenv("ELEVEN_VOICE_ID") or os.getenv("CHIP_VOICE_ID") or "").strip()
-    model = os.getenv("ELEVENLABS_MODEL_ID", "eleven_turbo_v2")
-    return key, voice, model
-
-def _tts_with_elevenlabs(text: str, *, voice_id: Optional[str]=None, model_id: Optional[str]=None) -> Dict[str, Any]:
-    """
-    Returns: { ok: bool, audio_base64: str|None, visemes: list|None, error: str|None }
-    """
-    key, default_voice, default_model = _eleven_keys()
-    voice_id = voice_id or default_voice
-    model_id = model_id or default_model
-    if not key:
-        return {"ok": False, "error": "ELEVENLABS_API_KEY not set", "audio_base64": None, "visemes": None}
-    if not voice_id:
-        return {"ok": False, "error": "ELEVENLABS_VOICE_ID/VOICE_ID not set", "audio_base64": None, "visemes": None}
-
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
-    headers = {
-        "xi-api-key": key,
-        "accept": "audio/mpeg",
-        "content-type": "application/json",
-    }
-    payload = {
-        "text": text,
-        "model_id": model_id,
-        "optimize_streaming_latency": 0,
-        "output_format": "mp3_44100_128",
-        # If your account supports it, you can request additional metadata; many plans
-        # do not yet return viseme data via REST. We return None for visemes today.
-        # "enable_subtitles": True,
-    }
+def _read_flask_session(request: Request) -> Dict[str, Any]:
+    if not _flask_serializer:
+        return {}
+    raw = request.cookies.get(_flask_cookie_name or "session")
+    if not raw:
+        return {}
     try:
-        r = requests.post(url, headers=headers, json=payload, timeout=60)
-        if r.status_code != 200:
-            try:
-                err_json = r.json()
-                msg = err_json.get("detail") or err_json.get("error") or err_json
-            except Exception:
-                msg = r.text[:300]
-            return {"ok": False, "error": f"ElevenLabs error {r.status_code}: {msg}", "audio_base64": None, "visemes": None}
-        audio_b64 = _b64(r.content)
-        # Visemes not provided by this stream endpoint; return None for now.
-        return {"ok": True, "audio_base64": audio_b64, "visemes": None, "error": None}
-    except Exception as e:
-        return {"ok": False, "error": f"TTS exception: {e}", "audio_base64": None, "visemes": None}
+        data = _flask_serializer.loads(raw)  # type: ignore
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
-# --------------------------------------------------------------------------------------
-# STT via OpenAI Whisper (1.x SDK)
-# --------------------------------------------------------------------------------------
-
-async def _stt_transcribe_bytes(filename: str, content: bytes, mime: str = "audio/wav") -> Dict[str, Any]:
-    client = _openai_client()
-    if not client:
-        return {"ok": False, "error": "OPENAI_API_KEY not set or SDK not available", "text": None}
-    model = os.getenv("OPENAI_STT_MODEL", "whisper-1")
+def _write_flask_session(resp: Response, session_data: Dict[str, Any]) -> Response:
+    if not _flask_serializer:
+        return resp
     try:
-        # The 1.x SDK accepts a file-like object.
-        import io as _io
-        f = _io.BytesIO(content)
-        f.name = filename  # type: ignore[attr-defined]
-        resp = client.audio.transcriptions.create(model=model, file=f)
-        text = (resp.text or "").strip()
-        return {"ok": True, "text": text}
-    except Exception as e:
-        await call_log.add("warn", "stt_error", error=str(e), model=model)
-        return {"ok": False, "error": str(e), "text": None}
+        raw = _flask_serializer.dumps(session_data)  # type: ignore
+        resp.set_cookie(_flask_cookie_name or "session", raw, **_flask_cookie_params)
+    except Exception:
+        pass
+    return resp
 
-# --------------------------------------------------------------------------------------
-# Starlette app + routes
-# --------------------------------------------------------------------------------------
+# -----------------------------
+# Health & features
+# -----------------------------
 
-asgi = Starlette(debug=_bool_env("DEBUG", False))
-
-# ---- Health ----
-async def health(_: Request) -> JSONResponse:
+async def healthz(_: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "ts": _now_iso(), "service": "ask-chip", "ws": True, "sse": True})
 
-# ---- /api/v1/chat ----
-async def api_chat(request: Request) -> JSONResponse:
+async def features_v1(_: Request) -> JSONResponse:
+    return JSONResponse({
+        "ok": True,
+        "features": {
+            "ws": True,
+            "sse": True,
+            "tts": "elevenlabs",
+            "stt": "openai_whisper_optional"
+        }
+    })
+
+# -----------------------------
+# /api/v1/chat — full pipeline parity
+# -----------------------------
+
+async def chat_v1(request: Request) -> JSONResponse:
     try:
         data = await request.json()
     except Exception:
@@ -278,13 +152,104 @@ async def api_chat(request: Request) -> JSONResponse:
     user_text = _extract_text(data)
     if not user_text:
         return _json_error(400, "bad_request", "Missing 'text' in body")
-    ctx = data.get("ctx") or {}
-    reply = await _llm_complete(user_text, ctx=ctx)
-    await call_log.add("chat", "reply", text=user_text, reply=reply)
-    return JSONResponse({"ok": True, "reply": reply, "message": reply, "text": reply})
+    sess = _read_flask_session(request)
 
-# ---- /api/v1/voice/tts-with-visemes ----
-async def api_tts(request: Request) -> JSONResponse:
+    # Prior context
+    ctx_prev = ctx_get(sess)
+
+    # Normalize + intent/product
+    normalized = None
+    updates: Dict[str, str] = {}
+    intent = (detect_intent(user_text) if callable(detect_intent) else None) or ctx_prev.get("intent")
+    prior_product = ctx_prev.get("product")
+
+    if callable(normalize_text_to_pure) and (intent or prior_product):
+        try:
+            normalized, updates = normalize_text_to_pure(user_text)  # type: ignore
+        except Exception:
+            normalized, updates = None, {}
+    detected_product = (updates or {}).get("product") or \
+                       (detect_product(user_text) if callable(detect_product) else None) or \
+                       prior_product
+
+    clean_text = (normalized or user_text).strip()
+
+    # Persist updated context in Flask session
+    ctx_data = ctx_set(sess, {"product": detected_product or "", "intent": intent or ""}) or {}
+
+    # Generate reply using the same service as Flask
+    if callable(generate_reply):
+        reply, err = generate_reply(clean_text, ctx=ctx_data)  # type: ignore
+    else:
+        reply, err = clean_text, None
+
+    if err:
+        call_log.add("warn", "openai_error", error=str(err))
+    call_log.add("chat:v1", "ok", text=user_text, reply=reply, ctx=ctx_data)
+
+    resp = JSONResponse({"ok": True, "reply": reply, "message": reply, "text": reply})
+    return _write_flask_session(resp, sess)
+
+# -----------------------------
+# Voice: TTS (+visemes placeholder) and STT
+# -----------------------------
+
+def _eleven_keys() -> Tuple[str, str, str]:
+    key = (os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVEN_API_KEY") or os.getenv("XI_API_KEY") or "").strip()
+    voice = (os.getenv("ELEVENLABS_VOICE_ID") or os.getenv("ELEVEN_VOICE_ID") or os.getenv("CHIP_VOICE_ID") or "").strip()
+    model = os.getenv("ELEVENLABS_MODEL_ID", "eleven_turbo_v2")
+    return key, voice, model
+
+def _tts_stream_pcm_chunks(text: str, *, chunk_samples: int = 2400, sample_rate: int = 24000):
+    """
+    Generator yielding Int16 PCM chunks (base64) for a given text using ElevenLabs stream endpoint.
+    This assumes the account supports 'pcm_24000' (or change via ELEVEN_OUTPUT_FORMAT_WS).
+    """
+    key, voice_id, model_id = _eleven_keys()
+    if not key or not voice_id:
+        yield {"type": "error", "code": "tts_config", "error": "Missing ELEVENLABS_API_KEY or VOICE_ID"}
+        return
+
+    output_fmt = os.getenv("ELEVEN_OUTPUT_FORMAT_WS", "pcm_24000")
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+    headers = {"xi-api-key": key, "accept": "*/*", "content-type": "application/json"}
+    payload = {
+        "text": text,
+        "model_id": model_id,
+        "optimize_streaming_latency": 0,
+        "output_format": output_fmt,
+    }
+    try:
+        with requests.post(url, headers=headers, json=payload, stream=True, timeout=90) as r:
+            if r.status_code != 200:
+                # Try JSON error
+                try:
+                    err_json = r.json()
+                    msg = err_json.get("detail") or err_json.get("error") or err_json
+                except Exception:
+                    msg = r.text[:300]
+                yield {"type": "error", "code": "tts_error", "error": f"ElevenLabs {r.status_code}: {msg}"}
+                return
+            # Accumulate and yield fixed-size PCM frames
+            buf = bytearray()
+            for chunk in r.iter_content(chunk_size=4096):
+                if not chunk:
+                    continue
+                buf.extend(chunk)
+                frame_bytes = chunk_samples * 2  # int16 mono
+                while len(buf) >= frame_bytes:
+                    sl = bytes(buf[:frame_bytes])
+                    del buf[:frame_bytes]
+                    b16 = base64.b64encode(sl).decode("utf-8")
+                    yield {"type": "audio_chunk", "b16": b16, "sr": sample_rate}
+            # Flush tail
+            if buf:
+                b16 = base64.b64encode(bytes(buf)).decode("utf-8")
+                yield {"type": "audio_chunk", "b16": b16, "sr": sample_rate}
+    except Exception as e:
+        yield {"type": "error", "code": "tts_exception", "error": str(e)}
+
+async def tts_v1(request: Request) -> JSONResponse:
     try:
         data = await request.json()
     except Exception:
@@ -292,26 +257,33 @@ async def api_tts(request: Request) -> JSONResponse:
     text = _extract_text(data)
     if not text:
         return _json_error(400, "bad_request", "Missing 'text' in body")
-    voice_id = data.get("voice_id") or data.get("voice") or None
-    model_id = data.get("model_id") or data.get("model") or None
-    res = _tts_with_elevenlabs(text, voice_id=voice_id, model_id=model_id)
-    if not res.get("ok"):
-        await call_log.add("warn", "tts_error", error=res.get("error"), text=text)
-        return _json_error(502, "tts_error", str(res.get("error") or "TTS failed"))
-    await call_log.add("tts", "ok", size=len(res.get("audio_base64") or ""))
-    return JSONResponse({"ok": True, "audio_base64": res["audio_base64"], "visemes": res.get("visemes")})
 
-# ---- /api/v1/voice/stt ----
-async def api_stt(request: Request) -> JSONResponse:
+    # Simple one-shot TTS: reuse ElevenLabs bridge used by Flask routes (mp3)
+    # We keep REST response format compatible with the legacy voice.js
+    try:
+        from services.tts_bridge import synthesize_with_visemes  # type: ignore
+        audio_b64, visemes, err = synthesize_with_visemes(text)
+        if err or not audio_b64:
+            call_log.add("tts", "error", error=str(err or "unknown"))
+            return _json_error(502, "tts_error", str(err or "TTS failed"))
+        call_log.add("tts", "ok", size=len(audio_b64))
+        return JSONResponse({"ok": True, "audio_base64": audio_b64, "visemes": visemes})
+    except Exception as e:
+        call_log.add("tts", "missing_bridge", error=str(e))
+        return _json_error(500, "server_error", "TTS bridge not available")
+
+async def stt_v1(request: Request) -> JSONResponse:
     # Accept multipart (file) or JSON { audio_base64, filename, mime }
-    if request.headers.get("content-type", "").startswith("multipart/form-data"):
-        form = await request.form()
-        file = form.get("file")
-        if not file:
-            return _json_error(400, "bad_request", "Missing 'file' form field")
-        content = await file.read()  # type: ignore[attr-defined]
-        filename = getattr(file, "filename", "audio.wav")  # type: ignore[attr-defined]
-        mime = getattr(file, "content_type", "audio/wav")  # type: ignore[attr-defined]
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("multipart/form-data"):
+        try:
+            form = await request.form()
+            file = form.get("file") or form.get("audio") or form.get("blob")
+            content = await file.read()  # type: ignore
+            filename = getattr(file, "filename", "audio.webm")  # type: ignore
+            mime = getattr(file, "content_type", "audio/webm")  # type: ignore
+        except Exception:
+            return _json_error(400, "bad_request", "Invalid multipart payload")
     else:
         try:
             data = await request.json()
@@ -324,15 +296,131 @@ async def api_stt(request: Request) -> JSONResponse:
             content = base64.b64decode(b64)
         except Exception:
             return _json_error(400, "bad_request", "Invalid base64 in 'audio_base64'")
-        filename = data.get("filename") or "audio.wav"
-        mime = data.get("mime") or "audio/wav"
-    res = await _stt_transcribe_bytes(filename, content, mime=mime)
-    if not res.get("ok"):
-        return _json_error(502, "stt_error", str(res.get("error") or "STT failed"))
-    await call_log.add("stt", "ok", text=res.get("text"))
-    return JSONResponse({"ok": True, "text": res.get("text")})
+        filename = data.get("filename") or "audio.webm"
+        mime = data.get("mime") or "audio/webm"
 
-# ---- /ws/v1/chat (text -> TTS audio roundtrip) ----
+    # Whisper via OpenAI SDK (optional)
+    try:
+        from openai import OpenAI
+        client = OpenAI()
+        import io as _io
+        f = _io.BytesIO(content); f.name = filename  # type: ignore
+        model = os.getenv("OPENAI_STT_MODEL", "whisper-1")
+        resp = client.audio.transcriptions.create(model=model, file=f)
+        text = (getattr(resp, "text", "") or "").strip()
+        call_log.add("stt", "ok", mime=mime, n=len(text))
+        return JSONResponse({"ok": True, "text": text})
+    except Exception as e:
+        call_log.add("stt", "error", error=str(e))
+        return _json_error(502, "stt_error", str(e))
+
+# -----------------------------
+# Profile / Me / Email / Accounts
+# -----------------------------
+
+async def me_v1(request: Request) -> JSONResponse:
+    sess = _read_flask_session(request)
+    email = (sess.get("user", {}) or {}).get("email") or sess.get("email")
+    return JSONResponse({"ok": True, "email": email or ""})
+
+async def profile_v1(request: Request) -> JSONResponse:
+    sess = _read_flask_session(request)
+    email = (sess.get("user", {}) or {}).get("email") or sess.get("email")
+    if request.method == "GET":
+        profile = {
+            "firstName": (sess.get("user", {}) or {}).get("firstName") or "",
+            "lastName":  (sess.get("user", {}) or {}).get("lastName") or "",
+            "role":      (sess.get("user", {}) or {}).get("role") or "",
+            "company":   (sess.get("user", {}) or {}).get("company") or "",
+            "email": email or "",
+        }
+        return JSONResponse({"ok": True, "profile": profile})
+    # POST
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    user = dict(sess.get("user") or {})
+    for k in ("firstName", "lastName", "role", "company", "email"):
+        v = (data.get(k) or "").strip()
+        if v:
+            user[k] = v
+    if not user.get("email") and email:
+        user["email"] = email
+    sess["user"] = user
+    call_log.add("profile:save", "session", **user)
+
+    # Optional DB helper
+    try:
+        from utils.db import upsert_profile  # type: ignore
+        upsert_profile(user)
+        call_log.add("profile:save", "db_ok", email=user.get("email"))
+    except Exception as e:
+        call_log.add("profile:save", "db_skip", error=str(e))
+
+    resp = JSONResponse({"ok": True, "profile": user})
+    return _write_flask_session(resp, sess)
+
+async def greet_v1(request: Request) -> JSONResponse:
+    sess = _read_flask_session(request)
+    profile = sess.get("user") or {}
+    try:
+        import memory  # optional
+        email = (profile or {}).get("email") or sess.get("email")
+        if email:
+            profile = memory.get_user(email) or profile  # type: ignore
+    except Exception:
+        pass
+    try:
+        text = generate_greeting(profile)
+        if not text:
+            text = "Hey—Chip here. What are we tackling today?"
+    except Exception:
+        text = "Hey—Chip here. What are we tackling today?"
+    call_log.add("greet", "ok", text=text)
+    return JSONResponse({"ok": True, "text": text})
+
+async def email_send_v1(request: Request) -> JSONResponse:
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    to = (data.get("to") or "").strip()
+    subject = (data.get("subject") or "").strip()
+    html = (data.get("html") or "").strip()
+    body = (data.get("text") or data.get("body") or "").strip()
+    if not to or not subject:
+        return _json_error(400, "bad_request", "to and subject required")
+    ok = False
+    try:
+        ok = bool(send_email(to, subject, html=html, text=body))
+    except Exception as e:
+        call_log.add("email", "send_error", error=str(e))
+        ok = False
+    if ok:
+        call_log.add("email", "send_ok", to=to, subject=subject)
+        return JSONResponse({"ok": True})
+    else:
+        call_log.add("email", "send_fail", to=to, subject=subject)
+        return JSONResponse({"ok": False, "error": "send_failed"})
+
+async def accounts_search_v1(request: Request) -> JSONResponse:
+    q = (request.query_params.get("q") or "").strip()
+    if not q:
+        call_log.add("accounts", "empty_query")
+        return JSONResponse({"ok": True, "results": []})
+    try:
+        results = search_accounts(q, limit=int(request.query_params.get("limit") or 20))
+    except Exception as e:
+        call_log.add("accounts", "search_error", error=str(e))
+        results = []
+    call_log.add("accounts", "search_ok", q=q, n=len(results))
+    return JSONResponse({"ok": True, "results": results})
+
+# -----------------------------
+# WS: /ws/v1/chat — stream PCM + support barge-in (client stops playback)
+# -----------------------------
+
 async def ws_chat(ws: WebSocket):
     await ws.accept()
     await call_log.add("ws", "connected", path="/ws/v1/chat")
@@ -340,33 +428,62 @@ async def ws_chat(ws: WebSocket):
         await ws.send_json({"type": "ready", "ts": _now_iso(), "service": "ws.chat"})
         while True:
             msg = await ws.receive_json()
-            mtype = msg.get("type")
-            if mtype in (None, "user_text", "text"):
-                user_text = _extract_text(msg)
-                if not user_text:
-                    await ws.send_json({"type": "error", "code": "bad_request", "error": "Missing text"})
-                    continue
-                # Generate reply
-                reply = await _llm_complete(user_text, ctx=msg.get("ctx") or {})
-                await call_log.add("ws_chat", "reply", text=user_text, reply=reply)
-                await ws.send_json({"type": "assistant_text", "text": reply})
-                # TTS
-                tts = _tts_with_elevenlabs(reply)
-                if not tts.get("ok"):
-                    await ws.send_json({"type": "error", "code": "tts_error", "error": str(tts.get("error"))})
-                else:
-                    await ws.send_json({
-                        "type": "assistant_audio",
-                        "audio_base64": tts["audio_base64"],
-                        "visemes": tts.get("visemes"),
-                        "mime": "audio/mpeg",
-                    })
-            elif mtype == "ping":
-                await ws.send_json({"type": "pong", "ts": _now_iso()})
-            elif mtype in ("close", "stop"):
+            mtype = msg.get("type") or "user_text"
+            if mtype in ("close", "stop"):
                 break
-            else:
+            if mtype not in ("user_text", "text"):
                 await ws.send_json({"type": "error", "code": "bad_message", "error": f"Unknown type '{mtype}'"})
+                continue
+
+            user_text = _extract_text(msg)
+            if not user_text:
+                await ws.send_json({"type": "error", "code": "bad_request", "error": "Missing text"})
+                continue
+
+            # Generate reply (full pipeline parity)
+            try:
+                # Minimal reuse by calling our own HTTP handler
+                class _FakeReq:
+                    def __init__(self, cookies, body):
+                        self.cookies = cookies
+                        self._body = body
+                    async def json(self): return self._body
+                _req = _FakeReq({}, {"text": user_text, "ctx": msg.get("ctx") or {}})
+                chat_resp = await chat_v1(_req)  # type: ignore
+                payload = json.loads(chat_resp.body.decode("utf-8"))
+                reply = (payload.get("reply") or "").strip()
+            except Exception as e:
+                reply = ""
+                await ws.send_json({"type": "error", "code": "chat_error", "error": str(e)})
+
+            if not reply:
+                await ws.send_json({"type": "final_text", "text": ""})
+                await ws.send_json({"type": "end"})
+                continue
+
+            await ws.send_json({"type": "partial_text", "text": reply[:80]})
+            await ws.send_json({"type": "final_text", "text": reply})
+
+            # Stream PCM audio chunks for the reply (sentence-level could be added later)
+            got_audio = False
+            async def _send(gen):
+                nonlocal got_audio
+                async for _ in gen:
+                    pass
+
+            # Use blocking generator, wrap into thread? We'll push chunks in the event loop.
+            # We'll iterate in the loop and send JSON per chunk.
+            for evt in _tts_stream_pcm_chunks(reply):
+                if evt.get("type") == "audio_chunk":
+                    got_audio = True
+                    await ws.send_json(evt)
+                elif evt.get("type") == "error":
+                    await ws.send_json(evt)
+                    break
+
+            await ws.send_json({"type": "end"})
+            await call_log.add("ws_chat", "turn_ok", has_audio=bool(got_audio), chars=len(reply))
+
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -382,77 +499,60 @@ async def ws_chat(ws: WebSocket):
         except Exception:
             pass
 
-# ---- /api/v1/admin/logs (SSE) ----
-async def sse_logs(request: Request) -> StreamingResponse:
-    # Optional ?history=100 to replay recent events
-    try:
-        history_n = int(request.query_params.get("history", "0"))
-    except Exception:
-        history_n = 0
+# -----------------------------
+# Admin SSE (/api/v1/admin/logs)
+# -----------------------------
 
+async def sse_logs(_: Request) -> StreamingResponse:
     async def event_stream() -> AsyncGenerator[bytes, None]:
-        # Replay history
-        if history_n:
-            for evt in call_log.recent(history_n):
-                yield f"event: message\ndata: {json.dumps(evt)}\n\n".encode("utf-8")
-
-        q = await call_log.subscribe()
+        q = call_log.subscribe()
         try:
-            # Heartbeat
-            async def _heartbeat():
-                while True:
-                    yield b": keepalive\\n\\n"
-                    await asyncio.sleep(15)
-
-            hb = _heartbeat()
+            # Replay recent
+            for evt in call_log.recent(100):
+                yield f"event: message\\ndata: {json.dumps(evt)}\\n\\n".encode("utf-8")
             while True:
-                try:
-                    evt = await asyncio.wait_for(q.get(), timeout=15.0)
-                    yield f"event: message\ndata: {json.dumps(evt)}\n\n".encode("utf-8")
-                except asyncio.TimeoutError:
-                    # send heartbeat
-                    try:
-                        yield next(hb)  # type: ignore
-                    except StopIteration:
-                        hb = _heartbeat()
-                        yield b": keepalive\\n\\n"
+                item = q.get()
+                yield f"event: message\\ndata: {json.dumps(item)}\\n\\n".encode("utf-8")
+        except asyncio.CancelledError:
+            pass
         finally:
-            await call_log.unsubscribe(q)
-
-    headers = {
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",  # for nginx
-    }
+            call_log.unsubscribe(q)
+    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
-# --------------------------------------------------------------------------------------
-# Route table
-# --------------------------------------------------------------------------------------
+# -----------------------------
+# Assemble Starlette app & routes
+# -----------------------------
 
-routes = [
-    Route("/api/health", endpoint=health, methods=["GET"]),
-    Route("/api/v1/chat", endpoint=api_chat, methods=["POST"]),
-    Route("/api/v1/voice/tts-with-visemes", endpoint=api_tts, methods=["POST"]),
-    Route("/api/v1/voice/stt", endpoint=api_stt, methods=["POST"]),
+asgi = Starlette(debug=bool(os.getenv("DEBUG", "").strip().lower() in ("1","true","yes","on")))
+
+# v1 API
+asgi.routes.extend([
+    Route("/api/health", endpoint=healthz, methods=["GET"]),  # keep non-version health
+    Route("/api/v1/features", endpoint=features_v1, methods=["GET"]),
+    Route("/api/v1/chat", endpoint=chat_v1, methods=["POST"]),
+    Route("/api/v1/greet", endpoint=greet_v1, methods=["GET"]),
+    Route("/api/v1/me", endpoint=me_v1, methods=["GET"]),
+    Route("/api/v1/profile", endpoint=profile_v1, methods=["GET", "POST"]),
+    Route("/api/v1/email/send", endpoint=email_send_v1, methods=["POST"]),
+    Route("/api/v1/accounts/search", endpoint=accounts_search_v1, methods=["GET"]),
+    Route("/api/v1/voice/tts-with-visemes", endpoint=tts_v1, methods=["POST"]),
+    Route("/api/v1/voice/stt", endpoint=stt_v1, methods=["POST"]),
     Route("/api/v1/admin/logs", endpoint=sse_logs, methods=["GET"]),
+])
+
+# WS (v1 + alias for current UI)
+asgi.routes.extend([
     WebSocketRoute("/ws/v1/chat", endpoint=ws_chat),
-]
+    WebSocketRoute("/ws/chat", endpoint=ws_chat),  # back-compat while UI flips
+])
 
-# Instantiate app with routes
-asgi = Starlette(routes=routes, debug=_bool_env("DEBUG", False))
-
-# Mount the existing Flask WSGI app (if available) at the root path
-try:
-    # The project exposes a WSGI app at app:app — import lazily to avoid circulars.
-    from app import app as flask_app  # type: ignore
-    asgi.mount("/", WsgiToAsgi(flask_app))
-except Exception as e:
-    # If Flask isn't available (e.g., during unit tests), expose a minimal root.
+# Mount Flask app at root for UI + any legacy routes
+if _wsgi:
+    asgi.mount("/", _wsgi)
+else:
     async def _root(_: Request):
-        return PlainTextResponse("Ask Chip ASGI gateway is running. Flask app not mounted.", status_code=200)
+        return PlainTextResponse("Ask Chip ASGI gateway running; Flask app not mounted.", status_code=200)
     asgi.routes.append(Route("/", endpoint=_root, methods=["GET"]))
 
-# No CORS middleware under Option A (same-origin). If you need cross-origin later,
-# add Starlette CORSMiddleware here guarded by an env flag.
-# --------------------------------------------------------------------------------------
+# No CORS under Option A (same origin). If you need cross-origin later, add CORSMiddleware guarded by env.
