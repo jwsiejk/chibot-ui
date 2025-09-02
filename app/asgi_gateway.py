@@ -497,22 +497,89 @@ async def ws_chat(ws: WebSocket):
 # -----------------------------
 # Admin SSE (/api/v1/admin/logs)
 # -----------------------------
-
+# ---- /api/v1/admin/logs (SSE with heartbeats to avoid worker timeout) ----
 async def sse_logs(_: Request) -> StreamingResponse:
-    async def event_stream() -> AsyncGenerator[bytes, None]:
-        q = call_log.subscribe()
+    async def _next_from_queue(q, timeout_sec: float = 15.0):
+        """
+        Try to get the next event from whatever queue impl utils.call_log uses.
+        Works with either an asyncio.Queue-like (awaitable get) or a threaded queue (blocking get).
+        Returns None on timeout.
+        """
+        get = getattr(q, "get", None)
+        if get is None:
+            await asyncio.sleep(timeout_sec)
+            return None
+
+        # Awaitable get()
+        if asyncio.iscoroutinefunction(get):
+            try:
+                return await asyncio.wait_for(get(), timeout=timeout_sec)
+            except asyncio.TimeoutError:
+                return None
+
+        # Blocking get(...) in a thread
+        loop = asyncio.get_event_loop()
+
+        def _blocking_get():
+            try:
+                # Prefer timeout if supported
+                return get(timeout=timeout_sec)
+            except TypeError:
+                # No timeout parameter; block (worker timeout still avoided by our outer keepalive)
+                return get()
+            except Exception:
+                return None
+
         try:
-            # Replay recent
-            for evt in call_log.recent(100):
+            return await loop.run_in_executor(None, _blocking_get)
+        except Exception:
+            return None
+
+    async def event_stream():
+        # Subscribe and replay a short history
+        q = None
+        try:
+            sub = getattr(call_log, "subscribe", None)
+            q = await sub() if asyncio.iscoroutinefunction(sub) else sub()
+        except Exception:
+            q = None
+
+        # Replay last 100 messages, if available
+        try:
+            recent = call_log.recent(100)  # may be empty
+            for evt in recent:
                 yield f"event: message\ndata: {json.dumps(evt)}\n\n".encode("utf-8")
+        except Exception:
+            pass
+
+        # Main loop: emit events; if none, emit a heartbeat every 15s
+        try:
             while True:
-                item = q.get()
-                yield f"event: message\ndata: {json.dumps(item)}\n\n".encode("utf-8")
+                item = await _next_from_queue(q, timeout_sec=15.0) if q else None
+                if item is None:
+                    # SSE comment line as heartbeat
+                    yield b": keepalive\n\n"
+                else:
+                    yield f"event: message\ndata: {json.dumps(item)}\n\n".encode("utf-8")
         except asyncio.CancelledError:
+            # client disconnected
             pass
         finally:
-            call_log.unsubscribe(q)
-    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
+            try:
+                unsub = getattr(call_log, "unsubscribe", None)
+                if unsub:
+                    if asyncio.iscoroutinefunction(unsub):
+                        await unsub(q)
+                    else:
+                        unsub(q)
+            except Exception:
+                pass
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",  # prevent proxy buffers from batching SSE
+    }
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
 # -----------------------------
