@@ -1,4 +1,3 @@
-# app/legacy_app.py
 from __future__ import annotations
 
 import os
@@ -12,7 +11,7 @@ from typing import Any, Optional, Dict
 from flask import Flask, jsonify, render_template, request, session
 from werkzeug.exceptions import HTTPException
 
-# Optional internal deps (harmless stubs if modules are absent)
+# Optional internal deps
 try:
     import memory  # type: ignore
 except Exception:  # pragma: no cover
@@ -61,15 +60,16 @@ def create_app() -> Flask:
 
     # ------------------------------------------------------------------
     # SECRET_KEY (must be set BEFORE any session use)
-    # Accept several env var names for backward compatibility.
+    # Supports your legacy env name plus the conventional one.
     # ------------------------------------------------------------------
     secret = (
         os.environ.get("SECRET_KEY")
         or os.environ.get("FLASK_SECRET")
-        or os.environ.get("Flask_Secret")
+        or os.environ.get("Flask_Secret")  # legacy casing you mentioned
     )
 
     if not secret:
+        # Dev-only fallback; DO NOT rely on this in production.
         if app.debug:
             secret = secrets.token_hex(32)
             app.logger.warning(
@@ -80,10 +80,13 @@ def create_app() -> Flask:
                 "SECRET_KEY is required (checked env: SECRET_KEY, FLASK_SECRET, Flask_Secret)."
             )
 
+    # Direct assignment (not setdefault) — Flask predefines SECRET_KEY=None.
     app.config["SECRET_KEY"] = secret
+
+    # Sensible session cookie defaults
     app.config.setdefault("SESSION_COOKIE_NAME", "askchip_session")
     app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
-    app.config.setdefault("SESSION_COOKIE_SECURE", not app.debug)
+    app.config.setdefault("SESSION_COOKIE_SECURE", not app.debug)  # True on HTTPS (Render)
     app.config.setdefault("SESSION_PERMANENT", True)
     app.config.setdefault("PERMANENT_SESSION_LIFETIME", timedelta(hours=12))
 
@@ -91,9 +94,13 @@ def create_app() -> Flask:
         logging.basicConfig(level=logging.INFO)
 
     # ------------------------------------------------------------------
-    # Blueprint helper
+    # Helpers
     # ------------------------------------------------------------------
-    def _register(module_path: str, attr_name: Optional[str] = None, url_prefix: Optional[str] = None) -> None:
+    def _register(
+        module_path: str,
+        attr_name: Optional[str] = None,
+        url_prefix: Optional[str] = None,
+    ) -> None:
         """Import module and register its Blueprint attribute safely."""
         try:
             mod = importlib.import_module(module_path)
@@ -104,26 +111,38 @@ def create_app() -> Flask:
         names = (
             [attr_name]
             if attr_name
-            else ["bp", "blueprint", "api_bp", "chat_bp", "profile_bp", "tools_bp", "admin_bp", "email_bp", "voice_bp", "auth_bp"]
+            else [
+                "bp",
+                "blueprint",
+                "api_bp",
+                "chat_bp",
+                "profile_bp",
+                "tools_bp",
+                "admin_bp",
+                "email_bp",
+                "voice_bp",
+                "auth_bp",
+            ]
         )
         bp = None
         for nm in names:
             if nm and hasattr(mod, nm):
                 bp = getattr(mod, nm)
                 break
-
         if bp is None:
-            # Best-effort scan for an object that "looks like" a Blueprint
+            # Best-effort scan (works for objects that "look like" Blueprints)
             for nm in dir(mod):
                 obj = getattr(mod, nm)
-                if getattr(obj, "register", None) and getattr(obj, "name", None) and getattr(obj, "url_prefix", None) is not None:
+                if (
+                    getattr(obj, "register", None)
+                    and getattr(obj, "name", None)
+                    and getattr(obj, "url_prefix", None) is not None
+                ):
                     bp = obj
                     break
-
         if bp is None:
             app.logger.info("Skipping %s: no blueprint found", module_path)
             return
-
         try:
             if getattr(bp, "name", None) in app.blueprints:
                 app.logger.info("Blueprint %s already registered; skipping", bp.name)
@@ -131,7 +150,9 @@ def create_app() -> Flask:
                 app.register_blueprint(bp, url_prefix=url_prefix)
                 app.logger.info(
                     "Registered blueprint from %s as %s (url_prefix=%r)",
-                    module_path, getattr(bp, "name", "?"), url_prefix,
+                    module_path,
+                    getattr(bp, "name", "?"),
+                    url_prefix,
                 )
         except Exception as e:  # pragma: no cover
             app.logger.warning("Failed registering blueprint %s: %s", module_path, e)
@@ -149,6 +170,7 @@ def create_app() -> Flask:
 
     @app.get("/favicon.ico")
     def favicon():
+        # Return empty favicon to avoid noisy 404s if no file is present
         return ("", 204, {"Cache-Control": "max-age=86400"})
 
     @app.get("/api/features")
@@ -187,12 +209,18 @@ def create_app() -> Flask:
             }
         )
 
-    # Optional routes/blueprints (registered only if present or feature-flagged)
+    # ------------------------------------------------------------------
+    # Blueprints (canonical only — no conversation/orchestrator)
+    # ------------------------------------------------------------------
+    # Tools / diagnostics (optional)
     if _bool_env("FEATURE_TOOLS"):
         _register("routes.tools", "tools_bp")
+
+    # Admin UI (optional)
     if _bool_env("FEATURE_ADMIN_UI"):
         _register("routes.admin", "admin_bp")
 
+    # Profile (mount under /api)
     try:
         from routes.profile import profile_bp as _profile_bp  # type: ignore
         if "profile_bp" not in app.blueprints:
@@ -202,41 +230,55 @@ def create_app() -> Flask:
     except Exception as e:  # pragma: no cover
         app.logger.info("Profile blueprint not available: %s", e)
 
-    _register("routes.auth", "auth_bp", url_prefix=None)   # blueprint defines /api
+    # Auth (session-based login/logout)
+    _register("routes.auth", "auth_bp", url_prefix=None)  # blueprint defines url_prefix="/api"
+
+    # Greet and Chat
     _register("routes.greet", "bp")
     _register("routes.chat", "chat_bp")
+
+    # Email API (optional)
     if _bool_env("FEATURE_EMAIL", True):
         _register("routes.email_api", None)
+
+    # Accounts search (optional)
     if _bool_env("FEATURE_ACCOUNTS", False):
         _register("routes.accounts", None)
+
+    # Voice (optional; WS handled wherever you implement it)
     if _bool_env("FEATURE_AUDIO", True):
         _register("routes.voice", None)
 
     # ------------------------------------------------------------------
-    # Error handling (correctly indented inside create_app)
+    # Error handling  (FIXED INDENTATION)
     # ------------------------------------------------------------------
     @app.errorhandler(Exception)
     def _unhandled_error(err: Exception):
         path = (request.path or "")
         wants_json = path.startswith(("/api/", "/voice", "/api/voice", "/speak"))
 
-        # HTTP exceptions (404, 405, etc.) keep default HTML for pages
+        # Flask HTTPException (404, 405, etc.)
         if isinstance(err, HTTPException):
             if wants_json:
-                payload = {"ok": False, "error": err.name, "status": err.code}
+                payload = {
+                    "ok": False,
+                    "error": err.name,
+                    "status": err.code,
+                }
                 if getattr(err, "description", None) and err.description != err.name:
                     payload["detail"] = err.description
                 return jsonify(payload), err.code
-            return err
+            return err  # default HTML for non-API paths
 
-        # Non-HTTP exceptions
+        # Non-HTTP exceptions (tracebacks)
         app.logger.error("Unhandled server error", exc_info=err)
         if wants_json:
             return jsonify(ok=False, error="server_error"), 500
         return "Internal Server Error", 500
 
+    # <-- IMPORTANT: return app must be here, not inside the handler
     return app
 
 
-# Expose 'app' for gunicorn
+# Expose 'app' for 'gunicorn app:app'
 app = create_app()
