@@ -4,7 +4,7 @@ import os
 import json
 import asyncio
 from datetime import datetime as _dt
-from typing import Any, Dict, Iterable
+from typing import Any, Dict
 
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, StreamingResponse
@@ -80,7 +80,7 @@ async def admin_logs(request: Request) -> StreamingResponse:
         yield b"retry: 2000\n\n"
         while True:
             now = str(int(asyncio.get_event_loop().time()))
-            data = f"event: ping\\ndata: {now}\\n\\n".encode("utf-8")
+            data = f"event: ping\ndata: {now}\n\n".encode("utf-8")
             yield data
             await asyncio.sleep(10)
     headers = {
