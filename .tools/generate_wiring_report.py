@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import os, re, csv, sys
 from collections import defaultdict
+from pathlib import PurePosixPath
+def posix(p): 
+    return str(PurePosixPath(str(p)))
 
 root = sys.argv[1] if len(sys.argv) > 1 else "."
 
