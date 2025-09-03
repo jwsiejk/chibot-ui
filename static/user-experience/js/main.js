@@ -154,7 +154,12 @@ function initUI(){
     const lbl = BTN_AUDIO.querySelector("span:last-child"); if (lbl) lbl.textContent = recording ? "Recording…" : (on ? "Listening" : "Audio");
   });
   setVoiceGuide((text)=>_chipGuide(text));
-  setRecordCallbacks(async ()=>{}, async ()=>{ await _vm_stopRecording(async (blob, durMs)=>{ await handleVoiceOnceResponse({ blob, durMs }); }); });
+  setRecordCallbacks(
+  // onStartRecording → immediately barge-in by voice
+  async () => { try { window.dispatchEvent(new Event("chip:bargein")); } catch {} },
+  // onStopRecording → send the utterance through the primary voice pipeline
+  async (blob, durMs) => { await handleVoiceOnceResponse({ blob, durMs }); }
+); }); });
   setArmVADForSend(()=>_vm_armVAD());
   wireChatLane(getChatLane, setChatLane);
   refreshLaneUI();
@@ -229,46 +234,50 @@ window.addEventListener("resize", calibrateMouth);
 async function startDynamicSession(){
   try{
     _chipSetState("greeting"); _chipStep("GET /api/greet →", {});
+    // j() returns the JSON body directly (no {data} wrapper)
     const res = await j("/api/greet");
-    const ok = res && (res.ok !== false);
+    const ok  = res && (res.ok !== false);
     if (!ok){
-      _chipStep("greet-failed",{status: res && res.status});
+      _chipStep("greet-failed",{ status: res && res.status });
       _chipSetState("idle");
       alert("Could not start the greeting. Try again?");
       setSessionActive(false);
       return;
     }
+
+    // unify greet text fields
     const reply = String(res.reply ?? res.reply_text ?? res.text ?? res.message ?? "").trim();
     if (reply) appendMessage("assistant", reply);
-    const audioUrl = res.audio || res.audio_url || null;
-    if (audioUrl){
-      try { await tryPlayWithMouth(audioUrl); } catch(e){ console.warn("Greet audio failed", e); }
-    } else if (reply){
-      try {
-        const ttsRes = await fetch("/api/v1/voice/tts-with-visemes", {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: reply })
-        }).then(r=>r.json()).catch(()=>null);
-        if (ttsRes){
-          if (ttsRes.audio) {
-            try { await tryPlayWithMouth(ttsRes.audio); } catch(e){ console.warn("Greet TTS (url) failed", e); }
-          } else if (ttsRes.audio_base64 || ttsRes.audio_b64) {
-            try { 
-              const a = new Audio("data:audio/mpeg;base64," + (ttsRes.audio_base64 || ttsRes.audio_b64));
-              await a.play();
-            } catch(e){ console.warn("Greet TTS (b64) failed", e); }
-          }
+
+    // SINGLE PATH: always synthesize greet audio via TTS
+    if (reply){
+      const ttsRes = await fetch("/api/v1/voice/tts-with-visemes", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: reply })
+      }).then(r => r.json()).catch(() => null);
+
+      if (ttsRes){
+        if (ttsRes.audio) {
+          try { await tryPlayWithMouth(ttsRes.audio); } catch(e){ console.warn("Greet TTS (url) failed", e); }
+        } else if (ttsRes.audio_base64 || ttsRes.audio_b64) {
+          try { await tryPlayWithMouth("data:audio/mpeg;base64," + (ttsRes.audio_base64 || ttsRes.audio_b64)); } catch(e){ console.warn("Greet TTS (b64) failed", e); }
         }
-      } catch(e){ console.warn("Greet TTS failed", e); }
+      }
     }
-    if (chatPanel) chatPanel.hidden=false; refreshLaneUI();
-    const chatInput=$("chatInput"); if (chatInput){ chatInput.placeholder="Ask me anything about Pure Storage…"; try{ chatInput.focus(); }catch{} }
+
+    if (chatPanel) chatPanel.hidden = false; refreshLaneUI();
+    const chatInput = $("chatInput");
+    if (chatInput){
+      chatInput.placeholder = "Ask me anything about Pure Storage…";
+      try { chatInput.focus(); } catch {}
+    }
     setStatus("Ready");
     _chipSetState("idle");
   } catch(e){
     console.warn("startDynamicSession failed", e);
-    setStatus("Ready"); _chipSetState("idle");
+    setStatus("Ready");
+    _chipSetState("idle");
   }
 }

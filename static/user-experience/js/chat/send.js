@@ -22,7 +22,20 @@ import {
 import { gate } from "../auth/profile.js";
 
 // Barge-in: stop playback and cancel any in-flight TTS
-window.addEventListener("chip:bargein", () => { try { cancelActiveSpeech(); } catch {} });
+window.addEventListener("chip:bargein", () => {
+  try { cancelActiveSpeech(); } catch {}
+  try {
+    if (_ws && _ws.isOpen()) {
+      // Mute incoming audio chunks for the remainder of the turn
+      _muteStream = true;
+      // Stop any active worklet stream
+      try { stopStream(); } catch {}
+      // Release any in-flight response lock
+      try { respRelease(); } catch {}
+      // Note: ws_chat does not implement mid-turn cancel; we mute client-side
+    }
+  } catch {}
+});
 
 /* --------------------------- Chat lane wiring --------------------------- */
 
@@ -138,6 +151,7 @@ export async function _chipEndConversation() {
 let _ws = null;
 let _wsReady = false;
 let _streamPrimed = false; // have we called startStream() for current turn?
+let _muteStream = false; // when true, ignore incoming audio chunks until WS "end"
 let _pendingThinking = null;
 
 function _ensureWS() {
@@ -153,12 +167,15 @@ function _ensureWS() {
         } else if (msg.type === "final_text") {
           if (_pendingThinking) { _pendingThinking.textContent = _limitWords(msg.text || "", 20); _pendingThinking = null; }
         } else if (msg.type === "audio_chunk") {
+          if (_muteStream) { /* muted due to barge-in */ return; }
           if (!_streamPrimed) {
-            const ok = await startStream({ sampleRate: msg.sr || 24000, channels: 1 });
+            const ok = await startStream({ sampleRate: msg.sr || 24000, channels: 1 
+        });
             _streamPrimed = ok;
           }
           if (msg.b16) pushPCM16Base64(msg.b16, { sampleRate: msg.sr || 24000 });
         } else if (msg.type === "end") {
+          _muteStream = false;
           _streamPrimed = false;
           respRelease();
           _chipSetState("followup");
@@ -256,7 +273,20 @@ export async function sendChat(message) {
         lane: _getChatLane(),
         language: "en",
         domain: "pure-storage",
-        short: true
+        short: true,
+        persona: {
+          name: "Chip",
+          origin: "Nebraska",
+          quirks: ["occasional Nebraska sayings", "likes buckeyes", "owns a John Deere 455 Diesel tractor"],
+          tone: "warm, helpful, practical",
+          style: "teacherly, conversational, occasionally playful"
+        },
+        conversation_guidelines: {
+          offer_deeper_help: true,
+          ask_checkpoints: ["Is that what you were looking for?", "Do you want to go a little deeper?"],
+          propose_integrations: true,
+          variability: "high"
+        }
       });
       usedStreaming = true;
     }
