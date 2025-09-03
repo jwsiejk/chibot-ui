@@ -215,10 +215,8 @@ async function onStartClicked(){
   setStatus("Connecting…");
   try {
     await startDynamicSession();
-    // Optional: auto-arm mic for Live lane
-    if (getChatLane() === "live"){
-      try { _vm_stopPlayback(); await _vm_armVAD(); } catch(e){ console.warn("VAD arm failed", e); }
-    }
+    // Auto-arm mic after greeting (unconditional)
+    try { _vm_stopPlayback(); await _vm_armVAD(); } catch(e){ console.warn("VAD arm failed", e); }
     setStatus("Ready");
   } catch(e){
     console.warn("start failed", e);
