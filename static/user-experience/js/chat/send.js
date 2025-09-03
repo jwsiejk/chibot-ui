@@ -13,8 +13,10 @@ import {
   stopStream,
   pushPCM16Base64
 } from "../voice/playback.js";
+import { _vm_disarmVAD, _vm_armVAD } from "../voice/vad.js";
 
 let _ws = null;
+let _speaking = false; // when true, ignore barge-in and keep mic muted during playback
 let _muteStream = false;
 let _getLane = function(){ return "text"; };
 let _wsReady = false;
@@ -50,6 +52,7 @@ function _ensureWS(){
           if (msg.text && String(msg.text).trim()) appendMessage("assistant", String(msg.text).trim());
           break;
         case "audio_chunk": {
+          if (!_speaking) { _speaking = true; try { _vm_disarmVAD(); } catch(e){} }
           const b16 = msg.b16 || msg.pcm16_b64 || msg.pcm16_base64 || msg.b64;
           if (typeof b16 === "string" && b16) {
             try { startStream({ sampleRate: msg.sr || 24000 }); } catch(e){}
@@ -60,6 +63,7 @@ function _ensureWS(){
           break;
         }
         case "end":
+          _speaking = false; try { _vm_armVAD(); } catch(e){}
           dbg("WS <- end");
           respRelease();
           stopStream();
@@ -92,6 +96,7 @@ function _wsSendWhenReady(payload, attempts=20){
 
 // Barge‑in: cancel local playback and mute incoming stream
 window.addEventListener("chip:bargein", function(){
+  if (_speaking) { dbg("barge-in ignored while assistant speaking"); return; }
   try { _vm_stopPlayback(); } catch(e){}
   try { _muteStream = true; respRelease(); stopStream(); } catch(e){}
   try { if (_ws && _ws.isOpen && _ws.isOpen()) { _ws.send({ type: "cancel" }); dbg("WS -> cancel"); } } catch(e){}

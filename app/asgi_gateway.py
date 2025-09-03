@@ -290,7 +290,8 @@ async def stt_v1(request: Request) -> JSONResponse:
         import io as _io
         f = _io.BytesIO(content); f.name = filename  # type: ignore
         model = os.getenv("OPENAI_STT_MODEL", "whisper-1")
-        resp = client.audio.transcriptions.create(model=model, file=f)
+        lang = os.getenv("OPENAI_STT_LANGUAGE","en")
+        resp = client.audio.transcriptions.create(model=model, file=f, language=lang, response_format="json")
         text = (getattr(resp, "text", "") or "").strip()
         call_log.add("stt", "ok", mime=mime, n=len(text))
         return JSONResponse({"ok": True, "text": text})
