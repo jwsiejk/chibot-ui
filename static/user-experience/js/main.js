@@ -1,86 +1,49 @@
-// main.js — auto-arm mic after greet (Live lane only), single-path greet TTS, voice barge-in
-console.log("UI build ⏱ patched-autoarm-2025-09-03");
+// main.js — final mic record patch: start/stop recording around VAD
+console.log("UI build ⏱ patched-record-2025-09-03");
 
 import { $, show, hide, setToolbarHeightVar } from "./core/dom.js";
 import { j } from "./core/api.js";
-import {
-  _chipGuide, _chipSetState, _chipStep,
-} from "./core/state.js";
-import {
-  appendMessage, updateChatButtonLabel
-} from "./chat/ui.js";
-import {
-  sendChat, handleVoiceOnceResponse, wireChatLane
-} from "./chat/send.js";
+import { _chipGuide, _chipSetState, _chipStep } from "./core/state.js";
+import { appendMessage } from "./chat/ui.js";
+import { sendChat, handleVoiceOnceResponse, wireChatLane } from "./chat/send.js";
 import { tryPlayWithMouth, _vm_stopPlayback } from "./voice/playback.js";
 import { _vm_armVAD, _vm_disarmVAD, setMicUIUpdater, setGuide as setVoiceGuide, setRecordCallbacks } from "./voice/vad.js";
-import { setStream as setRecordStream } from "./voice/record.js";
+import { setStream as setRecordStream, _vm_startRecording, _vm_stopRecording } from "./voice/record.js";
 import { loadProfileIntoForm, gate, wireLoginAndProfileHandlers } from "./auth/profile.js";
 
-/* --------------------------- Small utilities ---------------------------- */
 const el = (id) => document.getElementById(id);
 function onReady(fn){ if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn, { once:true }); else fn(); }
-function bindClick(node, handler){
-  if (!node) return false;
-  node.addEventListener("click", handler);
-  node.addEventListener("keydown", function(e){ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(e); } });
-  node.setAttribute("data-bound", "1");
-  return true;
-}
+function bindClick(node, handler){ if (!node) return false; node.addEventListener("click", handler); node.addEventListener("keydown", function(e){ if (e.key==="Enter"||e.key===" "){ e.preventDefault(); handler(e);} }); node.setAttribute("data-bound","1"); return true; }
 
-/* ------------------------------- Elements -------------------------------- */
 let BTN_START, BTN_AUDIO, BTN_END, BTN_CHAT, CHAT_MENU, BADGE;
-let chatPanel, chatText, chatTTS, chipImage, chipMouth;
+let chatPanel, chatText, chatTTS;
 
-/* -------------------------------- Lanes ---------------------------------- */
-let chatLane = (function(){
-  try { return (localStorage.getItem("chatLane") || "text") === "live" ? "live" : "text"; } catch(e) { return "text"; }
-})();
+let chatLane = (function(){ try { return (localStorage.getItem("chatLane") || "text") === "live" ? "live" : "text"; } catch(e) { return "text"; } })();
 const getChatLane = function(){ return chatLane; };
-const setChatLane = function(lane){
-  chatLane = lane === "live" ? "live" : "text";
-  try { localStorage.setItem("chatLane", chatLane); } catch(e){}
-  refreshLaneUI();
-};
+const setChatLane = function(lane){ chatLane = lane === "live" ? "live" : "text"; try { localStorage.setItem("chatLane", chatLane); } catch(e){} refreshLaneUI(); };
 function badge(){ if (BADGE) BADGE.textContent = chatLane === "live" ? "Live" : "Text"; }
 
-/* ----------------------------- Wiring / boot ----------------------------- */
 function initUI(){
   BTN_START=el("zStart"); BTN_AUDIO=el("zAudio"); BTN_END=el("zEnd"); BTN_CHAT=el("zChat"); CHAT_MENU=el("zChatMenu"); BADGE=el("laneBadge");
-  chatPanel=el("chatPanel"); chatText=el("chatText"); chatTTS=el("chatTTS"); chipImage=el("chipImage"); chipMouth=el("chipMouthImg");
-
+  chatPanel=el("chatPanel"); chatText=el("chatText"); chatTTS=el("chatTTS");
   try { setToolbarHeightVar(); } catch(e){}
 
-  // Bottom bar wiring
   bindClick(BTN_CHAT, onChatToggle);
   bindClick(BTN_START, onStartClicked);
   bindClick(BTN_AUDIO, onAudioClicked);
   bindClick(BTN_END, endSession);
 
-  // Lane menu
-  function openMenu(ev){
-    if (!CHAT_MENU||!BTN_CHAT) return;
-    const r=BTN_CHAT.getBoundingClientRect();
-    CHAT_MENU.style.left=Math.max(12, r.left+r.width/2-80)+"px";
-    CHAT_MENU.style.bottom=(window.innerHeight-r.top+10)+"px";
-    CHAT_MENU.classList.remove("hidden");
-    ev && ev.preventDefault();
-  }
+  function openMenu(ev){ if (!CHAT_MENU||!BTN_CHAT) return; const r=BTN_CHAT.getBoundingClientRect(); CHAT_MENU.style.left=Math.max(12, r.left+r.width/2-80)+"px"; CHAT_MENU.style.bottom=(window.innerHeight-r.top+10)+"px"; CHAT_MENU.classList.remove("hidden"); ev && ev.preventDefault(); }
   function closeMenu(){ if (CHAT_MENU) CHAT_MENU.classList.add("hidden"); }
-  if (BTN_CHAT){
-    BTN_CHAT.addEventListener("contextmenu", function(e){ e.preventDefault(); openMenu(e); });
-    BTN_CHAT.addEventListener("auxclick", function(e){ if (e.button===1){ e.preventDefault(); openMenu(e);} });
-  }
+  if (BTN_CHAT){ BTN_CHAT.addEventListener("contextmenu", function(e){ e.preventDefault(); openMenu(e); }); BTN_CHAT.addEventListener("auxclick", function(e){ if (e.button===1){ e.preventDefault(); openMenu(e);} }); }
   bindClick(el("laneText"), function(){ setChatLane("text"); closeMenu(); if (chatPanel && !chatPanel.hidden) refreshLaneUI(); });
   bindClick(el("laneLive"), function(){ setChatLane("live"); closeMenu(); if (chatPanel && !chatPanel.hidden) refreshLaneUI(); });
   document.addEventListener("click", function(e){ if (CHAT_MENU && !CHAT_MENU.classList.contains("hidden") && !CHAT_MENU.contains(e.target)) closeMenu(); });
 
-  // Chat compose
   bindClick(el("chatSendBtn"), function(){ const input=el("chatInput"); if (!input) return; const v=input.value; if (v && v.trim()) { sendChat(v); input.value=""; } });
   const chatInputEl = el("chatInput");
   if (chatInputEl) chatInputEl.addEventListener("keydown", function(e){ const input=el("chatInput"); if (!input) return; if (e.key==="Enter" && !e.shiftKey){ e.preventDefault(); const v=input.value; if (v&&v.trim()){ sendChat(v); input.value=""; } } });
 
-  // Mic UI + guide
   setMicUIUpdater(function(on, recording){
     if (!BTN_AUDIO) return;
     BTN_AUDIO.classList.toggle("primary", !!on);
@@ -89,17 +52,23 @@ function initUI(){
   });
   setVoiceGuide(function(text){ _chipGuide(text); });
 
-  // Voice barge-in: on VAD start; send on stop
+  // IMPORTANT: start and stop actual recording around VAD
   setRecordCallbacks(
-    async function onStart(){ try { window.dispatchEvent(new Event("chip:bargein")); } catch(e){} },
-    async function onStop(blob, durMs){ try { await handleVoiceOnceResponse({ blob, durMs }); } catch(e){} }
+    async function onStart(){
+      try { window.dispatchEvent(new Event("chip:bargein")); } catch(e){}
+      try { await _vm_startRecording(); } catch(e){ console.warn("startRecording failed", e); }
+    },
+    async function onStop(){
+      try {
+        await _vm_stopRecording(async function(blob, durMs){
+          try { await handleVoiceOnceResponse({ blob: blob, durMs: durMs }); } catch(e){ console.warn("voice handler failed", e); }
+        });
+      } catch(e){ console.warn("stopRecording failed", e); }
+    }
   );
 
   wireChatLane(getChatLane, setChatLane);
   refreshLaneUI();
-
-  // Auth/menu
-  wireLoginAndProfileHandlers();
 }
 
 function refreshLaneUI(){
@@ -110,7 +79,6 @@ function refreshLaneUI(){
   badge();
 }
 
-/* ------------------------------ Session UX ------------------------------ */
 let sessionActive=false;
 const setSessionActive=function(on){ sessionActive=!!on; if (BTN_START) BTN_START.disabled=on; if (BTN_END) BTN_END.disabled=!on; };
 const setStatus=function(t){ const s=$("statusBanner"); if (s) s.textContent=t||""; };
@@ -124,7 +92,7 @@ async function onStartClicked(){
   setStatus("Connecting…");
   try {
     await startDynamicSession();
-    // Auto-arm mic only for Live lane; request permission properly
+    // Auto-arm mic for Live lane only
     if (getChatLane() === "live"){
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -166,7 +134,6 @@ function endSession(){
   } catch(e){ console.warn("disconnect error", e); }
 }
 
-/* --------------------------- Greeting sequence --------------------------- */
 export async function startDynamicSession(){
   try{
     _chipSetState("greeting");
@@ -185,7 +152,6 @@ export async function startDynamicSession(){
     const reply = String(res.reply ?? res.reply_text ?? res.text ?? res.message ?? "").trim();
     if (reply) appendMessage("assistant", reply);
 
-    // Always synthesize greet audio via TTS
     if (reply){
       const ttsRes = await fetch("/api/v1/voice/tts-with-visemes", {
         method: "POST",
@@ -219,7 +185,6 @@ export async function startDynamicSession(){
   }
 }
 
-/* ---------------------------- Boot sequence ----------------------------- */
 wireLoginAndProfileHandlers();
 onReady(initUI);
 (async function(){
@@ -230,5 +195,3 @@ onReady(initUI);
     if (chatPanel) chatPanel.hidden=true;
   }
 })();
-
-window.addEventListener("resize", function(){ /* layout-safe */ });
