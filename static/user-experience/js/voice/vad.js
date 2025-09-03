@@ -1,143 +1,133 @@
-// voice/vad.js — mic ensure, VAD arm/disarm, calibration, UI hooks
-import { _chipStep } from "../core/state.js";
-import { _uiBeep } from "./playback.js";
 
-let _vm_stream = null;
-let _vm_an = null;
-let _vm_ctx = null;
-let _vm_src = null;
-let _vm_raf = 0;
+/**
+ * vad.js
+ * Simple VAD with echo-aware thresholding and DOM events.
+ *
+ * Exposes:
+ *   - arm() / disarm()
+ *   - on(event, handler) / off(event, handler)   // events: 'speechstart', 'speechend'
+ *   - setSpeakingMode(isSpeaking, boost=1.8)     // raises threshold while assistant speaks
+ *   - isArmed()
+ *
+ * Emits DOM CustomEvents for loose coupling as well:
+ *   - 'chip:vad_speechstart'
+ *   - 'chip:vad_speechend'
+ */
 
-let _vm_recording = false;
-let _onStartRecording = null;
-let _onStopRecording = null;
+const _listeners = { speechstart: new Set(), speechend: new Set() };
+let _armed = false;
+let _ctx, _media, _source, _proc;
+let _threshold = 0.015;           // base RMS threshold
+let _thresholdSpeaking = 0.027;   // auto-calculated
+let _currentThreshold = _threshold;
+let _minStartMs = 120;            // min duration above threshold to start
+let _minEndMs = 160;              // min duration below threshold to end
+let _aboveMs = 0;
+let _belowMs = 0;
+let _isSpeech = false;
 
-let _vm_vad_on = false;
+export async function arm() {
+  if (_armed) return;
+  _ctx = new (window.AudioContext || window.webkitAudioContext)();
 
-const _vm_cfg = {
-  vadThreshold: 0.015,
-  defaultVadThreshold: 0.015,
-  vadAttackMs: 120,
-  vadReleaseMs: 700,
-  maxRecordMs: 15000,
-  preRollMs: 300,
-  analyserSize: 1024
-};
-export function getVadConfig() { return _vm_cfg; }
+  // Try to prefer hardware echo canceller
+  _media = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: false,
+      channelCount: 1
+    }
+  });
 
-let _updateMicUI = null;
-let _guideFn = null;
+  _source = _ctx.createMediaStreamSource(_media);
 
-export function setMicUIUpdater(fn) { _updateMicUI = fn; }
-export function setGuide(fn) { _guideFn = fn; }
+  // ScriptProcessorNode is simple and widely supported
+  const bufferSize = 2048;
+  _proc = _ctx.createScriptProcessor(bufferSize, 1, 1);
+  _source.connect(_proc);
+  _proc.connect(_ctx.destination);
 
-export function isRecording() { return _vm_recording; }
-export function isArmed() { return _vm_vad_on; }
+  _proc.onaudioprocess = (e) => {
+    if (!_armed) return;
+    const input = e.inputBuffer.getChannelData(0);
+    let sum = 0;
+    for (let i = 0; i < input.length; i++) {
+      const s = input[i];
+      sum += s * s;
+    }
+    const rms = Math.sqrt(sum / input.length);
 
-export function setRecordCallbacks(onStart, onStop) {
-  _onStartRecording = onStart;
-  _onStopRecording  = onStop;
+    const dt = (bufferSize / _ctx.sampleRate) * 1000; // ms
+    const thr = _currentThreshold;
+
+    if (rms >= thr) {
+      _aboveMs += dt;
+      _belowMs = 0;
+    } else {
+      _belowMs += dt;
+      _aboveMs = 0;
+    }
+
+    if (!_isSpeech && _aboveMs >= _minStartMs) {
+      _isSpeech = true;
+      _emit('speechstart');
+    } else if (_isSpeech && _belowMs >= _minEndMs) {
+      _isSpeech = false;
+      _emit('speechend');
+    }
+  };
+
+  _armed = true;
 }
 
-export async function _vm_ensureMic() {
-  if (_vm_stream && _vm_stream.getTracks().some(t => t.readyState === "live")) return _vm_stream;
-  _vm_stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false, channelCount: 1 } });
-  return _vm_stream;
-}
-
-export function _vm_updateMicUI(on, recording=false) {
-  if (typeof _updateMicUI === "function") _updateMicUI(on, recording);
-}
-
-export function _vm_disarmVAD() {
-  _vm_vad_on = false;
-  cancelAnimationFrame(_vm_raf); _vm_raf = 0;
-  _vm_updateMicUI(false, false);
-}
-
-async function _vm_calibrateNoise(ms = 400) {
+export async function disarm() {
+  if (!_armed) return;
+  _armed = false;
+  try { _proc.disconnect(); } catch {}
+  try { _source.disconnect(); } catch {}
   try {
-    if (!_vm_an) return;
-    const buf = new Float32Array(_vm_an.fftSize);
-    const start = performance.now();
-    let n = 0, accum = 0;
-    return await new Promise((resolve) => {
-      const tick = () => {
-        _vm_an.getFloatTimeDomainData(buf);
-        let sum = 0;
-        for (let i = 0; i < buf.length; i++) { const s = buf[i]; sum += s*s; }
-        const rms = Math.sqrt(sum / buf.length);
-        accum += rms; n++;
-        if (performance.now() - start >= ms) {
-          const avg = accum / Math.max(1,n);
-          const newThresh = Math.min(Math.max(avg * 2.5, _vm_cfg.defaultVadThreshold), 0.05);
-          _vm_cfg.vadThreshold = newThresh;
-          _chipStep("vad-calibrated", { avgRMS: avg.toFixed(5), threshold: newThresh.toFixed(5) });
-          resolve();
-          return;
-        }
-        requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    });
+    const tracks = _media?.getTracks?.() || [];
+    tracks.forEach(t => t.stop());
   } catch {}
+  try { await _ctx?.close?.(); } catch {}
+  _proc = _source = _media = _ctx = null;
+  _isSpeech = false;
+  _aboveMs = 0;
+  _belowMs = 0;
 }
 
-export async function _vm_armVAD() {
-  try {
-    await _vm_ensureMic();
-    _vm_updateMicUI(true, false);
-
-    if (!_vm_ctx) _vm_ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if (_vm_ctx.state === "suspended") await _vm_ctx.resume();
-
-    _vm_src && _vm_src.disconnect();
-    _vm_an && _vm_an.disconnect();
-    _vm_src = _vm_ctx.createMediaStreamSource(_vm_stream);
-    _vm_an = _vm_ctx.createAnalyser();
-    _vm_an.fftSize = _vm_cfg.analyserSize;
-    _vm_src.connect(_vm_an);
-
-    await _vm_calibrateNoise(400);
-
-    _vm_vad_on = true;
-    let speakOn = 0, speakOff = 0, speaking = false;
-    const buf = new Float32Array(_vm_an.fftSize);
-
-    const tick = () => {
-      if (!_vm_vad_on) return;
-      _vm_an.getFloatTimeDomainData(buf);
-
-      let sum = 0;
-      for (let i = 0; i < buf.length; i++) { const s = buf[i]; sum += s * s; }
-      const rms = Math.sqrt(sum / buf.length);
-
-      const now = performance.now();
-      if (rms >= _vm_cfg.vadThreshold) {
-        speakOn = speakOn || now;
-        speakOff = 0;
-        if (!speaking && (now - speakOn) >= _vm_cfg.vadAttackMs) {
-          try { window.dispatchEvent(new CustomEvent('chip:bargein')); } catch {}
-          speaking = true;
-          if (typeof _onStartRecording === "function") _onStartRecording();
-          _vm_recording = true;
-          _vm_updateMicUI(true, true);
-          _uiBeep(1020, 80);
-          setTimeout(() => { if (_vm_recording && typeof _onStopRecording === "function") _onStopRecording(); }, _vm_cfg.maxRecordMs);
-        }
-      } else {
-        speakOff = speakOff || now;
-        speakOn = 0;
-        if (speaking && (now - speakOff) >= _vm_cfg.vadReleaseMs) {
-          speaking = false;
-          if (_vm_recording && typeof _onStopRecording === "function") _onStopRecording();
-        }
-      }
-      _vm_raf = requestAnimationFrame(tick);
-    };
-    cancelAnimationFrame(_vm_raf);
-    _vm_raf = requestAnimationFrame(tick);
-  } catch (e) {
-    console.warn("VAD arm failed:", e);
+/**
+ * While the assistant is speaking, raise threshold & lengthen start gate
+ * to resist echo false-positives.
+ * @param {boolean} isSpeaking
+ * @param {number} boost multiplier for threshold (default 1.8)
+ */
+export function setSpeakingMode(isSpeaking, boost = 1.8) {
+  if (isSpeaking) {
+    _currentThreshold = Math.max(_threshold * boost, 0.02);
+    _minStartMs = 200;  // require a little longer above threshold
+    _minEndMs = 140;    // but still release quickly if the user stops
+  } else {
+    _currentThreshold = _threshold;
+    _minStartMs = 120;
+    _minEndMs = 160;
   }
+}
+
+export function isArmed() { return _armed; }
+
+export function on(event, handler) {
+  (_listeners[event] || _listeners.speechstart).add(handler);
+}
+
+export function off(event, handler) {
+  (_listeners[event] || _listeners.speechstart).delete(handler);
+}
+
+function _emit(event) {
+  (_listeners[event] || []).forEach(fn => { try { fn(); } catch {} });
+  try {
+    window.dispatchEvent(new CustomEvent(event === 'speechstart' ? 'chip:vad_speechstart' : 'chip:vad_speechend'));
+  } catch {}
 }
