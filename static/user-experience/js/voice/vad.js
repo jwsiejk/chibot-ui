@@ -1,24 +1,25 @@
 
 /**
- * vad.js
- * Simple VAD with echo-aware thresholding and DOM events.
+ * vad.js (backward-compatible)
  *
- * Exposes:
- *   - arm() / disarm()
- *   - on(event, handler) / off(event, handler)   // events: 'speechstart', 'speechend'
- *   - setSpeakingMode(isSpeaking, boost=1.8)     // raises threshold while assistant speaks
- *   - isArmed()
+ * Echo-aware VAD with DOM events and compatibility shims for older code.
+ * New API:
+ *   - arm(), disarm(), setSpeakingMode(isSpeaking, boost), isArmed()
+ *   - on(event, fn), off(event, fn)  // events: 'speechstart', 'speechend'
+ *   - Emits DOM events 'chip:vad_speechstart' / 'chip:vad_speechend'
  *
- * Emits DOM CustomEvents for loose coupling as well:
- *   - 'chip:vad_speechstart'
- *   - 'chip:vad_speechend'
+ * Legacy exports preserved for compatibility:
+ *   - _vm_armVAD()           -> arm()
+ *   - _vm_disarmVAD()        -> disarm()
+ *   - _vm_setSpeakingMode()  -> setSpeakingMode()
+ *   - _vm_isArmed()          -> isArmed()
+ *   - _vm_updateMicUI(state) -> updates body CSS class + emits 'chip:mic'
  */
 
 const _listeners = { speechstart: new Set(), speechend: new Set() };
 let _armed = false;
 let _ctx, _media, _source, _proc;
 let _threshold = 0.015;           // base RMS threshold
-let _thresholdSpeaking = 0.027;   // auto-calculated
 let _currentThreshold = _threshold;
 let _minStartMs = 120;            // min duration above threshold to start
 let _minEndMs = 160;              // min duration below threshold to end
@@ -26,11 +27,10 @@ let _aboveMs = 0;
 let _belowMs = 0;
 let _isSpeech = false;
 
+/** Arm the VAD and request mic permissions */
 export async function arm() {
   if (_armed) return;
   _ctx = new (window.AudioContext || window.webkitAudioContext)();
-
-  // Try to prefer hardware echo canceller
   _media = await navigator.mediaDevices.getUserMedia({
     audio: {
       echoCancellation: true,
@@ -39,10 +39,8 @@ export async function arm() {
       channelCount: 1
     }
   });
-
   _source = _ctx.createMediaStreamSource(_media);
 
-  // ScriptProcessorNode is simple and widely supported
   const bufferSize = 2048;
   _proc = _ctx.createScriptProcessor(bufferSize, 1, 1);
   _source.connect(_proc);
@@ -52,35 +50,25 @@ export async function arm() {
     if (!_armed) return;
     const input = e.inputBuffer.getChannelData(0);
     let sum = 0;
-    for (let i = 0; i < input.length; i++) {
-      const s = input[i];
-      sum += s * s;
-    }
+    for (let i = 0; i < input.length; i++) { const s = input[i]; sum += s * s; }
     const rms = Math.sqrt(sum / input.length);
-
     const dt = (bufferSize / _ctx.sampleRate) * 1000; // ms
     const thr = _currentThreshold;
 
-    if (rms >= thr) {
-      _aboveMs += dt;
-      _belowMs = 0;
-    } else {
-      _belowMs += dt;
-      _aboveMs = 0;
-    }
+    if (rms >= thr) { _aboveMs += dt; _belowMs = 0; }
+    else { _belowMs += dt; _aboveMs = 0; }
 
     if (!_isSpeech && _aboveMs >= _minStartMs) {
-      _isSpeech = true;
-      _emit('speechstart');
+      _isSpeech = true; _emit('speechstart');
     } else if (_isSpeech && _belowMs >= _minEndMs) {
-      _isSpeech = false;
-      _emit('speechend');
+      _isSpeech = false; _emit('speechend');
     }
   };
 
   _armed = true;
 }
 
+/** Disarm and release mic */
 export async function disarm() {
   if (!_armed) return;
   _armed = false;
@@ -93,21 +81,15 @@ export async function disarm() {
   try { await _ctx?.close?.(); } catch {}
   _proc = _source = _media = _ctx = null;
   _isSpeech = false;
-  _aboveMs = 0;
-  _belowMs = 0;
+  _aboveMs = 0; _belowMs = 0;
 }
 
-/**
- * While the assistant is speaking, raise threshold & lengthen start gate
- * to resist echo false-positives.
- * @param {boolean} isSpeaking
- * @param {number} boost multiplier for threshold (default 1.8)
- */
+/** Raise thresholds while assistant is speaking to resist echo */
 export function setSpeakingMode(isSpeaking, boost = 1.8) {
   if (isSpeaking) {
     _currentThreshold = Math.max(_threshold * boost, 0.02);
-    _minStartMs = 200;  // require a little longer above threshold
-    _minEndMs = 140;    // but still release quickly if the user stops
+    _minStartMs = 200;  // require a little longer before starting
+    _minEndMs = 140;    // release quickly after user stops
   } else {
     _currentThreshold = _threshold;
     _minStartMs = 120;
@@ -117,17 +99,54 @@ export function setSpeakingMode(isSpeaking, boost = 1.8) {
 
 export function isArmed() { return _armed; }
 
-export function on(event, handler) {
-  (_listeners[event] || _listeners.speechstart).add(handler);
-}
-
-export function off(event, handler) {
-  (_listeners[event] || _listeners.speechstart).delete(handler);
-}
+export function on(event, handler) { (_listeners[event] || _listeners.speechstart).add(handler); }
+export function off(event, handler) { (_listeners[event] || _listeners.speechstart).delete(handler); }
 
 function _emit(event) {
   (_listeners[event] || []).forEach(fn => { try { fn(); } catch {} });
   try {
     window.dispatchEvent(new CustomEvent(event === 'speechstart' ? 'chip:vad_speechstart' : 'chip:vad_speechend'));
+  } catch {}
+}
+
+/* ---------------- Legacy compatibility shims ---------------- */
+
+export async function _vm_armVAD()            { return arm(); }
+export async function _vm_disarmVAD()         { return disarm(); }
+export function _vm_setSpeakingMode(a, b)     { return setSpeakingMode(a, b); }
+export function _vm_isArmed()                 { return isArmed(); }
+
+/**
+ * Legacy UI helper. Accepts either a string ('idle','listening','speaking','muted','error','armed'),
+ * a boolean (true -> 'listening', false -> 'idle'), or an object with {mode:string}.
+ * Toggles body CSS classes and emits 'chip:mic' for listeners.
+ */
+export function _vm_updateMicUI(state) {
+  let mode = 'idle';
+  if (typeof state === 'string') mode = state;
+  else if (typeof state === 'boolean') mode = state ? 'listening' : 'idle';
+  else if (state && typeof state === 'object') mode = state.mode || mode;
+
+  const classes = ['chip-mic-idle','chip-mic-listening','chip-mic-speaking','chip-mic-muted','chip-mic-error','chip-mic-armed'];
+  try {
+    const b = document.body;
+    if (b) {
+      b.classList.remove(...classes);
+      const normalized = String(mode).toLowerCase();
+      const map = {
+        'idle':'chip-mic-idle',
+        'listening':'chip-mic-listening',
+        'speaking':'chip-mic-speaking',
+        'muted':'chip-mic-muted',
+        'error':'chip-mic-error',
+        'armed':'chip-mic-armed'
+      };
+      const cls = map[normalized] || 'chip-mic-idle';
+      b.classList.add(cls);
+    }
+  } catch {}
+
+  try {
+    window.dispatchEvent(new CustomEvent('chip:mic', { detail: { mode } }));
   } catch {}
 }
