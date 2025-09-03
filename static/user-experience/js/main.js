@@ -1,7 +1,6 @@
-// main.js — DIAGNOSTIC BUILD (adds deep logging + fixes VAD→recording→STT chain)
-console.log("[AC][BOOT] main.js diagnostic build loaded");
+// main.js — DIAGNOSTIC + FORCE LIVE DEFAULT
+console.log("[AC][BOOT] main.js diagnostic+force-live loaded");
 
-// Core & modules
 import { $, setToolbarHeightVar } from "./core/dom.js";
 import { j } from "./core/api.js";
 import { _chipGuide, _chipSetState, _chipStep } from "./core/state.js";
@@ -29,18 +28,13 @@ function hud(){
     d.style.border = "1px solid rgba(255,255,255,0.2)";
     d.style.padding = "8px 10px";
     d.style.borderRadius = "6px";
-    d.style.maxWidth = "34vw";
+    d.style.maxWidth = "40vw";
     d.style.pointerEvents = "none";
     document.body.appendChild(d);
   }
   return d;
 }
-const _dbg = {
-  lane: "text",
-  mic: { haveStream:false, permission:"unknown", armed:false, rec:false },
-  counts: { vadStart:0, vadStop:0, stt:0, wsSends:0 },
-  last: { ws:"", err:"" }
-};
+const _dbg = { lane:"live", mic:{ haveStream:false, permission:"unknown", armed:false, rec:false }, counts:{ vadStart:0, vadStop:0, stt:0, wsSends:0 }, last:{ ws:"", err:"" } };
 function log(msg, data){
   try { console.log("[AC]", msg, data||""); } catch {}
   try { 
@@ -59,20 +53,21 @@ window.acDebug = { state:_dbg, log, hud };
 // -------------------- DOM helpers --------------------
 const el = (id) => document.getElementById(id);
 function onReady(fn){ if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn, { once:true }); else fn(); }
-function bindClick(node, handler){
-  if (!node) return false;
-  node.addEventListener("click", handler);
-  node.addEventListener("keydown", function(e){ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(e); } });
-  node.setAttribute("data-bound", "1");
-  return true;
-}
+function bindClick(node, handler){ if (!node) return false; node.addEventListener("click", handler); node.addEventListener("keydown", function(e){ if (e.key==="Enter"||e.key===" "){ e.preventDefault(); handler(e);} }); node.setAttribute("data-bound","1"); return true; }
 
 // -------------------- Elements --------------------
 let BTN_START, BTN_AUDIO, BTN_END, BTN_CHAT, CHAT_MENU, BADGE;
 let chatPanel, chatText, chatTTS;
 
 // -------------------- Lanes --------------------
-let chatLane = (function(){ try { return (localStorage.getItem("chatLane") || "text") === "live" ? "live" : "text"; } catch(e) { return "text"; } })();
+// Force default to LIVE if not explicitly set
+let chatLane = (function(){
+  try {
+    const stored = localStorage.getItem("chatLane");
+    if (!stored) { localStorage.setItem("chatLane","live"); return "live"; }
+    return stored === "live" ? "live" : "text";
+  } catch(e) { return "live"; }
+})();
 _dbg.lane = chatLane;
 const getChatLane = function(){ return chatLane; };
 const setChatLane = function(lane){ chatLane = lane === "live" ? "live" : "text"; _dbg.lane = chatLane; try { localStorage.setItem("chatLane", chatLane); } catch(e){} refreshLaneUI(); };
@@ -90,7 +85,6 @@ function initUI(){
   bindClick(BTN_AUDIO, onAudioClicked);
   bindClick(BTN_END, endSession);
 
-  // Lane menu
   function openMenu(ev){
     if (!CHAT_MENU||!BTN_CHAT) return;
     const r=BTN_CHAT.getBoundingClientRect();
@@ -100,20 +94,15 @@ function initUI(){
     ev && ev.preventDefault();
   }
   function closeMenu(){ if (CHAT_MENU) CHAT_MENU.classList.add("hidden"); }
-  if (BTN_CHAT){
-    BTN_CHAT.addEventListener("contextmenu", function(e){ e.preventDefault(); openMenu(e); });
-    BTN_CHAT.addEventListener("auxclick", function(e){ if (e.button===1){ e.preventDefault(); openMenu(e);} });
-  }
+  if (BTN_CHAT){ BTN_CHAT.addEventListener("contextmenu", function(e){ e.preventDefault(); openMenu(e); }); BTN_CHAT.addEventListener("auxclick", function(e){ if (e.button===1){ e.preventDefault(); openMenu(e);} }); }
   bindClick(el("laneText"), function(){ setChatLane("text"); closeMenu(); if (chatPanel && !chatPanel.hidden) refreshLaneUI(); log("Lane set → text"); });
   bindClick(el("laneLive"), function(){ setChatLane("live"); closeMenu(); if (chatPanel && !chatPanel.hidden) refreshLaneUI(); log("Lane set → live"); });
   document.addEventListener("click", function(e){ if (CHAT_MENU && !CHAT_MENU.classList.contains("hidden") && !CHAT_MENU.contains(e.target)) closeMenu(); });
 
-  // Compose
   bindClick(el("chatSendBtn"), function(){ const input=el("chatInput"); if (!input) return; const v=input.value; if (v && v.trim()) { sendChat(v); input.value=""; } });
   const chatInputEl = el("chatInput");
   if (chatInputEl) chatInputEl.addEventListener("keydown", function(e){ const input=el("chatInput"); if (!input) return; if (e.key==="Enter" && !e.shiftKey){ e.preventDefault(); const v=input.value; if (v&&v.trim()){ sendChat(v); input.value=""; } } });
 
-  // Mic UI + guide
   setMicUIUpdater(function(on, recording){
     _dbg.mic.armed = !!on; _dbg.mic.rec = !!recording;
     const lbl = BTN_AUDIO && BTN_AUDIO.querySelector("span:last-child");
@@ -122,7 +111,6 @@ function initUI(){
   });
   setVoiceGuide(function(text){ _chipGuide(text); });
 
-  // Wire VAD → recorder
   setRecordCallbacks(
     async function onStart(){
       _dbg.counts.vadStart++; log("VAD start");
@@ -144,13 +132,12 @@ function initUI(){
   wireChatLane(getChatLane, setChatLane);
   refreshLaneUI();
 
-  // Permission observer (best effort)
   try {
     if (navigator.permissions && navigator.permissions.query) {
       navigator.permissions.query({ name: "microphone" }).then(function(p){
         _dbg.mic.permission = p.state; log("Mic permission="+p.state);
         p.onchange = function(){ _dbg.mic.permission = p.state; log("Mic permission="+p.state); };
-      }).catch(function(e){ _dbg.mic.permission = "unknown"; });
+      }).catch(function(){ _dbg.mic.permission = "unknown"; });
     }
   } catch {}
 }
@@ -160,7 +147,7 @@ function refreshLaneUI(){
   if (chatText) chatText.classList.remove("hidden");
   if (chatLane==="live"){ if (chatTTS) chatTTS.classList.remove("hidden"); }
   else { if (chatTTS) chatTTS.classList.add("hidden"); }
-  badge();
+  if (BADGE) BADGE.textContent = chatLane==="live" ? "Live" : "Text";
 }
 
 // -------------------- Session UX --------------------
@@ -172,29 +159,26 @@ function onChatToggle(){ if (!chatPanel) return; chatPanel.hidden=!chatPanel.hid
 
 async function onStartClicked(){
   if (sessionActive) return;
+  // Force lane to LIVE on Start, per user expectation
+  setChatLane("live");
   const okGate = await gate({ applyLayout: true }); if (!okGate || !okGate.ok) { log("Gate failed"); return; }
   setSessionActive(true);
   setStatus("Connecting…");
   try {
     await startDynamicSession();
     log("Greet complete");
-    // Auto-arm mic only for Live lane; request permission properly
-    if (getChatLane() === "live"){
-      try {
-        log("Auto-arming mic…");
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        _dbg.mic.haveStream = !!stream;
-        setRecordStream(stream);
-        _vm_stopPlayback();
-        await _vm_armVAD();
-        _dbg.mic.armed = vadIsArmed();
-        log("VAD armed="+_dbg.mic.armed+", rec="+recIsRecording());
-      } catch(e){
-        log("VAD arm failed", e && (e.message || String(e)));
-        _chipGuide("Please allow microphone access to use Live conversation.");
-      }
-    } else {
-      log("Lane is Text; mic not auto-armed");
+    try {
+      log("Auto-arming mic…");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      _dbg.mic.haveStream = !!stream;
+      setRecordStream(stream);
+      _vm_stopPlayback();
+      await _vm_armVAD();
+      _dbg.mic.armed = vadIsArmed();
+      log("VAD armed="+_dbg.mic.armed+", rec="+recIsRecording());
+    } catch(e){
+      log("VAD arm failed", e && (e.message || String(e)));
+      _chipGuide("Please allow microphone access to use Live conversation.");
     }
     setStatus("Ready");
   } catch(e){
@@ -299,3 +283,6 @@ onReady(initUI);
     log("Boot gate failed");
   }
 })();
+
+// Quick helper to force lane to live from console if needed
+window.acForceLive = function(){ try { localStorage.setItem("chatLane","live"); } catch(e){} setChatLane("live"); log("Forced lane → live"); };
