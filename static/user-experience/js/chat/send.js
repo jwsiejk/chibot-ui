@@ -1,16 +1,13 @@
-// chat/send.js — WS-first, imports aligned with voice/playback.js exports
+// chat/send.js — WS-first, exports wireChatLane, aligned with playback exports
 
-// Core & UI
 import { j, wsConnect } from "../core/api.js";
-import { _chipGuide, _chipSetState, _chipStep, _chipClearIdleNudge } from "../core/state.js";
-import { appendMessage, _chipRenderSuggestions } from "./ui.js";
+import { _chipGuide, _chipSetState, _chipStartWaitingCountdown, _chipStep, _chipClearIdleNudge } from "../core/state.js";
+import { appendMessage, appendActions, _chipRenderSuggestions } from "./ui.js";
 import { gate } from "../auth/profile.js";
 
-// Voice playback utilities (match actual exports in voice/playback.js)
 import {
   tryPlayWithMouth,
   _vm_stopPlayback,
-  driveVisemes,
   respAcquire,
   respRelease,
   startStream,
@@ -21,20 +18,27 @@ import {
 
 // -------------------------- Streaming WebSocket --------------------------
 let _ws = null;
-let _muteStream = false;
 let _streamPrimed = false;
+let _muteStream = false;
+
+// lane getter supplied by main.js
+let _getLane = function(){ return "text"; };
+
+export function wireChatLane(getLane, setLane){
+  if (typeof getLane === "function") _getLane = getLane;
+  // Nothing else needed here for now; main.js controls the UI
+}
 
 function _ensureWS(){
   if (_ws && _ws.isOpen()) return;
   _ws = wsConnect("/ws/v1/chat", {
-    onOpen(){ _chipStep("ws.chat: open", {}); },
-    onClose(){ _chipStep("ws.chat: close", {}); _streamPrimed=false; },
-    onError(e){ _chipStep("ws.chat: error", String(e && e.message || e)); },
-    onMessage(msg){
+    onOpen: function(){ _chipStep("ws.chat: open", {}); },
+    onClose: function(){ _chipStep("ws.chat: close", {}); _streamPrimed=false; },
+    onError: function(e){ _chipStep("ws.chat: error", String(e && e.message || e)); },
+    onMessage: function(msg){
       try { if (typeof msg === "string") msg = JSON.parse(msg); } catch(e){}
       if (!msg || typeof msg !== "object") return;
 
-      // If user barged in, ignore the rest of this turn until we see 'end'
       if (_muteStream) {
         if (msg.type === "end") { _muteStream = false; respRelease(); stopStream(); }
         return;
@@ -44,39 +48,27 @@ function _ensureWS(){
         case "ready":
           _streamPrimed = true;
           break;
-
         case "partial_text":
-          // You can surface incremental text here if desired.
+          // Optional: could surface streaming text here
           break;
-
         case "final_text":
           if (msg.text && String(msg.text).trim()) appendMessage("assistant", String(msg.text).trim());
           break;
-
-        case "visemes":
-          try { driveVisemes(msg.visemes || msg.data || []); } catch(e){}
-          break;
-
         case "audio_chunk": {
-          // Support a few shapes: {pcm16: [...]}, {pcm16_b64: "..."}, {audio: "url"}
-          const arr = msg.pcm16 || msg.int16 || null;
-          const b64 = msg.pcm16_b64 || msg.pcm16_base64 || msg.b64 || null;
-          if (Array.isArray(arr) && arr.length) {
-            // Start stream if needed, then push samples
-            Promise.resolve(startStream()).then(function(){
-              try { pushPCMInt16(new Int16Array(arr)); } catch(e){}
-            });
+          // Three supported shapes: int16 array, base64 string, or a direct URL
+          var arr = msg.pcm16 || msg.int16 || null;
+          var b64 = msg.pcm16_b64 || msg.pcm16_base64 || msg.b64 || null;
+          if (arr && Array.isArray(arr) && arr.length) {
+            try { startStream(); } catch(e){}
+            try { pushPCMInt16(new Int16Array(arr)); } catch(e){}
           } else if (typeof b64 === "string" && b64) {
-            Promise.resolve(startStream()).then(function(){
-              try { pushPCM16Base64(b64); } catch(e){}
-            });
+            try { startStream(); } catch(e){}
+            try { pushPCM16Base64(b64); } catch(e){}
           } else if (msg.audio && typeof msg.audio === "string") {
-            // URL fallback (still considered part of the primary WS path)
             tryPlayWithMouth(msg.audio);
           }
           break;
         }
-
         case "end":
           respRelease();
           stopStream();
@@ -86,18 +78,16 @@ function _ensureWS(){
   });
 }
 
-// Barge‑in: cancel local playback, mute incoming stream for this turn, and ask server to cancel if supported
+// Bar­ge‑in: cancel local playback and mute incoming stream for this turn
 window.addEventListener("chip:bargein", function(){
   try { _vm_stopPlayback(); } catch(e){}
-  _muteStream = true;
-  try { respRelease(); } catch(e){}
-  try { stopStream(); } catch(e){}
+  try { _muteStream = true; respRelease(); stopStream(); } catch(e){}
   try { if (_ws && _ws.isOpen()) { _ws.send({ type: "cancel" }); } } catch(e){}
 });
 
-// -------------------------- Follow-up helpers --------------------------
+// -------------------------- Helpers --------------------------
 let _fu_lastOfferedAt = 0;
-let _fu_turnsSinceOffer = 99;
+let _fu_turnsSinceOffer = 999;
 function _offerFollowupOnce() {
   _fu_lastOfferedAt = Date.now();
   _fu_turnsSinceOffer = 0;
@@ -128,6 +118,7 @@ async function _handleCanned(cls){
 export async function sendChat(message){
   message = String(message||"");
   if (!message.trim()) return;
+
   if (_isEndTrigger(message)) { _chipEndConversation(); return; }
 
   const okGate = await gate();
@@ -146,7 +137,7 @@ export async function sendChat(message){
   appendMessage("user", message.trim(), null);
   _chipSetState("thinking");
 
-  // WS streaming only (no REST fallback)
+  // --- WS streaming only (no REST fallback) ---
   try {
     _ensureWS();
     if (!_ws || !_ws.isOpen()) {
@@ -154,7 +145,11 @@ export async function sendChat(message){
       _chipGuide("Chat stream isn’t available. Please try again.");
       return;
     }
-    const payload = { type: "user_message", text: message, meta: { lane: "text" } };
+    const payload = {
+      type: "user_message",
+      text: message,
+      meta: { lane: _getLane() }
+    };
     _ws.send(payload);
     _chipSetState("responding");
   } catch(e){
@@ -170,13 +165,11 @@ export async function sendChat(message){
 // One-shot voice pipeline (when user speaks and VAD stops)
 export async function handleVoiceOnceResponse({ blob, durMs }){
   if (!blob) return;
-  const okGate = await gate();
-  if (!okGate.ok) return;
-
-  _chipStep("voice-once →", { durMs, size: blob.size });
+  _chipStep("voice-once →", { durMs: durMs, size: blob.size });
   const fd = new FormData(); fd.append("audio", blob, "input.webm");
   if (!respAcquire()) { return; }
-  const onCancel = function(){ try { respRelease(); } catch(e){} };
+
+  function onCancel(){ try { respRelease(); } catch(e){} }
   window.addEventListener("chip:tts-cancel", onCancel);
 
   try {
@@ -184,7 +177,7 @@ export async function handleVoiceOnceResponse({ blob, durMs }){
     const res = await fetch("/api/v1/voice/stt", { method: "POST", body: fd, credentials: "include" });
     const data = await res.json().catch(function(){ return {}; });
 
-    // Expect server to reply with final text/audio; no client fallback in this mode
+    // Expect server to reply with final text/audio; if not present, stop here (no fallback in this mode)
     if (data && data.reply) appendMessage("assistant", String(data.reply).trim());
     if (data && data.audio) {
       try { await tryPlayWithMouth(data.audio); } catch(e){}
