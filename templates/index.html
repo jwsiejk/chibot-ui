@@ -90,6 +90,13 @@
     </div>
   </div>
 
+  <script src="/static/js/addons-conversation-tuning.js"></script>
+  <script>
+    // Optional: make the flavor even rarer or more frequent
+    window.AC_PERSONA_FLAVOR_CHANCE = 0.12; // 12%
+  </script>
+  <script src="/static/js/addons-chip-persona.js"></script>
+  
   <script src="{{ url_for('static', filename='user-experience/js/config.js') }}"></script>
   <script type="module" src="{{ url_for('static', filename='user-experience/js/main.js') }}"></script>
 
