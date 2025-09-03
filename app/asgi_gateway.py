@@ -358,7 +358,8 @@ async def greet_v1(request: Request) -> JSONResponse:
     except Exception:
         text = "Hey—Chip here. What are we tackling today?"
     call_log.add("greet", "ok", text=text)
-    return JSONResponse({"ok": True, "text": text})
+    # return all three for FE parity
+    return JSONResponse({"ok": True, "text": text, "message": text, "reply": text})
 
 async def email_send_v1(request: Request) -> JSONResponse:
     try:
