@@ -3,14 +3,14 @@ from __future__ import annotations
 """
 Ask Chip — ASGI gateway (Option A, same-origin) — Phase 1 (flip to /api/v1)
 - Keeps Flask to serve the UI and legacy endpoints while we migrate.
-- Adds *versioned* /api/v1/* on the Starlette side with *full* chat pipeline parity.
+- Adds versioned /api/v1/* on the Starlette side with full chat pipeline parity.
 - Provides WS at /ws/v1/chat that streams PCM chunks (for low-latency playback).
 - Bridges Flask cookie sessions so /api/v1/* can read/write session (email, chip_ctx, profile).
-- Exposes SSE admin log stream at /api/v1/admin/logs.
+- Exposes SSE admin log stream at /api/v1/admin/logs with keepalive heartbeats (prevents worker timeouts).
 - Serves /static/** directly from ASGI (StaticFiles) to avoid WSGI bridge races on assets.
 
 Start command (Render UI or dash):
-  gunicorn -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-1} --bind 0.0.0.0:$PORT app.asgi_gateway:asgi
+  gunicorn -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-1} --timeout ${WEB_TIMEOUT:-120} --keep-alive 5 --bind 0.0.0.0:$PORT app.asgi_gateway:asgi
 """
 
 import os
@@ -29,13 +29,13 @@ from starlette.requests import Request
 from starlette.staticfiles import StaticFiles
 from asgiref.wsgi import WsgiToAsgi
 
-# Project services (re‑use the Flask pipeline logic)
+# Project services (reuse the Flask pipeline logic)
 try:
     from services.reply_service import generate_reply            # full chat pipeline
     from services.entity_normalizer import detect_product, detect_intent, normalize_text_to_pure
     from services.session_ctx import get as ctx_get, set as ctx_set
     from services.llm_service import generate_greeting
-except Exception as e:  # pragma: no cover
+except Exception:
     generate_reply = None  # type: ignore
     detect_product = detect_intent = normalize_text_to_pure = None  # type: ignore
     def generate_greeting(*_a, **_k): return "Hey—Chip here. What are we tackling today?"  # type: ignore
@@ -92,7 +92,6 @@ if _flask_app:
         _ssi = SecureCookieSessionInterface()
         _flask_serializer = _ssi.get_signing_serializer(_flask_app)
         _flask_cookie_name = _flask_app.session_cookie_name
-        # Copy cookie params (secure/samesite/httponly/path)
         _flask_cookie_params = dict(
             httponly=True,
             secure=bool(_flask_app.config.get("SESSION_COOKIE_SECURE", False)),
@@ -134,12 +133,7 @@ async def healthz(_: Request) -> JSONResponse:
 async def features_v1(_: Request) -> JSONResponse:
     return JSONResponse({
         "ok": True,
-        "features": {
-            "ws": True,
-            "sse": True,
-            "tts": "elevenlabs",
-            "stt": "openai_whisper_optional"
-        }
+        "features": {"ws": True, "sse": True, "tts": "elevenlabs", "stt": "openai_whisper_optional"}
     })
 
 # -----------------------------
@@ -205,7 +199,7 @@ def _eleven_keys() -> Tuple[str, str, str]:
 def _tts_stream_pcm_chunks(text: str, *, chunk_samples: int = 2400, sample_rate: int = 24000):
     """
     Generator yielding Int16 PCM chunks (base64) for a given text using ElevenLabs stream endpoint.
-    This assumes the account supports 'pcm_24000' (or change via ELEVEN_OUTPUT_FORMAT_WS).
+    Assumes 'pcm_24000' output format unless overridden by ELEVEN_OUTPUT_FORMAT_WS.
     """
     key, voice_id, model_id = _eleven_keys()
     if not key or not voice_id:
@@ -215,16 +209,10 @@ def _tts_stream_pcm_chunks(text: str, *, chunk_samples: int = 2400, sample_rate:
     output_fmt = os.getenv("ELEVEN_OUTPUT_FORMAT_WS", "pcm_24000")
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
     headers = {"xi-api-key": key, "accept": "*/*", "content-type": "application/json"}
-    payload = {
-        "text": text,
-        "model_id": model_id,
-        "optimize_streaming_latency": 0,
-        "output_format": output_fmt,
-    }
+    payload = {"text": text, "model_id": model_id, "optimize_streaming_latency": 0, "output_format": output_fmt}
     try:
         with requests.post(url, headers=headers, json=payload, stream=True, timeout=90) as r:
             if r.status_code != 200:
-                # Try JSON error
                 try:
                     err_json = r.json()
                     msg = err_json.get("detail") or err_json.get("error") or err_json
@@ -232,19 +220,16 @@ def _tts_stream_pcm_chunks(text: str, *, chunk_samples: int = 2400, sample_rate:
                     msg = r.text[:300]
                 yield {"type": "error", "code": "tts_error", "error": f"ElevenLabs {r.status_code}: {msg}"}
                 return
-            # Accumulate and yield fixed-size PCM frames
             buf = bytearray()
+            frame_bytes = chunk_samples * 2  # int16 mono
             for chunk in r.iter_content(chunk_size=4096):
                 if not chunk:
                     continue
                 buf.extend(chunk)
-                frame_bytes = chunk_samples * 2  # int16 mono
                 while len(buf) >= frame_bytes:
-                    sl = bytes(buf[:frame_bytes])
-                    del buf[:frame_bytes]
+                    sl = bytes(buf[:frame_bytes]); del buf[:frame_bytes]
                     b16 = base64.b64encode(sl).decode("utf-8")
                     yield {"type": "audio_chunk", "b16": b16, "sr": sample_rate}
-            # Flush tail
             if buf:
                 b16 = base64.b64encode(bytes(buf)).decode("utf-8")
                 yield {"type": "audio_chunk", "b16": b16, "sr": sample_rate}
@@ -260,8 +245,7 @@ async def tts_v1(request: Request) -> JSONResponse:
     if not text:
         return _json_error(400, "bad_request", "Missing 'text' in body")
 
-    # Simple one-shot TTS: reuse ElevenLabs bridge used by Flask routes (mp3)
-    # We keep REST response format compatible with the legacy voice.js
+    # One-shot TTS via existing bridge (mp3 base64 + visemes)
     try:
         from services.tts_bridge import synthesize_with_visemes  # type: ignore
         audio_b64, visemes, err = synthesize_with_visemes(text)
@@ -275,7 +259,6 @@ async def tts_v1(request: Request) -> JSONResponse:
         return _json_error(500, "server_error", "TTS bridge not available")
 
 async def stt_v1(request: Request) -> JSONResponse:
-    # Accept multipart (file) or JSON { audio_base64, filename, mime }
     content_type = request.headers.get("content-type", "")
     if content_type.startswith("multipart/form-data"):
         try:
@@ -301,7 +284,6 @@ async def stt_v1(request: Request) -> JSONResponse:
         filename = data.get("filename") or "audio.webm"
         mime = data.get("mime") or "audio/webm"
 
-    # Whisper via OpenAI SDK (optional)
     try:
         from openai import OpenAI
         client = OpenAI()
@@ -337,7 +319,6 @@ async def profile_v1(request: Request) -> JSONResponse:
             "email": email or "",
         }
         return JSONResponse({"ok": True, "profile": profile})
-    # POST
     try:
         data = await request.json()
     except Exception:
@@ -351,15 +332,12 @@ async def profile_v1(request: Request) -> JSONResponse:
         user["email"] = email
     sess["user"] = user
     call_log.add("profile:save", "session", **user)
-
-    # Optional DB helper
     try:
         from utils.db import upsert_profile  # type: ignore
         upsert_profile(user)
         call_log.add("profile:save", "db_ok", email=user.get("email"))
     except Exception as e:
         call_log.add("profile:save", "db_skip", error=str(e))
-
     resp = JSONResponse({"ok": True, "profile": user})
     return _write_flask_session(resp, sess)
 
@@ -425,7 +403,8 @@ async def accounts_search_v1(request: Request) -> JSONResponse:
 
 async def ws_chat(ws: WebSocket):
     await ws.accept()
-    await call_log.add("ws", "connected", path="/ws/v1/chat")
+    path = ws.scope.get("path", "")
+    await call_log.add("ws", "connected", path=path)
     try:
         await ws.send_json({"type": "ready", "ts": _now_iso(), "service": "ws.chat"})
         while True:
@@ -444,7 +423,6 @@ async def ws_chat(ws: WebSocket):
 
             # Generate reply (full pipeline parity)
             try:
-                # Minimal reuse by calling our own HTTP handler
                 class _FakeReq:
                     def __init__(self, cookies, body):
                         self.cookies = cookies
@@ -466,7 +444,7 @@ async def ws_chat(ws: WebSocket):
             await ws.send_json({"type": "partial_text", "text": reply[:80]})
             await ws.send_json({"type": "final_text", "text": reply})
 
-            # Stream PCM audio chunks for the reply (sentence-level could be added later)
+            # Stream PCM audio chunks for the reply
             got_audio = False
             for evt in _tts_stream_pcm_chunks(reply):
                 if evt.get("type") == "audio_chunk":
@@ -488,98 +466,56 @@ async def ws_chat(ws: WebSocket):
         except Exception:
             pass
     finally:
-        await call_log.add("ws", "disconnected", path="/ws/v1/chat")
+        await call_log.add("ws", "disconnected", path=path)
         try:
             await ws.close()
         except Exception:
             pass
 
 # -----------------------------
-# Admin SSE (/api/v1/admin/logs)
+# Admin SSE (/api/v1/admin/logs) — with heartbeats
 # -----------------------------
-# ---- /api/v1/admin/logs (SSE with heartbeats to avoid worker timeout) ----
+
 async def sse_logs(_: Request) -> StreamingResponse:
     async def _next_from_queue(q, timeout_sec: float = 15.0):
-        """
-        Try to get the next event from whatever queue impl utils.call_log uses.
-        Works with either an asyncio.Queue-like (awaitable get) or a threaded queue (blocking get).
-        Returns None on timeout.
-        """
         get = getattr(q, "get", None)
         if get is None:
             await asyncio.sleep(timeout_sec)
             return None
-
-        # Awaitable get()
         if asyncio.iscoroutinefunction(get):
             try:
                 return await asyncio.wait_for(get(), timeout=timeout_sec)
             except asyncio.TimeoutError:
                 return None
-
-        # Blocking get(...) in a thread
         loop = asyncio.get_event_loop()
-
         def _blocking_get():
             try:
-                # Prefer timeout if supported
                 return get(timeout=timeout_sec)
             except TypeError:
-                # No timeout parameter; block (worker timeout still avoided by our outer keepalive)
                 return get()
             except Exception:
                 return None
-
         try:
             return await loop.run_in_executor(None, _blocking_get)
         except Exception:
             return None
 
-    async def event_stream():
-        # Subscribe and replay a short history
-        q = None
+    async def event_stream() -> AsyncGenerator[bytes, None]:
+        q = call_log.subscribe()
         try:
-            sub = getattr(call_log, "subscribe", None)
-            q = await sub() if asyncio.iscoroutinefunction(sub) else sub()
-        except Exception:
-            q = None
-
-        # Replay last 100 messages, if available
-        try:
-            recent = call_log.recent(100)  # may be empty
-            for evt in recent:
+            for evt in call_log.recent(100):
                 yield f"event: message\ndata: {json.dumps(evt)}\n\n".encode("utf-8")
-        except Exception:
-            pass
-
-        # Main loop: emit events; if none, emit a heartbeat every 15s
-        try:
             while True:
-                item = await _next_from_queue(q, timeout_sec=15.0) if q else None
+                item = await _next_from_queue(q, timeout_sec=15.0)
                 if item is None:
-                    # SSE comment line as heartbeat
                     yield b": keepalive\n\n"
                 else:
                     yield f"event: message\ndata: {json.dumps(item)}\n\n".encode("utf-8")
         except asyncio.CancelledError:
-            # client disconnected
             pass
         finally:
-            try:
-                unsub = getattr(call_log, "unsubscribe", None)
-                if unsub:
-                    if asyncio.iscoroutinefunction(unsub):
-                        await unsub(q)
-                    else:
-                        unsub(q)
-            except Exception:
-                pass
-
-    headers = {
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",  # prevent proxy buffers from batching SSE
-    }
+            call_log.unsubscribe(q)
+    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
 # -----------------------------
@@ -590,7 +526,7 @@ asgi = Starlette(debug=bool(os.getenv("DEBUG", "").strip().lower() in ("1","true
 
 # v1 API
 asgi.routes.extend([
-    Route("/api/health", endpoint=healthz, methods=["GET"]),  # keep non-version health
+    Route("/api/health", endpoint=healthz, methods=["GET"]),  # non-versioned health
     Route("/api/v1/features", endpoint=features_v1, methods=["GET"]),
     Route("/api/v1/chat", endpoint=chat_v1, methods=["POST"]),
     Route("/api/v1/greet", endpoint=greet_v1, methods=["GET"]),
@@ -606,10 +542,22 @@ asgi.routes.extend([
 # WS (v1 + alias for current UI)
 asgi.routes.extend([
     WebSocketRoute("/ws/v1/chat", endpoint=ws_chat),
-    WebSocketRoute("/ws/chat", endpoint=ws_chat),  # back-compat while UI flips
+    WebSocketRoute("/ws/chat", endpoint=ws_chat),  # temporary back-compat
 ])
 
-# Serve static assets directly from ASGI (avoids WSGI bridge races/500s)
+# Back-compat TTS aliases (temporary; remove after logs show no hits)
+asgi.routes.extend([
+    Route("/api/speak", endpoint=tts_v1, methods=["POST"]),
+    Route("/api/tts_with_visemes", endpoint=tts_v1, methods=["POST"]),
+    Route("/api/voice/tts_with_visemes", endpoint=tts_v1, methods=["POST"]),
+    Route("/tts_with_visemes", endpoint=tts_v1, methods=["POST"]),
+    Route("/tts", endpoint=tts_v1, methods=["POST"]),
+    Route("/speak", endpoint=tts_v1, methods=["POST"]),
+    Route("/eleven/tts", endpoint=tts_v1, methods=["POST"]),
+    Route("/eleven/speak", endpoint=tts_v1, methods=["POST"]),
+])
+
+# Serve static assets directly from ASGI (avoids WSGI bridge 500s)
 asgi.mount("/static", StaticFiles(directory="static", html=False), name="static")
 
 # Mount Flask app at root for UI + any legacy routes
