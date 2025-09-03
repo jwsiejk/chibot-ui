@@ -1,22 +1,21 @@
-// main.js — clean build (WS-first, voice barge-in, single-path greet TTS)
-console.log("UI build ⏱ patched-2025-09-03");
+// main.js — auto-arm mic after greet (Live lane only), single-path greet TTS, voice barge-in
+console.log("UI build ⏱ patched-autoarm-2025-09-03");
 
 import { $, show, hide, setToolbarHeightVar } from "./core/dom.js";
 import { j } from "./core/api.js";
 import {
-  _chipGuide, _chipSetState, _chipStartWaitingCountdown, _chipStep,
-  setRenderSuggestions, setArmVADHook, _chipClearIdleNudge
+  _chipGuide, _chipSetState, _chipStep,
 } from "./core/state.js";
 import {
-  appendMessage, appendActions, _chipRenderSuggestions, updateChatButtonLabel, wireChatMenu
+  appendMessage, updateChatButtonLabel
 } from "./chat/ui.js";
 import {
-  sendChat, handleVoiceOnceResponse, wireChatLane, setArmVAD as setArmVADForSend, _chipEndConversation
+  sendChat, handleVoiceOnceResponse, wireChatLane
 } from "./chat/send.js";
 import { tryPlayWithMouth, _vm_stopPlayback } from "./voice/playback.js";
 import { _vm_armVAD, _vm_disarmVAD, setMicUIUpdater, setGuide as setVoiceGuide, setRecordCallbacks } from "./voice/vad.js";
-import { _vm_stopRecording, setStream as setRecordStream } from "./voice/record.js";
-import { setProfileModalMode, loadProfileIntoForm, gate, wireLoginAndProfileHandlers } from "./auth/profile.js";
+import { setStream as setRecordStream } from "./voice/record.js";
+import { loadProfileIntoForm, gate, wireLoginAndProfileHandlers } from "./auth/profile.js";
 
 /* --------------------------- Small utilities ---------------------------- */
 const el = (id) => document.getElementById(id);
@@ -43,72 +42,7 @@ const setChatLane = function(lane){
   try { localStorage.setItem("chatLane", chatLane); } catch(e){}
   refreshLaneUI();
 };
-const badge = function(){ if (BADGE) BADGE.textContent = chatLane === "live" ? "Live" : "Text"; };
-
-/* ------------------------- Mouth overlay / calibration ------------------- */
-const CHIP_SRC   = "/static/chip/img/chip.png";
-const MOUTH_BASE = "/static/chip/img/visemes";
-function normalizeMouthFile(n){
-  if (!n) return "mouth_neutral.png";
-  if (/^mouth_/.test(n)) return n.endsWith(".png") ? n : (n + ".png");
-  if (/\.(png|webp|svg)$/i.test(n)) return n;
-  return n + ".png";
-}
-function setMouth(name){ if (chipMouth) chipMouth.src = MOUTH_BASE + "/" + normalizeMouthFile(name); }
-function calibrateMouth(){
-  if (!chipImage || !chipMouth) return;
-  try {
-    const cs = window.getComputedStyle(chipImage);
-    if (!chipMouth.style.top)   chipMouth.style.top   = cs.getPropertyValue("--mouth-top")   || "53%";
-    if (!chipMouth.style.left)  chipMouth.style.left  = cs.getPropertyValue("--mouth-left")  || "49%";
-    if (!chipMouth.style.width) chipMouth.style.width = cs.getPropertyValue("--mouth-width") || "120px";
-  } catch(e) {}
-}
-function rehydrateChip(){
-  const chip  = el("chipImage");
-  const mouth = el("chipMouthImg");
-  if (!chip) return;
-  try { chip.classList.remove("hidden"); } catch(e){}
-  chip.style.display    = "block";
-  chip.style.visibility = "visible";
-  chip.style.opacity    = "1";
-  try {
-    if (!chip.getAttribute("src") || chip.getAttribute("src").trim() === "") {
-      chip.src = CHIP_SRC + "?v=" + Date.now();
-    }
-  } catch(e){}
-  chip.onerror = function(){ chip.src = CHIP_SRC + "?v=" + Date.now(); try{ chip.classList.remove("hidden"); }catch(e){} };
-  if (mouth) mouth.onerror = function(){ setMouth("mouth_neutral.png"); };
-  calibrateMouth();
-}
-function enableCalibration(){
-  const stage = el("chipStage"); if (!stage || !chipMouth) return;
-  stage.classList.add("calibrating");
-  let dragging=false, startX=0, startY=0, startTop=0, startLeft=0;
-  stage.addEventListener("mousedown", function(ev){
-    if (!ev.shiftKey) return;
-    dragging=true; startX=ev.clientX; startY=ev.clientY;
-    startTop=parseFloat((chipMouth.style.top||"50%").replace("%",""));
-    startLeft=parseFloat((chipMouth.style.left||"50%").replace("%",""));
-    ev.preventDefault();
-  });
-  stage.addEventListener("mousemove", function(ev){
-    if (!dragging) return;
-    const dy = ((ev.clientY - startY) / stage.clientHeight) * 100;
-    const dx = ((ev.clientX - startX) / stage.clientWidth) * 100;
-    chipMouth.style.top  = (startTop + dy) + "%";
-    chipMouth.style.left = (startLeft + dx) + "%";
-  });
-  stage.addEventListener("mouseup", function(){ dragging=false; try {
-    localStorage.setItem("mouthTopPct", chipMouth.style.top);
-    localStorage.setItem("mouthLeftPct", chipMouth.style.left);
-  } catch(e){} });
-  chipMouth.addEventListener("dblclick", function(){
-    const cur=parseInt(chipMouth.style.width||"120",10);
-    const next=(cur>=140)?120:140; chipMouth.style.width=next+"px";
-    try { localStorage.setItem("mouthWidthPx", chipMouth.style.width); } catch(e){}
-  });
-}
+function badge(){ if (BADGE) BADGE.textContent = chatLane === "live" ? "Live" : "Text"; }
 
 /* ----------------------------- Wiring / boot ----------------------------- */
 function initUI(){
@@ -117,16 +51,13 @@ function initUI(){
 
   try { setToolbarHeightVar(); } catch(e){}
 
-  // Chip visuals
-  rehydrateChip(); requestAnimationFrame(rehydrateChip); setTimeout(rehydrateChip, 200);
-
   // Bottom bar wiring
   bindClick(BTN_CHAT, onChatToggle);
   bindClick(BTN_START, onStartClicked);
   bindClick(BTN_AUDIO, onAudioClicked);
   bindClick(BTN_END, endSession);
 
-  // Lane picker (open on right-click or middle-click on Chat)
+  // Lane menu
   function openMenu(ev){
     if (!CHAT_MENU||!BTN_CHAT) return;
     const r=BTN_CHAT.getBoundingClientRect();
@@ -144,20 +75,12 @@ function initUI(){
   bindClick(el("laneLive"), function(){ setChatLane("live"); closeMenu(); if (chatPanel && !chatPanel.hidden) refreshLaneUI(); });
   document.addEventListener("click", function(e){ if (CHAT_MENU && !CHAT_MENU.classList.contains("hidden") && !CHAT_MENU.contains(e.target)) closeMenu(); });
 
-  // App menu (top-right)
-  const navBtn=el("navMenuBtn"); const navMenu=el("navMenu");
-  bindClick(navBtn, function(e){ e.preventDefault(); e.stopPropagation(); if (navMenu) navMenu.classList.toggle("hidden"); });
-  document.addEventListener("click", function(e){ if (navMenu && !navBtn.contains(e.target) && e.target!==navBtn) navMenu.classList.add("hidden"); });
-
-  bindClick(el("navProfile"), async function(){ if (navMenu) navMenu.classList.add("hidden"); try { await loadProfileIntoForm(); } catch(e){} show(el("profileModal"), "flex"); });
-  bindClick(el("navLogout"), async function(){ if (navMenu) navMenu.classList.add("hidden"); try { await fetch("/logout", { method:"POST", credentials:"include" }); } catch(e){} location.reload(); });
-
   // Chat compose
   bindClick(el("chatSendBtn"), function(){ const input=el("chatInput"); if (!input) return; const v=input.value; if (v && v.trim()) { sendChat(v); input.value=""; } });
   const chatInputEl = el("chatInput");
   if (chatInputEl) chatInputEl.addEventListener("keydown", function(e){ const input=el("chatInput"); if (!input) return; if (e.key==="Enter" && !e.shiftKey){ e.preventDefault(); const v=input.value; if (v&&v.trim()){ sendChat(v); input.value=""; } } });
 
-  // Mic UI
+  // Mic UI + guide
   setMicUIUpdater(function(on, recording){
     if (!BTN_AUDIO) return;
     BTN_AUDIO.classList.toggle("primary", !!on);
@@ -166,36 +89,22 @@ function initUI(){
   });
   setVoiceGuide(function(text){ _chipGuide(text); });
 
-  // Voice barge-in on VAD start; send utterance on stop
+  // Voice barge-in: on VAD start; send on stop
   setRecordCallbacks(
     async function onStart(){ try { window.dispatchEvent(new Event("chip:bargein")); } catch(e){} },
     async function onStop(blob, durMs){ try { await handleVoiceOnceResponse({ blob, durMs }); } catch(e){} }
   );
 
-  setArmVADForSend(function(){ _vm_armVAD(); });
   wireChatLane(getChatLane, setChatLane);
   refreshLaneUI();
 
-  // Calibration UX
-  calibrateMouth();
-  const stage = el("chipStage");
-  if (stage) stage.addEventListener("dblclick", function(e){ if (e.target && e.target.id === "chipMouthImg") stage.classList.remove("calibrating"); else enableCalibration(); });
-
-  // Debug helper
-  window.__chipDebug = function(){ return {
-    build: "patched-2025-09-03",
-    bound: {
-      start: !!(BTN_START && BTN_START.getAttribute("data-bound")),
-      audio: !!(BTN_AUDIO && BTN_AUDIO.getAttribute("data-bound")),
-      end:   !!(BTN_END   && BTN_END.getAttribute("data-bound")),
-      chat:  !!(BTN_CHAT  && BTN_CHAT.getAttribute("data-bound"))
-    }
-  }; };
+  // Auth/menu
+  wireLoginAndProfileHandlers();
 }
 
 function refreshLaneUI(){
   if (!chatPanel) return;
-  if (chatText) chatText.classList.remove("hidden"); // always visible
+  if (chatText) chatText.classList.remove("hidden");
   if (chatLane==="live"){ if (chatTTS) chatTTS.classList.remove("hidden"); }
   else { if (chatTTS) chatTTS.classList.add("hidden"); }
   badge();
@@ -215,8 +124,18 @@ async function onStartClicked(){
   setStatus("Connecting…");
   try {
     await startDynamicSession();
-    // Auto-arm mic after greeting (unconditional)
-    try { _vm_stopPlayback(); await _vm_armVAD(); } catch(e){ console.warn("VAD arm failed", e); }
+    // Auto-arm mic only for Live lane; request permission properly
+    if (getChatLane() === "live"){
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setRecordStream(stream);
+        _vm_stopPlayback();
+        await _vm_armVAD();
+      } catch(e){
+        console.warn("VAD arm failed", e);
+        _chipGuide("Please allow microphone access to use Live conversation.");
+      }
+    }
     setStatus("Ready");
   } catch(e){
     console.warn("start failed", e);
@@ -237,32 +156,15 @@ async function onAudioClicked(){
     return;
   }
   _vm_stopPlayback();
-  await _vm_armVAD(); // barge-in then listen
+  await _vm_armVAD();
 }
 
 function endSession(){
   try{
-    _chipStep("disconnect","teardown");
-    _vm_disarmVAD(); _vm_stopPlayback(); _chipClearIdleNudge(); _chipSetState("idle"); setSessionActive(false);
+    _vm_disarmVAD(); _vm_stopPlayback(); _chipSetState("idle"); setSessionActive(false);
     setStatus("Disconnected. Press Start to begin a new session.");
   } catch(e){ console.warn("disconnect error", e); }
 }
-
-/* ---------------------------- Boot experience --------------------------- */
-wireLoginAndProfileHandlers();
-onReady(initUI);
-
-(async function(){
-  const g = await gate({ applyLayout: true });
-  if (g && g.ok){
-    setStatus("Disconnected. Press Start to begin a new session.");
-    _chipStep("boot","ready");
-  } else {
-    if (chatPanel) chatPanel.hidden=true;
-  }
-})();
-
-window.addEventListener("resize", calibrateMouth);
 
 /* --------------------------- Greeting sequence --------------------------- */
 export async function startDynamicSession(){
@@ -280,11 +182,10 @@ export async function startDynamicSession(){
       return;
     }
 
-    // Unified greet text (server only returns text)
     const reply = String(res.reply ?? res.reply_text ?? res.text ?? res.message ?? "").trim();
     if (reply) appendMessage("assistant", reply);
 
-    // SINGLE PATH: always synthesize greet audio via TTS
+    // Always synthesize greet audio via TTS
     if (reply){
       const ttsRes = await fetch("/api/v1/voice/tts-with-visemes", {
         method: "POST",
@@ -311,11 +212,23 @@ export async function startDynamicSession(){
       chatInput.placeholder = "Ask me anything about Pure Storage…";
       try { chatInput.focus(); } catch(e){}
     }
-    setStatus("Ready");
     _chipSetState("idle");
   } catch(e){
     console.warn("startDynamicSession failed", e);
-    setStatus("Ready");
     _chipSetState("idle");
   }
 }
+
+/* ---------------------------- Boot sequence ----------------------------- */
+wireLoginAndProfileHandlers();
+onReady(initUI);
+(async function(){
+  const g = await gate({ applyLayout: true });
+  if (g && g.ok){
+    const s=$("statusBanner"); if (s) s.textContent="Disconnected. Press Start to begin a new session.";
+  } else {
+    if (chatPanel) chatPanel.hidden=true;
+  }
+})();
+
+window.addEventListener("resize", function(){ /* layout-safe */ });
