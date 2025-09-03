@@ -1,4 +1,4 @@
-// chat/send.js — DIAGNOSTIC BUILD (WS-only, no gating), extra logging
+// chat/send.js — DIAGNOSTIC + Voice via STT -> WS chat (lane=live), WS-only typed chat
 import { j, wsConnect } from "../core/api.js";
 import { _chipGuide, _chipSetState, _chipStep, _chipClearIdleNudge } from "../core/state.js";
 import { appendMessage } from "./ui.js";
@@ -7,8 +7,6 @@ import { gate } from "../auth/profile.js";
 import {
   tryPlayWithMouth,
   _vm_stopPlayback,
-  respAcquire,
-  respRelease,
   startStream,
   stopStream,
   pushPCM16Base64
@@ -33,16 +31,13 @@ function _ensureWS(){
       if (!msg || typeof msg !== "object") return;
 
       if (_muteStream) {
-        if (msg.type === "end") { _muteStream = false; respRelease(); stopStream(); }
+        if (msg.type === "end") { _muteStream = false; stopStream(); }
         return;
       }
 
       switch (msg.type) {
         case "ready":
           dbg("WS <- ready");
-          break;
-        case "partial_text":
-          dbg("WS <- partial_text");
           break;
         case "final_text":
           dbg("WS <- final_text");
@@ -60,7 +55,6 @@ function _ensureWS(){
         }
         case "end":
           dbg("WS <- end");
-          respRelease();
           stopStream();
           break;
         case "error":
@@ -74,10 +68,11 @@ function _ensureWS(){
 // Barge‑in: cancel local playback and mute incoming stream
 window.addEventListener("chip:bargein", function(){
   try { _vm_stopPlayback(); } catch(e){}
-  try { _muteStream = true; respRelease(); stopStream(); } catch(e){}
+  try { _muteStream = true; stopStream(); } catch(e){}
   try { if (_ws && _ws.isOpen && _ws.isOpen()) { _ws.send({ type: "cancel" }); dbg("WS -> cancel"); } } catch(e){}
 });
 
+/* -------------------------- Typed chat (WS only) -------------------------- */
 export async function sendChat(message){
   const text = String(message||"").trim();
   if (!text) return;
@@ -107,40 +102,51 @@ export async function sendChat(message){
   }
 }
 
+/* ---------------------- One-shot voice turn (STT -> WS) ------------------- */
 export async function handleVoiceOnceResponse(ctx){
   const blob  = ctx && ctx.blob;
   const durMs = ctx && ctx.durMs || 0;
   if (!blob) { dbg("handleVoiceOnceResponse called with no blob"); return; }
-  if (durMs < 300) { _chipGuide("I heard something very short. Try again?"); dbg("Short utterance ignored", durMs); return; }
+  if (durMs < 350 || blob.size < 8000) { _chipGuide("Heard a very short utterance—try again?"); dbg("Short utterance ignored", { durMs, size: blob.size }); return; }
 
   _chipStep("voice-once →", { durMs: durMs, size: blob.size });
+
+  // 1) STT
   const fd = new FormData(); fd.append("audio", blob, "input.webm");
-  if (!respAcquire()) { dbg("respAcquire failed"); return; }
-
-  function onCancel(){ try { respRelease(); } catch(e){} }
-  window.addEventListener("chip:tts-cancel", onCancel);
-
   try {
     _chipSetState("thinking");
-    dbg("POST /api/v1/voice/stt", { size: blob.size, durMs: durMs });
+    dbg("POST /api/v1/voice/stt (multipart)", { size: blob.size, durMs: durMs });
     const res = await fetch("/api/v1/voice/stt", { method: "POST", body: fd, credentials: "include" });
     let data = {};
     try { data = await res.json(); } catch {}
-    dbg("STT ->", { ok: res.ok, status: res.status, hasReply: !!(data && data.reply), hasAudio: !!(data && (data.audio || data.audio_base64 || data.audio_b64)) });
+    const transcript = String((data && (data.text || data.transcript || data.reply || "")) || "").trim();
+    dbg("STT ->", { ok: res.ok, status: res.status, chars: transcript.length });
 
-    if (data && data.reply) appendMessage("assistant", String(data.reply).trim());
-    if (data && data.audio) {
-      try { await tryPlayWithMouth(data.audio); } catch(e){}
-    } else if (data && (data.audio_base64 || data.audio_b64)) {
-      try {
-        const a = new Audio("data:audio/mpeg;base64," + (data.audio_base64 || data.audio_b64));
-        await a.play();
-      } catch(e){}
+    if (!res.ok || !transcript) {
+      _chipSetState("followup");
+      _chipGuide("I didn’t catch that—mind repeating?");
+      return;
     }
 
+    // 2) Send transcript to chat over WS (lane=live)
+    _ensureWS();
+    if (!_ws || !_ws.isOpen || !_ws.isOpen()) {
+      _chipSetState("followup");
+      _chipGuide("Chat stream isn’t available. Please try again.");
+      dbg("WS not open after STT");
+      return;
+    }
+
+    appendMessage("user", transcript, null);
+    const payload = { type: "user_text", text: transcript, meta: { lane: "live", source: "stt" } };
+    _ws.send(payload);
+    dbg("WS -> user_text (from STT)", { len: transcript.length });
+
+    _chipSetState("responding");
+    // audio will stream back via WS handlers
+  } catch(e){
+    dbg("handleVoiceOnceResponse error", e && (e.message || String(e)));
     _chipSetState("followup");
-  } finally {
-    window.removeEventListener("chip:tts-cancel", onCancel);
-    respRelease();
+    _chipGuide("I ran into an issue processing that—try again?");
   }
 }
