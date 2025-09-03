@@ -1,19 +1,21 @@
 
 /**
- * vad.js (backward-compatible)
+ * vad.js (backward-compatible, echo-aware)
  *
- * Echo-aware VAD with DOM events and compatibility shims for older code.
- * New API:
+ * New API (used by the soft/echo-aware barge-in):
  *   - arm(), disarm(), setSpeakingMode(isSpeaking, boost), isArmed()
- *   - on(event, fn), off(event, fn)  // events: 'speechstart', 'speechend'
- *   - Emits DOM events 'chip:vad_speechstart' / 'chip:vad_speechend'
+ *   - on(event, handler), off(event, handler)           // events: 'speechstart', 'speechend'
+ *   - Emits DOM events 'chip:vad_speechstart'/'chip:vad_speechend'
  *
- * Legacy exports preserved for compatibility:
- *   - _vm_armVAD()           -> arm()
- *   - _vm_disarmVAD()        -> disarm()
- *   - _vm_setSpeakingMode()  -> setSpeakingMode()
- *   - _vm_isArmed()          -> isArmed()
- *   - _vm_updateMicUI(state) -> updates body CSS class + emits 'chip:mic'
+ * Legacy API (temporary, no-op unless noted):
+ *   - _vm_armVAD()           -> alias of arm()
+ *   - _vm_disarmVAD()        -> alias of disarm()
+ *   - _vm_setSpeakingMode()  -> alias of setSpeakingMode()
+ *   - _vm_isArmed()          -> alias of isArmed()
+ *   - _vm_updateMicUI(state) -> updates body CSS class + emits 'chip:mic' (safe helper)
+ *   - setMicUIUpdater(fn)    -> stores fn but is not invoked by the new pipeline
+ *   - setGuide(guide)        -> no-op stub for legacy "voice guide"
+ *   - setRecordCallbacks(cbs)-> no-op stub for legacy recorder callbacks
  */
 
 const _listeners = { speechstart: new Set(), speechend: new Set() };
@@ -26,6 +28,11 @@ let _minEndMs = 160;              // min duration below threshold to end
 let _aboveMs = 0;
 let _belowMs = 0;
 let _isSpeech = false;
+
+// Legacy placeholders (intentionally unused by the new pipeline)
+let __legacyMicUIUpdater = null;
+let __legacyGuide = null;
+let __legacyRecordCallbacks = null;
 
 /** Arm the VAD and request mic permissions */
 export async function arm() {
@@ -149,4 +156,21 @@ export function _vm_updateMicUI(state) {
   try {
     window.dispatchEvent(new CustomEvent('chip:mic', { detail: { mode } }));
   } catch {}
+}
+
+// Additional legacy no-op exports (do not affect the new pipeline)
+
+export function setMicUIUpdater(fn) {
+  __legacyMicUIUpdater = typeof fn === 'function' ? fn : null;
+  try { console.warn("[legacy stub] setMicUIUpdater() registered but is not used by the new VAD."); } catch {}
+}
+
+export function setGuide(guide) {
+  __legacyGuide = guide || null;
+  try { console.warn("[legacy stub] setGuide() is deprecated and ignored."); } catch {}
+}
+
+export function setRecordCallbacks(cbs) {
+  __legacyRecordCallbacks = cbs || null;
+  try { console.warn("[legacy stub] setRecordCallbacks() is deprecated and ignored."); } catch {}
 }
