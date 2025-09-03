@@ -1,11 +1,12 @@
 
 /**
- * send.js — MAX COMPAT build with soft / echo‑aware barge‑in
+ * send.js — MAX COMPAT (no-op legacy stubs) + soft/echo‑aware barge‑in
  *
- * Purpose: temporarily restore legacy named exports that older code may import
- * while still providing the new soft‑barge‑in behavior.
+ * This module provides the new runtime API AND defines legacy names as NO‑OP stubs
+ * so older imports do not crash the app. The stubs DO NOT send messages or change
+ * runtime behavior in Ask Chip. Remove them after migrating callers.
  *
- * New core API (preferred):
+ * New API (use these):
  *   - start()
  *   - attachSocket(ws)
  *   - handleVoiceOnceResponse(evtOrMsg)
@@ -13,17 +14,11 @@
  *   - interrupt(reason?)
  *   - setTTSPlayer(player)
  *
- * Legacy aliases re‑exported for compatibility (safe to remove later):
- *   - sendChat(text, ctx?)                 -> sendUserText
- *   - sendText(text, ctx?)                 -> sendUserText
- *   - sendTextAndContext(text, ctx?)       -> sendUserText
- *   - sendMessage(text, ctx?)              -> sendUserText
- *   - attachWS(ws) / setWS(ws)             -> attachSocket
- *   - initChat() / init()                  -> start
- *   - stop()                               -> interrupt('stop')
- *   - handleOnceResponse(evt)              -> handleVoiceOnceResponse
- *   - handleWsMessage(evt)                 -> handleVoiceOnceResponse
- *   - handleVoiceResponseOnce(evt)         -> handleVoiceOnceResponse
+ * Legacy names (temporary NO‑OPS; safe to delete later):
+ *   - sendChat, sendText, sendTextAndContext, sendMessage
+ *   - attachWS, setWS, initChat, init, stop
+ *   - handleOnceResponse, handleWsMessage, handleVoiceResponseOnce
+ *   - wireChatLane
  */
 
 import { SoftBargeIn } from "./soft-bargein.js";
@@ -82,7 +77,7 @@ let barge = null;
 let wsRef = null;
 let started = false;
 
-// --------------------------- Core API ---------------------------
+// --------------------------- New API ---------------------------
 
 export async function start() {
   if (started) return;
@@ -91,17 +86,13 @@ export async function start() {
   // Prepare audio player
   ttsPlayer = window.ttsPlayer || createFallbackTTSPlayer();
 
-  // Arm VAD (request mic permissions when you actually start the session)
-  try {
-    await VAD.arm();
-  } catch (e) {
-    console.warn("VAD arm failed (mic permissions?):", e);
-  }
+  // Arm VAD (request mic permissions)
+  try { await VAD.arm(); } catch (e) { console.warn("VAD arm failed:", e); }
 
-  // Instantiate soft barge-in controller; socket will be attached later via attachSocket()
+  // Instantiate soft barge-in controller; socket attached via attachSocket()
   barge = new SoftBargeIn({
     vad: VAD,
-    socket: null, // set later
+    socket: wsRef,
     ttsPlayer,
     confirmMs: (window.CHIP_BARGE_CONFIRM_MS || 420),
     echoThresholdBoost: (window.CHIP_ECHO_THRESHOLD_BOOST || 1.9),
@@ -150,7 +141,6 @@ export async function handleVoiceOnceResponse(evtOrMsg) {
   if (evtOrMsg && 'data' in evtOrMsg) {
     // Native MessageEvent
     maybeWS = evtOrMsg.currentTarget || evtOrMsg.target || null;
-    // Text vs binary
     if (typeof evtOrMsg.data === "string") {
       try { msg = JSON.parse(evtOrMsg.data); } catch { msg = null; }
     } else {
@@ -162,98 +152,98 @@ export async function handleVoiceOnceResponse(evtOrMsg) {
         buf = await evtOrMsg.data.arrayBuffer();
       }
       if (buf) {
-        if (barge) barge.onAssistantAudioStart();
+        barge?.onAssistantAudioStart?.();
         (ttsPlayer || (ttsPlayer = createFallbackTTSPlayer())).appendChunk(buf);
         return;
       }
     }
   } else if (evtOrMsg && typeof evtOrMsg === "object") {
-    // Already a parsed message
     msg = evtOrMsg;
   }
 
-  if (maybeWS && !wsRef) {
-    attachSocket(maybeWS); // so barge can send 'interrupt' commands
-  }
-
+  if (maybeWS && !wsRef) attachSocket(maybeWS);
   if (!msg) return;
 
   switch (msg.type) {
     case "state":
       emitState(msg.state);
       break;
-
     case "text":
-      // Bubble assistant/user text up to the UI
       try { window.dispatchEvent(new CustomEvent("chip:text", { detail: msg })); } catch {}
       break;
-
     case "audio_chunk": {
-      if (barge) barge.onAssistantAudioStart();
+      barge?.onAssistantAudioStart?.();
       let buf;
-      if (typeof msg.data === "string") {
-        buf = base64ToArrayBuffer(msg.data);
-      } else if (msg.data?.type === "Buffer" && Array.isArray(msg.data.data)) {
-        buf = new Uint8Array(msg.data.data).buffer;
-      } else if (Array.isArray(msg.data)) {
-        buf = new Uint8Array(msg.data).buffer;
-      } else {
-        break;
-      }
+      if (typeof msg.data === "string")       buf = base64ToArrayBuffer(msg.data);
+      else if (msg.data?.type === "Buffer" && Array.isArray(msg.data.data))
+                                              buf = new Uint8Array(msg.data.data).buffer;
+      else if (Array.isArray(msg.data))       buf = new Uint8Array(msg.data).buffer;
+      else                                    break;
       (ttsPlayer || (ttsPlayer = createFallbackTTSPlayer())).appendChunk(buf);
       break;
     }
-
     case "end":
-      if (barge) barge.onAssistantAudioEnd();
+      barge?.onAssistantAudioEnd?.();
       (ttsPlayer || (ttsPlayer = createFallbackTTSPlayer())).finalize();
       emitState("ready");
       break;
-
     case "error":
       console.error("WS error msg:", msg);
       break;
-
     default:
       // no-op
       break;
   }
 }
 
-// --------------------------- Legacy Compatibility Exports ---------------------------
+// --------------------------- Legacy NO-OP stubs ---------------------------
+/**
+ * IMPORTANT: The functions below are TEMPORARY placeholders to satisfy older imports.
+ * They DO NOTHING except log a deprecation warning. They must not send messages,
+ * wire sockets, or alter runtime behavior.
+ */
+
+function _warn(name) {
+  try { console.warn(`[legacy stub] ${name}() is deprecated and a no-op.`); } catch {}
+}
 
 // Text senders
-export function sendChat(text, ctx = {}) { return sendUserText(text, ctx); }
-export function sendText(text, ctx = {}) { return sendUserText(text, ctx); }
-export function sendTextAndContext(text, ctx = {}) { return sendUserText(text, ctx); }
-export function sendMessage(text, ctx = {}) { return sendUserText(text, ctx); }
+export function sendChat(/* text, ctx */)          { _warn("sendChat"); }
+export function sendText(/* text, ctx */)          { _warn("sendText"); }
+export function sendTextAndContext(/* text, ctx */){ _warn("sendTextAndContext"); }
+export function sendMessage(/* text, ctx */)       { _warn("sendMessage"); }
 
 // Socket/boot
-export function attachWS(ws) { return attachSocket(ws); }
-export function setWS(ws) { return attachSocket(ws); }
-export async function initChat() { return start(); }
-export async function init() { return start(); }
+export function attachWS(/* ws */)                 { _warn("attachWS"); }
+export function setWS(/* ws */)                    { _warn("setWS"); }
+export async function initChat(/* ... */)          { _warn("initChat"); }
+export async function init(/* ... */)              { _warn("init"); }
 
 // Stop/interrupt
-export function stop() { return interrupt("stop"); }
+export function stop(/* ... */)                    { _warn("stop"); }
 
-// Message handlers
-export function handleOnceResponse(evt) { return handleVoiceOnceResponse(evt); }
-export function handleWsMessage(evt) { return handleVoiceOnceResponse(evt); }
-export function handleVoiceResponseOnce(evt) { return handleVoiceOnceResponse(evt); }
+// Message handler aliases
+export function handleOnceResponse(/* evt */)      { _warn("handleOnceResponse"); }
+export function handleWsMessage(/* evt */)         { _warn("handleWsMessage"); }
+export function handleVoiceResponseOnce(/* evt */) { _warn("handleVoiceResponseOnce"); }
 
-// Default export (optional consumers)
+// Misc lanes
+export function wireChatLane(/* ... */)            { _warn("wireChatLane"); }
+
+// --------------------------- Default export ---------------------------
 const _default = {
+  // New API
   start,
   attachSocket,
   handleVoiceOnceResponse,
   sendUserText,
+  interrupt,
+  setTTSPlayer,
+  // Legacy stubs (for consumers using default)
   sendChat,
   sendText,
   sendTextAndContext,
   sendMessage,
-  interrupt,
-  setTTSPlayer,
   attachWS,
   setWS,
   initChat,
@@ -261,28 +251,10 @@ const _default = {
   stop,
   handleOnceResponse,
   handleWsMessage,
-  handleVoiceResponseOnce
+  handleVoiceResponseOnce,
+  wireChatLane
 };
 export default _default;
 
 // --------------------------- Global exposure ---------------------------
 window.ChatSend = _default;
-
-/* ------------------------------------------------------------------
- * Legacy no-op exports (temporary)
- * ------------------------------------------------------------------
- * These functions exist only to satisfy older imports so the app loads.
- * They should NOT be used by the new Ask Chip runtime. They do nothing.
- * Please remove these once main.js is updated to use the new API.
- */
-
-export function sendChat(/* text, ctx */) {
-  try { console.warn("[legacy stub] sendChat() is deprecated and a no-op."); } catch {}
-  // Intentionally no-op
-}
-
-export function wireChatLane(/* ...args */) {
-  try { console.warn("[legacy stub] wireChatLane() is deprecated and a no-op."); } catch {}
-  // Intentionally no-op
-}
-
