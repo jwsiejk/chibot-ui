@@ -405,7 +405,7 @@ async def accounts_search_v1(request: Request) -> JSONResponse:
 async def ws_chat(ws: WebSocket):
     await ws.accept()
     path = ws.scope.get("path", "")
-    await call_log.add("ws", "connected", path=path)
+    call_log.add("ws", "connected", path=path)
     try:
         await ws.send_json({"type": "ready", "ts": _now_iso(), "service": "ws.chat"})
         while True:
@@ -456,18 +456,18 @@ async def ws_chat(ws: WebSocket):
                     break
 
             await ws.send_json({"type": "end"})
-            await call_log.add("ws_chat", "turn_ok", has_audio=bool(got_audio), chars=len(reply))
+            call_log.add("ws_chat", "turn_ok", has_audio=bool(got_audio), chars=len(reply))
 
     except WebSocketDisconnect:
         pass
     except Exception as e:
-        await call_log.add("error", "ws_exception", error=str(e))
+        call_log.add("error", "ws_exception", error=str(e))
         try:
             await ws.send_json({"type": "error", "code": "server_error", "error": str(e)})
         except Exception:
             pass
     finally:
-        await call_log.add("ws", "disconnected", path=path)
+        call_log.add("ws", "disconnected", path=path)
         try:
             await ws.close()
         except Exception:
