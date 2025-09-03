@@ -229,12 +229,40 @@ window.addEventListener("resize", calibrateMouth);
 async function startDynamicSession(){
   try{
     _chipSetState("greeting"); _chipStep("GET /api/greet →", {});
-    const { ok, data, status } = await j("/api/greet");
-    if (!ok){ _chipStep("greet-failed",{status}); _chipSetState("idle"); alert("Could not start the greeting. Try again?"); setSessionActive(false); return; }
-    const audioUrl = data && (data.audio || data.audio_url);
-    const reply    = data && (data.reply ?? data.reply_text ?? data.text ?? "");
-    if (typeof reply === "string" && reply.trim()) appendMessage("chip", reply);
-    if (audioUrl){ try{ await tryPlayWithMouth(audioUrl); }catch(e){ console.warn("Greet audio failed", e);} }
+    const res = await j("/api/greet");
+    const ok = res && (res.ok !== false);
+    if (!ok){
+      _chipStep("greet-failed",{status: res && res.status});
+      _chipSetState("idle");
+      alert("Could not start the greeting. Try again?");
+      setSessionActive(false);
+      return;
+    }
+    const reply = String(res.reply ?? res.reply_text ?? res.text ?? res.message ?? "").trim();
+    if (reply) appendMessage("assistant", reply);
+    const audioUrl = res.audio || res.audio_url || null;
+    if (audioUrl){
+      try { await tryPlayWithMouth(audioUrl); } catch(e){ console.warn("Greet audio failed", e); }
+    } else if (reply){
+      try {
+        const ttsRes = await fetch("/api/v1/voice/tts-with-visemes", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: reply })
+        }).then(r=>r.json()).catch(()=>null);
+        if (ttsRes){
+          if (ttsRes.audio) {
+            try { await tryPlayWithMouth(ttsRes.audio); } catch(e){ console.warn("Greet TTS (url) failed", e); }
+          } else if (ttsRes.audio_base64 || ttsRes.audio_b64) {
+            try { 
+              const a = new Audio("data:audio/mpeg;base64," + (ttsRes.audio_base64 || ttsRes.audio_b64));
+              await a.play();
+            } catch(e){ console.warn("Greet TTS (b64) failed", e); }
+          }
+        }
+      } catch(e){ console.warn("Greet TTS failed", e); }
+    }
     if (chatPanel) chatPanel.hidden=false; refreshLaneUI();
     const chatInput=$("chatInput"); if (chatInput){ chatInput.placeholder="Ask me anything about Pure Storage…"; try{ chatInput.focus(); }catch{} }
     setStatus("Ready");
