@@ -18,7 +18,7 @@ def _parse_allowlist(raw: str) -> set:
 
 @bp.before_request
 def _guard():
-    # Allow logs SSE unauthenticated so diagnostics can pass
+    # Allow logs SSE unauthenticated so diagnostics/ops can see health
     if request.endpoint and request.endpoint.endswith("admin.logs"):
         return None
     allowed = _parse_allowlist(os.getenv("ADMIN_EMAILS", ""))
@@ -34,7 +34,7 @@ def logs():
     q = admin_events.subscribe()
 
     def event(data: str, event: str | None = None) -> str:
-        # IMPORTANT: use literal \n, not real line breaks inside the string
+        # use literal \n, not raw newlines inside f-strings
         prefix = f"event: {event}\n" if event else ""
         return prefix + f"data: {data}\n\n"
 
@@ -48,7 +48,7 @@ def logs():
                 ev = item.get("event", "message")
                 yield event(json.dumps(payload, separators=(",", ":")), ev)
             except Exception:
-                # keepalive comment to prevent proxy idle close
+                # keepalive comment prevents proxy idle close
                 yield ": ping\n\n"
 
     headers = {
@@ -77,4 +77,30 @@ def list_sessions():
         out.append({
             "id": sid,
             "email": s.get("email", "user@example.com"),
-            "message_count": len(s.get("messages_
+            "message_count": len(s.get("messages", [])),
+        })
+    return jsonify({"ok": True, "sessions": out})
+
+@bp.get("/sessions/<sid>")
+def get_session(sid):
+    return jsonify({"ok": True, "session_id": sid, "transcript": db.get_transcript(sid)})
+
+@bp.post("/storage/neon/snapshot")
+def storage_neon_snapshot():
+    from ..dal.neon_sqlite import connect, snapshot_memory
+    path = os.getenv("PERSIST_SQLITE_PATH", "/mnt/data/ask_chip.sqlite")
+    sess = (request.get_json(silent=True) or {}).get("session_id")
+    conn = connect(path)
+    snapshot_memory(conn, db.memory, session_id=sess)
+    admin_log(f"Snapshot to {path}")
+    return jsonify({"ok": True, "path": path})
+
+@bp.post("/storage/neon/restore")
+def storage_neon_restore():
+    from ..dal.neon_sqlite import connect, restore_memory
+    path = os.getenv("PERSIST_SQLITE_PATH", "/mnt/data/ask_chip.sqlite")
+    sess = (request.get_json(silent=True) or {}).get("session_id")
+    conn = connect(path)
+    restore_memory(conn, db.memory, session_id=sess)
+    admin_log(f"Restore from {path}")
+    return jsonify({"ok": True, "path": path})
