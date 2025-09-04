@@ -1,3 +1,0 @@
-DELETE THE FOLLOWING FILES:
-- routes/conversation.py
-- routes/legacy_block.py
