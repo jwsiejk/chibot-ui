@@ -1,1 +1,19 @@
-<!doctype html><title>Ask Chip</title>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask Chip</title><link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}"></head>
+<body data-app="ask-chip">
+<header class="topbar"><div class="brand">Ask Chip</div><nav class="menu"><a href="/admin">Admin</a> <a href="/diagnostics">Diagnostics</a></nav></header>
+<main class="layout">
+<section class="stage" id="chipStage">
+  <div class="state-dots"><span class="dot" data-state="ready"></span><span class="dot" data-state="listening"></span><span class="dot" data-state="thinking"></span><span class="dot" data-state="responding"></span></div>
+  <div class="chip-frame"><img id="chipImage" src="{{ url_for('static', filename='chip/img/chip.png') }}" alt="Chip"/><img id="chipMouth" alt="Mouth"/></div>
+  <div class="instruction-strip">“Hey Chip…”, “Stop Chip”, “Chip, hold on” — ESC interrupts</div>
+  <div class="toolbar"><button id="btnStart" class="btn primary">Start</button><button id="btnEnd" class="btn" disabled>End</button><button id="btnMute" class="btn" aria-pressed="false">Audio: On</button><button id="btnChat" class="btn" aria-pressed="true">Chat</button></div>
+  <div class="status-line"><span id="statusText">Ready</span></div>
+</section>
+<aside class="chat" id="chatPane"><div class="chat-header"><div>Conversation</div><div id="suggestions"></div></div><div class="chat-body" id="chatBody" aria-live="polite"></div><div class="chat-compose"><input id="chatInput" placeholder="Type a message…"><button id="chatSend" class="btn">Send</button></div></aside>
+</main>
+<div class="banner" id="errorBanner" role="alert"></div>
+<script>window.ASKCHIP={api:{greet:"/api/v1/greet",chat:"/api/v1/chat",stt:"/api/v1/voice/stt",tts:"/api/v1/voice/tts-with-visemes",logs:"/api/v1/admin/logs",ws:(location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/v1/chat'},assets:{chipImage:"{{ url_for('static', filename='chip/img/chip.png') }}",visemeBase:"{{ url_for('static', filename='visemes/chip-2d-pack') }}/"},config:{ws_ping_interval_ms:25000}};</script>
+<script defer src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body></html>

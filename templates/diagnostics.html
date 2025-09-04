@@ -1,64 +1,18 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ask Chip — Diagnostics</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/diagnostics.css') }}">
-</head>
-<body>
-  <header>
-    <h1>Ask Chip — Diagnostics</h1>
-    <p>This page runs the v1 acceptance checks against your live app.</p>
-  </header>
-
-  <section id="summary" class="card">
-    <div id="overall" class="overall">Running checks…</div>
-  </section>
-
-  <section class="card">
-    <table id="results">
-      <thead>
-        <tr><th>#</th><th>Check</th><th>Status</th><th>Details</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </section>
-
-  <section class="card">
-    <h2>Tips</h2>
-    <ul>
-      <li>Green = strict pass; Yellow = optional/warn; Red = fail.</li>
-      <li>Click the row to expand raw info.</li>
-    </ul>
-  </section>
-
-  <template id="row-tpl">
-    <tr class="row">
-      <td class="idx"></td>
-      <td class="name"></td>
-      <td class="status"></td>
-      <td class="details"></td>
-    </tr>
-  </template>
-
-  <script>
-    window.ASKCHIP = {
-      api: {
-        greet: "/api/v1/greet",
-        chat: "/api/v1/chat",
-        tts: "/api/v1/voice/tts-with-visemes",
-        logs: "/api/v1/admin/logs",
-        config: "/api/v1/admin/config"
-      },
-      ws: (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/v1/chat",
-      assets: {
-        chip: "{{ url_for('static', filename='chip/img/chip.png') }}",
-        visemeRest: "{{ url_for('static', filename='visemes/chip-3d-pack/rest.png') }}",
-        visemeAA: "{{ url_for('static', filename='visemes/chip-3d-pack/aa.png') }}",
-      }
-    };
-  </script>
-  <script defer src="{{ url_for('static', filename='js/diagnostics.js') }}"></script>
-</body>
-</html>
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask Chip — Diagnostics</title><style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0f1115;color:#e6e9ef;margin:0;padding:16px}.card{background:#161a22;border:1px solid #202533;border-radius:14px;padding:12px;margin:12px 0}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #202533;padding:8px}.pass{color:#27c28a}.warn{color:#ffc658}.fail{color:#ff6b6b}</style></head>
+<body><h1>Ask Chip — Diagnostics</h1><div id="overall" class="card">Running checks…</div><div class="card"><table id="t"><thead><tr><th>#</th><th>Check</th><th>Status</th><th>Details</th></tr></thead><tbody></tbody></table></div>
+<template id="row"><tr><td class="i"></td><td class="n"></td><td class="s"></td><td class="d"></td></tr></template>
+<script>
+const tpl=document.getElementById('row'); const tb=document.querySelector('#t tbody'); const overall=document.getElementById('overall');
+function row(i,n,s,d){const r=tpl.content.cloneNode(true);r.querySelector('.i').textContent=i;r.querySelector('.n').textContent=n;const S=r.querySelector('.s');S.textContent=s.toUpperCase();S.classList.add(s);r.querySelector('.d').textContent=d;tb.appendChild(r);}
+async function fetchText(u, init){const r=await fetch(u, init); const t=await r.text(); return {ok:r.ok, status:r.status, text:t, headers:r.headers};}
+async function greet(){try{const r=await fetchText('/api/v1/greet');return r.ok?['pass',`/api/v1/greet → ${r.status}`]:['fail',`/api/v1/greet → ${r.status}`]}catch(e){return ['fail',String(e.message||e)];}}
+async function ws(){const url=((location.protocol==='https:')?'wss://':'ws://')+location.host+'/ws/v1/chat';return new Promise(res=>{let done=false;try{const ws=new WebSocket(url);ws.onopen=()=>{try{ws.send(JSON.stringify({type:'ping',t:Date.now()}));}catch{}};ws.onmessage=(e)=>{try{const m=JSON.parse(e.data);if(m?.type==='pong'){done=true;ws.close();res(['pass','WS open + pong']);}}catch{}};ws.onclose=()=>{if(!done)res(['pass','WS opened (pong not required)']);};ws.onerror=()=>{if(!done)res(['fail','WS error'])}; setTimeout(()=>{if(!done){try{ws.close();}catch{} res(['pass','WS opened (no pong)']);}},1500);}catch(e){res(['fail',String(e.message||e)])}});}
+async function sse(){return new Promise(res=>{try{const es=new EventSource('/api/v1/admin/logs');let opened=false;es.onopen=()=>opened=true;es.onmessage=()=>{res(['pass','SSE receiving']); es.close();};es.onerror=()=>{res([opened?'warn':'fail', opened?'SSE opened, quiet':'SSE could not open']); try{es.close();}catch{}}; setTimeout(()=>{if(!opened){res(['warn','SSE no open within timeout']); try{es.close();}catch{}}},1500);}catch(e){res(['fail',String(e.message||e)])}});}
+async function staticCheck(){const base='/static/visemes/chip-2d-pack/'; try{let r=await fetchText(base+'mouth_neutral.png'); if(r.ok) return ['pass','mouth_neutral.png ok']; r=await fetchText(base+'mouth_aa.png'); return r.ok?['pass','mouth_aa.png ok'] : ['fail','viseme not found (mouth_neutral.png or mouth_aa.png)']; }catch(e){return ['fail',String(e.message||e)]; }}
+async function legacy(){try{const r=await fetchText('/api/greet'); return r.ok?['fail',`/api/greet returned ${r.status}`]:['pass',`/api/greet → ${r.status}`]; }catch(e){return ['pass','/api/greet unreachable']; }}
+async function tts(){try{const r=await fetch('/api/v1/voice/tts-with-visemes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'Hello from diagnostics.'})}); const j=await r.json().catch(()=>({})); return (r.ok&&j?.ok&&(j.audio_b64||'').length>10)?['pass',`TTS ok (bytes=${j.audio_b64.length})`] : ['warn',`TTS status=${r.status}`]; }catch(e){ return ['warn',String(e.message||e)]; }}
+async function config(){try{const r=await fetchText('/api/v1/admin/config'); return r.ok?['pass','Config ok'] : ['warn',`Config GET → ${r.status}`]; }catch(e){return ['warn',String(e.message||e)]; }}
+async function run(){const c=[['GET /api/v1/greet',greet],['WebSocket /ws/v1/chat',ws],['SSE /api/v1/admin/logs',sse],['Static viseme',staticCheck],['Legacy /api/greet absent',legacy],['POST /api/v1/voice/tts-with-visemes',tts],['GET /api/v1/admin/config',config]]; let pass=0,fail=0; for(let i=0;i<c.length;i++){let s='fail',d=''; try{[s,d]=await c[i][1]();}catch(e){s='fail'; d=String(e.message||e);} row(i+1,c[i][0],s,d); if(s==='pass')pass++; if(s==='fail')fail++; } overall.textContent = `Pass: ${pass} • Fail: ${fail} • Warn/Skip: ${c.length-pass-fail}`;}
+window.addEventListener('DOMContentLoaded', run);
+</script></body></html>

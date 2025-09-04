@@ -1,1 +1,9 @@
-<!doctype html><title>Admin</title>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask Chip — Admin</title><link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}"></head><body data-app="ask-chip-admin">
+<header class="topbar"><div class="brand">Ask Chip — Admin</div><nav class="menu"><a href="/">Back</a></nav></header>
+<main class="container">
+<section class="card"><h2>Live Logs</h2><div class="controls"><input id="logFilter" placeholder="filter text"><button class="btn" id="logClear">Clear</button></div><pre class="log" id="adminLog">(connecting...)</pre></section>
+<section class="card"><h2>Config</h2><div id="configForm" class="kv"></div><div style="margin-top:8px"><button id="cfgLoad" class="btn">Load</button> <button id="cfgSave" class="btn primary">Save</button> <span id="cfgStatus" class="hint"></span></div></section>
+</main>
+<script>window.ASKCHIP={api:{logs:"/api/v1/admin/logs",config_get:"/api/v1/admin/config",config_set:"/api/v1/admin/config"}};</script>
+<script defer src="{{ url_for('static', filename='js/admin.js') }}"></script></body></html>

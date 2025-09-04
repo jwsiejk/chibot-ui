@@ -46,6 +46,9 @@ async def ws_chat(scope, receive, send):
                 except Exception:
                     continue
                 mtype = msg.get('type')
+                if mtype == 'ping':
+                    await send({'type':'websocket.send','text': json.dumps({'type':'pong','t': msg.get('t')})})
+                    continue
                 if mtype == 'control':
                     cmd = msg.get('cmd')
                     if cmd == 'interrupt' and last_tid:

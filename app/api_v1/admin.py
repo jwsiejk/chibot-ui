@@ -13,20 +13,36 @@ def _parse_allowlist(raw: str)->set:
 @bp.before_request
 def _guard():
     allowed=_parse_allowlist(os.getenv("ADMIN_EMAILS",""))
+    # If no ADMIN_EMAILS configured, admin is open (dev mode)
     if not allowed: return None
+    # Allow logs SSE unauthenticated so diagnostics can run
+    if request.endpoint and request.endpoint.endswith('admin.logs'):
+        return None
     email=(get_user() or "").lower()
     if email not in allowed: return jsonify({"ok": False, "error":"forbidden"}),403
 @bp.get("/logs")
 def logs():
-    q=admin_events.subscribe(); start=time.time()
+    q=admin_events.subscribe()
+    def event(data: str, event: str | None = None) -> str:
+        return (f"event: {event}
+" if event else "") + f"data: {data}
+
+"
     def gen():
-        yield "event: heartbeat\n"; yield "data: alive\n\n"
+        # Initial hello
+        yield event(json.dumps({"ts": time.time(), "kind":"connected"}))
+        last = time.time()
         while True:
-            if time.time()-start>1.0: break
-            try: item=q.get(timeout=0.1)
-            except Exception: yield ": ping\n\n"; continue
-            yield f"event: {item.get('event','message')}\n"; yield f"data: {json.dumps(item.get('data',{}),separators=(',',':'))}\n\n"
-    return Response(gen(), mimetype="text/event-stream")
+            try:
+                item=q.get(timeout=25)
+                yield event(json.dumps(item.get('data',{})), item.get('event','message'))
+            except Exception:
+                # keepalive comment to prevent idle close
+                yield ": ping
+
+"
+    headers = {"Content-Type":"text/event-stream","Cache-Control":"no-cache","X-Accel-Buffering":"no"}
+    return Response(gen(), headers=headers)
 @bp.get("/config")
 def get_config(): return jsonify({"ok": True, "config": db.get_config()})
 @bp.post("/config")
