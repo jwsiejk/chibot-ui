@@ -14,11 +14,35 @@ function _rewriteV1(path) {
   let p = path.trim();
   if (!p) return p;
 
-  const lower = p.toLowerCase();
-  if (lower.startsWith("http://") || lower.startsWith("https://") ||
-      lower.startsWith("ws://")   || lower.startsWith("wss://")) {
-    return p;
-  }
+  // Normalize to pathname for checks
+  let base = p;
+  try {
+    const u = new URL(p, location.origin);
+    base = u.pathname;
+  } catch {}
+
+  const lower = base.toLowerCase();
+
+  // TTS & alias rewrites first (normalize to /api/v1/voice/*)
+  const ttsAliases = [
+    "/api/voice/tts-with-visemes",
+    "/api/voice/tts_with_visemes",
+    "/api/voice/tts",
+    "/api/voice/speak",
+    "/api/voice/eleven/tts",
+    "/api/voice/eleven/speak"
+  ];
+  if (ttsAliases.some(a => lower === a)) return "/api/v1/voice/tts-with-visemes";
+
+  // Avoid double-prefixing: if already versioned, leave it as-is
+  if (lower.startsWith("/api/v1/")) return p;
+  if (lower.startsWith("/ws/v1/"))  return p;
+
+  // General API & WS versioning
+  if (lower.startsWith("/api/")) return "/api/v1" + p.slice(4);
+  if (lower.startsWith("/ws/"))  return "/ws/v1"  + p.slice(3);
+  return p;
+}
 
   if (p.startsWith("/api/v1/") || p.startsWith("/ws/v1/")) return p;
 

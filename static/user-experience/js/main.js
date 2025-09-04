@@ -1,5 +1,5 @@
 
-// main.js — New API + awareness (HOTFIX v2: robust greet fallback with response.ok checks)
+// main.js — New API + awareness (STRICT v1 greet, no fallbacks)
 console.log("[AC][BOOT] main.js (new API + awareness) loaded");
 
 import { $, setToolbarHeightVar } from "./core/dom.js";
@@ -43,6 +43,16 @@ function initUI(){
 function armNudge(){ if (_nudgeArmed) return; _nudgeArmed=true; nudgeWasSent=false; _nudgeTimer=setTimeout(()=>{ _nudgeTimer=null; _nudgeArmed=false; nudgeWasSent=true; requestNudge('silence_timeout'); }, NUDGE_MS); }
 function cancelNudge(){ if (_nudgeTimer){ clearTimeout(_nudgeTimer); _nudgeTimer=null; } _nudgeArmed=false; }
 
+async function speak(text){
+  try {
+    await fetch("/api/v1/voice/tts-with-visemes", {
+      method:"POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text })
+    });
+  } catch {}
+}
+
 async function startSession(){
   await chatStart();
 
@@ -84,31 +94,22 @@ async function startSession(){
   attachSocket(ws);
   ws.addEventListener("message", handleVoiceOnceResponse);
   ws.addEventListener("open", async ()=>{
-    console.log("[AC] WS open → greeting");
-    let greeted = false;
-
-    // Try HTTP POST /api/v1/greet (and check status)
-    try {
-      const r = await fetch("/api/v1/greet", { method:"POST" });
-      if (r && r.ok) greeted = true;
-    } catch {}
-
-    // Fallback: GET /api/v1/greet (and check status)
-    if (!greeted) {
-      try {
-        const r2 = await fetch("/api/v1/greet");
-        if (r2 && r2.ok) greeted = true;
-      } catch {}
+    console.log("[AC] WS open → greeting (v1)");
+    // STRICT: GET /api/v1/greet only (no fallbacks)
+    const r = await fetch("/api/v1/greet", { method:"GET" });
+    if (!r.ok) {
+      console.error("[AC] /api/v1/greet failed:", r.status);
+      return; // strict: do not fallback
     }
-
-    // Fallback: WS control {cmd:'greet'}
-    if (!greeted) {
-      try { ws.send(JSON.stringify({ type:"control", cmd:"greet" })); greeted = true; } catch {}
-    }
-
-    // Final fallback: send a neutral user text that servers map to greet
-    if (!greeted) {
-      try { ws.send(JSON.stringify({ type:"user", mode:"text", text:"/greet" })); greeted = true; } catch {}
+    const data = await r.json().catch(()=>({}));
+    const greet = (data && (data.text || data.greet || data.message || data.reply || data.say)) || "";
+    if (greet) {
+      appendMessage({ role: "assistant", content: greet });
+      speak(greet); // use TTS REST to speak greeting
+      lastAssistantEnd = Date.now(); // start counting latency for awareness
+      armNudge();
+    } else {
+      console.warn("[AC] /api/v1/greet returned no text");
     }
   });
   ws.addEventListener("close", ()=>{ console.warn("[AC] WS closed"); });
