@@ -8,7 +8,8 @@ import json, os, time
 
 bp = Blueprint("admin", __name__)
 
-def _parse_allowlist(raw: str) -> set:
+
+def _parse_allowlist(raw: str) -> set[str]:
     raw = (raw or "").strip()
     if not raw:
         return set()
@@ -16,30 +17,36 @@ def _parse_allowlist(raw: str) -> set:
         raw = raw.replace(ch, ",")
     return {p.strip().lower() for p in raw.split(",") if p.strip()}
 
+
 @bp.before_request
 def _guard():
-    # Allow logs SSE unauthenticated so diagnostics/ops can see health
+    # Allow logs SSE unauthenticated so diagnostics/ops can see health.
+    # All other admin endpoints remain gated.
     if request.endpoint and request.endpoint.endswith("admin.logs"):
         return None
+
     allowed = _parse_allowlist(os.getenv("ADMIN_EMAILS", ""))
     # If no ADMIN_EMAILS configured, admin is open (dev mode)
     if not allowed:
         return None
+
     email = (get_user() or "").lower()
     if email not in allowed:
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
+
 @bp.get("/logs")
 def logs():
+    """Server-Sent Events stream for the Admin Log."""
     q = admin_events.subscribe()
 
-    def event(data: str, event: str | None = None) -> str:
-        # use literal \n, not raw newlines inside f-strings
-        prefix = f"event: {event}\n" if event else ""
+    def event(data: str, ev: str | None = None) -> str:
+        # IMPORTANT: use literal \n, not raw newlines inside the string
+        prefix = f"event: {ev}\n" if ev else ""
         return prefix + f"data: {data}\n\n"
 
     def gen():
-        # initial hello (clients PASS on first message)
+        # Initial hello (clients PASS on first message)
         yield event(json.dumps({"ts": time.time(), "kind": "connected"}))
         while True:
             try:
@@ -48,7 +55,7 @@ def logs():
                 ev = item.get("event", "message")
                 yield event(json.dumps(payload, separators=(",", ":")), ev)
             except Exception:
-                # keepalive comment prevents proxy idle close
+                # keepalive comment to prevent proxy idle close
                 yield ": ping\n\n"
 
     headers = {
@@ -58,9 +65,11 @@ def logs():
     }
     return Response(stream_with_context(gen()), headers=headers)
 
+
 @bp.get("/config")
 def get_config():
     return jsonify({"ok": True, "config": db.get_config()})
+
 
 @bp.post("/config")
 def post_config():
@@ -70,24 +79,31 @@ def post_config():
     admin_events.emit("config_updated", {"updates": data, "config": cfg})
     return jsonify({"ok": True, "config": cfg})
 
+
 @bp.get("/sessions")
 def list_sessions():
     out = []
     for sid, s in db.memory.get("sessions", {}).items():
-        out.append({
-            "id": sid,
-            "email": s.get("email", "user@example.com"),
-            "message_count": len(s.get("messages", [])),
-        })
+        out.append(
+            {
+                "id": sid,
+                "email": s.get("email", "user@example.com"),
+                "message_count": len(s.get("messages", [])),
+            }
+        )
     return jsonify({"ok": True, "sessions": out})
+
 
 @bp.get("/sessions/<sid>")
 def get_session(sid):
     return jsonify({"ok": True, "session_id": sid, "transcript": db.get_transcript(sid)})
 
+
 @bp.post("/storage/neon/snapshot")
 def storage_neon_snapshot():
+    # Uses the existing SQLite-based snapshot helper present in your repo
     from ..dal.neon_sqlite import connect, snapshot_memory
+
     path = os.getenv("PERSIST_SQLITE_PATH", "/mnt/data/ask_chip.sqlite")
     sess = (request.get_json(silent=True) or {}).get("session_id")
     conn = connect(path)
@@ -95,9 +111,11 @@ def storage_neon_snapshot():
     admin_log(f"Snapshot to {path}")
     return jsonify({"ok": True, "path": path})
 
+
 @bp.post("/storage/neon/restore")
 def storage_neon_restore():
     from ..dal.neon_sqlite import connect, restore_memory
+
     path = os.getenv("PERSIST_SQLITE_PATH", "/mnt/data/ask_chip.sqlite")
     sess = (request.get_json(silent=True) or {}).get("session_id")
     conn = connect(path)
