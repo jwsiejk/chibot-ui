@@ -1,5 +1,5 @@
 
-// main.js — New API + awareness (HOTFIX: request greet on WS open)
+// main.js — New API + awareness (HOTFIX v2: robust greet fallback with response.ok checks)
 console.log("[AC][BOOT] main.js (new API + awareness) loaded");
 
 import { $, setToolbarHeightVar } from "./core/dom.js";
@@ -85,15 +85,30 @@ async function startSession(){
   ws.addEventListener("message", handleVoiceOnceResponse);
   ws.addEventListener("open", async ()=>{
     console.log("[AC] WS open → greeting");
-    // 1) Try POST /api/v1/greet
+    let greeted = false;
+
+    // Try HTTP POST /api/v1/greet (and check status)
     try {
-      await fetch("/api/v1/greet", { method:"POST" });
-    } catch {
-      try { await fetch("/api/v1/greet"); }
-      catch {
-        // 2) Fallback: ask server via WS control
-        try { ws.send(JSON.stringify({ type:"control", cmd:"greet" })); } catch {}
-      }
+      const r = await fetch("/api/v1/greet", { method:"POST" });
+      if (r && r.ok) greeted = true;
+    } catch {}
+
+    // Fallback: GET /api/v1/greet (and check status)
+    if (!greeted) {
+      try {
+        const r2 = await fetch("/api/v1/greet");
+        if (r2 && r2.ok) greeted = true;
+      } catch {}
+    }
+
+    // Fallback: WS control {cmd:'greet'}
+    if (!greeted) {
+      try { ws.send(JSON.stringify({ type:"control", cmd:"greet" })); greeted = true; } catch {}
+    }
+
+    // Final fallback: send a neutral user text that servers map to greet
+    if (!greeted) {
+      try { ws.send(JSON.stringify({ type:"user", mode:"text", text:"/greet" })); greeted = true; } catch {}
     }
   });
   ws.addEventListener("close", ()=>{ console.warn("[AC] WS closed"); });
