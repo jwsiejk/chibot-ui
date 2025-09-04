@@ -1,0 +1,115 @@
+{
+  "configs": {
+    "csrf_enforced": false,
+    "profile_gate_enabled": false,
+    "suggestions_max_items": 4,
+    "suggestions_max_words": 7,
+    "nudge_delay_ms": 4200
+  },
+  "users": {},
+  "profiles": {},
+  "sessions": {
+    "p10s1": {
+      "email": "user@example.com",
+      "messages": [
+        [
+          "system",
+          "greet"
+        ]
+      ],
+      "nudges": 0,
+      "persona_id": "oak"
+    }
+  },
+  "emails": [],
+  "logs": [
+    {
+      "email": "jwsiejk@purestorage.com",
+      "role": "system",
+      "message": "Persona created: oak"
+    },
+    {
+      "email": "jwsiejk@purestorage.com",
+      "role": "system",
+      "message": "Persona oak imported v2"
+    },
+    {
+      "email": "jwsiejk@purestorage.com",
+      "role": "system",
+      "message": "Persona oak published v2"
+    },
+    {
+      "email": "system",
+      "role": "system",
+      "message": "Assigned persona oak to session p10s1"
+    }
+  ],
+  "layouts": {},
+  "personas": {
+    "chip": {
+      "owner_email": "system@local",
+      "active": true,
+      "published": {
+        "version": 1,
+        "config": {
+          "id": "chip",
+          "prompt": {
+            "system": "You are Chip"
+          }
+        },
+        "published_at": 1757005315.92858
+      },
+      "history": [
+        {
+          "version": 1,
+          "config": {
+            "id": "chip",
+            "prompt": {
+              "system": "You are Chip"
+            }
+          },
+          "created_at": 1757005315.9285817
+        }
+      ]
+    },
+    "oak": {
+      "owner_email": "jwsiejk@purestorage.com",
+      "active": true,
+      "published": {
+        "version": 2,
+        "config": {
+          "id": "oak",
+          "prompt": {
+            "system": "Oak v2 system"
+          }
+        },
+        "published_at": 1757005315.9338012
+      },
+      "history": [
+        {
+          "version": 1,
+          "config": {
+            "id": "oak",
+            "policy": {
+              "teacher_moves": true
+            },
+            "prompt": {
+              "system": "Oak v1 system"
+            }
+          },
+          "created_at": 1757005315.932442
+        },
+        {
+          "version": 2,
+          "config": {
+            "id": "oak",
+            "prompt": {
+              "system": "Oak v2 system"
+            }
+          },
+          "created_at": 1757005315.9332147
+        }
+      ]
+    }
+  }
+}
