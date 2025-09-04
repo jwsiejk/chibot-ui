@@ -1,5 +1,5 @@
 # app/__init__.py
-from flask import Flask, render_template
+from flask import Flask, render_template, request
 from .api_v1 import create_v1_blueprint
 from .middleware.csrf import csrf_before_request
 from .ws.chat_ws import register_ws_route
@@ -24,6 +24,9 @@ def create_app():
     # --- New: UI routes so / and /admin load pages instead of 404/500 ---
     @app.get("/")
     def index():
+        # Quick probe: ?raw=1 shows plain text so we can isolate template issues
+        if request.args.get("raw") == "1":
+            return "index-ok", 200, {"Content-Type": "text/plain; charset=utf-8"}
         return render_template("index.html")
 
     @app.get("/admin")
