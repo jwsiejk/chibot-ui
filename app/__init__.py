@@ -33,4 +33,8 @@ def create_app():
     def admin_ui():
         return render_template("admin.html")
 
+    @app.get("/diagnostics")
+    def diagnostics():
+        return render_template("diagnostics.html")
+
     return app
