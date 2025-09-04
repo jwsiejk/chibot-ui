@@ -1,2 +1,34 @@
-flask
-pytest
+# --- Web server / ASGI ---
+flask>=3.0.2
+gunicorn>=21.2.0
+uvicorn[standard]>=0.29.0   # brings websockets, httptools, uvloop, watchfiles
+asgiref>=3.8.1
+starlette>=0.37.2           # WS/SSE helpers + ASGI mounting around Flask
+
+# --- Database (Neon / Postgres) ---
+psycopg[binary]>=3.1.18     # pgcrypto/uuid-friendly; good on Render
+
+# --- HTTP clients (vendors & web calls) ---
+httpx>=0.27.0               # async+sync; use for OpenAI/ElevenLabs calls
+
+# --- Vendors ---
+openai>=1.30.0              # Chat Completions + Whisper
+elevenlabs>=1.6.1           # TTS + visemes client
+
+# --- CORS (off by default; enable via env/flag if UI/API split) ---
+Flask-Cors>=4.0.0
+
+# --- JSON / config utils ---
+orjson>=3.9.10              # fast JSON for logs/admin SSE payloads
+pydantic>=2.6.0             # request/response schemas (lightweight use)
+python-dotenv>=1.0.1        # local dev convenience; harmless on Render
+
+# --- Flask deps (pinned explicitly for stability) ---
+Jinja2>=3.1.3
+Werkzeug>=3.0.1
+itsdangerous>=2.1.2
+blinker>=1.7.0
+
+# --- Optional (safe to keep; remove if unused) ---
+sse-starlette>=1.6.1        # if you prefer Starlette-based SSE for /api/v1/admin/logs
+python-multipart>=0.0.9     # if you accept uploads on ASGI routes (not needed for Flask uploads)
