@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ask Chip — Diagnostics</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/diagnostics.css') }}">
+</head>
+<body>
+  <header>
+    <h1>Ask Chip — Diagnostics</h1>
+    <p>This page runs the v1 acceptance checks against your live app.</p>
+  </header>
+
+  <section id="summary" class="card">
+    <div id="overall" class="overall">Running checks…</div>
+  </section>
+
+  <section class="card">
+    <table id="results">
+      <thead>
+        <tr><th>#</th><th>Check</th><th>Status</th><th>Details</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Tips</h2>
+    <ul>
+      <li>Green = strict pass; Yellow = optional/warn; Red = fail.</li>
+      <li>Click the row to expand raw info.</li>
+    </ul>
+  </section>
+
+  <template id="row-tpl">
+    <tr class="row">
+      <td class="idx"></td>
+      <td class="name"></td>
+      <td class="status"></td>
+      <td class="details"></td>
+    </tr>
+  </template>
+
+  <script>
+    window.ASKCHIP = {
+      api: {
+        greet: "/api/v1/greet",
+        chat: "/api/v1/chat",
+        tts: "/api/v1/voice/tts-with-visemes",
+        logs: "/api/v1/admin/logs",
+        config: "/api/v1/admin/config"
+      },
+      ws: (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/v1/chat",
+      assets: {
+        chip: "{{ url_for('static', filename='chip/img/chip.png') }}",
+        visemeRest: "{{ url_for('static', filename='visemes/chip-3d-pack/rest.png') }}",
+        visemeAA: "{{ url_for('static', filename='visemes/chip-3d-pack/aa.png') }}",
+      }
+    };
+  </script>
+  <script defer src="{{ url_for('static', filename='js/diagnostics.js') }}"></script>
+</body>
+</html>
