@@ -9,7 +9,7 @@ class WhisperSTT:
 
     def transcribe(self, audio_bytes: bytes, *, language: str = "en") -> str:
         if not self.api_key:
-            return "transcription unavailable (missing OPENAI_API_KEY)"
+            raise RuntimeError("OPENAI_API_KEY is required for WhisperSTT")
         # multipart/form-data POST to OpenAI audio.transcriptions
         boundary = "----WebKitFormBoundary" + uuid.uuid4().hex
         def part(name, filename, content_type, data):
