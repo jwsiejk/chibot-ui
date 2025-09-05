@@ -1,9 +1,6 @@
 # app/asgi_gateway.py
 # Unified ASGI entrypoint that proxies HTTP to Flask (serves /static) and WS to our chat router.
 
-from typing import Callable, Awaitable
-import asyncio
-
 try:
     from asgiref.wsgi import WsgiToAsgi
 except Exception:
@@ -12,7 +9,7 @@ except Exception:
         async def __call__(self, scope, receive, send):
             raise RuntimeError("WsgiToAsgi shim used in test env")
 
-from . import create_app              # Flask WSGI app factory (serves templates + /static)
+from . import create_app                  # Flask WSGI app factory (serves templates + /static)
 from .asgi_router import asgi as ws_asgi  # WS router for /ws/v1/chat
 
 # Build once at import
