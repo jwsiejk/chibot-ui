@@ -313,3 +313,124 @@ window.addEventListener("DOMContentLoaded", () => {
     clearErr();
   } catch (e) { showErr(e.message || String(e)); }
 });
+
+
+
+// Phase1 patch: wire audio playback, visemes, and live apply signals
+import { ChunkedAudioPlayer } from './audio_player.js';
+import { VisemeAnimator } from './viseme_animator.js';
+
+window.__chip = window.__chip || {};
+
+(function() {
+  const audioEl = document.getElementById('chipAudio') || (function(){
+    const a = document.createElement('audio');
+    a.id = 'chipAudio';
+    a.autoplay = true;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    return a;
+  })();
+
+  const mouthEl = document.getElementById('chipMouth') || null;
+  const player = new ChunkedAudioPlayer(audioEl);
+  const visemes = new VisemeAnimator(mouthEl);
+
+  let ws = null;
+  let pendingVisemes = null;
+
+  function connectWS() {
+    if (ws && ws.readyState === WebSocket.OPEN) return ws;
+    const url = (window.CHAT_WS_URL || (location.origin.replace(/^http/,'ws') + '/ws/v1/chat'));
+    ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = () => console.log('[WS] open');
+    ws.onclose = () => console.log('[WS] close');
+    ws.onerror = (e) => console.error('[WS] error', e);
+    ws.onmessage = (ev) => {
+      if (typeof ev.data === 'string') {
+        try {
+          const msg = JSON.parse(ev.data);
+          handleMessage(msg);
+        } catch (e) {
+          console.warn('Non-JSON WS message', ev.data);
+        }
+      } else {
+        // If server sends raw binary frames, treat them as audio chunks
+        player.append(ev.data);
+      }
+    };
+    return ws;
+  }
+
+  function handleMessage(msg) {
+    switch (msg.type) {
+      case 'state':
+        if (msg.phase === 'assistant_speaking') {
+          player.start();
+          if (pendingVisemes) visemes.play(pendingVisemes, 0);
+        }
+        if (msg.phase === 'assistant_end') {
+          // end of turn
+          setTimeout(() => player.stop(), 50);
+          visemes.stop();
+        }
+        break;
+      case 'text':
+        // no-op here
+        break;
+      case 'audio_chunk':
+        player.append(base64ToArrayBuffer(msg.data));
+        break;
+      case 'visemes':
+        pendingVisemes = msg.items || msg.visemes || null;
+        break;
+      case 'end':
+        setTimeout(() => player.stop(), 50);
+        visemes.stop();
+        break;
+      case 'config_updated':
+        applyConfigToUI(msg.config || {});
+        break;
+      case 'layout_updated':
+        applyLayout(msg.layout || {});
+        break;
+      default:
+        // ignore
+        break;
+    }
+  }
+
+  function base64ToArrayBuffer(b64) {
+    const binary_string = window.atob(b64);
+    const len = binary_string.length;
+    const bytes = new Uint8Array(len);
+    for (let i=0; i<len; i++) bytes[i] = binary_string.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  function applyConfigToUI(cfg) {
+    // Minimal: show/hide instruction strip or dots if present
+    const strip = document.getElementById('instructionStrip');
+    if (strip && 'show_instruction_strip' in cfg) {
+      strip.style.display = cfg.show_instruction_strip ? '' : 'none';
+    }
+    const dots = document.getElementById('stateDots');
+    if (dots && 'show_state_dots' in cfg) {
+      dots.style.display = cfg.show_state_dots ? '' : 'none';
+    }
+    console.log('[Config] live applied', cfg);
+  }
+
+  function applyLayout(layout) {
+    // Placeholder: could set CSS vars or toggle classes
+    if (layout && layout.theme) document.documentElement.setAttribute('data-theme', layout.theme);
+    console.log('[Layout] live applied');
+  }
+
+  // Expose a start method if not already
+  window.__chip.ensureWS = connectWS;
+
+  // Auto-connect if Start button not required here; otherwise UI should call ensureWS on Start
+  setTimeout(connectWS, 0);
+})();
