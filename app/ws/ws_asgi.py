@@ -2,6 +2,7 @@
 import json, asyncio, urllib.parse
 from .bus import bus
 from ..services.streaming import make_assistant_frames
+from .barge import BargeState
 from .one_tab import acquire as _acquire, release as _release
 
 async def ws_chat(scope, receive, send):
@@ -13,6 +14,9 @@ async def ws_chat(scope, receive, send):
     session_id = (params.get("session_id", [None])[0]) or "default"
     tab_id = (params.get("tab", [None])[0]) or (params.get("tab_id", [None])[0]) or "default"
     _key = f"{session_id}:{tab_id}"
+    barge = BargeState()
+    paused = False
+
     last_tid = None
 
     # Accept
@@ -67,9 +71,28 @@ async def ws_chat(scope, receive, send):
 
                 if mtype == "control":
                     cmd = msg.get("cmd")
-                    if cmd == "interrupt" and last_tid:
-                        bus.cancel_turn(session_id, last_tid)
-                        await send({"type": "websocket.send", "text": json.dumps({"type": "state", "phase": "ready"})})
+                    if cmd == "barge_start":
+                        # Soft barge-in: pause, then confirm after confirm_ms
+                        confirm_ms = int((msg.get("confirm_ms") or 0) or int((__import__('app').db.db.get_config().get('confirm_ms', 420))))
+                        def _send_state(phase):
+                            asyncio.create_task(send({"type": "websocket.send", "text": json.dumps({"type":"state","phase": phase})}))
+                        def _on_commit():
+                            nonlocal last_tid
+                            if last_tid:
+                                bus.cancel_turn(session_id, last_tid)
+                        barge.start(confirm_ms=confirm_ms, on_commit=_on_commit, send_state=_send_state)
+                    elif cmd == "barge_cancel":
+                        def _send_state(phase):
+                            asyncio.create_task(send({"type": "websocket.send", "text": json.dumps({"type":"state","phase": phase})}))
+                        barge.cancel(send_state=_send_state)
+                    elif cmd in ("barge_commit", "interrupt", "esc"):
+                        def _send_state(phase):
+                            asyncio.create_task(send({"type": "websocket.send", "text": json.dumps({"type":"state","phase": phase})}))
+                        def _on_commit():
+                            nonlocal last_tid
+                            if last_tid:
+                                bus.cancel_turn(session_id, last_tid)
+                        barge.commit(send_state=_send_state)
                     elif cmd == "nudge":
                         # server synthesizes a short nudge reply
                         _, frames = make_assistant_frames("Still with me? Want a quick recap?")

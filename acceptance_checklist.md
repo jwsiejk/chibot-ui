@@ -26,3 +26,21 @@
 ## Nudges & suggestions policy
 - [ ] Server arms a deterministic nudge (~4200 ms by default) after `assistant_end` (or equivalent), with backoff/limit driven by config.
 - [ ] Nudge is canceled on new user input (chat or voice).
+
+---
+
+# Phase 3 — Acceptance Checklist
+
+## Barge-in (complete)
+- [ ] WS supports soft barge-in: pause on barge_start, confirm after ~confirm_ms (default 420 ms), then commit (interrupt) unless canceled.
+- [ ] 'interrupt' (ESC) commits immediately (no confirm delay).
+- [ ] While paused, audio chunks are not forwarded to the client.
+
+## Acceptance wiring (“email transcript on End”)
+- [ ] `POST /api/v1/chat` with `{"cmd":"end_session"}` emails transcript (mock/record).
+
+## Nudges & suggestions policy
+- [ ] Nudge arming occurs deterministically after assistant_end, and is canceled by user input.
+
+## Rate limits & “one WS per tab”
+- [ ] Guard remains in place; acquiring the same (session_id, tab_id) twice fails until released.
