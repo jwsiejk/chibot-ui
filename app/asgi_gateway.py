@@ -1,48 +1,29 @@
 # app/asgi_gateway.py
-# Phase1 patch: optional asgiref
+# Unified ASGI entrypoint that proxies HTTP to Flask (serves /static) and WS to our chat router.
+
+from typing import Callable, Awaitable
+import asyncio
+
 try:
     from asgiref.wsgi import WsgiToAsgi
 except Exception:
     class WsgiToAsgi:
-        def __init__(self, app):
-            self.app = app
-        def __call__(self, scope, receive, send):
-            raise RuntimeError('WsgiToAsgi shim used in test env')
+        def __init__(self, app): self.app = app
+        async def __call__(self, scope, receive, send):
+            raise RuntimeError("WsgiToAsgi shim used in test env")
 
+from . import create_app              # Flask WSGI app factory (serves templates + /static)
+from .asgi_router import asgi as ws_asgi  # WS router for /ws/v1/chat
 
-from . import create_app            # your Flask factory (WSGI)
-from .asgi_router import asgi as ws # your ASGI WS router (/ws/v1/chat)
-
-# Build the WSGI Flask app and wrap it for ASGI
-_flask = create_app()
-# Phase1 expose Flask app for tests
-app = _flask
-flask_app = _flask
-_wsgi_asgi = WsgiToAsgi(_flask)
+# Build once at import
+_wsgi_app = create_app()
+_asgi_wsgi = WsgiToAsgi(_wsgi_app)
 
 async def asgi(scope, receive, send):
     typ = scope.get("type")
     if typ == "websocket":
-        # All WS (e.g., /ws/v1/chat) are handled by the ASGI router
-        return await ws(scope, receive, send)
-
-    if typ == "lifespan":
-        # Minimal lifespan support so Uvicorn is happy
-        while True:
-            msg = await receive()
-            if msg["type"] == "lifespan.startup":
-                await send({"type": "lifespan.startup.complete"})
-            elif msg["type"] == "lifespan.shutdown":
-                await send({"type": "lifespan.shutdown.complete"})
-                break
+        # WS goes to our chat ASGI
+        await ws_asgi(scope, receive, send)
         return
-
-    # Everything else (HTTP) goes to the WSGI-wrapped Flask app
-    return await _wsgi_asgi(scope, receive, send)
-
-# Auto-registered by Phase1 patch
-try:
-    from app.routes.voice import bp_voice
-    app.register_blueprint(bp_voice)
-except Exception as _e:
-    print('Phase1: could not register voice blueprint', _e)
+    # Everything else (HTTP, lifespan) goes to Flask WSGI wrapped for ASGI
+    await _asgi_wsgi(scope, receive, send)
