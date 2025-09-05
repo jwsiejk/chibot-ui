@@ -14,8 +14,8 @@ os.environ.setdefault("EMAIL_HOST_USER","user")
 os.environ.setdefault("EMAIL_HOST_PASSWORD","pass")
 os.environ.setdefault("FROM_EMAIL","chip@example.com")
 
-# Monkeypatch urllib.request.urlopen to avoid real network, but keep real provider logic
-import urllib.request, json as _json
+# # Monkeypatch urllib.request.urlopen to avoid real network, but keep real provider logic
+import urllib.request, json as _json, base64 as _b64
 
 class _FakeResp:
     def __init__(self, data: bytes): self._d = data
@@ -27,21 +27,28 @@ _real_urlopen = urllib.request.urlopen
 
 def _fake_urlopen(req, timeout=30):
     url = req.full_url if hasattr(req, "full_url") else str(req)
-    if "/v1/chat/completions" in url:
+    # OpenAI chat completions
+    if "/v1/chat/completions" in url or "chat/completions" in url:
         payload = {"choices":[{"message":{"content":"Test OK"}}]}
         return _FakeResp(_json.dumps(payload).encode("utf-8"))
-    if "api.elevenlabs.io" in url or "api.elevenlabs" in url:
-        # Return fake MP3 bytes
-        return _FakeResp(b"FAKE_MP3_DATA")
+    # ElevenLabs alignment
+    if url.endswith("/alignment"):
+        payload = {"phonemes":[
+            {"start_ms":0,"phoneme":"HH"},
+            {"start_ms":120,"phoneme":"EH"},
+            {"start_ms":260,"phoneme":"L"}
+        ]}
+        return _FakeResp(_json.dumps(payload).encode("utf-8"))
+    # ElevenLabs TTS audio endpoint → return small MP3-ish bytes
+    if "/text-to-speech/" in url and "/alignment" not in url:
+        return _FakeResp(b"FAKE_MP3_DATA_BYTES")
+    # Whisper STT
     if "/v1/audio/transcriptions" in url:
         payload = {"text":"hello world"}
         return _FakeResp(_json.dumps(payload).encode("utf-8"))
-    # default minimal
     return _FakeResp(b"{}")
 
 urllib.request.urlopen = _fake_urlopen
-
-# Monkeypatch smtplib.SMTP to avoid real email
 import smtplib
 class _FakeSMTP:
     def __init__(self, host, port): self.host, self.port = host, port
@@ -51,6 +58,10 @@ class _FakeSMTP:
     def quit(self): pass
 smtplib.SMTP = _FakeSMTP
 
+os.environ.setdefault("RATE_LIMIT_WINDOW_S","0.05")
+os.environ.setdefault("RATE_LIMIT_MAX","100")
+os.environ.setdefault("RATE_LIMIT_WINDOW_S","0.05")
+os.environ.setdefault("RATE_LIMIT_MAX","100")
 import app
 app_ = app.create_app()
 client = app_.test_client()

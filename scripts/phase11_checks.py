@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import os, sys, json, base64
 sys.path.insert(0, ".")
+os.environ.setdefault("RATE_LIMIT_WINDOW_S","0.05")
+os.environ.setdefault("RATE_LIMIT_MAX","100")
 import app
 
 # Provide vendor envs for provider init

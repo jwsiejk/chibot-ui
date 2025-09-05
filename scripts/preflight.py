@@ -34,6 +34,10 @@ def run(cmd):
     return p
 
 def main():
+    import os
+    os.environ.setdefault("RATE_LIMIT_WINDOW_S","0.05")
+    os.environ.setdefault("RATE_LIMIT_MAX","100")
+
     results = {"steps":[]}
     rc = 0
     stages = [
