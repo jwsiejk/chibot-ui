@@ -44,3 +44,24 @@
 
 ## Rate limits & “one WS per tab”
 - [ ] Guard remains in place; acquiring the same (session_id, tab_id) twice fails until released.
+
+---
+
+# Phase 4 — Acceptance Checklist
+
+## Neon persistence
+- [ ] With DATABASE_URL set (sqlite in tests), config, layouts, profiles, sessions/messages persist across a reload.
+- [ ] db layer reads/writes through DAL; changes survive reset.
+
+## Admin – Users & Memory
+- [ ] Endpoints list/search users; list sessions; get session detail; export/email transcript; anonymize/delete.
+
+## Admin – Layout editor (advanced)
+- [ ] Publish per-breakpoint layouts with version increment.
+- [ ] List versions and rollback to a prior version.
+
+## Admin – Config (full surface)
+- [ ] Config writes are versioned and persisted; `config_updated` events fire to subscribers.
+
+## Profile gate / Auth
+- [ ] First-time profile detection and save path work via API; persisted in DB.

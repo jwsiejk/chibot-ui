@@ -2,161 +2,146 @@
 from flask import Blueprint, jsonify, request, Response, stream_with_context
 from ..db import db
 from ..security_state import get_user
-from ..admin_events import admin_events
-from ..logging import admin_log
+from ..services import config_store
+from ..services.mailer import send_transcript
 import json, os, time
 
-# Optional Neon adapter (persists layouts/config if DATABASE_URL is set)
+# DAL
+NEON_OK = False
 try:
-    from ..dal import neon_pg  # add file if you haven't (see earlier message)
+    from ..dal import neon_pg
     NEON_OK = neon_pg.ensure_schema()
 except Exception:
     NEON_OK = False
 
 bp = Blueprint("admin", __name__)
 
-def _parse_allowlist(raw: str) -> set[str]:
-    raw = (raw or "").strip()
-    if not raw: return set()
-    for ch in (";", " "): raw = raw.replace(ch, ",")
-    return {p.strip().lower() for p in raw.split(",") if p.strip()}
-
-def _layouts_mem():
-    return db.memory.setdefault("layouts", {})  # {"draft": {...}, "published": {...}}
-
-def _default_layout():
-    cfg = db.get_config()
-    return {
-        "mode": "grid",                          # "grid" or "free"
-        "stage_side": "left",
-        "show_instruction_strip": bool(cfg.get("show_instruction_strip", True)),
-        "show_state_dots": bool(cfg.get("show_state_dots", True)),
-        # in "free" mode we'll also store: "nodes": { key: {x,y,w,h} } (percentages)
-    }
-
-@bp.before_request
-def _guard():
-    # Logs SSE is readable so operators/diagnostics can see health
-    if request.endpoint and request.endpoint.endswith("admin.logs"):
-        return None
-    allowed = _parse_allowlist(os.getenv("ADMIN_EMAILS", ""))
-    if not allowed:  # dev mode
-        return None
-    email = (get_user() or "").lower()
-    if email not in allowed:
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-
-# ---------- Live Logs (SSE) ----------
-@bp.get("/logs")
-def logs():
-    q = admin_events.subscribe()
-    def event(data: str, ev: str | None = None) -> str:
-        prefix = f"event: {ev}\n" if ev else ""
-        return prefix + f"data: {data}\n\n"
-    def gen():
-        yield event(json.dumps({"ts": time.time(), "kind": "connected"}))
-        while True:
-            try:
-                item = q.get(timeout=25)
-                payload = item.get("data", {})
-                ev = item.get("event", "message")
-                yield event(json.dumps(payload, separators=(",", ":")), ev)
-            except Exception:
-                yield ": ping\n\n"
-    headers = {"Content-Type":"text/event-stream","Cache-Control":"no-cache","X-Accel-Buffering":"no"}
-    return Response(stream_with_context(gen()), headers=headers)
-
-# ---------- Config (unchanged) ----------
+# --- Config ---
 @bp.get("/config")
-def get_config():
-    if NEON_OK:
-        got = neon_pg.config_get()
-        if got is not None:
-            return jsonify({"ok": True, "config": got})
-    return jsonify({"ok": True, "config": db.get_config()})
+def cfg_get():
+    cfg = db.get_config()
+    ver = 0
+    try:
+        ver = config_store.get_config_version()
+    except Exception:
+        pass
+    return jsonify({"ok": True, "config": cfg, "version": ver})
 
-@bp.post("/config")
-def post_config():
+@bp.post("/config/update")
+def cfg_update():
     data = request.get_json(silent=True) or {}
-    if NEON_OK:
-        cfg = neon_pg.config_set(data, updated_by=get_user() or "admin")
-    else:
-        cfg = db.update_config(data)
-    admin_log(f"Config updated: {list(data.keys())}")
-    admin_events.emit("config_updated", {"updates": data, "config": cfg})
-    return jsonify({"ok": True, "config": cfg})
+    updates = data.get("updates") or {}
+    cfg = config_store.update_config(updates)
+    ver = 0
+    try:
+        ver = config_store.get_config_version()
+    except Exception:
+        pass
+    return jsonify({"ok": True, "config": cfg, "version": ver})
 
-# ---------- Layouts: GET/POST full JSON (grid or free with nodes) ----------
+# --- Layouts with versioning ---
+@bp.post("/layouts/publish")
+def layouts_publish():
+    data = request.get_json(silent=True) or {}
+    bp_name = data.get("breakpoint") or "desktop"
+    state = data.get("state") or {}
+    note = data.get("note") or ""
+    if os.environ.get("DATABASE_URL") and NEON_OK:
+        v = neon_pg.save_layout(bp_name, state, note)
+        db.memory.setdefault('layouts', {})[bp_name] = {"version": v, "state": state}
+        return jsonify({"ok": True, "breakpoint": bp_name, "version": v})
+    # in-memory fallback
+    cur = db.memory.setdefault('layouts', {}).setdefault(bp_name, {"version": 0, "state": {}})
+    cur["version"] += 1; cur["state"] = state
+    return jsonify({"ok": True, "breakpoint": bp_name, "version": cur["version"]})
+
 @bp.get("/layouts")
-def get_layout():
-    variant = (request.args.get("variant") or "published").lower()
-    breakpoint = request.args.get("breakpoint") or "desktop"
-    if NEON_OK:
-        got = neon_pg.layout_get(variant, breakpoint)
-        if got:
-            return jsonify({"ok": True, "variant": variant, "breakpoint": breakpoint, **got})
-    # memory fallback
-    store = _layouts_mem()
-    entry = (store.get(variant) or {}).get(breakpoint)
-    if not entry:
-        entry = {"version": 1, "updated_by": get_user() or "system", "updated_at": time.time(), "layout": _default_layout()}
-    return jsonify({"ok": True, "variant": variant, "breakpoint": breakpoint, **entry})
+def layouts_list():
+    bp_name = request.args.get("breakpoint") or "desktop"
+    if os.environ.get("DATABASE_URL") and NEON_OK:
+        items = neon_pg.list_layouts(bp_name)
+        return jsonify({"ok": True, "items": items})
+    cur = db.memory.get('layouts', {}).get(bp_name)
+    items = []
+    if cur:
+        items.append({"version": cur["version"], "state": cur["state"], "note":"mem", "created_at":time.time()})
+    return jsonify({"ok": True, "items": items})
 
-@bp.post("/layouts")
-def set_layout():
+@bp.post("/layouts/rollback")
+def layouts_rollback():
     data = request.get_json(silent=True) or {}
-    variant = (data.get("variant") or "draft").lower()
-    breakpoint = data.get("breakpoint") or "desktop"
-    layout_in = data.get("layout") or {}
-    # merge over defaults so we never lose required flags
-    merged = {**_default_layout(), **layout_in}
+    bp_name = data.get("breakpoint") or "desktop"
+    version = int(data.get("version") or 1)
+    if os.environ.get("DATABASE_URL") and NEON_OK:
+        state = neon_pg.get_layout(bp_name, version) or {}
+        v = neon_pg.save_layout(bp_name, state, f"rollback to {version}")
+        db.memory.setdefault('layouts', {})[bp_name] = {"version": v, "state": state}
+        return jsonify({"ok": True, "breakpoint": bp_name, "version": v, "state": state})
+    cur = db.memory.setdefault('layouts', {}).setdefault(bp_name, {"version":0, "state":{}})
+    cur["version"] += 1
+    return jsonify({"ok": True, "breakpoint": bp_name, "version": cur["version"], "state": cur["state"]})
 
-    if NEON_OK:
-        saved = neon_pg.layout_set(variant, breakpoint, merged, updated_by=get_user() or "admin")
-        if saved and variant == "published":
-            admin_events.emit("layout_updated", {"variant": variant, "breakpoint": breakpoint, "entry": saved})
-        return jsonify({"ok": True, "variant": variant, "breakpoint": breakpoint, "version": saved["version"]})
+# --- Users & Memory ---
+@bp.get("/users")
+def users():
+    items = []
+    if os.environ.get("DATABASE_URL") and NEON_OK:
+        items = neon_pg.list_users()
+        if not items:
+            # derive from sessions
+            sess = neon_pg.list_sessions()
+            seen = {}
+            for s in sess:
+                em = s.get("email") or "user@example.com"
+                if em not in seen:
+                    seen[em] = {"email": em, "created_at": time.time(), "last_seen": time.time()}
+            items = list(seen.values())
+    else:
+        items = [{"email": e, "created_at": time.time(), "last_seen": time.time()} for e in db.memory.get('users',{}).keys()]
+    return jsonify({"ok": True, "items": items})
 
-    # memory fallback
-    store = _layouts_mem()
-    prev = (store.get(variant) or {}).get(breakpoint) or {"version": 0}
-    entry = {
-        "version": int(prev["version"]) + 1,
-        "updated_by": get_user() or "admin",
-        "updated_at": time.time(),
-        "layout": merged,
-    }
-    store.setdefault(variant, {})[breakpoint] = entry
-    if variant == "published":
-        admin_events.emit("layout_updated", {"variant": variant, "breakpoint": breakpoint, "entry": entry})
-    return jsonify({"ok": True, "variant": variant, "breakpoint": breakpoint, "version": entry["version"]})
-
-# ---------- Sessions / Snapshot (unchanged) ----------
 @bp.get("/sessions")
-def list_sessions():
-    out = []
-    for sid, s in db.memory.get("sessions", {}).items():
-        out.append({"id": sid, "email": s.get("email", "user@example.com"), "message_count": len(s.get("messages", []))})
-    return jsonify({"ok": True, "sessions": out})
+def sessions_list():
+    email = request.args.get("user")
+    if os.environ.get("DATABASE_URL") and NEON_OK:
+        items = neon_pg.list_sessions(email=email)
+        try:
+            all_items = neon_pg.list_sessions(email=None)
+            ids = {s['id'] for s in items}
+            for s in all_items:
+                if s['id'] not in ids:
+                    items.append(s)
+        except Exception:
+            pass
+    else:
+        items = [{"id": sid, "email": s.get("email","user@example.com"), "persona_id": s.get("persona_id","chip"),
+                  "started_at": time.time(), "ended_at": None, "summary": {}} for sid,s in db.memory.get('sessions',{}).items()]
+    return jsonify({"ok": True, "items": items})
 
-@bp.get("/sessions/<sid>")
-def get_session(sid):
-    return jsonify({"ok": True, "session_id": sid, "transcript": db.get_transcript(sid)})
+@bp.get("/session/<sid>")
+def session_detail(sid):
+    # transcript
+    if os.environ.get("DATABASE_URL") and NEON_OK:
+        msgs = neon_pg.list_messages(sid)
+        transcript = "\n".join([f"{m['role'].upper()}: {m['text']}" for m in msgs])
+    else:
+        msgs = db.memory.get('sessions',{}).get(sid,{}).get('messages',[])
+        transcript = "\n".join([f"{r.upper()}: {t}" for r,t in msgs])
+    return jsonify({"ok": True, "transcript": transcript, "count": len(msgs)})
 
-@bp.post("/storage/neon/snapshot")
-def storage_neon_snapshot():
-    from ..dal.neon_sqlite import connect, snapshot_memory
-    path = os.getenv("PERSIST_SQLITE_PATH", "/mnt/data/ask_chip.sqlite")
-    sess = (request.get_json(silent=True) or {}).get("session_id")
-    conn = connect(path); snapshot_memory(conn, db.memory, session_id=sess)
-    admin_log(f"Snapshot to {path}")
-    return jsonify({"ok": True, "path": path})
+@bp.post("/session/<sid>/email")
+def session_email(sid):
+    to = (request.get_json(silent=True) or {}).get("to") or get_user()
+    body = db.get_transcript(sid)
+    send_transcript(to, f"Ask Chip transcript: {sid}", body)
+    return jsonify({"ok": True, "emailed": True})
 
-@bp.post("/storage/neon/restore")
-def storage_neon_restore():
-    from ..dal.neon_sqlite import connect, restore_memory
-    path = os.getenv("PERSIST_SQLITE_PATH", "/mnt/data/ask_chip.sqlite")
-    sess = (request.get_json(silent=True) or {}).get("session_id")
-    conn = connect(path); restore_memory(conn, db.memory, session_id=sess)
-    admin_log(f"Restore from {path}")
-    return jsonify({"ok": True, "path": path})
+@bp.post("/session/<sid>/anonymize")
+def session_anonymize(sid):
+    if os.environ.get("DATABASE_URL") and NEON_OK:
+        neon_pg.anonymize_session(sid)
+    else:
+        s = db.memory.get('sessions',{}).get(sid)
+        if s:
+            s['email'] = 'anonymized@example.com'
+    return jsonify({"ok": True})

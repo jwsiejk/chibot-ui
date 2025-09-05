@@ -2,12 +2,25 @@ from flask import Blueprint, jsonify, request
 from ..db import db
 from ..security_state import get_user
 bp = Blueprint("profile", __name__)
-@bp.get("")
-def get_profile():
-    email = get_user(); prof = db.memory['profiles'].get(email)
-    return jsonify({"ok": True, "has_profile": bool(prof), "profile": prof or None})
-@bp.post("")
-def set_profile():
-    email = get_user(); data=request.get_json(silent=True) or {}
-    prof = {"name": data.get("name","User"), "title": data.get("title","Engineer"), "region": data.get("region","NA")}
-    db.memory['profiles'][email]=prof; return jsonify({"ok": True, "profile": prof})
+
+@bp.get("/get")
+def profile_get():
+    email = get_user() or "user@example.com"
+    prof = db.memory.get('profiles',{}).get(email)
+    exists = bool(prof)
+    return jsonify({"ok": True, "exists": exists, "profile": prof or {}})
+
+@bp.post("/save")
+def profile_save():
+    email = get_user() or "user@example.com"
+    data = request.get_json(silent=True) or {}
+    db.memory.setdefault('profiles',{})[email] = data
+    try:
+        import os
+        if os.environ.get("DATABASE_URL"):
+            from ..dal import neon_pg
+            neon_pg.ensure_schema(); neon_pg.upsert_user(email, data.get("name"), data.get("title"), data.get("region"))
+            neon_pg.save_profile(email, data)
+    except Exception:
+        pass
+    return jsonify({"ok": True})

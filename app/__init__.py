@@ -14,6 +14,13 @@ def create_app():
     app.secret_key = "test-secret"
 
     # v1-only API
+    try:
+        import os
+        if os.environ.get('DATABASE_URL'):
+            from .dal import neon_pg
+            neon_pg.ensure_schema()
+    except Exception:
+        pass
     rate_limit_register(app)
     app.register_blueprint(create_v1_blueprint(), url_prefix="/api/v1")
 
