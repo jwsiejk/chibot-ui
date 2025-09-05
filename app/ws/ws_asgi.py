@@ -14,15 +14,9 @@ def _normalize_frame(fr: dict) -> dict:
     try:
         t = fr.get("type")
         if t == "text":
-            out = dict(fr)
-            out["type"] = "assistant_chunk"
-            if "content" in out and "text" not in out:
-                out["text"] = out.pop("content")
-            return out
+            out = dict(fr); out["type"] = "assistant_chunk"; out["text"] = out.get("content","" ); out.pop("content", None); return out
         if t == "end":
-            out = dict(fr)
-            out["type"] = "assistant_end"
-            return out
+            out = dict(fr); out["type"] = "assistant_end"; return out
         return fr
     except Exception:
         return fr

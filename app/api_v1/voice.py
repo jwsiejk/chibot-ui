@@ -1,6 +1,7 @@
+import base64
 import io
 from flask import Blueprint, jsonify, request
-from ..services.mock_stt import transcribe
+from ..services.stt_provider import get_stt_provider
 from ..services.streaming import make_assistant_frames, schedule_frames
 from ..db import db
 from ..middleware.rate_limit import check_now
@@ -22,7 +23,7 @@ def stt():
     except Exception:
         pass
     email=get_user(); db.ensure_session(sid, email); db.add_message(sid,"user",text)
-    tid, frames = make_assistant_frames(text or "voice"); schedule_frames(sid, frames)
+    tid, frames = make_assistant_frames(text or "voice", sid); schedule_frames(sid, frames)
     try:
         from ..policy.nudges import cancel_nudge
         cancel_nudge(sid)
@@ -32,9 +33,9 @@ def stt():
 @limit("voice_tts")
 @bp.post("/tts-with-visemes")
 def tts_with_visemes():
-    from ..services.mock_tts import synth
+    from ..services.tts_provider import get_tts_provider
     data=request.get_json(silent=True) or {}; text=(data.get("text") or "").strip()
-    a,v=synth(text)
+    cfg=db.get_config(); a_bytes, v = get_tts_provider(cfg).synth(text); a = base64.b64encode(a_bytes).decode('ascii')
     try:
         _emit('tts', chars=len(text))
     except Exception:

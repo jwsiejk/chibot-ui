@@ -1,22 +1,29 @@
 from typing import List, Dict, Tuple
-from .mock_llm import new_turn_id, generate_reply
+from .llm_provider import get_provider
 from .mock_tts import synth
 from .suggestions import hygienic_suggestions
 import threading, time
 from ..ws.bus import bus
 
-def make_assistant_frames(seed_text: str) -> Tuple[str, List[Dict]]:
-    tid = new_turn_id()
-    reply = generate_reply(seed_text)
+def make_assistant_frames(seed_text: str, session_id: str | None = None, meta: dict | None = None) -> Tuple[str, List[Dict]]:
+    from ..db import db
+cfg = db.get_config()
+provider = get_provider(cfg)
+tid = provider.new_turn_id()
+from .awareness import annotate
+ann = annotate((seed_text or ''), (meta or {}))
+persona_id = db.memory.get('sessions',{}).get(session_id or 'default',{}).get('persona_id','chip')
+persona = db.memory.get('personas',{}).get(persona_id, {'id':'chip'})
+reply = provider.generate_reply(seed_text or 'Hello', persona=persona, teacher_move=ann.get('teacher_move'), context={'session_id': session_id})
     audio_b64, _ = synth(reply)
     chunks = [audio_b64[i:i+8] for i in range(0, len(audio_b64), 8)][:3]
     frames: List[Dict] = []
     frames.append({"type":"state","phase":"assistant_speaking","turn_id":tid})
-    frames.append({"type":"text","role":"assistant","turn_id":tid,"content":reply})
+    frames.append({"type":"assistant_chunk","turn_id":tid,"text":reply})
     for c in chunks:
         frames.append({"type":"audio_chunk","turn_id":tid,"codec":"audio/webm;codecs=opus","data":c})
     frames.append({"type":"suggestions","turn_id":tid,"items": hygienic_suggestions()})
-    frames.append({"type":"end","turn_id":tid})
+    frames.append({"type":"assistant_end","turn_id":tid})
     frames.append({"type":"state","phase":"ready"})
     return tid, frames
 

@@ -1,3 +1,4 @@
+import base64
 from flask import Blueprint, jsonify, request
 from ..db import db
 from ..security_state import get_user
@@ -37,5 +38,21 @@ def chat():
             cancel_nudge(sid)
         except Exception:
             pass
-    tid, frames = make_assistant_frames(text or "chat"); schedule_frames(sid, frames)
+    tid, frames = make_assistant_frames((text or "chat"), sid); schedule_frames(sid, frames)
     return jsonify({"ok": True, "turn_id": tid})
+
+
+@limit("voice_tts")
+@bp.post("/tts-with-visemes")
+def tts_with_visemes():
+    from ..services.tts_provider import get_tts_provider
+    data=request.get_json(silent=True) or {}; text=(data.get("text") or "").strip()
+    cfg = db.get_config()
+    a_bytes, v = get_tts_provider(cfg).synth(text)
+    a = base64.b64encode(a_bytes).decode("ascii")
+    try:
+        from ..api_v1.admin import _emit
+        _emit('tts', chars=len(text))
+    except Exception:
+        pass
+    return jsonify({"ok": True, "audio_b64": a, "visemes": v})

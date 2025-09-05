@@ -13,7 +13,7 @@ class DB:
                 'confirm_ms':420,'echo_threshold_boost':1.9,'min_speech_ms':220,'voice_command_hints':True,
                 'language_lock':'en','max_turn_seconds':90,'normalization_table_version':1,
                 'nebraska_persona_level':0.13,'nebraska_quotes_enabled':True,
-                'ws_ping_interval_ms':25000,'ws_idle_timeout_ms':30000,'reconnect_policy':'1_attempt_5s',
+                'ws_ping_interval_ms':25000,'ws_idle_timeout_ms':30000,'reconnect_policy':'1_attempt_5s','llm_provider':'mock','openai_model':'gpt-4o-mini','stt_provider':'mock','tts_provider':'mock',
                 'redact_email_in_logs':True
             },
             'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{}
