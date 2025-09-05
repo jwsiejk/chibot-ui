@@ -2,6 +2,7 @@
 import json, asyncio, urllib.parse
 from .bus import bus
 from ..services.streaming import make_assistant_frames
+from .one_tab import acquire as _acquire, release as _release
 
 async def ws_chat(scope, receive, send):
     assert scope["type"] == "websocket"
@@ -10,10 +11,16 @@ async def ws_chat(scope, receive, send):
     qs = scope.get("query_string", b"").decode("utf-8")
     params = urllib.parse.parse_qs(qs)
     session_id = (params.get("session_id", [None])[0]) or "default"
+    tab_id = (params.get("tab", [None])[0]) or (params.get("tab_id", [None])[0]) or "default"
+    _key = f"{session_id}:{tab_id}"
     last_tid = None
 
     # Accept
     await send({"type": "websocket.accept"})
+    # One-WS-per-tab guard
+    if not _acquire(_key):
+        await send({"type":"websocket.close","code":4001})
+        return
     # Initial ready state
     await send({"type": "websocket.send", "text": json.dumps({"type": "state", "phase": "ready"})})
 
@@ -72,6 +79,11 @@ async def ws_chat(scope, receive, send):
                             await send({"type": "websocket.send", "text": json.dumps(fr, separators=(",", ":"))})
 
                 elif mtype == "user_text":
+                    try:
+                        from ..policy.nudges import cancel_nudge
+                        cancel_nudge(session_id)
+                    except Exception:
+                        pass
                     _, frames = make_assistant_frames(msg.get("text") or "")
                     for fr in frames:
                         if fr.get("type") == "text":
@@ -80,5 +92,9 @@ async def ws_chat(scope, receive, send):
     finally:
         try:
             forward_task.cancel()
+        except Exception:
+            pass
+        try:
+            _release(_key)
         except Exception:
             pass

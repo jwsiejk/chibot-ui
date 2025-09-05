@@ -11,3 +11,18 @@
 - [ ] `/api/v1/voice/tts-with-visemes` route exists and returns `{ok, audio_b64, visemes}`.
 - [ ] Vendor wiring includes real providers (Whisper STT, ElevenLabs TTS) behind env toggles; default to mocks in tests.
 - [ ] No external network is invoked during tests.
+
+---
+
+# Phase 2 — Acceptance Checklist
+
+## Rate limits & one-WS-per-tab
+- [ ] Requests to `/api/v1/chat` and `/api/v1/voice/stt` are rate-limited (429 on overflow).
+- [ ] ASGI WS `/ws/v1/chat` rejects a second connection for the same (session_id, tab_id).
+
+## Acceptance wiring (“email transcript on End”)
+- [ ] `POST /api/v1/chat` with `{"cmd":"end_session"}` triggers transcript email (mocked) and returns `{ ok: true, emailed: true }`.
+
+## Nudges & suggestions policy
+- [ ] Server arms a deterministic nudge (~4200 ms by default) after `assistant_end` (or equivalent), with backoff/limit driven by config.
+- [ ] Nudge is canceled on new user input (chat or voice).

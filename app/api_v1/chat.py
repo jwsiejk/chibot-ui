@@ -1,10 +1,17 @@
 from flask import Blueprint, jsonify, request
 from ..db import db
 from ..security_state import get_user
-from ..services.mock_emailer import send_transcript
+from ..services.mailer import send_transcript
 from ..services.streaming import make_assistant_frames, schedule_frames
+from ..middleware.rate_limit import limit, check_now
 from ..ws.bus import bus
 bp = Blueprint("chat", __name__)
+@bp.before_request
+def _chat_rl_guard():
+    rv = check_now('chat')
+    return rv
+
+@limit("chat")
 @bp.post("")
 def chat():
     data=request.get_json(silent=True) or {}
@@ -22,6 +29,13 @@ def chat():
     if cmd=="end_session":
         body=db.get_transcript(sid); send_transcript(email,"Ask Chip — Session transcript",body); return jsonify({"ok": True, "emailed": True})
     text=(data.get("text") or "").strip()
-    if text: db.ensure_session(sid, email); db.add_message(sid, "user", text)
+    if text:
+        db.ensure_session(sid, email)
+        db.add_message(sid, "user", text)
+        try:
+            from ..policy.nudges import cancel_nudge
+            cancel_nudge(sid)
+        except Exception:
+            pass
     tid, frames = make_assistant_frames(text or "chat"); schedule_frames(sid, frames)
     return jsonify({"ok": True, "turn_id": tid})

@@ -2,6 +2,7 @@
 from flask import Flask, render_template, request
 from .api_v1 import create_v1_blueprint
 from .middleware.csrf import csrf_before_request
+from .middleware.rate_limit import register_before_request as rate_limit_register
 from .ws.chat_ws import register_ws_route
 
 def create_app():
@@ -13,6 +14,7 @@ def create_app():
     app.secret_key = "test-secret"
 
     # v1-only API
+    rate_limit_register(app)
     app.register_blueprint(create_v1_blueprint(), url_prefix="/api/v1")
 
     # CSRF

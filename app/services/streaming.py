@@ -26,3 +26,15 @@ def schedule_frames(session_id: str, frames: list, delay_ms: int = 30):
             bus.broadcast(session_id, fr)
             time.sleep(max(0, delay_ms)/1000.0)
     threading.Thread(target=run, daemon=True).start()
+
+
+# Phase 2: after frames are streamed, arm a nudge on assistant_end
+def _arm_nudge_after_end(session_id: str, frames: list):
+    try:
+        from ..policy.nudges import arm_nudge
+        # Arm only if an 'end' frame exists
+        if any((fr.get("type") == "end") for fr in frames):
+            arm_nudge(session_id)
+    except Exception as e:
+        # avoid crashing stream thread
+        pass
