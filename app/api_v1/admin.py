@@ -228,3 +228,24 @@ def kb_seed():
     if not body: return jsonify({"ok": False, "error": "body_required"}), 400
     doc_id = add_document(title, body, tags)
     return jsonify({"ok": True, "doc_id": doc_id})
+
+
+@bp.get("/kb/docs")
+def kb_docs():
+    from ..services.retrieval import list_documents
+    q = request.args.get("query",""); tag = request.args.get("tag",""); page = int(request.args.get("page", "0") or 0); size = int(request.args.get("size","50") or 50)
+    items = list_documents(q, tag, size, page*size)
+    return jsonify({"ok": True, "items": items})
+
+@bp.get("/kb/docs/<int:doc_id>")
+def kb_doc_get(doc_id: int):
+    from ..services.retrieval import get_document
+    d = get_document(doc_id)
+    if not d: return jsonify({"ok": False, "error":"not_found"}), 404
+    return jsonify({"ok": True, "doc": d})
+
+@bp.delete("/kb/docs/<int:doc_id>")
+def kb_doc_delete(doc_id: int):
+    from ..services.retrieval import delete_document
+    ok = delete_document(doc_id)
+    return jsonify({"ok": bool(ok)})

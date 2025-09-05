@@ -78,7 +78,43 @@
       <p class="hint">Stub view for now.</p>
       <pre class="log" style="height:18rem">Coming soon.</pre>
     </section>
-  </main>
+  
+  <section id="tab-knowledge" class="panel" aria-hidden="true">
+    <h2>Knowledge</h2>
+    <div style="display:flex;gap:8px;align-items:center;margin:.5rem 0;">
+      <input id="kbQuery" placeholder="Search…" style="padding:6px 8px;border:1px solid #ccd;border-radius:8px;min-width:240px;">
+      <input id="kbTag" placeholder="Tag" style="padding:6px 8px;border:1px solid #ccd;border-radius:8px;min-width:120px;">
+      <button id="kbRefresh" class="btn">Search</button>
+      <button id="kbAdd" class="btn primary">Add Document</button>
+    </div>
+    <div id="kbList"></div>
+    <dialog id="kbAddDlg">
+      <form method="dialog" style="min-width: 680px;">
+        <h3 style="margin-top:0;">Add Document</h3>
+        <div class="form-grid">
+          <label>Title</label><input id="kbTitle">
+          <label>Tags</label><input id="kbTags" placeholder="comma,separated">
+          <label>Body</label><textarea id="kbBody" rows="12" style="width:100%"></textarea>
+        </div>
+        <div style="margin-top:10px;display:flex;gap:10px;justify-content:flex-end;">
+          <button type="button" id="kbSave" class="btn primary">Save</button>
+          <button type="reset" class="btn">Cancel</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="kbPreviewDlg">
+      <form method="dialog" style="min-width: 680px;max-width: 900px;">
+        <h3 id="kbPrevTitle" style="margin-top:0;"></h3>
+        <pre id="kbPrevBody" style="white-space:pre-wrap;max-height:50vh;overflow:auto;border:1px solid #ddd;padding:8px;border-radius:8px;"></pre>
+        <h4>Chunks</h4>
+        <ol id="kbPrevChunks"></ol>
+        <div style="margin-top:10px;display:flex;gap:10px;justify-content:flex-end;">
+          <button type="reset" class="btn">Close</button>
+        </div>
+      </form>
+    </dialog>
+  </section>
+</main>
 
   <script>
     window.ASKCHIP = {

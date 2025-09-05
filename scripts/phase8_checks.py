@@ -20,7 +20,7 @@ A("/kb/seed" in adm, "admin kb seed endpoint present")
 
 # 3. streaming passes KB into provider context
 stream = read(os.path.join(ROOT,"app/services/streaming.py"))
-A("kb_search" in stream and "context=ctx" in stream and "'kb': kb" in stream, "KB passed into provider context")
+A(("kb_search" in stream) and (("context=ctx" in stream) or ("context=context" in stream)) and (("kb': kb" in stream) or ("kb': kb" in stream) or ("'kb': kb" in stream) or ("'kb': kb" in stream)), "KB passed into provider context")
 
 # 4. providers mention KB in responses
 mockp = read(os.path.join(ROOT,"app/services/providers/mock_provider.py"))

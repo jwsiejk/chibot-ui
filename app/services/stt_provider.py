@@ -6,7 +6,11 @@ class STTProvider(Protocol):
     def transcribe(self, audio_bytes: bytes, *, language: str = "en") -> str: ...
 
 def get_stt_provider_name(cfg: dict) -> str:
-    return (cfg or {}).get("stt_provider", "mock").strip().lower() or "mock"
+    val = (cfg or {}).get("stt_provider", "auto").strip().lower()
+    if val in ("auto","",None):
+        import os
+        return "whisper" if os.environ.get("OPENAI_API_KEY") else "mock"
+    return val
 
 def load_stt_provider(name: str):
     if name == "whisper":

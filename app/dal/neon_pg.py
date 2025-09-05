@@ -303,3 +303,51 @@ def kb_search(query: str, limit: int = 5):
     else:
         rows = _exec("SELECT content FROM kb_chunks WHERE content LIKE ? LIMIT ?", [q, limit], fetch=True) or []
         return [r["content"] for r in rows]
+
+
+def kb_list_docs(query:str="", tag:str="", limit:int=50, offset:int=0):
+    ensure_kb_schema()
+    q = f"%{query}%" if query else None
+    t = f"%{tag}%" if tag else None
+    where = []
+    params = []
+    if q:
+        where.append("(title ILIKE %s OR body ILIKE %s)") if _DIALECT=="postgresql" else where.append("(title LIKE ? OR body LIKE ?)")
+        params += [q,q]
+    if t:
+        where.append("tags ILIKE %s") if _DIALECT=="postgresql" else where.append("tags LIKE ?")
+        params += [t]
+    sql = "SELECT id, title, tags, LENGTH(body) as size FROM kb_docs"
+    if where: sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY id DESC LIMIT %s OFFSET %s" if _DIALECT=="postgresql" else " ORDER BY id DESC LIMIT ? OFFSET ?"
+    params += [limit, offset]
+    rows = _exec(sql, params, fetch=True) or []
+    out = []
+    for r in rows:
+        if _DIALECT=="postgresql":
+            out.append({"id": r[0], "title": r[1], "tags": r[2], "size": r[3], "chunks": 0})
+        else:
+            out.append({"id": r["id"], "title": r["title"], "tags": r["tags"], "size": r["size"], "chunks": 0})
+    # count chunks
+    for d in out:
+        rc = _exec("SELECT COUNT(*) FROM kb_chunks WHERE doc_id=%s" if _DIALECT=="postgresql" else "SELECT COUNT(*) as c FROM kb_chunks WHERE doc_id=?", [d["id"]], fetch=True)
+        d["chunks"] = int(rc[0][0] if _DIALECT=="postgresql" else rc[0]["c"])
+    return out
+
+def kb_get_doc(doc_id:int):
+    ensure_kb_schema()
+    rows = _exec("SELECT id,title,tags,body FROM kb_docs WHERE id=%s" if _DIALECT=="postgresql" else "SELECT id,title,tags,body FROM kb_docs WHERE id=?", [doc_id], fetch=True)
+    if not rows: return None
+    if _DIALECT=="postgresql":
+        d = {"id": rows[0][0], "title": rows[0][1], "tags": rows[0][2], "body": rows[0][3]}
+    else:
+        r = rows[0]; d = {"id": r["id"], "title": r["title"], "tags": r["tags"], "body": r["body"]}
+    ch = _exec("SELECT id, idx, content FROM kb_chunks WHERE doc_id=%s ORDER BY idx ASC" if _DIALECT=="postgresql" else "SELECT id, idx, content FROM kb_chunks WHERE doc_id=? ORDER BY idx ASC", [doc_id], fetch=True)
+    chunks = [{"id": (x[0] if _DIALECT=="postgresql" else x["id"]), "idx": (x[1] if _DIALECT=="postgresql" else x["idx"]), "content": (x[2] if _DIALECT=="postgresql" else x["content"])} for x in ch or []]
+    return {"id": d["id"], "title": d["title"], "tags": d["tags"], "body": d["body"], "chunks": chunks}
+
+def kb_delete_doc(doc_id:int) -> bool:
+    ensure_kb_schema()
+    _exec("DELETE FROM kb_chunks WHERE doc_id=%s" if _DIALECT=="postgresql" else "DELETE FROM kb_chunks WHERE doc_id=?", [doc_id])
+    _exec("DELETE FROM kb_docs WHERE id=%s" if _DIALECT=="postgresql" else "DELETE FROM kb_docs WHERE id=?", [doc_id])
+    return True

@@ -6,14 +6,14 @@ class DB:
     def __init__(self):
         self.memory={
             'configs':{
-                'csrf_enforced':False,'profile_gate_enabled':False,
+                'csrf_enforced': bool(__import__('os').environ.get('CSRF_ENFORCED','')).__bool__(),'profile_gate_enabled':False,
                 'show_instruction_strip': True,'show_state_dots': True,'theme':'light',
                 'suggestions_enabled': True,'suggestions_max_items':4,'suggestions_max_words':7,
                 'nudges_enabled': True,'nudge_delay_ms':4200,'nudge_backoff_after_ignored':2,
                 'confirm_ms':420,'echo_threshold_boost':1.9,'min_speech_ms':220,'voice_command_hints':True,
                 'language_lock':'en','max_turn_seconds':90,'normalization_table_version':1,
                 'nebraska_persona_level':0.13,'nebraska_quotes_enabled':True,
-                'ws_ping_interval_ms':25000,'ws_idle_timeout_ms':30000,'reconnect_policy':'1_attempt_5s','llm_provider':'mock','openai_model':'gpt-4o-mini','stt_provider':'mock','tts_provider':'mock',
+                'ws_ping_interval_ms':25000,'ws_idle_timeout_ms':30000,'reconnect_policy':'1_attempt_5s','llm_provider':'auto','openai_model':'gpt-4o-mini','stt_provider':'auto','tts_provider':'auto',
                 'redact_email_in_logs':True
             },
             'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{}

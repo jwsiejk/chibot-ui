@@ -6,7 +6,11 @@ class TTSProvider(Protocol):
     def synth(self, text: str, *, voice_id: str | None = None, format: str | None = None) -> tuple[bytes, list[dict]]: ...
 
 def get_tts_provider_name(cfg: dict) -> str:
-    return (cfg or {}).get("tts_provider", "mock").strip().lower() or "mock"
+    val = (cfg or {}).get("tts_provider", "auto").strip().lower()
+    if val in ("auto","",None):
+        import os
+        return "elevenlabs" if os.environ.get("ELEVENLABS_API_KEY") else "mock"
+    return val
 
 def load_tts_provider(name: str):
     if name == "elevenlabs":

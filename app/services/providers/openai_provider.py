@@ -1,9 +1,6 @@
 
 # app/services/providers/openai_provider.py
-# Stub provider – stays network-free for tests. When activated, it returns a deterministic placeholder.
-import uuid
-from typing import Dict, Any
-import os
+import os, json, urllib.request
 
 class OpenAIProvider:
     def __init__(self):

@@ -164,3 +164,76 @@ $("#lyPublish").addEventListener("click", lyPublish);
 // Load initial data
 cfgLoad();
 lyLoad("published");
+
+
+/* Knowledge Tab */
+(function kb(){
+  const Q = (id)=>document.getElementById(id);
+  const api = {
+    list: (q,tag)=> fetch(`/api/v1/admin/kb/docs?query=${encodeURIComponent(q||"")}&tag=${encodeURIComponent(tag||"")}`, {credentials:"include"}).then(r=>r.json()),
+    get: (id)=> fetch(`/api/v1/admin/kb/docs/${id}`, {credentials:"include"}).then(r=>r.json()),
+    del: (id)=> fetch(`/api/v1/admin/kb/docs/${id}`, {method:"DELETE", credentials:"include", headers: csrf()} ).then(r=>r.json()),
+    seed: (title,tags,body)=> fetch(`/api/v1/admin/kb/seed`, {method:"POST", credentials:"include", headers: Object.assign({"Content-Type":"application/json"}, csrf()), body: JSON.stringify({title, tags, body})}).then(r=>r.json())
+  };
+  function csrf(){
+    const tok = sessionStorage.getItem("csrf");
+    return tok ? {"X-CSRF-Token": tok} : {};
+  }
+  async function ensureCSRF(){
+    if (!sessionStorage.getItem("csrf")){
+      const r = await fetch("/api/v1/auth/csrf", {credentials:"include"}).then(r=>r.json());
+      if (r.ok && r.csrf) sessionStorage.setItem("csrf", r.csrf);
+    }
+  }
+  async function refresh(){
+    const q = Q("kbQuery").value, tag = Q("kbTag").value;
+    const r = await api.list(q, tag);
+    const list = Q("kbList"); list.innerHTML="";
+    if (!r.ok) { list.textContent = "Error loading docs."; return; }
+    if (!r.items.length){ list.textContent = "No documents."; return; }
+    const tbl = document.createElement("table"); tbl.style.width="100%"; tbl.style.borderCollapse="collapse";
+    tbl.innerHTML = `<thead><tr><th style="text-align:left">Title</th><th>Tags</th><th>Size</th><th>Chunks</th><th>Actions</th></tr></thead>`;
+    const tb = document.createElement("tbody");
+    r.items.forEach(it => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${it.title}</td><td>${it.tags||""}</td><td style="text-align:center">${it.size||""}</td><td style="text-align:center">${it.chunks||0}</td><td style="text-align:right"><button data-id="${it.id}" class="btn preview">Preview</button> <button data-id="${it.id}" class="btn danger delete">Delete</button></td>`;
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb); list.appendChild(tbl);
+    list.querySelectorAll("button.preview").forEach(b => b.addEventListener("click", async () => {
+      const id = b.getAttribute("data-id");
+      const r = await api.get(id);
+      if (!r.ok) return alert("Failed to load doc");
+      Q("kbPrevTitle").textContent = `${r.doc.title} — ${r.doc.tags||""}`;
+      Q("kbPrevBody").textContent = r.doc.body || "";
+      const ol = Q("kbPrevChunks"); ol.innerHTML="";
+      (r.doc.chunks||[]).forEach(c => {
+        const li = document.createElement("li"); li.textContent = c.content; ol.appendChild(li);
+      });
+      Q("kbPreviewDlg").showModal();
+    }));
+    list.querySelectorAll("button.delete").forEach(b => b.addEventListener("click", async () => {
+      if (!confirm("Delete this document?")) return;
+      const id = b.getAttribute("data-id");
+      await ensureCSRF();
+      const r = await api.del(id);
+      if (!r.ok) return alert("Delete failed");
+      refresh();
+    }));
+  }
+  Q("kbRefresh").addEventListener("click", refresh);
+  Q("kbAdd").addEventListener("click", ()=> Q("kbAddDlg").showModal());
+  Q("kbSave").addEventListener("click", async ()=> {
+    const title = Q("kbTitle").value.trim();
+    const tags  = Q("kbTags").value.trim();
+    const body  = Q("kbBody").value.trim();
+    if (!body) return alert("Body required");
+    await ensureCSRF();
+    const r = await api.seed(title, tags, body);
+    if (!r.ok) return alert("Save failed");
+    Q("kbAddDlg").close(); Q("kbBody").value=""; Q("kbTitle").value=""; Q("kbTags").value="";
+    refresh();
+  });
+  // initial load
+  refresh();
+})();

@@ -8,7 +8,11 @@ class LLMProvider(Protocol):
                        teacher_move: str | None = None, context: Dict[str, Any] | None = None) -> str: ...
 
 def get_provider_name(cfg: dict) -> str:
-    return (cfg or {}).get("llm_provider", "mock").strip().lower() or "mock"
+    val = (cfg or {}).get("llm_provider", "auto").strip().lower()
+    if val in ("auto","",None):
+        import os
+        return "openai" if os.environ.get("OPENAI_API_KEY") else "mock"
+    return val
 
 def load_provider(name: str) -> LLMProvider:
     if name == "openai":

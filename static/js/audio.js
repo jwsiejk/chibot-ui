@@ -1,44 +1,36 @@
+
 import { setState, STATES } from "./state.js";
 
-let audioCtx;
+let audioEl = null;
 let playing = false;
-let onVisemes = null; // callback to sync visemes
+let onVisemes = null;
 
 export function setVisemeCallback(cb){ onVisemes = cb; }
 
 export async function playStream(chunks, visemes){
-  // chunks: ArrayBuffer[] of audio data (stubbed); visemes: [{t:ms, v:id}, ...]
-  ensureCtx();
+  stopPlayback();
+  const blob = new Blob(chunks.map(b => new Uint8Array(b)), { type: "audio/mpeg" });
+  const url = URL.createObjectURL(blob);
+  audioEl = new Audio();
+  audioEl.src = url;
   playing = true;
   setState(STATES.RESPONDING);
-  // Stub: just simulate playback timing using visemes or chunks length
-  const total = Math.max(500, (visemes?.at(-1)?.t || (chunks?.length||1)*250));
+  const start = performance.now();
   if (Array.isArray(visemes)){
-    scheduleVisemes(visemes);
+    visemes.forEach(v => {
+      const t = v.t ?? v.t_ms ?? 0;
+      setTimeout(() => { if (onVisemes && playing) onVisemes(v); }, Math.max(0, t - (performance.now() - start)));
+    });
   }
-  await new Promise(r => setTimeout(r, total));
-  playing = false;
+  audioEl.onended = () => { playing = false; URL.revokeObjectURL(url); };
+  try { await audioEl.play(); } catch(e){ playing = false; }
 }
 
 export function stopPlayback(){
-  // Stub: would stop sources, etc.
+  try {
+    if (audioEl) { audioEl.pause(); audioEl.src=""; }
+  } catch(e){}
   playing = false;
 }
 
 export function isPlaying(){ return playing; }
-
-function ensureCtx(){
-  if (!audioCtx) {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    audioCtx = new AC();
-  }
-}
-
-function scheduleVisemes(ves){
-  if (!onVisemes) return;
-  const start = performance.now();
-  ves.forEach(v => {
-    const due = v.t;
-    setTimeout(() => { onVisemes(v); }, Math.max(0, due - (performance.now()-start)));
-  });
-}
