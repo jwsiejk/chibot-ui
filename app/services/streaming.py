@@ -11,10 +11,15 @@ cfg = db.get_config()
 provider = get_provider(cfg)
 tid = provider.new_turn_id()
 from .awareness import annotate
+from .retrieval import search as kb_search
+from .persona_prompt import build_persona_preamble, format_kb_context
 ann = annotate((seed_text or ''), (meta or {}))
 persona_id = db.memory.get('sessions',{}).get(session_id or 'default',{}).get('persona_id','chip')
 persona = db.memory.get('personas',{}).get(persona_id, {'id':'chip'})
-reply = provider.generate_reply(seed_text or 'Hello', persona=persona, teacher_move=ann.get('teacher_move'), context={'session_id': session_id})
+kb = kb_search(seed_text or '', limit=3)
+preamble = build_persona_preamble(persona)
+ctx = {'session_id': session_id, 'kb': kb, 'preamble': preamble}
+reply = provider.generate_reply(seed_text or 'Hello', persona=persona, teacher_move=ann.get('teacher_move'), context=ctx)
     audio_b64, _ = synth(reply)
     chunks = [audio_b64[i:i+8] for i in range(0, len(audio_b64), 8)][:3]
     frames: List[Dict] = []

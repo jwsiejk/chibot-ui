@@ -15,4 +15,6 @@ class MockProvider:
             persona_tag = f"[{name}] "
         move = f"(move:{teacher_move}) " if teacher_move else ""
         # Keep it short and conversational per persona rules
-        return f"{persona_tag}Howdy—Chip here. {move}Let's get rolling. (mock)"
+        kb = (context or {}).get('kb') or []
+kb_tag = f" [KB:{len(kb)}]" if kb else ""
+return f"{persona_tag}Howdy—Chip here. {move}Let's get rolling.{kb_tag} (mock)"

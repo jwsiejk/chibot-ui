@@ -17,4 +17,7 @@ class OpenAIProvider:
         # Deterministic response for offline tests
         who = (persona or {}).get("id","Chip")
         mv  = f" ({teacher_move})" if teacher_move else ""
-        return f"{who}: {prompt.strip() or 'Hello'} → ok{mv} [openai-stub:{self.model}]"
+        kb = (context or {}).get('kb') or []
+pre = (context or {}).get('preamble') or ""
+kb_note = f" KB:{len(kb)}" if kb else ""
+return f"{who}: {prompt.strip() or 'Hello'} → ok{mv}{kb_note} [openai-stub:{self.model}]"

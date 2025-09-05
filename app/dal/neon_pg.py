@@ -263,3 +263,43 @@ def load_all_into_memory(memory: Dict[str, Any]):
                 memory.setdefault('layouts', {})[bp] = {"version": mv, "state": get_layout(bp, mv)}
     except Exception:
         pass
+
+
+def ensure_kb_schema():
+    ensure_schema()
+    if _DIALECT == "postgresql":
+        _exec("CREATE TABLE IF NOT EXISTS kb_docs (id SERIAL PRIMARY KEY, title TEXT, tags TEXT, body TEXT, created_at DOUBLE PRECISION);")
+        _exec("CREATE TABLE IF NOT EXISTS kb_chunks (id SERIAL PRIMARY KEY, doc_id INTEGER, idx INTEGER, content TEXT, created_at DOUBLE PRECISION);")
+    else:
+        _exec("CREATE TABLE IF NOT EXISTS kb_docs (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, tags TEXT, body TEXT, created_at DOUBLE PRECISION);")
+        _exec("CREATE TABLE IF NOT EXISTS kb_chunks (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_id INTEGER, idx INTEGER, content TEXT, created_at DOUBLE PRECISION);")
+
+def kb_upsert_doc(title: str, body: str, tags: str = "") -> int:
+    ensure_kb_schema()
+    now = time.time()
+    if _DIALECT == "postgresql":
+        _exec("INSERT INTO kb_docs (title,tags,body,created_at) VALUES (%s,%s,%s,%s)", [title, tags, body, now])
+        rows = _exec("SELECT MAX(id) FROM kb_docs", fetch=True)
+        doc_id = int(rows[0][0])
+    else:
+        _exec("INSERT INTO kb_docs (title,tags,body,created_at) VALUES (?,?,?,?)", [title, tags, body, now])
+        rows = _exec("SELECT MAX(id) AS id FROM kb_docs", fetch=True)
+        doc_id = int(rows[0]["id"])
+    # simple chunking
+    chunks = [body[i:i+600] for i in range(0, len(body), 600)]
+    for i, c in enumerate(chunks):
+        if _DIALECT == "postgresql":
+            _exec("INSERT INTO kb_chunks (doc_id,idx,content,created_at) VALUES (%s,%s,%s,%s)", [doc_id, i, c, now])
+        else:
+            _exec("INSERT INTO kb_chunks (doc_id,idx,content,created_at) VALUES (?,?,?,?)", [doc_id, i, c, now])
+    return doc_id
+
+def kb_search(query: str, limit: int = 5):
+    ensure_kb_schema()
+    q = f"%{query}%"
+    if _DIALECT == "postgresql":
+        rows = _exec("SELECT content FROM kb_chunks WHERE content ILIKE %s LIMIT %s", [q, limit], fetch=True) or []
+        return [r[0] for r in rows]
+    else:
+        rows = _exec("SELECT content FROM kb_chunks WHERE content LIKE ? LIMIT ?", [q, limit], fetch=True) or []
+        return [r["content"] for r in rows]

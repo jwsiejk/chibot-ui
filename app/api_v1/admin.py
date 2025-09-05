@@ -216,3 +216,15 @@ def db_health():
         return jsonify({"ok": True, "dialect": dialect, "connected": connected, "ts": time.time()})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@bp.post("/kb/seed")
+def kb_seed():
+    from ..services.retrieval import add_document
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "Doc").strip()
+    body  = (data.get("body") or "").strip()
+    tags  = data.get("tags") or ""
+    if not body: return jsonify({"ok": False, "error": "body_required"}), 400
+    doc_id = add_document(title, body, tags)
+    return jsonify({"ok": True, "doc_id": doc_id})
