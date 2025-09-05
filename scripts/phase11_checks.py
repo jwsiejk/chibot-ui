@@ -3,6 +3,7 @@ import os, sys, json, base64
 sys.path.insert(0, ".")
 os.environ.setdefault("RATE_LIMIT_WINDOW_S","0.05")
 os.environ.setdefault("RATE_LIMIT_MAX","100")
+os.environ["CSRF_ENFORCED"]=""
 import app
 
 # Provide vendor envs for provider init

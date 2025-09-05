@@ -27,10 +27,13 @@ $ python3 scripts/test_api_contract.py
 PASS: GET /api/v1/greet returns 200
 PASS: greet returns JSON
 PASS: greet JSON ok + turn_id
+# DEBUG chat 200 b'{"ok":true,"turn_id":"d802b8d4-86b4-447c-aef1-dbf1ec7003e2"}\n'
 PASS: POST /api/v1/chat returns 200/202
 PASS: chat returns JSON
+# DEBUG tts 200 b'{"audio_b64":"RkFLRV9NUDNfREFUQV9CWVRFUw==","ok":true,"visemes":[{"t_ms":0,"v":"ETC"},{"t_ms":1,"v":"E"},{"t_ms":1,"v":"ETC"}]}\n'
 PASS: POST /api/v1/chat/tts-with-visemes returns 200
 PASS: tts JSON ok + audio_b64 + visemes present
+# DEBUG stt 400 b'{"error":"missing_file","ok":false}\n'
 PASS: POST /api/v1/voice/stt returns 200/400
 PASS: stt returns JSON
 PASS: GET /api/v1/admin/logs returns OK-ish
