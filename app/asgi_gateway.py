@@ -12,29 +12,45 @@ except Exception:
 
 from starlette.staticfiles import StaticFiles
 
-from . import create_app                  # Flask WSGI (templates, routes)
-from .asgi_router import asgi as ws_asgi  # WS router for /ws/v1/chat
+from . import create_app
+from .asgi_router import asgi as ws_asgi
 
-# Build once at import
+# Build once
 _wsgi_app = create_app()
 _asgi_wsgi = WsgiToAsgi(_wsgi_app)
 
-# ASGI static server (bypasses WSGI thread executor)
+# Static directory: …/src/static
 _STATIC_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "static"))
 _static_asgi = StaticFiles(directory=_STATIC_DIR)
+
+STATIC_PREFIX = "/static"
+
+async def _serve_static(scope, receive, send):
+    """
+    Rewrites scope['path'] so StaticFiles sees a path relative to the static dir.
+    /static/js/app.js -> /js/app.js
+    """
+    path = scope.get("path", "")
+    if path == "/favicon.ico":
+        rel = "/favicon.ico"
+    else:
+        # must start with /static/ at this point
+        rel = path[len(STATIC_PREFIX):]  # drop '/static'
+        if not rel.startswith("/"):
+            rel = "/" + rel
+    new_scope = dict(scope)
+    new_scope["path"] = rel
+    await _static_asgi(new_scope, receive, send)
 
 async def asgi(scope, receive, send):
     typ = scope.get("type")
     if typ == "websocket":
-        # WS → chat router
         await ws_asgi(scope, receive, send)
         return
 
-    # Pure ASGI fast path for static files and favicon
     path = scope.get("path", "")
-    if typ == "http" and (path.startswith("/static/") or path == "/favicon.ico"):
-        await _static_asgi(scope, receive, send)
+    if typ == "http" and (path.startswith(STATIC_PREFIX + "/") or path == "/favicon.ico"):
+        await _serve_static(scope, receive, send)
         return
 
-    # All other HTTP → Flask (via WsgiToAsgi)
     await _asgi_wsgi(scope, receive, send)
