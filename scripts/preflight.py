@@ -34,10 +34,14 @@ def run(cmd):
     return p
 
 def main():
-    import os
+    import os, shutil
     os.environ.setdefault("RATE_LIMIT_WINDOW_S","0.05")
     os.environ.setdefault("RATE_LIMIT_MAX","100")
     os.environ["CSRF_ENFORCED"]=""
+    # Clean artifacts to avoid stale-hash verification issues
+    if ART_DIR.exists():
+        shutil.rmtree(ART_DIR)
+    ART_DIR.mkdir(exist_ok=True)
 
     results = {"steps":[]}
     rc = 0

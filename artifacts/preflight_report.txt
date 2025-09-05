@@ -27,7 +27,7 @@ $ python3 scripts/test_api_contract.py
 PASS: GET /api/v1/greet returns 200
 PASS: greet returns JSON
 PASS: greet JSON ok + turn_id
-# DEBUG chat 200 b'{"ok":true,"turn_id":"d802b8d4-86b4-447c-aef1-dbf1ec7003e2"}\n'
+# DEBUG chat 200 b'{"ok":true,"turn_id":"62cf73d9-38a5-4447-a834-9285f1643b7b"}\n'
 PASS: POST /api/v1/chat returns 200/202
 PASS: chat returns JSON
 # DEBUG tts 200 b'{"audio_b64":"RkFLRV9NUDNfREFUQV9CWVRFUw==","ok":true,"visemes":[{"t_ms":0,"v":"ETC"},{"t_ms":1,"v":"E"},{"t_ms":1,"v":"ETC"}]}\n'
