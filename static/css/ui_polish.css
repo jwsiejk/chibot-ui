@@ -1,0 +1,42 @@
+
+/* === UI Polish (Zoom/Teams/WebEx-inspired) === */
+:root{
+  --bg:#0f121a; --panel:#131824; --line:#202533; --muted:#9aa4b2;
+  --brand:#ff7a1a; --ink:#e6e9ef; --ok:#3ddc97; --warn:#f6c343;
+}
+body{background:var(--bg); color:var(--ink); font:14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;}
+.topbar{display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid var(--line);}
+.topbar .brand{font-weight:600; opacity:.7}
+.menu{position:relative;}
+.menu-button{background:transparent;border:1px solid var(--line);color:var(--ink);padding:6px 10px;border-radius:10px;cursor:pointer;}
+.menu-dropdown{position:absolute;right:0;top:calc(100% + 6px);background:var(--panel);border:1px solid var(--line);border-radius:10px;min-width:200px;display:none;box-shadow:0 10px 24px rgba(0,0,0,.35);}
+.menu-dropdown a{display:block;padding:10px 12px;color:var(--ink);text-decoration:none;border-bottom:1px solid var(--line);}
+.menu-dropdown a:last-child{border-bottom:none;}
+.menu-dropdown a:hover{background:#182035;}
+.menu.open .menu-dropdown{display:block;}
+
+.main-grid{display:grid;grid-template-columns: 1fr 300px;gap:16px;padding:16px;}
+.stage{background:var(--panel);border:1px solid var(--line);border-radius:14px;min-height:520px;position:relative;overflow:hidden;padding:16px;}
+.stage-inner{height:100%;display:flex;align-items:center;justify-content:center;}
+#chipPane{display:flex;align-items:center;justify-content:center;}
+#chipImage{width:240px;height:auto;border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.45);}
+#chipMouth{position:absolute;bottom:36px;left:50%;transform:translateX(-50%);width:120px;height:60px;border-radius:8px;background:rgba(255,255,255,.06);backdrop-filter:blur(1px);display:block;}
+
+.stage-status{position:absolute; top:10px; right:14px; text-align:center;}
+.stage-status .dots{display:flex; gap:6px; justify-content:center;}
+.stage-status .dot{width:6px;height:6px;border-radius:999px;background:#58607a;opacity:.9;}
+.stage-status .label{font-size:12px;color:var(--muted); margin-top:4px;}
+
+.controls{display:flex; gap:10px; justify-content:center; margin-top:14px;}
+.btn{background:#1f2432;color:var(--ink);border:1px solid #2a3145;border-radius:12px;padding:8px 14px;cursor:pointer;}
+.btn.primary{background:var(--brand);color:#151515;border-color:#d57a24;}
+.btn.ghost{background:transparent;border:1px dashed var(--line);}
+.btn:disabled{opacity:.5;cursor:not-allowed;}
+
+.chat-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;height:520px;}
+.chat-head{padding:10px 12px;border-bottom:1px solid var(--line);font-weight:600;opacity:.85;}
+.chat-msgs{flex:1;overflow:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px;}
+.chat-compose{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--line);}
+.chat-compose input{flex:1;padding:8px;border-radius:10px;border:1px solid #2a3145;background:#0e1320;color:var(--ink);}
+
+.instruction{padding:8px 0; text-align:center; color:var(--muted); font-size:13px;}

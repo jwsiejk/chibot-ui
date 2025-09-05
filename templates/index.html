@@ -1,140 +1,74 @@
+
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Ask Chip</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
-  <link rel="stylesheet" href="/static/css/design-mode.css">
-</head>
-<body data-app="ask-chip">
-  <header class="topbar">
-    <div class="brand">Ask Chip</div>
-    <nav class="menu">
-      <a href="/admin">Admin</a>
-      <a href="/diagnostics">Diagnostics</a>
-    </nav>
-  </header>
-
-  <main class="layout left-first" id="layoutRoot">
-    <!-- Chip stage -->
-    <section class="stage designable" id="chipStage" data-key="chipStage">
-      <div class="state-dots designable" id="stateDots" data-key="stateDots">
-        <span class="dot" data-state="ready"     title="Ready"></span>
-        <span class="dot" data-state="listening" title="Listening"></span>
-        <span class="dot" data-state="thinking"  title="Thinking"></span>
-        <span class="dot" data-state="responding" title="Responding"></span>
-      </div>
-
-      <div class="chip-frame">
-        <img id="chipImage" src="{{ url_for('static', filename='chip/img/chip.png') }}" alt="Chip" />
-        <img id="chipMouth" alt="Mouth" />
-      </div>
-
-      <div class="instruction-strip designable" id="instructionStrip" data-key="instructionStrip">
-        <strong>Voice commands:</strong>
-        “Hey Chip…”, “Stop Chip”, “Chip, hold on” — <em>ESC</em> is immediate interrupt
-      </div>
-
-      <div class="toolbar designable" data-key="toolbar">
-        <button id="btnStart" class="btn primary">Start</button>
-        <button id="btnEnd" class="btn" disabled>End</button>
-        <button id="btnMute" class="btn" aria-pressed="false">Audio: On</button>
-        <button id="btnChat" class="btn" aria-pressed="true">Chat</button>
-      </div>
-
-      <div class="status-line">
-        <span id="statusText">Ready</span>
-      </div>
-    </section>
-
-    <!-- Chat -->
-    <aside class="chat designable" id="chatPane" data-key="chatPane">
-      <div class="chat-header">
-        <div>Conversation</div>
-        <div class="suggestions" id="suggestions"></div>
-      </div>
-      <div class="chat-body" id="chatBody" aria-live="polite"></div>
-      <div class="chat-compose">
-        <input id="chatInput" placeholder="Type a message…" autocomplete="off">
-        <button id="chatSend" class="btn">Send</button>
-      </div>
-    </aside>
-  </main>
-
-  <div class="banner hidden" id="errorBanner" role="alert"></div>
-
-  <script>
-    window.ASKCHIP = {
-      api: {
-        greet: "/api/v1/greet",
-        chat: "/api/v1/chat",
-        stt: "/api/v1/voice/stt",
-        tts: "/api/v1/voice/tts-with-visemes",
-        logs: "/api/v1/admin/logs",
-        layouts: "/api/v1/admin/layouts",
-        ws:   (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/v1/chat"
-      },
-      assets: {
-        chipImage: "{{ url_for('static', filename='chip/img/chip.png') }}",
-        visemeBase: "{{ url_for('static', filename='visemes/chip-2d-pack') }}/"
-      },
-      config: { ws_ping_interval_ms: 25000 }
-    };
-
-    // Apply published layout on load
-    async function applyPublishedLayout(){
-      const root = document.getElementById("layoutRoot");
-      const strip = document.getElementById("instructionStrip");
-      const dots  = document.getElementById("stateDots");
-      try {
-        const r = await fetch(window.ASKCHIP.api.layouts + "?variant=published&breakpoint=desktop", {credentials:"include"});
-        if (!r.ok) return; // keep defaults
-        const j = await r.json();
-        const L = j.layout || {};
-        const side = (L.stage_side || "left").toLowerCase();
-        root.classList.remove("left-first","right-first");
-        root.classList.add(side === "right" ? "right-first" : "left-first");
-        // visibility toggles
-        strip.classList.toggle("hidden", !L.show_instruction_strip);
-        dots.classList.toggle("hidden", !L.show_state_dots);
-      } catch (e) { /* ignore; defaults apply */ }
-    }
-    document.addEventListener("DOMContentLoaded", applyPublishedLayout);
-
-    // Live-apply when Admin publishes a new layout (no reload)
-    (function listenForLayoutPublishes(){
-      try {
-        const es = new EventSource("/api/v1/admin/logs");
-        es.addEventListener("layout_updated", () => {
-          if (typeof applyPublishedLayout === "function") applyPublishedLayout();
-        });
-      } catch {}
-    })();
-  </script>
-
-  <script defer src="{{ url_for('static', filename='js/app.js') }}"></script>
-  <script defer src="{{ url_for('static', filename='js/layout_editor.js') }}"></script>
-<audio id="chipAudio" autoplay style="display:none"></audio>
-<script type="module" src="/static/js/app.js"></script>
-<button id="startBtn" disabled>Start</button>
-<script>
-  (async function() {
-    try {
-      const r = await fetch('/api/v1/profile/get');
-      const j = await r.json();
-      if (j && j.exists) document.getElementById('startBtn').disabled = false;
-    } catch(e) {}
-  })();
-</script>
-  <script src="/static/js/design-mode.js" defer></script>
+  <link rel="stylesheet" href="/static/css/app.css">
   <link rel="stylesheet" href="/static/css/app_phase6.css">
-  <script type="module" src="/static/js/app.js" defer></script>
-  <script type="module" src="/static/js/config.js" defer></script>
-  <script type="module" src="/static/js/state.js" defer></script>
-  <script type="module" src="/static/js/ws.js" defer></script>
-  <script type="module" src="/static/js/voice.js" defer></script>
-  <script type="module" src="/static/js/audio.js" defer></script>
-  <script type="module" src="/static/js/suggestions.js" defer></script>
+  <link rel="stylesheet" href="/static/css/design-mode.css">
+  <link rel="stylesheet" href="/static/css/ui_polish.css">
+</head>
+<body data-state="ready">
+
+<header class="topbar">
+  <div class="brand"></div>
+  <nav id="askChipMenu" class="menu" data-designable data-design-key="menu">
+    <button id="menuButton" class="menu-button">Ask&nbsp;Chip ▾</button>
+    <div id="menuDropdown" class="menu-dropdown">
+      <a id="menuProfile">Profile</a>
+      <a id="menuAdmin" data-admin-only>Admin</a>
+      <a id="menuDiagnostics" data-admin-only>Diagnostics</a>
+      <a id="menuLogout">Logout</a>
+    </div>
+  </nav>
+</header>
+
+<main class="main-grid">
+  <section class="stage" id="chipStage" data-designable data-design-key="chipStage">
+    <div class="stage-status" data-designable data-design-key="stateDots">
+      <div class="dots">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      </div>
+      <div id="stateLabel" class="label">Ready</div>
+    </div>
+    <div class="stage-inner">
+      <div id="chipPane" data-designable data-design-key="chipPane" style="position:relative;">
+        <img id="chipImage" data-designable data-design-key="chipImage" src="/static/img/chip.png" alt="Chip">
+        <div id="chipMouth" data-designable data-design-key="chipMouth" title="mouth_neutral"></div>
+      </div>
+    </div>
+    <div class="instruction" id="instructionStrip" data-designable data-design-key="instructionStrip">
+      Voice commands: <strong>“Hey Chip…”</strong> • <strong>“Stop Chip”</strong> • <strong>“Chip, hold on”</strong> — <em>ESC</em> is immediate interrupt
+    </div>
+    <div class="controls" id="voiceControls" data-designable data-design-key="voiceControls">
+      <button id="startButton" class="btn primary">Start</button>
+      <button id="endButton" class="btn">End</button>
+      <button id="muteButton" class="btn">Audio: On</button>
+      <button id="chatButton" class="btn">Chat</button>
+    </div>
+  </section>
+
+  <aside class="chat-card" id="chatPane" data-designable data-design-key="chatPane">
+    <div class="chat-head">Conversation</div>
+    <div class="chat-msgs" id="chatMessages"></div>
+    <div class="chat-compose" id="composerBar" data-designable data-design-key="composerBar">
+      <input id="composerInput" placeholder="Type to ask Chip…">
+      <button id="composerSend" class="btn">Send</button>
+    </div>
+  </aside>
+</main>
+
+<div id="suggestions" data-designable data-design-key="suggestionsBar" style="padding:0 16px;"></div>
+
+<script src="/static/js/design-mode.js" defer></script>
+<script type="module" src="/static/js/config.js" defer></script>
+<script type="module" src="/static/js/state.js" defer></script>
+<script type="module" src="/static/js/ws.js" defer></script>
+<script type="module" src="/static/js/voice.js" defer></script>
+<script type="module" src="/static/js/audio.js" defer></script>
+<script type="module" src="/static/js/suggestions.js" defer></script>
+<script type="module" src="/static/js/app.js" defer></script>
+<script src="/static/js/ui_menu.js" defer></script>
 </body>
 </html>
