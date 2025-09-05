@@ -5,15 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Ask Chip</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
-  <style>
-    /* Small helpers for applying the layout */
-    .layout { display: grid; grid-template-columns: 1fr 380px; gap: 16px; padding: 16px; }
-    .right-first .stage { order: 2; }
-    .right-first .chat  { order: 1; }
-    .left-first  .stage { order: 1; }
-    .left-first  .chat  { order: 2; }
-    .hidden { display: none !important; }
-  </style>
 </head>
 <body data-app="ask-chip">
   <header class="topbar">
@@ -25,10 +16,10 @@
   </header>
 
   <main class="layout left-first" id="layoutRoot">
-    <!-- Left: Chip stage -->
-    <section class="stage" id="chipStage">
-      <div class="state-dots" id="stateDots">
-        <span class="dot" data-state="ready"    title="Ready"></span>
+    <!-- Chip stage -->
+    <section class="stage designable" id="chipStage" data-key="chipStage">
+      <div class="state-dots designable" id="stateDots" data-key="stateDots">
+        <span class="dot" data-state="ready"     title="Ready"></span>
         <span class="dot" data-state="listening" title="Listening"></span>
         <span class="dot" data-state="thinking"  title="Thinking"></span>
         <span class="dot" data-state="responding" title="Responding"></span>
@@ -39,12 +30,12 @@
         <img id="chipMouth" alt="Mouth" />
       </div>
 
-      <div class="instruction-strip" id="instructionStrip">
+      <div class="instruction-strip designable" id="instructionStrip" data-key="instructionStrip">
         <strong>Voice commands:</strong>
         “Hey Chip…”, “Stop Chip”, “Chip, hold on” — <em>ESC</em> is immediate interrupt
       </div>
 
-      <div class="toolbar">
+      <div class="toolbar designable" data-key="toolbar">
         <button id="btnStart" class="btn primary">Start</button>
         <button id="btnEnd" class="btn" disabled>End</button>
         <button id="btnMute" class="btn" aria-pressed="false">Audio: On</button>
@@ -56,8 +47,8 @@
       </div>
     </section>
 
-    <!-- Right: Chat -->
-    <aside class="chat" id="chatPane">
+    <!-- Chat -->
+    <aside class="chat designable" id="chatPane" data-key="chatPane">
       <div class="chat-header">
         <div>Conversation</div>
         <div class="suggestions" id="suggestions"></div>
@@ -90,6 +81,7 @@
       config: { ws_ping_interval_ms: 25000 }
     };
 
+    // Apply published layout on load
     async function applyPublishedLayout(){
       const root = document.getElementById("layoutRoot");
       const strip = document.getElementById("instructionStrip");
@@ -102,16 +94,25 @@
         const side = (L.stage_side || "left").toLowerCase();
         root.classList.remove("left-first","right-first");
         root.classList.add(side === "right" ? "right-first" : "left-first");
-        // visibility
+        // visibility toggles
         strip.classList.toggle("hidden", !L.show_instruction_strip);
         dots.classList.toggle("hidden", !L.show_state_dots);
-      } catch (e) {
-        // ignore; defaults apply
-      }
+      } catch (e) { /* ignore; defaults apply */ }
     }
     document.addEventListener("DOMContentLoaded", applyPublishedLayout);
+
+    // Live-apply when Admin publishes a new layout (no reload)
+    (function listenForLayoutPublishes(){
+      try {
+        const es = new EventSource("/api/v1/admin/logs");
+        es.addEventListener("layout_updated", () => {
+          if (typeof applyPublishedLayout === "function") applyPublishedLayout();
+        });
+      } catch {}
+    })();
   </script>
 
   <script defer src="{{ url_for('static', filename='js/app.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/layout_editor.js') }}"></script>
 </body>
 </html>
