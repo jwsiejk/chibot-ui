@@ -32,6 +32,10 @@ def cfg_update():
     data = request.get_json(silent=True) or {}
     updates = data.get("updates") or {}
     cfg = config_store.update_config(updates)
+    try:
+        _emit('config_update', config=cfg)
+    except Exception:
+        pass
     ver = 0
     try:
         ver = config_store.get_config_version()
@@ -41,6 +45,7 @@ def cfg_update():
 
 # --- Layouts with versioning ---
 @bp.post("/layouts/publish")
+
 def layouts_publish():
     data = request.get_json(silent=True) or {}
     bp_name = data.get("breakpoint") or "desktop"
@@ -49,12 +54,19 @@ def layouts_publish():
     if os.environ.get("DATABASE_URL") and NEON_OK:
         v = neon_pg.save_layout(bp_name, state, note)
         db.memory.setdefault('layouts', {})[bp_name] = {"version": v, "state": state}
+        try:
+            _emit('layout_publish', breakpoint=bp_name, version=v)
+        except Exception:
+            pass
         return jsonify({"ok": True, "breakpoint": bp_name, "version": v})
-    # in-memory fallback
     cur = db.memory.setdefault('layouts', {}).setdefault(bp_name, {"version": 0, "state": {}})
     cur["version"] += 1; cur["state"] = state
+    try:
+        _emit('layout_publish', breakpoint=bp_name, version=cur["version"])
+    except Exception:
+        pass
     return jsonify({"ok": True, "breakpoint": bp_name, "version": cur["version"]})
-
+@bp.get("/layouts")
 @bp.get("/layouts")
 def layouts_list():
     bp_name = request.args.get("breakpoint") or "desktop"
@@ -145,3 +157,62 @@ def session_anonymize(sid):
         if s:
             s['email'] = 'anonymized@example.com'
     return jsonify({"ok": True})
+
+
+# --- Admin Log (SSE) ---
+_log_buffer = []  # simple in-memory ring
+def _emit(kind: str, **fields):
+    import json, time
+    evt = {"ts": time.time(), "kind": kind}
+    evt.update(fields or {})
+    line = json.dumps(evt, separators=(",",":"))
+    _log_buffer.append(line)
+    # trim
+    if len(_log_buffer) > 2000:
+        del _log_buffer[:len(_log_buffer)-2000]
+
+@bp.get("/logs")
+def logs():
+    from flask import Response
+    hdrs = {"Content-Type":"text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering":"no"}
+    # Emit a small payload as ndjson (simple for tests)
+    payload = "\n".join(_log_buffer + [json.dumps({"ts": time.time(), "kind":"admin_log", "msg":"hello"})])
+    return Response(payload, status=200, headers=hdrs)
+
+
+@bp.get("/db/health")
+def db_health():
+    import os, time
+    from flask import jsonify
+    dialect = "memory"
+    connected = False
+    info = {}
+    try:
+        if os.environ.get("DATABASE_URL"):
+            try:
+                from ..dal import neon_pg
+                # connect & ensure schema; neon_pg will set its internal dialect
+                neon_pg.ensure_schema()
+                # a lightweight query to verify connectivity
+                try:
+                    neon_pg._exec("SELECT 1", fetch=True)
+                    connected = True
+                except Exception:
+                    connected = False
+                # detect dialect
+                try:
+                    # force init
+                    neon_pg._connect()
+                    dialect = getattr(neon_pg, "_DIALECT", "postgresql")
+                except Exception:
+                    dialect = "postgresql"
+            except Exception:
+                dialect = "unknown"
+                connected = False
+        else:
+            # no DATABASE_URL → in-memory "connected"
+            connected = True
+            dialect = "memory"
+        return jsonify({"ok": True, "dialect": dialect, "connected": connected, "ts": time.time()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500

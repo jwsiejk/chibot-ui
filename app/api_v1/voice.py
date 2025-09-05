@@ -3,7 +3,9 @@ from flask import Blueprint, jsonify, request
 from ..services.mock_stt import transcribe
 from ..services.streaming import make_assistant_frames, schedule_frames
 from ..db import db
-from ..middleware.rate_limit import limit, check_now
+from ..middleware.rate_limit import check_now
+from ..middleware.rate_limit import limit
+from ..api_v1.admin import _emit
 from ..security_state import get_user
 bp = Blueprint("voice", __name__)
 @limit("voice_stt")
@@ -15,6 +17,10 @@ def stt():
     f=request.files['file']; audio=f.read()
     sid=request.form.get('session_id') or 'default'
     text=transcribe(audio, request.form.get('mime') or 'audio/webm', request.form.get('meta') or '{}')
+    try:
+        _emit('stt', bytes=len(audio))
+    except Exception:
+        pass
     email=get_user(); db.ensure_session(sid, email); db.add_message(sid,"user",text)
     tid, frames = make_assistant_frames(text or "voice"); schedule_frames(sid, frames)
     try:
@@ -28,4 +34,9 @@ def stt():
 def tts_with_visemes():
     from ..services.mock_tts import synth
     data=request.get_json(silent=True) or {}; text=(data.get("text") or "").strip()
-    a,v=synth(text); return jsonify({"ok": True, "audio_b64": a, "visemes": v})
+    a,v=synth(text)
+    try:
+        _emit('tts', chars=len(text))
+    except Exception:
+        pass
+    return jsonify({"ok": True, "audio_b64": a, "visemes": v})

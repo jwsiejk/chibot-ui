@@ -65,3 +65,21 @@
 
 ## Profile gate / Auth
 - [ ] First-time profile detection and save path work via API; persisted in DB.
+
+---
+
+# Phase 5 — Acceptance Checklist
+
+## Admin Log (SSE)
+- [ ] GET /api/v1/admin/logs streams newline-delimited JSON events.
+- [ ] Key actions emit events: greet, stt, tts, ws_open/close, nudge, interrupt, config_update, layout_publish.
+
+## Real vendor lanes (prod)
+- [ ] Providers implement real paths guarded by env: Whisper STT (language lock, normalization), ElevenLabs TTS (with visemes).
+- [ ] Tests use mocks (no external network).
+
+## Route-linter
+- [ ] Tests fail if any non-v1 route like '/api/greet' exists or legacy symbols are present.
+
+## Profile gate UI
+- [ ] index.html (or base template) includes a disabled Start button and a small script that calls /api/v1/profile/get and enables Start when exists=true.

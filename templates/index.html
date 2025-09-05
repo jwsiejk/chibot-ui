@@ -116,5 +116,15 @@
   <script defer src="{{ url_for('static', filename='js/layout_editor.js') }}"></script>
 <audio id="chipAudio" autoplay style="display:none"></audio>
 <script type="module" src="/static/js/app.js"></script>
+<button id="startBtn" disabled>Start</button>
+<script>
+  (async function() {
+    try {
+      const r = await fetch('/api/v1/profile/get');
+      const j = await r.json();
+      if (j && j.exists) document.getElementById('startBtn').disabled = false;
+    } catch(e) {}
+  })();
+</script>
 </body>
 </html>

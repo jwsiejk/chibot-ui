@@ -3,6 +3,7 @@ import json, asyncio, urllib.parse
 from .bus import bus
 from ..services.streaming import make_assistant_frames
 from .barge import BargeState
+from app.api_v1.admin import _emit
 from .one_tab import acquire as _acquire, release as _release
 
 async def ws_chat(scope, receive, send):
@@ -21,6 +22,10 @@ async def ws_chat(scope, receive, send):
 
     # Accept
     await send({"type": "websocket.accept"})
+    try:
+        _emit('ws_open', session_id=session_id)
+    except Exception:
+        pass
     # One-WS-per-tab guard
     if not _acquire(_key):
         await send({"type":"websocket.close","code":4001})
@@ -72,6 +77,10 @@ async def ws_chat(scope, receive, send):
                 if mtype == "control":
                     cmd = msg.get("cmd")
                     if cmd == "barge_start":
+                        try:
+                            _emit('nudge','barge_start',session_id=session_id)
+                        except Exception:
+                            pass
                         # Soft barge-in: pause, then confirm after confirm_ms
                         confirm_ms = int((msg.get("confirm_ms") or 0) or int((__import__('app').db.db.get_config().get('confirm_ms', 420))))
                         def _send_state(phase):
@@ -119,5 +128,9 @@ async def ws_chat(scope, receive, send):
             pass
         try:
             _release(_key)
+        except Exception:
+            pass
+        try:
+            _emit('ws_close', session_id=session_id)
         except Exception:
             pass
