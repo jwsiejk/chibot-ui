@@ -7,6 +7,23 @@ let mediaStream;
 let recorder;
 let chunks = [];
 
+/** --------------- CSRF helper (voice) --------------- **/
+async function csrfHeaders(){
+  let tok = sessionStorage.getItem("csrf");
+  if (!tok) {
+    try{
+      const r = await fetch("/api/v1/auth/csrf", { credentials: "include" });
+      const j = await r.json();
+      if (j?.ok && j?.csrf) {
+        sessionStorage.setItem("csrf", j.csrf);
+        tok = j.csrf;
+      }
+    }catch(e){ /* ignore */ }
+  }
+  return tok ? { "X-CSRF-Token": tok } : {};
+}
+/** --------------------------------------------------- **/
+
 export function armVAD(boostDuringPlayback = 0){
   vadArmed = true;
   thresholdBoost = boostDuringPlayback;
@@ -48,7 +65,12 @@ async function postSTT(blob){
     const form = new FormData();
     form.append("file", blob, "turn.webm");
     form.append("meta", JSON.stringify(meta));
-    const r = await fetch(API.STT, { method: "POST", body: form, credentials: "include" });
+    const r = await fetch(API.STT, {
+      method: "POST",
+      body: form,
+      credentials: "include",
+      headers: await csrfHeaders()
+    });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     // The server would then stream response on WS; no-op here
   }catch(e){
