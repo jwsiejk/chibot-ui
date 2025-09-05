@@ -8,7 +8,34 @@ import { bindControls, openWS, closeWS, sendInterrupt, cancelNudge } from "./ws.
 
 const $ = (s) => document.querySelector(s);
 
-let startBtn, endBtn, chatOpenBtn, composer, sendBtn, stateDots, instructionStrip;
+/* -------------------------------------------------------
+   CSRF helpers
+------------------------------------------------------- */
+async function ensureCSRF(){
+  let tok = sessionStorage.getItem("csrf");
+  if (!tok) {
+    try {
+      const r = await fetch("/api/v1/auth/csrf", { credentials: "include" });
+      const j = await r.json();
+      if (j?.ok && j?.csrf) {
+        sessionStorage.setItem("csrf", j.csrf);
+        tok = j.csrf;
+      }
+    } catch (e) { /* ignore */ }
+  }
+  return tok || "";
+}
+function csrfHeader(){
+  const tok = sessionStorage.getItem("csrf");
+  return tok ? { "X-CSRF-Token": tok } : {};
+}
+
+/* -------------------------------------------------------
+   UI refs
+------------------------------------------------------- */
+let startBtn, endBtn, chatOpenBtn, composer, sendBtn, instructionStrip;
+let stateLabelEl;   // label under the three dots
+let stateDotsWrap;  // optional: if you still render [data-dot] dots
 
 document.addEventListener("DOMContentLoaded", async () => {
   startBtn = $("#startButton");
@@ -16,8 +43,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   chatOpenBtn = $("#chatButton");
   composer = $("#composerInput");
   sendBtn = $("#composerSend");
-  stateDots = $("#stateDots");
   instructionStrip = $("#instructionStrip");
+  stateLabelEl = $("#stateLabel");
+  stateDotsWrap = $("#stateDots"); // present in older templates; harmless if null
 
   bindControls(startBtn, endBtn);
   setVisemeCallback(onViseme);
@@ -25,11 +53,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireUI();
   renderSuggestions(["Show roadmap", "Explain Portworx", "Demo FlashArray", "Open Admin"], onSuggestion);
 
+  // prefetch CSRF so first POSTs don't 403
+  await ensureCSRF();
+
   // initial state
   setState(STATES.READY);
-  updateStateDots(STATES.READY);
+  updateStateIndicators(STATES.READY);
 });
 
+/* -------------------------------------------------------
+   Event wiring
+------------------------------------------------------- */
 function wireUI(){
   startBtn?.addEventListener("click", onStart);
   endBtn?.addEventListener("click", onEnd);
@@ -52,19 +86,21 @@ function wireUI(){
     } else {
       disarmVAD();
     }
-    updateStateDots(next);
+    updateStateIndicators(next);
   });
 }
 
+/* -------------------------------------------------------
+   Start / End
+------------------------------------------------------- */
 async function onStart(){
   hideError();
   try{
     openWS();
-    await greet();
-    await initMic().catch(()=>{});
+    await greet();               // GET /api/v1/greet
+    await initMic().catch(()=>{}); // mic optional
     setState(STATES.LISTENING);
-    // Auto-open chat UI if you have a collapsible pane
-    document.body.classList.add("chat-open");
+    document.body.classList.add("chat-open"); // show chat if collapsible
   }catch(e){
     showError(API.GREET, e.status || "ERR", e.message || "start failed");
   }
@@ -78,6 +114,9 @@ async function onEnd(){
   }catch(e){}
 }
 
+/* -------------------------------------------------------
+   Text send
+------------------------------------------------------- */
 async function onSend(){
   cancelNudge();
   const text = composer?.value?.trim();
@@ -85,30 +124,53 @@ async function onSend(){
   composer.value = "";
   setState(STATES.THINKING);
   try{
+    await ensureCSRF();
+    const headers = Object.assign({ "Content-Type": "application/json" }, csrfHeader());
     const r = await fetch(API.CHAT, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       credentials: "include",
       body: JSON.stringify({ text })
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    // Server will stream via WS; no-op here
+    // Response streams over WS
   }catch(e){
     showError(API.CHAT, e.status || "ERR", e.message || "");
   }
 }
 
+/* -------------------------------------------------------
+   Greet (unchanged contract; now JSON)
+------------------------------------------------------- */
 async function greet(){
   const r = await fetch(API.GREET, { method: "GET", credentials: "include" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
 
-function updateStateDots(state){
-  const nodes = stateDots?.querySelectorAll?.("[data-dot]") || [];
+/* -------------------------------------------------------
+   Indicators (dots + label)
+------------------------------------------------------- */
+function labelForState(state){
+  switch (state){
+    case STATES.LISTENING: return "Listening";
+    case STATES.THINKING:  return "Thinking";
+    case STATES.RESPONDING:return "Responding";
+    default:               return "Ready";
+  }
+}
+function updateStateIndicators(state){
+  // optional legacy dots toggling if your DOM has [data-dot]
+  const nodes = stateDotsWrap?.querySelectorAll?.("[data-dot]") || [];
   nodes.forEach(n => n.classList.toggle("on", n.dataset.dot === state));
+
+  // authoritative label under the three dots
+  if (stateLabelEl) stateLabelEl.textContent = labelForState(state);
 }
 
+/* -------------------------------------------------------
+   Hooks
+------------------------------------------------------- */
 function onViseme(v){
   // hook for your 2D mouth animation
 }
