@@ -3,9 +3,9 @@ import { STATES, setState, getState, onState } from "./state.js";
 import { showError, hideError } from "./errors.js";
 import { renderSuggestions } from "./suggestions.js";
 import { playStream, stopPlayback, setVisemeCallback, isPlaying } from "./audio.js";
-import { armVAD, disarmVAD, initMic, speechStart, speechEnd } from "./voice.js";
+import { armVAD, disarmVAD, initMic } from "./voice.js";
 import { bindControls, openWS, closeWS, sendInterrupt, cancelNudge } from "./ws.js";
-import { getSID } from './util/sid.js';
+import { getSID } from "./util/sid.js";
 
 const $ = (s) => document.querySelector(s);
 
@@ -15,28 +15,25 @@ const $ = (s) => document.querySelector(s);
 async function ensureCSRF(){
   let tok = sessionStorage.getItem("csrf");
   if (!tok) {
-    try {
+    try{
       const r = await fetch("/api/v1/auth/csrf", { credentials: "include" });
       const j = await r.json();
-      if (j?.ok && j?.csrf) {
-        sessionStorage.setItem("csrf", j.csrf);
-        tok = j.csrf;
+      if (j && j.ok && j.csrf_token) {
+        sessionStorage.setItem("csrf", j.csrf_token);
       }
-    } catch (e) { /* ignore */ }
+    }catch(e){ /* best-effort */ }
   }
-  return tok || "";
-}
-function csrfHeader(){
-  const tok = sessionStorage.getItem("csrf");
-  return tok ? { "X-CSRF-Token": tok } : {};
+  return {
+    "X-CSRF-Token": sessionStorage.getItem("csrf") || ""
+  };
 }
 
 /* -------------------------------------------------------
-   UI refs
+   State / UI elements
 ------------------------------------------------------- */
 let startBtn, endBtn, chatOpenBtn, composer, sendBtn, instructionStrip;
-let stateLabelEl;   // label under the three dots
-let stateDotsWrap;  // optional: if you still render [data-dot] dots
+let stateLabelEl;
+let stateDotsWrap;
 
 document.addEventListener("DOMContentLoaded", async () => {
   startBtn = $("#startButton");
@@ -46,7 +43,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   sendBtn = $("#composerSend");
   instructionStrip = $("#instructionStrip");
   stateLabelEl = $("#stateLabel");
-  stateDotsWrap = $("#stateDots"); // present in older templates; harmless if null
+  stateDotsWrap = $("#stateDots");
 
   bindControls(startBtn, endBtn);
   setVisemeCallback(onViseme);
@@ -79,11 +76,13 @@ function wireUI(){
     }
   });
 
+  // React when state changes to toggle VAD and labels
   onState(({prev, next}) => {
     if (next === STATES.LISTENING){
       armVAD(1);
     } else if (next === STATES.RESPONDING){
-      armVAD(2); // threshold boost during playback
+      // threshold boost during playback
+      armVAD(2);
     } else {
       disarmVAD();
     }
@@ -94,14 +93,20 @@ function wireUI(){
 /* -------------------------------------------------------
    Start / End
 ------------------------------------------------------- */
+async function greet(){
+  const sid = getSID();
+  const r = await fetch(`${API.GREET}?session_id=${encodeURIComponent(sid)}`, { credentials: "include" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+}
+
 async function onStart(){
   hideError();
   try{
-    openWS();
-    await greet();               // GET /api/v1/greet
-    await initMic().catch((e)=>{ showError('mic','blocked','Microphone permission denied'); }); // mic optional
+    openWS();                 // opens /ws/v1/chat?sid=SID and sends hello
+    await greet();            // GET /api/v1/greet?session_id=SID
+    await initMic().catch((e)=>{ showError("mic","blocked","Microphone permission denied"); });
     setState(STATES.LISTENING);
-    document.body.classList.add("chat-open"); // show chat if collapsible
+    document.body.classList.add("chat-open");
   }catch(e){
     showError(API.GREET, e.status || "ERR", e.message || "start failed");
   }
@@ -112,7 +117,7 @@ async function onEnd(){
     closeWS();
     setState(STATES.READY);
     document.body.classList.remove("chat-open");
-  }catch(e){}
+  }catch(e){ /* noop */ }
 }
 
 /* -------------------------------------------------------
@@ -120,32 +125,29 @@ async function onEnd(){
 ------------------------------------------------------- */
 async function onSend(){
   cancelNudge();
-  const text = composer?.value?.trim();
+  const text = (composer?.value || "").trim();
   if (!text) return;
   composer.value = "";
   setState(STATES.THINKING);
+
   try{
-    await ensureCSRF();
-    const headers = Object.assign({ "Content-Type": "application/json" }, csrfHeader());
     const r = await fetch(API.CHAT, {
       method: "POST",
-      headers,
       credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(await ensureCSRF())
+      },
       body: JSON.stringify({ text, session_id: getSID() })
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    // Response streams over WS
+    if (!r.ok){
+      showError(API.CHAT, r.status, "chat failed");
+      setState(STATES.READY);
+    }
   }catch(e){
-    showError(API.CHAT, e.status || "ERR", e.message || "");
+    showError(API.CHAT, "ERR", e.message || "chat failed");
+    setState(STATES.READY);
   }
-}
-
-/* -------------------------------------------------------
-   Greet (unchanged contract; now JSON)
-------------------------------------------------------- */
-async function greet(){ const sid = getSID(); const r = await fetch(`${API.GREET}?session_id=${encodeURIComponent(sid)}`, {credentials:'include'}); if(!r.ok) throw new Error(`HTTP ${r.status}`); });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
 }
 
 /* -------------------------------------------------------
@@ -160,11 +162,9 @@ function labelForState(state){
   }
 }
 function updateStateIndicators(state){
-  // optional legacy dots toggling if your DOM has [data-dot]
-  const nodes = stateDotsWrap?.querySelectorAll?.("[data-dot]") || [];
-  nodes.forEach(n => n.classList.toggle("on", n.dataset.dot === state));
-
-  // authoritative label under the three dots
+  if (stateDotsWrap){
+    stateDotsWrap.querySelectorAll("[data-dot]").forEach(d => d.classList.toggle("on", d.dataset.dot === state));
+  }
   if (stateLabelEl) stateLabelEl.textContent = labelForState(state);
 }
 
@@ -175,6 +175,7 @@ function onViseme(v){
   // hook for your 2D mouth animation
 }
 function onSuggestion(text){
+  if (!composer) return;
   composer.value = text;
   onSend();
 }
