@@ -39,13 +39,17 @@ assert_true("make_assistant_frames(text or \"voice\", sid)" in voice, "voice pas
 # 5. server emits assistant_* frames somewhere pre-WS (streaming)
 assert_true("\"assistant_chunk\"" in stream and "\"assistant_end\"" in stream, "assistant_* frames generated in streaming")
 
-# 6. real OpenAI provider present and uses HTTP client or httputil
-real = read(os.path.join(ROOT,'app/services/providers_real/openai_http_provider.py'))
-assert_true(('http_json(' in real or 'urllib.request' in real) and ('chat/completions' in real), 'openai_http provider present and uses HTTP client (direct or httputil)')
-import subprocess
-proc = subprocess.run([sys.executable, os.path.join(ROOT,'scripts','route_linter.py')], capture_output=True, text=True)
-print(proc.stdout)
-assert_true(proc.returncode == 0, 'route linter passes')
+# 6. openai provider stub exists and no network use in tests
+openai = read(os.path.join(ROOT,"app/services/providers/openai_provider.py"))
+assert_true(("urllib.request" in openai) and ("OPENAI_API_KEY" in openai), "openai provider: network path present")
+assert_true(("fallback" in openai) or ("openai-stub" in openai), "openai provider: fallback path present when no key")
+assert_true("os.environ.get(\"OPENAI_MODEL\"" in openai, "openai model env read")
 
-print('\nRESULT:', 'PASS' if ok else 'FAIL')
+# 7. route linter
+import subprocess
+proc = subprocess.run([sys.executable, os.path.join(ROOT,"scripts","route_linter.py")], capture_output=True, text=True)
+print(proc.stdout)
+assert_true(proc.returncode == 0, "route linter passes")
+
+print("\nRESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

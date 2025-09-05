@@ -38,3 +38,16 @@ body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-ap
 .design-box{position:absolute;inset:0;pointer-events:none}
 .design-box .handle{pointer-events:auto;width:12px;height:12px;border:2px solid #7aa0ff;background:#1b2130;position:absolute}
 .design-box .handle.br{right:-8px;bottom:-8px;cursor:se-resize}
+
+
+/* --- Zoom/Teams style container & responsive layout --- */
+.container{max-width:1400px;margin:0 auto;padding:16px;}
+.layout{display:grid;grid-template-columns:minmax(420px,2fr) minmax(320px,1fr);gap:20px;align-items:start;}
+@media (max-width: 1200px){
+  .layout{grid-template-columns:1fr;gap:12px;}
+}
+.stage{min-height:52vh;}
+.chip-frame{height:56vh;margin-top:8px}
+#chipImage{max-height:54vh;width:auto}
+.chat{max-height:70vh;display:flex;flex-direction:column}
+.chat-body{flex:1;overflow:auto}

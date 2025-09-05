@@ -5,6 +5,7 @@ import { renderSuggestions } from "./suggestions.js";
 import { playStream, stopPlayback, setVisemeCallback, isPlaying } from "./audio.js";
 import { armVAD, disarmVAD, initMic, speechStart, speechEnd } from "./voice.js";
 import { bindControls, openWS, closeWS, sendInterrupt, cancelNudge } from "./ws.js";
+import { getSID } from './util/sid.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -98,7 +99,7 @@ async function onStart(){
   try{
     openWS();
     await greet();               // GET /api/v1/greet
-    await initMic().catch(()=>{}); // mic optional
+    await initMic().catch((e)=>{ showError('mic','blocked','Microphone permission denied'); }); // mic optional
     setState(STATES.LISTENING);
     document.body.classList.add("chat-open"); // show chat if collapsible
   }catch(e){
@@ -130,7 +131,7 @@ async function onSend(){
       method: "POST",
       headers,
       credentials: "include",
-      body: JSON.stringify({ text })
+      body: JSON.stringify({ text, session_id: getSID() })
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     // Response streams over WS
@@ -142,8 +143,7 @@ async function onSend(){
 /* -------------------------------------------------------
    Greet (unchanged contract; now JSON)
 ------------------------------------------------------- */
-async function greet(){
-  const r = await fetch(API.GREET, { method: "GET", credentials: "include" });
+async function greet(){ const sid = getSID(); const r = await fetch(`${API.GREET}?session_id=${encodeURIComponent(sid)}`, {credentials:'include'}); if(!r.ok) throw new Error(`HTTP ${r.status}`); });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }

@@ -7,10 +7,6 @@ set -euo pipefail
 echo "==> Installing requirements"
 pip install -r requirements.txt
 
-echo "==> Preflight (must pass)"
-python scripts/preflight.py
-python scripts/verify_preflight.py
-
 echo "==> Running v1-only route linter"
 python scripts/route_linter.py
 

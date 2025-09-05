@@ -22,6 +22,14 @@ def create_app():
     def index():
         return render_template("index.html")
 
+    @app.get("/admin")
+    def admin():
+        return render_template("admin.html")
+
+    @app.get("/diagnostics")
+    def diagnostics():
+        return render_template("diagnostics.html")
+
     # Favicon (browsers request /favicon.ico by default)
     @app.get("/favicon.ico")
     def favicon():

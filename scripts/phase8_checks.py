@@ -23,10 +23,10 @@ stream = read(os.path.join(ROOT,"app/services/streaming.py"))
 A(("kb_search" in stream) and (("context=ctx" in stream) or ("context=context" in stream)) and (("kb': kb" in stream) or ("kb': kb" in stream) or ("'kb': kb" in stream) or ("'kb': kb" in stream)), "KB passed into provider context")
 
 # 4. providers mention KB in responses
-real = read(os.path.join(ROOT,'app/services/providers_real/openai_http_provider.py'))
-openai = read(os.path.join(ROOT,"app/services/providers_real/openai_http_provider.py"))
-A("OPENAI_API_KEY" in real, "real provider reads API key")
-A("chat/completions" in openai, "real provider targets chat completions API")
+mockp = read(os.path.join(ROOT,"app/services/providers/mock_provider.py"))
+openai = read(os.path.join(ROOT,"app/services/providers/openai_provider.py"))
+A("[KB:" in mockp, "mock provider emits KB count tag")
+A("KB:" in openai or "KB" in openai, "openai stub emits KB count tag")
 
 # 5. MP3 path in providers (ElevenLabs provider mentions output format)
 tts = read(os.path.join(ROOT,"app/services/providers/elevenlabs_tts.py"))

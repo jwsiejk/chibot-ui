@@ -1,4 +1,5 @@
 import { API, TIMING } from "./config.js";
+import { getSID } from './util/sid.js';
 import { setState, STATES } from "./state.js";
 import { showError } from "./errors.js";
 import { playStream, stopPlayback, isPlaying } from "./audio.js";

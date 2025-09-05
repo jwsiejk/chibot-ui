@@ -1,7 +1,7 @@
 from ..db import db
 def trim_words(label: str, max_words: int) -> str:
     return " ".join(label.split()[:max_words])
-def hygienic_suggestions(reply: str | None = None):
+def hygienic_suggestions():
     cfg = db.get_config()
     max_items = int(cfg.get("suggestions_max_items", 4))
     max_words = int(cfg.get("suggestions_max_words", 7))

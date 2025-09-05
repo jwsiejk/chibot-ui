@@ -1,4 +1,5 @@
 import { API, TIMING } from "./config.js";
+import { getSID } from './util/sid.js';
 import { setState, STATES } from "./state.js";
 
 let vadArmed = false;
@@ -61,7 +62,7 @@ async function postSTT(blob){
   try{
     setState(STATES.THINKING);
     // meta we would include: language lock, simple prosody placeholders
-    const meta = { language: "en", avg_rms: 0.0, max_rms: 0.0 };
+    const meta = { session_id: getSID(), language: "en", avg_rms: 0.0, max_rms: 0.0 };
     const form = new FormData();
     form.append("file", blob, "turn.webm");
     form.append("meta", JSON.stringify(meta));
