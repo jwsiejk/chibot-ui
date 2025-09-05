@@ -1,25 +1,23 @@
-// static/js/app.js — v2: robust wiring + CSRF + clear errors
+// static/js/app.js — voice capture + barge-in + robust wiring
 
-/* ------- tiny helpers ------- */
+/* ---------- tiny helpers ---------- */
 const $  = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
-
-function log(...args){ try{ console.log("[AskChip]", ...args); }catch{} }
+const log = (...a) => { try { console.log("[AskChip]", ...a); } catch {} };
 function showErr(msg){ const b=$("#errorBanner"); if(!b) return; b.textContent=String(msg||"Error"); b.classList.add("show"); }
 function clearErr(){ const b=$("#errorBanner"); if(!b) return; b.classList.remove("show"); b.textContent=""; }
 
-/* ------- CSRF (works with common cookie names) ------- */
+/* ---------- CSRF (cookie → header) ---------- */
 function getCookie(name){
   const m = document.cookie.match(new RegExp("(^|; )" + name.replace(/[-.$?*|{}()[]\\/+^]/g, "\\$&") + "=([^;]*)"));
   return m ? decodeURIComponent(m[2]) : null;
 }
 function csrfHeader(){
-  // try common names your middleware might use
   const v = getCookie("csrf_token") || getCookie("csrftoken") || getCookie("XSRF-TOKEN") || getCookie("csrf");
   return v ? { "X-CSRFToken": v } : {};
 }
 
-/* ------- state dots ------- */
+/* ---------- state dots ---------- */
 const dots = (() => {
   const set = (phase) => {
     $$(".state-dots .dot").forEach(d => d.classList.remove("active"));
@@ -30,10 +28,14 @@ const dots = (() => {
   return { set };
 })();
 
-/* ------- websocket ------- */
+/* ---------- globals ---------- */
 let ws = null;
 let hb = null;
+let assistantSpeaking = false;      // server "assistant_speaking" state
+let bargeTimer = null;              // pending 420ms confirm before interrupt
+let stopVoice = null;               // function to stop mic/VAD/recorder
 
+/* ---------- websocket ---------- */
 function wsConnect() {
   const url = window.ASKCHIP?.api?.ws;
   if (!url) { showErr("WS url missing"); return; }
@@ -45,13 +47,15 @@ function wsConnect() {
   ws.addEventListener("open", () => {
     clearErr();
     $("#btnEnd") && ($("#btnEnd").disabled = false);
-    // heartbeat ping (app-level)
+
+    // heartbeat ping
     const interval = (window.ASKCHIP?.config?.ws_ping_interval_ms) || 25000;
     hb = setInterval(() => {
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
       }
     }, interval);
+
     dots.set("ready");
   });
 
@@ -59,15 +63,16 @@ function wsConnect() {
     let m = null;
     try { m = JSON.parse(e.data); } catch {}
     if (!m) return;
+
     if (m.type === "state") {
-      if (m.phase === "assistant_speaking") dots.set("responding");
-      else if (m.phase === "assistant_end" || m.phase === "ready") dots.set("ready");
+      if (m.phase === "assistant_speaking") { assistantSpeaking = true; dots.set("responding"); }
+      else if (m.phase === "assistant_end" || m.phase === "ready") { assistantSpeaking = false; dots.set("ready"); }
     } else if (m.type === "text") {
       addMsg("assistant", m.content || "");
     } else if (m.type === "error") {
       showErr(m.message || "Server error");
     } else if (m.type === "pong") {
-      // heartbeat OK
+      /* heartbeat ok */
     }
   });
 
@@ -77,24 +82,19 @@ function wsConnect() {
     log("WS closed");
   });
 
-  ws.addEventListener("error", () => {
-    showErr("WebSocket error");
-  });
+  ws.addEventListener("error", () => showErr("WebSocket error"));
 }
 
-/* ------- greet + chat ------- */
+/* ---------- greet + chat ---------- */
 async function greet() {
   const url = window.ASKCHIP?.api?.greet;
   if (!url) { showErr("greet url missing"); return; }
-  log("GET", url);
   try {
     const r = await fetch(url, { credentials: "include" });
     if (!r.ok) throw new Error(`/api/v1/greet → ${r.status}`);
     const j = await r.json().catch(()=>({}));
     if (j?.text) addMsg("assistant", j.text);
-  } catch (e) {
-    showErr(e.message || String(e));
-  }
+  } catch (e) { showErr(e.message || String(e)); }
 }
 
 async function sendChat(text) {
@@ -102,21 +102,16 @@ async function sendChat(text) {
   if (!url) { showErr("chat url missing"); return; }
   const body = JSON.stringify({ text: String(text||"") });
   const headers = Object.assign({ "Content-Type": "application/json" }, csrfHeader());
-
-  log("POST", url, body);
   try {
     const r = await fetch(url, { method: "POST", headers, credentials: "include", body });
     if (!r.ok) throw new Error(`/api/v1/chat → ${r.status}`);
-    // Assistant reply will stream over WS; we don't need the response body here.
-  } catch (e) {
-    showErr(e.message || String(e));
-  }
+    // assistant reply comes over WS
+  } catch (e) { showErr(e.message || String(e)); }
 }
 
-/* ------- chat UI ------- */
+/* ---------- chat UI ---------- */
 function addMsg(role, text){
-  const body = $("#chatBody");
-  if (!body) return;
+  const body = $("#chatBody"); if (!body) return;
   const d = document.createElement("div");
   d.className = "msg " + role;
   d.textContent = text;
@@ -124,7 +119,132 @@ function addMsg(role, text){
   body.scrollTop = body.scrollHeight;
 }
 
-/* ------- wire buttons ------- */
+/* ---------- voice capture (VAD + one blob per turn) ---------- */
+async function startVoiceCapture(onText){
+  // 1) Mic with echo/noise control, 48 kHz
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { sampleRate: 48000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+  });
+
+  // 2) WebAudio for simple VAD (RMS threshold + trailing silence)
+  const ctx   = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+  const src   = ctx.createMediaStreamSource(stream);
+  const proc  = ctx.createScriptProcessor(2048, 1, 1); // ok here; we can migrate to Worklet later
+
+  // Tunables (match spec defaults)
+  const START_RMS = 0.015; // speech starts above this
+  const STOP_RMS  = 0.008; // consider silence below this
+  const MIN_MS    = 220;   // min speech duration
+  const SILENCE_MS= 320;   // trailing silence to end
+  const BARGE_CONFIRM_MS = 420;
+
+  let speaking = false, lastSpeech = 0, speechStart = 0, rmsSum = 0, rmsMax = 0, rmsN = 0;
+
+  // 3) Recorder (one blob per turn)
+  const rec = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus", audioBitsPerSecond: 128000 });
+  let chunks = [];
+
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  rec.onstop = async () => {
+    try {
+      const blob = new Blob(chunks, { type: "audio/webm" });
+      chunks = [];
+      const speech_ms = Date.now() - speechStart;
+      if (speech_ms < MIN_MS) return; // too short
+
+      // 4) POST to /api/v1/voice/stt
+      const fd = new FormData();
+      fd.append("file", blob, "turn.webm");
+      fd.append("mime", "audio/webm;codecs=opus");
+      fd.append("meta", JSON.stringify({
+        speech_ms,
+        avg_rms: rmsSum / Math.max(1, rmsN),
+        max_rms: rmsMax,
+        language: "en"
+      }));
+      const headers = Object.assign({}, csrfHeader()); // do NOT set Content-Type with FormData
+      const r = await fetch("/api/v1/voice/stt", { method: "POST", body: fd, headers, credentials: "include" });
+      if (!r.ok) throw new Error(`/api/v1/voice/stt → ${r.status}`);
+      const j = await r.json();
+      if (j?.text && typeof onText === "function") onText(j.text);
+    } catch (e) { showErr(e.message || String(e)); }
+  };
+
+  proc.onaudioprocess = (ev) => {
+    const buf = ev.inputBuffer.getChannelData(0);
+    // quick RMS
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) { const v = buf[i]; sum += v*v; }
+    const rms = Math.sqrt(sum / buf.length);
+    const now = performance.now();
+
+    // ----- soft barge-in (if assistant is speaking) -----
+    if (!speaking && assistantSpeaking && rms >= START_RMS && !bargeTimer) {
+      // Start confirm window; if speech persists, send interrupt
+      bargeTimer = setTimeout(() => {
+        if (assistantSpeaking) {
+          try {
+            ws && ws.readyState === WebSocket.OPEN &&
+              ws.send(JSON.stringify({ type:"control", cmd:"interrupt", reason:"vad" }));
+          } catch {}
+        }
+        bargeTimer = null;
+      }, BARGE_CONFIRM_MS);
+    }
+    if (!assistantSpeaking && bargeTimer) { clearTimeout(bargeTimer); bargeTimer = null; }
+
+    // ----- turn VAD -----
+    if (!speaking && rms >= START_RMS) {
+      speaking = true;
+      lastSpeech = now;
+      speechStart = Date.now();
+      rmsSum = 0; rmsN = 0; rmsMax = 0;
+      chunks = [];
+      try { rec.start(); } catch {}
+      dots.set("listening");
+    }
+
+    if (speaking) {
+      rmsSum += rms; rmsN++; if (rms > rmsMax) rmsMax = rms;
+      if (rms >= STOP_RMS) lastSpeech = now;
+
+      // end after trailing silence
+      if ((now - lastSpeech) > SILENCE_MS) {
+        speaking = false;
+        try { rec.stop(); } catch {}
+        dots.set("thinking");
+      }
+    }
+  };
+
+  src.connect(proc); proc.connect(ctx.destination);
+
+  // Stop function to clean up
+  return () => {
+    try { proc.disconnect(); src.disconnect(); ctx.close(); } catch {}
+    try { stream.getTracks().forEach(t => t.stop()); } catch {}
+    if (bargeTimer) { clearTimeout(bargeTimer); bargeTimer = null; }
+  };
+}
+
+/* ---------- wire buttons ---------- */
+async function onStartClicked(){
+  try {
+    // 1) WS + greet
+    wsConnect();
+    await greet();
+
+    // 2) Voice capture (once)
+    if (!stopVoice) {
+      stopVoice = await startVoiceCapture((text) => {
+        addMsg("user", text);
+        // optional: also post to /api/v1/chat to drive LLM lane explicitly
+        sendChat(text);
+      });
+    }
+  } catch (e) { showErr(e.message || String(e)); }
+}
+
 function wireUI(){
   const start = $("#btnStart");
   const end   = $("#btnEnd");
@@ -133,22 +253,17 @@ function wireUI(){
   const send  = $("#chatSend");
   const input = $("#chatInput");
 
-  if (start) {
-    start.addEventListener("click", async () => {
-      log("Start clicked");
-      start.disabled = true;
-      wsConnect();
-      await greet();
-      start.disabled = false;
-    });
-  }
+  if (start) start.addEventListener("click", async () => {
+    start.disabled = true;
+    await onStartClicked();
+    start.disabled = false;
+  });
 
-  if (end) {
-    end.addEventListener("click", () => {
-      log("End clicked");
-      try { ws && ws.close(); } catch {}
-    });
-  }
+  if (end) end.addEventListener("click", () => {
+    try { ws && ws.close(); } catch {}
+    if (stopVoice) { try { stopVoice(); } catch {} stopVoice = null; }
+    dots.set("ready");
+  });
 
   if (mute) {
     mute.addEventListener("click", (ev) => {
@@ -164,7 +279,6 @@ function wireUI(){
       const pressed = ev.currentTarget.getAttribute("aria-pressed") === "true";
       ev.currentTarget.setAttribute("aria-pressed", (!pressed).toString());
       $("#chatPane").style.display = pressed ? "none" : "flex";
-      log("Chat pane", pressed ? "hidden" : "shown");
     });
   }
 
@@ -176,7 +290,6 @@ function wireUI(){
       input.value = "";
       await sendChat(text);
     });
-    // Enter to send
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -185,20 +298,18 @@ function wireUI(){
     });
   }
 
-  // Initial state
+  // initial UI
   dots.set("ready");
 }
 
-/* ------- boot ------- */
+/* ---------- boot ---------- */
 window.addEventListener("DOMContentLoaded", () => {
   try {
-    // Set initial mouth sprite (matches your 2D pack naming)
+    // Initial mouth sprite (your 2D pack naming)
     const base = window.ASKCHIP?.assets?.visemeBase || "/static/visemes/chip-2d-pack/";
     const m = $("#chipMouth");
     if (m) { m.src = base + "mouth_neutral.png"; m.style.display = "block"; }
     wireUI();
     clearErr();
-  } catch (e) {
-    showErr(e.message || String(e));
-  }
+  } catch (e) { showErr(e.message || String(e)); }
 });
