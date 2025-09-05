@@ -1,10 +1,9 @@
 # app/services/providers_real/openai_http_provider.py
-import os, json, uuid, urllib.request
+import os, json, uuid
+from ..httputil import http_json
 
 class OpenAIHTTPProvider:
-    """Production OpenAI provider using Chat Completions API.
-    Requires OPENAI_API_KEY. Uses OPENAI_MODEL (default: gpt-4o-mini).
-    """
+    """Production OpenAI provider using Chat Completions API."""
     def __init__(self):
         self.api_key = os.environ.get("OPENAI_API_KEY")
         if not self.api_key:
@@ -18,19 +17,21 @@ class OpenAIHTTPProvider:
 
     def generate_reply(self, prompt: str, persona=None, teacher_move=None, context=None) -> str:
         sys = (persona or {}).get("system") or "You are Chip, a helpful virtual systems engineer."
-        messages = [{"role":"system","content":sys},{"role":"user","content":(prompt or "").strip()}]
+        messages = [{"role":"system","content":sys},{"role":"user","content":(prompt or '').strip()}]
         payload = {
             "model": self.model,
             "messages": messages,
             "temperature": float(os.environ.get("OPENAI_TEMPERATURE","0.6")),
         }
-        data = json.dumps(payload).encode("utf-8")
         url = f"{self.base_url}/v1/chat/completions"
-        req = urllib.request.Request(url, data=data, method="POST")
-        req.add_header("Authorization", f"Bearer {self.api_key}")
-        req.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            out = json.loads(resp.read().decode("utf-8"))
-        # minimal extraction
+        out = http_json(
+            url, payload=payload,
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            timeout=self.timeout,
+            retries=int(os.environ.get("OPENAI_RETRIES","2")),
+            breaker_key="openai.chat",
+            breaker_threshold=int(os.environ.get("OPENAI_CB_THRESHOLD","3")),
+            breaker_cooldown=float(os.environ.get("OPENAI_CB_COOLDOWN","10"))
+        )
         txt = (out.get("choices") or [{}])[0].get("message",{}).get("content","").strip() or "ok"
         return txt
