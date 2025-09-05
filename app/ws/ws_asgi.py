@@ -6,6 +6,27 @@ from .barge import BargeState
 from app.api_v1.admin import _emit
 from .one_tab import acquire as _acquire, release as _release
 
+def _normalize_frame(fr: dict) -> dict:
+    """Map internal frame dialect to external client dialect:
+       text -> assistant_chunk (content -> text)
+       end  -> assistant_end
+    """
+    try:
+        t = fr.get("type")
+        if t == "text":
+            out = dict(fr)
+            out["type"] = "assistant_chunk"
+            if "content" in out and "text" not in out:
+                out["text"] = out.pop("content")
+            return out
+        if t == "end":
+            out = dict(fr)
+            out["type"] = "assistant_end"
+            return out
+        return fr
+    except Exception:
+        return fr
+
 async def ws_chat(scope, receive, send):
     assert scope["type"] == "websocket"
 
@@ -108,7 +129,7 @@ async def ws_chat(scope, receive, send):
                         for fr in frames:
                             if fr.get("type") == "end":
                                 fr["reason"] = "nudge"
-                            await send({"type": "websocket.send", "text": json.dumps(fr, separators=(",", ":"))})
+                            await send({"type":"websocket.send","text": json.dumps(_normalize_frame(fr), separators=(",",":"))})
 
                 elif mtype == "user_text":
                     try:
@@ -120,7 +141,7 @@ async def ws_chat(scope, receive, send):
                     for fr in frames:
                         if fr.get("type") == "text":
                             last_tid = fr.get("turn_id")
-                        await send({"type": "websocket.send", "text": json.dumps(fr, separators=(",", ":"))})
+                        await send({"type":"websocket.send","text": json.dumps(_normalize_frame(fr), separators=(",",":"))})
     finally:
         try:
             forward_task.cancel()

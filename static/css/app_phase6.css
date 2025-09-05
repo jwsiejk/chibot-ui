@@ -1,0 +1,10 @@
+/* Phase 6 UI helpers */
+#stateDots { display:flex; gap:6px; align-items:center; }
+#stateDots .dot { width:8px; height:8px; border-radius:999px; background:#bbb; }
+#stateDots .dot.on { background:#1f6feb; }
+
+#instructionStrip { font: 13px/1.4 system-ui; opacity: 0.85; }
+
+#suggestions { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+#suggestions .chip { border:1px solid #ddd; border-radius:999px; padding:6px 10px; background:#f7f7f7; cursor:pointer; }
+#suggestions .chip:hover { background:#eee; }

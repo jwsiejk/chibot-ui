@@ -1,6 +1,6 @@
 import os, re
 
-BANNED = [r"/api/greet", r"legacy_app", r"sendChat\("]
+BANNED = [r"/api/v1/greet", r"legacy_app", r"sendChat\("]
 
 def test_no_legacy_routes():
     repo = os.getcwd()

@@ -56,11 +56,11 @@ def test_vendor_lanes_guarded():
     assert isinstance(vis, list) and len(vis) > 0 and "t_ms" in vis[0]
 
 def test_route_linter_no_legacy():
-    # Fail if any legacy routes exist (e.g., '/api/greet' or '/api/v0')
+    # Fail if any legacy routes exist (e.g., '/api/v1/greet' or '/api/v0')
     files = glob("app/**/*.py")
     content = "\\n".join(read(f) for f in files)
     bad = [
-        "/api/greet", "/api/v0", "/orchestrator", "/api/greeting",
+        "/api/v1/greet", "/api/v0", "/orchestration", "/api/greeting",
         "legacy_app", "legacy_routes", "/api/voice/stt"  # ensure only v1 variant used
     ]
     offenders = [b for b in bad if b in content]

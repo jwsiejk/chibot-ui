@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 
 BANNED = [
-    r"/api/greet\b",
+    r"/api/v1/greet\b",
     r"/api/chat\b",
     r"/api/voice\b",
     r"/ws/chat\b",

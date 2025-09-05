@@ -110,13 +110,13 @@ async function checkStatic(url, label) {
 }
 
 async function checkLegacy() {
-  const url = '/api/greet';
+  const url = '/api/v1/greet';
   try {
     const r = await fetch(url, {credentials:'include'});
-    if (r.ok) return ['fail', `/api/greet returned ${r.status} (should not exist)`];
-    return ['pass', `/api/greet → ${r.status} (as expected)`];
+    if (r.ok) return ['fail', `/api/v1/greet returned ${r.status} (should not exist)`];
+    return ['pass', `/api/v1/greet → ${r.status} (as expected)`];
   } catch (e) {
-    return ['pass', `/api/greet unreachable (as expected)`];
+    return ['pass', `/api/v1/greet unreachable (as expected)`];
   }
 }
 
@@ -164,7 +164,7 @@ async function run() {
       if (r[0] === 'fail') r = await checkStatic(window.ASKCHIP.assets.visemeAA, 'aa.png');
       return r;
     }],
-    ['Legacy /api/greet absent', checkLegacy],
+    ['Legacy /api/v1/greet absent', checkLegacy],
     ['POST /api/v1/voice/tts-with-visemes', checkTTS],
     ['GET /api/v1/admin/config', checkAdminConfig]
   ];
