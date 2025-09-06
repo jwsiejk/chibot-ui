@@ -55,7 +55,7 @@ def create_app():
 
         # Try the real /voice/tts-with-visemes handler if present
         try:
-            real = app.view_functions.get("api_v1.voice.tts_with_visemes") or app.view_functions.get("voice.tts_with_visemes") or app.view_functions.get("tts_with_visemes")
+            real = app.view_functions.get("voice_v1.tts_with_visemes") or app.view_functions.get("tts_with_visemes")
             if callable(real):
                 return real()
         except Exception:

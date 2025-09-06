@@ -41,9 +41,6 @@ ok("admin UI controls")
 import app as apppkg
 app = apppkg.create_app()
 with app.test_client() as c:
-    # Get CSRF token (CSRF may be enforced in production)
-    _tok = c.get("/api/v1/auth/csrf").get_json().get("csrf")
-    _hdr = {"X-CSRF-Token": _tok} if _tok else {}
     r = c.get("/api/v1/admin/config")
     if r.status_code != 200:
         fail(f"/api/v1/admin/config status {r.status_code}")
@@ -56,9 +53,6 @@ ok("admin config shape/defaults")
 
 # 4) Admin logs SSE exists
 with app.test_client() as c:
-    # Get CSRF token (CSRF may be enforced in production)
-    _tok = c.get("/api/v1/auth/csrf").get_json().get("csrf")
-    _hdr = {"X-CSRF-Token": _tok} if _tok else {}
     r = c.get("/api/v1/admin/logs")
     if r.status_code != 200:
         fail(f"/api/v1/admin/logs status {r.status_code}")
@@ -84,13 +78,10 @@ def _fake_urlopen(req, timeout=30):
 
 urllib.request.urlopen = _fake_urlopen
 with app.test_client() as c:
-    # Get CSRF token (CSRF may be enforced in production)
-    _tok = c.get("/api/v1/auth/csrf").get_json().get("csrf")
-    _hdr = {"X-CSRF-Token": _tok} if _tok else {}
-    r1 = c.post("/api/v1/chat/tts-with-visemes", json={"text":"hello world"}, headers=_hdr)
+    r1 = c.post("/api/v1/chat/tts-with-visemes", json={"text":"hello world"})
     if r1.status_code != 200: fail("tts first call not 200")
     first_calls = _call_counts["tts"]
-    r2 = c.post("/api/v1/chat/tts-with-visemes", json={"text":"hello world"}, headers=_hdr)
+    r2 = c.post("/api/v1/chat/tts-with-visemes", json={"text":"hello world"})
     if r2.status_code != 200: fail("tts second call not 200")
     if _call_counts["tts"] != first_calls:
         fail("API did not memoize TTS; vendor was called again")
