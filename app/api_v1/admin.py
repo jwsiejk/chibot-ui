@@ -10,7 +10,9 @@ import json, os, time
 NEON_OK = False
 try:
     from ..dal import neon_pg
-    NEON_OK = neon_pg.ensure_schema()
+    # Do NOT call ensure_schema() at import time (can hang if DB unreachable).
+    # We will try inside endpoints on-demand with a short timeout handled in neon_pg.
+    NEON_OK = True
 except Exception:
     NEON_OK = False
 

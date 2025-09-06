@@ -38,7 +38,11 @@ def _connect():
         except Exception as e:
             raise RuntimeError("psycopg is not installed (add psycopg[binary] to requirements)") from e
         _DIALECT = "postgresql"
+                # Add a conservative connect timeout if not present in DSN
+        if 'connect_timeout=' not in url:
+            url = (url + ('&' if '?' in url else '?') + 'connect_timeout=3')
         _DB = psycopg.connect(conninfo=url, autocommit=True)
+
         return _DB
 
     raise RuntimeError("Unsupported DATABASE_URL scheme: " + url)
@@ -60,6 +64,7 @@ def _exec(sql, args=None, fetch=False):
         return None
 
 def ensure_schema():
+    try:
     """Create tables in the current dialect."""
     if _DIALECT is None:
         _connect()
@@ -82,9 +87,11 @@ def ensure_schema():
             "CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, email TEXT, persona_id TEXT, started_at DOUBLE PRECISION, ended_at DOUBLE PRECISION, summary_json TEXT);",
             "CREATE TABLE IF NOT EXISTS messages (id SERIAL PRIMARY KEY, session_id TEXT, role TEXT, text TEXT, meta_json TEXT, created_at DOUBLE PRECISION);"
         ]
-    for stmt in ddl:
+        for stmt in ddl:
         _exec(stmt)
-    return True
+        return True
+    except Exception:
+        return False
 
 def save_config(cfg: Dict[str, Any]) -> int:
     ensure_schema()
@@ -350,4 +357,6 @@ def kb_delete_doc(doc_id:int) -> bool:
     ensure_kb_schema()
     _exec("DELETE FROM kb_chunks WHERE doc_id=%s" if _DIALECT=="postgresql" else "DELETE FROM kb_chunks WHERE doc_id=?", [doc_id])
     _exec("DELETE FROM kb_docs WHERE id=%s" if _DIALECT=="postgresql" else "DELETE FROM kb_docs WHERE id=?", [doc_id])
-    return True
+        return True
+    except Exception:
+        return False
