@@ -1,3 +1,16 @@
+
+// --- Admin Safe Mode + Bootstrap ---
+(function(){
+  try{
+    window.ASKCHIP = window.ASKCHIP || { api: {
+      logs: '/api/v1/admin/logs',
+      config_get: '/api/v1/admin/config',
+      config_set: '/api/v1/admin/config/update',
+      runtime: '/api/v1/admin/runtime'
+    }};
+  }catch(e){}
+})();
+const SAFE_MODE = new URLSearchParams(location.search).has('safe') || new URLSearchParams(location.search).get('s')==='1';
 window.ASKCHIP = window.ASKCHIP || { api: { logs:'/api/v1/admin/logs', config_get:'/api/v1/admin/config', config_set:'/api/v1/admin/config/update', layout_get:'/api/v1/admin/layouts', layout_set:'/api/v1/admin/layouts', runtime:'/api/v1/admin/runtime' } };
 // static/js/admin.js
 const $ = (s) => document.querySelector(s);
