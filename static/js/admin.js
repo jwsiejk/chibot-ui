@@ -63,16 +63,6 @@ async function cfgLoad(){
     if (!r.ok) throw new Error(`${url} → ${r.status}`);
     const j = await r.json();
     const cfg = j.config || j;
-    /* PH14: populate audio controls */
-    try{
-      const setCB = (id,val)=>{ const el=document.getElementById(id); if(el) el.checked = !!val; };
-      const setNum= (id,val)=>{ const el=document.getElementById(id); if(el && typeof val!=='undefined') el.value = String(val); };
-      setCB('cfg-audio_worklet_enabled', cfg.audio_worklet_enabled);
-      setNum('cfg-vad_attack_ms', cfg.vad_attack_ms);
-      setNum('cfg-vad_release_ms', cfg.vad_release_ms);
-      setNum('cfg-vad_dbfs_threshold', cfg.vad_dbfs_threshold);
-    }catch{}
-    try{ window.__ASKCHIP_CFG = Object.assign({}, cfg); }catch{}
     box.innerHTML = "";
     Object.entries(cfg).forEach(([k,v]) => {
       const label = document.createElement("label");
@@ -273,31 +263,39 @@ lyLoad("published");
 })();
 
 
-// PH14: Save only audio-related settings
+// PH14: populate Audio/VAD controls and save handler
+document.addEventListener("DOMContentLoaded", async ()=>{
+  try {
+    const url = window.ASKCHIP?.api?.config_get || "/api/v1/admin/config";
+    const r = await fetch(url, {credentials:"include"});
+    if (!r.ok) return;
+    const j = await r.json(); const cfg = j.config || j;
+    const setCB=(id,v)=>{ const el=document.getElementById(id); if(el) el.checked=!!v; };
+    const setNum=(id,v)=>{ const el=document.getElementById(id); if(el && v!==undefined) el.value=String(v); };
+    setCB('cfg-audio_worklet_enabled', cfg.audio_worklet_enabled);
+    setNum('cfg-vad_attack_ms', cfg.vad_attack_ms);
+    setNum('cfg-vad_release_ms', cfg.vad_release_ms);
+    setNum('cfg-vad_dbfs_threshold', cfg.vad_dbfs_threshold);
+  } catch{}
+});
 async function cfgAudioSave(){
-  const status = document.getElementById("cfgStatus") || { textContent: ()=>{} };
+  const status = document.getElementById("cfgStatus") || { textContent: (t)=>{} };
   try{
-    const payload = {
-      updates: {
-        audio_worklet_enabled: !!document.getElementById('cfg-audio_worklet_enabled')?.checked,
-        vad_attack_ms: Number(document.getElementById('cfg-vad_attack_ms')?.value || 12),
-        vad_release_ms: Number(document.getElementById('cfg-vad_release_ms')?.value || 240),
-        vad_dbfs_threshold: Number(document.getElementById('cfg-vad_dbfs_threshold')?.value || -42)
-      }
+    const updates = {
+      audio_worklet_enabled: !!document.getElementById('cfg-audio_worklet_enabled')?.checked,
+      vad_attack_ms: Number(document.getElementById('cfg-vad_attack_ms')?.value || 12),
+      vad_release_ms: Number(document.getElementById('cfg-vad_release_ms')?.value || 240),
+      vad_dbfs_threshold: Number(document.getElementById('cfg-vad_dbfs_threshold')?.value || -42)
     };
     const r = await fetch(window.ASKCHIP?.api?.config_set || "/api/v1/admin/config/update", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ updates })
     });
-    if (!r.ok) throw new Error(`config update → ${r.status}`);
-    status.textContent = "Audio/VAD settings saved.";
-  } catch(e){
-    status.textContent = "Audio/VAD save failed: " + (e?.message || e);
-  }
+    status.textContent = r.ok ? "Audio/VAD settings saved." : ("Audio/VAD save failed: " + r.status);
+  } catch(e){ status.textContent = "Audio/VAD save failed: " + (e?.message || e); }
 }
-// Wire the button
 document.addEventListener("DOMContentLoaded", ()=>{
   document.getElementById("cfgAudioSave")?.addEventListener("click", cfgAudioSave);
 });

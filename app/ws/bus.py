@@ -48,28 +48,21 @@ class StreamBus:
             if not subs:
                 buf = self._pending.setdefault(sid, [])
                 # Backpressure: coalesce adjacent audio_chunk for same turn
-                if frame.get('type') == 'audio_chunk' and buf and buf[-1].get('type') == 'audio_chunk':
-                    if buf[-1].get('turn_id') == frame.get('turn_id'):
-                        # Merge base64 payloads
-                        try:
-                            prev = buf[-1]
-                            a = prev.get('base64') or ''
-                            b = frame.get('base64') or ''
-                            prev['base64'] = a + b
-                            # optional: cap chunk size
-                            if len(prev['base64']) > 32768*6:  # ~192KB b64
-                                # split off the excess to a new frame
-                                prev_data = prev['base64'][:32768*6]
-                                rem_data = prev['base64'][32768*6:]
-                                prev['base64'] = prev_data
-                                buf.append({'type':'audio_chunk','turn_id': frame.get('turn_id'),'base64': rem_data})
-                        except Exception:
-                            buf.append(frame)
-                    else:
+                if frame.get('type') == 'audio_chunk' and buf and buf[-1].get('type') == 'audio_chunk' and buf[-1].get('turn_id') == frame.get('turn_id'):
+                    try:
+                        prev = buf[-1]
+                        a = prev.get('base64') or ''
+                        b = frame.get('base64') or ''
+                        prev['base64'] = a + b
+                        if len(prev['base64']) > 32768*6:
+                            prev_data = prev['base64'][:32768*6]
+                            rem_data = prev['base64'][32768*6:]
+                            prev['base64'] = prev_data
+                            buf.append({'type':'audio_chunk','turn_id': frame.get('turn_id'),'base64': rem_data})
+                    except Exception:
                         buf.append(frame)
                 else:
                     buf.append(frame)
-                # Cap buffer; if overflow, drop oldest and log
                 if len(buf) > self._max_pending:
                     drop_n = len(buf) - self._max_pending
                     del buf[:drop_n]
@@ -78,13 +71,21 @@ class StreamBus:
                     except Exception:
                         pass
                 return
-
         for q in subs:
             try:
                 q.put(frame)
             except Exception:
                 pass
 
-
+    def cancel_turn(self, sid, tid):
+        if tid:
+            self._canceled.add((sid, tid))
+        with self._lock(sid):
+            buf = self._pending.get(sid)
+            if buf:
+                self._pending[sid] = [
+                    fr for fr in buf
+                    if not (fr.get('turn_id') == tid and fr.get('type') in {'text','audio_chunk','end','suggestions'})
+                ]
 
 bus = StreamBus()

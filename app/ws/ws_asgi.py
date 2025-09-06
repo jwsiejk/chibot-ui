@@ -4,7 +4,6 @@ from .bus import bus
 from ..services.streaming import make_assistant_frames
 from .barge import BargeState
 from app.api_v1.admin import _emit
-from app.drain_state import is_draining
 from .one_tab import acquire as _acquire, release as _release
 
 def _normalize_frame(fr: dict) -> dict:
@@ -38,7 +37,6 @@ async def ws_chat(scope, receive, send):
 
     # Accept
     await send({"type": "websocket.accept"})
-    last_activity = __import__('time').time()
     try:
         _emit('ws_open', session_id=session_id)
     except Exception:
@@ -66,24 +64,6 @@ async def ws_chat(scope, receive, send):
 
     forward_task = asyncio.create_task(forward_bus())
 
-    async def idle_watchdog():
-        try:
-            import time
-            from app.db import db as _db
-            cfg = _db.get_config(); idle_ms = int(cfg.get('ws_idle_timeout_ms', 30000))
-            while True:
-                await asyncio.sleep(1.0)
-                if is_draining():
-                    await send({'type':'websocket.close','code':1012})
-                    break
-                if idle_ms <= 0: continue
-                if (time.time() - last_activity) * 1000.0 > idle_ms:
-                    await send({'type':'websocket.close','code':1001})
-                    break
-        except Exception:
-            pass
-    watchdog_task = asyncio.create_task(idle_watchdog())
-
     try:
         while True:
             ev = await receive()
@@ -94,7 +74,6 @@ async def ws_chat(scope, receive, send):
                 break
 
             if t == "websocket.receive":
-                last_activity = __import__('time').time()
                 data = ev.get("text")
                 if not data:
                     continue
@@ -160,10 +139,6 @@ async def ws_chat(scope, receive, send):
     finally:
         try:
             forward_task.cancel()
-        except Exception:
-            pass
-        try:
-            watchdog_task.cancel()
         except Exception:
             pass
         try:

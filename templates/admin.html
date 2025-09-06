@@ -58,31 +58,30 @@
         <button id="cfgSave" class="btn primary">Save</button>
         <span id="cfgStatus" class="hint"></span>
       </div>
+    </section>
+
     <section id="tab-config-audio" class="panel" aria-hidden="true">
-  <h2>Audio / VAD</h2>
-  <div class="form-grid">
-    <label for="cfg-audio_worklet_enabled">AudioWorklet Enabled</label>
-    <input type="checkbox" id="cfg-audio_worklet_enabled" data-key="audio_worklet_enabled" />
-    <div class="hint"></div>
+      <h2>Audio / VAD</h2>
+      <div class="form-grid">
+        <label for="cfg-audio_worklet_enabled">AudioWorklet Enabled</label>
+        <input type="checkbox" id="cfg-audio_worklet_enabled" data-key="audio_worklet_enabled" />
+        <div class="hint"></div>
+        <label for="cfg-vad_attack_ms">VAD Attack (ms)</label>
+        <input type="number" id="cfg-vad_attack_ms" min="1" step="1" data-key="vad_attack_ms" />
+        <div class="hint">Typical 8–20 ms</div>
+        <label for="cfg-vad_release_ms">VAD Release (ms)</label>
+        <input type="number" id="cfg-vad_release_ms" min="10" step="10" data-key="vad_release_ms" />
+        <div class="hint">Typical 200–400 ms</div>
+        <label for="cfg-vad_dbfs_threshold">VAD Threshold (dBFS)</label>
+        <input type="number" id="cfg-vad_dbfs_threshold" min="-90" max="0" step="1" data-key="vad_dbfs_threshold" />
+        <div class="hint">More negative = less sensitive</div>
+      </div>
+      <div style="margin-top:10px;">
+        <button class="btn" id="cfgAudioSave">Save Audio Settings</button>
+      </div>
+    </section>
 
-    <label for="cfg-vad_attack_ms">VAD Attack (ms)</label>
-    <input type="number" id="cfg-vad_attack_ms" min="1" step="1" data-key="vad_attack_ms" />
-    <div class="hint">Typical 8–20 ms</div>
-
-    <label for="cfg-vad_release_ms">VAD Release (ms)</label>
-    <input type="number" id="cfg-vad_release_ms" min="10" step="10" data-key="vad_release_ms" />
-    <div class="hint">Typical 200–400 ms</div>
-
-    <label for="cfg-vad_dbfs_threshold">VAD Threshold (dBFS)</label>
-    <input type="number" id="cfg-vad_dbfs_threshold" min="-90" max="0" step="1" data-key="vad_dbfs_threshold" />
-    <div class="hint">More negative = less sensitive</div>
-  </div>
-  <div style="margin-top:10px;">
-    <button class="btn" id="cfgAudioSave">Save Audio Settings</button>
-  </div>
-</section>
-
-<section id="tab-users" class="panel" aria-hidden="true">
+    <section id="tab-users" class="panel" aria-hidden="true">
       <h2>Users &amp; Memory</h2>
       <p class="hint">Stub view for now.</p>
       <pre class="log" style="height:18rem">Coming soon.</pre>

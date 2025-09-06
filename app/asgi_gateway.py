@@ -17,9 +17,7 @@ from .asgi_router import asgi as ws_asgi
 import app.drain_state as drain_state
 
 # Phase13: graceful drain signal
-
 def _install_sigterm_handler():
-
     try:
         import signal
         def on_term(signum, frame):
@@ -66,9 +64,7 @@ async def asgi(scope, receive, send):
     typ = scope.get("type")
     if typ == "websocket":
         if drain_state.is_draining():
-            # Politely refuse new sockets during drain
-            await send({'type':'websocket.close','code':1012})
-            return
+            await send({'type':'websocket.close','code':1012}); return
         await ws_asgi(scope, receive, send)
         return
 

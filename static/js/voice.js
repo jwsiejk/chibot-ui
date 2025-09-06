@@ -1,4 +1,3 @@
-
 /* Phase 14: UA-based capability detection + AudioWorklet gating */
 export function detectAudioCaps(){
   const ua = (navigator.userAgent || '').toLowerCase();
@@ -8,10 +7,8 @@ export function detectAudioCaps(){
   const workletSupported = !!(window.AudioWorklet && (AudioWorkletNode || window.AudioWorkletNode));
   return { isSafari, isFirefox, isChrome, workletSupported };
 }
-
-// Phase 14 gating flag (defaults off; can be toggled via window.ASKCHIP.features.audio_worklet_enabled)
 const __PH14_USE_WORKLET = !!(window.ASKCHIP?.features?.audio_worklet_enabled) && detectAudioCaps().workletSupported && !detectAudioCaps().isSafari;
-}
+
 import { API, TIMING } from "./config.js";
 import { getSID } from './util/sid.js';
 import { setState, STATES } from "./state.js";
@@ -93,11 +90,12 @@ async function postSTT(blob){
   }
 }
 
+
 export function getVADThresholds(){
   const cfg = (window.__ASKCHIP_CFG || {});
   return {
     attack_ms:  (cfg.vad_attack_ms ?? 12),
     release_ms: (cfg.vad_release_ms ?? 240),
-    dbfs:       (cfg.vad_dbfs_threshold ?? -42)
+    dbfs:       (cfg.vad_dbfs_threshold ?? -42),
   };
 }

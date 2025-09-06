@@ -245,80 +245,30 @@ def kb_doc_delete(doc_id: int):
 
 @bp.get("/runtime")
 def runtime():
-    import sys, platform
+    import os, time, platform
+    from flask import jsonify
+    from ..db import db
     from ..services.llm_provider import get_provider_name as llm_name
     from ..services.tts_provider import get_tts_provider_name as tts_name
     from ..services.stt_provider import get_stt_provider_name as stt_name
-
-    def safe(callable_):
-        try:
-            name = callable_({})
-            return {"ok": True, "name": name, "error": None}
-        except Exception as e:
-            return {"ok": False, "name": "error", "error": str(e)}
-
-    def pkg_ver(module_name):
-        try:
-            mod = __import__(module_name)
-            return getattr(mod, "__version__", "unknown")
-        except Exception:
-            return None
-
-    smtp_ready = all(os.environ.get(k) for k in ["EMAIL_HOST","EMAIL_PORT","EMAIL_HOST_USER","EMAIL_HOST_PASSWORD","FROM_EMAIL"])
-
-    out = {
-        "env": {
-            "APP_ENV": os.getenv("APP_ENV",""),
-            "ENV": os.getenv("ENV","")
-        },
-        "commit": os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "",
+    import app.drain_state as drain_state
+    cfg = db.get_config()
+    def provider_info(name_fn):
+        try: return {"ok": True, "name": name_fn(cfg), "error": None}
+        except Exception as e: return {"ok": False, "name": None, "error": str(e)}
+    runtime = {
         "timestamp": time.time(),
-        "providers": {
-            "llm": safe(llm_name),
-            "tts": safe(tts_name),
-            "stt": safe(stt_name),
-        },
-        "keys": {
-            "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
-            "ELEVENLABS_API_KEY": bool(os.getenv("ELEVENLABS_API_KEY")),
-        },
-        "smtp_ready": bool(smtp_ready),
-        "versions": {
-            "python": sys.version.split()[0],
-            "openai": pkg_ver("openai"),
-            "elevenlabs": pkg_ver("elevenlabs"),
-        }
+        "python": platform.python_version(),
+        "versions": {"python": platform.python_version()},
+        "env": {"APP_ENV": os.getenv("APP_ENV",""), "ENV": os.getenv("ENV","")},
+        "keys": {"OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")), "ELEVENLABS_API_KEY": bool(os.getenv("ELEVENLABS_API_KEY"))},
+        "providers": {"llm": provider_info(llm_name), "stt": provider_info(stt_name), "tts": provider_info(tts_name)},
+        "smtp_ready": bool(os.getenv("EMAIL_HOST") and os.getenv("EMAIL_HOST_USER") and os.getenv("EMAIL_HOST_PASSWORD")),
+        "commit": os.getenv("RENDER_GIT_COMMIT") or os.getenv("COMMIT") or "",
+        "draining": drain_state.is_draining(),
     }
-    return jsonify({"ok": True, "runtime": out})
+    return jsonify({"ok": True, "runtime": runtime})
 
-    def sse():
-        import time, json
-        # Flush existing lines first
-        snapshot = list(_log_buffer)
-        for line in snapshot:
-            yield f"data: {line}\n\n"
-        idx = len(snapshot)
-        last_ping = time.time()
-        # Continuous stream
-        while True:
-            # Send any new lines
-            if idx < len(_log_buffer):
-                for line in _log_buffer[idx:]:
-                    yield f"data: {line}\n\n"
-                idx = len(_log_buffer)
-                last_ping = time.time()
-            # Heartbeat every 10s
-            if time.time() - last_ping >= 10:
-                yield "event: ping\ndata: keepalive\n\n"
-                last_ping = time.time()
-            time.sleep(1.0)
-    headers = {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-        "Connection": "keep-alive",
-    }
-    return Response(sse(), status=200, headers=headers)
 
 @bp.get("/logs")
 def logs():

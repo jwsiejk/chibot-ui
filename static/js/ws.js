@@ -63,6 +63,7 @@ export function openWS(){
 }
 
 export function closeWS(){
+  stopHeartbeat();
   if (ws) try { ws.close(1000, "End"); } catch{};
   ws = null;
   updateButtons();
@@ -162,15 +163,7 @@ export function cancelNudge(){
 let _hbTimer = null;
 function startHeartbeat(){
   stopHeartbeat();
-  try {
-    const sendPing = () => {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      try{ ws.send(JSON.stringify({ type:"ping", t: Date.now() })); }catch{}
-    };
-    sendPing();
-    _hbTimer = setInterval(sendPing, 25000); // matches default ws_ping_interval_ms
-  } catch(e){}
+  const sendPing = () => { if (ws && ws.readyState === WebSocket.OPEN) try{ ws.send(JSON.stringify({ type:"ping", t: Date.now() })); }catch{} };
+  sendPing(); _hbTimer = setInterval(sendPing, 25000);
 }
-function stopHeartbeat(){
-  try{ if (_hbTimer) clearInterval(_hbTimer); }catch{}; _hbTimer = null;
-}
+function stopHeartbeat(){ try{ if (_hbTimer) clearInterval(_hbTimer); }catch{} _hbTimer = null; }

@@ -7,7 +7,7 @@ let onVisemes = null;
 
 export function setVisemeCallback(cb){ onVisemes = cb; }
 
-export async function playStream(chunks, visemes){ /* Worklet playback path not required; using HTMLAudio for now */
+export async function playStream(chunks, visemes){
   stopPlayback();
   const blob = new Blob(chunks.map(b => new Uint8Array(b)), { type: "audio/mpeg" });
   const url = URL.createObjectURL(blob);
