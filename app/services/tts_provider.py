@@ -10,15 +10,17 @@ def _env_is_prod() -> bool:
             os.getenv("ENV","").lower() in ("prod","production"))
 
 def get_tts_provider_name(cfg: dict) -> str:
-    val = (cfg or {}).get("tts_provider", "auto").strip().lower()
-    if val in ("auto","",None):
+    val = (cfg or {}).get("tts_provider", "auto")
+    val = (val or "auto").strip().lower()
+    if val in ("auto", ""):
         has_key = bool(os.environ.get("ELEVENLABS_API_KEY"))
         if has_key:
             return "elevenlabs"
-        allow_mock = os.getenv("ALLOW_MOCK_PROVIDERS","false").lower() in ("1","true","yes")
-        if _env_is_prod() or not allow_mock:
-            raise RuntimeError("No ELEVENLABS_API_KEY and mocks are disallowed in this environment.")
-        return "mock"
+        allow_mock = os.environ.get("ALLOW_MOCK_PROVIDERS","false").lower() in ("1","true","yes")
+        if allow_mock or not _env_is_prod():
+            return "mock"
+        # prod without key is a hard error in callers
+        return "elevenlabs"
     return val
 
 def load_tts_provider(name: str):
