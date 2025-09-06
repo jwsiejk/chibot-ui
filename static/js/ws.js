@@ -21,12 +21,12 @@ export function bindControls(startEl, endEl){
   updateButtons();
 }
 
-export export function waitWSOpen(timeout=4000){
+export function waitWSOpen(timeout=4000){
   if (ws && ws.readyState === WebSocket.OPEN) return Promise.resolve();
   return _openPromise || new Promise((res) => setTimeout(res, 10));
 }
 
-function openWS(){
+export function openWS(){
   if (ws && ws.readyState === WebSocket.OPEN) return ws;
   ws = new WebSocket(API.WS);
   reconnects = 0;

@@ -171,13 +171,47 @@ def _emit(kind: str, **fields):
     if len(_log_buffer) > 2000:
         del _log_buffer[:len(_log_buffer)-2000]
 
+
 @bp.get("/logs")
 def logs():
+    # Proper SSE stream with keep-alives; uses in-memory _log_buffer
     from flask import Response
-    hdrs = {"Content-Type":"text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering":"no"}
-    # Emit a small payload as ndjson (simple for tests)
-    payload = "\n".join(_log_buffer + [json.dumps({"ts": time.time(), "kind":"admin_log", "msg":"hello"})])
-    return Response(payload, status=200, headers=hdrs)
+    def sse():
+        import time, json
+        idx = 0
+        # flush any existing lines first
+        snapshot = list(_log_buffer)
+        for line in snapshot:
+            yield f"data: {line}
+
+"
+        idx = len(snapshot)
+        # streaming loop
+        last_ping = time.time()
+        while True:
+            # send new log lines
+            if idx < len(_log_buffer):
+                for line in _log_buffer[idx:]:
+                    yield f"data: {line}
+
+"
+                idx = len(_log_buffer)
+                last_ping = time.time()
+            # keep-alive every 10s to keep Render proxies happy
+            if time.time() - last_ping >= 10:
+                yield "event: ping
+data: keepalive
+
+"
+                last_ping = time.time()
+            time.sleep(1.0)
+    headers = {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive"
+    }
+    return Response(sse(), status=200, headers=headers)
 
 
 @bp.get("/db/health")
