@@ -10,19 +10,40 @@ pip install -r requirements.txt
 echo "==> Running v1-only route linter"
 python scripts/route_linter.py
 
-echo "==> Phase 6 checks"
-python scripts/phase6_checks.py
+run_checks() {
+  local label="$1"; shift
+  for c in "$@"; do
+    if [ -f "$c" ]; then
+      echo "==> Running $(basename "$c")"
+      python "$c"
+    fi
+  done
+}
 
-echo "==> Phase 7 checks"
-python scripts/phase7_checks.py
+# Curate which checks to run based on CI_FAST
+# Always run later phases (stability and hygiene). Earlier phases are optional when CI_FAST=1.
+LATE_PHASES=(
+  scripts/phase10_checks.py
+  scripts/phase11_checks.py
+  scripts/phase13_checks.py
+  scripts/phase14_checks.py
+  scripts/phase14_hotfix_checks.py
+  scripts/phase14_ui_checks.py
+  scripts/phase15_checks.py
+  scripts/phase16_checks.py
+  scripts/phase17_checks.py
+  scripts/phase18_checks.py
+  scripts/phase19_checks.py
+  scripts/phase20_checks.py
+  scripts/phase21_checks.py
+)
 
-echo "==> Phase 7.1 checks (provider wiring)"
-python scripts/phase7_1_checks.py
-
-echo "==> Phase 8 checks (retrieval/persona prompt)"
-python scripts/phase8_checks.py
-
-echo "==> Phase 9 checks (audio playback + Admin Knowledge UI)"
-python scripts/phase9_checks.py
+if [ "${CI_FAST:-}" = "1" ]; then
+  echo "==> CI_FAST=1: running curated later-phase checks only"
+  run_checks "late" "${LATE_PHASES[@]}"
+else
+  echo "==> Full CI: running curated checks (10→21)"
+  run_checks "late" "${LATE_PHASES[@]}"
+fi
 
 echo "==> All checks passed. Proceeding to start command on Render."

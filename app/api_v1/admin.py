@@ -103,3 +103,60 @@ def config_rollback():
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ---- Admin Log Emitter (legacy-compatible) ----
+from collections import deque
+from datetime import datetime
+import uuid, time
+from flask import Response, stream_with_context
+_EVENT_RING = deque(maxlen=int(os.environ.get("ADMIN_LOG_RING", "1000")))
+
+def _emit(kind: str, msg: str="ok", **fields):
+    """
+    Lightweight event emitter used by internal modules (e.g., voice.py).
+    - Appends to in-memory ring for Admin SSE.
+    - Persists to admin_events table when possible.
+    """
+    evt = {"ts": datetime.utcnow().isoformat()+"Z", "kind": kind}
+    if msg is not None:
+        evt["msg"] = msg
+    for k,v in (fields or {}).items():
+        evt[k] = v
+    try:
+        _EVENT_RING.append(evt)
+    except Exception:
+        pass
+    # Persist best-effort
+    try:
+        dal = make_dal()
+        dal.execute("CREATE TABLE IF NOT EXISTS admin_events (id TEXT PRIMARY KEY, ts TEXT, kind TEXT, payload_json TEXT)")
+        dal.execute("INSERT INTO admin_events (id, ts, kind, payload_json) VALUES (?,?,?,?)",
+                    (str(uuid.uuid4()), evt["ts"], kind, json.dumps({k:v for k,v in evt.items() if k not in ("ts","kind")})))
+    except Exception:
+        pass
+    return True
+
+@bp.get("/logs")
+def logs_sse():
+    """
+    Minimal SSE stream of recent admin events.
+    Note: This is intentionally simple; production can switch to a queue/broker later.
+    """
+    @stream_with_context
+    def gen():
+        idx = 0
+        while True:
+            # drain any new events
+            size = len(_EVENT_RING)
+            while idx < size:
+                ev = _EVENT_RING[idx]
+                yield f"data: {json.dumps(ev)}\n\n"
+                idx += 1
+            time.sleep(1.0)
+    headers = {
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Accel-Buffering": "no",
+    }
+    return Response(gen(), headers=headers)

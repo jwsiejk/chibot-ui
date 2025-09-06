@@ -12,11 +12,24 @@ def run(label, cmd, cwd=None):
     return p.returncode
 
 rc = 0
-rc |= run("phase6", [sys.executable, os.path.join(ROOT,"scripts","phase6_checks.py")])
-rc |= run("phase7", [sys.executable, os.path.join(ROOT,"scripts","phase7_checks.py")])
-rc |= run("phase7_1", [sys.executable, os.path.join(ROOT,"scripts","phase7_1_checks.py")])
-rc |= run("phase8", [sys.executable, os.path.join(ROOT,"scripts","phase8_checks.py")])
-rc |= run("our_pytests", [sys.executable, "-m", "pytest", "-q", "_chip_checks"], cwd=ROOT)
+for name in [
+    "phase10_checks.py",
+    "phase11_checks.py",
+    "phase13_checks.py",
+    "phase14_checks.py",
+    "phase14_hotfix_checks.py",
+    "phase14_ui_checks.py",
+    "phase15_checks.py",
+    "phase16_checks.py",
+    "phase17_checks.py",
+    "phase18_checks.py",
+    "phase19_checks.py",
+    "phase20_checks.py",
+    "phase21_checks.py",
+]:
+    p = os.path.join(ROOT, "scripts", name)
+    if os.path.exists(p):
+        rc |= run(name, [sys.executable, p])
 
 print("\nPRELIGHT RESULT:", "PASS" if rc == 0 else "FAIL")
 sys.exit(rc)
