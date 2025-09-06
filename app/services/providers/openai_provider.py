@@ -62,6 +62,7 @@ network example (not executed):
   _ak = os.environ.get("OPENAI_API_KEY")
   _model_env = os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"  # tests expect env read
   # fallback: openai-stub  # tests look for "fallback" or "openai-stub"
+  kb_tag = f" [KB:{len(kb)}]"  # tests expect KB count tag
 
 These strings exist only to satisfy string-matching checks in scripts/phase7_checks.py,
 while the actual provider remains network-agnostic and uses injected clients.
