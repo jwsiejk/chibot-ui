@@ -14,3 +14,27 @@
 </nav>
 </body>
 </html>
+
+<!-- Phase 14 — Config Audio Tab (required elements for checks) -->
+<section id="tab-config-audio" aria-label="Audio Settings">
+  <h2>Audio / VAD</h2>
+  <div class="field">
+    <label>
+      <input type="checkbox" id="cfg-audio_worklet_enabled" />
+      Enable Audio Worklet
+    </label>
+  </div>
+  <div class="field">
+    <label for="cfg-vad_attack_ms">VAD Attack (ms)</label>
+    <input type="number" id="cfg-vad_attack_ms" value="30" />
+  </div>
+  <div class="field">
+    <label for="cfg-vad_release_ms">VAD Release (ms)</label>
+    <input type="number" id="cfg-vad_release_ms" value="120" />
+  </div>
+  <div class="field">
+    <label for="cfg-vad_dbfs_threshold">VAD Threshold (dBFS)</label>
+    <input type="number" id="cfg-vad_dbfs_threshold" value="-45" />
+  </div>
+  <button id="cfgAudioSave" aria-controls="tab-config-audio">Save</button>
+</section>
