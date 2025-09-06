@@ -7,32 +7,29 @@ class LLMProvider(Protocol):
     def generate_reply(self, prompt: str, persona: Dict[str, Any] | None = None,
                        teacher_move: str | None = None, context: Dict[str, Any] | None = None) -> str: ...
 
-def _env_is_prod() -> bool:
-    return (os.getenv("APP_ENV","").lower() in ("prod","production") or
-            os.getenv("ENV","").lower() in ("prod","production"))
-
 def get_provider_name(cfg: dict) -> str:
+    """
+    No implicit fallback. Either configuration explicitly sets 'mock',
+    or an OpenAI key is present (or a client is injected) to use 'openai'.
+    """
     name = (cfg or {}).get("llm_provider", "auto")
     name = (name or "auto").strip().lower()
     if name == "auto":
-        has_key = bool(os.environ.get("OPENAI_API_KEY"))
-        if has_key:
+        if os.environ.get("OPENAI_API_KEY"):
             return "openai"
-        # No key. In production (or unless explicitly allowed), do not fall back to mock.
-        allow_mock = os.getenv("ALLOW_MOCK_PROVIDERS","false").lower() in ("1","true","yes")
-        if _env_is_prod() or not allow_mock:
-            raise RuntimeError("No OPENAI_API_KEY and mocks are disallowed in this environment.")
-        return "mock"
+        # No key: do not silently fall back.
+        raise RuntimeError("No OPENAI_API_KEY; set llm_provider=mock explicitly for dev or provide a key.")
     return name
 
-def load_provider(name: str) -> LLMProvider:
+def load_provider(name: str, cfg: dict | None = None) -> LLMProvider:
     if name == "openai":
-        from .providers_real.openai_http_provider import OpenAIHTTPProvider as OpenAIProvider
-        return OpenAIProvider()
+        from .providers.openai_provider import OpenAIProvider
+        from .vendor_clients import make_openai_client
+        return OpenAIProvider(cfg or {}, client_factory=make_openai_client)
     if name == "mock":
         from .providers.mock_provider import MockProvider
         return MockProvider()
     raise RuntimeError(f"Unknown LLM provider: {name}")
 
 def get_provider(cfg: dict) -> LLMProvider:
-    return load_provider(get_provider_name(cfg))
+    return load_provider(get_provider_name(cfg), cfg=cfg or {})
