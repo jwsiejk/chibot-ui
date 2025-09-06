@@ -7,7 +7,11 @@ def _smtp_ready():
 
 def send_transcript(email: str, subject: str, body: str) -> bool:
     # In tests or when SMTP is not configured, record to DB (mock)
+    prod = (os.environ.get("APP_ENV","").lower() in ("prod","production") or os.environ.get("ENV","").lower() in ("prod","production"))
+    allow_mock = os.environ.get("ALLOW_MOCK_PROVIDERS","false").lower() in ("1","true","yes")
     if os.environ.get("USE_MOCK_VENDORS") == "1" or not _smtp_ready():
+        if prod and not allow_mock:
+            raise RuntimeError("SMTP not configured and mocks disallowed in production")
         db.add_email(email, subject, body)
         return True
 

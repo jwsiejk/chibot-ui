@@ -12,7 +12,10 @@ class ElevenLabsTTS:
         vid = voice_id or self.voice_id
         fmt = format or self.output_format
         if not self.api_key:
-            # Fail gracefully with mock output if key missing
+            allow = os.environ.get("ALLOW_MOCK_PROVIDERS","false").lower() in ("1","true","yes")
+            prod = (os.environ.get("APP_ENV","" ).lower() in ("prod","production") or os.environ.get("ENV","" ).lower() in ("prod","production"))
+            if prod or not allow:
+                raise RuntimeError("ELEVENLABS_API_KEY missing and mocks disallowed")
             return b"FAKE_MP3_DATA", [{"t_ms": i*120, "v": "A"} for i in range(5)]
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{vid}"
         payload = {

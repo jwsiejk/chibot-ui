@@ -9,6 +9,10 @@ class WhisperSTT:
 
     def transcribe(self, audio_bytes: bytes, *, language: str = "en") -> str:
         if not self.api_key:
+            allow = os.environ.get("ALLOW_MOCK_PROVIDERS","false").lower() in ("1","true","yes")
+            prod = (os.environ.get("APP_ENV","" ).lower() in ("prod","production") or os.environ.get("ENV","" ).lower() in ("prod","production"))
+            if prod or not allow:
+                raise RuntimeError("OPENAI_API_KEY missing and mocks disallowed")
             return "transcription unavailable (missing OPENAI_API_KEY)"
         # multipart/form-data POST to OpenAI audio.transcriptions
         boundary = "----WebKitFormBoundary" + uuid.uuid4().hex

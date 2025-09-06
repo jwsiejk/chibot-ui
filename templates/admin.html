@@ -12,6 +12,7 @@
     .panel[aria-hidden="false"] { display:block; }
     .form-grid { display:grid; grid-template-columns: 240px 1fr; gap:.5rem 1rem; align-items:center; }
     .hint { color:#9aa4b2; }
+    .kv td:first-child{width:220px;color:#556;}
   </style>
 </head>
 <body data-app="ask-chip-admin">
@@ -23,6 +24,7 @@
   <main class="container">
     <div class="tabs" role="tablist">
       <button class="tab" role="tab" aria-controls="tab-logs"    aria-selected="true"  id="t-logs">Live Logs</button>
+      <button class="tab" role="tab" aria-controls="tab-runtime" aria-selected="false" id="t-runtime">Runtime</button>
       <button class="tab" role="tab" aria-controls="tab-config"  aria-selected="false" id="t-config">Config</button>
       <button class="tab" role="tab" aria-controls="tab-layout"  aria-selected="false" id="t-layout">Layout</button>
       <button class="tab" role="tab" aria-controls="tab-users"   aria-selected="false" id="t-users">Users &amp; Memory</button>
@@ -36,6 +38,17 @@
       </div>
       <pre class="log" id="adminLog">(connecting...)</pre>
     </section>
+<section id="tab-runtime" class="panel" aria-hidden="true">
+  <h2>Runtime Status</h2>
+  <div style="display:flex;gap:8px;align-items:center;margin:.5rem 0;">
+    <button id="rtRefresh" class="btn">Refresh</button>
+    <span id="rtStatus" class="hint"></span>
+  </div>
+  <table class="kv" id="rtTable" style="width:100%;max-width:780px">
+    <tbody></tbody>
+  </table>
+  <pre class="log" id="rtRaw" style="height:12rem"></pre>
+</section>
 
     <section id="tab-config" class="panel" aria-hidden="true">
       <h2>Runtime Config</h2>
@@ -123,7 +136,8 @@
         config_get: "/api/v1/admin/config",
         config_set: "/api/v1/admin/config",
         layout_get: "/api/v1/admin/layouts",
-        layout_set: "/api/v1/admin/layouts"
+        layout_set: "/api/v1/admin/layouts",
+        runtime: "/api/v1/admin/runtime"
       }
     };
   </script>

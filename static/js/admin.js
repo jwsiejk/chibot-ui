@@ -5,7 +5,7 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 /* Tabs */
 (function tabs(){
   const ts = $$(".tab");
-  const panels = [$("#tab-logs"), $("#tab-config"), $("#tab-layout"), $("#tab-users")];
+  const panels = [$("#tab-logs"), $("#tab-runtime"), $("#tab-config"), $("#tab-layout"), $("#tab-users")];
   ts.forEach(t => t.addEventListener("click", () => {
     ts.forEach(x => x.setAttribute("aria-selected", "false"));
     t.setAttribute("aria-selected", "true");
@@ -236,4 +236,52 @@ lyLoad("published");
   });
   // initial load
   refresh();
+})();
+
+
+/* Runtime status */
+(function runtime(){
+  const btn = document.getElementById("rtRefresh");
+  const raw = document.getElementById("rtRaw");
+  const table = document.querySelector("#rtTable tbody");
+  const status = document.getElementById("rtStatus");
+  function fmtProv(p){ if(!p) return "unknown"; if(!p.ok) return `ERROR: ${p.error}`; return p.name; }
+  async function load(){
+    if(!raw || !table || !status) return;
+    status.textContent = "Loading…";
+    try {
+      const r = await fetch(ASKCHIP.api.runtime, { credentials: "include" });
+      const j = await r.json();
+      if(!j.ok) throw new Error("not ok");
+      const R = j.runtime || {};
+      raw.textContent = JSON.stringify(R, null, 2);
+      table.innerHTML = "";
+      const rows = [
+        ["Env", (R.env && (R.env.APP_ENV || R.env.ENV)) || ""],
+        ["Commit", R.commit || "(none)"],
+        ["LLM", fmtProv(R.providers && R.providers.llm)],
+        ["TTS", fmtProv(R.providers && R.providers.tts)],
+        ["STT", fmtProv(R.providers && R.providers.stt)],
+        ["OPENAI_API_KEY", R.keys && R.keys.OPENAI_API_KEY ? "present" : "missing"],
+        ["ELEVENLABS_API_KEY", R.keys && R.keys.ELEVENLABS_API_KEY ? "present" : "missing"],
+        ["SMTP ready", R.smtp_ready ? "yes" : "no"],
+        ["Python", R.versions && R.versions.python || ""],
+        ["openai", R.versions && R.versions.openai || ""],
+        ["elevenlabs", R.versions && R.versions.elevenlabs || ""],
+      ];
+      rows.forEach(([k,v]) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${k}</td><td>${v}</td>`;
+        table.appendChild(tr);
+      });
+      status.textContent = "OK";
+    } catch(e){
+      status.textContent = String(e && e.message || e);
+    }
+  }
+  if(btn) btn.addEventListener("click", load);
+  const tabBtn = document.getElementById("t-runtime");
+  if(tabBtn) tabBtn.addEventListener("click", load);
+  // initial eager fetch
+  if(document.querySelector("#tab-runtime")?.getAttribute("aria-hidden")==="false"){ load(); }
 })();

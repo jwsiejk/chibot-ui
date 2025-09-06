@@ -249,3 +249,51 @@ def kb_doc_delete(doc_id: int):
     from ..services.retrieval import delete_document
     ok = delete_document(doc_id)
     return jsonify({"ok": bool(ok)})
+
+@bp.get("/runtime")
+def runtime():
+    import sys, platform
+    from ..services.llm_provider import get_provider_name as llm_name
+    from ..services.tts_provider import get_tts_provider_name as tts_name
+    from ..services.stt_provider import get_stt_provider_name as stt_name
+
+    def safe(callable_):
+        try:
+            name = callable_({})
+            return {"ok": True, "name": name, "error": None}
+        except Exception as e:
+            return {"ok": False, "name": "error", "error": str(e)}
+
+    def pkg_ver(module_name):
+        try:
+            mod = __import__(module_name)
+            return getattr(mod, "__version__", "unknown")
+        except Exception:
+            return None
+
+    smtp_ready = all(os.environ.get(k) for k in ["EMAIL_HOST","EMAIL_PORT","EMAIL_HOST_USER","EMAIL_HOST_PASSWORD","FROM_EMAIL"])
+
+    out = {
+        "env": {
+            "APP_ENV": os.getenv("APP_ENV",""),
+            "ENV": os.getenv("ENV","")
+        },
+        "commit": os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "",
+        "timestamp": time.time(),
+        "providers": {
+            "llm": safe(llm_name),
+            "tts": safe(tts_name),
+            "stt": safe(stt_name),
+        },
+        "keys": {
+            "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
+            "ELEVENLABS_API_KEY": bool(os.getenv("ELEVENLABS_API_KEY")),
+        },
+        "smtp_ready": bool(smtp_ready),
+        "versions": {
+            "python": sys.version.split()[0],
+            "openai": pkg_ver("openai"),
+            "elevenlabs": pkg_ver("elevenlabs"),
+        }
+    }
+    return jsonify({"ok": True, "runtime": out})
