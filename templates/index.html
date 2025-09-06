@@ -1,67 +1,66 @@
-
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ask Chip</title>
-  <link rel="stylesheet" href="/static/css/app.css">
-  <link rel="stylesheet" href="/static/css/app_phase6.css">
-  <link rel="stylesheet" href="/static/css/design-mode.css">
-  <link rel="stylesheet" href="/static/css/ui_polish.css">
+
+  <!-- Core styles (no design-mode) -->
+  <link rel="stylesheet" href="/static/css/app.css" />
+  <link rel="stylesheet" href="/static/css/app_phase6.css" />
+  <link rel="stylesheet" href="/static/css/ui_polish.css" />
 </head>
 <body data-state="ready">
 
 <header class="topbar">
   <div class="brand"></div>
-  <nav id="askChipMenu" class="menu" data-designable data-design-key="menu">
-    <button id="menuButton" class="menu-button">Ask&nbsp;Chip ▾</button>
-    <div id="menuDropdown" class="menu-dropdown">
-      <a id="menuProfile">Profile</a>
-      <a id="menuAdmin" data-admin-only>Admin</a>
-      <a id="menuDiagnostics" data-admin-only>Diagnostics</a>
-      <a id="menuLogout">Logout</a>
-    </div>
+  <nav class="menu">
+    <button id="menuBtn" class="btn btn-ghost">Menu</button>
   </nav>
 </header>
 
-<main class="main-grid">
-  <section class="stage" id="chipStage" data-designable data-design-key="chipStage">
-    <div class="stage-status" data-designable data-design-key="stateDots">
-      <div class="dots">
+<main class="container">
+  <section class="stage-card" id="chipStage">
+    <div class="stage-head">
+      <div class="state" id="stateDots">
         <span class="dot"></span><span class="dot"></span><span class="dot"></span>
       </div>
       <div id="stateLabel" class="label">Ready</div>
     </div>
+
     <div class="stage-inner">
-      <div id="chipPane" data-designable data-design-key="chipPane" style="position:relative;">
-        <img id="chipImage" data-designable data-design-key="chipImage" src="/static/chip/img/chip.png" alt="Chip">
-        <div id="chipMouth" data-designable data-design-key="chipMouth" title="mouth_neutral"></div>
+      <div id="chipPane" style="position:relative;">
+        <img id="chipImage" src="/static/chip/img/chip.png" alt="Chip" width="640" height="640" />
+        <div id="chipMouth" title="mouth_neutral"></div>
       </div>
     </div>
-    <div class="instruction" id="instructionStrip" data-designable data-design-key="instructionStrip">
-      Voice commands: <strong>“Hey Chip…”</strong> • <strong>“Stop Chip”</strong> • <strong>“Chip, hold on”</strong> — <em>ESC</em> is immediate interrupt
+
+    <div class="instruction" id="instructionStrip">
+      Voice commands: <strong>“Hey Chip…”</strong> • <strong>“Stop Chip”</strong> • <strong>“Chip, hold on”</strong>
+      — <em>ESC</em> is immediate interrupt
     </div>
-    <div class="controls" id="voiceControls" data-designable data-design-key="voiceControls">
-      <button id="startButton" class="btn primary">Start</button>
-      <button id="endButton" class="btn">End</button>
+
+    <div class="controls" id="voiceControls">
+      <button id="startButton" class="btn btn-primary">Start</button>
+      <button id="endButton" class="btn" disabled>End</button>
       <button id="muteButton" class="btn">Audio: On</button>
       <button id="chatButton" class="btn">Chat</button>
     </div>
   </section>
 
-  <aside class="chat-card" id="chatPane" data-designable data-design-key="chatPane">
+  <aside class="chat-card" id="chatPane">
     <div class="chat-head">Conversation</div>
     <div class="chat-msgs" id="chatMessages"></div>
-    <div class="chat-compose" id="composerBar" data-designable data-design-key="composerBar">
-      <input id="composerInput" placeholder="Type to ask Chip…">
+    <div class="chat-compose" id="composerBar">
+      <input id="composerInput" placeholder="Type to ask Chip…" />
       <button id="composerSend" class="btn">Send</button>
     </div>
   </aside>
 </main>
 
-<div id="suggestions" data-designable data-design-key="suggestionsBar" style="padding:0 16px;"></div>
+<div id="suggestions" style="padding:0 16px;"></div>
 
-<script src="/static/js/design-mode.js?v=v20250906d" defer></script>
+<!-- JS (cache-busted to pull latest) -->
 <script type="module" src="/static/js/config.js?v=v20250906d" defer></script>
 <script type="module" src="/static/js/state.js?v=v20250906d" defer></script>
 <script type="module" src="/static/js/ws.js?v=v20250906d" defer></script>
