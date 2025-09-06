@@ -1,5 +1,6 @@
 from __future__ import annotations
-import os, time, sqlite3, threading, contextlib, json, random, uuid
+import os, time
+import sqlite3, sqlite3, threading, contextlib, json, random, uuid
 from dataclasses import dataclass
 from typing import Optional, Any, Callable, Iterable, Tuple
 
@@ -73,6 +74,13 @@ class DAL:
     def execute(self, sql: str, params: Optional[Iterable[Any]] = None):
         def _do():
             with self.connect() as c:
+                # Only sqlite supports row_factory
+                try:
+                    import sqlite3 as _sl
+                    if isinstance(c, _sl.Connection):
+                        c.row_factory = _sl.Row
+                except Exception:
+                    pass
                 cur = c.cursor()
                 if params is None:
                     cur.execute(sql)
@@ -85,7 +93,13 @@ class DAL:
     def query(self, sql: str, params: Optional[Iterable[Any]] = None) -> list[Tuple]:
         def _do():
             with self.connect() as c:
-                c.row_factory = sqlite3.Row if hasattr(c, "row_factory") else None
+                # Only sqlite supports row_factory
+                try:
+                    import sqlite3 as _sl
+                    if isinstance(c, _sl.Connection):
+                        c.row_factory = _sl.Row
+                except Exception:
+                    pass
                 cur = c.cursor()
                 if params is None:
                     cur.execute(sql)

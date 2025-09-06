@@ -58,4 +58,6 @@ else
   run_checks "late" "${LATE_PHASES[@]}"
 fi
 
+echo "==> Running proactive guard checks"
+python scripts/proactive_guard_checks.py
 echo "==> All checks passed. Proceeding to start command on Render."

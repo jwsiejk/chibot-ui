@@ -80,6 +80,25 @@ def add_corr_header(resp):
 from app.db_dal import DAL, DBConfig
 @bp.get("/outbox")
 def outbox_list():
+    # Ensure outbox table exists (safe on Postgres)
+    try:
+        dal = make_dal()
+        dal.execute("""
+        CREATE TABLE IF NOT EXISTS outbox (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            session_id TEXT,
+            ended_at TIMESTAMP,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at TIMESTAMP,
+            last_error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+    except Exception:
+        pass
     dal = make_dal()
     try:
         rows = dal.query("SELECT id, kind, status, attempts, last_error FROM outbox ORDER BY created_at DESC")

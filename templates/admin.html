@@ -38,3 +38,39 @@
   </div>
   <button id="cfgAudioSave" aria-controls="tab-config-audio">Save</button>
 </section>
+
+
+<!-- Additional Admin panels restored -->
+<section id="tab-config-bargein" aria-label="Barge-in">
+  <h2>Barge-in</h2>
+  <label>Confirm (ms) <input type="number" id="cfg-bargein_confirm_ms" value="420"></label>
+  <label>Echo threshold boost <input type="number" step="0.1" id="cfg-bargein_echo_boost" value="1.6"></label>
+</section>
+<section id="tab-config-nudges" aria-label="Nudges">
+  <h2>Nudges</h2>
+  <label>Enable <input type="checkbox" id="cfg-nudges_enabled"></label>
+  <label>Delay (ms) <input type="number" id="cfg-nudges_delay_ms" value="8000"></label>
+</section>
+<section id="tab-config-suggestions" aria-label="Suggestions">
+  <h2>Suggestions</h2>
+  <label>Enable <input type="checkbox" id="cfg-suggestions_enabled" checked></label>
+  <label>Max items <input type="number" id="cfg-suggestions_max_items" value="3"></label>
+  <label>Max words <input type="number" id="cfg-suggestions_max_words" value="7"></label>
+</section>
+<section id="tab-config-stt" aria-label="STT">
+  <h2>STT</h2>
+  <label>Language lock <input type="text" id="cfg-stt_language_lock" value="en"></label>
+</section>
+<section id="tab-config-persona" aria-label="Persona">
+  <h2>Persona</h2>
+  <label>Nebraska persona level <input type="number" step="0.01" id="cfg-persona_level" value="0.13"></label>
+</section>
+<section id="tab-config-ws" aria-label="WS/Ops">
+  <h2>WS / Ops</h2>
+  <label>Ping interval (ms) <input type="number" id="cfg-ws_ping_interval" value="15000"></label>
+  <label>Idle timeout (ms) <input type="number" id="cfg-ws_idle_timeout" value="60000"></label>
+</section>
+<section id="tab-config-security" aria-label="Security/PII">
+  <h2>Security / PII</h2>
+  <label>Redact email in logs <input type="checkbox" id="cfg-redact_email" checked></label>
+</section>

@@ -9,3 +9,16 @@ def csrf_before_request():
         tok=request.headers.get("X-CSRF-Token")
         if not tok or tok!=get_csrf(): return jsonify({"ok":False,"error":"csrf_failed"}),403
     return None
+
+
+# --- Ask Chip CSRF policy ---
+from urllib.parse import urlparse
+ALLOW_SAME_ORIGIN_JSON = True
+
+def _same_origin_ok(req):
+    try:
+        ori = req.headers.get("Origin","")
+        host = req.host_url.rstrip("/")
+        return bool(ori) and urlparse(ori).netloc == urlparse(host).netloc
+    except Exception:
+        return False

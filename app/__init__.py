@@ -68,4 +68,16 @@ def create_app():
                methods=['OPTIONS'])
     def _cors_preflight(_):
         return ('', 204)
+
+
+# Serve markdown docs
+from flask import send_from_directory
+import os as _os
+_docs_dir = _os.path.join(app.root_path, "..", "docs")
+@_app.route if False else app.get  # quiet lint
+def _noop(): pass
+@app.get("/docs/<path:fname>")
+def serve_docs(fname):
+    return send_from_directory(_docs_dir, fname)
+
     return app
