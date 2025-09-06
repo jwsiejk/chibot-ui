@@ -22,6 +22,44 @@ class DBConfig:
     base_delay: float = DEFAULT_BASE_DELAY
     max_delay: float = DEFAULT_MAX_DELAY
 
+def _detect_driver(conn):
+    # Return string identifier for driver ("sqlite", "psycopg", etc.)
+    try:
+        mod = type(conn).__module__
+    except Exception:
+        return "unknown"
+    if "sqlite3" in mod:
+        return "sqlite"
+    if "psycopg" in mod or "psycopg2" in mod:
+        return "psycopg"
+    return mod
+
+def _normalize_sql_params(sql: str, params, driver: str):
+    """
+    Accepts SQL written with SQLite-style '?' placeholders and adapts for psycopg.
+    - sqlite: leave '?' as-is
+    - psycopg: convert bare '?' to '%s' (not inside quotes)
+    """
+    if not params:
+        return sql, params
+    if driver == "psycopg":
+        # Replace unquoted ? with %s; preserve ? inside quotes.
+        out = []
+        in_s = in_d = False
+        for ch in sql:
+            if ch == "'" and not in_d:
+                in_s = not in_s
+                out.append(ch)
+            elif ch == '"' and not in_s:
+                in_d = not in_d
+                out.append(ch)
+            elif ch == "?" and not in_s and not in_d:
+                out.append("%s")
+            else:
+                out.append(ch)
+        return "".join(out), list(params) if isinstance(params, (tuple, list)) else [params]
+    return sql, params
+
 class DAL:
     def __init__(self, cfg: DBConfig):
         cfg.url = (cfg.url or '').strip()
