@@ -36,12 +36,49 @@ def _detect_driver(conn):
 
 def _normalize_sql_params(sql: str, params, driver: str):
     """
-    Accepts SQL written with SQLite-style '?' placeholders and adapts for psycopg.
-    - sqlite: leave '?' as-is
-    - psycopg: convert bare '?' to '%s' (not inside quotes)
+    Normalize param styles between sqlite ('?') and psycopg ('%s').
+    - If driver is 'psycopg': convert unquoted '?' to '%s'.
+    - If driver is 'sqlite': convert unquoted '%s' to '?'.
+    Leave placeholders inside single/double quotes untouched.
     """
-    if not params:
+    if params is None:
         return sql, params
+
+    # Helper to replace only when not inside quotes
+    def replace_unquoted(s: str, needle: str, repl: str) -> str:
+        out = []
+        in_s = in_d = False
+        i = 0
+        n = len(s)
+        while i < n:
+            ch = s[i]
+            if ch == "'" and not in_d:
+                in_s = not in_s
+                out.append(ch)
+                i += 1
+                continue
+            if ch == '"' and not in_s:
+                in_d = not in_d
+                out.append(ch)
+                i += 1
+                continue
+            if not in_s and not in_d and s.startswith(needle, i):
+                out.append(repl)
+                i += len(needle)
+                continue
+            out.append(ch)
+            i += 1
+        return "".join(out)
+
+    if driver == "psycopg":
+        sql = replace_unquoted(sql, "?", "%s")
+    elif driver == "sqlite":
+        sql = replace_unquoted(sql, "%s", "?")
+
+    # Ensure params is a list/tuple
+    if not isinstance(params, (list, tuple)):
+        params = [params]
+    return sql, params
     if driver == "psycopg":
         # Replace unquoted ? with %s; preserve ? inside quotes.
         out = []
