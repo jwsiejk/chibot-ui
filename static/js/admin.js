@@ -21,6 +21,8 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
   const el = $("#adminLog");
   try {
     const es = new EventSource(url);
+    es.onopen = () => { el.textContent = ""; };
+    es.addEventListener("ping", () => {/* keepalive */});
     es.onmessage = (ev) => {
       const line = ev.data || "";
       const f = ($("#logFilter").value || "").toLowerCase();
