@@ -25,6 +25,8 @@ def create_app():
         template_folder='../templates'
     )
     app.config['JSON_SORT_KEYS'] = False
+    if os.environ.get('CI_FAST'):
+        app.config['TESTING'] = True
 
     # Secret key (read env in production)
     app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")

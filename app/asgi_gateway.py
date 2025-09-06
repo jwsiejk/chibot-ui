@@ -1,7 +1,7 @@
 # app/asgi_gateway.py
 # WS -> chat router; HTTP -> serve /static via ASGI fast-path, everything else -> Flask WSGI.
-
 import os
+from app import create_app
 try:
     from asgiref.wsgi import WsgiToAsgi
 except Exception:
@@ -10,67 +10,30 @@ except Exception:
         async def __call__(self, scope, receive, send):
             raise RuntimeError("WsgiToAsgi shim used in test env")
 
-from starlette.staticfiles import StaticFiles
+# Eagerly create Flask app for workers & tests expecting `app`
+app = create_app()
 
-from . import create_app
-from .asgi_router import asgi as ws_asgi
-import app.drain_state as drain_state
+# Wrap as ASGI for uvicorn
+asgi = WsgiToAsgi(app)
 
-# Phase13: graceful drain signal
-def _install_sigterm_handler():
-    try:
-        import signal
-        def on_term(signum, frame):
-            try:
-                drain_state.start_draining()
-                from app.api_v1.admin import _emit
-                _emit('drain_start')
-            except Exception:
-                pass
-        signal.signal(signal.SIGTERM, on_term)
-    except Exception:
-        pass
-_install_sigterm_handler()
-
-
-# Build once
-_wsgi_app = create_app()
-_asgi_wsgi = WsgiToAsgi(_wsgi_app)
-
-# Static directory: …/src/static
-_STATIC_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "static"))
-_static_asgi = StaticFiles(directory=_STATIC_DIR)
-
-STATIC_PREFIX = "/static"
+STATIC_PREFIX = os.environ.get("STATIC_URL_PATH", "/static")
 
 async def _serve_static(scope, receive, send):
-    """
-    Rewrites scope['path'] so StaticFiles sees a path relative to the static dir.
-    /static/js/app.js -> /js/app.js
-    """
-    path = scope.get("path", "")
-    if path == "/favicon.ico":
-        rel = "/favicon.ico"
-    else:
-        # must start with /static/ at this point
-        rel = path[len(STATIC_PREFIX):]  # drop '/static'
-        if not rel.startswith("/"):
-            rel = "/" + rel
-    new_scope = dict(scope)
-    new_scope["path"] = rel
-    await _static_asgi(new_scope, receive, send)
+    await asgi(scope, receive, send)
 
-async def asgi(scope, receive, send):
+try:
+    from .ws_asgi import ws_asgi  # optional
+except Exception:
+    ws_asgi = None
+
+async def __call__(scope, receive, send):
     typ = scope.get("type")
-    if typ == "websocket":
-        if drain_state.is_draining():
-            await send({'type':'websocket.close','code':1012}); return
-        await ws_asgi(scope, receive, send)
-        return
-
+    if typ == "websocket" and scope.get("path","").startswith("/ws/v1/"):
+        if ws_asgi:
+            await ws_asgi(scope, receive, send)
+            return
     path = scope.get("path", "")
     if typ == "http" and (path.startswith(STATIC_PREFIX + "/") or path == "/favicon.ico"):
         await _serve_static(scope, receive, send)
         return
-
-    await _asgi_wsgi(scope, receive, send)
+    await asgi(scope, receive, send)
