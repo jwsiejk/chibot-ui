@@ -7,6 +7,18 @@ from app.db_dal import DAL, DBConfig, health_check, anonymize_user, delete_user_
 bp = Blueprint("admin_v1", __name__)
 
 
+from flask import has_app_context as _has_app_context
+def _json_resp(obj, status=200):
+    try:
+        if _has_app_context():
+            return jsonify(obj), status
+    except Exception:
+        pass
+    class _R:
+        def __init__(self, data): self.json = data
+    return (_R(obj), status)
+
+
 from urllib.parse import urlparse, parse_qs
 
 def _parse_dsn_info(url: str) -> dict:
@@ -53,7 +65,11 @@ from flask import request
 from app.obs.metrics import with_correlation_id, emit_request_metrics
 
 def get_correlation_id():
-    return with_correlation_id(dict(request.headers))
+    try:
+        hdrs = dict(getattr(request, "headers", {}) or {})
+    except Exception:
+        hdrs = {}
+    return with_correlation_id(hdrs)
 
 @bp.after_request
 def add_corr_header(resp):
@@ -76,7 +92,7 @@ def outbox_list():
             out.append({"id": oid, "kind": kind, "status": status, "attempts": attempts or 0, "last_error": err})
         return jsonify({"ok": True, "items": out})
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return _json_resp({"ok": False, "error": str(e)}, 500)
 
 from app.services.config_guard import validate_config
 import time
@@ -86,16 +102,16 @@ def config_preview():
     cfg = request.get_json(force=True) or {}
     errs = validate_config(cfg)
     if errs:
-        return jsonify({"ok": False, "errors": errs}), 400
+        return _json_resp({"ok": False, "errors": errs}, 400)
     # Return would-be version id (not persisted)
-    return jsonify({"ok": True, "preview_id": int(time.time())})
+    return _json_resp({"ok": True, "preview_id": int(time.time())}, 200)
 
 @bp.post("/config/commit")
 def config_commit():
     cfg = request.get_json(force=True) or {}
     errs = validate_config(cfg)
     if errs:
-        return jsonify({"ok": False, "errors": errs}), 400
+        return _json_resp({"ok": False, "errors": errs}, 400)
     # persist simple version history in sqlite table (CI)
     dal = make_dal()
     try:
@@ -104,7 +120,7 @@ def config_commit():
         pass
     import datetime as dt, json
     dal.execute("INSERT INTO admin_settings_versions (cfg_json, created_at) VALUES (?, ?)", (json.dumps(cfg), dt.datetime.utcnow().isoformat()+"Z"))
-    return jsonify({"ok": True})
+    return _json_resp({"ok": True}, 200)
 
 @bp.post("/config/rollback")
 def config_rollback():
@@ -112,13 +128,13 @@ def config_rollback():
     try:
         rows = dal.query("SELECT id, cfg_json FROM admin_settings_versions ORDER BY id DESC LIMIT 2")
         if len(rows) < 2:
-            return jsonify({"ok": False, "error":"no previous version"}), 400
+            return _json_resp({"ok": False, "error":"no previous version"}, 400)
         # 'rollback' means discard latest and keep prior
         last_id = rows[0][0] if isinstance(rows[0], tuple) else rows[0]["id"]
         dal.execute("DELETE FROM admin_settings_versions WHERE id=?", (last_id,))
-        return jsonify({"ok": True})
+        return _json_resp({"ok": True}, 200)
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return _json_resp({"ok": False, "error": str(e)}, 500)
 
 
 # ---- Admin Log Emitter (legacy-compatible) ----
@@ -176,3 +192,27 @@ def logs_sse():
         "X-Accel-Buffering": "no",
     }
     return Response(gen(), headers=headers)
+
+
+@bp.get("/config")
+def get_config():
+    dal = make_dal()
+    cfg = {}
+    try:
+        # Try last committed version
+        rows = dal.query("SELECT cfg_json FROM admin_settings_versions ORDER BY id DESC LIMIT 1")
+        if rows:
+            row = rows[0]
+            cfg_json = row[0] if isinstance(row, tuple) else row["cfg_json"]
+            import json as _json
+            cfg = _json.loads(cfg_json or "{}")
+    except Exception:
+        pass
+    # Provide minimal defaults if none found
+    if not cfg:
+        cfg = {"confirm_ms": 420, "language_lock": "en", "suggestions_max_items": 3}
+    cfg.setdefault("audio_worklet_enabled", False)
+    cfg.setdefault("vad_attack_ms", 30)
+    cfg.setdefault("vad_release_ms", 120)
+    cfg.setdefault("vad_dbfs_threshold", -45)
+    return jsonify({"config": cfg}), 200

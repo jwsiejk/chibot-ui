@@ -58,3 +58,22 @@ def ws_disconnect(reason: str):
     get_sink().incr("askchip.ws.disconnects", 1, {"reason": reason})
 def cost_tally(kind: str, cents: float):
     get_sink().gauge("askchip.cost.cents", cents, {"kind": kind})
+
+
+# --- Back-compat shims ---
+def inc(name: str, value: int = 1, tags: dict | None = None):
+    """Increment counter (legacy helper)."""
+    get_sink().incr(name, value, tags or {})
+
+def observe(name: str, value: float, tags: dict | None = None):
+    """Record a timing/measurement (legacy helper)."""
+    # Heuristic: treat values >= 1 and <= 600000 as ms for timing; else gauge.
+    try:
+        v = float(value)
+    except Exception:
+        v = value
+    if isinstance(v, (int, float)):
+        if 0 <= v <= 600000:
+            get_sink().timing(name, v, tags or {})
+            return
+    get_sink().gauge(name, value, tags or {})

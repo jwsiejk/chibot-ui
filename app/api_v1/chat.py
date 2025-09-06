@@ -7,6 +7,7 @@ from ..services.streaming import make_assistant_frames, schedule_frames
 from ..middleware.rate_limit import limit, check_now
 from ..ws.bus import bus
 bp = Blueprint("chat", __name__)
+_TTS_MEMO = {}
 @bp.before_request
 def _chat_rl_guard():
     rv = check_now('chat')
@@ -48,8 +49,12 @@ def tts_with_visemes():
     from ..services.tts_provider import get_tts_provider
     data=request.get_json(silent=True) or {}; text=(data.get("text") or "").strip()
     cfg = db.get_config()
-    a_bytes, v = get_tts_provider(cfg).synth(text)
-    a = base64.b64encode(a_bytes).decode("ascii")
+    if text in _TTS_MEMO:
+        a, v = _TTS_MEMO[text]
+    else:
+        a_bytes, v = get_tts_provider(cfg).synth(text)
+        a = base64.b64encode(a_bytes).decode("ascii")
+        _TTS_MEMO[text] = (a, v)
     try:
         from ..api_v1.admin import _emit
         _emit('tts', chars=len(text))
