@@ -63,6 +63,16 @@ async function cfgLoad(){
     if (!r.ok) throw new Error(`${url} → ${r.status}`);
     const j = await r.json();
     const cfg = j.config || j;
+    /* PH14: populate audio controls */
+    try{
+      const setCB = (id,val)=>{ const el=document.getElementById(id); if(el) el.checked = !!val; };
+      const setNum= (id,val)=>{ const el=document.getElementById(id); if(el && typeof val!=='undefined') el.value = String(val); };
+      setCB('cfg-audio_worklet_enabled', cfg.audio_worklet_enabled);
+      setNum('cfg-vad_attack_ms', cfg.vad_attack_ms);
+      setNum('cfg-vad_release_ms', cfg.vad_release_ms);
+      setNum('cfg-vad_dbfs_threshold', cfg.vad_dbfs_threshold);
+    }catch{}
+    try{ window.__ASKCHIP_CFG = Object.assign({}, cfg); }catch{}
     box.innerHTML = "";
     Object.entries(cfg).forEach(([k,v]) => {
       const label = document.createElement("label");
@@ -261,3 +271,33 @@ lyLoad("published");
   // initial eager fetch
   if(document.querySelector("#tab-runtime")?.getAttribute("aria-hidden")==="false"){ load(); }
 })();
+
+
+// PH14: Save only audio-related settings
+async function cfgAudioSave(){
+  const status = document.getElementById("cfgStatus") || { textContent: ()=>{} };
+  try{
+    const payload = {
+      updates: {
+        audio_worklet_enabled: !!document.getElementById('cfg-audio_worklet_enabled')?.checked,
+        vad_attack_ms: Number(document.getElementById('cfg-vad_attack_ms')?.value || 12),
+        vad_release_ms: Number(document.getElementById('cfg-vad_release_ms')?.value || 240),
+        vad_dbfs_threshold: Number(document.getElementById('cfg-vad_dbfs_threshold')?.value || -42)
+      }
+    };
+    const r = await fetch(window.ASKCHIP?.api?.config_set || "/api/v1/admin/config/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(payload)
+    });
+    if (!r.ok) throw new Error(`config update → ${r.status}`);
+    status.textContent = "Audio/VAD settings saved.";
+  } catch(e){
+    status.textContent = "Audio/VAD save failed: " + (e?.message || e);
+  }
+}
+// Wire the button
+document.addEventListener("DOMContentLoaded", ()=>{
+  document.getElementById("cfgAudioSave")?.addEventListener("click", cfgAudioSave);
+});

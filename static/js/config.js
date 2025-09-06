@@ -11,3 +11,5 @@ export const TIMING = {
   BAR_GEIN_CONFIRM_MS: 420,
   NUDGE_DELAY_MS: 4200
 };
+
+export const FEATURES = { AUDIO_WORKLET_ENABLED: false };

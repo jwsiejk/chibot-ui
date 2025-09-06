@@ -6,6 +6,10 @@ class DB:
     def __init__(self):
         self.memory={
             'configs':{
+                'audio_worklet_enabled': False,
+                'vad_attack_ms': 12,
+                'vad_release_ms': 240,
+                'vad_dbfs_threshold': -42,
                 'csrf_enforced': bool(__import__('os').environ.get('CSRF_ENFORCED','')).__bool__(),'profile_gate_enabled':False,
                 'show_instruction_strip': True,'show_state_dots': True,'theme':'light',
                 'suggestions_enabled': True,'suggestions_max_items':4,'suggestions_max_words':7,
