@@ -1,3 +1,4 @@
+window.ASKCHIP = window.ASKCHIP || { api: { logs:'/api/v1/admin/logs', config_get:'/api/v1/admin/config', config_set:'/api/v1/admin/config/update', layout_get:'/api/v1/admin/layouts', layout_set:'/api/v1/admin/layouts', runtime:'/api/v1/admin/runtime' } };
 // static/js/admin.js
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));

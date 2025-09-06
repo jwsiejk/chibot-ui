@@ -125,7 +125,7 @@ async function onEnd(){
    Text send
 ------------------------------------------------------- */
 async function onSend(){
-  cancelNudge();
+cancelNudge();
   const text = (composer?.value || "").trim();
   if (!text) return;
   composer.value = "";

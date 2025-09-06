@@ -6,6 +6,12 @@ import { playStream, stopPlayback, isPlaying } from "./audio.js";
 import { renderSuggestions } from "./suggestions.js";
 
 let ws = null;
+let _tabId = null;
+function getTabId(){
+  if(!_tabId){ try{ _tabId = sessionStorage.getItem('chip.tab') || (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now())); sessionStorage.setItem('chip.tab', _tabId); }catch(e){ _tabId = 'tab'; } }
+  return _tabId;
+}
+
 let reconnects = 0;
 let startBtn, endBtn;
 let nudgeTimer = null;
@@ -15,6 +21,19 @@ let _openPromise = null;
 // Accumulators for current turn
 let _audioBufs = [];
 let _visemes = [];
+
+function addChatMessage(role, text){
+  try{
+    const box = document.getElementById('chatMessages');
+    if(!box) return;
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+    div.textContent = text;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }catch(e){}
+}
+
 
 export function bindControls(startEl, endEl){
   startBtn = startEl; endBtn = endEl;
@@ -28,7 +47,7 @@ export function waitWSOpen(timeout=4000){
 
 export function openWS(){
   if (ws && ws.readyState === WebSocket.OPEN) return ws;
-  ws = new WebSocket(API.WS);
+  ws = new WebSocket(`${API.WS}?session_id=${encodeURIComponent(getSID())}&tab=${encodeURIComponent(getTabId())}`);
   reconnects = 0;
   updateButtons();
   _openPromise = new Promise((resolve)=>{ ws.onopen = () => { updateButtons(); resolve(); }; });
@@ -82,6 +101,7 @@ function onWSMessage(ev){
       setState(STATES.RESPONDING);
       lastAssistantTurn = msg.turn_id || lastAssistantTurn;
       // (optional) update chat UI here with msg.text or msg.content
+      if (msg.text || msg.content) addChatMessage('assistant', (msg.text || msg.content));
     }
 
     if (msg.type === "audio_chunk"){
@@ -125,7 +145,7 @@ export function sendInterrupt(){
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const turn = lastAssistantTurn;
   stopPlayback();
-  const frame = { type: "cmd", cmd: "interrupt", turn_id: turn };
+  const frame = { type: "control", cmd: "interrupt", turn_id: turn };
   ws.send(JSON.stringify(frame));
   setState(STATES.LISTENING);
 }
@@ -134,7 +154,7 @@ function scheduleNudge(){
   if (nudgeTimer) clearTimeout(nudgeTimer);
   nudgeTimer = setTimeout(() => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type:"cmd", cmd:"nudge" }));
+    ws.send(JSON.stringify({ type:"control", cmd:"nudge" }));
   }, TIMING.NUDGE_DELAY_MS);
 }
 
