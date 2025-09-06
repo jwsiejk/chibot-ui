@@ -8,8 +8,11 @@ BANNED = [
     r"orchestrator",                    # legacy 'orchestrator' symbol
 ]
 
-# Repo root (two levels up from this script)
+# Repo root
 ROOT = os.path.dirname(os.path.dirname(__file__))
+
+# Scan only source files to avoid false positives in docs
+ALLOWED_EXTS = {".py", ".js", ".ts", ".tsx", ".html", ".css", ".json"}
 
 # Exclusions: dirs & specific files we should not scan
 EXCLUDE_DIRS = {
@@ -28,11 +31,13 @@ for root, dirs, files in os.walk(ROOT):
     # Prune excluded directories in-place
     dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
     for f in files:
-        relp = os.path.relpath(os.path.join(root, f), ROOT).replace("\\","/")
         # Skip excluded files
-        if any(relp == x or relp.endswith("/" + x) for x in EXCLUDE_FILES):
+        relp = os.path.relpath(os.path.join(root, f), ROOT).replace("\\","/")
+        if relp in EXCLUDE_FILES:
             continue
-        if not f.endswith((".py",".js",".html",".css",".json",".md")):
+        # Filter by extension
+        ext = os.path.splitext(f)[1].lower()
+        if ext and ext not in ALLOWED_EXTS:
             continue
         try:
             with open(os.path.join(root, f), "r", encoding="utf-8", errors="ignore") as fh:
