@@ -6,7 +6,7 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 /* Tabs */
 (function tabs(){
   const ts = $$(".tab");
-  const panels = [$("#tab-logs"), $("#tab-runtime"), $("#tab-config"), $("#tab-layout"), $("#tab-users")];
+  const panels = [$("#tab-logs"), $("#tab-runtime"), $("#tab-config"), $("#tab-users")];
   ts.forEach(t => t.addEventListener("click", () => {
     ts.forEach(x => x.setAttribute("aria-selected", "false"));
     t.setAttribute("aria-selected", "true");
@@ -93,22 +93,6 @@ $("#cfgLoad").addEventListener("click", cfgLoad);
 $("#cfgSave").addEventListener("click", cfgSave);
 
 /* Layout Editor */
-async function lyLoad(variant){
-  const url = `${window.ASKCHIP.api.layout_get}?variant=${encodeURIComponent(variant)}&breakpoint=desktop`;
-  const status = $("#lyStatus");
-  try {
-    const r = await fetch(url, {credentials:"include"});
-    if (!r.ok) throw new Error(`${url} → ${r.status}`);
-    const j = await r.json();
-    const L = j.layout || {};
-    $("#stageSide").value = L.stage_side || "left";
-    $("#showStrip").checked = !!L.show_instruction_strip;
-    $("#showDots").checked  = !!L.show_state_dots;
-    status.textContent = `Loaded ${variant} (v${j.version || 1})`;
-  } catch (e) {
-    status.textContent = String(e.message || e);
-  }
-}
 async function lySaveDraft(){
   const status = $("#lyStatus");
   const body = {
@@ -121,41 +105,15 @@ async function lySaveDraft(){
     }
   };
   try {
-    const r = await fetch(window.ASKCHIP.api.layout_set, {
+    const r = await fetch(/* layout_api_removed */, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       credentials: "include",
       body: JSON.stringify(body)
     });
-    if (!r.ok) throw new Error(`POST /layouts → ${r.status}`);
+    if (!r.ok) throw new Error(`POST /admin/config → ${r.status}`);
     const j = await r.json();
     status.textContent = `Draft saved (v${j.version})`;
-  } catch (e) {
-    status.textContent = String(e.message || e);
-  }
-}
-async function lyPublish(){
-  // publish = save directly to 'published'
-  const status = $("#lyStatus");
-  const body = {
-    variant: "published",
-    breakpoint: "desktop",
-    layout: {
-      stage_side: $("#stageSide").value,
-      show_instruction_strip: !!$("#showStrip").checked,
-      show_state_dots: !!$("#showDots").checked
-    }
-  };
-  try {
-    const r = await fetch(window.ASKCHIP.api.layout_set, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      credentials: "include",
-      body: JSON.stringify(body)
-    });
-    if (!r.ok) throw new Error(`POST /layouts → ${r.status}`);
-    const j = await r.json();
-    status.textContent = `Published (v${j.version}) — all users will see it on next load.`;
   } catch (e) {
     status.textContent = String(e.message || e);
   }

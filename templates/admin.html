@@ -26,7 +26,6 @@
       <button class="tab" role="tab" aria-controls="tab-logs"    aria-selected="true"  id="t-logs">Live Logs</button>
       <button class="tab" role="tab" aria-controls="tab-runtime" aria-selected="false" id="t-runtime">Runtime</button>
       <button class="tab" role="tab" aria-controls="tab-config"  aria-selected="false" id="t-config">Config</button>
-      <button class="tab" role="tab" aria-controls="tab-layout"  aria-selected="false" id="t-layout">Layout</button>
       <button class="tab" role="tab" aria-controls="tab-users"   aria-selected="false" id="t-users">Users &amp; Memory</button>
     </div>
 
@@ -57,32 +56,6 @@
         <button id="cfgLoad" class="btn">Load</button>
         <button id="cfgSave" class="btn primary">Save</button>
         <span id="cfgStatus" class="hint"></span>
-      </div>
-    </section>
-
-    <section id="tab-layout" class="panel" aria-hidden="true">
-      <h2>Layout Editor (Design Mode)</h2>
-      <p class="hint">Set where the Chip pane lives and what UI elements are visible. Save as <em>Draft</em>, then <em>Publish</em> to apply for everyone.</p>
-      <div class="form-grid">
-        <label for="stageSide">Stage side</label>
-        <select id="stageSide">
-          <option value="left">Left (default)</option>
-          <option value="right">Right</option>
-        </select>
-
-        <label for="showStrip">Show Instruction Strip</label>
-        <input id="showStrip" type="checkbox" checked>
-
-        <label for="showDots">Show State Dots</label>
-        <input id="showDots" type="checkbox" checked>
-      </div>
-
-      <div style="margin-top:10px">
-        <button id="lyLoadPublished" class="btn">Load Published</button>
-        <button id="lyLoadDraft" class="btn">Load Draft</button>
-        <button id="lySaveDraft" class="btn">Save Draft</button>
-        <button id="lyPublish" class="btn primary">Publish</button>
-        <span id="lyStatus" class="hint"></span>
       </div>
     </section>
 

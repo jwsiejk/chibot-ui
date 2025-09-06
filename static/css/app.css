@@ -3,45 +3,6 @@ body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-ap
 .topbar{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:#0c0e13;border-bottom:1px solid #202533}
 .topbar .menu a{color:var(--muted);text-decoration:none;margin-left:12px}
 
-/* Layout helpers (moved from inline) */
-.layout{display:grid;grid-template-columns:1fr 380px;gap:16px;padding:16px}
-.right-first .stage{order:2}.right-first .chat{order:1}
-.left-first .stage{order:1}.left-first .chat{order:2}
-.hidden{display:none !important}
-
-.stage,.chat{background:var(--panel);border:1px solid #202533;border-radius:14px;padding:12px}
-.state-dots{position:absolute;top:12px;right:12px;display:flex;gap:8px}
-.dot{width:10px;height:10px;background:#3a3f52;border-radius:50%}
-.dot.active[data-state=ready]{background:var(--ok)}
-.dot.active[data-state=responding]{background:var(--warn)}
-.chip-frame{display:flex;justify-content:center;align-items:center;height:280px;margin-top:24px;position:relative}
-#chipImage{height:260px;width:auto;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.35)}
-#chipMouth{position:absolute;bottom:36px;width:96px;height:60px;display:none}
-.toolbar{margin-top:12px;display:flex;gap:10px}
-.btn{background:#1f2432;color:#e6e9ef;border:1px solid #2a3145;border-radius:10px;padding:8px 12px;cursor:pointer}
-.btn.primary{background:var(--brand);color:#151515;border-color:#d57a24}
-.banner{position:fixed;left:16px;right:16px;bottom:16px;padding:12px 14px;border-radius:12px;background:#2a1220;border:1px solid #52283e;color:#ffd1d1;display:none}
-.banner.show{display:block}
-.chat{display:flex;flex-direction:column}
-.chat-header{display:flex;justify-content:space-between;border-bottom:1px solid #202533;padding-bottom:8px;margin-bottom:8px}
-.chat-body{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px}
-.msg{padding:8px 10px;border-radius:10px;max-width:90%}
-.msg.user{align-self:flex-end;background:#213654}
-.msg.assistant{align-self:flex-start;background:#1f2432}
-.kv{display:grid;grid-template-columns:260px 1fr;gap:6px 12px}
-.log{background:#0a0a0a;color:#e6e9ef;padding:8px;border-radius:10px;height:44vh;overflow:auto}
-.hint{color:var(--muted)}
-
-/* --- Design Mode + Free Layout additions --- */
-.free-layout .designable{position:absolute}
-.design-mode .designable{outline:1px dashed #7aa0ff;cursor:move}
-.design-box{position:absolute;inset:0;pointer-events:none}
-.design-box .handle{pointer-events:auto;width:12px;height:12px;border:2px solid #7aa0ff;background:#1b2130;position:absolute}
-.design-box .handle.br{right:-8px;bottom:-8px;cursor:se-resize}
-
-
-/* --- Zoom/Teams style container & responsive layout --- */
-.container{max-width:1400px;margin:0 auto;padding:16px;}
 .layout{display:grid;grid-template-columns:minmax(420px,2fr) minmax(320px,1fr);gap:20px;align-items:start;}
 @media (max-width: 1200px){
   .layout{grid-template-columns:1fr;gap:12px;}

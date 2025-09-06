@@ -44,21 +44,6 @@ def cfg_update():
     return jsonify({"ok": True, "config": cfg, "version": ver})
 
 # --- Layouts with versioning ---
-@bp.post("/layouts/publish")
-
-def layouts_publish():
-    data = request.get_json(silent=True) or {}
-    bp_name = data.get("breakpoint") or "desktop"
-    state = data.get("state") or {}
-    note = data.get("note") or ""
-    if os.environ.get("DATABASE_URL") and NEON_OK:
-        v = neon_pg.save_layout(bp_name, state, note)
-        db.memory.setdefault('layouts', {})[bp_name] = {"version": v, "state": state}
-        try:
-            _emit('layout_publish', breakpoint=bp_name, version=v)
-        except Exception:
-            pass
-        return jsonify({"ok": True, "breakpoint": bp_name, "version": v})
     cur = db.memory.setdefault('layouts', {}).setdefault(bp_name, {"version": 0, "state": {}})
     cur["version"] += 1; cur["state"] = state
     try:
@@ -66,29 +51,12 @@ def layouts_publish():
     except Exception:
         pass
     return jsonify({"ok": True, "breakpoint": bp_name, "version": cur["version"]})
-@bp.get("/layouts")
-@bp.get("/layouts")
-def layouts_list():
-    bp_name = request.args.get("breakpoint") or "desktop"
-    if os.environ.get("DATABASE_URL") and NEON_OK:
-        items = neon_pg.list_layouts(bp_name)
-        return jsonify({"ok": True, "items": items})
     cur = db.memory.get('layouts', {}).get(bp_name)
     items = []
     if cur:
         items.append({"version": cur["version"], "state": cur["state"], "note":"mem", "created_at":time.time()})
     return jsonify({"ok": True, "items": items})
 
-@bp.post("/layouts/rollback")
-def layouts_rollback():
-    data = request.get_json(silent=True) or {}
-    bp_name = data.get("breakpoint") or "desktop"
-    version = int(data.get("version") or 1)
-    if os.environ.get("DATABASE_URL") and NEON_OK:
-        state = neon_pg.get_layout(bp_name, version) or {}
-        v = neon_pg.save_layout(bp_name, state, f"rollback to {version}")
-        db.memory.setdefault('layouts', {})[bp_name] = {"version": v, "state": state}
-        return jsonify({"ok": True, "breakpoint": bp_name, "version": v, "state": state})
     cur = db.memory.setdefault('layouts', {}).setdefault(bp_name, {"version":0, "state":{}})
     cur["version"] += 1
     return jsonify({"ok": True, "breakpoint": bp_name, "version": cur["version"], "state": cur["state"]})
