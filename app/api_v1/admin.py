@@ -6,6 +6,22 @@ from app.db_dal import DAL, DBConfig, health_check, anonymize_user, delete_user_
 
 bp = Blueprint("admin_v1", __name__)
 
+
+from urllib.parse import urlparse, parse_qs
+
+def _parse_dsn_info(url: str) -> dict:
+    try:
+        u = urlparse(url)
+        q = parse_qs(u.query or "")
+        return {
+            "scheme": u.scheme,
+            "host": u.hostname,
+            "db": (u.path or "").lstrip("/"),
+            "sslmode": (q.get("sslmode",[None])[0]),
+        }
+    except Exception:
+        return {"error": "unable to parse DSN"}
+
 def make_dal():
     url = os.environ.get("DATABASE_URL", "sqlite:///ci_phase15.sqlite3")
     return DAL(DBConfig(url=url))

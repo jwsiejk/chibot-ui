@@ -9,6 +9,15 @@ pip install -r requirements.txt
 
 echo "==> Running v1-only route linter"
 python scripts/route_linter.py
+# Prefer CI_DB_URL if provided; else use local SQLite to avoid network calls during checks
+if [ -n "${CI_DB_URL:-}" ]; then
+  export DATABASE_URL="${CI_DB_URL}"
+  echo "Using CI_DB_URL for checks"
+else
+  export DATABASE_URL="sqlite:///ci_acceptance.sqlite3"
+  echo "Using local SQLite for checks"
+fi
+
 
 # Use local sqlite DB for acceptance checks to avoid network
 export DATABASE_URL="sqlite:///ci_acceptance.sqlite3"
