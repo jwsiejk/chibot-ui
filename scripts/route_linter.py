@@ -14,7 +14,7 @@ ALLOWED_EXTS = {".py", ".js", ".ts", ".tsx", ".html", ".css", ".json"}
 EXCLUDE_DIRS = {
     ".git", ".venv", "node_modules", "__pycache__", ".pytest_cache", "artifacts", "dist", "build"
 }
-EXCLUDE_FILES = set()
+EXCLUDE_FILES = {'scripts/route_linter.py'}
 
 def scan():
     bad_hits = []
