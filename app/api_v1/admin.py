@@ -174,44 +174,37 @@ def _emit(kind: str, **fields):
 
 @bp.get("/logs")
 def logs():
-    # Proper SSE stream with keep-alives; uses in-memory _log_buffer
+    """Server-Sent Events stream of the Admin Log."""
     from flask import Response
     def sse():
         import time, json
-        idx = 0
-        # flush any existing lines first
+        # Flush existing lines first
         snapshot = list(_log_buffer)
         for line in snapshot:
-            yield f"data: {line}
-
-"
+            yield f"data: {line}\n\n"
         idx = len(snapshot)
-        # streaming loop
         last_ping = time.time()
+        # Continuous stream
         while True:
-            # send new log lines
+            # Send any new lines
             if idx < len(_log_buffer):
                 for line in _log_buffer[idx:]:
-                    yield f"data: {line}
-
-"
+                    yield f"data: {line}\n\n"
                 idx = len(_log_buffer)
                 last_ping = time.time()
-            # keep-alive every 10s to keep Render proxies happy
+            # Heartbeat every 10s
             if time.time() - last_ping >= 10:
-                yield "event: ping
-data: keepalive
-
-"
+                yield "event: ping\ndata: keepalive\n\n"
                 last_ping = time.time()
             time.sleep(1.0)
     headers = {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",
-        "Connection": "keep-alive"
+        "Connection": "keep-alive",
     }
     return Response(sse(), status=200, headers=headers)
+
 
 
 @bp.get("/db/health")
