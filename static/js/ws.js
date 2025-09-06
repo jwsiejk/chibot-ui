@@ -10,6 +10,7 @@ let reconnects = 0;
 let startBtn, endBtn;
 let nudgeTimer = null;
 let lastAssistantTurn = null;
+let _openPromise = null;
 
 // Accumulators for current turn
 let _audioBufs = [];
@@ -20,12 +21,17 @@ export function bindControls(startEl, endEl){
   updateButtons();
 }
 
-export function openWS(){
+export export function waitWSOpen(timeout=4000){
+  if (ws && ws.readyState === WebSocket.OPEN) return Promise.resolve();
+  return _openPromise || new Promise((res) => setTimeout(res, 10));
+}
+
+function openWS(){
   if (ws && ws.readyState === WebSocket.OPEN) return ws;
   ws = new WebSocket(API.WS);
   reconnects = 0;
   updateButtons();
-  ws.onopen = () => { updateButtons(); };
+  _openPromise = new Promise((resolve)=>{ ws.onopen = () => { updateButtons(); resolve(); }; });
   ws.onmessage = onWSMessage;
   ws.onerror = () => { showError(API.WS, "WS", "socket error"); };
   ws.onclose = () => {

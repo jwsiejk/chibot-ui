@@ -4,7 +4,7 @@ import { showError, hideError } from "./errors.js";
 import { renderSuggestions } from "./suggestions.js";
 import { playStream, stopPlayback, setVisemeCallback, isPlaying } from "./audio.js";
 import { armVAD, disarmVAD, initMic } from "./voice.js";
-import { bindControls, openWS, closeWS, sendInterrupt, cancelNudge } from "./ws.js";
+import { bindControls, openWS, closeWS, sendInterrupt, cancelNudge, waitWSOpen } from "./ws.js";
 import { getSID } from "./util/sid.js";
 
 const $ = (s) => document.querySelector(s);
@@ -102,8 +102,9 @@ async function greet(){
 async function onStart(){
   hideError();
   try{
-    openWS();                 // opens /ws/v1/chat?sid=SID and sends hello
-    await greet();            // GET /api/v1/greet?session_id=SID
+    openWS();                 // opens /ws/v1/chat
+    await waitWSOpen();      // ensure server subscription is ready
+    await greet();           // GET /api/v1/greet?session_id=SID
     await initMic().catch((e)=>{ showError("mic","blocked","Microphone permission denied"); });
     setState(STATES.LISTENING);
     document.body.classList.add("chat-open");
