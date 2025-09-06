@@ -14,34 +14,33 @@ const $ = (s) => document.querySelector(s);
 ------------------------------------------------------- */
 async function ensureCSRF(){
   let tok = sessionStorage.getItem("csrf");
-  if (!tok) {
-    try{
-      const r = await fetch("/api/v1/auth/csrf", { credentials: "include" });
-      const j = await r.json();
-      if (j && j.ok && j.csrf_token) {
-        sessionStorage.setItem("csrf", j.csrf_token);
-      }
-    }catch(e){ /* best-effort */ }
+  if (tok) return tok;
+  try {
+    const r = await fetch("/api/v1/auth/csrf", { credentials: "include" });
+    if (!r.ok) return null;
+    const j = await r.json();
+    tok = j?.token || null;
+    if (tok) sessionStorage.setItem("csrf", tok);
+    return tok;
+  } catch {
+    return null;
   }
-  return {
-    "X-CSRF-Token": sessionStorage.getItem("csrf") || ""
-  };
 }
 
 /* -------------------------------------------------------
-   State / UI elements
+   Start/End wiring
 ------------------------------------------------------- */
-let startBtn, endBtn, chatOpenBtn, composer, sendBtn, instructionStrip;
-let stateLabelEl;
-let stateDotsWrap;
+let startBtn, endBtn, sendBtn, composer, stateLabelEl, stateDotsWrap;
+
+function onViseme(v){
+  // mouth anim hook (no-op here unless you wire it)
+}
 
 document.addEventListener("DOMContentLoaded", async () => {
   startBtn = $("#startButton");
   endBtn = $("#endButton");
-  chatOpenBtn = $("#chatButton");
-  composer = $("#composerInput");
   sendBtn = $("#composerSend");
-  instructionStrip = $("#instructionStrip");
+  composer = $("#composerInput");
   stateLabelEl = $("#stateLabel");
   stateDotsWrap = $("#stateDots");
 
@@ -72,27 +71,27 @@ function wireUI(){
   document.addEventListener("vad-hit", () => {
     if (getState() === STATES.RESPONDING && isPlaying()){
       stopPlayback();
-      setTimeout(() => sendInterrupt(), 420);
+      sendInterrupt();
+      setTimeout(() => setState(STATES.LISTENING), 420);
     }
-  });
-
-  // React when state changes to toggle VAD and labels
-  onState(({prev, next}) => {
-    if (next === STATES.LISTENING){
-      armVAD(1);
-    } else if (next === STATES.RESPONDING){
-      // threshold boost during playback
-      armVAD(2);
-    } else {
-      disarmVAD();
-    }
-    updateStateIndicators(next);
   });
 }
 
-/* -------------------------------------------------------
-   Start / End
-------------------------------------------------------- */
+function updateStateIndicators(s){
+  const label = ({
+    [STATES.READY]: "Ready",
+    [STATES.LISTENING]: "Listening",
+    [STATES.RESPONDING]: "Responding"
+  })[s] || "Ready";
+  stateLabelEl.textContent = label;
+  // dots visibility already controlled via CSS
+}
+
+function onSuggestion(text){
+  composer.value = text;
+  onSend();
+}
+
 async function greet(){
   const sid = getSID();
   const r = await fetch(`${API.GREET}?session_id=${encodeURIComponent(sid)}`, { credentials: "include" });
@@ -103,8 +102,8 @@ async function onStart(){
   hideError();
   try{
     openWS();                 // opens /ws/v1/chat
-    await waitWSOpen();      // ensure server subscription is ready
-    await greet();           // GET /api/v1/greet?session_id=SID
+    await waitWSOpen();       // ensure server subscription is ready
+    await greet();            // GET /api/v1/greet?session_id=SID
     await initMic().catch((e)=>{ showError("mic","blocked","Microphone permission denied"); });
     setState(STATES.LISTENING);
     document.body.classList.add("chat-open");
@@ -125,58 +124,39 @@ async function onEnd(){
    Text send
 ------------------------------------------------------- */
 async function onSend(){
-cancelNudge();
+  try { const vtmp = (composer?.value || '').trim(); if(vtmp) { try{ addChatMessage('user', vtmp); }catch(e){} } } catch(e) {}
+  cancelNudge();
   const text = (composer?.value || "").trim();
   if (!text) return;
   composer.value = "";
-  setState(STATES.THINKING);
-
   try{
+    const tok = await ensureCSRF();
     const r = await fetch(API.CHAT, {
       method: "POST",
+      headers: { "Content-Type":"application/json", ...(tok ? {"X-CSRF-Token":tok} : {}) },
       credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        ...(await ensureCSRF())
-      },
       body: JSON.stringify({ text, session_id: getSID() })
     });
-    if (!r.ok){
-      showError(API.CHAT, r.status, "chat failed");
-      setState(STATES.READY);
-    }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
   }catch(e){
-    showError(API.CHAT, "ERR", e.message || "chat failed");
-    setState(STATES.READY);
+    showError(API.CHAT, e.status || "ERR", e.message || "send failed");
   }
 }
 
 /* -------------------------------------------------------
-   Indicators (dots + label)
+   UI helpers
 ------------------------------------------------------- */
-function labelForState(state){
-  switch (state){
-    case STATES.LISTENING: return "Listening";
-    case STATES.THINKING:  return "Thinking";
-    case STATES.RESPONDING:return "Responding";
-    default:               return "Ready";
-  }
-}
-function updateStateIndicators(state){
-  if (stateDotsWrap){
-    stateDotsWrap.querySelectorAll("[data-dot]").forEach(d => d.classList.toggle("on", d.dataset.dot === state));
-  }
-  if (stateLabelEl) stateLabelEl.textContent = labelForState(state);
-}
+function updateStateIndicatorsOnce(s){ updateStateIndicators(s); }
 
-/* -------------------------------------------------------
-   Hooks
-------------------------------------------------------- */
-function onViseme(v){
-  // hook for your 2D mouth animation
-}
-function onSuggestion(text){
-  if (!composer) return;
-  composer.value = text;
-  onSend();
+/* global function used above */
+function addChatMessage(role, text){
+  try{
+    const box = document.getElementById('chatMessages');
+    if(!box || !text) return;
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+    div.textContent = text;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }catch(e){}
 }
