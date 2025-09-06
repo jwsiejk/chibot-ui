@@ -120,10 +120,12 @@ class DAL:
                 except Exception:
                     pass
                 cur = c.cursor()
-                if params is None:
-                    cur.execute(sql)
+                driver = _detect_driver(c)
+                _sql, _params = _normalize_sql_params(sql, params, driver)
+                if _params is None:
+                    cur.execute(_sql)
                 else:
-                    cur.execute(sql, params)
+                    cur.execute(_sql, _params)
                 c.commit()
                 return cur.rowcount
         return self._retry(_do)
@@ -139,10 +141,12 @@ class DAL:
                 except Exception:
                     pass
                 cur = c.cursor()
-                if params is None:
-                    cur.execute(sql)
+                driver = _detect_driver(c)
+                _sql, _params = _normalize_sql_params(sql, params, driver)
+                if _params is None:
+                    cur.execute(_sql)
                 else:
-                    cur.execute(sql, params)
+                    cur.execute(_sql, _params)
                 rows = cur.fetchall()
                 return rows
         return self._retry(_do)
