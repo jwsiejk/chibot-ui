@@ -12,6 +12,7 @@ def run(label, cmd, cwd=None):
     return p.returncode
 
 rc = 0
+os.environ.setdefault("DATABASE_URL", "sqlite:///ci_acceptance.sqlite3")
 for name in [
     "phase10_checks.py",
     "phase11_checks.py",

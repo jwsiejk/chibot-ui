@@ -23,6 +23,7 @@ class DBConfig:
 
 class DAL:
     def __init__(self, cfg: DBConfig):
+        cfg.url = (cfg.url or '').strip()
         self.cfg = cfg
         self._lock = threading.RLock()
         self._pg_pool = None

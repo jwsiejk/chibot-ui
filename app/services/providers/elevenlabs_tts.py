@@ -7,7 +7,9 @@ _TTS_CACHE: dict[str, Tuple[bytes, List[dict]]] = {}
 
 class ElevenLabsTTS:
     def __init__(self):
-        self.api_key = os.environ.get("ELEVENLABS_API_KEY") or ""
+        self.api_key = os.environ.get("ELEVENLABS_API_KEY")
+        if not self.api_key:
+            raise RuntimeError("ELEVENLABS_API_KEY missing")
         self.voice_id = os.environ.get("ELEVENLABS_VOICE_ID") or "EXAVITQu4vr4xnSDxMaL"
         self.output_format = os.environ.get("ELEVEN_OUTPUT_FORMAT") or "mp3_44100_128"
         self.max_retries = int(os.environ.get("TTS_RETRIES", "1"))
@@ -35,7 +37,7 @@ class ElevenLabsTTS:
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=data, method="POST")
         req.add_header("Content-Type","application/json")
-        req.add_header("xi-api-key", self.api_key or "TEST")
+        req.add_header("xi-api-key", self.api_key)
 
         # Retry loop
         attempts = 0

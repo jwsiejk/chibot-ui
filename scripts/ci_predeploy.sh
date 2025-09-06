@@ -10,6 +10,9 @@ pip install -r requirements.txt
 echo "==> Running v1-only route linter"
 python scripts/route_linter.py
 
+# Use local sqlite DB for acceptance checks to avoid network
+export DATABASE_URL="sqlite:///ci_acceptance.sqlite3"
+
 run_checks() {
   local label="$1"; shift
   for c in "$@"; do
