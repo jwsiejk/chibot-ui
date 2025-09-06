@@ -243,3 +243,8 @@ def get_config():
     cfg.setdefault("vad_release_ms", 120)
     cfg.setdefault("vad_dbfs_threshold", -45)
     return jsonify({"config": cfg}), 200
+
+
+@bp.post("/voice/tts")
+def tts_compat():
+    return tts_with_visemes()
