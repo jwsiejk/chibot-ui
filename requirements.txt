@@ -36,3 +36,7 @@ python-multipart>=0.0.9     # if you accept uploads on ASGI routes (not needed f
 pytest
 
 requests
+
+alembic
+
+SQLAlchemy

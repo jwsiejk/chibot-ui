@@ -1,130 +1,16 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ask Chip — Admin</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
-  <style>
-    .tabs { display:flex; gap:.5rem; margin:1rem 0; flex-wrap: wrap; }
-    .tab { padding:.5rem .75rem; border:1px solid #ccd; border-radius:10px; cursor:pointer; background:#f7f9fc; }
-    .tab[aria-selected="true"] { background:#e8eefc; border-color:#7aa0ff; }
-    .panel { display:none; }
-    .panel[aria-hidden="false"] { display:block; }
-    .form-grid { display:grid; grid-template-columns: 240px 1fr; gap:.5rem 1rem; align-items:center; }
-    .hint { color:#9aa4b2; }
-    .kv td:first-child{width:220px;color:#556;}
-  </style>
-</head>
-<body data-app="ask-chip-admin">
-  <header class="topbar">
-    <div class="brand">Ask Chip — Admin</div>
-    <nav class="menu"><a href="/">Back to App</a></nav>
-  </header>
-
-  <main class="container">
-    <div class="tabs" role="tablist">
-      <button class="tab" role="tab" aria-controls="tab-logs"    aria-selected="true"  id="t-logs">Live Logs</button>
-      <button class="tab" role="tab" aria-controls="tab-runtime" aria-selected="false" id="t-runtime">Runtime</button>
-      <button class="tab" role="tab" aria-controls="tab-config"  aria-selected="false" id="t-config">Config</button>
-      <button class="tab" role="tab" aria-controls="tab-config-audio" aria-selected="false" id="t-config-audio">Audio / VAD</button>
-      <button class="tab" role="tab" aria-controls="tab-users"   aria-selected="false" id="t-users">Users &amp; Memory</button>
-    </div>
-
-    <section id="tab-logs" class="panel" aria-hidden="false">
-      <h2>Live Admin Log</h2>
-      <div class="controls">
-        <input id="logFilter" placeholder="filter text">
-        <button class="btn" id="logClear">Clear</button>
-      </div>
-      <pre class="log" id="adminLog">(connecting...)</pre>
-    </section>
-<section id="tab-runtime" class="panel" aria-hidden="true">
-  <h2>Runtime Status</h2>
-  <div style="display:flex;gap:8px;align-items:center;margin:.5rem 0;">
-    <button id="rtRefresh" class="btn">Refresh</button>
-    <span id="rtStatus" class="hint"></span>
-  </div>
-  <table class="kv" id="rtTable" style="width:100%;max-width:780px">
-    <tbody></tbody>
-  </table>
-  <pre class="log" id="rtRaw" style="height:12rem"></pre>
-</section>
-
-    <section id="tab-config" class="panel" aria-hidden="true">
-      <h2>Runtime Config</h2>
-      <div id="configForm" class="form-grid"></div>
-      <div style="margin-top:8px">
-        <button id="cfgLoad" class="btn">Load</button>
-        <button id="cfgSave" class="btn primary">Save</button>
-        <span id="cfgStatus" class="hint"></span>
-      </div>
-    </section>
-
-    <section id="tab-config-audio" class="panel" aria-hidden="true">
-      <h2>Audio / VAD</h2>
-      <div class="form-grid">
-        <label for="cfg-audio_worklet_enabled">AudioWorklet Enabled</label>
-        <input type="checkbox" id="cfg-audio_worklet_enabled" data-key="audio_worklet_enabled" />
-        <div class="hint"></div>
-        <label for="cfg-vad_attack_ms">VAD Attack (ms)</label>
-        <input type="number" id="cfg-vad_attack_ms" min="1" step="1" data-key="vad_attack_ms" />
-        <div class="hint">Typical 8–20 ms</div>
-        <label for="cfg-vad_release_ms">VAD Release (ms)</label>
-        <input type="number" id="cfg-vad_release_ms" min="10" step="10" data-key="vad_release_ms" />
-        <div class="hint">Typical 200–400 ms</div>
-        <label for="cfg-vad_dbfs_threshold">VAD Threshold (dBFS)</label>
-        <input type="number" id="cfg-vad_dbfs_threshold" min="-90" max="0" step="1" data-key="vad_dbfs_threshold" />
-        <div class="hint">More negative = less sensitive</div>
-      </div>
-      <div style="margin-top:10px;">
-        <button class="btn" id="cfgAudioSave">Save Audio Settings</button>
-      </div>
-    </section>
-
-    <section id="tab-users" class="panel" aria-hidden="true">
-      <h2>Users &amp; Memory</h2>
-      <p class="hint">Stub view for now.</p>
-      <pre class="log" style="height:18rem">Coming soon.</pre>
-    </section>
-  
-  <section id="tab-knowledge" class="panel" aria-hidden="true">
-    <h2>Knowledge</h2>
-    <div style="display:flex;gap:8px;align-items:center;margin:.5rem 0;">
-      <input id="kbQuery" placeholder="Search…" style="padding:6px 8px;border:1px solid #ccd;border-radius:8px;min-width:240px;">
-      <input id="kbTag" placeholder="Tag" style="padding:6px 8px;border:1px solid #ccd;border-radius:8px;min-width:120px;">
-      <button id="kbRefresh" class="btn">Search</button>
-      <button id="kbAdd" class="btn primary">Add Document</button>
-    </div>
-    <div id="kbList"></div>
-    <dialog id="kbAddDlg">
-      <form method="dialog" style="min-width: 680px;">
-        <h3 style="margin-top:0;">Add Document</h3>
-        <div class="form-grid">
-          <label>Title</label><input id="kbTitle">
-          <label>Tags</label><input id="kbTags" placeholder="comma,separated">
-          <label>Body</label><textarea id="kbBody" rows="12" style="width:100%"></textarea>
-        </div>
-        <div style="margin-top:10px;display:flex;gap:10px;justify-content:flex-end;">
-          <button type="button" id="kbSave" class="btn primary">Save</button>
-          <button type="reset" class="btn">Cancel</button>
-        </div>
-      </form>
-    </dialog>
-    <dialog id="kbPreviewDlg">
-      <form method="dialog" style="min-width: 680px;max-width: 900px;">
-        <h3 id="kbPrevTitle" style="margin-top:0;"></h3>
-        <pre id="kbPrevBody" style="white-space:pre-wrap;max-height:50vh;overflow:auto;border:1px solid #ddd;padding:8px;border-radius:8px;"></pre>
-        <h4>Chunks</h4>
-        <ol id="kbPrevChunks"></ol>
-        <div style="margin-top:10px;display:flex;gap:10px;justify-content:flex-end;">
-          <button type="reset" class="btn">Close</button>
-        </div>
-      </form>
-    </dialog>
-  </section>
-</main>
-
-  <script defer src="{{ url_for('static', filename='js/admin.js') }}?v=v20250906b"></script>
-  <script src="/static/js/admin_ux_persona.js?v=v20250906a" defer></script>
+<html>
+<head><meta charset="utf-8"><title>Ask Chip — Admin</title></head>
+<body>
+<h1>Admin</h1>
+<nav>
+  <ul>
+    <li><a href="/api/v1/admin/db/health">DB Health</a></li>
+    <li><a href="/api/v1/admin/outbox">Outbox</a></li>
+    <li><a href="/docs/runbook.md">Runbook</a></li>
+    <li><a href="/docs/env_matrix.md">Environment Matrix</a></li>
+    <li><a href="/docs/troubleshooting.md">Troubleshooting</a></li>
+  </ul>
+</nav>
 </body>
 </html>
