@@ -25,7 +25,7 @@ let _visemes = [];
 function addChatMessage(role, text){
   try{
     const box = document.getElementById('chatMessages');
-    if(!box) return;
+    if(!box || !text) return;
     const div = document.createElement('div');
     div.className = `msg ${role}`;
     div.textContent = text;
@@ -33,7 +33,6 @@ function addChatMessage(role, text){
     box.scrollTop = box.scrollHeight;
   }catch(e){}
 }
-
 
 export function bindControls(startEl, endEl){
   startBtn = startEl; endBtn = endEl;
@@ -72,21 +71,20 @@ export function closeWS(){
 function updateButtons(){
   const active = ws && ws.readyState === WebSocket.OPEN;
   if (startBtn) startBtn.disabled = active;
-  if (endBtn) endBtn.disabled = !active;
+  if (endBtn)   endBtn.disabled   = !active;
 }
 
-function b64ToArrayBuffer(b64){
-  try{
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
-    return bytes.buffer;
-  }catch(e){ return new ArrayBuffer(0); }
+function b64ToArrayBuffer(base64) {
+  const bin = atob(base64);
+  const len = bin.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
 }
 
 function normalizeVisemes(items){
-  // Accept {t_ms, v} or {t, v}; output {t:ms, v}
-  return (items||[]).map(x => ({
+  const xs = Array.isArray(items) ? items : [];
+  return xs.map(x => ({
     t: typeof x.t !== "undefined" ? x.t : (x.t_ms ?? 0),
     v: x.v
   }));
@@ -100,7 +98,7 @@ function onWSMessage(ev){
     if (msg.type === "assistant_chunk" || msg.type === "text"){
       setState(STATES.RESPONDING);
       lastAssistantTurn = msg.turn_id || lastAssistantTurn;
-      // (optional) update chat UI here with msg.text or msg.content
+      // append assistant text to chat
       if (msg.text || msg.content) addChatMessage('assistant', (msg.text || msg.content));
     }
 
@@ -123,9 +121,7 @@ function onWSMessage(ev){
       _visemes = [];
       setState(STATES.RESPONDING);
       playStream(bufs, ves).finally(() => setState(STATES.READY));
-      // If this frame carries suggestions in 'suggestions' or 'items'
-      const sug = msg.suggestions || msg.items;
-      if (Array.isArray(sug)) renderSuggestions(sug);
+      // If the server sends suggestions after end, schedule a gentle nudge
       scheduleNudge();
       lastAssistantTurn = msg.turn_id || lastAssistantTurn;
     }
@@ -144,13 +140,13 @@ function onWSMessage(ev){
 export function sendInterrupt(){
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const turn = lastAssistantTurn;
-  stopPlayback();
   const frame = { type: "control", cmd: "interrupt", turn_id: turn };
-  ws.send(JSON.stringify(frame));
+  try { ws.send(JSON.stringify(frame)); } catch {}
+  stopPlayback();
   setState(STATES.LISTENING);
 }
 
-function scheduleNudge(){
+export function scheduleNudge(){
   if (nudgeTimer) clearTimeout(nudgeTimer);
   nudgeTimer = setTimeout(() => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
