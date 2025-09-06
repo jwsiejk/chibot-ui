@@ -4,7 +4,7 @@ from .bus import bus
 from ..services.streaming import make_assistant_frames
 from .barge import BargeState
 from app.api_v1.admin import _emit
-from app.asgi_gateway import _DRAINING
+from app.drain_state import is_draining
 from .one_tab import acquire as _acquire, release as _release
 
 def _normalize_frame(fr: dict) -> dict:
@@ -73,7 +73,7 @@ async def ws_chat(scope, receive, send):
             cfg = _db.get_config(); idle_ms = int(cfg.get('ws_idle_timeout_ms', 30000))
             while True:
                 await asyncio.sleep(1.0)
-                if _DRAINING:
+                if is_draining():
                     await send({'type':'websocket.close','code':1012})
                     break
                 if idle_ms <= 0: continue

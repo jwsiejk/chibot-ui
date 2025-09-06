@@ -14,16 +14,17 @@ from starlette.staticfiles import StaticFiles
 
 from . import create_app
 from .asgi_router import asgi as ws_asgi
+import app.drain_state as drain_state
 
 # Phase13: graceful drain signal
-_DRAINING = False
+
 def _install_sigterm_handler():
-    global _DRAINING
+
     try:
         import signal
         def on_term(signum, frame):
             try:
-                _DRAINING = True
+                drain_state.start_draining()
                 from app.api_v1.admin import _emit
                 _emit('drain_start')
             except Exception:
@@ -64,7 +65,7 @@ async def _serve_static(scope, receive, send):
 async def asgi(scope, receive, send):
     typ = scope.get("type")
     if typ == "websocket":
-        if _DRAINING:
+        if drain_state.is_draining():
             # Politely refuse new sockets during drain
             await send({'type':'websocket.close','code':1012})
             return
