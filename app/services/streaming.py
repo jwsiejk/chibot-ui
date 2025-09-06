@@ -103,3 +103,20 @@ def _arm_nudge_after_end(session_id: str, frames: list):
             arm_nudge(session_id)
     except Exception:
         pass
+
+def make_assistant_frames_text_only(seed_text: str, session_id: str | None = None, meta: dict | None = None) -> Tuple[str, List[Dict]]:
+    cfg = db.get_config()
+    provider = get_provider(cfg)
+    persona_id = db.memory.get('sessions',{}).get(session_id or 'default',{}).get('persona_id','chip')
+    persona = db.memory.get('personas',{}).get(persona_id, {'id':'chip'})
+    kb = kb_search((seed_text or ""), limit=2)
+    preamble = build_persona_preamble(persona)
+    context = {'session_id': session_id, 'kb': kb, 'preamble': preamble}
+    tid = provider.new_turn_id()
+    reply = provider.generate_reply((seed_text or ""), persona=persona, teacher_move=None, context=context)
+    frames = [
+        {"type":"assistant_chunk","turn_id":tid,"text": reply},
+        {"type":"suggestions","turn_id":tid,"items": hygienic_suggestions(reply)},
+        {"type":"assistant_end","turn_id":tid}
+    ]
+    return tid, frames

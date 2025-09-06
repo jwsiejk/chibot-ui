@@ -10,5 +10,10 @@ def greet():
         return jsonify({"ok": False, "error": "profile_required"}), 400
     db.ensure_session(sid, email)
     db.add_message(sid, "system", "greet")
-    tid, frames = make_assistant_frames("greet", sid); schedule_frames(sid, frames)
+    try:
+        tid, frames = make_assistant_frames("greet", sid)
+    except Exception:
+        from ..services.streaming import make_assistant_frames_text_only
+        tid, frames = make_assistant_frames_text_only("greet", sid)
+    schedule_frames(sid, frames)
     return jsonify({"ok": True, "turn_id": tid})

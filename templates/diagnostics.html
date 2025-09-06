@@ -32,7 +32,7 @@
     async function c_sse(){return new Promise(res=>{try{const es=new EventSource('/api/v1/admin/logs');let opened=false;es.onopen=()=>opened=true;es.onmessage=()=>{res(['pass','SSE receiving events']);es.close();};es.onerror=()=>{res([opened?'warn':'fail',opened?'SSE open, quiet':'SSE could not open']);try{es.close();}catch{}};setTimeout(()=>{if(!opened){res(['warn','SSE no open within timeout']);try{es.close();}catch{}}},1500);}catch(e){res(['fail',`SSE init error: ${e.message||e}`]);}});}
     async function c_staticViseme(){const base='/static/visemes/chip-2d-pack/';try{let r=await ftxt(base+'mouth_neutral.png');if(r.ok)return ['pass','mouth_neutral.png ok'];r=await ftxt(base+'mouth_aa.png');return r.ok?['pass','mouth_aa.png ok']:['fail','no viseme (mouth_neutral.png or mouth_aa.png)'];}catch(e){return ['fail',String(e.message||e)];}}
     async function c_legacy(){try{const r=await ftxt('/api/v1/greet');return r.ok?['fail',`/api/v1/greet returned ${r.status}`]:['pass',`/api/v1/greet → ${r.status}`]}catch(e){return ['pass','/api/v1/greet unreachable (as expected)'];}}
-    async function c_tts(){try{const r=await fetch('/api/v1/voice/tts-with-visemes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'Hello from diagnostics.'})});const j=await r.json().catch(()=>({}));return (r.ok&&j?.ok&&(j.audio_b64||'').length>10)?['pass',`TTS ok (bytes=${j.audio_b64.length})`]:['warn',`TTS status=${r.status}`];}catch(e){return ['warn',`TTS error (optional): ${e.message||e}`];}}
+    async function c_tts(){try{const r=await fetch('/api/v1/voice/tts-with-visemes',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token': await _csrf()},body:JSON.stringify({text:'Hello from diagnostics.'})});const j=await r.json().catch(()=>({}));return (r.ok&&j?.ok&&(j.audio_b64||'').length>10)?['pass',`TTS ok (bytes=${j.audio_b64.length})`]:['warn',`TTS status=${r.status}`];}catch(e){return ['warn',`TTS error (optional): ${e.message||e}`];}}
     async function c_config(){try{const r=await ftxt('/api/v1/admin/config');return r.ok?['pass','Config ok']:['warn',`Config GET → ${r.status}`]}catch(e){return ['warn',`Config error (optional): ${e.message||e}`];}}
 
     async function run(){
@@ -48,6 +48,8 @@
       overall.textContent = `Pass: ${pass} • Fail: ${fail} • Warn/Skip: ${checks.length - pass - fail}`;
     }
     window.addEventListener('DOMContentLoaded', run);
-  </script>
+  
+    async function _csrf(){ try{ const r=await fetch('/api/v1/auth/csrf',{credentials:'include'}); const j=await r.json(); return j?.csrf_token || ''; }catch(e){ return ''; } }
+    </script>
 </body>
 </html>

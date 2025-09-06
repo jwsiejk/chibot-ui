@@ -1,6 +1,6 @@
 # app/__init__.py
 import os
-from flask import Flask, render_template, send_from_directory
+from flask import Flask, render_template, send_from_directory, request
 from .api_v1 import create_v1_blueprint
 from .middleware.csrf import csrf_before_request
 from .middleware.rate_limit import register_before_request as rate_limit_register
@@ -38,4 +38,34 @@ def create_app():
     # Middleware
     app.before_request(csrf_before_request)
     rate_limit_register(app)
+
+    # Security headers & CORS
+    @app.after_request
+    def _security_headers(resp):
+        # Security headers
+        resp.headers['X-Content-Type-Options'] = 'nosniff'
+        resp.headers['X-Frame-Options'] = 'DENY'
+        resp.headers['Referrer-Policy'] = 'no-referrer'
+        # CSP tuned for self-hosted assets and WSS
+        resp.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' wss:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'"
+        # HSTS (enable only on HTTPS)
+        if request.scheme == 'https' or request.headers.get('X-Forwarded-Proto','') == 'https':
+            resp.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains; preload'
+        # CORS allowlist (off by default)
+        allow = os.environ.get('CORS_ALLOW_ORIGINS','').strip()
+        if allow:
+            origins = [o.strip() for o in allow.split(',') if o.strip()]
+            ori = request.headers.get('Origin','')
+            if ori in origins:
+                resp.headers['Access-Control-Allow-Origin'] = ori
+                resp.headers['Vary'] = 'Origin'
+                resp.headers['Access-Control-Allow-Credentials'] = 'true'
+                resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-CSRF-Token'
+                resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+        return resp
+
+    @app.route('/<path:_>',
+               methods=['OPTIONS'])
+    def _cors_preflight(_):
+        return ('', 204)
     return app
