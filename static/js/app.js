@@ -12,19 +12,17 @@ const $ = (s) => document.querySelector(s);
 /* -------------------------------------------------------
    CSRF helpers
 ------------------------------------------------------- */
-async function ensureCSRF(){
+async function ensureCSRF() {
   let tok = sessionStorage.getItem("csrf");
   if (tok) return tok;
   try {
-    const r = await fetch("/api/v1/auth/csrf", { credentials: "include" });
+    const r = await fetch("/api/v1/auth/csrf", { credentials: "include", cache: "no-store" });
     if (!r.ok) return null;
-    const j = await r.json();
-    tok = j?.token || null;
+    const j = await r.json().catch(() => ({}));
+    tok = j?.token || j?.csrf || null;
     if (tok) sessionStorage.setItem("csrf", tok);
     return tok;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 /* -------------------------------------------------------
@@ -124,7 +122,32 @@ async function onEnd(){
    Text send
 ------------------------------------------------------- */
 async function onSend(){
-  try { const vtmp = (composer?.value || '').trim(); if(vtmp) { try{ addChatMessage('user', vtmp); }catch(e){} } } catch(e) {}
+  cancelNudge();
+  const text = (composer?.value || "").trim();
+  if (!text) return;
+  try { addChatMessage && addChatMessage('user', text); } catch {}
+  composer.value = "";
+
+  const postOnce = async (tok) => fetch(API.CHAT, {
+    method: "POST",
+    headers: { "Content-Type":"application/json", ...(tok ? {"X-CSRF-Token":tok} : {}) },
+    credentials: "include",
+    body: JSON.stringify({ text, session_id: getSID() })
+  });
+
+  try{
+    let tok = await ensureCSRF();
+    let r = await postOnce(tok);
+    if (r.status === 403){
+      sessionStorage.removeItem("csrf");
+      tok = await ensureCSRF();
+      r = await postOnce(tok);
+    }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  }catch(e){
+    showError(API.CHAT, e.status || "ERR", e.message || "send failed");
+  }
+}catch(e){} } } catch(e) {}
   cancelNudge();
   const text = (composer?.value || "").trim();
   if (!text) return;

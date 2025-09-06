@@ -49,7 +49,7 @@ export function openWS(){
   ws = new WebSocket(`${API.WS}?session_id=${encodeURIComponent(getSID())}&tab=${encodeURIComponent(getTabId())}`);
   reconnects = 0;
   updateButtons();
-  _openPromise = new Promise((resolve)=>{ ws.onopen = () => { updateButtons(); resolve(); }; });
+  _openPromise = new Promise((resolve)=>{ ws.onopen = () => { updateButtons(); startHeartbeat(); resolve(); }; });
   ws.onmessage = onWSMessage;
   ws.onerror = () => { showError(API.WS, "WS", "socket error"); };
   ws.onclose = () => {
@@ -156,4 +156,21 @@ export function scheduleNudge(){
 
 export function cancelNudge(){
   if (nudgeTimer) { clearTimeout(nudgeTimer); nudgeTimer = null; }
+}
+
+
+let _hbTimer = null;
+function startHeartbeat(){
+  stopHeartbeat();
+  try {
+    const sendPing = () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      try{ ws.send(JSON.stringify({ type:"ping", t: Date.now() })); }catch{}
+    };
+    sendPing();
+    _hbTimer = setInterval(sendPing, 25000); // matches default ws_ping_interval_ms
+  } catch(e){}
+}
+function stopHeartbeat(){
+  try{ if (_hbTimer) clearInterval(_hbTimer); }catch{}; _hbTimer = null;
 }
