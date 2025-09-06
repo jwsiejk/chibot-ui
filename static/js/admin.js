@@ -22,7 +22,9 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
   const el = $("#adminLog");
   try {
     const es = new EventSource(url);
-    es.onopen = () => { el.textContent = ""; };
+    let opened = false;
+    const to = setTimeout(()=>{ if(!opened){ el.textContent = '(log stream unavailable — SSE timeout)'; try{es.close();}catch{} } }, 6000);
+    es.onopen = () => { opened = true; clearTimeout(to); el.textContent = ""; };
     es.addEventListener("ping", () => {/* keepalive */});
     es.onmessage = (ev) => {
       const line = ev.data || "";

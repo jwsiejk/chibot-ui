@@ -1,3 +1,4 @@
+window.addEventListener('error', (e)=>{ try{ document.getElementById('overall').textContent = 'Diagnostics error: ' + (e?.message||e); }catch{} });
 const tpl = document.getElementById('row-tpl');
 const tbody = document.querySelector('#results tbody');
 const overall = document.getElementById('overall');
