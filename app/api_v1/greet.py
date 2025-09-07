@@ -1,3 +1,4 @@
+from ..middleware.csrf import ensure_csrf_headers
 from flask import Blueprint, jsonify, request
 from ..db import db
 from ..security_state import get_user
@@ -16,4 +17,5 @@ def greet():
         from ..services.streaming import make_assistant_frames_text_only
         tid, frames = make_assistant_frames_text_only("greet", sid)
     schedule_frames(sid, frames)
-    return jsonify({"ok": True, "turn_id": tid})
+    resp = jsonify({"ok": True, "turn_id": tid});
+    return ensure_csrf_headers(resp)
