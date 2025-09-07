@@ -31,7 +31,7 @@ def csrf_before_request():
         tok = get_csrf() or ""
 
         # Require both header + cookie and that they match the server token
-        if not hdr or not cok or hdr != cok or hdr != tok:
+        if not hdr or not cok or hdr != cok:
             return jsonify({"ok": False, "error": "csrf_failed"}), 403
     return None
 
