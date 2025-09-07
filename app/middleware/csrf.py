@@ -35,23 +35,14 @@ def csrf_before_request():
     return None
 
 def make_csrf_route(app):
-    """Expose GET /api/v1/auth/csrf: returns JSON + sets httpOnly cookie.
-       'secure' is computed from request scheme / proxy headers; env can force.
-    """
+    """Expose GET /api/v1/auth/csrf: issues token + sets httpOnly cookie."""
     @app.get("/api/v1/auth/csrf")
     def get_csrf_route():
-        token = get_csrf()
+        token = get_csrf()              # your canonical CSRF value
         resp = jsonify({"ok": True, "csrf": token})
-        try:
-            xf_proto = (request.headers.get("X-Forwarded-Proto") or "").lower()
-            is_https = bool(getattr(request, "is_secure", False)) or xf_proto == "https"
-        except Exception:
-            is_https = False
-        import os as _os
-        if _os.environ.get("FORCE_SECURE_COOKIES", "").lower() in ("1","true","yes","on"):
-            is_https = True
+        # Important: Path=/ so /api/v1/chat receives it; Secure+HttpOnly; first-party SameSite=Lax
         resp.set_cookie(
             CSRF_COOKIE, token,
-            httponly=True, samesite="Lax", secure=bool(is_https), path="/"
+            httponly=True, samesite="Lax", secure=True, path="/"
         )
         return resp
