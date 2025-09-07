@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """
-Proactive guard: TTS first-call check (CSRF-aware) without test_client context manager
-to avoid Flask request context teardown issues.
+Proactive guard: TTS first-call check (CSRF-aware) with robust import path and
+without Flask test_client context manager to avoid teardown errors.
 
-Expectations:
-  - Prints "PASS: tts first call 200" if POST /api/v1/voice/tts-with-visemes returns 200 with CSRF.
-  - Prints "FAIL: tts first call not 200" otherwise and exits 1.
+Outputs exactly the lines the CI harness expects.
 """
-import sys
+import sys, os
 from importlib import import_module
+from pathlib import Path
+
+# Ensure project root (parent of /scripts) is on sys.path
+THIS_DIR = Path(__file__).resolve().parent
+ROOT_DIR = THIS_DIR.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 def main():
     try:
@@ -17,7 +22,6 @@ def main():
         print(f"FAIL: could not import app: {e}")
         return 1
 
-    # Flask app must be accessible as pkg.app
     try:
         flask_app = getattr(pkg, "app")
     except Exception as e:
@@ -26,8 +30,7 @@ def main():
 
     client = flask_app.test_client()
 
-    # Fetch CSRF token
-    csrf = None
+    # CSRF handshake
     try:
         r = client.get("/api/v1/auth/csrf")
         data = None
@@ -35,36 +38,37 @@ def main():
             data = r.get_json(silent=True)
         except Exception:
             data = None
+        csrf = None
         if isinstance(data, dict):
             csrf = data.get("csrf") or data.get("token")
-        # Fallback: some implementations return token in header
         if not csrf:
             csrf = r.headers.get("X-CSRF-Token")
+        if not csrf:
+            print("FAIL: could not fetch CSRF: empty token")
+            return 1
     except Exception as e:
         print(f"FAIL: could not fetch CSRF: {e}")
         return 1
 
-    headers = {}
-    if csrf:
-        headers["X-CSRF-Token"] = csrf
+    headers = {"X-CSRF-Token": csrf}
 
     # First TTS call
     try:
         resp = client.post(
             "/api/v1/voice/tts-with-visemes",
             json={"text": "proactive-check-hello", "session_id": "proactive-guard"},
-            headers=headers
+            headers=headers,
         )
     except Exception as e:
         print(f"FAIL: tts request errored: {e}")
         return 1
 
     if getattr(resp, "status_code", None) != 200:
-        body_preview = None
+        body_preview = b""
         try:
             body_preview = (resp.data or b"")[:200]
         except Exception:
-            body_preview = b""
+            pass
         print("FAIL: tts first call not 200")
         try:
             print(f"DEBUG: status={resp.status_code} body={body_preview!r}")
