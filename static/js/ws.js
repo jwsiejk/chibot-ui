@@ -1,79 +1,96 @@
+/**
+ * ws.js — WebSocket helpers for Ask Chip
+ * Updated: 2025-09-07
+ *
+ * Behavior:
+ *  - Opens a single WS to /ws/v1/chat with session_id + tab id
+ *  - Auto-reconnects with backoff on close/error (survives deploys/rotations)
+ *  - Streams assistant frames (text/audio/visemes/state/suggestions)
+ *  - Exposes start/end controls, interrupts, and nudge helpers
+ */
+
 import { API, TIMING } from "./config.js";
-import { getSID } from './util/sid.js';
+import { getSID } from "./util/sid.js";
 import { setState, STATES } from "./state.js";
 import { showError } from "./errors.js";
 import { playStream, stopPlayback, isPlaying } from "./audio.js";
 import { renderSuggestions } from "./suggestions.js";
 
 let ws = null;
+let _openPromise = null;
+
+// Tab identity (stable per-tab so server can correlate)
 let _tabId = null;
-function getTabId(){
-  if(!_tabId){ try{ _tabId = sessionStorage.getItem('chip.tab') || (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now())); sessionStorage.setItem('chip.tab', _tabId); }catch(e){ _tabId = 'tab'; } }
+function getTabId() {
+  if (_tabId) return _tabId;
+  try {
+    _tabId = sessionStorage.getItem("chip.tab");
+    if (!_tabId) {
+      _tabId =
+        (crypto && crypto.randomUUID)
+          ? crypto.randomUUID()
+          : String(Date.now()) + Math.random().toString(16).slice(2);
+      sessionStorage.setItem("chip.tab", _tabId);
+    }
+  } catch {
+    _tabId = "tab";
+  }
   return _tabId;
 }
 
+// Reconnect backoff
 let reconnects = 0;
+const MAX_RECONNECTS = 8;
+const BASE_DELAY_MS = 500;
+
+function scheduleReconnect() {
+  if (reconnects >= MAX_RECONNECTS) return;
+  const delay = Math.min(10000, BASE_DELAY_MS * (2 ** reconnects));
+  reconnects++;
+  setTimeout(() => openWS(), delay);
+}
+
+// UI Buttons (optional wiring from app.js)
 let startBtn, endBtn;
-let nudgeTimer = null;
-let lastAssistantTurn = null;
-let _openPromise = null;
-
-// Accumulators for current turn
-let _audioBufs = [];
-let _visemes = [];
-
-function addChatMessage(role, text){
-  try{
-    const box = document.getElementById('chatMessages');
-    if(!box || !text) return;
-    const div = document.createElement('div');
-    div.className = `msg ${role}`;
-    div.textContent = text;
-    box.appendChild(div);
-    box.scrollTop = box.scrollHeight;
-  }catch(e){}
-}
-
-export function bindControls(startEl, endEl){
-  startBtn = startEl; endBtn = endEl;
+export function bindControls(startEl, endEl) {
+  startBtn = startEl;
+  endBtn = endEl;
   updateButtons();
 }
 
-export function waitWSOpen(timeout=4000){
-  if (ws && ws.readyState === WebSocket.OPEN) return Promise.resolve();
-  return _openPromise || new Promise((res) => setTimeout(res, 10));
-}
-
-export function openWS(){
-  if (ws && ws.readyState === WebSocket.OPEN) return ws;
-  ws = new WebSocket(`${API.WS}?session_id=${encodeURIComponent(getSID())}&tab=${encodeURIComponent(getTabId())}`);
-  reconnects = 0;
-  updateButtons();
-  _openPromise = new Promise((resolve)=>{ ws.onopen = () => { updateButtons(); startHeartbeat(); resolve(); }; });
-  ws.onmessage = onWSMessage;
-  ws.onerror = () => { showError(API.WS, "WS", "socket error"); };
-  ws.onclose = () => {
-    updateButtons();
-    if (reconnects < 1){
-      reconnects++;
-      setTimeout(() => openWS(), 1000);
-    }
-  };
-  return ws;
-}
-
-export function closeWS(){
-  stopHeartbeat();
-  if (ws) try { ws.close(1000, "End"); } catch{};
-  ws = null;
-  updateButtons();
-}
-
-function updateButtons(){
+function updateButtons() {
   const active = ws && ws.readyState === WebSocket.OPEN;
-  if (startBtn) startBtn.disabled = active;
-  if (endBtn)   endBtn.disabled   = !active;
+  try {
+    if (startBtn) startBtn.disabled = active;
+    if (endBtn) endBtn.disabled = !active;
+  } catch {}
 }
+
+// Heartbeat (keep socket fresh + detect half-open)
+let _hbTimer = null;
+function startHeartbeat() {
+  stopHeartbeat();
+  const sendPing = () => {
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+      }
+    } catch {}
+  };
+  sendPing();
+  _hbTimer = setInterval(sendPing, 25000);
+}
+function stopHeartbeat() {
+  try {
+    if (_hbTimer) clearInterval(_hbTimer);
+  } catch {}
+  _hbTimer = null;
+}
+
+// Chat flow state
+let lastAssistantTurn = null;
+let _audioBufs = [];
+let nudgeTimer = null;
 
 function b64ToArrayBuffer(base64) {
   const bin = atob(base64);
@@ -83,62 +100,70 @@ function b64ToArrayBuffer(base64) {
   return bytes.buffer;
 }
 
-function normalizeVisemes(items){
+function normalizeVisemes(items) {
   const xs = Array.isArray(items) ? items : [];
-  return xs.map(x => ({
-    t: typeof x.t !== "undefined" ? x.t : (x.t_ms ?? 0),
-    v: x.v
-  }));
+  // passthrough for now — keep placeholder to evolve format
+  return xs;
 }
 
-function onWSMessage(ev){
-  try{
+// Core message handler
+function onWSMessage(ev) {
+  try {
     const msg = JSON.parse(ev.data);
 
-    // Normalize both server frame dialects
-    if (msg.type === "assistant_chunk" || msg.type === "text"){
+    // Normalize server dialects
+    if (msg.type === "assistant_chunk" || msg.type === "text") {
       setState(STATES.RESPONDING);
       lastAssistantTurn = msg.turn_id || lastAssistantTurn;
-      // append assistant text to chat
-      if (msg.text || msg.content) addChatMessage('assistant', (msg.text || msg.content));
+
+      const piece = msg.text || msg.content || "";
+      if (piece) {
+        // Append assistant text to chat (app.js defines addChatMessage globally)
+        try { addChatMessage("assistant", piece); } catch {}
+      }
     }
 
-    if (msg.type === "audio_chunk"){
+    if (msg.type === "audio_chunk") {
       if (msg.base64) _audioBufs.push(b64ToArrayBuffer(msg.base64));
     }
 
-    if (msg.type === "visemes"){
-      _visemes = normalizeVisemes(msg.items || msg.visemes || []);
+    if (msg.type === "audio_flush") {
+      // Play accumulated audio
+      try {
+        const total = _audioBufs.length
+          ? _audioBufs.reduce((acc, buf) => {
+              const a = new Uint8Array(acc);
+              const b = new Uint8Array(buf);
+              const out = new Uint8Array(a.length + b.length);
+              out.set(a, 0); out.set(b, a.length);
+              return out.buffer;
+            })
+          : null;
+        if (total) playStream(total, normalizeVisemes(msg.visemes || []));
+      } catch {}
+      _audioBufs = [];
     }
 
-    if (msg.type === "suggestions"){
-      if (Array.isArray(msg.items)) renderSuggestions(msg.items);
+    if (msg.type === "assistant_end" || msg.type === "end") {
+      // Suggestions (chips)
+      if (Array.isArray(msg.suggestions) && msg.suggestions.length) {
+        try { renderSuggestions(msg.suggestions); } catch {}
+      }
+      if (!isPlaying()) setState(STATES.READY);
+      scheduleNudge(); // start idle nudge timer
     }
 
-    if (msg.type === "assistant_end" || msg.type === "end"){
-      const bufs = _audioBufs.slice();
-      const ves  = _visemes.slice();
-      _audioBufs.length = 0;
-      _visemes = [];
-      setState(STATES.RESPONDING);
-      playStream(bufs, ves).finally(() => setState(STATES.READY));
-      // If the server sends suggestions after end, schedule a gentle nudge
-      scheduleNudge();
-      lastAssistantTurn = msg.turn_id || lastAssistantTurn;
+    if (msg.type === "state") {
+      // Map phases if you want visible UI states; currently no-op
+      // phases: ready/listening/responding etc.
     }
-
-    if (msg.type === "error"){
-      showError(API.WS, msg.code || "ERR", msg.message || "");
-    }
-
-    if (msg.type === "state"){
-      // could map phases to UI if useful
-    }
-
-  }catch(e){}
+  } catch (e) {
+    // Parsing or unexpected payload — keep socket alive
+  }
 }
 
-export function sendInterrupt(){
+// Public controls
+export function sendInterrupt() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const turn = lastAssistantTurn;
   const frame = { type: "control", cmd: "interrupt", turn_id: turn };
@@ -147,23 +172,67 @@ export function sendInterrupt(){
   setState(STATES.LISTENING);
 }
 
-export function scheduleNudge(){
+export function scheduleNudge() {
   if (nudgeTimer) clearTimeout(nudgeTimer);
   nudgeTimer = setTimeout(() => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type:"control", cmd:"nudge" }));
-  }, TIMING.NUDGE_DELAY_MS);
+    try { ws.send(JSON.stringify({ type: "control", cmd: "nudge" })); } catch {}
+  }, TIMING.NUDGE_DELAY_MS || 4200);
 }
 
-export function cancelNudge(){
+export function cancelNudge() {
   if (nudgeTimer) { clearTimeout(nudgeTimer); nudgeTimer = null; }
 }
 
+// Open / Close
+export function openWS() {
+  if (ws && ws.readyState === WebSocket.OPEN) return ws;
 
-let _hbTimer = null;
-function startHeartbeat(){
-  stopHeartbeat();
-  const sendPing = () => { if (ws && ws.readyState === WebSocket.OPEN) try{ ws.send(JSON.stringify({ type:"ping", t: Date.now() })); }catch{} };
-  sendPing(); _hbTimer = setInterval(sendPing, 25000);
+  ws = new WebSocket(
+    `${API.WS}?session_id=${encodeURIComponent(getSID())}&tab=${encodeURIComponent(getTabId())}`
+  );
+
+  updateButtons();
+  _openPromise = new Promise((resolve) => {
+    ws.onopen = () => {
+      updateButtons();
+      startHeartbeat();
+      reconnects = 0;               // reset on successful open
+      resolve();
+    };
+  });
+
+  ws.onmessage = onWSMessage;
+
+  ws.onerror = () => {
+    // Surface the error but funnel through onclose → reconnect path
+    showError(API.WS, "WS", "socket error");
+    try { ws.close(); } catch {}
+  };
+
+  ws.onclose = () => {
+    updateButtons();
+    stopHeartbeat();
+    scheduleReconnect();
+  };
+
+  return ws;
 }
-function stopHeartbeat(){ try{ if (_hbTimer) clearInterval(_hbTimer); }catch{} _hbTimer = null; }
+
+export function closeWS() {
+  try { if (ws) ws.close(); } catch {}
+  ws = null;
+  stopHeartbeat();
+  updateButtons();
+}
+
+// Promise that resolves once WS is OPEN
+export function waitWSOpen(timeout = 4000) {
+  if (ws && ws.readyState === WebSocket.OPEN) return Promise.resolve();
+  const p = _openPromise || new Promise((res) => setTimeout(res, 10));
+  if (!timeout) return p;
+  return Promise.race([
+    p,
+    new Promise((_, rej) => setTimeout(() => rej(new Error("ws_open_timeout")), timeout)),
+  ]);
+}
