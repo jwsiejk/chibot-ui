@@ -69,3 +69,7 @@ def check_now(name: str):
         arr.append(t)
         _BUCKETS[k] = arr
     return None
+
+
+def bucket_key(ip: str, session_id: str) -> str:
+    return f"{ip}:{session_id or ''}"

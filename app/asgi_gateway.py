@@ -8,6 +8,7 @@ from starlette.applications import Starlette
 from starlette.routing import WebSocketRoute, Mount
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.middleware.gzip import GZipMiddleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware import Middleware
 from app.ws.protocol import dumps, PROTO_ID, DEFAULT_HEARTBEAT_MS
 
@@ -86,5 +87,12 @@ routes = [
     WebSocketRoute("/ws/v1/chat", chat_ws),
     Mount("/", app=WSGIMiddleware(flask_app)),
 ]
+_cors_origins = []
+import os as _os
+_allow = _os.environ.get("CORS_ALLOWLIST","").strip()
+if _allow:
+    _cors_origins = [o.strip() for o in _allow.split(",") if o.strip()]
 middleware = [Middleware(GZipMiddleware, minimum_size=1024)]
+if _cors_origins:
+    middleware.insert(0, Middleware(CORSMiddleware, allow_origins=_cors_origins, allow_methods=["GET","POST","OPTIONS"], allow_headers=["Content-Type","X-CSRF-Token"], allow_credentials=True))
 asgi = Starlette(routes=routes, middleware=middleware)

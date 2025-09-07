@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 import os, sys, json
 from pathlib import Path
-sys.path.insert(0, ".")
+import pathlib
+ROOT=pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 os.environ.setdefault("RATE_LIMIT_WINDOW_S","0.05")
 os.environ.setdefault("RATE_LIMIT_MAX","100")
 os.environ["CSRF_ENFORCED"]=""
-import app
+
+from importlib import import_module
+app = import_module('app')
+
 
 # Test env for vendors
 os.environ.setdefault("OPENAI_API_KEY","TEST")
@@ -95,7 +100,8 @@ ok &= A(tripped, "Circuit breaker opened after failures")
 
 
 
-# === WS handshake & ping/pong ===
+
+# === WS handshake & ping/pong (protocol-aware) ===
 try:
     from importlib import import_module
     gw = import_module("app.asgi_gateway")
@@ -105,10 +111,11 @@ try:
     from starlette.testclient import TestClient
     with TestClient(star_asgi) as tc:
         with tc.websocket_connect("/ws/v1/chat?session_id=phase10") as ws:
-            # Should receive ready JSON
             first = ws.receive_text()
+            import json as _json
+            msg = _json.loads(first)
             ok &= A(msg.get("type") == "ready", "WS handshake sends ready")
-            # ping/pong
+            ok &= A("proto" in msg and isinstance(msg.get("heartbeat_ms"), int), "WS ready includes proto/heartbeat_ms")
             ws.send_text("ping")
             pong = ws.receive_text()
             ok &= A(pong == "pong", "WS ping -> pong")
