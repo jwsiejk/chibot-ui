@@ -3,7 +3,7 @@ import os
 from flask import Flask, Blueprint, render_template, send_from_directory, request
 
 from .api_v1 import create_v1_blueprint
-from .middleware.csrf import csrf_before_request
+from .middleware.csrf import csrf_before_request, make_csrf_route
 from .middleware.rate_limit import register_before_request as rate_limit_register
 
 # --- Core blueprint (docs/misc) ---
@@ -87,6 +87,9 @@ def create_app():
     # Middleware
     app.before_request(csrf_before_request)
     rate_limit_register(app)
+
+    # CSRF token endpoint (issues token + sets httpOnly cookie)
+    make_csrf_route(app)
 
     # Simple CORS (optional, controlled via CORS_ALLOW_ORIGINS env var)
     @app.after_request
