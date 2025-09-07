@@ -32,6 +32,7 @@ def logs_ui():
 
 @bp.get("/logs")
 def logs_sse():
+    import os
     _require_admin()
     def stream():
         yield "event: heartbeat\n"

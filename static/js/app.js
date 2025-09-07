@@ -170,6 +170,8 @@ async function onSend(){
   const text = (composer?.value || "").trim();
   if (!text) return;
   composer.value = "";
+  // Ensure WS is open so assistant frames can arrive
+  try { openWS(); await waitWSOpen(); } catch(e) { /* ignore, fetch will still work */ }
   try{
     const tok = await ensureCSRF();
     const r = await fetch(API.CHAT, {
