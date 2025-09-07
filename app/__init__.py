@@ -103,6 +103,11 @@ def create_app():
                 resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
         return resp
 
+    # Template context: asset_version from env or timestamp
+    @app.context_processor
+    def inject_asset_version():
+        return {'asset_version': os.environ.get('ASSET_VERSION') or os.environ.get('RENDER_GIT_COMMIT') or os.environ.get('HEROKU_RELEASE_VERSION') or 'v' + os.getenv('BUILD_VERSION','1757211289')}
+
     # CORS Preflight handler
     @app.route('/<path:_>', methods=['OPTIONS'])
     def _cors_preflight(_):
