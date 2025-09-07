@@ -15,11 +15,6 @@ _docs_dir = os.path.abspath(os.path.join(_MODULE_DIR, "..", "docs"))
 @core_bp.get("/docs/<path:fname>")
 def serve_docs(fname):
     return send_from_directory(_docs_dir, fname)
-@core_bp.get("/login")
-def login_page():
-    # Simple login form that posts to /api/v1/auth/login
-    return render_template("login.html")
-
 
 def create_app():
     # Serve /static (JS/CSS/img) and /templates
@@ -130,3 +125,8 @@ try:
     app.register_blueprint(admin_bp)
 except Exception:
     pass
+
+@core_bp.get("/login")
+def login_page():
+    # Simple login form that posts to /api/v1/auth/login
+    return render_template("login.html")

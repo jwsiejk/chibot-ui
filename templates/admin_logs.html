@@ -1,0 +1,12 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Admin Live Log</title></head>
+<body>
+  <h1>Admin Live Log</h1>
+  <pre id="out"></pre>
+  <script>
+    const out = document.getElementById('out');
+    const es = new EventSource('/api/v1/admin/logs');
+    es.addEventListener('heartbeat', e => { out.textContent += e.data + "\n"; });
+    es.onmessage = e => { out.textContent += e.data + "\n"; };
+  </script>
+</body></html>
