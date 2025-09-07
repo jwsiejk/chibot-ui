@@ -4,6 +4,8 @@
 #   • All HTTP via mounted Flask WSGI app
 import asyncio, time
 from app import create_app
+# Expose Flask WSGI app for test suites that import `app`
+app = create_app()
 from starlette.applications import Starlette
 from starlette.routing import WebSocketRoute, Mount
 from starlette.middleware.wsgi import WSGIMiddleware

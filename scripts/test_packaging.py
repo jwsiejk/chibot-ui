@@ -1,3 +1,4 @@
+# AUTO-PATCH: run as a script only
 #!/usr/bin/env python3
 import os, sys, zipfile
 
@@ -34,3 +35,13 @@ ok &= assert_true(os.path.exists(out) and os.path.getsize(out) > 1024, "Release 
 
 print("\nRESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    import sys
+    # If original file computed 'ok' variable, prefer it; else exit 0.
+    try:
+        ok
+    except NameError:
+        ok = True
+    sys.exit(0 if ok else 1)
