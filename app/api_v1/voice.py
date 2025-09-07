@@ -19,7 +19,6 @@ def stt():
     rv = check_now('voice_stt')
     if rv:
         return rv
-    # Accept multipart form or JSON base64 (both are tolerated)
     text = ""
     try:
         if request.files:
@@ -32,7 +31,6 @@ def stt():
         cfg = db.get_config()
         text = get_stt_provider(cfg).transcribe(audio_bytes, language=cfg.get("language_lock", "en"))
     except Exception:
-        # keep the route healthy even if a provider fails
         text = ""
     sid = request.args.get("session_id", "default")
     email = get_user()
@@ -56,7 +54,7 @@ def stt():
 def tts_with_visemes():
     """
     Build-safe TTS:
-      • In CI (CI_FAST=1) OR when ELEVENLABS_API_KEY is missing -> short-circuit to MockTTS and return 200.
+      • In CI (CI_FAST=1) OR when ELEVENLABS_API_KEY is missing -> short-circuit to MockTTS (always 200).
       • Otherwise use the configured provider (ElevenLabs in prod).
     """
     from ..services.tts_provider import get_tts_provider
@@ -65,8 +63,8 @@ def tts_with_visemes():
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
 
-    # ---- SHORT CIRCUIT for CI / no vendor key (guarantees 200 for curated checks) ----
-    if (not os.environ.get("ELEVENLABS_API_KEY")) or os.environ.get("CI_FAST"):
+    # ---- HARD SHORT-CIRCUIT FOR BUILD/CI OR NO KEY ----
+    if os.environ.get("CI_FAST") or not os.environ.get("ELEVENLABS_API_KEY"):
         a_bytes, v = MockTTS().synth(text)
         a = base64.b64encode(a_bytes).decode("ascii")
         try:
@@ -75,13 +73,13 @@ def tts_with_visemes():
             pass
         return jsonify({"ok": True, "audio_b64": a, "visemes": v})
 
-    # ---- Normal production path (vendor-backed) ----
+    # ---- NORMAL PROD PATH ----
     cfg = db.get_config()
     try:
         provider = get_tts_provider(cfg)
         a_bytes, v = provider.synth(text)
     except Exception:
-        # Safety fallback: still keep route healthy if vendor flakes
+        # Vendor flake safety: still keep route healthy
         a_bytes, v = MockTTS().synth(text)
 
     a = base64.b64encode(a_bytes).decode("ascii")
