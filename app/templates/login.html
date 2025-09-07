@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Login</title></head>
+<body>
+  <form id="f">
+    <input name="email" placeholder="email" />
+    <button type="submit">Login</button>
+  </form>
+  <script>
+    document.getElementById('f').addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const email = e.target.email.value.trim();
+      const r = await fetch('/api/v1/auth/login', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email})});
+      if (r.ok) location.href='/api/v1/admin/logs-ui'; else alert('login failed');
+    });
+  </script>
+</body></html>

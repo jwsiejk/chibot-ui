@@ -117,3 +117,11 @@ def create_app():
         return ('', 204)
 
     return app
+
+from .api_v1.auth import bp as auth_bp
+from .api_v1.admin import bp as admin_bp
+try:
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(admin_bp)
+except Exception:
+    pass
