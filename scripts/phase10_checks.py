@@ -93,5 +93,27 @@ for i in range(4):
         break
 ok &= A(tripped, "Circuit breaker opened after failures")
 
+
+
+# === WS handshake & ping/pong ===
+try:
+    from importlib import import_module
+    gw = import_module("app.asgi_gateway")
+    star_asgi = getattr(gw, "asgi", None)
+    if star_asgi is None:
+        raise AssertionError("ASGI gateway missing 'asgi' app")
+    from starlette.testclient import TestClient
+    with TestClient(star_asgi) as tc:
+        with tc.websocket_connect("/ws/v1/chat?session_id=phase10") as ws:
+            # Should receive ready JSON
+            first = ws.receive_text()
+            ok &= A('"type":"ready"' in first, "WS handshake sends ready")
+            # ping/pong
+            ws.send_text("ping")
+            pong = ws.receive_text()
+            ok &= A(pong == "pong", "WS ping -> pong")
+except Exception as e:
+    print("WS CHECK ERROR:", repr(e))
+    ok &= A(False, "WS handshake & ping")
 print("\nRESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

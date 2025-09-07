@@ -11,47 +11,26 @@ from app import create_app
 flask_app = create_app()
 
 # --- ASGI WS endpoint ---
-async def chat_ws(scope, receive, send):
-    if scope["type"] != "websocket":
-        # Reject anything that isn't a websocket scope
-        await send({"type": "http.response.start", "status": 400, "headers": []})
-        await send({"type": "http.response.body", "body": b"websocket only"})
-        return
-
-    # Accept
-    await send({"type": "websocket.accept"})
-
-    # Minimal session id extraction (used by client UI for one-tab semantics)
-    query = scope.get("query_string", b"").decode("utf-8", "ignore")
-    qs = parse_qs(query)
-    session_id = (qs.get("session_id") or [""])[0]
-
-    # Notify client we are alive (UI waits for open before greet)
+async def chat_ws(websocket):
+    # Starlette WebSocket endpoint
+    await websocket.accept()
     try:
-        await send({"type": "websocket.send", "text": json.dumps({"type":"ready","session_id": session_id})})
-    except Exception:
-        pass
-
-    # Keep the socket open; relay simple pings; ignore other frames for now.
-    try:
+        session_id = websocket.query_params.get("session_id", "")
+        # Tell client we're alive so UI can proceed to greet
+        await websocket.send_text(json.dumps({"type":"ready","session_id": session_id}))
         while True:
-            evt = await receive()
-            t = evt.get("type")
+            message = await websocket.receive()
+            t = message.get("type")
             if t == "websocket.receive":
-                if "text" in evt and evt["text"] == "ping":
-                    await send({"type":"websocket.send","text":"pong"})
-                # Ignore other inbound messages; real streaming is driven by HTTP events.
+                if "text" in message and message["text"] == "ping":
+                    await websocket.send_text("pong")
             elif t == "websocket.disconnect":
                 break
-            else:
-                # ignore any other ASGI events
-                await asyncio.sleep(0)
     finally:
         try:
-            await send({"type":"websocket.close", "code": 1000})
+            await websocket.close(code=1000)
         except Exception:
             pass
-
 # --- Build Starlette app that can handle WS + mount Flask for HTTP ---
 try:
     from starlette.applications import Starlette
