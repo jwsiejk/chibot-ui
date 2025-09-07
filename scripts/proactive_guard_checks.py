@@ -126,6 +126,28 @@ def main():
         return 1
     headers = {"X-CSRF-Token": csrf}
 
+# Ensure the CSRF cookie is present in client jar (Starlette or Flask)
+try:
+    jar = getattr(client, "cookies", None)
+    if jar is not None:
+        # Starlette/requests cookie jar
+        names = [getattr(c, "name", getattr(c, "key", "")) for c in getattr(jar, "_cookies", {}).get("testserver", {}).get("/", {}).values()] if hasattr(jar, "_cookies") else []
+        has_cookie = ("csrf" in names) or ("csrf" in str(jar))
+        if not has_cookie:
+            try:
+                jar.set("csrf", csrf, domain="testserver", path="/")
+            except Exception:
+                pass
+    # Flask test client fallback
+    if hasattr(client, "set_cookie"):
+        try:
+            client.set_cookie("testserver", "csrf", csrf, path="/")
+        except Exception:
+            pass
+except Exception:
+    pass
+
+
     # First TTS call
     try:
         resp = client.post(
