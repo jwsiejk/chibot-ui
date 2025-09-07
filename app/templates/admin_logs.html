@@ -1,43 +1,12 @@
 <!doctype html>
-<html>
-<head><meta charset="utf-8"/><title>Admin Live Log</title>
-<style>
- body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0b0f14;color:#e6edf3;margin:0}
- header{padding:12px 16px;border-bottom:1px solid #1f2937;display:flex;gap:12px;align-items:center}
- .tag{background:#111827;border:1px solid #374151;padding:2px 8px;border-radius:999px;font-size:12px}
- main{padding:12px 16px}
- table{width:100%;border-collapse:collapse;font-size:13px}
- th,td{border-bottom:1px solid #1f2937;padding:8px;text-align:left}
- tr:hover{background:#0f1220}
-</style>
-</head>
+<html><head><meta charset="utf-8"><title>Admin Live Log</title></head>
 <body>
-<header><h1>Admin Live Log</h1><span class="tag" id="status">disconnected</span><span class="tag">Admins only</span></header>
-<main>
-<div id="controls">
- <label>Filter kind <input id="kind" placeholder="(e.g., ws, tts, stt)"/></label>
- <label>Search <input id="q" placeholder="text"/></label>
- <button id="clear">Clear</button>
-</div>
-<table><thead><tr><th>Time</th><th>Kind</th><th>Message</th></tr></thead><tbody id="rows"></tbody></table>
-</main>
-<script>
- const statusEl=document.getElementById('status'), rows=document.getElementById('rows');
- const kind=document.getElementById('kind'), q=document.getElementById('q');
- const es=new EventSource('/api/v1/admin/logs');
- es.onopen=()=>statusEl.textContent='connected';
- es.onerror=()=>statusEl.textContent='error/disconnected';
- document.getElementById('clear').onclick=()=>{rows.innerHTML='';};
- function add(obj){
-   const k=String(obj.kind||''), txt=JSON.stringify(obj);
-   if(kind.value && k!==kind.value.trim()) return;
-   if(q.value && !txt.toLowerCase().includes(q.value.trim().toLowerCase())) return;
-   const tr=document.createElement('tr');
-   const t=new Date((obj.ts||Date.now()/1000)*1000).toLocaleTimeString();
-   tr.innerHTML=`<td>${t}</td><td>${k}</td><td>${obj.msg||txt}</td>`;
-   rows.appendChild(tr); tr.scrollIntoView({behavior:'smooth',block:'end'});
- }
- es.addEventListener('heartbeat', e=>{ try{ add(JSON.parse(e.data)); }catch{} });
- es.onmessage=(e)=>{ try{ add(JSON.parse(e.data)); }catch{} };
-</script>
+  <h1>Admin Live Log</h1>
+  <pre id="out"></pre>
+  <script>
+    const out = document.getElementById('out');
+    const es = new EventSource('/api/v1/admin/logs');
+    es.addEventListener('heartbeat', e => { out.textContent += e.data + "\n"; });
+    es.onmessage = e => { out.textContent += e.data + "\n"; };
+  </script>
 </body></html>
