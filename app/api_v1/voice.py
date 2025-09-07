@@ -54,12 +54,11 @@ def stt():
 @bp.post("/tts-with-visemes")
 def tts_with_visemes():
     try:
-        from flask import request
-        _t = (request.get_json(silent=True) or {}).get('text')
+        _j=(request.get_json(silent=True) or {})
+        _t=_j.get('text')
         admin_emit('tts', msg='request', chars=(len(_t) if isinstance(_t,str) else 0))
     except Exception:
         pass
-:
     """
     Build-safe TTS:
       • In CI (CI_FAST=1) OR when ELEVENLABS_API_KEY is missing -> short-circuit to MockTTS (always 200).
