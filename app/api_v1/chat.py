@@ -1,3 +1,4 @@
+from ..admin_log import emit as admin_emit
 import base64
 from flask import Blueprint, jsonify, request
 from ..db import db
@@ -19,17 +20,41 @@ def chat():
     data=request.get_json(silent=True) or {}
     sid=data.get("session_id","default"); cmd=data.get("cmd"); email=get_user()
     if cmd=="interrupt":
-        tid=data.get("turn_id"); bus.cancel_turn(sid, tid); bus.broadcast(sid, {"type":"state","phase":"ready"}); return jsonify({"ok": True, "interrupted": True})
+        tid=data.get("turn_id"); bus.cancel_turn(sid, tid); bus.broadcast(sid, {"type":"state","phase":"ready"});     try:
+        _resp = ({"ok": True, "interrupted": True}).get('response') if isinstance({"ok": True, "interrupted": True}, dict) else None
+        _tok = len(_resp.split()) if isinstance(_resp, str) else 0
+    except Exception:
+        _tok = 0
+    admin_emit('chat', msg='assistant', tokens=_tok)
+    return jsonify(\1)
     if cmd=="nudge":
         s = db.memory['sessions'].setdefault(sid, {'email': email, 'messages': [], 'nudges': 0, 'persona_id':'chip'}); s['nudges']+=1
         if s['nudges']<=2:
             tid, frames = make_assistant_frames("Still with me? Want a quick recap?")
             for fr in frames:
                 if fr.get("type")=="end": fr["reason"]="nudge"
-            schedule_frames(sid, frames); return jsonify({"ok": True, "nudged": True, "count": s['nudges']})
-        return jsonify({"ok": True, "nudged": False, "count": s['nudges']})
+            schedule_frames(sid, frames);     try:
+        _resp = ({"ok": True, "nudged": True, "count": s['nudges']}).get('response') if isinstance({"ok": True, "nudged": True, "count": s['nudges']}, dict) else None
+        _tok = len(_resp.split()) if isinstance(_resp, str) else 0
+    except Exception:
+        _tok = 0
+    admin_emit('chat', msg='assistant', tokens=_tok)
+    return jsonify(\1)
+            try:
+        _resp = ({"ok": True, "nudged": False, "count": s['nudges']}).get('response') if isinstance({"ok": True, "nudged": False, "count": s['nudges']}, dict) else None
+        _tok = len(_resp.split()) if isinstance(_resp, str) else 0
+    except Exception:
+        _tok = 0
+    admin_emit('chat', msg='assistant', tokens=_tok)
+    return jsonify(\1)
     if cmd=="end_session":
-        body=db.get_transcript(sid); send_transcript(email,"Ask Chip — Session transcript",body); return jsonify({"ok": True, "emailed": True})
+        body=db.get_transcript(sid); send_transcript(email,"Ask Chip — Session transcript",body);     try:
+        _resp = ({"ok": True, "emailed": True}).get('response') if isinstance({"ok": True, "emailed": True}, dict) else None
+        _tok = len(_resp.split()) if isinstance(_resp, str) else 0
+    except Exception:
+        _tok = 0
+    admin_emit('chat', msg='assistant', tokens=_tok)
+    return jsonify(\1)
     text=(data.get("text") or "").strip()
     if text:
         db.ensure_session(sid, email)
@@ -40,7 +65,13 @@ def chat():
         except Exception:
             pass
     tid, frames = make_assistant_frames((text or "chat"), sid); schedule_frames(sid, frames)
-    return jsonify({"ok": True, "turn_id": tid})
+        try:
+        _resp = ({"ok": True, "turn_id": tid}).get('response') if isinstance({"ok": True, "turn_id": tid}, dict) else None
+        _tok = len(_resp.split()) if isinstance(_resp, str) else 0
+    except Exception:
+        _tok = 0
+    admin_emit('chat', msg='assistant', tokens=_tok)
+    return jsonify(\1)
 
 
 @limit("voice_tts")
@@ -60,4 +91,10 @@ def tts_with_visemes():
         _emit('tts', chars=len(text))
     except Exception:
         pass
-    return jsonify({"ok": True, "audio_b64": a, "visemes": v})
+        try:
+        _resp = ({"ok": True, "audio_b64": a, "visemes": v}).get('response') if isinstance({"ok": True, "audio_b64": a, "visemes": v}, dict) else None
+        _tok = len(_resp.split()) if isinstance(_resp, str) else 0
+    except Exception:
+        _tok = 0
+    admin_emit('chat', msg='assistant', tokens=_tok)
+    return jsonify(\1)

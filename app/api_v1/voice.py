@@ -1,3 +1,4 @@
+from ..admin_log import emit as admin_emit
 # app/api_v1/voice.py
 import base64
 import io
@@ -52,6 +53,13 @@ def stt():
 @limit("voice_tts")
 @bp.post("/tts-with-visemes")
 def tts_with_visemes():
+    try:
+        from flask import request
+        _t = (request.get_json(silent=True) or {}).get('text')
+        admin_emit('tts', msg='request', chars=(len(_t) if isinstance(_t,str) else 0))
+    except Exception:
+        pass
+:
     """
     Build-safe TTS:
       • In CI (CI_FAST=1) OR when ELEVENLABS_API_KEY is missing -> short-circuit to MockTTS (always 200).

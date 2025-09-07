@@ -125,8 +125,3 @@ try:
     app.register_blueprint(admin_bp)
 except Exception:
     pass
-
-@core_bp.get("/login")
-def login_page():
-    # Simple login form that posts to /api/v1/auth/login
-    return render_template("login.html")
