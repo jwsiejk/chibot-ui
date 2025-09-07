@@ -19,13 +19,20 @@ def _same_origin_ok(req):
         return False
 # --------------------------------------------
 
+
 def csrf_before_request():
-    """Enforce double-submit when enabled in config."""
-    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
-        if request.path in EXEMPT:
+    from flask import jsonify, request
+    if request.method in ("POST","PUT","PATCH","DELETE"):
+        if request.path in EXEMPT: 
             return None
-        if not db.get_config().get("csrf_enforced", False):
+        if not db.get_config().get("csrf_enforced", False): 
             return None
+        hdr = request.headers.get(CSRF_HEADER) or ""
+        cok = request.cookies.get(CSRF_COOKIE) or ""
+        # Header and cookie must exist and match server token
+        if not hdr or not cok or hdr != cok or hdr != get_csrf():
+            return jsonify({"ok":False,"error":"csrf_failed"}), 403
+    return None
 
         hdr = request.headers.get(CSRF_HEADER) or ""
         cok = request.cookies.get(CSRF_COOKIE) or ""

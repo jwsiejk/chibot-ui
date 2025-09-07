@@ -29,7 +29,7 @@ def _get_asgi_client():
         if asgi_app is not None:
             try:
                 from starlette.testclient import TestClient
-                return TestClient(asgi_app)
+                return TestClient(asgi_app, base_url='https://testserver')
             except Exception:
                 return None
     return None
