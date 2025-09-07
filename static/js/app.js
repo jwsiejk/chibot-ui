@@ -1,20 +1,43 @@
-
-// CSRF-aware POST helper
-let __csrf = null;
-async function ensureCSRF(force=false){
-  if(__csrf && !force) return __csrf;
-  const j = await fetch('/api/v1/auth/csrf', { credentials:'include' }).then(r=>r.json()).catch(()=>({}));
-  __csrf = j.csrf || null; return __csrf;
-}
-async function apiPost(path, payload){
-  const csrf = await ensureCSRF();
-  let res = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, credentials:'include', body: JSON.stringify(payload||{}) });
-  if(res.status === 403){
-    const fresh = await ensureCSRF(true);
-    res = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':fresh}, credentials:'include', body: JSON.stringify(payload||{}) });
+// == AskChip CSRF helpers (guarded) ==
+(function(){
+  if (!window.__askchip) window.__askchip = {};
+  if (typeof window.__askchip.ensureCSRF !== 'function') {
+    window.__askchip.__csrfToken = null;
+    window.__askchip.ensureCSRF = async function(force=false){
+      if (window.__askchip.__csrfToken && !force) return window.__askchip.__csrfToken;
+      const j = await fetch('/api/v1/auth/csrf', { credentials:'include' })
+        .then(r=>r.json()).catch(()=>({}));
+      window.__askchip.__csrfToken = j.csrf || null;
+      return window.__askchip.__csrfToken;
+    };
   }
-  return res;
-}
+  if (typeof window.__askchip.apiPost !== 'function') {
+    window.__askchip.apiPost = async function(path, payload){
+      const csrf = await window.__askchip.ensureCSRF();
+      let res = await fetch(path, {
+        method:'POST',
+        headers:{'Content-Type':'application/json','X-CSRF-Token': csrf},
+        credentials:'include',
+        body: JSON.stringify(payload||{})
+      });
+      if (res.status === 403) {
+        const fresh = await window.__askchip.ensureCSRF(true);
+        res = await fetch(path, {
+          method:'POST',
+          headers:{'Content-Type':'application/json','X-CSRF-Token': fresh},
+          credentials:'include',
+          body: JSON.stringify(payload||{})
+        });
+      }
+      return res;
+    };
+  }
+  // Provide globals if not already defined
+  if (typeof window.ensureCSRF !== 'function') window.ensureCSRF = window.__askchip.ensureCSRF;
+  if (typeof window.apiPost   !== 'function') window.apiPost   = window.__askchip.apiPost;
+})();
+// == End helpers ==
+
 
 import { API } from "./config.js";
 import { STATES, setState, getState, onState } from "./state.js";

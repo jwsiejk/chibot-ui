@@ -1,4 +1,8 @@
 
+// Admin JS expects ensureCSRF; provide alias from window namespace
+(function(){ if(window.__askchip && typeof window.__askchip.ensureCSRF==='function' && typeof window.ensureCSRF!=='function'){ window.ensureCSRF = window.__askchip.ensureCSRF; } })();
+
+
 // --- Admin Safe Mode + Bootstrap ---
 (function(){
   try{
@@ -155,7 +159,7 @@ lyLoad("published");
     const tok = sessionStorage.getItem("csrf");
     return tok ? {"X-CSRF-Token": tok} : {};
   }
-  async function ensureCSRF(){
+  async // ensureCSRF provided via window.__askchip.ensureCSRF(){
     if (!sessionStorage.getItem("csrf")){
       const r = await fetch("/api/v1/auth/csrf", {credentials:"include"}).then(r=>r.json());
       if (r.ok && r.csrf) sessionStorage.setItem("csrf", r.csrf);
