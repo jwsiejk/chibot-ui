@@ -33,7 +33,6 @@ def stt():
 @limit("voice_tts")
 @bp.post("/tts-with-visemes")
 def tts_with_visemes():
-    import os, base64
     from ..services.tts_provider import get_tts_provider
     data=request.get_json(silent=True) or {}; text=(data.get("text") or "").strip()
     cfg=db.get_config(); a_bytes, v = get_tts_provider(cfg).synth(text); a = base64.b64encode(a_bytes).decode('ascii')

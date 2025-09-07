@@ -8,7 +8,7 @@ CSRF_HEADER = "X-CSRF-Token"
 CSRF_COOKIE = "csrf"
 EXEMPT = {"/api/v1/auth/csrf", "/api/v1/auth/login", "/api/v1/auth/logout"}
 
-# --- kept for compatibility with your file ---
+# Kept for compatibility with existing callers
 ALLOW_SAME_ORIGIN_JSON = True
 def _same_origin_ok(req):
     try:
@@ -17,37 +17,31 @@ def _same_origin_ok(req):
         return bool(ori) and urlparse(ori).netloc == urlparse(host).netloc
     except Exception:
         return False
-# --------------------------------------------
-
 
 def csrf_before_request():
-    from flask import jsonify, request
-    if request.method in ("POST","PUT","PATCH","DELETE"):
-        if request.path in EXEMPT: 
+    """Enforce double-submit CSRF when enabled by config."""
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        if request.path in EXEMPT:
             return None
-        if not db.get_config().get("csrf_enforced", False): 
+        if not db.get_config().get("csrf_enforced", False):
             return None
-        hdr = request.headers.get(CSRF_HEADER) or ""
-        cok = request.cookies.get(CSRF_COOKIE) or ""
-        # Header and cookie must exist and match server token
-        if not hdr or not cok or hdr != cok or hdr != get_csrf():
-            return jsonify({"ok":False,"error":"csrf_failed"}), 403
-    return None
 
         hdr = request.headers.get(CSRF_HEADER) or ""
         cok = request.cookies.get(CSRF_COOKIE) or ""
-        # Require header AND cookie and that they match the server token.
-        if not hdr or not cok or hdr != cok or hdr != get_csrf():
+        tok = get_csrf() or ""
+
+        # Require both header + cookie and that they match the server token
+        if not hdr or not cok or hdr != cok or hdr != tok:
             return jsonify({"ok": False, "error": "csrf_failed"}), 403
     return None
 
 def make_csrf_route(app):
-    """Expose GET /api/v1/auth/csrf: issues token + sets httpOnly cookie."""
+    """Expose GET /api/v1/auth/csrf: returns JSON + sets httpOnly cookie."""
     @app.get("/api/v1/auth/csrf")
     def get_csrf_route():
-        token = get_csrf()              # your canonical CSRF value
+        token = get_csrf()
         resp = jsonify({"ok": True, "csrf": token})
-        # Important: Path=/ so /api/v1/chat receives it; Secure+HttpOnly; first-party SameSite=Lax
+        # Path=/ so /api/v1/chat receives it; httpOnly; SameSite=Lax; Secure on HTTPS
         resp.set_cookie(
             CSRF_COOKIE, token,
             httponly=True, samesite="Lax", secure=True, path="/"
