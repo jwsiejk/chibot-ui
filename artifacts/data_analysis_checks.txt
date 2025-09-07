@@ -1,0 +1,283 @@
+== packaging_check.py (rc=0) ==
+PASS: Release zip built and >1KB
+
+RESULT: PASS
+
+
+== phase10_checks.py (rc=0) ==
+PASS: TTS first call returns 200 after retry
+PASS: TTS second call returns 200
+PASS: TTS idempotency prevented second vendor call
+PASS: Mailer idempotency prevented duplicate send
+PASS: Circuit breaker opened after failures
+PASS: WS handshake sends ready
+PASS: WS ready includes proto/heartbeat_ms
+PASS: WS ping -> pong
+
+RESULT: PASS
+
+
+== phase11_checks.py (rc=0) ==
+PASS: tts-with-visemes returns 200
+PASS: json ok
+PASS: visemes present
+PASS: viseme times strictly increasing
+PASS: end time within ±2% of estimated audio duration
+
+RESULT: PASS
+
+
+== phase13_checks.py (rc=0) ==
+PH13: backpressure cap/coalesce PASS (frames: 17 )
+PH13: SIGTERM drain handler installed PASS
+PH13: ALL CHECKS PASS
+
+
+== phase14_checks.py (rc=0) ==
+PH14: ALL CHECKS PASS
+
+
+== phase14_hotfix_checks.py (rc=0) ==
+HOTFIX: imports OK; draining initial: False
+
+
+== phase14_ui_checks.py (rc=0) ==
+PH14 UI: inputs present and wired
+
+
+== phase15_checks.py (rc=0) ==
+OK: migrations (sqlite) applied to /mnt/data/repo_938/ci_phase15.sqlite3
+PHASE15: PASS
+
+
+== phase16_checks.py (rc=0) ==
+PHASE16: PASS
+
+
+== phase17_checks.py (rc=0) ==
+PHASE17: PASS
+
+
+== phase18_checks.py (rc=0) ==
+PHASE18: PASS
+
+
+== phase19_checks.py (rc=0) ==
+PHASE19: PASS
+
+
+== phase20_checks.py (rc=0) ==
+PHASE20: PASS
+
+
+== phase21_checks.py (rc=0) ==
+PHASE21: PASS
+
+
+== phase6_checks.py (rc=0) ==
+PASS: GET /api/v1/greet -> 200
+PASS: state machine has all four states (presence)
+PASS: Start waits for WS then greet
+ROUTE LINTER: PASS
+
+PASS: route linter passes
+
+RESULT: PASS
+
+
+== phase7_1_checks.py (rc=0) ==
+PASS: tts_provider exists
+PASS: stt_provider exists
+PASS: elevenlabs tts provider exists
+PASS: whisper stt provider exists
+PASS: voice stt endpoint uses stt_provider
+PASS: chat tts endpoint uses tts_provider
+PASS: config contains stt_provider/tts_provider
+ROUTE LINTER: PASS
+
+PASS: route linter passes
+
+RESULT: PASS
+
+
+== phase7_checks.py (rc=0) ==
+PASS: llm_provider abstraction present
+PASS: streaming loads provider
+PASS: openai provider: network path present
+PASS: openai provider: fallback path present when no key
+PASS: openai model env read
+ROUTE LINTER: PASS
+
+PASS: route linter passes
+
+RESULT: PASS
+
+
+== phase8_checks.py (rc=0) ==
+PASS: retrieval service exposes add_document/search
+PASS: retrieval service exposes add_document/search
+PASS: KB passed into provider context
+PASS: mock provider emits KB count tag
+PASS: openai stub emits KB count tag
+PASS: TTS provider supports mp3 output format
+PASS: GET /api/v1/greet -> 200
+PASS: state machine has all four states (presence)
+PASS: Start waits for WS then greet
+ROUTE LINTER: PASS
+
+PASS: route linter passes
+
+RESULT: PASS
+
+PASS: llm_provider abstraction present
+PASS: streaming loads provider
+PASS: openai provider: network path present
+PASS: openai provider: fallback path present when no key
+PASS: openai model env read
+ROUTE LINTER: PASS
+
+PASS: route linter passes
+
+RESULT: PASS
+
+PASS: tts_provider exists
+PASS: stt_provider exists
+PASS: elevenlabs tts provider exists
+PASS: whisper stt provider exists
+PASS: voice stt endpoint uses stt_provider
+PASS: chat tts endpoint uses tts_provider
+PASS: config contains stt_provider/tts_provider
+ROUTE LINTER: PASS
+
+PASS: route linter passes
+
+RESULT: PASS
+
+ROUTE LINTER: PASS
+
+
+RESULT: PASS
+
+
+== phase9_checks.py (rc=1) ==
+PASS: audio.js uses real HTMLAudioElement + Blob for MP3 playback
+FAIL: admin knowledge endpoints present
+FAIL: Admin Knowledge tab present
+PASS: GET /api/v1/greet -> 200
+PASS: state machine has all four states (presence)
+PASS: Start waits for WS then greet
+ROUTE LINTER: PASS
+
+PASS: route linter passes
+
+RESULT: PASS
+
+PASS: llm_provider abstraction present
+PASS: streaming loads provider
+PASS: openai provider: network path present
+PASS: openai provider: fallback path present when no key
+PASS: openai model env read
+ROUTE LINTER: PASS
+
+PASS: route linter passes
+
+RESULT: PASS
+
+PASS: tts_provider exists
+PASS: stt_provider exists
+PASS: elevenlabs tts provider exists
+PASS: whisper stt provider exists
+PASS: voice stt endpoint uses stt_provider
+PASS: chat tts endpoint uses tts_provider
+PASS: config contains stt_provider/tts_provider
+ROUTE LINTER: PASS
+
+PASS: route linter passes
+
+RESULT: PASS
+
+PASS: retrieval service exposes add_document/search
+PASS: retrieval service exposes add_document/search
+PASS: KB passed into provider context
+PASS: mock provider emits KB count tag
+PASS: openai stub emits KB count tag
+PASS: TTS provider supports mp3 output format
+PASS: GET /api/v1/greet -> 200
+PASS: state machine has all four states (presence)
+PASS: Start waits for WS then greet
+ROUTE LINTER: PASS
+
+PASS: route linter passes
+
+RESULT: PASS
+
+PASS: llm_provider abstraction present
+PASS: streaming loads provider
+PASS: openai provider: network path present
+PASS: openai provider: fallback path present when no key
+PASS: openai model env read
+ROUTE LINTER: PASS
+
+PASS: route linter passes
+
+RESULT: PASS
+
+PASS: tts_provider exists
+PASS: stt_provider exists
+PASS: elevenlabs tts provider exists
+PASS: whisper stt provider exists
+PASS: voice stt endpoint uses stt_provider
+PASS: chat tts endpoint uses tts_provider
+PASS: config contains stt_provider/tts_provider
+ROUTE LINTER: PASS
+
+PASS: route linter passes
+
+RESULT: PASS
+
+ROUTE LINTER: PASS
+
+
+RESULT: PASS
+
+ROUTE LINTER: PASS
+
+PASS: all prior phase checks pass + route linter
+\nRESULT: FAIL
+
+
+== proactive_guard_checks.py (rc=1) ==
+[2025-09-07 01:42:31,217] ERROR in app: Exception on /api/v1/voice/tts-with-visemes [POST]
+Traceback (most recent call last):
+  File "/home/sandbox/.local/lib/python3.11/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sandbox/.local/lib/python3.11/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sandbox/.local/lib/python3.11/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sandbox/.local/lib/python3.11/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/data/repo_938/app/api_v1/voice.py", line 38, in tts_with_visemes
+    cfg=db.get_config(); a_bytes, v = get_tts_provider(cfg).synth(text); a = base64.b64encode(a_bytes).decode('ascii')
+                                      ^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/data/repo_938/app/services/tts_provider.py", line 22, in get_tts_provider
+    return load_tts_provider(get_tts_provider_name(cfg))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/data/repo_938/app/services/tts_provider.py", line 18, in load_tts_provider
+    return ElevenLabsTTS()
+           ^^^^^^^^^^^^^^^
+  File "/mnt/data/repo_938/app/services/providers/elevenlabs_tts.py", line 12, in __init__
+    raise RuntimeError("ELEVENLABS_API_KEY missing")
+RuntimeError: ELEVENLABS_API_KEY missing
+FAIL: tts first call not 200
+DEBUG: status=500 body=b'<!doctype html>\n<html lang=en>\n<title>500 Internal Server Error</title>\n<h1>Internal Server Error</h1>\n<p>The server encountered an internal error and was unable to complete your request. Either the s'
+
+
+== run_phase2_tests.py (rc=0) ==
+obsolete in phase 4
+
+

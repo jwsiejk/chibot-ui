@@ -1,3 +1,21 @@
+
+// CSRF-aware POST helper
+let __csrf = null;
+async function ensureCSRF(force=false){
+  if(__csrf && !force) return __csrf;
+  const j = await fetch('/api/v1/auth/csrf', { credentials:'include' }).then(r=>r.json()).catch(()=>({}));
+  __csrf = j.csrf || null; return __csrf;
+}
+async function apiPost(path, payload){
+  const csrf = await ensureCSRF();
+  let res = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, credentials:'include', body: JSON.stringify(payload||{}) });
+  if(res.status === 403){
+    const fresh = await ensureCSRF(true);
+    res = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':fresh}, credentials:'include', body: JSON.stringify(payload||{}) });
+  }
+  return res;
+}
+
 import { API } from "./config.js";
 import { STATES, setState, getState, onState } from "./state.js";
 import { showError, hideError } from "./errors.js";
