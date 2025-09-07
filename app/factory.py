@@ -5,6 +5,7 @@ from app.api_v1.greet import bp as bp_greet
 from app.api_v1.chat import bp as bp_chat
 from app.api_v1.voice import bp as bp_voice
 from app.api_v1.admin import bp as bp_admin
+from app.api_v1.diag import bp as bp_diag
 
 def create_app() -> Flask:
     app = Flask(__name__, static_folder=None)
@@ -15,6 +16,7 @@ def create_app() -> Flask:
     app.register_blueprint(bp_chat, url_prefix="/api/v1")
     app.register_blueprint(bp_voice, url_prefix="/api/v1")
     app.register_blueprint(bp_admin, url_prefix="/api/v1")
+    app.register_blueprint(bp_diag, url_prefix="/api/v1")
     # Errors
     register_error_handlers(app)
     return app
