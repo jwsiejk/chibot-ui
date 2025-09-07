@@ -1,0 +1,9 @@
+== phase11_ui_static_checks.py (rc=0) ==
+PASS: no duplicate ensureCSRF declarations (1)
+PASS: no duplicate apiPost declarations (0)
+
+
+== phase11_ui_csrf_usage.py (rc=0) ==
+PASS: no raw fetch('/api/v1/chat') without apiPost helper
+
+
