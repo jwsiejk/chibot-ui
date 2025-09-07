@@ -107,7 +107,7 @@ try:
         with tc.websocket_connect("/ws/v1/chat?session_id=phase10") as ws:
             # Should receive ready JSON
             first = ws.receive_text()
-            ok &= A('"type":"ready"' in first, "WS handshake sends ready")
+            ok &= A(msg.get("type") == "ready", "WS handshake sends ready")
             # ping/pong
             ws.send_text("ping")
             pong = ws.receive_text()
@@ -117,3 +117,30 @@ except Exception as e:
     ok &= A(False, "WS handshake & ping")
 print("\nRESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
+
+
+# === WS handshake & ping/pong (protocol-aware) ===
+try:
+    from importlib import import_module
+    gw = import_module("app.asgi_gateway")
+    star_asgi = getattr(gw, "asgi", None)
+    if star_asgi is None:
+        raise AssertionError("ASGI gateway missing 'asgi' app")
+    from starlette.testclient import TestClient
+    with TestClient(star_asgi) as tc:
+        with tc.websocket_connect("/ws/v1/chat?session_id=phase10") as ws:
+            first = ws.receive_text()
+            try:
+                import json as _json
+                msg = _json.loads(first)
+            except Exception as _e:
+                raise AssertionError(f"WS first frame not JSON: {first!r}")
+            ok &= A(msg.get("type") == "ready", "WS handshake sends ready")
+            ok &= A("proto" in msg and isinstance(msg["heartbeat_ms"], int), "WS ready includes proto/heartbeat_ms")
+            # ping/pong
+            ws.send_text("ping")
+            pong = ws.receive_text()
+            ok &= A(pong == "pong", "WS ping -> pong")
+except Exception as e:
+    print("WS CHECK ERROR:", repr(e))
+    ok &= A(False, "WS handshake & ping")

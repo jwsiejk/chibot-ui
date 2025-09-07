@@ -2,39 +2,84 @@
 # Starlette ASGI app that serves:
 #   • WebSocket /ws/v1/chat  (native ASGI)
 #   • All HTTP via mounted Flask WSGI app
-import json
+import asyncio, time
 from app import create_app
 from starlette.applications import Starlette
 from starlette.routing import WebSocketRoute, Mount
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware import Middleware
+from app.ws.protocol import dumps, PROTO_ID, DEFAULT_HEARTBEAT_MS
+
+# Optional admin log emitter
+try:
+    from app.api_v1.admin import _emit as _admin_emit
+except Exception:
+    def _admin_emit(*a, **k): pass
 
 # Build the Flask WSGI app
 flask_app = create_app()
 
+async def _keepalive_task(websocket, heartbeat_ms: int):
+    try:
+        while True:
+            await asyncio.sleep(max(heartbeat_ms, 1000) / 1000.0)
+            try:
+                await websocket.send_text(dumps({"type":"keepalive","ts": int(time.time()*1000)}))
+            except Exception:
+                break
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass
+
 # --- WebSocket endpoint ---
 async def chat_ws(websocket):
     await websocket.accept()
-    # Always send 'ready' FIRST so the UI and tests can progress
     session_id = websocket.query_params.get("session_id", "")
-    await websocket.send_text(json.dumps({"type": "ready", "session_id": session_id}))
-    while True:
-        try:
-            message = await websocket.receive()
-        except Exception:
-            break
-        t = message.get("type")
-        if t == "websocket.disconnect":
-            break
-        if t == "websocket.receive":
-            if "text" in message and message["text"] == "ping":
-                await websocket.send_text("pong")
-            # Ignore other inbound frames for now
+
+    # Announce open to admin log
     try:
-        await websocket.close(code=1000)
+        _admin_emit("ws_open", session_id=session_id, proto=PROTO_ID)
     except Exception:
         pass
+
+    # Send 'ready' FIRST, deterministically encoded
+    ready = {"type":"ready","session_id":session_id,"proto":PROTO_ID,"heartbeat_ms":DEFAULT_HEARTBEAT_MS,"ts": int(time.time()*1000)}
+    await websocket.send_text(dumps(ready))
+
+    # Start keepalive pings from server (optional; client may also ping)
+    ka = asyncio.create_task(_keepalive_task(websocket, DEFAULT_HEARTBEAT_MS))
+
+    try:
+        while True:
+            try:
+                text = await websocket.receive_text()
+            except RuntimeError:
+                # Non-text or close
+                data = await websocket.receive()
+                if data.get("type") == "websocket.disconnect":
+                    break
+                # ignore binary or others
+                continue
+            if text == "ping":
+                await websocket.send_text("pong")
+            # ignore other inbound messages for now
+    except Exception:
+        pass
+    finally:
+        try:
+            ka.cancel()
+        except Exception:
+            pass
+        try:
+            _admin_emit("ws_close", session_id=session_id)
+        except Exception:
+            pass
+        try:
+            await websocket.close(code=1000)
+        except Exception:
+            pass
 
 # --- Compose Starlette app ---
 routes = [
