@@ -125,3 +125,12 @@ try:
     app.register_blueprint(admin_bp)
 except Exception:
     pass
+
+
+# Public GET /login page
+try:
+    @app.get("/login")
+    def login_page():
+        return render_template("login.html")
+except Exception:
+    pass
