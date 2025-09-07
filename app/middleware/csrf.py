@@ -1,3 +1,8 @@
+try:
+    from app.api_v1.admin import _emit
+except Exception:
+    def _emit(*a,**k): pass
+
 # app/middleware/csrf.py
 from flask import request, jsonify
 from urllib.parse import urlparse
