@@ -27,9 +27,6 @@ def serve_docs(fname):
 def home():
     return render_template("index.html")
 
-@core_bp.get("/login")
-def login_page():
-    return render_template("login.html")
 
 @core_bp.get("/profile")
 def profile_page():
