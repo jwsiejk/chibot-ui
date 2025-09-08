@@ -7,6 +7,6 @@ bp = Blueprint("health_v1", __name__, url_prefix="/api/v1")
 def health():
     return jsonify(ok=True, status="ok"), 200
 
-@bp.head("/health")
+@bp.route('/health', methods=['HEAD'])
 def health_head():
     return ("", 200)
