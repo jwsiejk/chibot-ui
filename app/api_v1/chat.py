@@ -19,6 +19,11 @@ def _chat_rl_guard():
 @limit("chat")
 @bp.post("")
 def chat():
+    # auth/profile guard
+    email = get_user()
+    if not email:
+        return jsonify({"ok": False, "error": "not_authenticated"}), 401
+
     data=request.get_json(silent=True) or {}
     sid=data.get("session_id","default"); cmd=data.get("cmd"); email=get_user()
     if cmd=="interrupt":

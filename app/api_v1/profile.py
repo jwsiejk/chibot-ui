@@ -1,26 +1,40 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, request, jsonify
 from ..db import db
 from ..security_state import get_user
-bp = Blueprint("profile", __name__)
 
-@bp.get("/get")
-def profile_get():
-    email = get_user() or "user@example.com"
-    prof = db.memory.get('profiles',{}).get(email)
-    exists = bool(prof)
-    return jsonify({"ok": True, "exists": exists, "profile": prof or {}})
+bp = Blueprint("profile_v1", __name__, url_prefix="/api/v1/profile")
 
-@bp.post("/save")
-def profile_save():
-    email = get_user() or "user@example.com"
+def _empty_profile(email):
+    return {"email": email or "", "name":"", "title":"", "region":"", "profile_complete": False}
+
+@bp.get("")
+def get_profile():
+    email = get_user()
+    if not email:
+        return jsonify({"ok": False, "error": "not_authenticated"}), 401
+    users = db.memory.setdefault("users", {})
+    prof = users.get(email) or _empty_profile(email)
+    return jsonify({"ok": True, "profile": prof})
+
+@bp.post("")
+def save_profile():
+    email = get_user()
+    if not email:
+        return jsonify({"ok": False, "error": "not_authenticated"}), 401
+    users = db.memory.setdefault("users", {})
     data = request.get_json(silent=True) or {}
-    db.memory.setdefault('profiles',{})[email] = data
+    prof = users.get(email) or _empty_profile(email)
+    # email is not editable; ensure it matches session
+    prof["email"] = email
+    prof["name"] = (data.get("name") or "").strip()
+    prof["title"] = (data.get("title") or "").strip()
+    prof["region"] = (data.get("region") or "").strip()
+    # profile is complete if name & title exist (tweakable)
+    prof["profile_complete"] = bool(prof["name"] and prof["title"])
+    users[email] = prof
     try:
-        import os
-        if os.environ.get("DATABASE_URL"):
-            from ..dal import neon_pg
-            neon_pg.ensure_schema(); neon_pg.upsert_user(email, data.get("name"), data.get("title"), data.get("region"))
-            neon_pg.save_profile(email, data)
+        from ..api_v1.admin import _emit as _admin_emit
+        _admin_emit("profile:save", email=email, complete=prof["profile_complete"])
     except Exception:
         pass
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "profile": prof})

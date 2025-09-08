@@ -1,118 +1,12 @@
 <!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Admin Live Log</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 16px; }
-    #toolbar { display:flex; gap:8px; align-items:center; margin-bottom:12px; }
-    #log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .row { padding:4px 6px; border-bottom: 1px solid #eee; }
-    .kind { font-weight: 600; margin-right: 6px; }
-    details { border:1px solid #ddd; border-radius:8px; padding:8px; margin-bottom:10px; }
-    summary { cursor: pointer; }
-    .muted { color:#666; }
-    .badge { display:inline-block; min-width:1.5em; padding:0 6px; border-radius:999px; background:#eee; margin-left:6px; }
-    .controls { margin-left:auto; }
-    .hidden { display:none; }
-  </style>
-</head>
+<html><head><meta charset="utf-8"><title>Admin Live Log</title></head>
 <body>
   <h1>Admin Live Log</h1>
-
-  <div id="toolbar">
-    <label><input type="checkbox" id="hide-heartbeats"> Hide heartbeats</label>
-    <button id="clear">Clear</button>
-    <div class="muted">Tip: expand the heartbeat group to see individual beats.</div>
-  </div>
-
-  <details id="hb-group" open>
-    <summary>Heartbeats <span id="hb-count" class="badge">0</span> <span id="hb-last" class="muted"></span></summary>
-    <div id="hb-items"></div>
-  </details>
-
-  <div id="log"></div>
-
+  <pre id="out"></pre>
   <script>
-    const hideHB = document.getElementById('hide-heartbeats');
-    const clearBtn = document.getElementById('clear');
-    const hbGroup = document.getElementById('hb-group');
-    const hbCount = document.getElementById('hb-count');
-    const hbLast = document.getElementById('hb-last');
-    const hbItems = document.getElementById('hb-items');
-    const log = document.getElementById('log');
-
-    let hbTotal = 0;
-    const hbMaxKeep = 100; // cap to avoid runaway DOM
-
-    function fmt(ts) {
-      try { 
-        const d = new Date((typeof ts === 'number' ? ts*1000 : Date.now()));
-        return d.toLocaleTimeString();
-      } catch(e) {
-        return new Date().toLocaleTimeString();
-      }
-    }
-
-    function renderRow(obj) {
-      const div = document.createElement('div');
-      div.className = 'row';
-      const kind = document.createElement('span');
-      kind.className = 'kind';
-      kind.textContent = obj.kind || 'message';
-      const payload = document.createElement('span');
-      payload.textContent = JSON.stringify(obj);
-      div.appendChild(kind);
-      div.appendChild(payload);
-      return div;
-    }
-
-    function onBeat(obj) {
-      hbTotal += 1;
-      hbCount.textContent = hbTotal;
-      hbLast.textContent = 'last: ' + fmt(obj.ts);
-      // append compact row into heartbeat section
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.textContent = JSON.stringify(obj);
-      hbItems.appendChild(row);
-      // cap children
-      while (hbItems.childElementCount > hbMaxKeep) {
-        hbItems.removeChild(hbItems.firstChild);
-      }
-      // optionally hide the entire group content
-      hbGroup.classList.toggle('hidden', hideHB.checked);
-    }
-
-    function onMsg(obj) {
-      if (obj && obj.kind === 'heartbeat') { onBeat(obj); return; }
-      log.appendChild(renderRow(obj || {kind:'message', raw: true}));
-      // keep log scrolled to bottom
-      window.requestAnimationFrame(() => { window.scrollTo(0, document.body.scrollHeight); });
-    }
-
-    hideHB.addEventListener('change', () => {
-      hbGroup.classList.toggle('hidden', hideHB.checked);
-    });
-    clearBtn.addEventListener('click', () => {
-      hbTotal = 0;
-      hbCount.textContent = '0';
-      hbLast.textContent = '';
-      hbItems.innerHTML = '';
-      log.innerHTML = '';
-    });
-
+    const out = document.getElementById('out');
     const es = new EventSource('/api/v1/admin/logs');
-    // Explicit heartbeat event (first line from server)
-    es.addEventListener('heartbeat', e => {
-      try { onBeat(JSON.parse(e.data)); } catch(_) { /* ignore */ }
-    });
-    es.onmessage = e => {
-      try { onMsg(JSON.parse(e.data)); } catch(_) { /* non-JSON fallback */ onMsg({kind:'message', data: e.data}); }
-    };
-    es.onerror = (err) => {
-      onMsg({kind:'sse_error', detail: String(err)});
-    };
+    es.addEventListener('heartbeat', e => { out.textContent += e.data + "\n"; });
+    es.onmessage = e => { out.textContent += e.data + "\n"; };
   </script>
-</body>
-</html>
+</body></html>

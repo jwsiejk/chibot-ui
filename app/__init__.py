@@ -1,12 +1,18 @@
 # app/__init__.py
 import os
-from flask import Flask, Blueprint, render_template, send_from_directory, request
+from flask import Flask, Blueprint, render_template, send_from_directory, request, session
 
 from .api_v1 import create_v1_blueprint
+from .db import db
 from .middleware.csrf import csrf_before_request, make_csrf_route
 from .middleware.rate_limit import register_before_request as rate_limit_register
 
 # --- Core blueprint (docs/misc) ---
+@core_bp.get("/profile")
+def profile_page():
+    # simple template render; profile API handles data
+    return render_template("profile.html")
+
 core_bp = Blueprint('core', __name__)
 
 _MODULE_DIR = os.path.dirname(__file__)
@@ -126,6 +132,23 @@ def create_app():
     @app.route('/<path:_>', methods=['OPTIONS'])
     def _cors_preflight(_):
         return ('', 204)
+
+    
+    @app.before_request
+    def _auth_gate():
+        # Gate only HTML pages; allow APIs, static, ws, admin logs sse
+        p = request.path or "/"
+        allow = (
+            p.startswith("/api/") or p.startswith("/ws/") or p.startswith("/static/")
+            or p.startswith("/favicon") or p.startswith("/docs/") or p == "/login"
+        )
+        if allow:
+            return
+        email = session.get("email")
+        if not email:
+            # Not logged in: go to login page
+            from flask import redirect, url_for
+            return redirect(url_for("core.login_page"))
 
     return app
 

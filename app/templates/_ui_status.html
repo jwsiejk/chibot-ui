@@ -1,0 +1,39 @@
+
+<!-- _ui_status.html : toast + inline status UI -->
+<div id="toast-root" aria-live="polite" aria-atomic="true"></div>
+<style>
+#toast-root{position:fixed;right:16px;bottom:16px;z-index:9999;display:grid;gap:8px}
+.toast{background:#111;color:#fff;padding:10px 12px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.18);opacity:.96}
+.toast.ok{background:#0a6}
+.toast.warn{background:#d9822b}
+.toast.err{background:#b00020}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+#inline-status{margin:6px 0 10px;padding:8px 10px;border-radius:8px;font:14px/1.2 ui-sans-serif;background:#f3f4f6;color:#111;display:flex;align-items:center;gap:8px}
+</style>
+<script>
+(function(){
+  // Toast helper
+  window.askchipToast = function(msg, level='info', ms=2200){
+    const root = document.getElementById('toast-root'); if(!root) return;
+    const div = document.createElement('div');
+    div.className = 'toast ' + (level==='ok'?'ok':level==='warn'?'warn':level==='err'?'err':'');
+    div.textContent = msg;
+    root.appendChild(div);
+    setTimeout(()=>{ div.remove(); }, ms);
+    if(window.askchipLog) try{ window.askchipLog({kind:'ui_toast',level,message:msg}); }catch(e){}
+  };
+  // Inline status helper
+  window.askchipSetStatus = function(text){
+    let bar = document.getElementById('inline-status');
+    if(!bar){
+      bar = document.createElement('div'); bar.id='inline-status';
+      const chat = document.querySelector('[data-role="chat-pane"], #chat') || document.body;
+      chat.prepend(bar);
+    }
+    bar.innerHTML = text ? ('<span class="spinner"></span>'+text) : '';
+    bar.style.display = text ? '' : 'none';
+    if(window.askchipLog) try{ window.askchipLog({kind:'ui_status',text}); }catch(e){}
+  };
+})();
+</script>
