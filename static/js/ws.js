@@ -1,237 +1,195 @@
-/**
- * ws.js — WebSocket helpers for Ask Chip
- * Updated: 2025-09-08 (compat catch(e){} + robust reconnect)
- */
+/* static/js/app.js  — Auth/Profile state + gating (deterministic, race-proof) */
 
-import { API, TIMING } from "./config.js";
-import { getSID } from "./util/sid.js";
-import { setState, STATES } from "./state.js";
-import { showError } from "./errors.js";
-import { playStream, stopPlayback, isPlaying } from "./audio.js";
-import { renderSuggestions } from "./suggestions.js";
+function $(sel){ return document.querySelector(sel); }
+function el(id){ return document.getElementById(id); }
 
-let ws = null;
-let _openPromise = null;
+/* --- CSRF (idempotent) --- */
+window.__csrfToken = null;
+async function ensureCSRF(){
+  if (window.__csrfToken) return window.__csrfToken;
+  try{
+    const r = await fetch('/api/v1/csrf', { credentials:'include' });
+    const t = r.headers.get('X-CSRF-Token');
+    if (t) window.__csrfToken = t;
+    return window.__csrfToken;
+  }catch(_){ return null; }
+}
 
-// Stable per-tab id
-let _tabId = null;
-function getTabId() {
-  if (_tabId) return _tabId;
-  try {
-    _tabId = sessionStorage.getItem("chip.tab");
-    if (!_tabId) {
-      _tabId = (crypto && crypto.randomUUID)
-        ? crypto.randomUUID()
-        : String(Date.now()) + Math.random().toString(16).slice(2);
-      sessionStorage.setItem("chip.tab", _tabId);
+/* --- Modal toggles (mutually exclusive, always hide the other) --- */
+function showLogin(on){
+  const m = el('loginModal'), p = el('profileModal');
+  if (m) m.hidden = !on;
+  if (on && p) p.hidden = true;
+  if (on){ const e = el('inlineLoginEmail'); if (e) setTimeout(()=>e.focus(), 0); }
+}
+function showProfile(on){
+  const p = el('profileModal'), m = el('loginModal');
+  if (p) p.hidden = !on;
+  if (on && m) m.hidden = true;
+  if (on){ const e = el('prof_name'); if (e) setTimeout(()=>e.focus(), 0); }
+}
+
+/* --- Profile prefill --- */
+async function prefillProfile(){
+  try{
+    const me = await fetch('/api/v1/auth/me', { credentials:'include' }).then(r=>r.json());
+    const prof = (me && me.profile) || {};
+    if (me && me.email) prof.email = me.email;
+    const map = { email:'prof_email', name:'prof_name', role:'prof_role', region:'prof_region', company:'prof_company' };
+    for (const k in map){ const x = el(map[k]); if (x && prof[k] != null) x.value = prof[k]; }
+  }catch(_){}
+}
+
+/* --- Gating banner + Start state --- */
+async function refreshGating(){
+  try{
+    const me = await fetch('/api/v1/auth/me', { credentials:'include' }).then(r=>r.json());
+    const startBtn = el('startButton');
+    const banner   = el('profileGateBanner');
+    const authed   = !!(me && me.authenticated);
+    const needs    = authed && me.profile_complete === false;
+
+    if (!authed){
+      if (startBtn){ startBtn.disabled = true; startBtn.title = 'Please sign in to continue'; }
+      if (banner){ banner.hidden = true; }
+      window.AC_AUTH_READY = false;
+    } else if (needs){
+      if (startBtn){ startBtn.disabled = true; startBtn.title = 'Please fill out your profile to continue'; }
+      if (banner){ banner.hidden = false; }
+      window.AC_AUTH_READY = false;
+    } else {
+      if (startBtn){ startBtn.disabled = false; startBtn.title = ''; }
+      if (banner){ banner.hidden = true; }
+      window.AC_AUTH_READY = true;
+      window.dispatchEvent(new CustomEvent('ac:auth-ready'));
     }
-  } catch (e) {
-    _tabId = "tab";
-  }
-  return _tabId;
+  }catch(_){}
 }
 
-// Reconnect policy
-let reconnects = 0;
-const MAX_RECONNECTS = Number.POSITIVE_INFINITY; // keep trying
-const BASE_DELAY_MS = 800;                        // base backoff
+/* --- Deterministic state machine --- */
+const STATE = { status: 'init', evalNonce: 0, authInFlight: false };
 
-function scheduleReconnect() {
-  if (reconnects >= MAX_RECONNECTS) return;
-  const delay = Math.min(30000, BASE_DELAY_MS * (2 ** reconnects)); // cap 30s
-  reconnects++;
-  setTimeout(() => openWS(), delay);
-}
+async function evaluateAuth(){
+  const myNonce = ++STATE.evalNonce;
+  try{
+    const me = await fetch('/api/v1/auth/me', { credentials:'include' }).then(r=>r.json());
+    if (myNonce !== STATE.evalNonce) return; // a newer evaluation superseded this one
 
-// Optional UI buttons (wired by app.js)
-let startBtn, endBtn;
-export function bindControls(startEl, endEl) {
-  startBtn = startEl;
-  endBtn = endEl;
-  updateButtons();
-}
-
-function updateButtons() {
-  const active = ws && ws.readyState === WebSocket.OPEN;
-  try {
-    if (startBtn) startBtn.disabled = active;
-    if (endBtn)   endBtn.disabled   = !active;
-  } catch (e) {}
-}
-
-// Heartbeat
-let _hbTimer = null;
-function startHeartbeat() {
-  stopHeartbeat();
-  const sendPing = () => {
-    try {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
-      }
-    } catch (e) {}
-  };
-  sendPing();
-  _hbTimer = setInterval(sendPing, 25000);
-}
-function stopHeartbeat() {
-  try { if (_hbTimer) clearInterval(_hbTimer); } catch (e) {}
-  _hbTimer = null;
-}
-
-// Turn state
-let lastAssistantTurn = null;
-let _audioBufs = [];
-let nudgeTimer = null;
-
-function b64ToArrayBuffer(base64) {
-  const bin = atob(base64);
-  const len = bin.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes.buffer;
-}
-
-function normalizeVisemes(items) {
-  const xs = Array.isArray(items) ? items : [];
-  return xs; // passthrough
-}
-
-// Core WS handler
-function onWSMessage(ev) {
-  try {
-    const msg = JSON.parse(ev.data);
-
-    if (msg.type === "assistant_chunk" || msg.type === "text") {
-      setState(STATES.RESPONDING);
-      lastAssistantTurn = msg.turn_id || lastAssistantTurn;
-      const piece = msg.text || msg.content || "";
-      if (piece) {
-        try { addChatMessage("assistant", piece); } catch (e) {}
-      }
+    const authed = !!(me && me.authenticated);
+    if (!authed){
+      STATE.status = 'unauth';
+      showLogin(true);  showProfile(false);
+    } else if (me.profile_complete === false){
+      STATE.status = 'needs_profile';
+      await prefillProfile();
+      showProfile(true); showLogin(false);
+    } else {
+      STATE.status = 'ready';
+      showLogin(false); showProfile(false);
     }
-
-    if (msg.type === "audio_chunk") {
-      if (msg.base64) _audioBufs.push(b64ToArrayBuffer(msg.base64));
-    }
-
-    if (msg.type === "audio_flush") {
-      try {
-        const total = _audioBufs.length
-          ? _audioBufs.reduce((acc, buf) => {
-              const a = new Uint8Array(acc);
-              const b = new Uint8Array(buf);
-              const out = new Uint8Array(a.length + b.length);
-              out.set(a, 0); out.set(b, a.length);
-              return out.buffer;
-            })
-          : null;
-        if (total) playStream(total, normalizeVisemes(msg.visemes || []));
-      } catch (e) {}
-      _audioBufs = [];
-    }
-
-    if (msg.type === "assistant_end" || msg.type === "end") {
-      if (Array.isArray(msg.suggestions) && msg.suggestions.length) {
-        try { renderSuggestions(msg.suggestions); } catch (e) {}
-      }
-      if (!isPlaying()) setState(STATES.READY);
-      scheduleNudge();
-    }
-
-    if (msg.type === "state") {
-      // map phases if desired
-    }
-  } catch (e) {
-    // swallow parse errors; keep socket alive
+    await refreshGating();
+  }catch(_){
+    if (myNonce !== STATE.evalNonce) return;
+    STATE.status = 'unauth';
+    showLogin(true); showProfile(false);
   }
 }
 
-// Public controls
-export function sendInterrupt() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  const frame = { type: "control", cmd: "interrupt", turn_id: lastAssistantTurn };
-  try { ws.send(JSON.stringify(frame)); } catch (e) {}
-  stopPlayback();
-  setState(STATES.LISTENING);
-}
+/* --- Wire UI once DOM is ready --- */
+document.addEventListener('DOMContentLoaded', async ()=>{
+  await ensureCSRF();
+  await evaluateAuth();
 
-export function scheduleNudge() {
-  if (nudgeTimer) clearTimeout(nudgeTimer);
-  const ms = TIMING?.NUDGE_DELAY_MS ?? 4200;
-  nudgeTimer = setTimeout(() => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    try { ws.send(JSON.stringify({ type: "control", cmd: "nudge" })); } catch (e) {}
-  }, ms);
-}
+  /* Login form */
+  const f  = el('inlineLoginForm');
+  const msg= el('inlineLoginMsg');
+  const btn= el('inlineLoginSubmit');
+  const can= el('inlineLoginCancel');
+  const email = el('inlineLoginEmail');
 
-export function cancelNudge() {
-  if (nudgeTimer) { clearTimeout(nudgeTimer); nudgeTimer = null; }
-}
+  if (can) can.addEventListener('click', ()=> showLogin(false));
+  if (f){
+    f.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const v = (email?.value || '').trim();
+      if (!v){ msg.textContent = 'Please enter a valid email.'; return; }
+      btn.disabled = true; msg.textContent = 'Signing in…';
+      STATE.authInFlight = true;
+      showLogin(false); // hide immediately for UX
 
-// Open / Close
-export function openWS() {
-  if (ws && ws.readyState === WebSocket.OPEN) return ws;
+      try{
+        const tok = await ensureCSRF();
+        const r = await fetch('/api/v1/auth/login', {
+          method:'POST', credentials:'include',
+          headers:{ 'Content-Type':'application/json', ...(tok?{'X-CSRF-Token':tok}:{}) },
+          body: JSON.stringify({ email: v })
+        });
+        const me = await fetch('/api/v1/auth/me', { credentials:'include' }).then(x=>x.json()).catch(()=>null);
+        if (r.ok && me && me.authenticated){
+          if (me.profile_complete === false){
+            STATE.status = 'needs_profile';
+            await prefillProfile();
+            showProfile(true);
+          } else {
+            STATE.status = 'ready';
+            showProfile(false);
+          }
+          await refreshGating();
+        } else {
+          STATE.status = 'unauth';
+          msg.textContent = 'Login failed. Please try again.';
+          showLogin(true); btn.disabled = false;
+        }
+      }catch(_){
+        STATE.status = 'unauth';
+        msg.textContent = 'Network error. Please try again.';
+        showLogin(true); btn.disabled = false;
+      }finally{
+        STATE.authInFlight = false;
+      }
+    });
+  }
 
-  ws = new WebSocket(
-    `${API.WS}?session_id=${encodeURIComponent(getSID())}&tab=${encodeURIComponent(getTabId())}`
-  );
-  updateButtons();
-
-  _openPromise = new Promise((resolve) => {
-    ws.onopen = () => {
-      updateButtons();
-      startHeartbeat();
-      reconnects = 0;          // reset on successful open
-      resolve();
-    };
-  });
-
-  ws.onmessage = onWSMessage;
-
-  ws.onerror = () => {
-    try {
-      ws.close();              // funnel to onclose for reconnect
-    } catch (e) {}
-    showError(API.WS, "WS", "socket error");
-  };
-
-  ws.onclose = () => {
-    updateButtons();
-    stopHeartbeat();
-    scheduleReconnect();
-  };
-
-  return ws;
-}
-
-export function closeWS() {
-  try { if (ws) ws.close(); } catch (e) {}
-  ws = null;
-  stopHeartbeat();
-  updateButtons();
-}
-
-// Promise: resolve when WS is OPEN
-export function waitWSOpen(timeout = 4000) {
-  if (ws && ws.readyState === WebSocket.OPEN) return Promise.resolve();
-  const p = _openPromise || new Promise((res) => setTimeout(res, 10));
-  if (!timeout) return p;
-  return Promise.race([
-    p,
-    new Promise((_, rej) =>
-      setTimeout(() => rej(new Error("ws_open_timeout")), timeout)
-    ),
-  ]);
-}
-
-// Reconnect on tab visible or network back
-try {
-  window.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      try { openWS(); } catch (e) {}
-    }
-  });
-  window.addEventListener("online", () => {
-    try { openWS(); } catch (e) {}
-  });
-} catch (e) {}
+  /* Profile form */
+  const pf   = el('inlineProfileForm');
+  const pmsg = el('inlineProfileMsg');
+  const pbtn = el('inlineProfileSubmit');
+  const pcan = el('inlineProfileCancel');
+  if (pcan) pcan.addEventListener('click', ()=> showProfile(false));
+  if (pf){
+    pf.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const data = {
+        email:  (el('prof_email')?.value||'').trim(),
+        name:   (el('prof_name')?.value||'').trim(),
+        role:   (el('prof_role')?.value||'').trim(),
+        region: (el('prof_region')?.value||'').trim(),
+        company:(el('prof_company')?.value||'').trim(),
+        completed: true
+      };
+      if (!data.name || !data.role || !data.region){
+        pmsg.textContent = 'Please complete name, title, and region.'; return;
+      }
+      pbtn.disabled = true; pmsg.textContent = 'Saving…';
+      try{
+        const tok = await ensureCSRF();
+        const r = await fetch('/api/v1/auth/profile/save', {
+          method:'POST', credentials:'include',
+          headers:{ 'Content-Type':'application/json', ...(tok?{'X-CSRF-Token':tok}:{}) },
+          body: JSON.stringify(data)
+        });
+        if (r.ok){
+          STATE.status = 'ready';
+          showProfile(false);
+          await refreshGating();
+        } else {
+          pmsg.textContent = 'Save failed.';
+        }
+      }catch(_){
+        pmsg.textContent = 'Network error.';
+      }finally{
+        pbtn.disabled = false;
+      }
+    });
+  }
+});
