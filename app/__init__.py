@@ -128,16 +128,22 @@ def create_app():
     def _cors_preflight(_):
         return ('', 204)
 
-        @app.before_request
+    @app.before_request
     def _auth_gate():
         p = request.path or '/'
-        allow = (p.startswith('/api/') or p.startswith('/ws/') or p.startswith('/static/') or p.startswith('/favicon') or p.startswith('/docs/') or p == '/login')
+        allow = (
+            p.startswith('/api/') or
+            p.startswith('/ws') or
+            p.startswith('/static') or
+            p.startswith('/favicon') or
+            p.startswith('/docs/') or
+            p == '/login'
+        )
         if allow:
             return
         if not session.get('email'):
             from flask import redirect, url_for
             return redirect(url_for('core.login_page'))
-
     return app
 
 from .api_v1.auth import bp as auth_bp
