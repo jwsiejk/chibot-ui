@@ -228,12 +228,14 @@ function showProfileModal(show){ const m = el('profileModal'); if (m){ m.hidden 
 async function prefillProfile(){
   try{
     const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(r=>r.json());
-    const p = (me && me.profile) || {};
-    const map = {name:'prof_name', role:'prof_role', region:'prof_region', company:'prof_company'};
+    const p = (me && me.profile) || {}; if (me && me.email){ p.email = me.email; }
+    const map = {email:'prof_email', name:'prof_name', role:'prof_role', region:'prof_region', company:'prof_company'};
     for (const k in map){ const elx = el(map[k]); if (elx && p[k]!=null) elx.value = p[k]; }
   }catch(e){}
 }
 
+
+window.__authInFlight = false;
 
 document.addEventListener('DOMContentLoaded', ()=>{
   const pf = el('inlineProfileForm');
@@ -243,15 +245,11 @@ document.addEventListener('DOMContentLoaded', ()=>{
   if (cancel) cancel.addEventListener('click', ()=> showProfileModal(false));
   if (pf) pf.addEventListener('submit', async (e)=>{
     e.preventDefault();
-    const data = {
-      name: (el('prof_name')?.value||'').trim(),
-      role: (el('prof_role')?.value||'').trim(),
-      region: (el('prof_region')?.value||'').trim(),
-      company: (el('prof_company')?.value||'').trim(),
-      completed: true
-    };
-    if (!data.name || !data.role || !data.region){ msg.textContent = 'Please complete name, title, and region.'; return; }
-    save.disabled = true; msg.textContent = 'Saving…';
+    const v = (email?.value || '').trim();
+    if (!v){ msg.textContent = 'Please enter a valid email.'; return; }
+    submit.disabled = true; msg.textContent = 'Signing in…';
+    window.__authInFlight = true;
+    showLoginModal(false);
     try{
       const tok = await ensureCSRF();
       const r = await fetch('/api/v1/auth/profile/save', {

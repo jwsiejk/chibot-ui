@@ -12,27 +12,38 @@
 </head>
 <body
 
+
 <!-- Inline Profile Modal -->
-<div id="profileModal" hidden style="position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.35);z-index:1000">
-  <div style="background:#111419;color:#fff;border:1px solid rgba(255,255,255,.08);border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.35);padding:1.25rem 1.25rem;min-width:340px;max-width:92vw">
-    <div style="font-weight:800;font-size:1.15rem;margin-bottom:.5rem">Please fill out your profile to continue</div>
+<div id="profileModal" hidden style="position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.55);z-index:1200">
+  <div style="background:#111419;color:#eaeef5;border:1px solid rgba(255,255,255,.08);border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.6);padding:1.2rem 1.2rem;min-width:480px;max-width:92vw">
+    <div style="font-weight:800;font-size:1.05rem;margin-bottom:.5rem">Please fill out your profile to continue</div>
     <form id="inlineProfileForm">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
-        <div><label style="display:block;font-size:.85rem;opacity:.85;margin-bottom:.25rem">Name</label>
+        <div><label style="display:block;font-size:.85rem;opacity:.9;margin-bottom:.25rem">Email</label>
+          <input id="prof_email" name="email" type="email" placeholder="you@company.com" readonly
+                 style="display:block;width:100%;padding:.65rem .75rem;background:#0f1216;color:#aeb6c1;border:1px solid rgba(255,255,255,.18);border-radius:10px;opacity:.85"/></div>
+        <div><label style="display:block;font-size:.85rem;opacity:.9;margin-bottom:.25rem">Name</label>
           <input id="prof_name" name="name" type="text" placeholder="Full name"
-                 style="display:block;width:100%;padding:.6rem .7rem;background:#0f1216;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:10px"/></div>
-        <div><label style="display:block;font-size:.85rem;opacity:.85;margin-bottom:.25rem">Title</label>
+                 style="display:block;width:100%;padding:.65rem .75rem;background:#0f1216;color:#eaeef5;border:1px solid rgba(255,255,255,.18);border-radius:10px"/></div>
+        <div><label style="display:block;font-size:.85rem;opacity:.9;margin-bottom:.25rem">Title</label>
           <input id="prof_role" name="role" type="text" placeholder="Title / Role"
-                 style="display:block;width:100%;padding:.6rem .7rem;background:#0f1216;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:10px"/></div>
-        <div><label style="display:block;font-size:.85rem;opacity:.85;margin-bottom:.25rem">Region</label>
+                 style="display:block;width:100%;padding:.65rem .75rem;background:#0f1216;color:#eaeef5;border:1px solid rgba(255,255,255,.18);border-radius:10px"/></div>
+        <div><label style="display:block;font-size:.85rem;opacity:.9;margin-bottom:.25rem">Region</label>
           <input id="prof_region" name="region" type="text" placeholder="eg. PA"
-                 style="display:block;width:100%;padding:.6rem .7rem;background:#0f1216;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:10px"/></div>
-        <div><label style="display:block;font-size:.85rem;opacity:.85;margin-bottom:.25rem">Company (optional)</label>
+                 style="display:block;width:100%;padding:.65rem .75rem;background:#0f1216;color:#eaeef5;border:1px solid rgba(255,255,255,.18);border-radius:10px"/></div>
+        <div><label style="display:block;font-size:.85rem;opacity:.9;margin-bottom:.25rem">Company (optional)</label>
           <input id="prof_company" name="company" type="text" placeholder="Company"
-                 style="display:block;width:100%;padding:.6rem .7rem;background:#0f1216;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:10px"/></div>
+                 style="display:block;width:100%;padding:.65rem .75rem;background:#0f1216;color:#eaeef5;border:1px solid rgba(255,255,255,.18);border-radius:10px"/></div>
       </div>
-
       <div style="display:flex;gap:.5rem;align-items:center;justify-content:flex-end;margin-top:1rem">
+        <button type="button" id="inlineProfileCancel" class="btn">Cancel</button>
+        <button type="submit" id="inlineProfileSubmit" class="btn btn-primary">Save</button>
+      </div>
+      <div id="inlineProfileMsg" style="margin-top:.6rem;font-size:.9rem;opacity:.9"></div>
+    </form>
+  </div>
+</div>
+<div style="display:flex;gap:.5rem;align-items:center;justify-content:flex-end;margin-top:1rem">
         <button type="button" id="inlineProfileCancel" class="btn">Cancel</button>
         <button type="submit" id="inlineProfileSubmit" class="btn btn-primary">Save</button>
       </div>
@@ -42,28 +53,29 @@
 </div>
 
 
+
 <!-- Inline Login Modal -->
-<div id="loginModal" hidden style="position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.35);z-index:1000">
-  <div style="background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.15);padding:1.25rem 1.25rem;min-width:320px;max-width:92vw">
-    <div style="font-weight:700;margin-bottom:.5rem">Sign in</div>
+<div id="loginModal" hidden style="position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.55);z-index:1200">
+  <div style="background:#111419;color:#eaeef5;border:1px solid rgba(255,255,255,.08);border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.6);padding:1.2rem 1.2rem;min-width:360px;max-width:92vw">
+    <div style="font-weight:800;font-size:1.05rem;margin-bottom:.5rem">Please login with your Trace3 or Pure Storage email address</div>
     <form id="inlineLoginForm">
-      <label style="display:block;font-size:.9rem;opacity:.8;margin-bottom:.25rem">Email</label>
-      <input id="inlineLoginEmail" type="email" placeholder="you@company.com" autocomplete="email"
-             style="display:block;width:100%;padding:.6rem .7rem;border:1px solid rgba(0,0,0,.18);border-radius:10px;margin-bottom:.75rem"/>
+      <label style="display:block;font-size:.85rem;opacity:.9;margin-bottom:.25rem">Email</label>
+      <input id="inlineLoginEmail" type="email" placeholder="you@trace3.com or you@purestorage.com" autocomplete="email"
+             style="display:block;width:100%;padding:.65rem .75rem;background:#0f1216;color:#eaeef5;border:1px solid rgba(255,255,255,.18);border-radius:10px;margin-bottom:.9rem"/>
       <div style="display:flex;gap:.5rem;align-items:center;justify-content:flex-end">
         <button type="button" id="inlineLoginCancel" class="btn">Cancel</button>
         <button type="submit" id="inlineLoginSubmit" class="btn btn-primary">Login</button>
       </div>
-      <div id="inlineLoginMsg" style="margin-top:.5rem;font-size:.9rem;opacity:.85"></div>
+      <div id="inlineLoginMsg" style="margin-top:.6rem;font-size:.9rem;opacity:.9"></div>
     </form>
   </div>
 </div>
- data-state="ready">
+data-state="ready">
 
 <header class="topbar">
   <div class="brand"></div>
   <nav class="menu">
-    <button id="menuBtn" class="btn btn-ghost">Menu</button>
+    <button id="menuBtn" class="btn btn-ghost">AskChip</button>
   </nav>
 </header>
 
