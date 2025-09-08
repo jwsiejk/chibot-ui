@@ -1,22 +1,76 @@
-<html><head><meta charset="utf-8"><title>Login</title></head>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ask Chip — Sign in</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
+  <link rel="stylesheet" href="/static/css/ui_polish.css" />
+  <style>
+    body{font-family:system-ui;background:#faf7ee;color:#111;margin:0;min-height:100vh;display:grid;grid-template-rows:auto 1fr}
+    header.topbar{display:flex;align-items:center;gap:.75rem;padding:.9rem 1.2rem;background:#fff;box-shadow:0 1px 0 rgba(0,0,0,.08)}
+    header .brand{font-weight:700;letter-spacing:.3px}
+    main{display:grid;place-items:center;padding:2rem}
+    .card{background:#fff;border:1px solid rgba(0,0,0,.06);border-radius:16px;padding:2rem;box-shadow:0 6px 24px rgba(0,0,0,.06);min-width:320px}
+    .title{font-size:1.25rem;margin-bottom:.75rem}
+    label{font-size:.9rem;opacity:.8}
+    input{display:block;width:100%;margin:.35rem 0 1rem;padding:.7rem .8rem;border:1px solid rgba(0,0,0,.15);border-radius:10px}
+    button{display:inline-flex;align-items:center;gap:.5rem;border:0;background:#ff4f00;color:#fff;padding:.65rem 1rem;border-radius:999px;cursor:pointer}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .msg{margin-top:.6rem;font-size:.9rem;opacity:.85}
+  </style>
+</head>
 <body>
-  <form id="f" style="margin:2rem;font-family:system-ui">
-    <input name="email" placeholder="email" style="padding:.5rem" />
-    <button type="submit" style="padding:.5rem 1rem">Login</button>
-  </form>
-  <script>
-    document.getElementById('f').addEventListener('submit', async (e)=>{
-      e.preventDefault();
-      const email = e.target.email.value.trim();
-      const r = await fetch('/api/v1/auth/login', {
-        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email})
-      });
-      if (!r.ok){ alert('login failed'); return; }
-      // Check profile status and route accordingly
-      try{
-        const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(r=>r.json());
-        if (me?.profile_complete === false) location.href = '/profile'; else location.href = '/';
-      }catch(_){ location.href = '/'; }
+  <header class="topbar">
+    <div class="brand">Ask Chip</div>
+  </header>
+  <main>
+    <div class="card">
+      <div class="title">Sign in</div>
+      <form id="f" novalidate>
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" placeholder="you@company.com" autocomplete="email" required />
+        <button id="btn" type="submit">Login</button>
+        <div id="status" class="msg"></div>
+      </form>
+    </div>
+  </main>
+<script>
+async function getCSRF(){
+  try{
+    const r = await fetch('/api/v1/csrf', {credentials:'include'});
+    const t = r.headers.get('X-CSRF-Token');
+    if (t) return t;
+    const j = await r.json().catch(()=>({}));
+    return j && j.csrf;
+  }catch(e){ return null; }
+}
+document.getElementById('f').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const email = (document.getElementById('email').value||'').trim();
+  const status = document.getElementById('status');
+  const btn = document.getElementById('btn');
+  if (!email){ status.textContent = 'Please enter a valid email.'; return; }
+  status.textContent = 'Signing in…';
+  btn.disabled = true;
+  const csrf = await getCSRF();
+  try{
+    const r = await fetch('/api/v1/auth/login', {
+      method:'POST',
+      credentials:'include',
+      headers:{ 'Content-Type':'application/json', ...(csrf?{'X-CSRF-Token':csrf}:{}) },
+      body: JSON.stringify({ email })
     });
-  </script>
-</body></html>
+    if (!r.ok){ status.textContent = 'Login failed.'; btn.disabled = false; return; }
+    // Decide next route by profile status
+    const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(x=>x.json()).catch(()=>null);
+    if (me && me.profile_complete === false) location.href = '/profile';
+    else location.href = '/';
+  }catch(err){
+    status.textContent = 'Network error. Please try again.';
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

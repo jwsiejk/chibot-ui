@@ -91,7 +91,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireUI();
   renderSuggestions(["Show roadmap", "Explain Portworx", "Demo FlashArray", "Open Admin"], onSuggestion);
 
-  // prefetch CSRF so first POSTs don't 403
+  
+  // Profile gate: disable Start until profile is completed
+  try {
+    const me = await fetch('/api/v1/auth/me', { credentials: 'include' }).then(r=>r.json());
+    const incomplete = (me && me.profile_complete === false);
+    const banner = document.getElementById('profileGateBanner');
+    if (incomplete) {
+      if (startBtn){ startBtn.disabled = true; startBtn.title = 'Please fill out your profile to continue'; }
+      if (banner){ banner.hidden = false; }
+    } else {
+      if (startBtn){ startBtn.disabled = false; startBtn.title = ''; }
+      if (banner){ banner.hidden = true; }
+    }
+  } catch (_) { /* ignore */ }
+// prefetch CSRF so first POSTs don't 403
   await ensureCSRF();
 
   // initial state
