@@ -1,4 +1,3 @@
-from app.admin_log import emit as admin_emit
 # app/ws/ws_asgi.py
 import json, asyncio, urllib.parse
 from .bus import bus

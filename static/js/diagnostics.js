@@ -1,3 +1,4 @@
+async function __whoami(){ try{ const r=await fetch('/api/v1/auth/me',{credentials:'include'}); if(!r.ok) return {}; return await r.json(); }catch{ return {}; } }
 
 window.addEventListener('error', (e)=>{ try{ document.getElementById('overall').textContent = 'Diagnostics error: ' + (e?.message||e); }catch{} });
 function $id(id){ return document.getElementById(id); } function $qs(sel){ return document.querySelector(sel); }
@@ -32,3 +33,31 @@ async function run(){
   }catch(e){ try{ overall && (overall.textContent='Diagnostics error: '+(e?.message||e)); }catch{} }
 }
 window.addEventListener('DOMContentLoaded', run);
+
+async function __probeAdminSSE(){
+  const me = await __whoami();
+  const email = (me && me.email) ? me.email : null;
+  const init = email ? { method:'GET', credentials:'include', headers:{ 'X-User-Email': email, 'Accept': 'text/event-stream' } }
+                     : { method:'GET', credentials:'include', headers:{ 'Accept': 'text/event-stream' } };
+  const ctrl = new AbortController();
+  const t = setTimeout(()=>{ try{ ctrl.abort(); }catch(e){} }, 1500);
+  try{
+    const r = await fetch('/api/v1/admin/logs', { ...init, signal: ctrl.signal });
+    clearTimeout(t);
+    return r.status;
+  }catch(e){
+    clearTimeout(t);
+    return 0;
+  }
+}
+
+async function checkAdminSSE(){
+  const max = 6;
+  for (let i=0;i<max;i++){
+    const s = await __probeAdminSSE();
+    if (s === 200) return 200;
+    if (s >= 500 || s === 0) { await new Promise(r=>setTimeout(r, Math.min(30000, 800*(2**i)))); continue; }
+    return s;
+  }
+  return 503;
+}

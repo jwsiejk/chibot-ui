@@ -6,7 +6,6 @@ from ..services.mailer import send_transcript
 from ..services.streaming import make_assistant_frames, schedule_frames
 from ..middleware.rate_limit import limit, check_now
 from ..ws.bus import bus
-from ..admin_log import emit as admin_emit
 bp = Blueprint("chat", __name__)
 _TTS_MEMO = {}
 @bp.before_request
@@ -32,10 +31,6 @@ def chat():
     if cmd=="end_session":
         body=db.get_transcript(sid); send_transcript(email,"Ask Chip — Session transcript",body); return jsonify({"ok": True, "emailed": True})
     text=(data.get("text") or "").strip()
-    try:
-        admin_emit('chat', msg='user', chars=len(text))
-    except Exception:
-        pass
     if text:
         db.ensure_session(sid, email)
         db.add_message(sid, "user", text)
@@ -45,10 +40,6 @@ def chat():
         except Exception:
             pass
     tid, frames = make_assistant_frames((text or "chat"), sid); schedule_frames(sid, frames)
-    try:
-        admin_emit('chat', msg='assistant', tokens=0, turn_id=tid)
-    except Exception:
-        pass
     return jsonify({"ok": True, "turn_id": tid})
 
 
@@ -57,10 +48,6 @@ def chat():
 def tts_with_visemes():
     from ..services.tts_provider import get_tts_provider
     data=request.get_json(silent=True) or {}; text=(data.get("text") or "").strip()
-    try:
-        admin_emit('chat', msg='user', chars=len(text))
-    except Exception:
-        pass
     cfg = db.get_config()
     if text in _TTS_MEMO:
         a, v = _TTS_MEMO[text]
