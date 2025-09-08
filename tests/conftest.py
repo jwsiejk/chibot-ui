@@ -30,19 +30,3 @@ spec = importlib.util.spec_from_file_location("app", pkg_init, submodule_search_
 module = importlib.util.module_from_spec(spec)
 sys.modules['app'] = module
 spec.loader.exec_module(module)
-
-
-import pytest
-try:
-    from starlette.testclient import TestClient
-except Exception:
-    TestClient = None
-
-@pytest.fixture(scope="session")
-def client():
-    # lazily import to avoid side effects at collection time
-    from app.asgi_gateway import asgi
-    if TestClient is None:
-        pytest.skip("starlette TestClient not available")
-    with TestClient(asgi) as c:
-        yield c
