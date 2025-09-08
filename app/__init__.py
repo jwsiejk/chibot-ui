@@ -104,6 +104,7 @@ def create_app():
     make_csrf_route(app)
 
     # Simple CORS (optional, controlled via CORS_ALLOW_ORIGINS env var)
+    # Simple CORS (optional, controlled via CORS_ALLOW_ORIGINS env var)
     @app.after_request
     def maybe_allow_cors(resp):
         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
@@ -115,13 +116,13 @@ def create_app():
                 resp.headers['Vary'] = 'Origin'
                 resp.headers['Access-Control-Allow-Credentials'] = 'true'
                 resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-CSRF-Token'
-                resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+                resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
         return resp
 
     # Template context: asset_version from env or timestamp
     @app.context_processor
     def inject_asset_version():
-        return {'asset_version': os.environ.get('ASSET_VERSION') or os.environ.get('RENDER_GIT_COMMIT') or os.environ.get('HEROKU_RELEASE_VERSION') or 'v' + os.getenv('BUILD_VERSION','1757211289')}
+        return {'asset_version': os.environ.get('ASSET_VERSION') or os.environ.get('RELEASE_VERSION') or 'v' + os.getenv('BUILD_VERSION','1757211289')}
 
     # CORS Preflight handler
     @app.route('/<path:_>', methods=['OPTIONS'])
@@ -147,17 +148,8 @@ def create_app():
             from flask import redirect, url_for
             return redirect(url_for('core.login_page'))
 
-        @app.before_request
-    def _auth_gate():
-        p = request.path or '/'
-        allow = (p.startswith('/api/') or p.startswith('/ws/') or p.startswith('/static/') or p.startswith('/favicon') or p.startswith('/docs/') or p == '/login')
-        if allow:
-            return
-        if not session.get('email'):
-            from flask import redirect, url_for
-            return redirect(url_for('core.login_page'))
-
     return app
+
 
 from .api_v1.auth import bp as auth_bp
 from .api_v1.admin import bp as admin_bp
@@ -166,16 +158,3 @@ try:
     app.register_blueprint(admin_bp)
 except Exception:
     pass
-
-@core_bp.get("/")
-def home():
-    return render_template("index.html")
-
-@core_bp.get("/login")
-def login_page():
-    return render_template("login.html")
-
-@core_bp.get("/profile")
-def profile_page():
-    return render_template("profile.html")
-

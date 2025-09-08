@@ -264,6 +264,5 @@ document.addEventListener('DOMContentLoaded', ()=>{
       submit.disabled = false;
     }
   });
-  // After core wiring, prompt if needed
   checkAuthAndMaybePrompt();
 });
