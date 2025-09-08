@@ -97,6 +97,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const me = await fetch('/api/v1/auth/me', { credentials: 'include' }).then(r=>r.json());
     const incomplete = (me && me.profile_complete === false);
     const banner = document.getElementById('profileGateBanner');
+    const startBtn = document.getElementById('startButton');
     if (incomplete) {
       if (startBtn){ startBtn.disabled = true; startBtn.title = 'Please fill out your profile to continue'; }
       if (banner){ banner.hidden = false; }
@@ -221,13 +222,11 @@ function addChatMessage(role, text){
    Inline Login Modal
 ------------------------------------------------------- */
 function el(id){ return document.getElementById(id); }
-function showLoginModal(show){ const m = el('loginModal'); if (!m) return; m.hidden = !show; }
+function showLoginModal(show){ const m = el('loginModal'); if (!m) return; m.hidden = !show; if (show){ const e = el('inlineLoginEmail'); if (e) setTimeout(()=>e.focus(), 0); } }
 async function checkAuthAndMaybePrompt(){
   try{
     const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(r=>r.json());
-    // If profile is not complete but we *do* have an email, send to /profile.
     if (me && me.email && me.profile_complete === false){ location.href = '/profile'; return; }
-    // If no email or not logged in, show modal.
     if (!me || !me.email){ showLoginModal(true); }
   }catch(_){ showLoginModal(true); }
 }
@@ -256,7 +255,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
       const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(x=>x.json()).catch(()=>null);
       if (me && me.profile_complete === false){ location.href = '/profile'; return; }
       showLoginModal(false);
-      // Enable Start if we were gated
       const startBtn = document.getElementById('startButton');
       if (startBtn){ startBtn.disabled = false; startBtn.title = ''; }
       const banner = document.getElementById('profileGateBanner');
@@ -269,4 +267,3 @@ document.addEventListener('DOMContentLoaded', ()=>{
   // After core wiring, prompt if needed
   checkAuthAndMaybePrompt();
 });
-

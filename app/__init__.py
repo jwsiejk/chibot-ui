@@ -137,13 +137,26 @@ def create_app():
             p.startswith('/static') or
             p.startswith('/favicon') or
             p.startswith('/docs/') or
-            p == '/login' or p == '/'
+            p == '/' or
+            p == '/login' or
+            p.startswith('/profile')
         )
         if allow:
             return
         if not session.get('email'):
             from flask import redirect, url_for
             return redirect(url_for('core.login_page'))
+
+        @app.before_request
+    def _auth_gate():
+        p = request.path or '/'
+        allow = (p.startswith('/api/') or p.startswith('/ws/') or p.startswith('/static/') or p.startswith('/favicon') or p.startswith('/docs/') or p == '/login')
+        if allow:
+            return
+        if not session.get('email'):
+            from flask import redirect, url_for
+            return redirect(url_for('core.login_page'))
+
     return app
 
 from .api_v1.auth import bp as auth_bp
@@ -156,10 +169,13 @@ except Exception:
 
 @core_bp.get("/")
 def home():
-    # Main app UI
     return render_template("index.html")
 
+@core_bp.get("/login")
+def login_page():
+    return render_template("login.html")
 
 @core_bp.get("/profile")
 def profile_page():
     return render_template("profile.html")
+
