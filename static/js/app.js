@@ -270,3 +270,63 @@ document.addEventListener('DOMContentLoaded', ()=>{
     }
   });
 });
+
+
+/* ===== Deterministic Auth/Profile Controller ===== */
+(function(){
+  function el(id){ return document.getElementById(id); }
+  async function ensureCSRF(){ if (window.__csrfToken) return window.__csrfToken; try{ const r=await fetch('/api/v1/csrf',{credentials:'include'}); const t=r.headers.get('X-CSRF-Token'); if(t) window.__csrfToken=t; return t; }catch(_){ return null; } }
+  function showLogin(on){ const m=el('loginModal'), p=el('profileModal'); if(m) m.hidden=!on; if(on&&p) p.hidden=true; if(on){ const e=el('inlineLoginEmail'); if(e) setTimeout(()=>e.focus(),0);} }
+  function showProfile(on){ const p=el('profileModal'), m=el('loginModal'); if(p) p.hidden=!on; if(on&&m) m.hidden=true; if(on){ const e=el('prof_name'); if(e) setTimeout(()=>e.focus(),0);} }
+  async function prefillProfile(){ try{ const me=await fetch('/api/v1/auth/me',{credentials:'include'}).then(r=>r.json()); const prof=(me&&me.profile)||{}; if(me&&me.email) prof.email=me.email; const map={email:'prof_email',name:'prof_name',role:'prof_role',region:'prof_region',company:'prof_company'}; for(const k in map){ const x=el(map[k]); if(x&&prof[k]!=null) x.value=prof[k]; } }catch(_){ } }
+  async function refreshGating(){ try{ const me=await fetch('/api/v1/auth/me',{credentials:'include'}).then(r=>r.json()); const s=el('startButton'), b=el('profileGateBanner'); const authed=!!(me&&me.authenticated); const inc=authed&&me.profile_complete===false; if(!authed){ if(s){s.disabled=true;s.title='Please sign in to continue';} if(b){b.hidden=true;} } else if(inc){ if(s){s.disabled=true;s.title='Please fill out your profile to continue';} if(b){b.hidden=false;} } else { if(s){s.disabled=false;s.title='';} if(b){b.hidden=true;} } }catch(_){ } }
+  async function evaluate(){ try{ const me=await fetch('/api/v1/auth/me',{credentials:'include'}).then(r=>r.json()); if(!me||!me.authenticated){ showLogin(true); showProfile(false); } else if(me.profile_complete===false){ await prefillProfile(); showProfile(true); showLogin(false); } else { showLogin(false); showProfile(false); } await refreshGating(); }catch(_){ showLogin(true); showProfile(false); } }
+  document.addEventListener('DOMContentLoaded', async ()=>{
+    await ensureCSRF();
+    await evaluate();
+
+    // Login submit
+    const Lf=el('inlineLoginForm'), Lmsg=el('inlineLoginMsg'), Lbtn=el('inlineLoginSubmit'), Lcan=el('inlineLoginCancel'), Lem=el('inlineLoginEmail');
+    if(Lcan) Lcan.addEventListener('click',()=>showLogin(false));
+    if(Lf){
+      Lf.addEventListener('submit', async (e)=>{
+        e.preventDefault();
+        const email=(Lem?.value||'').trim();
+        if(!email){ Lmsg.textContent='Please enter a valid email.'; return; }
+        Lbtn.disabled=true; Lmsg.textContent='Signing in…'; showLogin(false);
+        try{
+          const tok=await ensureCSRF();
+          const r=await fetch('/api/v1/auth/login',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json',...(tok?{'X-CSRF-Token':tok}:{})},body:JSON.stringify({email})});
+          const me=await fetch('/api/v1/auth/me',{credentials:'include'}).then(x=>x.json()).catch(()=>null);
+          if(r.ok && me && me.authenticated){
+            if(me.profile_complete===false){ await prefillProfile(); showProfile(true); }
+            else { showProfile(false); }
+            await refreshGating();
+          } else {
+            Lmsg.textContent='Login failed. Please try again.'; Lbtn.disabled=false; showLogin(true);
+          }
+        }catch(_){
+          Lmsg.textContent='Network error. Please try again.'; Lbtn.disabled=false; showLogin(true);
+        }
+      });
+    }
+
+    // Profile submit
+    const Pf=el('inlineProfileForm'), Pmsg=el('inlineProfileMsg'), Pbtn=el('inlineProfileSubmit'), Pcan=el('inlineProfileCancel');
+    if(Pcan) Pcan.addEventListener('click',()=>showProfile(false));
+    if(Pf){
+      Pf.addEventListener('submit', async (e)=>{
+        e.preventDefault();
+        const data={ email:(el('prof_email')?.value||'').trim(), name:(el('prof_name')?.value||'').trim(), role:(el('prof_role')?.value||'').trim(), region:(el('prof_region')?.value||'').trim(), company:(el('prof_company')?.value||'').trim(), completed:true };
+        if(!data.name||!data.role||!data.region){ Pmsg.textContent='Please complete name, title, and region.'; return; }
+        Pbtn.disabled=true; Pmsg.textContent='Saving…';
+        try{
+          const tok=await ensureCSRF();
+          const r=await fetch('/api/v1/auth/profile/save',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json',...(tok?{'X-CSRF-Token':tok}:{})},body:JSON.stringify(data)});
+          if(r.ok){ showProfile(false); await refreshGating(); } else { Pmsg.textContent='Save failed.'; }
+        }catch(_){ Pmsg.textContent='Network error.'; }
+        finally{ Pbtn.disabled=false; }
+      });
+    }
+  });
+})();
