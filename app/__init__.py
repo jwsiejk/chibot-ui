@@ -153,3 +153,16 @@ try:
     app.register_blueprint(admin_bp)
 except Exception:
     pass
+
+@core_bp.get("/")
+def home():
+    # Main app UI
+    return render_template("index.html")
+
+@core_bp.get("/login")
+def login_page():
+    return render_template("login.html")
+
+@core_bp.get("/profile")
+def profile_page():
+    return render_template("profile.html")

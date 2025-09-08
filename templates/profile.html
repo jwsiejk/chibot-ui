@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Profile</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+  <style>
+    body{font-family:system-ui;margin:2rem}
+    label{display:block;margin:.5rem 0 .25rem}
+    input,select,textarea{padding:.5rem;width:340px;max-width:100%}
+    button{padding:.6rem 1.1rem;margin-top:1rem}
+    .msg{margin-left:.75rem;opacity:.8}
+  </style>
+</head>
+<body>
+  <h1>Profile</h1>
+  <form id="pform">
+    <label>Name</label><input name="name" />
+    <label>Company</label><input name="company" />
+    <label>Role</label><input name="role" />
+    <label>Region</label><input name="region" />
+    <label>Notes</label><textarea name="notes" rows="3"></textarea>
+    <div><button type="submit">Save</button><span class="msg" id="msg"></span></div>
+  </form>
+  <script>
+    async function load(){
+      try{
+        const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(r=>r.json());
+        const p = (me && me.profile) || {};
+        for (const el of document.querySelectorAll('#pform [name]')){
+          if (p[el.name] != null) el.value = p[el.name];
+        }
+      }catch(e){}
+    }
+    document.getElementById('pform').addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const data = {}; for (const el of e.target.querySelectorAll('[name]')) data[el.name]=el.value.trim();
+      data.completed = true;
+      const r = await fetch('/api/v1/auth/profile/save', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(data), credentials:'include'
+      });
+      if (r.ok){ document.getElementById('msg').textContent='Saved'; setTimeout(()=>location.href='/', 600); }
+      else alert('Save failed');
+    });
+    load();
+  </script>
+</body></html>
