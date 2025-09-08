@@ -10,7 +10,25 @@
   <link rel="stylesheet" href="/static/css/app_phase6.css" />
   <link rel="stylesheet" href="/static/css/ui_polish.css" />
 </head>
-<body data-state="ready">
+<body
+
+<!-- Inline Login Modal -->
+<div id="loginModal" hidden style="position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.35);z-index:1000">
+  <div style="background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.15);padding:1.25rem 1.25rem;min-width:320px;max-width:92vw">
+    <div style="font-weight:700;margin-bottom:.5rem">Sign in</div>
+    <form id="inlineLoginForm">
+      <label style="display:block;font-size:.9rem;opacity:.8;margin-bottom:.25rem">Email</label>
+      <input id="inlineLoginEmail" type="email" placeholder="you@company.com" autocomplete="email"
+             style="display:block;width:100%;padding:.6rem .7rem;border:1px solid rgba(0,0,0,.18);border-radius:10px;margin-bottom:.75rem"/>
+      <div style="display:flex;gap:.5rem;align-items:center;justify-content:flex-end">
+        <button type="button" id="inlineLoginCancel" class="btn">Cancel</button>
+        <button type="submit" id="inlineLoginSubmit" class="btn btn-primary">Login</button>
+      </div>
+      <div id="inlineLoginMsg" style="margin-top:.5rem;font-size:.9rem;opacity:.85"></div>
+    </form>
+  </div>
+</div>
+ data-state="ready">
 
 <header class="topbar">
   <div class="brand"></div>
@@ -19,6 +37,7 @@
   </nav>
 </header>
 
+<div id="profileGateBanner" hidden style="margin:1rem auto;max-width:980px;background:#fff3cd;border:1px solid #ffe69c;color:#664d03;border-radius:12px;padding:.75rem 1rem;font-family:system-ui">Please fill out your profile to continue.</div>
 <main class="container">
   <section class="stage-card" id="chipStage">
     <div class="stage-head">

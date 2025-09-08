@@ -22,6 +22,11 @@ def login_page():
 def serve_docs(fname):
     return send_from_directory(_docs_dir, fname)
 
+
+@core_bp.get("/profile")
+def profile_page():
+    return render_template("profile.html")
+
 def create_app():
     # Serve /static (JS/CSS/img) and /templates
     app = Flask(
