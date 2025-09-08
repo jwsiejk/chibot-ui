@@ -35,10 +35,11 @@ async def _keepalive_task(websocket: WebSocket, heartbeat_ms: int):
     except asyncio.CancelledError:
         return
 
+
 # --- WebSocket endpoint ---
 async def chat_ws(websocket: WebSocket):
     await websocket.accept()
-    session_id = websocket.query_params.get("session_id", "")
+    session_id = websocket.query_params.get("session_id", "") or "default"
 
     # Announce open to admin log
     try:
@@ -46,15 +47,58 @@ async def chat_ws(websocket: WebSocket):
     except Exception:
         pass
 
-    # Send 'ready' FIRST, deterministically encoded
-    ready = {"type":"ready","session_id":session_id,"proto":PROTO_ID,"heartbeat_ms":DEFAULT_HEARTBEAT_MS,"ts": int(time.time()*1000)}
-    await websocket.send_text(dumps(ready))
+    # Subscribe to bus
+    from app.ws.bus import bus as _bus
+    q = _bus.subscribe(session_id)
 
-    # Start keepalive pings from server (optional; client may also ping)
-    ka = asyncio.create_task(_keepalive_task(websocket, DEFAULT_HEARTBEAT_MS))
+    # Send ready frame immediately
+    ready = {"type":"ready","session_id":session_id,"proto":PROTO_ID,"heartbeat_ms":DEFAULT_HEARTBEAT_MS}
+    try:
+        await websocket.send_text(dumps(ready))
+    except Exception:
+        pass
+
+    stop = False
+
+    async def forward_bus():
+        from queue import Empty
+        while not stop:
+            try:
+                fr = q.get(timeout=0.05)
+            except Empty:
+                await asyncio.sleep(0.01)
+                continue
+            # Normalize server-internal dialect to client dialect
+            t = fr.get("type")
+            if t == "text":
+                fr = {"type":"assistant_chunk","turn_id":fr.get("turn_id"),"text":fr.get("content") or fr.get("text") or ""}
+            elif t == "end":
+                fr = {"type":"assistant_end","turn_id":fr.get("turn_id"),"suggestions":fr.get("suggestions") or []}
+            try:
+                await websocket.send_text(dumps(fr))
+            except Exception:
+                break
+
+    # Heartbeat (ping) helper
+    async def heartbeat():
+        try:
+            while not stop:
+                await asyncio.sleep(DEFAULT_HEARTBEAT_MS/1000.0)
+                try:
+                    await websocket.send_text(dumps({"type":"ping","t":int(time.time()*1000)}))
+                except Exception:
+                    break
+        except Exception:
+            pass
+
+    # Start tasks
+    fwd_task = asyncio.create_task(forward_bus())
+    hb_task  = asyncio.create_task(heartbeat())
 
     try:
+        # Receive loop (only control frames presently)
         while True:
+            event = await websocket.receive_text()
             try:
                 msg = await websocket.receive_text()
             except WebSocketDisconnect:
@@ -99,8 +143,13 @@ async def chat_ws(websocket: WebSocket):
                 pass
 
     finally:
+        stop = True
         try:
-            ka.cancel()
+            fwd_task.cancel()
+        except Exception:
+            pass
+        try:
+            hb_task.cancel()
         except Exception:
             pass
         try:
