@@ -41,3 +41,42 @@ def logs_sse():
             evt = _LOG_Q.popleft()
             yield "data: " + json.dumps(evt) + "\n\n"
     return Response(stream(), mimetype="text/event-stream")
+
+@bp.get("/runtime")
+def runtime():
+    import os, sys, platform
+    allow_open = bool(os.environ.get("ALLOW_MOCK_PROVIDERS") or os.environ.get("CI_FAST"))
+    if not allow_open: _require_admin()
+    def _safe(fnpath):
+        try:
+            mod_name, func_name = fnpath.rsplit(".", 1)
+            mod = __import__(mod_name, fromlist=[func_name])
+            fn = getattr(mod, func_name, None)
+            val = fn() if callable(fn) else None
+            return str(val or "unknown")
+        except Exception:
+            return "unknown"
+    providers = {
+        "llm": _safe("app.services.llm_provider.get_provider_name"),
+        "stt": _safe("app.services.stt_provider.get_stt_provider_name"),
+        "tts": _safe("app.services.tts_provider.get_tts_provider_name"),
+    }
+    keys = {
+        "openai": bool(os.environ.get("OPENAI_API_KEY")),
+        "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY")),
+        "smtp": bool(os.environ.get("EMAIL_HOST") or os.environ.get("FROM_EMAIL")),
+        "database_url": bool(os.environ.get("DATABASE_URL")),
+    }
+    def _v(name):
+        try:
+            m=__import__(name); return getattr(m,"__version__","unknown")
+        except Exception: return "unknown"
+    versions = {
+        "python": sys.version.split()[0],
+        "flask": _v("flask"),
+        "starlette": _v("starlette"),
+        "uvicorn": _v("uvicorn"),
+        "anyio": _v("anyio"),
+        "platform": platform.platform()
+    }
+    return jsonify({"ok": True, "runtime": {"providers": providers, "keys": keys, "versions": versions}}), 200

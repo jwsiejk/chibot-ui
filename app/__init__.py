@@ -13,6 +13,11 @@ _MODULE_DIR = os.path.dirname(__file__)
 _docs_dir = os.path.abspath(os.path.join(_MODULE_DIR, "..", "docs"))
 
 @core_bp.get("/docs/<path:fname>")
+
+@core_bp.get("/login")
+def login_page():
+    return render_template("login.html")
+
 def serve_docs(fname):
     return send_from_directory(_docs_dir, fname)
 

@@ -60,7 +60,7 @@ export function openWS(){
   updateButtons();
   _openPromise = new Promise((resolve)=>{ ws.onopen = () => { updateButtons(); startHeartbeat(); reconnects = 0; resolve(); }; });
   ws.onmessage = onWSMessage;
-  ws.onerror = () => { try{ ws.close(); }catch{}; }; };
+  ws.onerror = () => { try{ ws.close(); }catch{}; }; }catch{}; }; };
   ws.onclose = () => {
     updateButtons();
     if (reconnects < 1){
