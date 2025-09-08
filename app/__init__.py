@@ -8,11 +8,6 @@ from .middleware.csrf import csrf_before_request, make_csrf_route
 from .middleware.rate_limit import register_before_request as rate_limit_register
 
 # --- Core blueprint (docs/misc) ---
-@core_bp.get("/profile")
-def profile_page():
-    # simple template render; profile API handles data
-    return render_template("profile.html")
-
 core_bp = Blueprint('core', __name__)
 
 _MODULE_DIR = os.path.dirname(__file__)
@@ -133,22 +128,15 @@ def create_app():
     def _cors_preflight(_):
         return ('', 204)
 
-    
-    @app.before_request
+        @app.before_request
     def _auth_gate():
-        # Gate only HTML pages; allow APIs, static, ws, admin logs sse
-        p = request.path or "/"
-        allow = (
-            p.startswith("/api/") or p.startswith("/ws/") or p.startswith("/static/")
-            or p.startswith("/favicon") or p.startswith("/docs/") or p == "/login"
-        )
+        p = request.path or '/'
+        allow = (p.startswith('/api/') or p.startswith('/ws/') or p.startswith('/static/') or p.startswith('/favicon') or p.startswith('/docs/') or p == '/login')
         if allow:
             return
-        email = session.get("email")
-        if not email:
-            # Not logged in: go to login page
+        if not session.get('email'):
             from flask import redirect, url_for
-            return redirect(url_for("core.login_page"))
+            return redirect(url_for('core.login_page'))
 
     return app
 

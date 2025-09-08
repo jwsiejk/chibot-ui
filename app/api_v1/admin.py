@@ -80,15 +80,3 @@ def runtime():
         "platform": platform.platform()
     }
     return jsonify({"ok": True, "runtime": {"providers": providers, "keys": keys, "versions": versions}}), 200
-
-
-@bp.post("/log")
-def ingest_client_log():
-    try:
-        from flask import jsonify, request
-        j = request.get_json(silent=True) or {}
-        _emit("client_log", **({"payload": j} if isinstance(j, dict) else {"raw": str(j)}))
-        return jsonify({"ok": True})
-    except Exception:
-        from flask import jsonify
-        return jsonify({"ok": False}), 200

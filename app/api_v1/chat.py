@@ -6,22 +6,19 @@ from ..services.mailer import send_transcript
 from ..services.streaming import make_assistant_frames, schedule_frames
 from ..middleware.rate_limit import limit, check_now
 from ..ws.bus import bus
-from ..admin_log import emit as _admin_emit
 bp = Blueprint("chat", __name__)
 _TTS_MEMO = {}
 @bp.before_request
 def _chat_rl_guard():
-    # rate limit guard
-    
     rv = check_now('chat')
     return rv
 
 @limit("chat")
 @bp.post("")
 def chat():
-    # auth/profile guard
-    email = get_user()
-    if not email:
+    from ..security_state import get_user
+    from flask import jsonify
+    if not get_user():
         return jsonify({"ok": False, "error": "not_authenticated"}), 401
 
     data=request.get_json(silent=True) or {}
@@ -69,30 +66,3 @@ def tts_with_visemes():
     except Exception:
         pass
     return jsonify({"ok": True, "audio_b64": a, "visemes": v})
-@bp.before_request
-def _diag_chat_before():
-    # Only trace this blueprint; keep payloads short to avoid PII in logs
-    try:
-        if request.method == "POST":
-            j = request.get_json(silent=True)
-            _admin_emit("chat:request", path=request.path, len=(len(json.dumps(j)) if j else 0))
-    except Exception:
-        pass
-
-@bp.after_request
-def _diag_chat_after(resp):
-    try:
-        _admin_emit("chat:response", path=request.path, status=getattr(resp, "status_code", None))
-    except Exception:
-        pass
-    return resp
-
-@bp.errorhandler(Exception)
-def _diag_chat_error(e):
-    try:
-        _admin_emit("chat:error", path=request.path, error=str(e.__class__.__name__), msg=str(e))
-    except Exception:
-        pass
-    # Preserve original behavior but ensure JSON error is sent
-    from flask import jsonify
-    return jsonify({"ok": False, "error": "chat_handler_failed", "detail": str(e)}), 500
