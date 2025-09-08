@@ -80,6 +80,12 @@ def create_app():
     def admin():
         return render_template("admin.html")
 
+    
+    # Health check endpoint for Render (simple 200 OK)
+    @app.get("/api/v1/health")
+    def _health():
+        from flask import jsonify
+        return jsonify(ok=True), 200
     @app.get("/diagnostics")
     def diagnostics():
         return render_template("diagnostics.html")
