@@ -91,22 +91,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireUI();
   renderSuggestions(["Show roadmap", "Explain Portworx", "Demo FlashArray", "Open Admin"], onSuggestion);
 
-  
-  // Profile gate: disable Start until profile is completed
-  try {
-    const me = await fetch('/api/v1/auth/me', { credentials: 'include' }).then(r=>r.json());
-    const incomplete = (me && me.profile_complete === false);
-    const banner = document.getElementById('profileGateBanner');
-    const startBtn = document.getElementById('startButton');
-    if (incomplete) {
-      if (startBtn){ startBtn.disabled = true; startBtn.title = 'Please fill out your profile to continue'; }
-      if (banner){ banner.hidden = false; }
-    } else {
-      if (startBtn){ startBtn.disabled = false; startBtn.title = ''; }
-      if (banner){ banner.hidden = true; }
-    }
-  } catch (_) { /* ignore */ }
-// prefetch CSRF so first POSTs don't 403
+  // prefetch CSRF so first POSTs don't 403
   await ensureCSRF();
 
   // initial state
@@ -216,53 +201,3 @@ function addChatMessage(role, text){
     box.scrollTop = box.scrollHeight;
   }catch(e){}
 }
-
-
-/* -------------------------------------------------------
-   Inline Login Modal
-------------------------------------------------------- */
-function el(id){ return document.getElementById(id); }
-function showLoginModal(show){ const m = el('loginModal'); if (!m) return; m.hidden = !show; if (show){ const e = el('inlineLoginEmail'); if (e) setTimeout(()=>e.focus(), 0); } }
-async function checkAuthAndMaybePrompt(){
-  try{
-    const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(r=>r.json());
-    if (me && me.email && me.profile_complete === false){ location.href = '/profile'; return; }
-    if (!me || !me.email){ showLoginModal(true); }
-  }catch(_){ showLoginModal(true); }
-}
-
-document.addEventListener('DOMContentLoaded', ()=>{
-  const f = el('inlineLoginForm');
-  const email = el('inlineLoginEmail');
-  const msg = el('inlineLoginMsg');
-  const submit = el('inlineLoginSubmit');
-  const cancel = el('inlineLoginCancel');
-  if (!f) return;
-  cancel?.addEventListener('click', ()=> showLoginModal(false));
-  f.addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    const v = (email?.value || '').trim();
-    if (!v){ msg.textContent = 'Please enter a valid email.'; return; }
-    submit.disabled = true; msg.textContent = 'Signing in…';
-    try{
-      const tok = await ensureCSRF();
-      const r = await fetch('/api/v1/auth/login', {
-        method:'POST', credentials:'include',
-        headers:{'Content-Type':'application/json', ...(tok?{'X-CSRF-Token':tok}:{})},
-        body: JSON.stringify({ email: v })
-      });
-      if (!r.ok){ msg.textContent = 'Login failed.'; submit.disabled = false; return; }
-      const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(x=>x.json()).catch(()=>null);
-      if (me && me.profile_complete === false){ location.href = '/profile'; return; }
-      showLoginModal(false);
-      const startBtn = document.getElementById('startButton');
-      if (startBtn){ startBtn.disabled = false; startBtn.title = ''; }
-      const banner = document.getElementById('profileGateBanner');
-      if (banner){ banner.hidden = true; }
-    }catch(_){
-      msg.textContent = 'Network error. Please try again.';
-      submit.disabled = false;
-    }
-  });
-  checkAuthAndMaybePrompt();
-});

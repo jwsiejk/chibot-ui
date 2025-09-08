@@ -33,10 +33,17 @@ def logout():
 
 @bp.get("/me")
 def me():
-    email = (session.get("user") or {}).get("email") or get_user()
-    prof = get_profile()
-    profile_complete = bool(session.get("profile_complete") or prof.get("completed"))
-    return jsonify({"ok": True, "email": email, "profile_complete": profile_complete, "profile": prof}), 200
+    email = (session.get("user") or {}).get("email")
+    authenticated = bool(email)
+    prof = get_profile() if authenticated else {}
+    profile_complete = bool(session.get("profile_complete") or (prof.get("completed") if prof else False))
+    return jsonify({
+        "ok": True,
+        "authenticated": authenticated,
+        "email": email or "",
+        "profile_complete": profile_complete,
+        "profile": prof
+    }), 200
 
 @bp.post("/profile/save")
 def profile_save():

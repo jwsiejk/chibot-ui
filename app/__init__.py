@@ -104,7 +104,6 @@ def create_app():
     make_csrf_route(app)
 
     # Simple CORS (optional, controlled via CORS_ALLOW_ORIGINS env var)
-    # Simple CORS (optional, controlled via CORS_ALLOW_ORIGINS env var)
     @app.after_request
     def maybe_allow_cors(resp):
         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
@@ -119,12 +118,10 @@ def create_app():
                 resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
         return resp
 
-    # Template context: asset_version from env or timestamp
     @app.context_processor
     def inject_asset_version():
         return {'asset_version': os.environ.get('ASSET_VERSION') or os.environ.get('RELEASE_VERSION') or 'v' + os.getenv('BUILD_VERSION','1757211289')}
 
-    # CORS Preflight handler
     @app.route('/<path:_>', methods=['OPTIONS'])
     def _cors_preflight(_):
         return ('', 204)
@@ -149,7 +146,6 @@ def create_app():
             return redirect(url_for('core.login_page'))
 
     return app
-
 
 from .api_v1.auth import bp as auth_bp
 from .api_v1.admin import bp as admin_bp
