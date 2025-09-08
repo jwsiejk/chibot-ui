@@ -63,3 +63,4 @@
     }catch(e){ /* swallow menu errors to avoid breaking page */ }
   });
 })();
+(function(){document.addEventListener('DOMContentLoaded',()=>{try{const b=document.getElementById('menuBtn'); if(b) b.textContent='AskChip';}catch(e){}});})();

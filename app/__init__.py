@@ -33,6 +33,18 @@ def profile_page():
     return render_template("profile.html")
 
 
+
+@core_bp.get('/')
+def home():
+    return render_template('index.html')
+
+@core_bp.get('/login')
+def login_page():
+    return render_template('login.html')
+
+@core_bp.get('/profile')
+def profile_page():
+    return render_template('profile.html')
 def create_app():
     # Serve /static (JS/CSS/img) and /templates
     app = Flask(
@@ -149,12 +161,20 @@ def create_app():
             p == '/' or
             p == '/login' or
             p.startswith('/profile')
+        ) or
+            p.startswith('/ws') or
+            p.startswith('/static') or
+            p.startswith('/favicon') or
+            p.startswith('/docs/') or
+            p == '/' or
+            p == '/login' or
+            p.startswith('/profile')
         )
         if allow:
             return
         if not session.get('email'):
             from flask import redirect, url_for
-            return redirect(url_for('core.login_page'))
+            return redirect(url_for('core.home'))
 
     return app
 
