@@ -222,47 +222,53 @@ function addChatMessage(role, text){
 }
 
 
-/* -------------------------------------------------------
-   Inline Login Modal
-------------------------------------------------------- */
 function el(id){ return document.getElementById(id); }
-function showLoginModal(show){ const m = el('loginModal'); if (!m) return; m.hidden = !show; if (show){ const e = el('inlineLoginEmail'); if (e) setTimeout(()=>e.focus(), 0); } }
-async function checkAuthAndMaybePrompt(){
+function showLoginModal(show){ const m = el('loginModal'); if (m){ m.hidden = !show; if (show){ const e = el('inlineLoginEmail'); if (e) setTimeout(()=>e.focus(),0); } } }
+function showProfileModal(show){ const m = el('profileModal'); if (m){ m.hidden = !show; if (show){ const e = el('prof_name'); if (e) setTimeout(()=>e.focus(),0); } } }
+async function prefillProfile(){
   try{
     const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(r=>r.json());
-    const authed = !!(me && me.authenticated);
-    if (!authed){ showLoginModal(true); return; }
-    if (me.profile_complete === false){ location.href = '/profile'; return; }
-  }catch(_){ showLoginModal(true); }
+    const p = (me && me.profile) || {};
+    const map = {name:'prof_name', role:'prof_role', region:'prof_region', company:'prof_company'};
+    for (const k in map){ const elx = el(map[k]); if (elx && p[k]!=null) elx.value = p[k]; }
+  }catch(e){}
 }
+
+
 document.addEventListener('DOMContentLoaded', ()=>{
-  const f = el('inlineLoginForm');
-  const email = el('inlineLoginEmail');
-  const msg = el('inlineLoginMsg');
-  const submit = el('inlineLoginSubmit');
-  const cancel = el('inlineLoginCancel');
-  if (cancel) cancel.addEventListener('click', ()=> showLoginModal(false));
-  if (f) f.addEventListener('submit', async (e)=>{
+  const pf = el('inlineProfileForm');
+  const msg = el('inlineProfileMsg');
+  const save = el('inlineProfileSubmit');
+  const cancel = el('inlineProfileCancel');
+  if (cancel) cancel.addEventListener('click', ()=> showProfileModal(false));
+  if (pf) pf.addEventListener('submit', async (e)=>{
     e.preventDefault();
-    const v = (email?.value || '').trim();
-    if (!v){ msg.textContent = 'Please enter a valid email.'; return; }
-    submit.disabled = true; msg.textContent = 'Signing in…';
+    const data = {
+      name: (el('prof_name')?.value||'').trim(),
+      role: (el('prof_role')?.value||'').trim(),
+      region: (el('prof_region')?.value||'').trim(),
+      company: (el('prof_company')?.value||'').trim(),
+      completed: true
+    };
+    if (!data.name || !data.role || !data.region){ msg.textContent = 'Please complete name, title, and region.'; return; }
+    save.disabled = true; msg.textContent = 'Saving…';
     try{
       const tok = await ensureCSRF();
-      const r = await fetch('/api/v1/auth/login', {
+      const r = await fetch('/api/v1/auth/profile/save', {
         method:'POST', credentials:'include',
         headers:{'Content-Type':'application/json', ...(tok?{'X-CSRF-Token':tok}:{})},
-        body: JSON.stringify({ email: v })
+        body: JSON.stringify(data)
       });
-      if (!r.ok){ msg.textContent = 'Login failed.'; submit.disabled = false; return; }
-      const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(x=>x.json()).catch(()=>null);
-      if (me && me.authenticated && me.profile_complete === false){ location.href = '/profile'; return; }
-      if (me && me.authenticated){ showLoginModal(false); }
-      submit.disabled = false;
+      if (!r.ok){ msg.textContent = 'Save failed.'; save.disabled=false; return; }
+      msg.textContent = 'Saved.';
+      showProfileModal(false);
+      const startBtn = document.getElementById('startButton');
+      if (startBtn){ startBtn.disabled = false; startBtn.title = ''; }
+      const banner = document.getElementById('profileGateBanner');
+      if (banner){ banner.hidden = true; }
     }catch(_){
-      msg.textContent = 'Network error. Please try again.';
-      submit.disabled = false;
+      msg.textContent = 'Network error.';
+      save.disabled=false;
     }
   });
-  checkAuthAndMaybePrompt();
 });

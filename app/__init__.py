@@ -23,9 +23,18 @@ def serve_docs(fname):
     return send_from_directory(_docs_dir, fname)
 
 
+@core_bp.get("/")
+def home():
+    return render_template("index.html")
+
+@core_bp.get("/login")
+def login_page():
+    return render_template("login.html")
+
 @core_bp.get("/profile")
 def profile_page():
     return render_template("profile.html")
+
 
 def create_app():
     # Serve /static (JS/CSS/img) and /templates
@@ -111,7 +120,7 @@ def create_app():
     # Simple CORS (optional, controlled via CORS_ALLOW_ORIGINS env var)
     @app.after_request
     def maybe_allow_cors(resp):
-        allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
+        allow = os.environ.get('CORS_ALLOW_ORIGINS', '')
         if allow:
             origins = [o.strip() for o in allow.split(',') if o.strip()]
             ori = request.headers.get('Origin', '')
