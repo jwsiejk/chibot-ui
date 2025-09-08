@@ -137,7 +137,7 @@ def create_app():
             p.startswith('/static') or
             p.startswith('/favicon') or
             p.startswith('/docs/') or
-            p == '/login'
+            p == '/login' or p == '/'
         )
         if allow:
             return
