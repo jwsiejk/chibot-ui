@@ -1,3 +1,4 @@
+
 # app/services/tts_provider.py
 import os
 from typing import Protocol
@@ -8,11 +9,17 @@ class TTSProvider(Protocol):
 def get_tts_provider_name(cfg: dict) -> str:
     val = (cfg or {}).get("tts_provider", "auto")
     val = (val or "auto").strip().lower()
+    # NEVER mock in production. Only allow mock in CI_FAST.
     if val in ("auto", ""):
-        # Prefer ElevenLabs when key is present and not in CI_FAST.
-        ci_fast = bool(os.environ.get("CI_FAST"))
-        has_key = bool(os.environ.get("ELEVENLABS_API_KEY"))
-        return "elevenlabs" if (has_key and not ci_fast) else "mock"
+        if os.environ.get("CI_FAST"):
+            return "mock"
+        if os.environ.get("ELEVENLABS_API_KEY"):
+            return "elevenlabs"
+        raise RuntimeError("ELEVENLABS_API_KEY is not set — refusing to run with mock in production.")
+    if val == "mock":
+        if os.environ.get("CI_FAST"):
+            return "mock"
+        raise RuntimeError("Mock TTS provider is disallowed outside CI_FAST.")
     return val
 
 def load_tts_provider(name: str):

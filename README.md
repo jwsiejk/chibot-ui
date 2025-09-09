@@ -7,3 +7,8 @@
 - Still 100% mocked vendors (LLM/STT/TTS/Email); no network calls.
 
 Entrypoint stays `app.asgi_gateway:asgi` per the architecture.
+
+## Production Provider Policy (No Mocks)
+- The app will **refuse to boot with mock providers** unless `CI_FAST` is set.
+- LLM requires `OPENAI_API_KEY` (set `OPENAI_MODEL` optionally).
+- TTS requires `ELEVENLABS_API_KEY` (+ `ELEVENLABS_VOICE_ID`).

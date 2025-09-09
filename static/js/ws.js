@@ -65,19 +65,19 @@ export function openWS(){
         _textBuf += text;
         if (_assistantDiv) _assistantDiv.textContent = _textBuf;
       } else if (t === "audio_chunk"){
-        const b64 = fr.data || fr.bytes || "";
+        const b64 = fr.base64 || fr.data || fr.bytes || "";
         if (b64) _audioChunks.push(Uint8Array.from(atob(b64), c=>c.charCodeAt(0)));
       } else if (t === "visemes"){
         try{ setVisemeCallback(()=>{}); }catch{}
       } else if (t === "suggestions"){
-        const list = fr.items || fr.suggestions || [];
+        const list = (fr.items || fr.suggestions || []).map(x => (typeof x === 'string') ? x : (x && x.label) ? x.label : String(x));
         renderSuggestions(list, (s) => {
           const c = document.getElementById('composer');
           if (c) c.value = s;
           const btn = document.getElementById('composerSend');
           if (btn) btn.click();
         });
-      } else if (t === "end"){
+      } else if (t === "end" || t === "assistant_end"){
         // finalize audio
         if (_audioChunks.length){
           const chunks = _audioChunks.slice();
