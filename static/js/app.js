@@ -10,6 +10,7 @@ import { API } from "./config.js";
 import { initAuthGate, refreshGating, showLoginModal, showProfileModal, prefillProfile } from './auth_gate.js';
 
 import { STATES, setState, getState } from "./state.js";
+import { openWS, waitWSOpen, closeWS, bindControls, isOpen, cancelNudge } from "./ws.js";
 import { showError, hideError } from "./errors.js";
 import { renderSuggestions } from "./suggestions.js";
 import { playStream, stopPlayback, setVisemeCallback, isPlaying } from "./audio.js";
@@ -279,6 +280,7 @@ async function onEnd(){
    Text send
 ------------------------------------------------------- */
 async function onSend(){
+  try{ if (!isOpen()) { openWS(); await waitWSOpen(); } }catch{}
   try { const ghost = (composer?.value || '').trim(); if(ghost) { try{ addChatMessage('user', ghost); }catch(e){} } } catch(e) {}
   cancelNudge();
   const text = (composer?.value || "").trim();
