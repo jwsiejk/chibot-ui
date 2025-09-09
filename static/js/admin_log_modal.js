@@ -33,6 +33,7 @@
       es = new EventSource('/api/v1/admin/logs');
       es.addEventListener('heartbeat', e => { if(!paused) out.textContent += e.data + "\n"; });
       es.onmessage = e => { if(!paused) out.textContent += e.data + "\n"; };
+      es.onerror = () => { if(!paused) out.textContent += 'SSE error (maybe 403 — admin only).\n'; };
     }catch(e){
       out.textContent += 'SSE error: ' + (e && e.message || String(e)) + "\n";
     }

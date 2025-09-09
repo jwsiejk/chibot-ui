@@ -1,10 +1,56 @@
 <!doctype html>
-<html><head>
-  <link rel="icon" href="/static/favicon.ico" type="image/x-icon" /><meta charset="utf-8"><title>Profile</title>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Profile</title>
+  <link rel="icon" href="/static/favicon.ico" type="image/x-icon" />
   <link rel="stylesheet" href="/static/css/app.css" />
+  <style>
+    body{background:#0f1115;color:#e6e9ef;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0}
+    header{padding:16px 20px;border-bottom:1px solid #202533;background:#0c0e13}
+    main{max-width:820px;margin:0 auto;padding:20px}
+    .card{background:#161a22;border:1px solid #202533;border-radius:12px;padding:14px;margin:12px 0}
+    .row{display:grid;grid-template-columns:200px 1fr;gap:12px;margin:6px 0}
+    code{background:#0b0e13;border-radius:6px;padding:2px 6px}
+    .muted{opacity:.8}
+  </style>
 </head>
-<body style="font-family:system-ui;margin:2rem">
-  <h1>Profile</h1>
-  <p>This page remains available from the menu, but first-time flow uses the inline modal.</p>
-</body></html>
+<body>
+  <header><h2>Profile</h2></header>
+  <main>
+    <section class="card">
+      <div class="row"><div>Signed in as</div><div id="email"><em>loading…</em></div></div>
+      <div class="row"><div>Profile status</div><div id="status" class="muted">loading…</div></div>
+    </section>
+
+    <section class="card">
+      <h3>Details</h3>
+      <div class="row"><div>Name</div><div id="name" class="muted">—</div></div>
+      <div class="row"><div>Title</div><div id="title" class="muted">—</div></div>
+      <div class="row"><div>Region</div><div id="region" class="muted">—</div></div>
+      <div class="row"><div>Company</div><div id="company" class="muted">—</div></div>
+    </section>
+  </main>
+
+  <script type="module">
+    async function load(){
+      try{
+        const me = await fetch('/api/v1/auth/me', { credentials:'include' }).then(r=>r.json());
+        document.getElementById('email').textContent = me?.email || '—';
+        document.getElementById('status').textContent = (me?.authenticated ? 'Authenticated' : 'Not signed in') + (me?.profile_complete===false ? ' • profile incomplete' : '');
+        const p = me?.profile || {};
+        const set = (id, v) => { document.getElementById(id).textContent = v ? String(v) : '—'; };
+        set('name', p.name);
+        set('title', p.title);
+        set('region', p.region);
+        set('company', p.company);
+      }catch(e){
+        document.getElementById('email').textContent = '—';
+        document.getElementById('status').textContent = 'Error loading profile';
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

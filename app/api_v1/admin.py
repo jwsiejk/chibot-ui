@@ -21,8 +21,8 @@ def _emit(kind:str, **fields):
 bp = Blueprint("admin_v1", __name__, url_prefix="/api/v1/admin")
 
 def _require_admin():
-    email = get_user() or (session.get("user", {}) or {}).get("email") or session.get("email") or request.headers.get("X-User-Email")
-    if not is_admin_email(email):
+    email = (session.get("user") or {}).get("email") or session.get("email") or request.headers.get("X-User-Email") or (get_user() or "")
+    if not is_admin_email((email or "").strip().lower()):
         abort(403)
 
 @bp.get("/logs-ui")

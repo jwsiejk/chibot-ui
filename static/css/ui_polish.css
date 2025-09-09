@@ -38,3 +38,56 @@
     scroll-behavior:auto !important;
   }
 }
+
+
+/* --- AskChip menu revamp --- */
+#menuBtn{
+  background: linear-gradient(180deg,#1b2230,#151a24);
+  color: var(--text);
+  border: 1px solid #232a3a;
+  border-radius: 12px;
+  padding: 8px 12px;
+  box-shadow: 0 6px 16px rgba(0,0,0,.25);
+}
+#menuBtn:hover{ filter: brightness(1.05); }
+.askchip-menu{
+  position: absolute;
+  display: none;
+  min-width: 220px;
+  padding: 10px;
+  background: rgba(22,26,34,.92);
+  backdrop-filter: blur(8px) saturate(140%);
+  border: 1px solid #202533;
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.03);
+  z-index: 1500;
+}
+.askchip-menu .menu-item{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, transform .02s ease;
+}
+.askchip-menu .menu-item:hover{
+  background: #1c2230;
+  border-color: #2a3244;
+}
+.askchip-menu .menu-item:active{ transform: translateY(1px); }
+.askchip-menu .icon{ width: 16px; height: 16px; opacity:.9; display:inline-grid; place-items:center; }
+.askchip-menu .divider{
+  height: 1px; background: #262c3a; margin: 6px 4px;
+}
+.askchip-menu .header{
+  display:flex; align-items:center; gap:10px;
+  padding: 4px 8px 10px 8px; margin: 2px 4px 8px 4px;
+  border-bottom: 1px solid #262c3a; color:#9aa4b2; font-size:12px; text-transform:uppercase; letter-spacing:.06em;
+}
+.askchip-menu .header img{ width:20px; height:20px; border-radius:50%; opacity:.95; }

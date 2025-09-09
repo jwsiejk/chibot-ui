@@ -108,11 +108,10 @@ def create_app():
 
 @core_bp.get("/admin")
 def admin_console():
-    # gate to admins only
     from .utils.admin import is_admin_email
     from .security_state import get_user
     from flask import abort, render_template, session, request
-    email = get_user() or (session.get("user", {}) or {}).get("email") or session.get("email") or request.headers.get("X-User-Email")
-    if not is_admin_email(email or ""):
+    email = (session.get("user") or {}).get("email") or session.get("email") or request.headers.get("X-User-Email") or (get_user() or "")
+    if not is_admin_email((email or "").strip().lower()):
         abort(403)
     return render_template("admin_console.html")
