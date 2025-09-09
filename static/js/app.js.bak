@@ -7,8 +7,6 @@
 */
 
 import { API } from "./config.js";
-import { initAuthGate, refreshGating, showLoginModal, showProfileModal, prefillProfile } from './auth_gate.js';
-
 import { STATES, setState, getState } from "./state.js";
 import { showError, hideError } from "./errors.js";
 import { renderSuggestions } from "./suggestions.js";
@@ -70,10 +68,51 @@ document.addEventListener("DOMContentLoaded", async () => {
    Deterministic auth/profile controller
 ------------------------------------------------------- */
 function el(id){ return document.getElementById(id); }
-// showLoginModal handled by auth_gate.js
-// showProfileModal handled by auth_gate.js
-// prefillProfile handled by auth_gate.js
-// refreshGating handled by auth_gate.js
+function showLoginModal(on){
+  const m = el('loginModal'), p = el('profileModal');
+  if (m) m.hidden = !on;
+  if (on && p) p.hidden = true;
+  if (on){ const e = el('inlineLoginEmail'); if (e) setTimeout(()=>e.focus(),0); }
+}
+function showProfileModal(on){
+  const p = el('profileModal'), m = el('loginModal');
+  if (p) p.hidden = !on;
+  if (on && m) m.hidden = true;
+  if (on){ const e = el('prof_name'); if (e) setTimeout(()=>e.focus(),0); }
+}
+async function prefillProfile(){
+  try{
+    const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(r=>r.json());
+    const prof = (me && me.profile) || {};
+    if (me && me.email) prof.email = me.email;
+    const map = {email:'prof_email', name:'prof_name', role:'prof_role', region:'prof_region', company:'prof_company'};
+    for (const k in map){ const x = el(map[k]); if (x && prof[k]!=null) x.value = prof[k]; }
+  }catch(_){}
+}
+async function refreshGating(){
+  try{
+    const me = await fetch('/api/v1/auth/me', { credentials: 'include' }).then(r=>r.json());
+    const authed = !!(me && me.authenticated);
+    const incomplete = authed && me.profile_complete === false;
+    const banner = document.getElementById('profileGateBanner');
+    if (!startBtn) startBtn = document.getElementById('startButton');
+
+    if (!authed) {
+      if (startBtn){ startBtn.disabled = true; startBtn.title = 'Please sign in to continue'; }
+      if (banner){ banner.hidden = true; }
+      window.AC_AUTH_READY = false;
+    } else if (incomplete) {
+      if (startBtn){ startBtn.disabled = true; startBtn.title = 'Please fill out your profile to continue'; }
+      if (banner){ banner.hidden = false; }
+      window.AC_AUTH_READY = false;
+    } else {
+      if (startBtn){ startBtn.disabled = false; startBtn.title = ''; }
+      if (banner){ banner.hidden = true; }
+      window.AC_AUTH_READY = true;
+      window.dispatchEvent(new CustomEvent('ac:auth-ready'));
+    }
+  } catch (_){}
+}
 const STATE = { status:'init', evalNonce:0, authInFlight:false };
 
 async function evaluateAuth(){

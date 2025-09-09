@@ -40,3 +40,5 @@ requests
 alembic
 
 SQLAlchemy
+
+beautifulsoup4
