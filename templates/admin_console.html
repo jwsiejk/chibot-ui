@@ -1,0 +1,106 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ask Chip — Admin Console</title>
+  <link rel="icon" href="/static/favicon.ico" type="image/x-icon" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+  <style>
+    body{background:#0f1115;color:#e6e9ef;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0}
+    header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:#0c0e13;border-bottom:1px solid #202533}
+    .tabs{display:flex;gap:8px;padding:8px 16px;border-bottom:1px solid #202533;background:#0f1115;position:sticky;top:0}
+    .tabs button{background:#161a22;border:1px solid #202533;color:#e6e9ef;border-radius:10px;padding:8px 12px;cursor:pointer}
+    .tabs button.active{border-color:#7aa0ff;box-shadow:0 0 0 2px rgba(122,160,255,.2)}
+    .panel{padding:16px;display:none}
+    .panel.active{display:block}
+    .grid{display:grid;grid-template-columns:300px 1fr;gap:12px;max-width:1080px}
+    .card{background:#161a22;border:1px solid #202533;border-radius:12px;padding:12px;margin:8px 0}
+    label{display:block;font-size:.9rem;margin:6px 0 4px 0;color:#9aa4b2}
+    input[type="text"], input[type="number"], select{width:100%;padding:8px 10px;background:#11151c;border:1px solid #202533;border-radius:10px;color:#e6e9ef}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .actions{display:flex;gap:8px;margin-top:12px}
+    .btn{background:#7aa0ff;border:none;color:#0b1220;padding:8px 12px;border-radius:10px;cursor:pointer}
+    .btn.secondary{background:#202533;color:#e6e9ef}
+    .right{margin-left:auto}
+    #toast{position:fixed;right:12px;bottom:12px;background:#161a22;border:1px solid #202533;border-radius:8px;padding:8px 12px;display:none}
+  </style>
+</head>
+<body>
+  <header><h2>Ask Chip — Admin</h2><div class="actions"><a class="btn secondary" href="/">Back</a><button class="btn" id="openLog">Open Real‑Time Call Log</button></div></header>
+  <nav class="tabs">
+    <button data-tab="ux" class="active">User Experience</button>
+    <button data-tab="flow">Conversational Flow</button>
+    <button data-tab="persona">PTM Personality</button>
+</nav>
+
+  <section id="ux" class="panel active">
+    <div class="grid">
+      <div class="card">
+        <h3>UI</h3>
+        <label><input type="checkbox" id="show_instruction_strip"> Show instruction strip</label>
+        <label><input type="checkbox" id="show_state_dots"> Show state dots</label>
+        <label>Theme<select id="theme"><option value="light">light</option><option value="dark">dark</option></select></label>
+      </div>
+      <div class="card">
+        <h3>Suggestions</h3>
+        <label><input type="checkbox" id="suggestions_enabled"> Enable suggestions</label>
+        <div class="row">
+          <div><label>Max items<input type="number" id="suggestions_max_items" min="0" max="4"></label></div>
+          <div><label>Max words<input type="number" id="suggestions_max_words" min="1" max="7"></label></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="flow" class="panel">
+    <div class="grid">
+      <div class="card">
+        <h3>VAD & Barge‑in</h3>
+        <div class="row">
+          <div><label>VAD min speech (ms)<input type="number" id="min_speech_ms"></label></div>
+          <div><label>Barge‑in confirm (ms)<input type="number" id="confirm_ms"></label></div>
+        </div>
+        <div class="row">
+          <div><label>Echo threshold boost<input type="number" step="0.1" id="echo_threshold_boost"></label></div>
+          <div><label>Language lock<select id="language_lock"><option value="en">en</option></select></label></div>
+        </div>
+        <label><input type="checkbox" id="nudges_enabled"> Enable silence nudge</label>
+        <div class="row">
+          <div><label>Nudge delay (ms)<input type="number" id="nudge_delay_ms"></label></div>
+          <div><label>Backoff after ignored<input type="number" id="nudge_backoff_after_ignored" min="0" max="5"></label></div>
+        </div>
+        <div class="row">
+          <div><label>Max turn seconds<input type="number" id="max_turn_seconds" min="5" max="120"></label></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Vendors</h3>
+        <p>LLM: OpenAI · STT: Whisper · TTS: ElevenLabs (keys required)</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="persona" class="panel">
+    <div class="grid">
+      <div class="card">
+        <h3>Chip Persona</h3>
+        <div class="row">
+          <div><label>Nebraska persona level (0.12–0.15)<input type="number" step="0.01" id="nebraska_persona_level"></label></div>
+          <div><label><input type="checkbox" id="nebraska_quotes_enabled"> Enable Nebraska quotes</label></div>
+        </div>
+      </div>
+    </div>
+  </section>
+<div class="actions" style="padding:12px 16px">
+    <button class="btn" id="save">Save</button>
+    <button class="btn secondary" id="reload">Reload</button>
+    <div class="right"></div>
+  </div>
+
+  <div id="toast"></div>
+  <script type="module" src="/static/js/admin_console.js?v={{ asset_version }}"></script>
+  <script type="module" src="/static/js/admin_log_modal.js?v={{ asset_version }}"></script>
+</body>
+</html>

@@ -80,3 +80,36 @@ def runtime():
         "platform": platform.platform()
     }
     return jsonify({"ok": True, "runtime": {"providers": providers, "keys": keys, "versions": versions}}), 200
+
+
+from flask import jsonify
+from ..db import db
+
+@bp.get("/config")
+def config_get():
+    _require_admin()
+    cfg = db.get_config()
+    return jsonify({"ok": True, "config": cfg}), 200
+
+@bp.post("/config")
+def config_post():
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    updates = data.get("updates") or {}
+    if not isinstance(updates, dict):
+        return jsonify({"ok": False, "error": "invalid_updates"}), 400
+    db.update_config(updates)
+    try:
+        _emit('config_updated', updates=updates)
+    except Exception:
+        pass
+    return jsonify({"ok": True}), 200
+
+@bp.post("/diag/run")
+def diag_run():
+    # Called by /diagnostics to kick an event and prove admin API is alive
+    try:
+        _emit('diag', msg='requested')
+    except Exception:
+        pass
+    return jsonify({"ok": True}), 200

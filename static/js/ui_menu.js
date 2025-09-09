@@ -7,11 +7,12 @@
       if (!btn) return;                       // page doesn't have menu
       let open = false, menu = null;
       const items = [
-        { label: 'Admin',       href: '/admin' },
-        { label: 'Diagnostics', href: '/diagnostics' },
-        { label: 'Profile',     href: '/profile' },
-        { label: 'Logout',      action: 'logout' }
-      ];
+  { label: 'Admin',       href: '/admin' },
+  { label: 'Diagnostics', href: '/diagnostics' },
+  { label: 'Real Time Log', action: 'realtime_log' },
+  { label: 'Profile',     href: '/profile' },
+  { label: 'Logout',      action: 'logout' }
+];
       function build(){
         if (menu) return menu;
         menu = document.createElement('div');
