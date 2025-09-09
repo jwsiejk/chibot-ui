@@ -1,6 +1,7 @@
+
 # app/__init__.py
 import os
-from flask import Flask, Blueprint, render_template, send_from_directory, request, session
+from flask import Flask, Blueprint, render_template, request, session
 
 from .api_v1 import create_v1_blueprint
 from .api_v1.health import bp as health_bp
@@ -12,31 +13,35 @@ core_bp = Blueprint("core", __name__)
 
 @core_bp.get("/")
 def home():
-
-@core_bp.get("/logs-ui")
-def logs_ui_redirect():
-    from flask import redirect
-    return redirect("/api/v1/admin/logs-ui", code=302)
     return render_template("index.html")
 
-@core_bp.get("/login")
-def login_page():
-    return render_template("login.html")
-
-@core_bp.get("/profile")
-def profile_page():
-    return render_template("profile.html")
-
-# Optional helpers
 @core_bp.get("/diagnostics")
 def diagnostics():
     return render_template("diagnostics.html")
 
 @core_bp.get("/favicon.ico")
 def favicon():
-    import os
+    # Serve from /static/favicon.ico
     from flask import current_app, send_file
-    return send_file(os.path.join(current_app.static_folder, "favicon.ico"), mimetype="image/x-icon")
+    import os as _os
+    return send_file(_os.path.join(current_app.static_folder, "favicon.ico"), mimetype="image/x-icon")
+
+@core_bp.get("/logs-ui")
+def logs_ui_redirect():
+    # Convenience redirect for the admin log UI
+    from flask import redirect
+    return redirect("/api/v1/admin/logs-ui", code=302)
+
+@core_bp.get("/admin")
+def admin_console():
+    # Admin-only HTML console
+    from .utils.admin import is_admin_email
+    from .security_state import get_user
+    from flask import abort, render_template as _rt, session as _sess, request as _req
+    email = (_sess.get("user") or {}).get("email") or _sess.get("email") or _req.headers.get("X-User-Email") or (get_user() or "")
+    if not is_admin_email((email or "").strip().lower()):
+        abort(403)
+    return _rt("admin_console.html")
 
 def create_app():
     app = Flask(
@@ -76,14 +81,6 @@ def create_app():
                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         return resp
 
-    @app.context_processor
-    def inject_asset_version():
-        return {
-            "asset_version": os.environ.get("ASSET_VERSION")
-                            or os.environ.get("RELEASE_VERSION")
-                            or "v" + os.getenv("BUILD_VERSION", "dev")
-        }
-
     @app.route("/<path:_>", methods=["OPTIONS"])
     def _cors_preflight(_):
         return ("", 204)
@@ -109,14 +106,3 @@ def create_app():
             return redirect(url_for("core.home"))
 
     return app
-
-
-@core_bp.get("/admin")
-def admin_console():
-    from .utils.admin import is_admin_email
-    from .security_state import get_user
-    from flask import abort, render_template, session, request
-    email = (session.get("user") or {}).get("email") or session.get("email") or request.headers.get("X-User-Email") or (get_user() or "")
-    if not is_admin_email((email or "").strip().lower()):
-        abort(403)
-    return render_template("admin_console.html")
