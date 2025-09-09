@@ -54,7 +54,7 @@ export async function refreshGating(){
     const authed = !!(me && me.authenticated);
     const incomplete = authed && me.profile_complete === false;
     const banner = el('profileGateBanner');
-    const startBtn = el('startButton');
+    const startBtn = document.querySelector('[data-role="start-btn"], #startButton, #start');
 
     if (!authed){
       if (startBtn){ startBtn.disabled = true; startBtn.title = 'Please sign in to continue'; }
