@@ -1,46 +1,13 @@
-// == AskChip CSRF helpers (guarded) ==
-(function(){
-  if (!window.__askchip) window.__askchip = {};
-  if (typeof window.__askchip.ensureCSRF !== 'function') {
-    window.__askchip.__csrfToken = null;
-    window.__askchip.ensureCSRF = async function(force=false){
-      if (window.__askchip.__csrfToken && !force) return window.__askchip.__csrfToken;
-      const j = await fetch('/api/v1/auth/csrf', { credentials:'include' })
-        .then(r=>r.json()).catch(()=>({}));
-      window.__askchip.__csrfToken = j.csrf || null;
-      return window.__askchip.__csrfToken;
-    };
-  }
-  if (typeof window.__askchip.apiPost !== 'function') {
-    window.__askchip.apiPost = async function(path, payload){
-      const csrf = await window.__askchip.ensureCSRF();
-      let res = await fetch(path, {
-        method:'POST',
-        headers:{'Content-Type':'application/json','X-CSRF-Token': csrf},
-        credentials:'include',
-        body: JSON.stringify(payload||{})
-      });
-      if (res.status === 403) {
-        const fresh = await window.__askchip.ensureCSRF(true);
-        res = await fetch(path, {
-          method:'POST',
-          headers:{'Content-Type':'application/json','X-CSRF-Token': fresh},
-          credentials:'include',
-          body: JSON.stringify(payload||{})
-        });
-      }
-      return res;
-    };
-  }
-  // Provide globals if not already defined
-  if (typeof window.ensureCSRF !== 'function') window.ensureCSRF = window.__askchip.ensureCSRF;
-  if (typeof window.apiPost   !== 'function') window.apiPost   = window.__askchip.apiPost;
-})();
-// == End helpers ==
-
+/* static/js/app.js — unified, deterministic auth/profile gating + your existing UI glue
+   - Single CSRF getter (GET /api/v1/csrf)
+   - Exactly one modal at a time (login XOR profile)
+   - Login modal hides immediately on submit; re-opens only on real failure
+   - Start is disabled until authenticated && profile_complete
+   - Does NOT autoconnect WS — that happens from ws.js or Start button by design
+*/
 
 import { API } from "./config.js";
-import { STATES, setState, getState, onState } from "./state.js";
+import { STATES, setState, getState } from "./state.js";
 import { showError, hideError } from "./errors.js";
 import { renderSuggestions } from "./suggestions.js";
 import { playStream, stopPlayback, setVisemeCallback, isPlaying } from "./audio.js";
@@ -51,36 +18,31 @@ import { getSID } from "./util/sid.js";
 const $ = (s) => document.querySelector(s);
 
 /* -------------------------------------------------------
-   CSRF helpers
+   CSRF (canonical, idempotent)
 ------------------------------------------------------- */
-async function ensureCSRF(){
-  let tok = sessionStorage.getItem("csrf");
-  if (tok) return tok;
-  try {
-    const r = await fetch("/api/v1/auth/csrf", { credentials: "include" });
+window.__csrfToken = null;
+export async function ensureCSRF(force=false){
+  if (window.__csrfToken && !force) return window.__csrfToken;
+  try{
+    const r = await fetch("/api/v1/csrf", { credentials: "include" });
     if (!r.ok) return null;
-    const j = await r.json();
-    tok = j?.token || null;
-    if (tok) sessionStorage.setItem("csrf", tok);
-    return tok;
-  } catch {
-    return null;
-  }
+    const t = r.headers.get("X-CSRF-Token");
+    if (t) window.__csrfToken = t;
+    return window.__csrfToken;
+  }catch{ return null; }
 }
 
 /* -------------------------------------------------------
-   Start/End wiring
+   UI refs and basic state
 ------------------------------------------------------- */
 let startBtn, endBtn, sendBtn, composer, stateLabelEl, stateDotsWrap;
 
-function onViseme(v){
-  // mouth anim hook (no-op here unless you wire it)
-}
+function onViseme(v){ /* mouth anim hook (optional) */ }
 
 document.addEventListener("DOMContentLoaded", async () => {
   startBtn = $("#startButton");
-  endBtn = $("#endButton");
-  sendBtn = $("#composerSend");
+  endBtn   = $("#endButton");
+  sendBtn  = $("#composerSend");
   composer = $("#composerInput");
   stateLabelEl = $("#stateLabel");
   stateDotsWrap = $("#stateDots");
@@ -91,35 +53,201 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireUI();
   renderSuggestions(["Show roadmap", "Explain Portworx", "Demo FlashArray", "Open Admin"], onSuggestion);
 
-  
-  // Profile gate: disable Start until profile is completed
-  try {
+  // prefetch CSRF so first POSTs don't 403
+  await ensureCSRF();
+
+  // initial state in the stage dots
+  setState(STATES.READY);
+  updateStateIndicators(STATES.READY);
+
+  // deterministic auth/profile evaluation
+  await evaluateAuth();
+});
+
+/* -------------------------------------------------------
+   Deterministic auth/profile controller
+------------------------------------------------------- */
+function el(id){ return document.getElementById(id); }
+function showLoginModal(on){
+  const m = el('loginModal'), p = el('profileModal');
+  if (m) m.hidden = !on;
+  if (on && p) p.hidden = true;
+  if (on){ const e = el('inlineLoginEmail'); if (e) setTimeout(()=>e.focus(),0); }
+}
+function showProfileModal(on){
+  const p = el('profileModal'), m = el('loginModal');
+  if (p) p.hidden = !on;
+  if (on && m) m.hidden = true;
+  if (on){ const e = el('prof_name'); if (e) setTimeout(()=>e.focus(),0); }
+}
+async function prefillProfile(){
+  try{
+    const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(r=>r.json());
+    const prof = (me && me.profile) || {};
+    if (me && me.email) prof.email = me.email;
+    const map = {email:'prof_email', name:'prof_name', role:'prof_role', region:'prof_region', company:'prof_company'};
+    for (const k in map){ const x = el(map[k]); if (x && prof[k]!=null) x.value = prof[k]; }
+  }catch(_){}
+}
+async function refreshGating(){
+  try{
     const me = await fetch('/api/v1/auth/me', { credentials: 'include' }).then(r=>r.json());
     const authed = !!(me && me.authenticated);
     const incomplete = authed && me.profile_complete === false;
     const banner = document.getElementById('profileGateBanner');
-    const startBtn = document.getElementById('startButton');
+    if (!startBtn) startBtn = document.getElementById('startButton');
+
     if (!authed) {
       if (startBtn){ startBtn.disabled = true; startBtn.title = 'Please sign in to continue'; }
       if (banner){ banner.hidden = true; }
+      window.AC_AUTH_READY = false;
     } else if (incomplete) {
       if (startBtn){ startBtn.disabled = true; startBtn.title = 'Please fill out your profile to continue'; }
       if (banner){ banner.hidden = false; }
+      window.AC_AUTH_READY = false;
     } else {
       if (startBtn){ startBtn.disabled = false; startBtn.title = ''; }
       if (banner){ banner.hidden = true; }
+      window.AC_AUTH_READY = true;
+      window.dispatchEvent(new CustomEvent('ac:auth-ready'));
     }
-  } catch (_) { /* ignore */ }
-// prefetch CSRF so first POSTs don't 403
-  await ensureCSRF();
+  } catch (_){}
+}
+const STATE = { status:'init', evalNonce:0, authInFlight:false };
 
-  // initial state
-  setState(STATES.READY);
-  updateStateIndicators(STATES.READY);
-});
+async function evaluateAuth(){
+  const myNonce = ++STATE.evalNonce;
+  try{
+    const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(r=>r.json());
+    if (myNonce !== STATE.evalNonce) return; // superseded
+    const authed = !!(me && me.authenticated);
+
+    if (!authed){
+      STATE.status = 'unauth';
+      showLoginModal(true);  showProfileModal(false);
+    } else if (me.profile_complete === false){
+      STATE.status = 'needs_profile';
+      await prefillProfile();
+      showProfileModal(true); showLoginModal(false);
+    } else {
+      STATE.status = 'ready';
+      showLoginModal(false); showProfileModal(false);
+    }
+    await refreshGating();
+    wireAuthFormsOnce(); // idempotent
+  }catch(_){
+    if (myNonce !== STATE.evalNonce) return;
+    STATE.status = 'unauth';
+    showLoginModal(true); showProfileModal(false);
+    wireAuthFormsOnce(); // still wire handlers so login works
+  }
+}
+
+/* One-time wiring for login/profile forms */
+let _formsWired = false;
+async function wireAuthFormsOnce(){
+  if (_formsWired) return;
+  _formsWired = true;
+
+  // LOGIN
+  const f  = el('inlineLoginForm');
+  const msg= el('inlineLoginMsg');
+  const btn= el('inlineLoginSubmit');
+  const can= el('inlineLoginCancel');
+  const email = el('inlineLoginEmail');
+  if (can) can.addEventListener('click', ()=> showLoginModal(false));
+  if (f){
+    f.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const v = (email?.value || '').trim();
+      if (!v){ if(msg) msg.textContent='Please enter a valid email.'; return; }
+      if (btn) btn.disabled = true;
+      if (msg) msg.textContent = 'Signing in…';
+      STATE.authInFlight = true;
+      showLoginModal(false); // hide immediately
+
+      try{
+        const tok = await ensureCSRF();
+        const r = await fetch('/api/v1/auth/login', {
+          method:'POST', credentials:'include',
+          headers:{ 'Content-Type':'application/json', ...(tok?{'X-CSRF-Token':tok}:{}) },
+          body: JSON.stringify({ email: v })
+        });
+        const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(x=>x.json()).catch(()=>null);
+        if (r.ok && me && me.authenticated){
+          if (me.profile_complete === false){
+            STATE.status='needs_profile';
+            await prefillProfile();
+            showProfileModal(true);
+          } else {
+            STATE.status='ready';
+            showProfileModal(false);
+          }
+          await refreshGating();
+        } else {
+          STATE.status='unauth';
+          if (msg) msg.textContent='Login failed. Please try again.';
+          showLoginModal(true);
+          if (btn) btn.disabled=false;
+        }
+      }catch(_){
+        STATE.status='unauth';
+        if (msg) msg.textContent='Network error. Please try again.';
+        showLoginModal(true);
+        if (btn) btn.disabled=false;
+      }finally{
+        STATE.authInFlight = false;
+      }
+    });
+  }
+
+  // PROFILE
+  const pf   = el('inlineProfileForm');
+  const pmsg = el('inlineProfileMsg');
+  const pbtn = el('inlineProfileSubmit');
+  const pcan = el('inlineProfileCancel');
+  if (pcan) pcan.addEventListener('click', ()=> showProfileModal(false));
+  if (pf){
+    pf.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const data = {
+        email:  (el('prof_email')?.value||'').trim(),
+        name:   (el('prof_name')?.value||'').trim(),
+        role:   (el('prof_role')?.value||'').trim(),
+        region: (el('prof_region')?.value||'').trim(),
+        company:(el('prof_company')?.value||'').trim(),
+        completed: true
+      };
+      if (!data.name || !data.role || !data.region){
+        if (pmsg) pmsg.textContent='Please complete name, title, and region.'; return;
+      }
+      if (pbtn) pbtn.disabled = true;
+      if (pmsg) pmsg.textContent='Saving…';
+      try{
+        const tok = await ensureCSRF();
+        const r = await fetch('/api/v1/auth/profile/save', {
+          method:'POST', credentials:'include',
+          headers:{ 'Content-Type':'application/json', ...(tok?{'X-CSRF-Token':tok}:{}) },
+          body: JSON.stringify(data)
+        });
+        if (r.ok){
+          STATE.status='ready';
+          showProfileModal(false);
+          await refreshGating();
+        } else {
+          if (pmsg) pmsg.textContent='Save failed.';
+        }
+      }catch(_){
+        if (pmsg) pmsg.textContent='Network error.';
+      }finally{
+        if (pbtn) pbtn.disabled=false;
+      }
+    });
+  }
+}
 
 /* -------------------------------------------------------
-   Event wiring
+   Stage/toolbar/chat glue (your existing behaviors)
 ------------------------------------------------------- */
 function wireUI(){
   startBtn?.addEventListener("click", onStart);
@@ -143,12 +271,12 @@ function updateStateIndicators(s){
     [STATES.LISTENING]: "Listening",
     [STATES.RESPONDING]: "Responding"
   })[s] || "Ready";
-  stateLabelEl.textContent = label;
-  // dots visibility already controlled via CSS
+  if (stateLabelEl) stateLabelEl.textContent = label;
 }
+function updateStateIndicatorsOnce(s){ updateStateIndicators(s); }
 
 function onSuggestion(text){
-  composer.value = text;
+  if (composer) composer.value = text;
   onSend();
 }
 
@@ -158,20 +286,26 @@ async function greet(){
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
 }
 
+/* -------------------------------------------------------
+   Start/End logic — guarded by AC_AUTH_READY
+------------------------------------------------------- */
 async function onStart(){
   hideError();
+  if (!window.AC_AUTH_READY){
+    showError("auth", "blocked", "Please complete login/profile first");
+    return;
+  }
   try{
-    openWS();                 // opens /ws/v1/chat
+    openWS();                 // opens /ws/v1/chat (no autoconnect on load)
     await waitWSOpen();       // ensure server subscription is ready
     await greet();            // GET /api/v1/greet?session_id=SID
-    await initMic().catch((e)=>{ showError("mic","blocked","Microphone permission denied"); });
+    await initMic().catch(()=>{ showError("mic","blocked","Microphone permission denied"); });
     setState(STATES.LISTENING);
     document.body.classList.add("chat-open");
   }catch(e){
     showError(API.GREET, e.status || "ERR", e.message || "start failed");
   }
 }
-
 async function onEnd(){
   try{
     closeWS();
@@ -184,11 +318,11 @@ async function onEnd(){
    Text send
 ------------------------------------------------------- */
 async function onSend(){
-  try { const vtmp = (composer?.value || '').trim(); if(vtmp) { try{ addChatMessage('user', vtmp); }catch(e){} } } catch(e) {}
+  try { const ghost = (composer?.value || '').trim(); if(ghost) { try{ addChatMessage('user', ghost); }catch(e){} } } catch(e) {}
   cancelNudge();
   const text = (composer?.value || "").trim();
   if (!text) return;
-  composer.value = "";
+  if (composer) composer.value = "";
   try{
     const tok = await ensureCSRF();
     const r = await fetch(API.CHAT, {
@@ -204,11 +338,8 @@ async function onSend(){
 }
 
 /* -------------------------------------------------------
-   UI helpers
+   Minimal chat UI helper
 ------------------------------------------------------- */
-function updateStateIndicatorsOnce(s){ updateStateIndicators(s); }
-
-/* global function used above */
 function addChatMessage(role, text){
   try{
     const box = document.getElementById('chatMessages');
@@ -220,113 +351,3 @@ function addChatMessage(role, text){
     box.scrollTop = box.scrollHeight;
   }catch(e){}
 }
-
-
-function el(id){ return document.getElementById(id); }
-function showLoginModal(show){ const m = el('loginModal'); if (m){ m.hidden = !show; if (show){ const e = el('inlineLoginEmail'); if (e) setTimeout(()=>e.focus(),0); } } }
-function showProfileModal(show){ const m = el('profileModal'); if (m){ m.hidden = !show; if (show){ const e = el('prof_name'); if (e) setTimeout(()=>e.focus(),0); } } }
-async function prefillProfile(){
-  try{
-    const me = await fetch('/api/v1/auth/me', {credentials:'include'}).then(r=>r.json());
-    const p = (me && me.profile) || {}; if (me && me.email){ p.email = me.email; }
-    const map = {email:'prof_email', name:'prof_name', role:'prof_role', region:'prof_region', company:'prof_company'};
-    for (const k in map){ const elx = el(map[k]); if (elx && p[k]!=null) elx.value = p[k]; }
-  }catch(e){}
-}
-
-
-window.__authInFlight = false;
-
-document.addEventListener('DOMContentLoaded', ()=>{
-  const pf = el('inlineProfileForm');
-  const msg = el('inlineProfileMsg');
-  const save = el('inlineProfileSubmit');
-  const cancel = el('inlineProfileCancel');
-  if (cancel) cancel.addEventListener('click', ()=> showProfileModal(false));
-  if (pf) pf.addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    const v = (email?.value || '').trim();
-    if (!v){ msg.textContent = 'Please enter a valid email.'; return; }
-    submit.disabled = true; msg.textContent = 'Signing in…';
-    window.__authInFlight = true;
-    showLoginModal(false);
-    try{
-      const tok = await ensureCSRF();
-      const r = await fetch('/api/v1/auth/profile/save', {
-        method:'POST', credentials:'include',
-        headers:{'Content-Type':'application/json', ...(tok?{'X-CSRF-Token':tok}:{})},
-        body: JSON.stringify(data)
-      });
-      if (!r.ok){ msg.textContent = 'Save failed.'; save.disabled=false; return; }
-      msg.textContent = 'Saved.';
-      showProfileModal(false);
-      const startBtn = document.getElementById('startButton');
-      if (startBtn){ startBtn.disabled = false; startBtn.title = ''; }
-      const banner = document.getElementById('profileGateBanner');
-      if (banner){ banner.hidden = true; }
-    }catch(_){
-      msg.textContent = 'Network error.';
-      save.disabled=false;
-    }
-  });
-});
-
-
-/* ===== Deterministic Auth/Profile Controller ===== */
-(function(){
-  function el(id){ return document.getElementById(id); }
-  async function ensureCSRF(){ if (window.__csrfToken) return window.__csrfToken; try{ const r=await fetch('/api/v1/csrf',{credentials:'include'}); const t=r.headers.get('X-CSRF-Token'); if(t) window.__csrfToken=t; return t; }catch(_){ return null; } }
-  function showLogin(on){ const m=el('loginModal'), p=el('profileModal'); if(m) m.hidden=!on; if(on&&p) p.hidden=true; if(on){ const e=el('inlineLoginEmail'); if(e) setTimeout(()=>e.focus(),0);} }
-  function showProfile(on){ const p=el('profileModal'), m=el('loginModal'); if(p) p.hidden=!on; if(on&&m) m.hidden=true; if(on){ const e=el('prof_name'); if(e) setTimeout(()=>e.focus(),0);} }
-  async function prefillProfile(){ try{ const me=await fetch('/api/v1/auth/me',{credentials:'include'}).then(r=>r.json()); const prof=(me&&me.profile)||{}; if(me&&me.email) prof.email=me.email; const map={email:'prof_email',name:'prof_name',role:'prof_role',region:'prof_region',company:'prof_company'}; for(const k in map){ const x=el(map[k]); if(x&&prof[k]!=null) x.value=prof[k]; } }catch(_){ } }
-  async function refreshGating(){ try{ const me=await fetch('/api/v1/auth/me',{credentials:'include'}).then(r=>r.json()); const s=el('startButton'), b=el('profileGateBanner'); const authed=!!(me&&me.authenticated); const inc=authed&&me.profile_complete===false; if(!authed){ if(s){s.disabled=true;s.title='Please sign in to continue';} if(b){b.hidden=true;} } else if(inc){ if(s){s.disabled=true;s.title='Please fill out your profile to continue';} if(b){b.hidden=false;} } else { if(s){s.disabled=false;s.title='';} if(b){b.hidden=true;} } }catch(_){ } }
-  async function evaluate(){ try{ const me=await fetch('/api/v1/auth/me',{credentials:'include'}).then(r=>r.json()); if(!me||!me.authenticated){ showLogin(true); showProfile(false); } else if(me.profile_complete===false){ await prefillProfile(); showProfile(true); showLogin(false); } else { showLogin(false); showProfile(false); } await refreshGating(); }catch(_){ showLogin(true); showProfile(false); } }
-  document.addEventListener('DOMContentLoaded', async ()=>{
-    await ensureCSRF();
-    await evaluate();
-
-    // Login submit
-    const Lf=el('inlineLoginForm'), Lmsg=el('inlineLoginMsg'), Lbtn=el('inlineLoginSubmit'), Lcan=el('inlineLoginCancel'), Lem=el('inlineLoginEmail');
-    if(Lcan) Lcan.addEventListener('click',()=>showLogin(false));
-    if(Lf){
-      Lf.addEventListener('submit', async (e)=>{
-        e.preventDefault();
-        const email=(Lem?.value||'').trim();
-        if(!email){ Lmsg.textContent='Please enter a valid email.'; return; }
-        Lbtn.disabled=true; Lmsg.textContent='Signing in…'; showLogin(false);
-        try{
-          const tok=await ensureCSRF();
-          const r=await fetch('/api/v1/auth/login',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json',...(tok?{'X-CSRF-Token':tok}:{})},body:JSON.stringify({email})});
-          const me=await fetch('/api/v1/auth/me',{credentials:'include'}).then(x=>x.json()).catch(()=>null);
-          if(r.ok && me && me.authenticated){
-            if(me.profile_complete===false){ await prefillProfile(); showProfile(true); }
-            else { showProfile(false); }
-            await refreshGating();
-          } else {
-            Lmsg.textContent='Login failed. Please try again.'; Lbtn.disabled=false; showLogin(true);
-          }
-        }catch(_){
-          Lmsg.textContent='Network error. Please try again.'; Lbtn.disabled=false; showLogin(true);
-        }
-      });
-    }
-
-    // Profile submit
-    const Pf=el('inlineProfileForm'), Pmsg=el('inlineProfileMsg'), Pbtn=el('inlineProfileSubmit'), Pcan=el('inlineProfileCancel');
-    if(Pcan) Pcan.addEventListener('click',()=>showProfile(false));
-    if(Pf){
-      Pf.addEventListener('submit', async (e)=>{
-        e.preventDefault();
-        const data={ email:(el('prof_email')?.value||'').trim(), name:(el('prof_name')?.value||'').trim(), role:(el('prof_role')?.value||'').trim(), region:(el('prof_region')?.value||'').trim(), company:(el('prof_company')?.value||'').trim(), completed:true };
-        if(!data.name||!data.role||!data.region){ Pmsg.textContent='Please complete name, title, and region.'; return; }
-        Pbtn.disabled=true; Pmsg.textContent='Saving…';
-        try{
-          const tok=await ensureCSRF();
-          const r=await fetch('/api/v1/auth/profile/save',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json',...(tok?{'X-CSRF-Token':tok}:{})},body:JSON.stringify(data)});
-          if(r.ok){ showProfile(false); await refreshGating(); } else { Pmsg.textContent='Save failed.'; }
-        }catch(_){ Pmsg.textContent='Network error.'; }
-        finally{ Pbtn.disabled=false; }
-      });
-    }
-  });
-})();
