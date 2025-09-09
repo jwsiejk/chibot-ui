@@ -85,7 +85,7 @@ def make_assistant_frames(seed_text: str, session_id: str | None = None, meta: d
     frames.append({"type":"assistant_end","turn_id":tid})
     return tid, frames
 
-def schedule_frames(session_id: str, frames: List[Dict], delay_ms: int = 120):
+def schedule_frames(session_id: str, frames: List[Dict], delay_ms: int = 120, **kw):
     def run():
         for fr in frames:
             try:
@@ -93,7 +93,7 @@ def schedule_frames(session_id: str, frames: List[Dict], delay_ms: int = 120):
             except Exception:
                 pass
             time.sleep(max(0, delay_ms)/1000.0)
-        _arm_nudge_after_end(session_id, frames)
+        ( _arm_nudge_after_end(session_id, frames) if kw.get('enable_nudge', True) else None )
     threading.Thread(target=run, daemon=True).start()
 
 def _arm_nudge_after_end(session_id: str, frames: list):

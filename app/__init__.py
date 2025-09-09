@@ -12,6 +12,11 @@ core_bp = Blueprint("core", __name__)
 
 @core_bp.get("/")
 def home():
+
+@core_bp.get("/logs-ui")
+def logs_ui_redirect():
+    from flask import redirect
+    return redirect("/api/v1/admin/logs-ui", code=302)
     return render_template("index.html")
 
 @core_bp.get("/login")

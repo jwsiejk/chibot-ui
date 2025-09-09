@@ -16,6 +16,6 @@ def greet():
     except Exception:
         from ..services.streaming import make_assistant_frames_text_only
         tid, frames = make_assistant_frames_text_only("greet", sid)
-    schedule_frames(sid, frames)
+    schedule_frames(sid, frames, enable_nudge=False)
     resp = jsonify({"ok": True, "turn_id": tid});
     return ensure_csrf_headers(resp)
