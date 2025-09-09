@@ -17,7 +17,7 @@ function mapFields(cfg){
     'min_speech_ms','confirm_ms','echo_threshold_boost','language_lock',
     'nudges_enabled','nudge_delay_ms','nudge_backoff_after_ignored',
     'max_turn_seconds',
-    'nebraska_persona_level','nebraska_quotes_enabled'
+    'nebraska_persona_level','nebraska_quotes_enabled','gen_humor','gen_humor','gen_target_verbosity','gen_target_verbosity','gen_max_sentences','gen_max_sentences','gen_top_p','gen_top_p','gen_temperature','gen_temperature'
   ];
   for(const id of ids){
     const el = document.getElementById(id);
@@ -37,7 +37,7 @@ function collectUpdates(){
     'min_speech_ms','confirm_ms','echo_threshold_boost','language_lock',
     'nudges_enabled','nudge_delay_ms','nudge_backoff_after_ignored',
     'max_turn_seconds',
-    'nebraska_persona_level','nebraska_quotes_enabled'
+    'nebraska_persona_level','nebraska_quotes_enabled','gen_humor','gen_humor','gen_target_verbosity','gen_target_verbosity','gen_max_sentences','gen_max_sentences','gen_top_p','gen_top_p','gen_temperature','gen_temperature'
   ];
   for(const id of ids){
     const el = document.getElementById(id);

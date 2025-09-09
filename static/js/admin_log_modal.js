@@ -49,4 +49,5 @@
   }
 
   window.addEventListener('ac:open-admin-log', open);
+  window.__acOpenAdminLog = open;
 })();

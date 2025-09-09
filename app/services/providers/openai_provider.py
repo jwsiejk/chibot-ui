@@ -38,8 +38,12 @@ class OpenAIProvider:
         pre = (context or {}).get("preamble") or ""
         kb = (context or {}).get("kb") or []
         kb_hint = f" Use the provided knowledge base items ({len(kb)} items) if relevant." if kb else ""
+        verb = (cfg.get('gen_target_verbosity') or 'medium')
+        humor = float(cfg.get('gen_humor', 0.0))
+        max_s = int(cfg.get('gen_max_sentences', 4))
+        extra = f" Target verbosity: {verb}. Humor level: {humor:.2f} (0..1). Aim for no more than {max_s} sentences unless necessary."
         system = (f"You are {who}, a concise, friendly Pure Storage virtual systems engineer. "
-                  f"Speak conversationally and stay on-brand.{kb_hint}\n{pre}").strip()
+                  f"Speak conversationally and stay on-brand.{kb_hint}{extra}\n{pre}").strip()
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": (prompt or "Hello")},
@@ -47,10 +51,12 @@ class OpenAIProvider:
         resp = self._client_lazy().chat.completions.create(
             model=self.model,
             messages=messages,
-            temperature=0.3,
+            temperature=(cfg.get('gen_temperature', 0.3)),
             stream=False,
         )
-        return (resp.choices[0].message.content or "").strip()
+        out = (resp.choices[0].message.content or "").strip()
+        out = _limit_sentences(out, max_s)
+        return out
 
 
 """
@@ -67,3 +73,16 @@ network example (not executed):
 These strings exist only to satisfy string-matching checks in scripts/phase7_checks.py,
 while the actual provider remains network-agnostic and uses injected clients.
 """
+
+
+        # Post-process: rough sentence cap
+        def _limit_sentences(text: str, max_s: int) -> str:
+            try:
+                import re
+                parts = re.split(r'(?<=[.!?])\s+', text.strip())
+                if max_s > 0 and len(parts) > max_s:
+                    parts = parts[:max_s]
+                return ' '.join(p.strip() for p in parts if p.strip())
+            except Exception:
+                return text
+

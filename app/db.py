@@ -18,7 +18,12 @@ class DB:
                 'language_lock':'en','max_turn_seconds':90,'normalization_table_version':1,
                 'nebraska_persona_level':0.13,'nebraska_quotes_enabled':True,
                 'ws_ping_interval_ms':25000,'ws_idle_timeout_ms':30000,'reconnect_policy':'1_attempt_5s','llm_provider':'auto','openai_model':'gpt-4o-mini','stt_provider':'auto','tts_provider':'auto',
-                'redact_email_in_logs':True
+                'redact_email_in_logs':True,
+                'gen_humor': 0.0,
+                'gen_target_verbosity': 'medium',
+                'gen_max_sentences': 4,
+                'gen_top_p': 1.0,
+                'gen_temperature': 0.3
             },
             'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{}
         }
