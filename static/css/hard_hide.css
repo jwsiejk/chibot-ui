@@ -1,0 +1,8 @@
+/* Guarantees hidden things are truly hidden, regardless of overlay styles */
+[hidden] { display: none !important; }
+
+/* Extra safety for common overlay/modal wrappers */
+.ac-overlay[hidden],
+.ac-modal[hidden],
+#profileModal[hidden],
+#loginModal[hidden] { display: none !important; }
