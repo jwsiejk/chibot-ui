@@ -92,6 +92,7 @@ def create_app():
             p.startswith("/static") or
             p.startswith("/favicon") or
             p.startswith("/docs/") or
+            p.startswith("/admin") or
             p == "/" or
             p == "/login" or
             p.startswith("/profile")

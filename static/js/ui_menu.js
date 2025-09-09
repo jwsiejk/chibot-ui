@@ -9,7 +9,7 @@
       const items = [
   { label: 'Admin',       href: '/admin' },
   { label: 'Diagnostics', href: '/diagnostics' },
-  { label: 'Real Time Log', action: 'realtime_log' },
+  { label: 'Call Log', action: 'call_log' },
   { label: 'Profile',     href: '/profile' },
   { label: 'Logout',      action: 'logout' }
 ];
