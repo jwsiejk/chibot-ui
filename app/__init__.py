@@ -29,7 +29,9 @@ def diagnostics():
 
 @core_bp.get("/favicon.ico")
 def favicon():
-    return send_from_directory("static", "favicon.ico", mimetype="image/x-icon")
+    import os
+    from flask import current_app, send_file
+    return send_file(os.path.join(current_app.static_folder, "favicon.ico"), mimetype="image/x-icon")
 
 def create_app():
     app = Flask(

@@ -53,3 +53,17 @@ def profile_save():
     if data.get("completed"):
         session["profile_complete"] = True
     return jsonify({"ok": True, "profile_complete": bool(session.get("profile_complete"))}), 200
+
+
+@bp.get("/csrf")
+def csrf_get_alias():
+    # Provide CSRF token at legacy path expected by some frontends: /api/v1/auth/csrf
+    import secrets
+    from flask import jsonify, session
+    token = session.get("_csrf_token") or secrets.token_hex(16)
+    session["_csrf_token"] = token
+    resp = jsonify({"ok": True, "csrf": token})
+    # Mirror header used elsewhere
+    resp.headers["X-CSRF-Token"] = token
+    resp.headers["Cache-Control"] = "no-store"
+    return resp, 200
