@@ -15,7 +15,6 @@ import { showError, hideError } from "./errors.js";
 import { renderSuggestions } from "./suggestions.js";
 import { playStream, stopPlayback, setVisemeCallback, isPlaying } from "./audio.js";
 import { armVAD, disarmVAD, initMic } from "./voice.js";
-import { bindControls, openWS, closeWS, sendInterrupt, cancelNudge, waitWSOpen } from "./ws.js";
 import { getSID } from "./util/sid.js";
 
 const $ = (s) => document.querySelector(s);
