@@ -76,7 +76,7 @@ loadCfg();
 
 
 async function startTest(mode){
-  const r = await fetch('/api/v1/admin/test-runs', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mode})});
+  const r = await fetch('/api/v1/admin/test-runs', {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify({mode})});
   const j = await r.json();
   if(!j.ok){ toast('Failed to start test'); return; }
   const id = j.id;
