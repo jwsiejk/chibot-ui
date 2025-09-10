@@ -13,7 +13,7 @@ import { STATES, setState, getState } from "./state.js";
 import { openWS, waitWSOpen, closeWS, bindControls, isOpen, cancelNudge } from "./ws.js";
 import { showError, hideError } from "./errors.js";
 import { renderSuggestions } from "./suggestions.js";
-import { ensureCSRF, csrfHeader, installFetchInterceptor } from './csrf.js';
+import { ensureCSRF, installFetchInterceptor } from "./csrf.js";
 import { playStream, stopPlayback, setVisemeCallback, isPlaying } from "./audio.js";
 import { armVAD, disarmVAD, initMic } from "./voice.js";
 import { getSID } from "./util/sid.js";
@@ -26,16 +26,7 @@ const __greetedSIDs = new Set();
    CSRF (canonical, idempotent)
 ------------------------------------------------------- */
 window.__csrfToken = null;
-export async function ensureCSRF(force=false){
-  if (window.__csrfToken && !force) return window.__csrfToken;
-  try{
-    const r = await fetch("/api/v1/csrf", { credentials: "include" });
-    if (!r.ok) return null;
-    const t = r.headers.get("X-CSRF-Token");
-    if (t) window.__csrfToken = t;
-    return window.__csrfToken;
-  }catch{ return null; }
-}
+export async }
 
 /* -------------------------------------------------------
    UI refs and basic state
@@ -264,12 +255,8 @@ async function onStart(){
   try{
     openWS();                 // opens /ws/v1/chat (no autoconnect on load)
     await waitWSOpen();       // ensure server subscription is ready
+    await initMic().catch(()=>{ showError("mic","blocked","Microphone permission denied"); });
     await greet();            // GET /api/v1/greet?session_id=SID
-    await initMic().catch(()=>{
-  // CSRF bootstrap
-  try{ installFetchInterceptor(); }catch{}
-  try{ await ensureCSRF(); }catch{}
-showError("mic","blocked","Microphone permission denied"); });
     setState(STATES.LISTENING);
     document.body.classList.add("chat-open");
   }catch(e){
@@ -332,15 +319,13 @@ function addChatMessage(role, text){
    - Sets window.AC_AUTH_READY when authenticated && profile_complete.
    - Does NOT autoconnect WebSocket.
 =============================================================================*/
-(async () => {
+(() => {
+  try{ installFetchInterceptor(); }catch{}
+  try{ ensureCSRF(); }catch{}
   const $  = (sel)=> document.querySelector(sel);
   const el = (id)=> document.getElementById(id);
 
-  const hasEnsure = true;
-async function ensureCSRF(force=false){
-  try{ return await (await import('./csrf.js')).ensureCSRF(force); }catch(_){ return null; }
-}
-  }
+    }
 
   function showLoginModal(on){
     const m = el('loginModal'), p = el('profileModal');
@@ -553,22 +538,13 @@ async function ensureCSRF(force=false){
    - Sets window.AC_AUTH_READY when authenticated && profile_complete
    - Does NOT autoconnect WebSocket
 =============================================================================*/
-(async () => {
+(() => {
+  try{ installFetchInterceptor(); }catch{}
+  try{ ensureCSRF(); }catch{}
   const $  = (sel)=> document.querySelector(sel);
   const el = (id)=> document.getElementById(id);
 
-  const hasEnsure = typeof window.ensureCSRF === 'function';
-  async function ensureCSRF(force=false){
-    if (hasEnsure && !force) return window.ensureCSRF();
-    if (window.__csrfToken && !force) return window.__csrfToken;
-    try{
-      const r = await fetch('/api/v1/csrf', { credentials:'include' });
-      if (!r.ok) return null;
-      const t = r.headers.get('X-CSRF-Token');
-      if (t) window.__csrfToken = t;
-      return window.__csrfToken;
-    }catch(_){ return null; }
-  }
+    }
 
   function showLoginModal(on){
     const m = el('loginModal'), p = el('profileModal');

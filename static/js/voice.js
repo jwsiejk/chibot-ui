@@ -10,7 +10,7 @@ export function detectAudioCaps(){
 const __PH14_USE_WORKLET = !!(window.ASKCHIP?.features?.audio_worklet_enabled) && detectAudioCaps().workletSupported && !detectAudioCaps().isSafari;
 
 import { API, TIMING } from "./config.js";
-import { ensureCSRF, csrfHeader } from './csrf.js';
+import { csrfHeader } from "./csrf.js";
 import { getSID } from './util/sid.js';
 import { setState, STATES } from "./state.js";
 
