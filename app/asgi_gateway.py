@@ -76,6 +76,10 @@ async def chat_ws(websocket: WebSocket):
     # Subscribe to the bus and start forwarder
     loop = asyncio.get_running_loop()
     q = bus.subscribe(session_id)
+        try:
+            _emit('ws_subscribed', label='ws_subscribed', session_id=session_id)
+        except Exception:
+            pass
     async def forward_bus():
         from queue import Empty
         while True:

@@ -16,7 +16,15 @@ def greet():
     except Exception:
         pass
     sid=request.args.get("session_id","default"); email=get_user()
+    try:
+        _emit('greet:req', label='greet:req', route='/api/v1/greet', session_id=sid)
+    except Exception:
+        pass
     if db.get_config().get("profile_gate_enabled") and not db.memory['profiles'].get(email):
+        try:
+            _emit('greet:err', label='greet:err – profile_required', route='/api/v1/greet', error='profile_required')
+        except Exception:
+            pass
         return jsonify({"ok": False, "error": "profile_required"}), 400
     db.ensure_session(sid, email)
     db.add_message(sid, "system", "greet")
@@ -34,6 +42,10 @@ def greet():
         from ..services.streaming import make_assistant_frames_text_only
         tid, frames = make_assistant_frames_text_only("greet", sid)
     schedule_frames(sid, frames, enable_nudge=False)
+    try:
+        _emit('greet:scheduled', label='greet:scheduled', session_id=sid, n=len(frames))
+    except Exception:
+        pass
     try:
         _emit('greet:audio', label='greet:audio – summary', audio_chunks=0, total_bytes=0, viseme_sets=0)
     except Exception:

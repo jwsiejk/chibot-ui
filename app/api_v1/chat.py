@@ -78,6 +78,10 @@ def post_chat():
         tid, frames = make_assistant_frames_text_only((text or "chat"), sid)
     schedule_frames(sid, frames)
     try:
+        _emit('chat:scheduled', label='chat:scheduled', session_id=sid, n=len(frames))
+    except Exception:
+        pass
+    try:
         _emit('chat:ok', label='chat:ok – frames ready', turn_id=tid, n=len(frames))
     except Exception:
         pass
