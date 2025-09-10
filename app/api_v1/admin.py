@@ -8,11 +8,29 @@ import json, time
 from collections import deque
 _LOG_Q = deque(maxlen=1000)
 
-def _emit(kind:str, **fields):
+
+_STEP = 0
+
+def _emit(kind: str, **fields):
+    global _STEP
     try:
         import time, json
-        evt = {"ts": time.time(), "kind": kind}
-        evt.update(fields or {})
+        _STEP += 1
+        route = fields.pop("route", None)
+        label = fields.pop("label", None)
+        if not label:
+            base = kind
+            if route:
+                base += f" – {route}"
+            label = base
+        evt = {
+            "ts": time.time(),
+            "step": _STEP,
+            "kind": kind,
+            "route": route,
+            "label": label,
+            **(fields or {})
+        }
         _LOG_Q.append(evt)
         return True
     except Exception:

@@ -61,14 +61,26 @@ def post_chat():
         db.ensure_session(sid, email)
         db.add_message(sid, "user", text)
         try:
+            _emit('chat:req', label='chat:req – user_text', route='/api/v1/chat', text=text)
+        except Exception:
+            pass
+        try:
             from ..policy.nudges import cancel_nudge
             cancel_nudge(sid)
         except Exception:
             pass
 
     # Compose + schedule frames (TTS is internally gated by feature_audio)
-    tid, frames = make_assistant_frames((text or "chat"), sid)
+    try:
+        tid, frames = make_assistant_frames((text or "chat"), sid)
+    except Exception:
+        from ..services.streaming import make_assistant_frames_text_only
+        tid, frames = make_assistant_frames_text_only((text or "chat"), sid)
     schedule_frames(sid, frames)
+    try:
+        _emit('chat:ok', label='chat:ok – frames ready', turn_id=tid, n=len(frames))
+    except Exception:
+        pass
     return jsonify({"ok": True, "turn_id": tid})
 
 @limit("voice_tts")
