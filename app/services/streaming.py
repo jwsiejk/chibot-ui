@@ -10,7 +10,7 @@ from .retrieval import search as kb_search
 from .persona_prompt import build_persona_preamble
 from .suggestions import hygienic_suggestions
 from .tts_provider import get_tts_provider
-from ..db import db
+from . import admin_settings as cfg
 
 from ..db import db
 from ..ws.bus import bus

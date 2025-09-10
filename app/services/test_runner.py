@@ -42,7 +42,7 @@ def _run(run_id: str, mode: str) -> None:
         # Adjust audio setting based on mode
         want_audio = (mode == "voice")
         db.update_config({"feature_audio": want_audio})
-        s = cfg.get_settings()
+        s = db.get_config()
 
         _log(run_id, "start", "test run started", mode=mode, settings=s)
 
