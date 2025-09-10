@@ -75,10 +75,30 @@
           <div><label>Max turn seconds<input type="number" id="max_turn_seconds" min="5" max="120"></label></div>
         </div>
       </div>
-      <div class="card">
-        <h3>Vendors</h3>
-        <p>LLM: OpenAI · STT: Whisper · TTS: ElevenLabs (keys required)</p>
-      </div>
+      
+<div class="card">
+  <h3>Vendors</h3>
+  <div class="row">
+    <div><label><input type="checkbox" id="feature_audio"> Enable audio (TTS/STT)</label></div>
+  </div>
+  <div class="row">
+    <div><label>Voice ID<input type="text" id="tts_voice_id" placeholder="ELEVENLABS_VOICE_ID"></label></div>
+    <div><label>Output format<input type="text" id="tts_output_format" placeholder="mp3_44100_128"></label></div>
+  </div>
+  <div class="row">
+    <div><label>Model ID<input type="text" id="tts_model_id" placeholder="eleven_multilingual_v2"></label></div>
+  </div>
+  <div class="row">
+    <button class="btn" id="btn_test_voice">Test flow - voice</button>
+    <button class="btn secondary" id="btn_test_chat">Test flow - chat only</button>
+  </div>
+  <div id="test_log_panel" class="card" style="margin-top:10px; display:none; max-height:240px; overflow:auto;">
+    <div class="row small"><strong>Test Run:</strong> <span id="test_id">-</span> · <span id="test_status">running</span></div>
+    <pre id="test_log" style="white-space:pre-wrap;margin:0"></pre>
+    <div class="row"><a id="test_json_link" target="_blank">Open JSON</a></div>
+  </div>
+</div>
+
     </div>
   </section>
 

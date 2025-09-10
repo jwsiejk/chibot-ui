@@ -10,6 +10,7 @@ from .retrieval import search as kb_search
 from .persona_prompt import build_persona_preamble
 from .suggestions import hygienic_suggestions
 from .tts_provider import get_tts_provider
+from . import admin_settings as cfg
 
 from ..db import db
 from ..ws.bus import bus
@@ -70,7 +71,11 @@ def make_assistant_frames(seed_text: str, session_id: str | None = None, meta: d
                                     context=context)
 
     # TTS (MP3 + visemes)
-    a_bytes, vis = get_tts_provider(cfg).synth(reply)
+    settings = cfg
+    audio_on = settings.get('feature_audio', True)
+    a_bytes, vis = (b'', [])
+    if audio_on:
+        a_bytes, vis = get_tts_provider(cfg).synth(reply)
     audio_b64 = base64.b64encode(a_bytes).decode("ascii")
     chunk_size = 32768
     b64_chunks = [audio_b64[i:i+chunk_size] for i in range(0, len(audio_b64), chunk_size)]

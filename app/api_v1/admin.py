@@ -113,3 +113,67 @@ def diag_run():
     except Exception:
         pass
     return jsonify({"ok": True}), 200
+
+
+from flask import jsonify, request
+from ..services import admin_settings as cfg
+
+@bp.get("/config")
+def get_settings_api():
+    return jsonify({"ok": True, "settings": cfg.get_settings(), "vendors": cfg.vendor_status()})
+
+@bp.post("/config")
+def post_settings_api():
+    payload = request.get_json(silent=True) or {}
+    updated = cfg.update_settings(payload)
+    return jsonify({"ok": True, "settings": updated})
+
+
+# --- Test run control & logs (pinned) ---
+from flask import Response
+from ..services import test_runner as testr
+
+@bp.post("/test-runs")
+def start_test_run():
+    payload = request.get_json(silent=True) or {}
+    mode = str(payload.get("mode", "voice")).lower()
+    if mode not in ("voice","chat"):
+        mode = "voice"
+    run_id = testr.start_test(mode)
+    return jsonify({"ok": True, "id": run_id})
+
+@bp.get("/test-runs")
+def list_test_runs():
+    return jsonify({"ok": True, "items": testr.list_runs()})
+
+@bp.get("/test-runs/<run_id>")
+def get_test_run(run_id: str):
+    data = testr.get(run_id)
+    if not data:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    return jsonify({"ok": True, "item": data})
+
+@bp.get("/test-runs/<run_id>/json")
+def get_test_run_json(run_id: str):
+    data = testr.get(run_id)
+    if not data:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    return jsonify(data)
+
+@bp.get("/test-runs/<run_id>/sse")
+def sse_test_run(run_id: str):
+    def gen():
+        last = 0
+        while True:
+            data = testr.get(run_id)
+            if not data:
+                break
+            logs = data.get("logs", [])
+            if last < len(logs):
+                chunk = logs[last:]
+                last = len(logs)
+                yield f"data: {json.dumps(chunk)}\n\n"
+            if data.get("status") in ("ok","fail"):
+                break
+            import time as _t; _t.sleep(0.35)
+    return Response(gen(), mimetype="text/event-stream")

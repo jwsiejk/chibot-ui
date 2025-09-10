@@ -12,6 +12,7 @@ function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg
 
 function mapFields(cfg){
   const ids = [
+    'feature_audio','tts_voice_id','tts_output_format','tts_model_id',
     'show_instruction_strip','show_state_dots','theme',
     'suggestions_enabled','suggestions_max_items','suggestions_max_words',
     'min_speech_ms','confirm_ms','echo_threshold_boost','language_lock',
@@ -32,6 +33,7 @@ function mapFields(cfg){
 function collectUpdates(){
   const out = {};
   const ids = [
+    'feature_audio','tts_voice_id','tts_output_format','tts_model_id',
     'show_instruction_strip','show_state_dots','theme',
     'suggestions_enabled','suggestions_max_items','suggestions_max_words',
     'min_speech_ms','confirm_ms','echo_threshold_boost','language_lock',
@@ -71,3 +73,37 @@ document.getElementById('openLog')?.addEventListener('click', ()=>window.dispatc
 document.getElementById('openLog2')?.addEventListener('click', ()=>window.dispatchEvent(new CustomEvent('ac:open-admin-log')));
 
 loadCfg();
+
+
+async function startTest(mode){
+  const r = await fetch('/api/v1/admin/test-runs', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mode})});
+  const j = await r.json();
+  if(!j.ok){ toast('Failed to start test'); return; }
+  const id = j.id;
+  const panel = document.getElementById('test_log_panel');
+  const pre = document.getElementById('test_log');
+  const idSpan = document.getElementById('test_id');
+  const st = document.getElementById('test_status');
+  const link = document.getElementById('test_json_link');
+  pre.textContent = ''; idSpan.textContent = id; st.textContent = 'running'; link.href = '/api/v1/admin/test-runs/'+id+'/json';
+  panel.style.display = 'block';
+  const es = new EventSource('/api/v1/admin/test-runs/'+id+'/sse');
+  es.onmessage = ev => {
+    try{
+      const arr = JSON.parse(ev.data);
+      for(const it of arr){
+        const ts = new Date(it.ts*1000).toISOString();
+        pre.textContent += `[${ts}] ${it.kind}: ${it.msg}` + (Object.keys(it).length>2 ? ' '+JSON.stringify(it) : '') + '\n';
+      }
+      panel.scrollTop = panel.scrollHeight;
+    }catch(e){}
+  };
+  es.onerror = ()=>{ es.close(); };
+  const h = setInterval(async ()=>{
+    const r2 = await fetch('/api/v1/admin/test-runs/'+id);
+    const j2 = await r2.json();
+    if(j2.ok){ st.textContent = j2.item.status; if(j2.item.status==='ok'||j2.item.status==='fail'){clearInterval(h); es.close();} }
+  }, 800);
+}
+document.getElementById('btn_test_voice')?.addEventListener('click', ()=>startTest('voice'));
+document.getElementById('btn_test_chat')?.addEventListener('click', ()=>startTest('chat'));

@@ -1,8 +1,8 @@
 # app/services/providers/elevenlabs_tts.py
-import os, json, base64, urllib.request, urllib.error, time, hashlib
+import os, json, urllib.request, urllib.error, time
 from typing import Tuple, List
+from ...db import db
 
-# Simple in-memory cache shared across instances
 _TTS_CACHE: dict[str, Tuple[bytes, List[dict]]] = {}
 
 class ElevenLabsTTS:
@@ -10,57 +10,75 @@ class ElevenLabsTTS:
         self.api_key = os.environ.get("ELEVENLABS_API_KEY")
         if not self.api_key:
             raise RuntimeError("ELEVENLABS_API_KEY missing")
-        self.voice_id = os.environ.get("ELEVENLABS_VOICE_ID") or "EXAVITQu4vr4xnSDxMaL"
-        self.output_format = os.environ.get("ELEVEN_OUTPUT_FORMAT") or "mp3_44100_128"
-        self.max_retries = int(os.environ.get("TTS_RETRIES", "1"))
-        self.backoff_base = float(os.environ.get("TTS_BACKOFF_BASE", "0.1"))
+        cfg = db.get_config()
+        self.voice_id = cfg.get('tts_voice_id') or os.environ.get('ELEVENLABS_VOICE_ID') or "EXAVITQu4vr4xnSDxMaL"
+        self.output_format = cfg.get('tts_output_format') or os.environ.get('ELEVEN_OUTPUT_FORMAT') or "mp3_44100_128"
+        self.model_id = cfg.get('tts_model_id') or os.environ.get('ELEVEN_MODEL_ID') or "eleven_multilingual_v2"
+        self.max_retries = int(os.environ.get("TTS_RETRIES", "2"))
+        self.backoff_base = float(os.environ.get("TTS_BACKOFF_BASE", "0.2"))
 
-    def _key(self, text: str, voice_id: str, fmt: str) -> str:
-        h = hashlib.sha1(f"{voice_id}|{fmt}|{text}".encode("utf-8")).hexdigest()
-        return h
+    def _cache_key(self, text: str, voice_id: str, fmt: str) -> str:
+        return f"{voice_id}|{fmt}|{hash(text)}"
 
-    def synth(self, text: str, *, voice_id: str | None = None, format: str | None = None):
-        vid = voice_id or self.voice_id
-        fmt = format or self.output_format
-        if not text:
-            # Empty input => empty audio + empty visemes
-            return b"", []
+    def synth(self, text: str, *, voice_id: str | None = None, format: str | None = None) -> tuple[bytes, list[dict]]:
+        vid = (voice_id or self.voice_id).strip()
+        fmt = (format or self.output_format).strip()
 
-        # Check idempotent cache
-        key = self._key(text, vid, fmt)
+        key = self._cache_key(text, vid, fmt)
         if key in _TTS_CACHE:
             return _TTS_CACHE[key]
 
-        # Build request
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{vid}"
-        payload = {"text": text, "voice_settings": {}, "output_format": fmt}
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, method="POST")
-        req.add_header("Content-Type","application/json")
-        req.add_header("xi-api-key", self.api_key)
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{vid}/stream?output_format={fmt}"
+        payload = json.dumps({
+            "text": text,
+            "model_id": self.model_id,
+            "optimize_streaming_latency": 0,
+            "voice_settings": {"stability": 0.5, "similarity_boost": 0.8}
+        }).encode("utf-8")
 
-        # Retry loop
+        headers = {
+            "xi-api-key": self.api_key,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg" if fmt.startswith("mp3") else "application/octet-stream",
+        }
+
         attempts = 0
-        while True:
+        last_err = None
+        while attempts <= self.max_retries:
+            attempts += 1
+            req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:
+                    if resp.status != 200:
+                        body = resp.read().decode("utf-8", "ignore")
+                        raise urllib.error.HTTPError(url, resp.status, f"TTS HTTP {resp.status}: {body}", resp.headers, None)
                     audio_bytes = resp.read()
-                break
-            except (urllib.error.URLError, OSError) as e:
-                attempts += 1
-                if attempts > self.max_retries:
-                    raise
-                time.sleep(self.backoff_base * (2 ** (attempts - 1)))
-
-                # Generate viseme schedule based on audio size (assume 128kbps) to match tests
-        bitrate_bps = 128000.0
-        est_ms = int((len(audio_bytes) * 8 / bitrate_bps) * 1000.0) if audio_bytes else 0
-        dur_ms = max(300, est_ms)
-        N = 12
-        times = [int(round(i*dur_ms/(N-1))) for i in range(N)]
-        # ensure strictly increasing
-        for i in range(1, len(times)):
-            if times[i] <= times[i-1]:
-                times[i] = times[i-1] + 1
-        vis = [{"t_ms": t, "v": "A"} for t in times]
-        return audio_bytes, vis
+                # Minimal synthetic viseme schedule by duration estimate (assume ~128kbps)
+                bitrate_bps = 128000.0
+                est_ms = int((len(audio_bytes) * 8 / bitrate_bps) * 1000.0) if audio_bytes else 0
+                dur_ms = max(300, est_ms)
+                N = 12
+                times = [int(round(i * dur_ms / (N - 1))) for i in range(N)]
+                for i in range(1, len(times)):
+                    if times[i] <= times[i-1]:
+                        times[i] = times[i-1] + 1
+                vis = [{"t_ms": t, "v": "A"} for t in times]
+                _TTS_CACHE[key] = (audio_bytes, vis)
+                return audio_bytes, vis
+            except urllib.error.HTTPError as e:
+                detail = ""
+                try:
+                    if getattr(e, "fp", None):
+                        detail = (e.fp.read() or b"").decode("utf-8", "ignore")
+                except Exception:
+                    pass
+                if e.code == 401:
+                    raise RuntimeError(
+                        "ElevenLabs returned 401 Unauthorized. Check ELEVENLABS_API_KEY, voice permissions, and project access. "
+                        f"Endpoint={url}, Response={detail[:300]}"
+                    ) from e
+                last_err = e
+            except Exception as e:
+                last_err = e
+            time.sleep(self.backoff_base * (2 ** (attempts - 1)))
+        raise RuntimeError(f"TTS synth failed after {self.max_retries} attempts: {last_err}")

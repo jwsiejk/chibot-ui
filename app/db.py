@@ -23,7 +23,11 @@ class DB:
                 'gen_target_verbosity': 'medium',
                 'gen_max_sentences': 4,
                 'gen_top_p': 1.0,
-                'gen_temperature': 0.3
+                'gen_temperature': 0.3,
+                'feature_audio': True,
+                'tts_voice_id': '',
+                'tts_output_format': 'mp3_44100_128',
+                'tts_model_id': 'eleven_multilingual_v2'
             },
             'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{}
         }
