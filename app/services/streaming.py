@@ -41,8 +41,8 @@ def _maybe_summarize(session_id: str, text: str) -> str:
 def make_assistant_frames(seed_text: str, session_id: str | None = None, meta: dict | None = None) -> Tuple[str, List[Dict]]:
     """Compose an assistant reply (NLG), synthesize MP3+visemes (TTS),
     and return frames for WS streaming (assistant_chunk, visemes, audio_chunk*, suggestions, assistant_end)."""
-    cfg = db.get_config()
-    provider = get_provider(cfg)
+    cfg_db = db.get_config()
+    provider = get_provider(cfg_db)
 
     # Persona + policy
     ann = annotate((seed_text or ""), (meta or {}))
@@ -52,11 +52,11 @@ def make_assistant_frames(seed_text: str, session_id: str | None = None, meta: d
     # Context: KB + short-term memory
     kb = kb_search(seed_text or "", limit=3)
     preamble = build_persona_preamble(persona)
-    stn = int(cfg.get('short_term_window', 6))
+    stn = int(cfg_db.get('short_term_window', 6))
     st_text = _collect_st_memory(session_id, stn)
-    st_summary = _maybe_summarize(session_id, st_text) if cfg.get('short_term_summary', True) else ''
+    st_summary = _maybe_summarize(session_id, st_text) if cfg_db.get('short_term_summary', True) else ''
     labels = score_engagement(seed_text or '', meta or {})
-    policy  = pick_policy(labels, cfg)
+    policy  = pick_policy(labels, cfg_db)
 
     context = {
         'session_id': session_id, 'kb': kb, 'preamble': preamble,
@@ -71,11 +71,11 @@ def make_assistant_frames(seed_text: str, session_id: str | None = None, meta: d
                                     context=context)
 
     # TTS (MP3 + visemes)
-    settings = cfg
+    settings = cfg_db
     audio_on = settings.get('feature_audio', True)
     a_bytes, vis = (b'', [])
     if audio_on:
-        a_bytes, vis = get_tts_provider(cfg).synth(reply)
+        a_bytes, vis = get_tts_provider(cfg_db).synth(reply)
     audio_b64 = base64.b64encode(a_bytes).decode("ascii")
     chunk_size = 32768
     b64_chunks = [audio_b64[i:i+chunk_size] for i in range(0, len(audio_b64), chunk_size)]
@@ -110,8 +110,8 @@ def _arm_nudge_after_end(session_id: str, frames: list):
         pass
 
 def make_assistant_frames_text_only(seed_text: str, session_id: str | None = None, meta: dict | None = None) -> Tuple[str, List[Dict]]:
-    cfg = db.get_config()
-    provider = get_provider(cfg)
+    cfg_db = db.get_config()
+    provider = get_provider(cfg_db)
     persona_id = db.memory.get('sessions',{}).get(session_id or 'default',{}).get('persona_id','chip')
     persona = db.memory.get('personas',{}).get(persona_id, {'id':'chip'})
     kb = kb_search((seed_text or ""), limit=2)
