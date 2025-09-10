@@ -20,6 +20,7 @@ import { getSID } from "./util/sid.js";
 const $ = (s) => document.querySelector(s);
 // Track per-session greet to avoid double-greet
 const __greetedSIDs = new Set();
+const __greetPromises = new Map();
 
 /* -------------------------------------------------------
    CSRF (canonical, idempotent)
@@ -246,9 +247,23 @@ function onSuggestion(text){
 async function greet(){
   const sid = getSID();
   if (__greetedSIDs.has(sid)) return;
-  const r = await fetch(`${API.GREET}?session_id=${encodeURIComponent(sid)}`, { credentials: "include" });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  __greetedSIDs.add(sid);
+  if (__greetPromises.has(sid)) return __greetPromises.get(sid);
+  const p = (async ()=>{
+    try{
+      // Mark as greeted early to avoid race with ws-ready listener or other callers
+      __greetedSIDs.add(sid);
+      const r = await fetch(`${API.GREET}?session_id=${encodeURIComponent(sid)}`, { credentials: "include" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    }catch(e){
+      // Roll back greeted flag on hard failure so user can retry Start
+      __greetedSIDs.delete(sid);
+      throw e;
+    }finally{
+      __greetPromises.delete(sid);
+    }
+  })();
+  __greetPromises.set(sid, p);
+  return p;
 }
 
 /* -------------------------------------------------------
@@ -263,8 +278,8 @@ async function onStart(){
   try{
     openWS();                 // opens /ws/v1/chat (no autoconnect on load)
     await waitWSOpen();       // ensure server subscription is ready
-    await greet();            // GET /api/v1/greet?session_id=SID
-    await initMic().catch(()=>{ showError("mic","blocked","Microphone permission denied"); });
+    await initMic()          // prepare mic before greeting so barge-in works
+    await greet().catch(()=>{ showError("mic","blocked","Microphone permission denied"); });
     setState(STATES.LISTENING);
     document.body.classList.add("chat-open");
   }catch(e){
@@ -792,9 +807,6 @@ function addChatMessage(role, text){
   // Belt-and-suspenders: when the app broadcasts auth-ready, hide any stale modals.
   window.addEventListener('ac:auth-ready', settleUIForReady);
 
-  // Safety: ensure greet after WS-ready if not yet greeted
-  window.addEventListener('ac:ws-ready', (e)=>{
-    try{ const sid = e?.detail?.sid || getSID(); if (!__greetedSIDs.has(sid)) greet(); }catch{}
-  });
+  // Safety: greet is invoked deterministically by Start flow after mic init.
 
 })();
