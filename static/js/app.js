@@ -13,6 +13,7 @@ import { STATES, setState, getState } from "./state.js";
 import { openWS, waitWSOpen, closeWS, bindControls, isOpen, cancelNudge } from "./ws.js";
 import { showError, hideError } from "./errors.js";
 import { renderSuggestions } from "./suggestions.js";
+import { ensureCSRF, csrfHeader, installFetchInterceptor } from './csrf.js';
 import { playStream, stopPlayback, setVisemeCallback, isPlaying } from "./audio.js";
 import { armVAD, disarmVAD, initMic } from "./voice.js";
 import { getSID } from "./util/sid.js";
@@ -20,7 +21,6 @@ import { getSID } from "./util/sid.js";
 const $ = (s) => document.querySelector(s);
 // Track per-session greet to avoid double-greet
 const __greetedSIDs = new Set();
-const __greetPromises = new Map();
 
 /* -------------------------------------------------------
    CSRF (canonical, idempotent)
@@ -247,23 +247,9 @@ function onSuggestion(text){
 async function greet(){
   const sid = getSID();
   if (__greetedSIDs.has(sid)) return;
-  if (__greetPromises.has(sid)) return __greetPromises.get(sid);
-  const p = (async ()=>{
-    try{
-      // Mark as greeted early to avoid race with ws-ready listener or other callers
-      __greetedSIDs.add(sid);
-      const r = await fetch(`${API.GREET}?session_id=${encodeURIComponent(sid)}`, { credentials: "include" });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    }catch(e){
-      // Roll back greeted flag on hard failure so user can retry Start
-      __greetedSIDs.delete(sid);
-      throw e;
-    }finally{
-      __greetPromises.delete(sid);
-    }
-  })();
-  __greetPromises.set(sid, p);
-  return p;
+  const r = await fetch(`${API.GREET}?session_id=${encodeURIComponent(sid)}`, { credentials: "include" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  __greetedSIDs.add(sid);
 }
 
 /* -------------------------------------------------------
@@ -278,8 +264,12 @@ async function onStart(){
   try{
     openWS();                 // opens /ws/v1/chat (no autoconnect on load)
     await waitWSOpen();       // ensure server subscription is ready
-    await initMic()          // prepare mic before greeting so barge-in works
-    await greet().catch(()=>{ showError("mic","blocked","Microphone permission denied"); });
+    await greet();            // GET /api/v1/greet?session_id=SID
+    await initMic().catch(()=>{
+  // CSRF bootstrap
+  try{ installFetchInterceptor(); }catch{}
+  try{ await ensureCSRF(); }catch{}
+showError("mic","blocked","Microphone permission denied"); });
     setState(STATES.LISTENING);
     document.body.classList.add("chat-open");
   }catch(e){
@@ -342,21 +332,14 @@ function addChatMessage(role, text){
    - Sets window.AC_AUTH_READY when authenticated && profile_complete.
    - Does NOT autoconnect WebSocket.
 =============================================================================*/
-(() => {
+(async () => {
   const $  = (sel)=> document.querySelector(sel);
   const el = (id)=> document.getElementById(id);
 
-  const hasEnsure = typeof window.ensureCSRF === 'function';
-  async function ensureCSRF(force=false){
-    if (hasEnsure && !force) return window.ensureCSRF();
-    if (window.__csrfToken && !force) return window.__csrfToken;
-    try{
-      const r = await fetch('/api/v1/csrf', { credentials:'include' });
-      if (!r.ok) return null;
-      const t = r.headers.get('X-CSRF-Token');
-      if (t) window.__csrfToken = t;
-      return window.__csrfToken;
-    }catch(_){ return null; }
+  const hasEnsure = true;
+async function ensureCSRF(force=false){
+  try{ return await (await import('./csrf.js')).ensureCSRF(force); }catch(_){ return null; }
+}
   }
 
   function showLoginModal(on){
@@ -570,7 +553,7 @@ function addChatMessage(role, text){
    - Sets window.AC_AUTH_READY when authenticated && profile_complete
    - Does NOT autoconnect WebSocket
 =============================================================================*/
-(() => {
+(async () => {
   const $  = (sel)=> document.querySelector(sel);
   const el = (id)=> document.getElementById(id);
 
@@ -807,6 +790,6 @@ function addChatMessage(role, text){
   // Belt-and-suspenders: when the app broadcasts auth-ready, hide any stale modals.
   window.addEventListener('ac:auth-ready', settleUIForReady);
 
-  // Safety: greet is invoked deterministically by Start flow after mic init.
+  // Safety: greet is invoked by Start flow; no auto-greet on ws-ready.
 
 })();

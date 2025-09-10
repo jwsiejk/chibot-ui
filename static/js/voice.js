@@ -10,6 +10,7 @@ export function detectAudioCaps(){
 const __PH14_USE_WORKLET = !!(window.ASKCHIP?.features?.audio_worklet_enabled) && detectAudioCaps().workletSupported && !detectAudioCaps().isSafari;
 
 import { API, TIMING } from "./config.js";
+import { ensureCSRF, csrfHeader } from './csrf.js';
 import { getSID } from './util/sid.js';
 import { setState, STATES } from "./state.js";
 
@@ -20,22 +21,7 @@ let recorder;
 let chunks = [];
 
 /** --------------- CSRF helper (voice) --------------- **/
-async function csrfHeaders(){
-  let tok = sessionStorage.getItem("csrf");
-  if (!tok) {
-    try{
-      const r = await fetch("/api/v1/auth/csrf", { credentials: "include" });
-      const j = await r.json();
-      if (j?.ok && j?.csrf) {
-        sessionStorage.setItem("csrf", j.csrf);
-        tok = j.csrf;
-      }
-    }catch(e){ /* ignore */ }
-  }
-  return tok ? { "X-CSRF-Token": tok } : {};
-}
-/** --------------------------------------------------- **/
-
+async 
 export function armVAD(boostDuringPlayback = 0){
   vadArmed = true;
   thresholdBoost = boostDuringPlayback;
@@ -81,7 +67,7 @@ async function postSTT(blob){
       method: "POST",
       body: form,
       credentials: "include",
-      headers: await csrfHeaders()
+      headers: await csrfHeader()
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     // The server would then stream response on WS; no-op here
