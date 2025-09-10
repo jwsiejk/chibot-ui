@@ -51,6 +51,10 @@ export function openWS(){
     try{
       const fr = JSON.parse(ev.data);
       const t  = fr.type || fr.kind;
+      if (t === 'ready'){
+        try{ dispatchEvent(new CustomEvent('ac:ws-ready', {detail:{sid:getSID()}})); }catch{}
+        return;
+      }
       if (t === "assistant_chunk" || t === "text"){
         const text = fr.text || "";
         if (!_assistantDiv){

@@ -18,6 +18,8 @@ import { armVAD, disarmVAD, initMic } from "./voice.js";
 import { getSID } from "./util/sid.js";
 
 const $ = (s) => document.querySelector(s);
+// Track per-session greet to avoid double-greet
+const __greetedSIDs = new Set();
 
 /* -------------------------------------------------------
    CSRF (canonical, idempotent)
@@ -243,8 +245,10 @@ function onSuggestion(text){
 
 async function greet(){
   const sid = getSID();
+  if (__greetedSIDs.has(sid)) return;
   const r = await fetch(`${API.GREET}?session_id=${encodeURIComponent(sid)}`, { credentials: "include" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  __greetedSIDs.add(sid);
 }
 
 /* -------------------------------------------------------
@@ -294,6 +298,7 @@ async function onSend(){
       body: JSON.stringify({ text, session_id: getSID() })
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  __greetedSIDs.add(sid);
   }catch(e){
     showError(API.CHAT, e.status || "ERR", e.message || "send failed");
   }
@@ -786,4 +791,10 @@ function addChatMessage(role, text){
 
   // Belt-and-suspenders: when the app broadcasts auth-ready, hide any stale modals.
   window.addEventListener('ac:auth-ready', settleUIForReady);
+
+  // Safety: ensure greet after WS-ready if not yet greeted
+  window.addEventListener('ac:ws-ready', (e)=>{
+    try{ const sid = e?.detail?.sid || getSID(); if (!__greetedSIDs.has(sid)) greet(); }catch{}
+  });
+
 })();

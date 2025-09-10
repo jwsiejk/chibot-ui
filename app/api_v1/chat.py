@@ -27,7 +27,11 @@ def post_chat():
 
     # Establish session/user
     email = (session.get("user") or {}).get("email") or (get_user() or "")
-    sid = data.get("sid") or session.get("sid") or "default"
+    sid = (data.get("session_id") or data.get("sid") or request.args.get("session_id") or session.get("sid") or "default")
+    try:
+        session["sid"] = sid
+    except Exception:
+        pass
 
     # Nudge controls
     if cmd == "nudge":
@@ -77,6 +81,11 @@ def post_chat():
         from ..services.streaming import make_assistant_frames_text_only
         tid, frames = make_assistant_frames_text_only((text or "chat"), sid)
     schedule_frames(sid, frames)
+    try:
+        from ..api_v1.admin import _emit
+        if sid=='default': _emit('warn', label='chat:default_sid', note='frames scheduled to default sid')
+    except Exception:
+        pass
     try:
         _emit('chat:scheduled', label='chat:scheduled', session_id=sid, n=len(frames))
     except Exception:
