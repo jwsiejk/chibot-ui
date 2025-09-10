@@ -42,7 +42,7 @@ def _run(run_id: str, mode: str) -> None:
         # Adjust audio setting based on mode
         want_audio = (mode == "voice")
         db.update_config({"feature_audio": want_audio})
-        s = cfg.get_settings()
+        s = db.get_config()
 
         _log(run_id, "start", "test run started", mode=mode, settings=s)
 
@@ -75,10 +75,12 @@ def _run(run_id: str, mode: str) -> None:
                 "audio_enabled": s.get("feature_audio", True),
             }
     except Exception as e:
-        _log(run_id, "error", str(e))
+        import traceback
+        tb = traceback.format_exc()
+        _log(run_id, "error", str(e), traceback=tb)
         with _LOCK:
             _TEST_RUNS[run_id]["status"] = "fail"
-            _TEST_RUNS[run_id]["result"] = {"error": repr(e)}
+            _TEST_RUNS[run_id]["result"] = {"error": repr(e), "traceback": tb}
     finally:
         # restore audio setting
         db.update_config({"feature_audio": audio_on_before})
