@@ -93,7 +93,18 @@ async function startTest(mode){
       const arr = JSON.parse(ev.data);
       for(const it of arr){
         const ts = new Date(it.ts*1000).toISOString();
-        pre.textContent += `[${ts}] ${it.kind}: ${it.msg}` + (Object.keys(it).length>2 ? ' '+JSON.stringify(it) : '') + '\n';
+        const step = (it.step!=null? String(it.step).padStart(4,'0') : '----');
+        const label = it.label || (it.kind + (it.route ? (' – '+it.route) : ''));
+        const extras = [];
+        for (const k of ['n','audio_chunks','viseme_sets','chars','turn_id','text','msg','error']){
+          if (it[k] != null){
+            let v = String(it[k]);
+            if (k === 'turn_id') v = v.slice(0,8)+'…';
+            if (k === 'text') v = v.slice(0,140);
+            extras.push(k + '=' + v);
+          }
+        }
+        pre.textContent += `[${ts}] [${step}] ${label}` + (extras.length ? '  —  ' + extras.join('  ') : '') + '\n';
       }
       panel.scrollTop = panel.scrollHeight;
     }catch(e){}

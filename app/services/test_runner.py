@@ -15,7 +15,15 @@ def _log(run_id: str, kind: str, msg: str, **extra: Any) -> None:
     if extra:
         rec.update(extra)
     with _LOCK:
-        _TEST_RUNS[run_id]["logs"].append(rec)
+        logs = _TEST_RUNS[run_id]["logs"]
+        rec["step"] = len(logs) + 1
+        # build default label if not supplied
+        if 'label' not in rec:
+            label = kind
+            if 'route' in rec and rec['route']:
+                label += f" – {rec['route']}"
+            rec['label'] = label
+        logs.append(rec)
 
 def start_test(mode: str = "voice") -> str:
     """Start a test run. mode in {"voice","chat"}"""
@@ -44,22 +52,22 @@ def _run(run_id: str, mode: str) -> None:
         db.update_config({"feature_audio": want_audio})
         s = db.get_config()
 
-        _log(run_id, "start", "test run started", mode=mode, settings=s)
+        _log(run_id, "start", "test run started", mode=mode, settings=s, label='start: test run started')
 
         # Step 1: GREET
-        _log(run_id, "greet:req", "calling make_assistant_frames('greet')")
+        _log(run_id, "greet:req", "calling make_assistant_frames('greet')", label="greet:req – make_assistant_frames('greet')", route='/api/v1/greet')
         tid, frames = make_assistant_frames("greet", sid)
-        _log(run_id, "greet:ok", "frames ready", turn_id=tid, n=len(frames))
+        _log(run_id, "greet:ok", "frames ready", label='greet:ok – frames ready', turn_id=tid, n=len(frames))
 
         # Summarize audio bytes and visemes if present
         a_sizes = [len(f.get("audio_bytes", b"")) for f in frames if f.get("type")=="audio"]
         vis_cts = [len(f.get("visemes", [])) for f in frames if f.get("type")=="audio"]
-        _log(run_id, "greet:audio", "summary", audio_chunks=len(a_sizes), total_bytes=sum(a_sizes), viseme_sets=sum(1 for v in vis_cts if v))
+        _log(run_id, "greet:audio", "summary", label='greet:audio – summary', audio_chunks=len(a_sizes), total_bytes=sum(a_sizes), viseme_sets=sum(1 for v in vis_cts if v))
 
         # Step 2: CHAT TURN
         _log(run_id, "chat:req", "calling make_assistant_frames('chat')", text="Run a built-in health check.")
         tid2, frames2 = make_assistant_frames("chat", sid)
-        _log(run_id, "chat:ok", "frames ready", turn_id=tid2, n=len(frames2))
+        _log(run_id, "chat:ok", "frames ready", label='chat:ok – frames ready', turn_id=tid2, n=len(frames2))
 
         a2_sizes = [len(f.get("audio_bytes", b"")) for f in frames2 if f.get("type")=="audio"]
         v2_cts = [len(f.get("visemes", [])) for f in frames2 if f.get("type")=="audio"]

@@ -1,13 +1,44 @@
 <!doctype html>
 <html><head>
-  <link rel="icon" href="/static/favicon.ico" type="image/x-icon" /><meta charset="utf-8"><title>Admin Live Log</title></head>
+  <link rel="icon" href="/static/favicon.ico" type="image/x-icon" /><meta charset="utf-8"><title>Admin Live Log</title>
+  <style>
+    body{background:#0f1115;color:#e6e9ef;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+    pre{white-space:pre-wrap;word-break:break-word}
+    .ok{color:#a2e57b} .warn{color:#ffd166} .err{color:#ff6b6b}
+  </style>
+</head>
 <body>
   <h1>Admin Live Log</h1>
   <pre id="out"></pre>
   <script>
     const out = document.getElementById('out');
+    function renderLine(obj){
+      const step = (obj.step!=null? String(obj.step).padStart(4,'0') : '----');
+      const label = obj.label || obj.kind || 'event';
+      let line = `[${step}] ${label}`;
+      if (obj.route) line += ` (${obj.route})`;
+      const extras = [];
+      for (const k of ['turn_id','n','audio_chunks','viseme_sets','chars','msg','text','error']){
+        if (obj[k] != null && String(obj[k]).length){
+          let val = String(obj[k]);
+          if (k === 'turn_id') val = val.slice(0,8)+'…';
+          if (k === 'text') val = val.slice(0,140);
+          extras.push(`${k}=${val}`);
+        }
+      }
+      if (extras.length) line += '  —  ' + extras.join('  ');
+      return line;
+    }
+    function onEvent(e){
+      let line = e.data;
+      try{
+        const obj = JSON.parse(e.data);
+        line = renderLine(obj);
+      }catch{}
+      out.textContent += line + "\n";
+    }
     const es = new EventSource('/api/v1/admin/logs');
-    es.addEventListener('heartbeat', e => { out.textContent += e.data + "\n"; });
-    es.onmessage = e => { out.textContent += e.data + "\n"; };
+    es.addEventListener('heartbeat', onEvent);
+    es.onmessage = onEvent;
   </script>
 </body></html>
