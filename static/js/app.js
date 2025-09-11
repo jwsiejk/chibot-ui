@@ -324,7 +324,6 @@ function addChatMessage(role, text){
   const $  = (sel)=> document.querySelector(sel);
   const el = (id)=> document.getElementById(id);
 
-    }
 
   function showLoginModal(on){
     const m = el('loginModal'), p = el('profileModal');
