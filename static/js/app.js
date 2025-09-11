@@ -318,10 +318,11 @@ function addChatMessage(role, text){
    - Sets window.AC_AUTH_READY when authenticated && profile_complete.
    - Does NOT autoconnect WebSocket.
 =============================================================================*/
-(()=>{ try{ installFetchInterceptor(); }catch{} try{ ensureCSRF(); }catch{} const $  = (sel)=> document.querySelector(sel);
+(() => {
+  try{ installFetchInterceptor(); }catch{}
+  try{ ensureCSRF(); }catch{}
+  const $  = (sel)=> document.querySelector(sel);
   const el = (id)=> document.getElementById(id);
-
-    }
 
   function showLoginModal(on){
     const m = el('loginModal'), p = el('profileModal');
@@ -528,4 +529,4 @@ function addChatMessage(role, text){
 
 
 
-/* (removed duplicate APPEND-ONLY v2 block) */
+/* (removed duplicate APPEND-ONLY block) */
