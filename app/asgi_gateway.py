@@ -125,7 +125,7 @@ async def chat_ws(websocket: WebSocket):
             if isinstance(payload, dict):
                 t = str(payload.get("type","")).lower()
 
-                if t == "ping":
+                if t == "ping" or t == "keepalive":
                     # Application-level pong (JSON)
                     await websocket.send_text(dumps({"type":"pong","echo": payload.get("ts"), "ts": int(time.time()*1000)}))
                     continue

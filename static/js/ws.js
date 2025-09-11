@@ -46,7 +46,7 @@ export function openWS(){
   _ws = new WebSocket(_url);
   _ws.onopen = () => {
     try{ clearInterval(_pingTimer);}catch{}
-    _pingTimer = setInterval(()=>{ try{ if (isOpen()) _ws.send(JSON.stringify({type:'keepalive'})); }catch{} }, 20000);
+    _pingTimer = setInterval(()=>{ try{ if (isOpen()) _ws.send(JSON.stringify({type:'ping', ts: Date.now()})); }catch{} }, 20000);
     for (const cb of _onOpenCbs) try{ cb(); }catch{}
   };
   _ws.onclose = () => { try{ clearInterval(_pingTimer); }catch{} _pingTimer = null; };
