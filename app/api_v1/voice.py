@@ -3,6 +3,7 @@ import base64
 import io
 import os
 from flask import Blueprint, jsonify, request
+import json
 
 from ..services.stt_provider import get_stt_provider
 from ..services.streaming import make_assistant_frames, schedule_frames

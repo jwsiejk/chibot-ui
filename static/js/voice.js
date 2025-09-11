@@ -62,7 +62,7 @@ async function postSTT(blob){
     const form = new FormData();
     form.append("file", blob, "turn.webm");
     form.append("meta", JSON.stringify(meta));
-    const r = await fetch(API.STT, {
+    const r = await fetch(`${API.STT}?session_id=${encodeURIComponent(getSID())}`, {
       method: "POST",
       body: form,
       credentials: "include",
