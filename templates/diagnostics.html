@@ -1,28 +1,21 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ask Chip — Diagnostics</title>
-  <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0f1115;color:#e6e9ef;margin:0;padding:16px}
-    header h1{margin:0 0 6px 0}
-    .card{background:#161a22;border:1px solid #202533;border-radius:14px;padding:12px;margin:12px 0}
-    table{width:100%;border-collapse:collapse}
-    th,td{border-bottom:1px solid #202533;padding:8px;vertical-align:top}
-    .pass{color:#27c28a}.warn{color:#ffc658}.fail{color:#ff6b6b}
-  </style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AskChip — Diagnostics</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
 </head>
-<body>
-  <header><h1>Ask Chip — Diagnostics</h1><p><a href="/" class="btn" style="background:#7aa0ff;color:#0b1220;padding:6px 10px;border-radius:8px;text-decoration:none">Back</a></p><p>This page runs the v1 acceptance checks against your live app.</p></header>
-  <section class="card"><div id="overall">Running checks…</div></section>
+<body class="page">
+  <header class="toolbar">
+    <a href="/" class="brand">⟵ Back</a>
+    <h1>AskChip — Diagnostics</h1>
+  </header>
   <section class="card">
+    <div id="overall">Ready. Click “Run checks”.</div>
+    <div class="actions"><button id="runBtn" class="primary">Run checks</button></div>
     <table id="results"><thead><tr><th>#</th><th>Check</th><th>Status</th><th>Details</th></tr></thead><tbody></tbody></table>
   </section>
-
-  <template id="row-tpl"><tr><td class="i"></td><td class="n"></td><td class="s"></td><td class="d"></td></tr></template>
-  
-  <script defer src="/static/js/diagnostics.js?v=v20250906a"></script>
-  <script type="module" src="/static/js/admin_log_modal.js?v={{ asset_version }}"></script>
+  <script type="module" src="/static/js/diagnostics.js"></script>
 </body>
 </html>

@@ -3,106 +3,36 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Profile</title>
-  <link rel="icon" href="/static/favicon.ico" type="image/x-icon" />
+  <title>AskChip — Profile</title>
   <link rel="stylesheet" href="/static/css/app.css" />
-  <style>
-    body{background:#0f1115;color:#e6e9ef;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0}
-    header{padding:16px 20px;border-bottom:1px solid #202533;background:#0c0e13}
-    main{max-width:820px;margin:0 auto;padding:20px}
-    .card{background:#161a22;border:1px solid #202533;border-radius:12px;padding:14px;margin:12px 0}
-    .row{display:grid;grid-template-columns:200px 1fr;gap:12px;margin:6px 0}
-    code{background:#0b0e13;border-radius:6px;padding:2px 6px}
-    .muted{opacity:.8}
-  </style>
 </head>
-<body>
-  <header style="display:flex;justify-content:space-between;align-items:center"><h2>Profile</h2><a href="/" class="btn" style="background:#7aa0ff;color:#0b1220;padding:6px 10px;border-radius:8px;text-decoration:none">Back</a></header>
-  <main>
-    <section class="card">
-      <div class="row"><div>Signed in as</div><div id="email"><em>loading…</em></div></div>
-      <div class="row"><div>Profile status</div><div id="status" class="muted">loading…</div></div>
-    </section>
-
-    <section class="card">
-      <h3>Details</h3>
-      <div class="row"><div>Name</div><div id="name" class="muted">—</div></div>
-      <div class="row"><div>Title</div><div id="title" class="muted">—</div></div>
-      <div class="row"><div>Region</div><div id="region" class="muted">—</div></div>
-      <div class="row"><div>Company</div><div id="company" class="muted">—</div></div>
-    </section>
-  
-    <section class="card">
-      <h3>Edit</h3>
-      <div class="row"><div>Email</div><div id="emailEdit" class="muted"></div></div>
-      <div class="row"><div>Name</div><div><input id="inp_name" /></div></div>
-      <div class="row"><div>Title</div><div><input id="inp_title" /></div></div>
-      <div class="row"><div>Region</div><div><input id="inp_region" /></div></div>
-      <div class="row"><div>Company</div><div><input id="inp_company" /></div></div>
-      <button id="saveProf" class="btn" style="margin-top:10px;background:#7aa0ff;color:#0b1220;border:none;border-radius:8px;padding:8px 12px">Save profile</button>
-      <span id="saveMsg" class="muted" style="margin-left:10px"></span>
-    </section>
-  </main>
-
+<body class="page">
+  <header class="toolbar">
+    <a href="/" class="brand">⟵ Back</a>
+    <h1>Profile</h1>
+  </header>
+  <section class="card">
+    <div class="grid">
+      <label>Name<input id="prof_name"/></label>
+      <label>Email<input id="prof_email" disabled/></label>
+      <label>Role<input id="prof_role"/></label>
+      <label>Region<input id="prof_region"/></label>
+      <label>Company<input id="prof_company"/></label>
+    </div>
+    <div class="actions">
+      <button id="profileSave" class="primary">Save</button>
+      <a class="ghost" href="/">Cancel</a>
+    </div>
+    <div id="profileMsg" class="msgline"></div>
+  </section>
+  <script type="module" src="/static/js/csrf.js"></script>
+  <script type="module" src="/static/js/auth_gate.js"></script>
   <script type="module">
-    async function load(){
-      try{
-        const me = await fetch('/api/v1/auth/me', { credentials:'include' }).then(r=>r.json());
-        document.getElementById('email').textContent = me?.email || '—';
-        document.getElementById('emailEdit').textContent = me?.email || '—';
-        document.getElementById('status').textContent = (me?.authenticated ? 'Authenticated' : 'Not signed in') + (me?.profile_complete===false ? ' • profile incomplete' : '');
-        const p = me?.profile || {};
-        const setTxt = (id, v) => { document.getElementById(id).textContent = v ? String(v) : '—'; };
-        setTxt('name', p.name); setTxt('title', p.title); setTxt('region', p.region); setTxt('company', p.company);
-        // inputs
-        const setVal = (id, v) => { const el=document.getElementById(id); if (el) el.value = v || ''; };
-        setVal('inp_name', p.name); setVal('inp_title', p.title); setVal('inp_region', p.region); setVal('inp_company', p.company);
-      }catch(e){
-        document.getElementById('status').textContent = 'Error loading profile';
-      }
-    }
-    async function save(){
-      const data = {
-        name: document.getElementById('inp_name')?.value || '',
-        title: document.getElementById('inp_title')?.value || '',
-        region: document.getElementById('inp_region')?.value || '',
-        company: document.getElementById('inp_company')?.value || '',
-        completed: true
-      };
-      const btn = document.getElementById('saveProf'); const msg = document.getElementById('saveMsg');
-      btn.disabled = true; msg.textContent = 'Saving…';
-      try{
-        const tok = await fetch('/api/v1/csrf', { credentials:'include' }).then(r=>r.headers.get('X-CSRF-Token')).catch(()=>null);
-        const r = await fetch('/api/v1/auth/profile/save', { method:'POST', credentials:'include', headers:{'Content-Type':'application/json', ...(tok?{'X-CSRF-Token':tok}:{})}, body: JSON.stringify(data) });
-        if (r.ok){ msg.textContent = 'Saved.'; await load(); } else { msg.textContent = 'Save failed'; }
-      }catch{ msg.textContent = 'Network error'; }
-      finally{ btn.disabled = false; setTimeout(()=>msg.textContent='', 2000); }
-    }
-    document.getElementById('saveProf')?.addEventListener('click', save);
-    load();
-  </script>
-</body>
-</html>
-
-
-  <script type="module">
-    async function load(){
-      try{
-        const me = await fetch('/api/v1/auth/me', { credentials:'include' }).then(r=>r.json());
-        document.getElementById('email').textContent = me?.email || '—';
-        document.getElementById('status').textContent = (me?.authenticated ? 'Authenticated' : 'Not signed in') + (me?.profile_complete===false ? ' • profile incomplete' : '');
-        const p = me?.profile || {};
-        const set = (id, v) => { document.getElementById(id).textContent = v ? String(v) : '—'; };
-        set('name', p.name);
-        set('title', p.title);
-        set('region', p.region);
-        set('company', p.company);
-      }catch(e){
-        document.getElementById('email').textContent = '—';
-        document.getElementById('status').textContent = 'Error loading profile';
-      }
-    }
-    load();
+    import { prefillProfile, saveProfile } from '/static/js/auth_gate.js';
+    document.addEventListener('DOMContentLoaded', async ()=>{
+      await prefillProfile(); 
+      document.getElementById('profileSave').addEventListener('click', saveProfile);
+    });
   </script>
 </body>
 </html>
