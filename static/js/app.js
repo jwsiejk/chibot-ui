@@ -26,7 +26,6 @@ const __greetedSIDs = new Set();
    CSRF (canonical, idempotent)
 ------------------------------------------------------- */
 window.__csrfToken = null;
-export async }
 
 /* -------------------------------------------------------
    UI refs and basic state

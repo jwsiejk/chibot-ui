@@ -21,7 +21,6 @@ let recorder;
 let chunks = [];
 
 /** --------------- CSRF helper (voice) --------------- **/
-async 
 export function armVAD(boostDuringPlayback = 0){
   vadArmed = true;
   thresholdBoost = boostDuringPlayback;
