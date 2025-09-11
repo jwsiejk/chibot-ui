@@ -11,6 +11,7 @@ let _onOpenCbs = [];
 let _audioChunks = [];
 let _textBuf = "";
 let _assistantDiv = null;
+let _pingTimer = null;
 
 function getSID(){
   const key = "chip.sid";
@@ -44,9 +45,11 @@ export function openWS(){
   _url = `${proto}://${location.host}/ws/v1/chat?${q}`;
   _ws = new WebSocket(_url);
   _ws.onopen = () => {
+    try{ clearInterval(_pingTimer);}catch{}
+    _pingTimer = setInterval(()=>{ try{ if (isOpen()) _ws.send(JSON.stringify({type:'keepalive'})); }catch{} }, 20000);
     for (const cb of _onOpenCbs) try{ cb(); }catch{}
   };
-  _ws.onclose = () => {};
+  _ws.onclose = () => { try{ clearInterval(_pingTimer); }catch{} _pingTimer = null; };
   _ws.onerror = () => {};
   _ws.onmessage = (ev) => {
     try{
