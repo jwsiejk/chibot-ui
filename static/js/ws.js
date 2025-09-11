@@ -3,6 +3,7 @@
 
 import { playStream, stopPlayback, setVisemeCallback } from "./audio.js";
 import { renderSuggestions } from "./suggestions.js";
+import { armVAD } from "./voice.js";
 
 let _ws = null;
 let _url = null;
@@ -90,6 +91,7 @@ export function openWS(){
         }
         _textBuf = "";
         _assistantDiv = null;
+        try{ armVAD(); }catch{}
       }
     }catch(_){}
   };
@@ -114,7 +116,8 @@ export function closeWS(){
   _audioChunks = [];
   _textBuf = "";
   _assistantDiv = null;
-}
+        try{ armVAD(); }catch{}
+      }
 
 export function sendInterrupt(){
   try{ if (isOpen()) _ws.send(JSON.stringify({type:'interrupt'})); }catch{}

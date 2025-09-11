@@ -255,6 +255,7 @@ async function onStart(){
     openWS();                 // opens /ws/v1/chat (no autoconnect on load)
     await waitWSOpen();       // ensure server subscription is ready
     await initMic().catch(()=>{ showError("mic","blocked","Microphone permission denied"); });
+    try{ armVAD(); }catch{}
     await greet();            // GET /api/v1/greet?session_id=SID
     setState(STATES.LISTENING);
     document.body.classList.add("chat-open");
@@ -324,6 +325,7 @@ function addChatMessage(role, text){
   const $  = (sel)=> document.querySelector(sel);
   const el = (id)=> document.getElementById(id);
 
+    }
 
   function showLoginModal(on){
     const m = el('loginModal'), p = el('profileModal');
