@@ -41,7 +41,7 @@ async function onStart(){
     openWS();
     await waitWSOpen();
     await initMic();
-    armVAD(); // speak immediately
+    // VAD will be armed after assistant finishes speaking (see ws.js)
 
     // Greet
     const sid = localStorage.getItem('chip.sid');
@@ -96,3 +96,17 @@ document.addEventListener('DOMContentLoaded', () => {
   if (sendBtn)  sendBtn.addEventListener('click', onSend);
   setDot('ready');
 });
+
+
+// --- VAD HUD (tiny) ---
+(function(){
+  const hud = document.createElement('div');
+  hud.id='vadHud';
+  hud.style.cssText='position:fixed;right:10px;bottom:10px;font:12px system-ui;background:rgba(0,0,0,.55);color:#fff;padding:6px 8px;border-radius:8px;z-index:9999;pointer-events:none';
+  hud.textContent='VAD: idle';
+  document.body.appendChild(hud);
+  window.addEventListener('chip:vad', (e)=>{
+    const {level, thr, speechMs, silenceMs, armed, boost} = e.detail||{};
+    hud.textContent = `VAD ${armed?'ARMED':'IDLE'}  lvl:${level.toFixed(3)} thr:${thr.toFixed(3)}  +${boost.toFixed(2)}  s:${speechMs} q:${silenceMs}`;
+  });
+})();
