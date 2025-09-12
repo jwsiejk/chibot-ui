@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Ask Chip</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}"/>
+</head>
+<body>
+  <!-- App Root (your Zoom-style UI mounts/forms here) -->
+  <div id="app-root"></div>
+
+  <!-- Your existing JS bundle order -->
+  <script src="{{ url_for('static', filename='js/csrf.js') }}?v={{ version }}"></script>
+  <script src="{{ url_for('static', filename='js/ws.js') }}?v={{ version }}"></script>
+  <script src="{{ url_for('static', filename='js/voice.js') }}?v={{ version }}"></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}?v={{ version }}"></script>
+</body>
+</html>
