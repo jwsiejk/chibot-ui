@@ -1,148 +1,153 @@
-
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8"/>
   <title>Ask Chip — Admin Console</title>
-  <link rel="icon" href="/static/favicon.ico" type="image/x-icon" />
-  <link rel="stylesheet" href="/static/css/app.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="/static/css/app.css"/>
   <style>
-    body{background:#0f1115;color:#e6e9ef;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0}
-    header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:#0c0e13;border-bottom:1px solid #202533}
-    .tabs{display:flex;gap:8px;padding:8px 16px;border-bottom:1px solid #202533;background:#0f1115;position:sticky;top:0}
-    .tabs button{background:#161a22;border:1px solid #202533;color:#e6e9ef;border-radius:10px;padding:8px 12px;cursor:pointer}
-    .tabs button.active{border-color:#7aa0ff;box-shadow:0 0 0 2px rgba(122,160,255,.2)}
-    .panel{padding:16px;display:none}
+    .wrap{max-width:1080px;margin:36px auto;padding:0 16px}
+    .tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+    .tabs button{padding:8px 12px;border-radius:10px;border:1px solid #202533;background:#161a22;color:#e6e9ef;cursor:pointer}
+    .tabs button.active{border-color:#7aa0ff;box-shadow:0 0 0 2px rgba(122,160,255,.15) inset}
+    .panel{display:none;border:1px solid #202533;border-radius:12px;background:#161a22;padding:16px;margin-bottom:16px}
     .panel.active{display:block}
-    .grid{display:grid;grid-template-columns:300px 1fr;gap:12px;max-width:1080px}
-    .card{background:#161a22;border:1px solid #202533;border-radius:12px;padding:12px;margin:8px 0}
-    label{display:block;font-size:.9rem;margin:6px 0 4px 0;color:#9aa4b2}
-    input[type="text"], input[type="number"], select{width:100%;padding:8px 10px;background:#11151c;border:1px solid #202533;border-radius:10px;color:#e6e9ef}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .actions{display:flex;gap:8px;margin-top:12px}
-    .btn{background:#7aa0ff;border:none;color:#0b1220;padding:8px 12px;border-radius:10px;cursor:pointer}
-    .btn.secondary{background:#202533;color:#e6e9ef}
-    .right{margin-left:auto}
-    #toast{position:fixed;right:12px;bottom:12px;background:#161a22;border:1px solid #202533;border-radius:8px;padding:8px 12px;display:none}
+    .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+    label{display:flex;flex-direction:column;font-size:13px;color:#9aa4b2}
+    label > input, label > select, label > textarea{margin-top:6px;padding:8px;border-radius:8px;border:1px solid #202533;background:#0f1115;color:#e6e9ef}
+    .row{display:flex;gap:10px;align-items:center}
+    .actions{margin-top:12px;display:flex;gap:10px;justify-content:flex-end}
+    .btn{padding:8px 12px;border-radius:10px;border:1px solid #202533;background:#0f1115;color:#e6e9ef;cursor:pointer}
+    .btn.primary{border-color:#7aa0ff}
+    .muted{color:#9aa4b2}
+    table{width:100%;border-collapse:collapse}
+    th,td{font-size:13px;border-bottom:1px solid #202533;padding:8px}
   </style>
 </head>
 <body>
-  <header><h2>Ask Chip — Admin</h2><div class="actions"><a class="btn secondary" href="/">Back</a><button class="btn" id="openLog">Open Real‑Time Call Log</button></div></header>
-  <nav class="tabs">
+<div class="wrap">
+  <h1>Ask Chip — Admin</h1>
+
+  <div class="tabs" id="tabs">
     <button data-tab="ux" class="active">User Experience</button>
     <button data-tab="flow">Conversational Flow</button>
-    <button data-tab="persona">PTM Personality</button>
-</nav>
+    <button data-tab="vendor">Vendor — Streaming ASR (Deepgram) / VAD</button>
+    <button data-tab="ptm">PTM Personality (NLP / NLU / NLG)</button>
+    <button data-tab="diag">Diagnostics</button>
+  </div>
 
-  <section id="ux" class="panel active">
+  <!-- UX -->
+  <section class="panel active" id="tab-ux">
+    <h3>User Experience</h3>
     <div class="grid">
-      <div class="card">
-        <h3>UI</h3>
-        <label><input type="checkbox" id="show_instruction_strip"> Show instruction strip</label>
-        <label><input type="checkbox" id="show_state_dots"> Show state dots</label>
-        <label>Theme<select id="theme"><option value="light">light</option><option value="dark">dark</option></select></label>
-      </div>
-      <div class="card">
-        <h3>Suggestions</h3>
-        <label><input type="checkbox" id="suggestions_enabled"> Enable suggestions</label>
-        <div class="row">
-          <div><label>Max items<input type="number" id="suggestions_max_items" min="0" max="4"></label></div>
-          <div><label>Max words<input type="number" id="suggestions_max_words" min="1" max="7"></label></div>
-        </div>
-      </div>
+      <label>Theme
+        <select id="theme">
+          <option>light</option><option>dark</option><option>system</option>
+        </select>
+      </label>
+      <label>Show instruction strip <input type="checkbox" id="show_instruction_strip"/></label>
+      <label>Show state dots <input type="checkbox" id="show_state_dots"/></label>
+
+      <label>Suggestions enabled <input type="checkbox" id="suggestions_enabled"/></label>
+      <label>Suggestions — max items <input type="number" id="suggestions_max_items" min="0" max="4"/></label>
+      <label>Suggestions — max words <input type="number" id="suggestions_max_words" min="1" max="7"/></label>
+
+      <label>Nudges enabled <input type="checkbox" id="nudges_enabled"/></label>
+      <label>Nudge delay (ms) <input type="number" id="nudge_delay_ms" min="0"/></label>
+      <label>Nudge backoff after ignored <input type="number" id="nudge_backoff_after_ignored" min="0" max="5"/></label>
+
+      <label>WS ping interval (ms) <input type="number" id="ws_ping_interval_ms" min="5000"/></label>
+      <label>WS idle timeout (ms) <input type="number" id="ws_idle_timeout_ms" min="5000"/></label>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="save-ux">Save</button>
     </div>
   </section>
 
-  <section id="flow" class="panel">
+  <!-- Flow -->
+  <section class="panel" id="tab-flow">
+    <h3>Conversational Flow</h3>
     <div class="grid">
-      <div class="card">
-        <h3>VAD & Barge‑in</h3>
-        <div class="row">
-          <div><label>VAD min speech (ms)<input type="number" id="min_speech_ms"></label></div>
-          <div><label>Barge‑in confirm (ms)<input type="number" id="confirm_ms"></label></div>
-        </div>
-        <div class="row">
-          <div><label>Echo threshold boost<input type="number" step="0.1" id="echo_threshold_boost"></label></div>
-          <div><label>Language lock<select id="language_lock"><option value="en">en</option></select></label></div>
-        </div>
-        <label><input type="checkbox" id="nudges_enabled"> Enable silence nudge</label>
-        <div class="row">
-          <div><label>Nudge delay (ms)<input type="number" id="nudge_delay_ms"></label></div>
-          <div><label>Backoff after ignored<input type="number" id="nudge_backoff_after_ignored" min="0" max="5"></label></div>
-        </div>
-        <div class="row">
-          <div><label>Max turn seconds<input type="number" id="max_turn_seconds" min="5" max="120"></label></div>
-        </div>
-      </div>
-      
-<div class="card">
-  <h3>Vendors</h3>
-  <div class="row">
-    <div><label><input type="checkbox" id="feature_audio"> Enable audio (TTS/STT)</label></div>
-  </div>
-  <div class="row">
-    <div><label>Voice ID<input type="text" id="tts_voice_id" placeholder="ELEVENLABS_VOICE_ID"></label></div>
-    <div><label>Output format<input type="text" id="tts_output_format" placeholder="mp3_44100_128"></label></div>
-  </div>
-  <div class="row">
-    <div><label>Model ID<input type="text" id="tts_model_id" placeholder="eleven_multilingual_v2"></label></div>
-  </div>
-  <div class="row">
-    <button class="btn" id="btn_test_voice">Test flow - voice</button>
-    <button class="btn secondary" id="btn_test_chat">Test flow - chat only</button>
-  </div>
-  <div id="test_log_panel" class="card" style="margin-top:10px; display:none; max-height:240px; overflow:auto;">
-    <div class="row small"><strong>Test Run:</strong> <span id="test_id">-</span> · <span id="test_status">running</span></div>
-    <pre id="test_log" style="white-space:pre-wrap;margin:0"></pre>
-    <div class="row"><a id="test_json_link" target="_blank">Open JSON</a></div>
-  </div>
+      <label>Teacher move — summarize_next_actions weight (0..1)
+        <input id="tm_summarize_next_actions" type="number" step="0.05" min="0" max="1"/>
+      </label>
+      <label>Teacher move — check_understanding weight (0..1)
+        <input id="tm_check_understanding" type="number" step="0.05" min="0" max="1"/>
+      </label>
+      <label>Teacher move — deep_dive weight (0..1)
+        <input id="tm_deep_dive" type="number" step="0.05" min="0" max="1"/>
+      </label>
+
+      <label>Barge-in confirm (ms) <input id="confirm_ms" type="number" min="0"/></label>
+      <label>Echo threshold boost <input id="echo_threshold_boost" type="number" min="1" step="0.1"/></label>
+      <label>Min speech (ms) <input id="min_speech_ms" type="number" min="0"/></label>
+    </div>
+    <div class="actions"><button class="btn primary" id="save-flow">Save</button></div>
+  </section>
+
+  <!-- Vendor / VAD -->
+  <section class="panel" id="tab-vendor">
+    <h3>Vendor — Streaming ASR (Deepgram) & VAD</h3>
+    <div class="grid">
+      <label>Deepgram model <input id="deepgram_model" value="nova-3"/></label>
+      <label>Language <input id="deepgram_language" value="en"/></label>
+      <label>Smart format <input id="deepgram_smart_format" type="checkbox" checked/></label>
+      <label>Listen URL <input id="deepgram_listen_url" value="wss://api.deepgram.com/v1/listen"/></label>
+      <label>Encoding <input id="deepgram_encoding" value="opus"/></label>
+      <label>Sample rate <input id="deepgram_sample_rate" type="number" value="48000"/></label>
+      <label>Interim results <input id="deepgram_interim_results" type="checkbox" checked/></label>
+
+      <label>VAD attack (ms) <input id="vad_attack_ms" type="number" value="12"/></label>
+      <label>VAD release (ms) <input id="vad_release_ms" type="number" value="240"/></label>
+      <label>VAD dbFS threshold <input id="vad_dbfs_threshold" type="number" value="-42"/></label>
+    </div>
+    <div class="muted" style="margin-top:6px">
+      Secrets (Deepgram API key) remain in environment variables; not editable here.
+    </div>
+    <div class="actions"><button class="btn primary" id="save-vendor">Save</button></div>
+  </section>
+
+  <!-- PTM -->
+  <section class="panel" id="tab-ptm">
+    <h3>PTM Personality (NLP / NLU / NLG)</h3>
+    <div class="grid">
+      <label>OpenAI model <input id="openai_model" value="gpt-4o-mini"/></label>
+      <label>Temperature <input id="gen_temperature" type="number" step="0.05" min="0" max="2" value="0.3"/></label>
+      <label>Top-p <input id="gen_top_p" type="number" step="0.05" min="0" max="1" value="1.0"/></label>
+      <label>Max sentences <input id="gen_max_sentences" type="number" min="1" value="4"/></label>
+      <label>Target verbosity <select id="gen_target_verbosity">
+        <option>short</option><option selected>medium</option><option>long</option></select>
+      </label>
+
+      <label>Persona intensity (Nebraska %) <input id="nebraska_persona_level" type="number" step="0.01" min="0" max="1" value="0.13"/></label>
+      <label>Use persona quotes <input id="nebraska_quotes_enabled" type="checkbox" checked/></label>
+
+      <label>NLU: intent classification <input id="nlu_intent" type="checkbox" checked/></label>
+      <label>NLU: sentiment/tone detection <input id="nlu_sentiment" type="checkbox" checked/></label>
+      <label>NLP: context memory blending <input id="nlp_memory_blend" type="checkbox" checked/></label>
+      <label>NLG: summarizer preference <select id="nlg_summary_pref">
+        <option>never</option><option selected>auto</option><option>always</option></select>
+      </label>
+    </div>
+    <div class="actions"><button class="btn primary" id="save-ptm">Save</button></div>
+  </section>
+
+  <!-- Diagnostics -->
+  <section class="panel" id="tab-diag">
+    <h3>Diagnostics</h3>
+    <div class="row">
+      <button class="btn primary" id="run-diag">Run checks</button>
+      <span id="diag-status" class="muted">idle</span>
+    </div>
+    <div style="margin-top:10px">
+      <table>
+        <thead><tr><th>Check</th><th>OK</th><th>Details</th></tr></thead>
+        <tbody id="diag-body"></tbody>
+      </table>
+    </div>
+  </section>
 </div>
 
-    </div>
-  </section>
-
-  <section id="persona" class="panel">
-    <div class="grid">
-      <div class="card">
-        <h3>Chip Persona</h3>
-        <div class="row">
-          <div><label>Nebraska persona level (0.12–0.15)<input type="number" step="0.01" id="nebraska_persona_level"></label></div>
-          <div><label><input type="checkbox" id="nebraska_quotes_enabled"> Enable Nebraska quotes</label></div>
-        </div>
-      </div>
-    </div>
-  </section>
-<div class="actions" style="padding:12px 16px">
-    <button class="btn" id="save">Save</button>
-    <button class="btn secondary" id="reload">Reload</button>
-    <div class="right"></div>
-  </div>
-
-  <div id="toast"></div>
-  <script type="module" src="/static/js/admin_console.js?v={{ asset_version }}"></script>
-  <script type="module" src="/static/js/admin_log_modal.js?v={{ asset_version }}"></script>
-  <script src="/static/js/csrf_interceptor.js?v={{ asset_version }}"></script>
-
-<section id="deepgram-panel" class="panel">
-  <h3>Streaming ASR (Deepgram)</h3>
-  <div class="grid">
-    <label>stt_mode
-      <select id="stt_mode">
-        <option value="batch">batch</option>
-        <option value="stream">stream</option>
-      </select>
-    </label>
-    <label>model <input id="deepgram_model" value="nova-3"></label>
-    <label>language <input id="deepgram_language" value="en"></label>
-    <label>smart_format <input id="deepgram_smart_format" type="checkbox" checked></label>
-    <label>listen_url <input id="deepgram_listen_url" value="wss://api.deepgram.com/v1/listen"></label>
-    <label>encoding <input id="deepgram_encoding" value="opus"></label>
-    <label>sample_rate <input id="deepgram_sample_rate" value="48000" type="number"></label>
-    <label>interim_results <input id="deepgram_interim_results" type="checkbox" checked></label>
-  </div>
-  <button id="save-deepgram">Save</button>
-</section>
-
+<script type="module" src="/static/js/admin_console.js"></script>
 </body>
 </html>
