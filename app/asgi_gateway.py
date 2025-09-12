@@ -3,7 +3,7 @@
 #   • WebSocket /ws/v1/chat  (native ASGI)  -> bus bridge + ping/pong
 #   • All HTTP via mounted Flask WSGI app
 
-import asyncio, time, json
+import asyncio, time, json, os
 from app import create_app
 from starlette.applications import Starlette
 from starlette.routing import WebSocketRoute, Mount
@@ -38,8 +38,8 @@ def _normalize_frame(fr: dict) -> dict:
             return {"type": "assistant_chunk", "text": fr.get("content","")}
         if t == "end":
             out = {"type": "assistant_end"}
-            # include optional metadata
-            if "finish_reason" in fr: out["finish_reason"] = fr["finish_reason"]
+            if "finish_reason" in fr:
+                out["finish_reason"] = fr["finish_reason"]
             return out
         return fr
     except Exception:
@@ -52,7 +52,6 @@ async def _keepalive_task(websocket: WebSocket, heartbeat_ms: int):
             try:
                 await websocket.send_text(dumps({"type":"keepalive","ts": int(time.time()*1000)}))
             except Exception:
-                # Connection likely closed
                 return
     except asyncio.CancelledError:
         return
@@ -63,38 +62,33 @@ async def chat_ws(websocket: WebSocket):
     session_id = websocket.query_params.get("session_id", "") or "default"
     tab_id = websocket.query_params.get("tab") or websocket.query_params.get("tab_id") or "default"
 
-    # Announce open to admin log
     try:
         _admin_emit("ws_open", session_id=session_id, proto=PROTO_ID, tab_id=tab_id)
     except Exception:
         pass
 
-    # Send 'ready' FIRST, deterministically encoded
     ready = {"type":"ready","session_id":session_id,"proto":PROTO_ID,"heartbeat_ms":DEFAULT_HEARTBEAT_MS,"ts": int(time.time()*1000)}
     await websocket.send_text(dumps(ready))
 
-    # Subscribe to the bus and start forwarder
     loop = asyncio.get_running_loop()
     q = bus.subscribe(session_id)
     try:
         _admin_emit('ws_subscribed', session_id=session_id)
     except Exception:
         pass
+
     async def forward_bus():
-        from queue import Empty
         while True:
             try:
                 frame = await loop.run_in_executor(None, q.get)
             except Exception:
-                # Executor/bus error or closed
                 return
             try:
                 await websocket.send_text(dumps(_normalize_frame(frame)))
             except Exception:
                 return
-    forward_task = asyncio.create_task(forward_bus())
 
-    # Start keepalive pings from server (optional; client may also ping)
+    forward_task = asyncio.create_task(forward_bus())
     ka = asyncio.create_task(_keepalive_task(websocket, DEFAULT_HEARTBEAT_MS))
 
     try:
@@ -104,10 +98,8 @@ async def chat_ws(websocket: WebSocket):
             except WebSocketDisconnect:
                 break
             except Exception:
-                # If receive fails, close out
                 break
 
-            # Handle plain text 'ping' for CI
             if isinstance(msg, str) and msg.strip().lower() == "ping":
                 try:
                     await websocket.send_text("pong")
@@ -116,7 +108,6 @@ async def chat_ws(websocket: WebSocket):
                     pass
                 continue
 
-            # Try to parse JSON control frames
             try:
                 payload = json.loads(msg)
             except Exception:
@@ -125,27 +116,23 @@ async def chat_ws(websocket: WebSocket):
             if isinstance(payload, dict):
                 t = str(payload.get("type","")).lower()
 
-                if t == "ping" or t == "keepalive":
-                    # Application-level pong (JSON)
+                if t in ("ping", "keepalive"):
                     await websocket.send_text(dumps({"type":"pong","echo": payload.get("ts"), "ts": int(time.time()*1000)}))
                     continue
 
                 if t == "interrupt":
-                    # Signal: user barge-in; acknowledge (upstream cancellation handled elsewhere)
                     await websocket.send_text(dumps({"type":"interrupt_ack","ts": int(time.time()*1000)}))
                     continue
 
                 if t == "close":
                     break
 
-            # Unknown inbound -> ignore but log
             try:
                 _admin_emit("ws_in", session_id=session_id, payload=(msg[:256] if isinstance(msg,str) else "<binary>"))
             except Exception:
                 pass
 
     finally:
-        # Teardown
         for task in (ka, forward_task):
             try:
                 task.cancel()
@@ -167,14 +154,17 @@ routes = [
 ]
 
 _cors_origins = []
-import os as _os
-_allow = _os.environ.get("CORS_ALLOWLIST","").strip()
+_allow = os.environ.get("CORS_ALLOWLIST","").strip()
 if _allow:
     _cors_origins = [o.strip() for o in _allow.split(",") if o.strip()]
 
 middleware = [Middleware(GZipMiddleware, minimum_size=1024)]
 if _cors_origins:
-    middleware.insert(0, Middleware(CORSMiddleware, allow_origins=_cors_origins, allow_methods=["GET","POST","OPTIONS"], allow_headers=["Content-Type","X-CSRF-Token"], allow_credentials=True))
+    middleware.insert(0, Middleware(CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_methods=["GET","POST","OPTIONS"],
+        allow_headers=["Content-Type","X-CSRF-Token"],
+        allow_credentials=True))
 
 asgi = Starlette(routes=routes, middleware=middleware)
 
@@ -188,3 +178,16 @@ _register_bp_once("voice_mode_v1", voice_mode_bp)
 
 from app.api_v1.voice_stream import bp as voice_stream_bp
 _register_bp_once("voice_stream_v1", voice_stream_bp)
+
+# --- Graceful shutdown: stop streaming manager loop/thread on SIGTERM ---
+try:
+    from app.services.streaming_asr.stream_manager import shutdown_manager
+    async def _shutdown_streaming():
+        try:
+            await shutdown_manager()
+        except Exception:
+            pass
+    asgi.add_event_handler("shutdown", _shutdown_streaming)
+except Exception:
+    # If the streaming manager isn't present, continue without hook
+    pass
