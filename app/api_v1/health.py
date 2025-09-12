@@ -5,5 +5,5 @@ bp = Blueprint("health_v1", __name__, url_prefix="/api/v1")
 
 @bp.get("/health")
 def health():
-    # Minimal liveness. Expand with DB/provider checks later if desired.
-    return jsonify(ok=True), 200
+    # Fast, dependency-free liveness. Attach deeper checks behind flags if needed.
+    return jsonify(ok=True, checks={"app":"up"}), 200
