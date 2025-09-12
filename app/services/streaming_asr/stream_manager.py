@@ -1,4 +1,3 @@
-# app/services/streaming_asr/stream_manager.py
 from __future__ import annotations
 
 import asyncio
@@ -7,10 +6,9 @@ import threading
 from collections import deque
 from typing import Deque, Dict, Optional
 
-from app.ws.bus import bus                      # existing bus instance
-from .deepgram_client import FakeDeepgramClient # swap to real provider later
+from app.ws.bus import bus
+from .deepgram_client import FakeDeepgramClient
 
-# Lightweight counters (in-proc). If you already have a metrics sink, wire it there.
 _METRICS = {
     "partials": 0,
     "finals": 0,
@@ -19,12 +17,11 @@ _METRICS = {
     "sessions": 0,
 }
 
-# Simple circuit breaker: open after N provider errors, stay open for 'cooldown' seconds.
 _CB = {
-    "open_until": 0.0,   # epoch seconds
+    "open_until": 0.0,
     "error_count": 0,
-    "trip_threshold": 8,  # consecutive errors before opening
-    "cooldown": 60.0,     # seconds to keep open
+    "trip_threshold": 8,
+    "cooldown": 60.0,
 }
 
 def _cb_opened() -> bool:
@@ -43,7 +40,7 @@ class StreamSession:
     def __init__(self, session_id: str, provider):
         self.session_id = session_id
         self.provider = provider
-        self.queue: Deque[bytes] = deque(maxlen=32)  # backpressure window
+        self.queue: Deque[bytes] = deque(maxlen=32)
         self.last_enqueue = time.time()
         self.closed = False
 
@@ -55,11 +52,6 @@ class StreamSession:
             self.last_enqueue = time.time()
 
 class StreamManager:
-    """
-    Holds one streaming ASR client per user session.
-    Enqueues Opus/PCM timeslices (from POST /api/v1/voice/stt/stream),
-    feeds provider, and emits user_partial / user_final to the WS bus.
-    """
     def __init__(self) -> None:
         self.sessions: Dict[str, StreamSession] = {}
         self.loop = asyncio.new_event_loop()
@@ -67,12 +59,10 @@ class StreamManager:
         self.thread.start()
 
     def _get_provider(self):
-        # Deterministic fake for now; replace with the real Deepgram client later.
         return FakeDeepgramClient({})
 
     def enqueue(self, session_id: str, data: bytes) -> None:
         if _cb_opened():
-            # Drop quietly; route should return a 503 so client can back off
             return
         sess = self.sessions.get(session_id)
         if not sess:
@@ -93,15 +83,12 @@ class StreamManager:
         IDLE_TIMEOUT = 9.0
         try:
             while not sess.closed:
-                # idle close
                 if (time.time() - sess.last_enqueue) > IDLE_TIMEOUT and not sess.queue:
-                    try:
-                        await sess.provider.close()
+                    try: await sess.provider.close()
                     finally:
                         sess.closed = True
                         break
 
-                # feed provider
                 if sess.queue:
                     data = sess.queue.popleft()
                     try:
@@ -109,7 +96,6 @@ class StreamManager:
                     except Exception:
                         _METRICS["provider_errors"] += 1
                         _cb_note_error()
-                        # emit a one-time notice to the client/admin log (non-blocking)
                         bus.broadcast(sess.session_id, {
                             "type": "system_notice",
                             "level": "warn",
@@ -118,62 +104,40 @@ class StreamManager:
                         await asyncio.sleep(0.05)
                         continue
 
-                    # Fake provider behavior: partials on counts 2/4, final on 6.
                     count = getattr(sess.provider, "_count", 0)
                     if count in (2, 4):
                         _METRICS["partials"] += 1
-                        bus.broadcast(sess.session_id, {
-                            "type": "user_partial",
-                            "text": f"hello {count}"
-                        })
+                        bus.broadcast(sess.session_id, {"type":"user_partial","text":f"hello {count}"})
                     if count == 6:
                         _METRICS["finals"] += 1
-                        bus.broadcast(sess.session_id, {
-                            "type": "user_final",
-                            "text": "final hello"
-                        })
+                        bus.broadcast(sess.session_id, {"type":"user_final","text":"final hello"})
 
                 await asyncio.sleep(0.01)
         finally:
-            try:
-                await sess.provider.close()
-            except Exception:
-                pass
+            try: await sess.provider.close()
+            except Exception: pass
 
-    # ---- graceful shutdown for deploy/worker SIGTERM ----
     def shutdown(self, join_timeout: float = 2.0) -> None:
-        """
-        Stop the background event loop and thread cleanly.
-        Safe to call multiple times.
-        """
         if not self.thread or not self.loop:
             return
 
         async def _close_all():
             for sess in list(self.sessions.values()):
-                try:
-                    await sess.provider.close()
-                except Exception:
-                    pass
+                try: await sess.provider.close()
+                except Exception: pass
 
         try:
             fut = asyncio.run_coroutine_threadsafe(_close_all(), self.loop)
-            try:
-                fut.result(timeout=join_timeout)
-            except Exception:
-                pass
+            try: fut.result(timeout=join_timeout)
+            except Exception: pass
         except Exception:
             pass
 
+        try: self.loop.call_soon_threadsafe(self.loop.stop)
+        except Exception: pass
         try:
-            self.loop.call_soon_threadsafe(self.loop.stop)
-        except Exception:
-            pass
-        try:
-            if self.thread.is_alive():
-                self.thread.join(timeout=join_timeout)
-        except Exception:
-            pass
+            if self.thread.is_alive(): self.thread.join(timeout=join_timeout)
+        except Exception: pass
 
 _MANAGER: Optional[StreamManager] = None
 
@@ -183,8 +147,17 @@ def get_manager() -> StreamManager:
         _MANAGER = StreamManager()
     return _MANAGER
 
-# coroutine used by ASGI app shutdown hook
 async def shutdown_manager():
     mgr = _MANAGER
     if mgr is not None:
         mgr.shutdown()
+
+# ---- status for diagnostics ----
+def get_streaming_status() -> Dict[str, object]:
+    return {
+        "breaker_open": _cb_opened(),
+        "provider_errors": _METRICS["provider_errors"],
+        "partials": _METRICS["partials"],
+        "finals": _METRICS["finals"],
+        "sessions": _METRICS["sessions"],
+    }
