@@ -7,8 +7,8 @@ import threading
 from collections import deque
 from typing import Deque, Dict, Optional
 
-from app.ws.bus import bus                      # ✅ use your existing bus instance
-from .deepgram_client import FakeDeepgramClient # (swap to real client when you wire Deepgram)
+from app.ws.bus import bus                      # ✅ use your existing bus
+from .deepgram_client import FakeDeepgramClient # swap to real client later
 
 class StreamSession:
     def __init__(self, session_id: str, provider):
@@ -25,20 +25,17 @@ class StreamSession:
 class StreamManager:
     """
     Holds one streaming ASR client per user session.
-    - Enqueues Opus timeslices coming from POST /api/v1/voice/stt/stream
-    - Feeds provider
-    - Emits user_partial / user_final to the existing WS bus
+    Enqueues Opus timeslices (from POST /api/v1/voice/stt/stream),
+    feeds provider, and emits user_partial / user_final to WS bus.
     """
     def __init__(self) -> None:
         self.sessions: Dict[str, StreamSession] = {}
-        # Background event loop dedicated to ASR IO
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
         self.thread.start()
 
     def _get_provider(self):
-        # For now, use the fake provider (emits deterministic partials/final).
-        # When you connect Deepgram, replace with the real client wired to Admin config.
+        # Deterministic fake for now; wire real Deepgram via Admin config later.
         return FakeDeepgramClient({})
 
     def enqueue(self, session_id: str, data: bytes) -> None:
@@ -46,7 +43,6 @@ class StreamManager:
         if not sess:
             provider = self._get_provider()
             sess = self.sessions[session_id] = StreamSession(session_id, provider)
-            # start the session runner in the background loop
             asyncio.run_coroutine_threadsafe(self._run_session(sess), self.loop)
         sess.put(data)
 
@@ -66,8 +62,7 @@ class StreamManager:
                     data = sess.queue.popleft()
                     await sess.provider.send(data)
 
-                    # Fake provider emits on count 2/4 (partials) and 6 (final).
-                    # We mirror that behavior by broadcasting frames on your existing bus.
+                    # Fake provider behavior: partials on counts 2/4, final on 6.
                     count = getattr(sess.provider, "_count", 0)
                     if count in (2, 4):
                         bus.broadcast(sess.session_id, {
