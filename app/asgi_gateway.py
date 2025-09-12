@@ -24,6 +24,17 @@ except Exception:
 # Build the Flask WSGI app
 flask_app = create_app()
 
+# ---------- Legacy Diagnostics → Admin Diagnostics (unification) ----------
+try:
+    from flask import redirect
+    @flask_app.get("/diagnostics")
+    def _legacy_diag_redirect():
+        # Open Admin with Diagnostics tab pre-selected
+        return redirect("/admin?tab=diag", code=302)
+except Exception:
+    pass
+# -------------------------------------------------------------------------
+
 def _normalize_frame(fr: dict) -> dict:
     try:
         t = fr.get("type")
@@ -161,8 +172,6 @@ if _cors_origins:
 
 asgi = Starlette(routes=routes, middleware=middleware)
 
-# ... (file unchanged above) ...
-
 # --- Idempotent blueprint registration to avoid double-register crashes ---
 def _register_bp_once(name: str, bp):
     if name not in flask_app.blueprints:
@@ -174,7 +183,7 @@ _register_bp_once("voice_mode_v1", voice_mode_bp)
 from app.api_v1.voice_stream import bp as voice_stream_bp
 _register_bp_once("voice_stream_v1", voice_stream_bp)
 
-# NEW: Admin diagnostics routes
+# Admin Diagnostics (new)
 try:
     from app.api_v1.admin_diagnostics import bp as admin_diag_bp
     _register_bp_once("admin_diag_v1", admin_diag_bp)
