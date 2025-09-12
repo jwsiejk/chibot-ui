@@ -161,6 +161,8 @@ if _cors_origins:
 
 asgi = Starlette(routes=routes, middleware=middleware)
 
+# ... (file unchanged above) ...
+
 # --- Idempotent blueprint registration to avoid double-register crashes ---
 def _register_bp_once(name: str, bp):
     if name not in flask_app.blueprints:
@@ -172,6 +174,13 @@ _register_bp_once("voice_mode_v1", voice_mode_bp)
 from app.api_v1.voice_stream import bp as voice_stream_bp
 _register_bp_once("voice_stream_v1", voice_stream_bp)
 
+# NEW: Admin diagnostics routes
+try:
+    from app.api_v1.admin_diagnostics import bp as admin_diag_bp
+    _register_bp_once("admin_diag_v1", admin_diag_bp)
+except Exception:
+    pass
+
 # --- Graceful shutdown: stop streaming manager loop/thread on SIGTERM ---
 try:
     from app.services.streaming_asr.stream_manager import shutdown_manager
@@ -182,5 +191,4 @@ try:
             pass
     asgi.add_event_handler("shutdown", _shutdown_streaming)
 except Exception:
-    # If the streaming manager isn't present, continue without hook
     pass
