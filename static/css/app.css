@@ -1,18 +1,16 @@
 /* ------------------------------------------------------------------
-   Ask Chip — App CSS (scoped for safety)
-   - Keeps dark theme
-   - Unifies Diagnostics under Admin
-   - Styles AskChip menu trigger to match legacy orange branding
-   - Avoids global layout selectors to prevent UI collisions
+   Ask Chip — App CSS (main + admin, safe defaults)
    ------------------------------------------------------------------ */
 
-/* Theme tokens (kept minimal) */
+/* Theme tokens */
 :root {
   --bg: #0f1115;
+  --panel: #161a22;
   --text: #e6e9ef;
   --muted: #9aa4b2;
   --link: #7aa0ff;
   --accent: #ff8a00; /* legacy AskChip orange */
+  --border: #202533;
 }
 
 * { box-sizing: border-box; }
@@ -24,7 +22,64 @@ body {
   font: 14px/1.55 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
 }
 
-a { color: var(--link); }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* -------------------- Layout helpers (main UI) -------------------- */
+.wrap {
+  max-width: 1080px;
+  margin: 36px auto;
+  padding: 0 16px;
+}
+
+h1 { font-size: 28px; margin: 0 0 12px; }
+
+.grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  color: var(--text);
+}
+.card:hover {
+  border-color: var(--link);
+  box-shadow: 0 0 0 2px rgba(122,160,255,.15) inset;
+}
+
+/* Tables used across pages */
+table { width: 100%; border-collapse: collapse; }
+th, td { font-size: 13px; border-bottom: 1px solid var(--border); padding: 8px; }
+.muted { color: var(--muted); }
+
+/* Basic form inputs (keeps native look but consistent contrast) */
+input[type="text"],
+input[type="email"],
+input[type="number"],
+input[type="password"],
+textarea,
+select {
+  background: #0f1115;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+button {
+  background: #0f1115;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--link); }
+button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 
 /* ---------------- Unify Diagnostics under Admin ------------------ */
 /* Hide any legacy "Diagnostics" nav item if it still exists */
@@ -57,19 +112,10 @@ nav .menu [data-askchip-menu] {
   appearance: none;
   cursor: pointer;
 }
-
 nav .menu a[href^="/admin"]:hover,
-nav .menu [data-askchip-menu]:hover {
-  opacity: .9;
-}
-
-/* Accessibility focus ring for the AskChip menu trigger */
+nav .menu [data-askchip-menu]:hover { opacity: .9; }
 nav .menu a[href^="/admin"]:focus-visible,
 nav .menu [data-askchip-menu]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-
-/* ------------------------ Utility (optional) --------------------- */
-/* Muted text utility (used across pages) */
-.muted { color: var(--muted); }
