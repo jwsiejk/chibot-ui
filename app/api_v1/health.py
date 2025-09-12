@@ -5,8 +5,5 @@ bp = Blueprint("health_v1", __name__, url_prefix="/api/v1")
 
 @bp.get("/health")
 def health():
-    return jsonify(ok=True, status="ok"), 200
-
-@bp.route('/health', methods=['HEAD'])
-def health_head():
-    return ("", 200)
+    # Minimal liveness. Expand with DB/provider checks later if desired.
+    return jsonify(ok=True), 200
