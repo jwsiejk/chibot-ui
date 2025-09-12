@@ -1,11 +1,9 @@
-
 import { ensureCSRF } from './csrf.js';
 
 let mediaStream = null;
 let ctx = null;
 let analyser = null;
-let rec = null;
-let chunks = [];
+// NOTE: batch-recorder removed (no batch STT)
 let vadOn = false;
 let silenceMs = 0;
 let speechMs = 0;
@@ -15,6 +13,11 @@ let vadBoost = 1.0;
 let vadBase = 0.025;   // will auto-calibrate
 let vadCalibrating = false;
 
+// === Public helper to expose the active stream ===
+export function currentStream(){
+  return mediaStream || null;
+}
+
 // Init mic + analyser
 export async function initMic(){
   try{
@@ -23,7 +26,7 @@ export async function initMic(){
       video: false
     });
   }catch(e){
-    console.warnn('getUserMedia error', e);
+    console.warn('getUserMedia error', e);
     throw e;
   }
   try{
@@ -33,7 +36,7 @@ export async function initMic(){
     analyser.fftSize = 2048;
     src.connect(analyser);
   }catch(e){
-    console.warnn('AudioContext error', e);
+    console.warn('AudioContext error', e);
     throw e;
   }
   return mediaStream;
@@ -64,28 +67,30 @@ export function setVadBoost(mult){
   vadBoost = Math.max(1.0, m);
 }
 
-// VAD loop
+// VAD loop (no batch recording — just level tracking for barge-in UX)
 async function loop(){
   if(!vadOn) return;
-  try{ await ctx.resume(); }catch(e){}
+  try{ await ctx?.resume(); }catch(e){}
   const level = instantLevel();
   const thr = (vadBase || 0.025) * vadBoost;
   emitHud(level, thr);
   const ms = 60;
   if(level > thr) speechMs += ms; else silenceMs += ms;
+
+  // basic stop condition to avoid running forever
   if(speechMs >= 300 && silenceMs >= 400){
     vadOn = false;
-    try{ if(rec && rec.state !== 'inactive') rec.stop(); }catch(e){}
     return;
   }
   setTimeout(loop, ms);
 }
 
-// Arm VAD (idempotent) with quick baseline calibration
+// Arm VAD (idempotent) with quick baseline calibration — NO batch upload anymore
 export function armVAD(){
   if(!mediaStream) return;
   if(vadOn) return;
   vadOn = true;
+
   // Calibrate baseline ~ 800ms
   vadCalibrating = true;
   let acc = 0, n = 0;
@@ -100,53 +105,23 @@ export function armVAD(){
     vadBase = Math.min(Math.max(avg * 1.8, 0.01), 0.05); // clamp
     vadCalibrating = false;
   })();
-  try{ if(rec && rec.state !== 'inactive') rec.stop(); }catch(e){}
-  try{
-    rec = new MediaRecorder(mediaStream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 128000 });
-    rec.ondataavailable = (e)=>{ try{ if(e.data && e.data.size) chunks.push(e.data); }catch(ex){} };
-    rec.onstop = ()=>{ try{ postSTT(); }catch(ex){} };
-    rec.start();
-    chunks = [];
-    silenceMs = 0;
-    speechMs = 0;
-    loop();
-  }catch(e){
-    console.warnn('MediaRecorder error', e);
-    vadOn = false;
-  }
+
+  // Reset counters and start loop (no MediaRecorder here)
+  try{ silenceMs = 0; speechMs = 0; }catch(e){}
+  loop();
 }
 
 export function disarmVAD(){
   vadOn = false;
-  try{ if(rec && rec.state !== 'inactive') rec.stop(); }catch(e){}
-  try{ chunks = []; silenceMs = 0; speechMs = 0; }catch(e){}
+  try{ silenceMs = 0; speechMs = 0; }catch(e){}
 }
 
-// Send blob to STT
-async function postSTT(){
-  try{
-    const sid = localStorage.getItem('chip.sid') || '';
-    const fd = new FormData();
-    const blob = new Blob(chunks, { type: 'audio/webm' });
-    fd.append('file', blob, 'turn.webm');
-    fd.append('meta', JSON.stringify({
-      language: 'en',
-      avg_rms: 0, max_rms: 0, // placeholder; optional client metrics
-    }));
-    const headers = { 'X-CSRF-Token': await ensureCSRF() };
-    await fetch(`/api/v1/voice/stt?session_id=${encodeURIComponent(sid)}`, {
-      method: 'POST',
-      credentials: 'include',
-      headers,
-      body: fd
-    });
-  }catch(e){
-    console.warnn('STT error', e);
-  }
-}
+// === (Removed) Batch STT upload path ===
+// The old postSTT() + recorder-onstop path has been removed so the UI
+// does not call /api/v1/voice/stt (batch) anymore.
 
-
-// === Option B Phase 3: timeslice sender (flagged by stt_mode) ===
+// === Streaming timeslice sender (Option B Phase 3) ===
+// Flagged by stt_mode returned by the server; only starts once.
 (function(){
   let _sttMode = "batch";
   let _streamEnabled = false;
@@ -168,8 +143,8 @@ async function postSTT(){
       const rec = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
       const queue = [];
       let inflight = false;
-      
-async function pump(){
+
+      async function pump(){
         if(inflight || queue.length === 0) return;
         inflight = true;
         const blob = queue.shift();
@@ -179,7 +154,7 @@ async function pump(){
           try{
             const rr = await fetch("/api/v1/voice/stt/stream"+qs, {
               method: "POST",
-              headers: { "X-CSRF-Token": csrfToken || "" },
+              headers: csrfToken ? { "X-CSRF-Token": csrfToken } : {},
               body: blob
             });
             ok = rr.ok;
@@ -208,12 +183,13 @@ async function pump(){
         }
       });
       rec.start(250);
-      // expose a hook so your existing code can call it after mic open
+
+      // expose a hook so other modules can trigger this with the current stream
       window.ASKCHIP_STREAMING_TIMESLICE = (sid, csrf) => startTimesliceIfEnabled(stream, sid, csrf);
-    }catch(e){ console.warnn("timeslice failed", e); }
+    }catch(e){ console.warn("timeslice failed", e); }
   }
 
-  // Public bootstrap to be called by your existing mic-open code after it gets a MediaStream.
+  // Public bootstrap to be called by code that owns the MediaStream.
   window.ASKCHIP_FETCH_STT_MODE = fetchSttMode;
   window.ASKCHIP_START_TIMESLICE_IF_ENABLED = startTimesliceIfEnabled;
 })();
