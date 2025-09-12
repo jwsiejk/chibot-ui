@@ -25,13 +25,6 @@ except Exception:
 flask_app = create_app()
 
 def _normalize_frame(fr: dict) -> dict:
-    """
-    Map internal bus frames -> client protocol:
-      text(content)     -> assistant_chunk(text)
-      end               -> assistant_end
-      suggestions(list) -> suggestions (passthrough)
-      audio_chunk       -> audio_chunk (passthrough)
-    """
     try:
         t = fr.get("type")
         if t == "text":
