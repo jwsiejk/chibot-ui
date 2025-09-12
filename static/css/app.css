@@ -1,138 +1,98 @@
 /* ------------------------------------------------------------------
-   Ask Chip — App CSS (main + admin, safe defaults)
+   Ask Chip — App CSS (main + admin, resilient layout)
    ------------------------------------------------------------------ */
 
 /* Theme tokens */
-:root {
-  --bg: #0f1115;
-  --panel: #161a22;
-  --text: #e6e9ef;
-  --muted: #9aa4b2;
-  --link: #7aa0ff;
-  --accent: #ff8a00; /* legacy AskChip orange */
-  --border: #202533;
+:root{
+  --bg:#0f1115; --panel:#161a22; --text:#e6e9ef; --muted:#9aa4b2;
+  --link:#7aa0ff; --accent:#ff8a00; --border:#202533;
 }
 
-* { box-sizing: border-box; }
+*{box-sizing:border-box}
 
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 14px/1.55 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font:14px/1.55 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
 }
 
-a { color: var(--link); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a{color:var(--link); text-decoration:none}
+a:hover{text-decoration:underline}
 
-/* -------------------- Gentle defaults for main UI -------------------- */
-/* Give top-level containers some breathing room even if no classes are used */
-main, #main, #app, #app-root, .app {
-  max-width: 1080px;
-  margin: 24px auto;
-  padding: 0 16px;
-}
+h1{font-size:28px; margin:0 0 12px}
+h2,h3{margin:18px 0 8px}
+.muted{color:var(--muted)}
 
-/* Headings spacing (many sections use plain text headings) */
-h1 { font-size: 28px; margin: 0 0 12px; }
-h2, h3 { margin: 18px 0 8px; }
+/* ------------------- resilient container spacing ------------------- */
+main,#main,#app,#app-root,.app{max-width:1080px; margin:24px auto; padding:0 16px}
 
-/* Section spacing (covers "Suggestions", "Sign in", "Profile" blocks) */
-section, .section, .pane, .panel {
-  margin: 16px 0;
-}
+/* ------------------- generic section spacing ---------------------- */
+section,.section,.pane,.panel{margin:16px 0}
 
-/* Forms: make rows wrap instead of running in one long line */
-form, .form {
-  gap: 12px 16px;
-}
-form .row, .form .row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 16px;
-}
-
-/* Inputs: consistent contrast & spacing */
+/* ------------------- inputs & buttons (stack) --------------------- */
+/* Make text inputs block-level so "Name / Email / Role / Region / Company" don't sprawl across the whole row. */
 input[type="text"],
 input[type="email"],
 input[type="number"],
 input[type="password"],
 input[type="search"],
 textarea,
-select {
-  background: #0f1115;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 8px;
-  margin: 4px 8px 8px 0;   /* ensures labels/text don't glue to inputs */
-  max-width: 100%;
+select{
+  display:block;               /* key: stack fields */
+  width:min(420px,100%);       /* reasonable field width */
+  background:#0f1115; color:var(--text);
+  border:1px solid var(--border); border-radius:8px;
+  padding:6px 8px; margin:4px 0 10px;
 }
 
-/* Keep the chat composer looking normal (don’t force it full width) */
+/* Keep the chat composer inline and compact */
 input[type="text"][placeholder^="Type a message"],
-#chatInput, #composer, .chat-input {
-  margin: 0 8px 0 0;
-  display: inline-block;
+#chatInput, #composer, .chat-input{
+  display:inline-block !important;
+  width:320px !important;
+  margin:0 8px 0 0 !important;
 }
 
 /* Buttons */
-button, .btn {
-  background: #0f1115;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 10px;
-  cursor: pointer;
+button,.btn{
+  background:#0f1115; color:var(--text);
+  border:1px solid var(--border); border-radius:8px;
+  padding:6px 10px; cursor:pointer;
 }
-button:hover, .btn:hover { border-color: var(--link); }
-button:focus-visible, .btn:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+button:hover,.btn:hover{border-color:var(--link)}
+button:focus-visible,.btn:focus-visible{outline:2px solid var(--link); outline-offset:2px}
 
-/* Tables used across pages (Admin Diagnostics etc.) */
-table { width: 100%; border-collapse: collapse; }
-th, td { font-size: 13px; border-bottom: 1px solid var(--border); padding: 8px; }
-.muted { color: var(--muted); }
+/* Make ad-hoc "rows" wrap even if not using classes */
+form,.form,.row,.rows,#profileForm,#signinForm{
+  display:block;
+}
+form .row,.form .row,#profileForm .row,#signinForm .row{
+  display:flex; flex-wrap:wrap; gap:12px 16px;
+}
 
-/* -------------------- Utility layout helpers (if used) -------------------- */
-.wrap  { max-width: 1080px; margin: 36px auto; padding: 0 16px; }
-.grid  { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
-.card  { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; color: var(--text); }
-.card:hover { border-color: var(--link); box-shadow: 0 0 0 2px rgba(122,160,255,.15) inset; }
+/* Tables used across pages (e.g., Admin Diagnostics) */
+table{width:100%; border-collapse:collapse}
+th,td{font-size:13px; border-bottom:1px solid var(--border); padding:8px}
 
-/* ---------------- Unify Diagnostics under Admin ------------------ */
+/* -------------------- optional helpers (if present) ---------------- */
+.wrap{max-width:1080px; margin:36px auto; padding:0 16px}
+.grid{display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.card{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:14px 16px; color:var(--text)}
+.card:hover{border-color:var(--link); box-shadow:0 0 0 2px rgba(122,160,255,.15) inset}
+
+/* -------- Unify Diagnostics under Admin (hide legacy link) -------- */
 nav .menu a[href="/diagnostics"],
-nav .menu a[href="/diagnostics/"] {
-  display: none !important;
-}
+nav .menu a[href="/diagnostics/"]{display:none !important}
 
-/* ------------------ Brand/Menu visual changes -------------------- */
-/* Hide legacy brand text at top-left so only the menu remains */
-header .brand,
-.brand-askchip,
-.site-title,
-.app-brand {
-  display: none !important;
-}
+/* --------- Brand/Menu visual changes (orange AskChip text) -------- */
+header .brand,.brand-askchip,.site-title,.app-brand{display:none !important}
 
-/* Style the AskChip menu trigger to match the old orange brand text */
-nav .menu a[href^="/admin"],
-nav .menu [data-askchip-menu] {
-  font-weight: 700;
-  font-size: 20px;
-  letter-spacing: .3px;
-  color: var(--accent) !important;
-  text-decoration: none !important;
-  background: transparent;
-  border: none;
-  padding: 0;
-  margin: 0;
-  appearance: none;
-  cursor: pointer;
+nav .menu a[href^="/admin"],          /* if menu is a link */
+nav .menu [data-askchip-menu]{        /* if menu is a button/custom */
+  font-weight:700; font-size:20px; letter-spacing:.3px;
+  color:var(--accent) !important; text-decoration:none !important;
+  background:transparent; border:none; padding:0; margin:0; appearance:none; cursor:pointer;
 }
 nav .menu a[href^="/admin"]:hover,
-nav .menu [data-askchip-menu]:hover { opacity: .9; }
+nav .menu [data-askchip-menu]:hover{opacity:.9}
 nav .menu a[href^="/admin"]:focus-visible,
-nav .menu [data-askchip-menu]:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
+nav .menu [data-askchip-menu]:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
