@@ -7,10 +7,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}"/>
 </head>
 <body>
-  <!-- App Root (your Zoom-style UI mounts/forms here) -->
-  <div id="app-root"></div>
-
-  <!-- Your existing JS bundle order -->
+  <!-- Fallback UI shell: your JS bundle should render into body or attach listeners -->
   <script src="{{ url_for('static', filename='js/csrf.js') }}?v={{ version }}"></script>
   <script src="{{ url_for('static', filename='js/ws.js') }}?v={{ version }}"></script>
   <script src="{{ url_for('static', filename='js/voice.js') }}?v={{ version }}"></script>
