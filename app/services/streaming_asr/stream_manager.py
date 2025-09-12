@@ -7,7 +7,7 @@ import threading
 from collections import deque
 from typing import Deque, Dict, Optional
 
-from app.ws.bus import bus                      # ✅ use your existing bus
+from app.ws.bus import bus                      # use your existing bus
 from .deepgram_client import FakeDeepgramClient # swap to real client later
 
 class StreamSession:
@@ -35,7 +35,7 @@ class StreamManager:
         self.thread.start()
 
     def _get_provider(self):
-        # Deterministic fake for now; wire real Deepgram via Admin config later.
+        # Deterministic fake; wire real Deepgram via Admin config later.
         return FakeDeepgramClient({})
 
     def enqueue(self, session_id: str, data: bytes) -> None:
@@ -82,6 +82,42 @@ class StreamManager:
             except Exception:
                 pass
 
+    # ---- graceful shutdown for deploy/worker SIGTERM ----
+    def shutdown(self, join_timeout: float = 2.0) -> None:
+        """
+        Stop the background event loop and thread cleanly.
+        Close any live provider connections before stopping the loop.
+        Safe to call multiple times.
+        """
+        if not self.thread or not self.loop:
+            return
+
+        async def _close_all():
+            for sess in list(self.sessions.values()):
+                try:
+                    await sess.provider.close()
+                except Exception:
+                    pass
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(_close_all(), self.loop)
+            try:
+                fut.result(timeout=join_timeout)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        try:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+        except Exception:
+            pass
+        try:
+            if self.thread.is_alive():
+                self.thread.join(timeout=join_timeout)
+        except Exception:
+            pass
+
 _MANAGER: Optional[StreamManager] = None
 
 def get_manager() -> StreamManager:
@@ -89,3 +125,9 @@ def get_manager() -> StreamManager:
     if _MANAGER is None:
         _MANAGER = StreamManager()
     return _MANAGER
+
+# coroutine used by ASGI app shutdown hook
+async def shutdown_manager():
+    mgr = _MANAGER
+    if mgr is not None:
+        mgr.shutdown()
