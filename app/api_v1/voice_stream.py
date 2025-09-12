@@ -1,14 +1,12 @@
 # app/api_v1/voice_stream.py
 from __future__ import annotations
 from flask import Blueprint, request, jsonify
-from ..middleware.rate_limit import limit
 
 from ..services.streaming_asr.stream_manager import get_manager
 
 bp = Blueprint("voice_stream_v1", __name__, url_prefix="/api/v1/voice")
 
 @bp.post("/stt/stream")
-@limit('stt_stream', maxn=6, window=1.0)
 def voice_stt_stream():
     sess = request.args.get("session_id") or request.form.get("session_id") or "default"
 
