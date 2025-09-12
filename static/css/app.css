@@ -1,33 +1,34 @@
-:root{--bg:#0f1115;--panel:#161a22;--text:#e6e9ef;--muted:#9aa4b2;--brand:#ffa255;--ok:#27c28a;--warn:#f0ad4e;--line:#202533}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-.topbar{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:#0c0e13;border-bottom:1px solid var(--line)}
-.topbar .brand{font-weight:700;color:var(--brand);font-size:16px}
-.menu-wrap{display:flex;gap:8px;align-items:center}
-.zoom-grid{display:grid;grid-template-columns:3fr 1fr;gap:16px;padding:16px}
-.video-pane{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:10px}
-.chip-face{flex:1;display:flex;flex-direction:column}
-.status-row{display:flex;gap:6px;margin-bottom:6px;color:var(--muted)}
-.chat{flex:1;overflow:auto;background:#0c1017;border:1px solid var(--line);border-radius:10px;padding:10px}
-.msg{padding:8px 10px;margin:6px;border-radius:10px;background:#11151c}
-.msg.user{background:#1d2330}.msg.assistant{background:#151c26}
-.composer{display:flex;gap:8px}.composer input{flex:1;background:#0c1017;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px}
-.side-pane{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;min-height:60vh}
-#sugg{margin:0;padding-left:18px}
-.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-left:8px}
-.dot-ready{background:var(--muted)}.dot-listening{background:#39c07f}.dot-thinking{background:var(--warn)}.dot-speaking{background:#7aa0ff}
-button{background:#1f2837;color:var(--text);border:1px solid #2a3346;padding:6px 10px;border-radius:8px;cursor:pointer}
-button.ghost{background:transparent;border-color:#2a3346}
-button.primary{background:#253149;border-color:#334260}
-button:disabled{opacity:.6;cursor:not-allowed}
-/* Modals */
-.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;z-index:1200}
-.modal.hidden{display:none}
-.sheet{background:#0f141d;border:1px solid var(--line);border-radius:12px;min-width:320px;max-width:520px;padding:16px}
-.sheet .actions{display:flex;gap:8px;margin-top:10px;justify-content:flex-end}
-.msgline{margin-top:8px;color:var(--muted)}
-.grid{display:grid;grid-template-columns: repeat(2, minmax(180px,1fr));gap:10px}
-.page .toolbar{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line)}
-.page .brand{color:var(--brand);text-decoration:none}
-.card{padding:12px}
-#results{width:100%;border-collapse:collapse}#results th,#results td{border:1px solid var(--line);padding:6px;text-align:left}
-.log{background:#0c1017;border:1px solid var(--line);border-radius:10px;padding:10px;max-height:70vh;overflow:auto}
+:root{--bg:#0f1115;--panel:#161a22;--text:#e6e9ef;--muted:#9aa4b2;--link:#7aa0ff;--accent:#ff8a00}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:1080px;margin:36px auto;padding:0 16px}
+h1{font-size:28px;margin:0 0 12px}
+.muted{color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:14px}
+.card{display:block;background:var(--panel);padding:14px 16px;border-radius:12px;text-decoration:none;color:var(--text);border:1px solid #202533}
+.card:hover{border-color:var(--link);box-shadow:0 0 0 2px rgba(122,160,255,.15) inset}
+a{color:var(--link)}
+code{background:#0b0d12;padding:2px 6px;border-radius:6px}
+
+/* === Unify Diagnostics and brand/menu look === */
+
+/* Hide any legacy top-left brand text if present */
+header .brand, .brand-askchip, .site-title, .app-brand { display:none !important; }
+
+/* Hide old Diagnostics menu item (if still in markup) */
+nav .menu a[href="/diagnostics"], .menu a[href="/diagnostics/"] { display:none !important; }
+
+/* Style the AskChip menu trigger like the old orange brand */
+nav .menu a[href^="/admin"], nav .menu a[data-askchip-menu]{
+  font-weight:700;
+  font-size:20px;
+  letter-spacing:.3px;
+  color:var(--accent) !important;
+  text-decoration:none !important;
+}
+nav .menu a[href^="/admin"]:hover,
+nav .menu a[data-askchip-menu]:hover{opacity:.9}
+
+/* Tables (Admin Diagnostics) */
+table{width:100%;border-collapse:collapse}
+th,td{font-size:13px;border-bottom:1px solid #202533;padding:8px}
