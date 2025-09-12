@@ -178,11 +178,13 @@ if _cors_origins:
 
 asgi = Starlette(routes=routes, middleware=middleware)
 
+# --- Idempotent blueprint registration to avoid double-register crashes ---
+def _register_bp_once(name: str, bp):
+    if name not in flask_app.blueprints:
+        flask_app.register_blueprint(bp)
+
 from app.api_v1.voice_mode import bp as voice_mode_bp
-flask_app.register_blueprint(voice_mode_bp)
+_register_bp_once("voice_mode_v1", voice_mode_bp)
 
 from app.api_v1.voice_stream import bp as voice_stream_bp
-flask_app.register_blueprint(voice_stream_bp)
-
-from app.api_v1.voice_mode import bp as voice_mode_bp
-flask_app.register_blueprint(voice_mode_bp)
+_register_bp_once("voice_stream_v1", voice_stream_bp)
