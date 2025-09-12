@@ -14,17 +14,35 @@ function sid(){
 export function isOpen(){return _ws&&_ws.readyState===WebSocket.OPEN;}
 export function waitWSOpen(){return new Promise(res=>{if(isOpen())return res();_onOpen.push(res);});}
 
+// === NEW: ensure mic is opened here if not already, then arm streaming
 async function _tryStartStreamingOnce(){
   // Ensure the mode is fetched (server returns "stream")
   try { await (window.ASKCHIP_FETCH_STT_MODE && window.ASKCHIP_FETCH_STT_MODE()); } catch(e){}
-  const s = currentStream ? currentStream() : null;
-  if(!s) return; // mic not opened yet
+
+  // 1) Get stream; if none, open mic now (asks permission once).
+  let s = currentStream ? currentStream() : null;
+  if(!s){
+    try {
+      s = await initMic(); // <— opens the mic if not already opened
+    } catch(e) {
+      console.warn("mic open failed or denied", e);
+      return; // don't try to stream without a mic
+    }
+  }
+
+  // 2) Use the same session id as the WS
   const sess = window.__ASKCHIP_SESSION_ID || sid();
+
+  // 3) CSRF token for POSTs
   let csrf = "";
   try { csrf = await ensureCSRF(); } catch(e){}
+
+  // 4) Start timeslice loop (voice.js guards duplicates)
   try {
     window.ASKCHIP_START_TIMESLICE_IF_ENABLED && window.ASKCHIP_START_TIMESLICE_IF_ENABLED(s, sess, csrf);
-  } catch(e){}
+  } catch(e){
+    console.warn("start timeslice failed", e);
+  }
 }
 
 export function openWS(){
@@ -47,7 +65,7 @@ export function openWS(){
     for(const cb of _onOpen) { try{ cb(); }catch{} }
     _onOpen = [];
 
-    // Prime streaming on connect (will no-op if mic not open yet)
+    // Prime streaming on connect
     _tryStartStreamingOnce();
   };
 
