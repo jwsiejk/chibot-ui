@@ -23,7 +23,7 @@ export async function initMic(){
       video: false
     });
   }catch(e){
-    console.warn('getUserMedia error', e);
+    console.warnn('getUserMedia error', e);
     throw e;
   }
   try{
@@ -33,7 +33,7 @@ export async function initMic(){
     analyser.fftSize = 2048;
     src.connect(analyser);
   }catch(e){
-    console.warn('AudioContext error', e);
+    console.warnn('AudioContext error', e);
     throw e;
   }
   return mediaStream;
@@ -111,7 +111,7 @@ export function armVAD(){
     speechMs = 0;
     loop();
   }catch(e){
-    console.warn('MediaRecorder error', e);
+    console.warnn('MediaRecorder error', e);
     vadOn = false;
   }
 }
@@ -141,7 +141,7 @@ async function postSTT(){
       body: fd
     });
   }catch(e){
-    console.warn('STT error', e);
+    console.warnn('STT error', e);
   }
 }
 
@@ -168,22 +168,38 @@ async function postSTT(){
       const rec = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
       const queue = [];
       let inflight = false;
-      async function pump(){
+      
+async function pump(){
         if(inflight || queue.length === 0) return;
         inflight = true;
         const blob = queue.shift();
         try{
           const qs = sessionId ? ("?session_id="+encodeURIComponent(sessionId)) : "";
-          await fetch("/api/v1/voice/stt/stream"+qs, {
-            method: "POST",
-            headers: { "X-CSRF-Token": csrfToken || "" },
-            body: blob
-          });
-        }catch(e){} finally {
+          let ok = true;
+          try{
+            const rr = await fetch("/api/v1/voice/stt/stream"+qs, {
+              method: "POST",
+              headers: { "X-CSRF-Token": csrfToken || "" },
+              body: blob
+            });
+            ok = rr.ok;
+          }catch(e){ ok = false; }
+          if(!ok){
+            window.ASKCHIP_STREAM_FAILS = (window.ASKCHIP_STREAM_FAILS||0)+1;
+            if(window.ASKCHIP_STREAM_FAILS >= 10){
+              console.warn("stt stream disabled due to repeated failures");
+              // stop producing further network load until reload
+              queue.length = 0;
+              inflight = false;
+              return;
+            }
+          }
+        } finally {
           inflight = false;
           pump();
         }
       }
+
       rec.addEventListener("dataavailable", (ev) => {
         if(ev.data && ev.data.size > 0){
           if(queue.length >= 8) queue.shift();
@@ -194,7 +210,7 @@ async function postSTT(){
       rec.start(250);
       // expose a hook so your existing code can call it after mic open
       window.ASKCHIP_STREAMING_TIMESLICE = (sid, csrf) => startTimesliceIfEnabled(stream, sid, csrf);
-    }catch(e){ console.warn("timeslice failed", e); }
+    }catch(e){ console.warnn("timeslice failed", e); }
   }
 
   // Public bootstrap to be called by your existing mic-open code after it gets a MediaStream.

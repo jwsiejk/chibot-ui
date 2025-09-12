@@ -7,7 +7,11 @@ import threading
 from collections import deque
 from typing import Deque, Dict, Optional
 
-from app.ws.bus import bus                      # use your existing bus
+from app.ws.bus import bus
+from app.api_v1.admin import _emit
+from app.db import db
+from app.services.streaming import make_assistant_frames, schedule_frames
+from app.security_state import get_user                      # use your existing bus
 from .deepgram_client import FakeDeepgramClient # swap to real client later
 
 class StreamSession:
@@ -65,16 +69,38 @@ class StreamManager:
                     # Fake provider behavior: partials on counts 2/4, final on 6.
                     count = getattr(sess.provider, "_count", 0)
                     if count in (2, 4):
+                        try:
+                            _emit('user_partial', session_id=sess.session_id, count=count)
+                        except Exception:
+                            pass
                         bus.broadcast(sess.session_id, {
                             "type": "user_partial",
                             "text": f"hello {count}"
                         })
                     if count == 6:
+                        final_text = "final hello"
+                        try:
+                            _emit('user_final', session_id=sess.session_id)
+                        except Exception:
+                            pass
                         bus.broadcast(sess.session_id, {
                             "type": "user_final",
-                            "text": "final hello"
+                            "text": final_text
                         })
-
+                        # Promote to user turn -> LLM turn
+                        try:
+                            email = get_user()
+                        except Exception:
+                            email = "user@example.com"
+                        try:
+                            db.ensure_session(sess.session_id, email)
+                            if final_text:
+                                db.add_message(sess.session_id, "user", final_text)
+                            tid, frames = make_assistant_frames(final_text, session_id=sess.session_id, meta={})
+                            schedule_frames(sess.session_id, frames, enable_nudge=True)
+                        except Exception:
+                            pass
+                
                 await asyncio.sleep(0.01)
         finally:
             try:
