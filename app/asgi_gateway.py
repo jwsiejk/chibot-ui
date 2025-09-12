@@ -1,6 +1,6 @@
 # app/asgi_gateway.py
 # Starlette ASGI app that serves:
-#   • WebSocket /ws/v1/chat  (native ASGI)  -> bus bridge + ping/pong
+#   • WebSocket /ws/v1/chat  (native ASGI)
 #   • All HTTP via mounted Flask WSGI app
 
 import asyncio, time, json, os
@@ -28,9 +28,13 @@ flask_app = create_app()
 try:
     from flask import redirect
     @flask_app.get("/diagnostics")
-    def _legacy_diag_redirect():
-        # Open Admin with Diagnostics tab pre-selected
-        return redirect("/admin?tab=diag", code=302)
+    def _legacy_diag_redirect():       return redirect("/admin?tab=diag", code=302)
+    @flask_app.get("/diagnostics/")
+    def _legacy_diag_redirect_slash(): return redirect("/admin?tab=diag", code=302)
+    @flask_app.get("/diagnostics.html")
+    def _legacy_diag_redirect_html():  return redirect("/admin?tab=diag", code=302)
+    @flask_app.get("/diagnostics/index")
+    def _legacy_diag_redirect_idx():   return redirect("/admin?tab=diag", code=302)
 except Exception:
     pass
 # -------------------------------------------------------------------------
@@ -183,7 +187,7 @@ _register_bp_once("voice_mode_v1", voice_mode_bp)
 from app.api_v1.voice_stream import bp as voice_stream_bp
 _register_bp_once("voice_stream_v1", voice_stream_bp)
 
-# Admin Diagnostics (new)
+# Admin Diagnostics
 try:
     from app.api_v1.admin_diagnostics import bp as admin_diag_bp
     _register_bp_once("admin_diag_v1", admin_diag_bp)
