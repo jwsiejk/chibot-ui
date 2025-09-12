@@ -1,0 +1,13 @@
+from starlette.testclient import TestClient
+from app.asgi_gateway import asgi
+
+def test_stream_rps_limit():
+    c = TestClient(asgi)
+    # send >6 in ~1s
+    codes = []
+    for _ in range(8):
+        r = c.post("/api/v1/voice/stt/stream?session_id=limittest", content=b"X"*100,
+                   headers={"content-type":"application/octet-stream"})
+        codes.append(r.status_code)
+    # we expect at least one 429 in the burst
+    assert 429 in codes
