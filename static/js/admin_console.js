@@ -118,3 +118,53 @@ async function startTest(mode){
 }
 document.getElementById('btn_test_voice')?.addEventListener('click', ()=>startTest('voice'));
 document.getElementById('btn_test_chat')?.addEventListener('click', ()=>startTest('chat'));
+
+
+async function loadDeepgramPanel(cfg){
+  try{
+    document.getElementById("stt_mode").value = cfg.stt_mode || "batch";
+    const k = ["deepgram_model","deepgram_language","deepgram_listen_url","deepgram_encoding","deepgram_sample_rate"];
+    for(const key of k){
+      const el = document.getElementById(key);
+      if(el){ el.value = (cfg[key] !== undefined ? cfg[key] : el.value); }
+    }
+    document.getElementById("deepgram_smart_format").checked = !!cfg.deepgram_smart_format;
+    document.getElementById("deepgram_interim_results").checked = !!cfg.deepgram_interim_results;
+  }catch(e){ console.warn("deepgram panel load", e); }
+}
+async function saveDeepgramPanel(){
+  const updates = {
+    stt_mode: document.getElementById("stt_mode").value,
+    deepgram_model: document.getElementById("deepgram_model").value,
+    deepgram_language: document.getElementById("deepgram_language").value,
+    deepgram_smart_format: !!document.getElementById("deepgram_smart_format").checked,
+    deepgram_listen_url: document.getElementById("deepgram_listen_url").value,
+    deepgram_encoding: document.getElementById("deepgram_encoding").value,
+    deepgram_sample_rate: parseInt(document.getElementById("deepgram_sample_rate").value, 10),
+    deepgram_interim_results: !!document.getElementById("deepgram_interim_results").checked
+  };
+  // basic validation
+  if(!updates.deepgram_listen_url.startsWith("wss://")){ alert("listen_url must start with wss://"); return; }
+  if(updates.deepgram_encoding !== "opus"){ alert("encoding must be 'opus'"); return; }
+  if(updates.deepgram_sample_rate !== 48000){ alert("sample_rate must be 48000"); return; }
+
+  const r = await fetch("/api/v1/admin/config", {
+    method: "POST",
+    headers: {"content-type":"application/json"},
+    body: JSON.stringify({updates})
+  });
+  if(!r.ok){ alert("save failed"); return; }
+  alert("saved");
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  try {
+    const r = await fetch("/api/v1/admin/config");
+    if(r.ok){
+      const cfg = await r.json();
+      await loadDeepgramPanel(cfg);
+    }
+  } catch(e){}
+  const b = document.getElementById("save-deepgram");
+  if(b){ b.addEventListener("click", saveDeepgramPanel); }
+});

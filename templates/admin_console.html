@@ -123,5 +123,26 @@
   <script type="module" src="/static/js/admin_console.js?v={{ asset_version }}"></script>
   <script type="module" src="/static/js/admin_log_modal.js?v={{ asset_version }}"></script>
   <script src="/static/js/csrf_interceptor.js?v={{ asset_version }}"></script>
+
+<section id="deepgram-panel" class="panel">
+  <h3>Streaming ASR (Deepgram)</h3>
+  <div class="grid">
+    <label>stt_mode
+      <select id="stt_mode">
+        <option value="batch">batch</option>
+        <option value="stream">stream</option>
+      </select>
+    </label>
+    <label>model <input id="deepgram_model" value="nova-3"></label>
+    <label>language <input id="deepgram_language" value="en"></label>
+    <label>smart_format <input id="deepgram_smart_format" type="checkbox" checked></label>
+    <label>listen_url <input id="deepgram_listen_url" value="wss://api.deepgram.com/v1/listen"></label>
+    <label>encoding <input id="deepgram_encoding" value="opus"></label>
+    <label>sample_rate <input id="deepgram_sample_rate" value="48000" type="number"></label>
+    <label>interim_results <input id="deepgram_interim_results" type="checkbox" checked></label>
+  </div>
+  <button id="save-deepgram">Save</button>
+</section>
+
 </body>
 </html>
