@@ -1,179 +1,171 @@
-# app/asgi_gateway.py
-# Starlette ASGI app that serves:
-#   • WebSocket /ws/v1/chat  (native ASGI)  -> bus bridge + ping/pong
-#   • All HTTP via mounted Flask WSGI app
 
-import asyncio, time, json
-from app import create_app
+from __future__ import annotations
+import json, os, anyio
+from typing import Optional
+from flask import Flask, request, jsonify
 from starlette.applications import Starlette
 from starlette.routing import WebSocketRoute, Mount
-from starlette.middleware.wsgi import WSGIMiddleware
-from starlette.middleware.gzip import GZipMiddleware
-from starlette.middleware.cors import CORSMiddleware
-from starlette.middleware import Middleware
 from starlette.websockets import WebSocket, WebSocketDisconnect
-from app.ws.protocol import dumps, PROTO_ID, DEFAULT_HEARTBEAT_MS
-from app.ws.bus import bus
+from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.wsgi import WSGIMiddleware
 
-# Optional admin log emitter
-try:
-    from app.api_v1.admin import _emit as _admin_emit
-except Exception:
-    def _admin_emit(*a, **k): pass
+from .config_store import get_config, set_config
+from .ws_bus import BUS
 
-# Build the Flask WSGI app
-flask_app = create_app()
+# Flask app for HTTP v1 APIs
+flask_app = Flask(__name__)
 
-def _normalize_frame(fr: dict) -> dict:
-    """
-    Map internal bus frames -> client protocol:
-      text(content)     -> assistant_chunk(text)
-      end               -> assistant_end
-      suggestions(list) -> suggestions (passthrough)
-      audio_chunk       -> audio_chunk (passthrough)
-    """
+
+@flask_app.get("/admin")
+def admin_page():
+    return """
+<!doctype html><html><head><meta charset='utf-8'><title>Admin Config</title></head>
+<body style="font-family: system-ui; padding:20px">
+<h2>Streaming ASR (Deepgram)</h2>
+<form id="f">
+<label>stt_mode:
+  <select name="stt_mode">
+    <option value="batch">batch</option>
+    <option value="stream">stream</option>
+  </select>
+</label><br/>
+<label>model: <input name="model" value="nova-3"></label><br/>
+<label>language: <input name="language" value="en"></label><br/>
+<label>smart_format: <input type="checkbox" name="smart_format" checked></label><br/>
+<label>listen_url: <input name="listen_url" size="60" value="wss://api.deepgram.com/v1/listen"></label><br/>
+<label>encoding: <input name="encoding" value="opus"></label><br/>
+<label>sample_rate: <input name="sample_rate" value="48000"></label><br/>
+<label>interim_results: <input type="checkbox" name="interim_results" checked></label><br/>
+<button type="submit">Save</button>
+</form>
+<pre id="out"></pre>
+<script>
+async function load() {
+  const r = await fetch('/api/v1/admin/config');
+  const cfg = await r.json();
+  document.querySelector('[name=stt_mode]').value = cfg.stt_mode;
+  const dg = cfg.deepgram;
+  for (const k of ['model','language','listen_url','encoding','sample_rate']) {
+    const el = document.querySelector('[name='+k+']'); if (el) el.value = dg[k];
+  }
+  document.querySelector('[name=smart_format]').checked = !!dg.smart_format;
+  document.querySelector('[name=interim_results]').checked = !!dg.interim_results;
+}
+document.getElementById('f').onsubmit = async (e) => {
+  e.preventDefault();
+  const form = new FormData(e.target);
+  const payload = {
+    stt_mode: form.get('stt_mode'),
+    deepgram: {
+      model: form.get('model'),
+      language: form.get('language'),
+      smart_format: !!document.querySelector('[name=smart_format]').checked,
+      listen_url: form.get('listen_url'),
+      encoding: form.get('encoding'),
+      sample_rate: parseInt(form.get('sample_rate')),
+      interim_results: !!document.querySelector('[name=interim_results]').checked
+    }
+  };
+  const r = await fetch('/api/v1/admin/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(payload)});
+  const j = await r.json();
+  document.getElementById('out').textContent = JSON.stringify(j, null, 2);
+};
+load();
+</script>
+</body></html>
+"""
+
+@flask_app.get("/api/v1/admin/config")
+def get_admin_config():
+    return jsonify(get_config())
+
+def _validate_config(payload: dict):
+    errors = {}
+    dg = payload.get("deepgram")
+    if dg:
+        lu = dg.get("listen_url")
+        if lu and not str(lu).startswith("wss://"):
+            errors["listen_url"] = "listen_url must start with wss://"
+        if "sample_rate" in dg and dg["sample_rate"] != 48000:
+            errors["sample_rate"] = "sample_rate must be 48000"
+        if "encoding" in dg and dg["encoding"] != "opus":
+            errors["encoding"] = "encoding must be 'opus'"
+    stt_mode = payload.get("stt_mode")
+    if stt_mode and stt_mode not in ("batch", "stream"):
+        errors["stt_mode"] = "stt_mode must be 'batch' or 'stream'"
+    return errors
+
+@flask_app.post("/api/v1/admin/config")
+def post_admin_config():
+    data = request.json or {}
+    errs = _validate_config(data)
+    if errs:
+        return jsonify({"ok": False, "errors": errs}), 400
+    if "stt_mode" in data:
+        set_config("stt_mode", data["stt_mode"])
+    if "deepgram" in data:
+        set_config("deepgram", data["deepgram"])
+    return jsonify({"ok": True, "config": get_config()})
+
+
+@flask_app.get("/api/v1/_test/events")
+def get_test_events():
+    sess = request.args.get("session_id", "default")
+    from .ws_bus import BUS
+    # NOTE: direct access; safe in tests
+    hist = BUS._history.get(sess, [])[:]
+    BUS._history[sess] = []
+    return jsonify(hist)
+
+@flask_app.post("/api/v1/voice/stt/stream")
+def post_stt_stream():
+    sess = request.args.get("session_id") or request.form.get("session_id") or "default"
+    chunk = None
+    data = b""
     try:
-        t = fr.get("type")
-        if t == "text":
-            return {"type": "assistant_chunk", "text": fr.get("content","")}
-        if t == "end":
-            out = {"type": "assistant_end"}
-            # include optional metadata
-            if "finish_reason" in fr: out["finish_reason"] = fr["finish_reason"]
-            return out
-        return fr
+        chunk = request.files.get("chunk")
     except Exception:
-        return {"type":"error","message":"frame_normalization_failed"}
+        chunk = None
+    if chunk:
+        data = chunk.read()
+    else:
+        data = request.get_data(cache=False) or b""
+    if not data:
+        return jsonify({"error": "missing chunk"}), 400
+    if len(data) > 512 * 1024:
+        return jsonify({"error": "chunk too large"}), 413
+    from .services.streaming_asr.stream_manager import get_manager
+    mgr = get_manager()
+    mgr.enqueue(sess, data)
+    return jsonify({"ok": True})
 
-async def _keepalive_task(websocket: WebSocket, heartbeat_ms: int):
-    try:
-        while True:
-            await asyncio.sleep(max(heartbeat_ms, 1000) / 1000.0)
-            try:
-                await websocket.send_text(dumps({"type":"keepalive","ts": int(time.time()*1000)}))
-            except Exception:
-                # Connection likely closed
-                return
-    except asyncio.CancelledError:
-        return
+# Starlette for WS
 
-# --- WebSocket endpoint ---
-async def chat_ws(websocket: WebSocket):
+async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
-    session_id = websocket.query_params.get("session_id", "") or "default"
-    tab_id = websocket.query_params.get("tab") or websocket.query_params.get("tab_id") or "default"
-
-    # Announce open to admin log
-    try:
-        _admin_emit("ws_open", session_id=session_id, proto=PROTO_ID, tab_id=tab_id)
-    except Exception:
-        pass
-
-    # Send 'ready' FIRST, deterministically encoded
-    ready = {"type":"ready","session_id":session_id,"proto":PROTO_ID,"heartbeat_ms":DEFAULT_HEARTBEAT_MS,"ts": int(time.time()*1000)}
-    await websocket.send_text(dumps(ready))
-
-    # Subscribe to the bus and start forwarder
-    loop = asyncio.get_running_loop()
-    q = bus.subscribe(session_id)
-    try:
-        _admin_emit('ws_subscribed', session_id=session_id)
-    except Exception:
-        pass
-    async def forward_bus():
-        from queue import Empty
-        while True:
-            try:
-                frame = await loop.run_in_executor(None, q.get)
-            except Exception:
-                # Executor/bus error or closed
-                return
-            try:
-                await websocket.send_text(dumps(_normalize_frame(frame)))
-            except Exception:
-                return
-    forward_task = asyncio.create_task(forward_bus())
-
-    # Start keepalive pings from server (optional; client may also ping)
-    ka = asyncio.create_task(_keepalive_task(websocket, DEFAULT_HEARTBEAT_MS))
-
+    query = dict(websocket.query_params)
+    session_id = query.get("session_id", "default")
+    q = await BUS.subscribe(session_id)
     try:
         while True:
-            try:
-                msg = await websocket.receive_text()
-            except WebSocketDisconnect:
-                break
-            except Exception:
-                # If receive fails, close out
-                break
+            item = await q.get()
+            await websocket.send_json(item)
+    except WebSocketDisconnect:
+        await BUS.unsubscribe(session_id, q)
 
-            # Handle plain text 'ping' for CI
-            if isinstance(msg, str) and msg.strip().lower() == "ping":
-                try:
-                    await websocket.send_text("pong")
-                    _admin_emit("ws_pong", session_id=session_id)
-                except Exception:
-                    pass
-                continue
+starlette_app = Starlette(routes=[
+    WebSocketRoute("/ws/v1/chat", ws_endpoint),
+])
 
-            # Try to parse JSON control frames
-            try:
-                payload = json.loads(msg)
-            except Exception:
-                payload = None
 
-            if isinstance(payload, dict):
-                t = str(payload.get("type","")).lower()
-
-                if t == "ping" or t == "keepalive":
-                    # Application-level pong (JSON)
-                    await websocket.send_text(dumps({"type":"pong","echo": payload.get("ts"), "ts": int(time.time()*1000)}))
-                    continue
-
-                if t == "interrupt":
-                    # Signal: user barge-in; acknowledge (upstream cancellation handled elsewhere)
-                    await websocket.send_text(dumps({"type":"interrupt_ack","ts": int(time.time()*1000)}))
-                    continue
-
-                if t == "close":
-                    break
-
-            # Unknown inbound -> ignore but log
-            try:
-                _admin_emit("ws_in", session_id=session_id, payload=(msg[:256] if isinstance(msg,str) else "<binary>"))
-            except Exception:
-                pass
-
-    finally:
-        # Teardown
-        for task in (ka, forward_task):
-            try:
-                task.cancel()
-            except Exception:
-                pass
-        try:
-            _admin_emit("ws_close", session_id=session_id)
-        except Exception:
-            pass
-        try:
-            await websocket.close(code=1000)
-        except Exception:
-            pass
-
-# --- Compose Starlette app ---
-routes = [
-    WebSocketRoute("/ws/v1/chat", chat_ws),
-    Mount("/", app=WSGIMiddleware(flask_app)),
-]
-
-_cors_origins = []
-import os as _os
-_allow = _os.environ.get("CORS_ALLOWLIST","").strip()
-if _allow:
-    _cors_origins = [o.strip() for o in _allow.split(",") if o.strip()]
-
-middleware = [Middleware(GZipMiddleware, minimum_size=1024)]
-if _cors_origins:
-    middleware.insert(0, Middleware(CORSMiddleware, allow_origins=_cors_origins, allow_methods=["GET","POST","OPTIONS"], allow_headers=["Content-Type","X-CSRF-Token"], allow_credentials=True))
-
-asgi = Starlette(routes=routes, middleware=middleware)
+# Compose ASGI
+from starlette.applications import Starlette as _Star
+asgi = _Star()
+asgi.add_websocket_route("/ws/v1/chat", ws_endpoint)
+asgi.mount("/", app=WSGIMiddleware(flask_app))
+asgi.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)

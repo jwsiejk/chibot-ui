@@ -1,3 +1,20 @@
+
+[project]
+name = "askchip-optB"
+version = "0.1.0"
+description = "Ask Chip - Option B (Phases 1–3)"
+requires-python = ">=3.10"
+dependencies = [
+  "flask==3.0.3",
+  "uvicorn==0.30.6",
+  "starlette==0.38.4",
+  "sqlalchemy==2.0.32",
+  "pydantic==2.9.2",
+  "itsdangerous==2.2.0",
+  "pytest==8.3.3",
+  "httpx==0.27.2",
+  "anyio==4.6.0",
+]
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 addopts = "-q"
-pythonpath = ["."]
