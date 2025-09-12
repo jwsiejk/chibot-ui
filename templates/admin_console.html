@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>Ask Chip — Admin Console</title>
+  <title>Ask Chip — Admin</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <link rel="stylesheet" href="/static/css/app.css"/>
   <style>
@@ -22,10 +22,13 @@
     .muted{color:#9aa4b2}
     table{width:100%;border-collapse:collapse}
     th,td{font-size:13px;border-bottom:1px solid #202533;padding:8px}
+    .back{display:inline-block;margin-bottom:8px;color:#7aa0ff;text-decoration:none}
+    .back:hover{text-decoration:underline}
   </style>
 </head>
 <body>
 <div class="wrap">
+  <a class="back" href="/">← Back</a>
   <h1>Ask Chip — Admin</h1>
 
   <div class="tabs" id="tabs">
@@ -36,48 +39,32 @@
     <button data-tab="diag">Diagnostics</button>
   </div>
 
-  <!-- UX -->
+  <!-- User Experience -->
   <section class="panel active" id="tab-ux">
     <h3>User Experience</h3>
     <div class="grid">
-      <label>Theme
-        <select id="theme">
-          <option>light</option><option>dark</option><option>system</option>
-        </select>
-      </label>
+      <label>Theme <select id="theme"><option>light</option><option>dark</option><option>system</option></select></label>
       <label>Show instruction strip <input type="checkbox" id="show_instruction_strip"/></label>
       <label>Show state dots <input type="checkbox" id="show_state_dots"/></label>
-
       <label>Suggestions enabled <input type="checkbox" id="suggestions_enabled"/></label>
       <label>Suggestions — max items <input type="number" id="suggestions_max_items" min="0" max="4"/></label>
       <label>Suggestions — max words <input type="number" id="suggestions_max_words" min="1" max="7"/></label>
-
       <label>Nudges enabled <input type="checkbox" id="nudges_enabled"/></label>
       <label>Nudge delay (ms) <input type="number" id="nudge_delay_ms" min="0"/></label>
       <label>Nudge backoff after ignored <input type="number" id="nudge_backoff_after_ignored" min="0" max="5"/></label>
-
       <label>WS ping interval (ms) <input type="number" id="ws_ping_interval_ms" min="5000"/></label>
       <label>WS idle timeout (ms) <input type="number" id="ws_idle_timeout_ms" min="5000"/></label>
     </div>
-    <div class="actions">
-      <button class="btn primary" id="save-ux">Save</button>
-    </div>
+    <div class="actions"><button class="btn primary" id="save-ux">Save</button></div>
   </section>
 
-  <!-- Flow -->
+  <!-- Conversational Flow -->
   <section class="panel" id="tab-flow">
     <h3>Conversational Flow</h3>
     <div class="grid">
-      <label>Teacher move — summarize_next_actions weight (0..1)
-        <input id="tm_summarize_next_actions" type="number" step="0.05" min="0" max="1"/>
-      </label>
-      <label>Teacher move — check_understanding weight (0..1)
-        <input id="tm_check_understanding" type="number" step="0.05" min="0" max="1"/>
-      </label>
-      <label>Teacher move — deep_dive weight (0..1)
-        <input id="tm_deep_dive" type="number" step="0.05" min="0" max="1"/>
-      </label>
-
+      <label>Teacher move — summarize_next_actions (0..1) <input id="tm_summarize_next_actions" type="number" step="0.05" min="0" max="1"/></label>
+      <label>Teacher move — check_understanding (0..1) <input id="tm_check_understanding" type="number" step="0.05" min="0" max="1"/></label>
+      <label>Teacher move — deep_dive (0..1) <input id="tm_deep_dive" type="number" step="0.05" min="0" max="1"/></label>
       <label>Barge-in confirm (ms) <input id="confirm_ms" type="number" min="0"/></label>
       <label>Echo threshold boost <input id="echo_threshold_boost" type="number" min="1" step="0.1"/></label>
       <label>Min speech (ms) <input id="min_speech_ms" type="number" min="0"/></label>
@@ -87,7 +74,7 @@
 
   <!-- Vendor / VAD -->
   <section class="panel" id="tab-vendor">
-    <h3>Vendor — Streaming ASR (Deepgram) & VAD</h3>
+    <h3>Vendor — Streaming ASR (Deepgram) / VAD</h3>
     <div class="grid">
       <label>Deepgram model <input id="deepgram_model" value="nova-3"/></label>
       <label>Language <input id="deepgram_language" value="en"/></label>
@@ -96,14 +83,11 @@
       <label>Encoding <input id="deepgram_encoding" value="opus"/></label>
       <label>Sample rate <input id="deepgram_sample_rate" type="number" value="48000"/></label>
       <label>Interim results <input id="deepgram_interim_results" type="checkbox" checked/></label>
-
       <label>VAD attack (ms) <input id="vad_attack_ms" type="number" value="12"/></label>
       <label>VAD release (ms) <input id="vad_release_ms" type="number" value="240"/></label>
       <label>VAD dbFS threshold <input id="vad_dbfs_threshold" type="number" value="-42"/></label>
     </div>
-    <div class="muted" style="margin-top:6px">
-      Secrets (Deepgram API key) remain in environment variables; not editable here.
-    </div>
+    <div class="muted" style="margin-top:6px">Secrets (Deepgram API key) remain in environment variables; not editable here.</div>
     <div class="actions"><button class="btn primary" id="save-vendor">Save</button></div>
   </section>
 
@@ -115,19 +99,13 @@
       <label>Temperature <input id="gen_temperature" type="number" step="0.05" min="0" max="2" value="0.3"/></label>
       <label>Top-p <input id="gen_top_p" type="number" step="0.05" min="0" max="1" value="1.0"/></label>
       <label>Max sentences <input id="gen_max_sentences" type="number" min="1" value="4"/></label>
-      <label>Target verbosity <select id="gen_target_verbosity">
-        <option>short</option><option selected>medium</option><option>long</option></select>
-      </label>
-
+      <label>Target verbosity <select id="gen_target_verbosity"><option>short</option><option selected>medium</option><option>long</option></select></label>
       <label>Persona intensity (Nebraska %) <input id="nebraska_persona_level" type="number" step="0.01" min="0" max="1" value="0.13"/></label>
       <label>Use persona quotes <input id="nebraska_quotes_enabled" type="checkbox" checked/></label>
-
       <label>NLU: intent classification <input id="nlu_intent" type="checkbox" checked/></label>
       <label>NLU: sentiment/tone detection <input id="nlu_sentiment" type="checkbox" checked/></label>
       <label>NLP: context memory blending <input id="nlp_memory_blend" type="checkbox" checked/></label>
-      <label>NLG: summarizer preference <select id="nlg_summary_pref">
-        <option>never</option><option selected>auto</option><option>always</option></select>
-      </label>
+      <label>NLG: summarizer preference <select id="nlg_summary_pref"><option>never</option><option selected>auto</option><option>always</option></select></label>
     </div>
     <div class="actions"><button class="btn primary" id="save-ptm">Save</button></div>
   </section>
@@ -149,5 +127,15 @@
 </div>
 
 <script type="module" src="/static/js/admin_console.js"></script>
+<script>
+  // Open the requested tab when coming from /diagnostics redirect
+  (function(){
+    const p=new URLSearchParams(location.search);
+    const want=p.get('tab');
+    if(!want) return;
+    const btn=[...document.querySelectorAll('#tabs button')].find(b=>b.dataset.tab===want);
+    if(btn) btn.click();
+  })();
+</script>
 </body>
 </html>
