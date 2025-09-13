@@ -1,6 +1,7 @@
 
 from flask import Blueprint, request, jsonify, session
 from ..db import db, persist_enabled
+from ..middleware.csrf import ensure_csrf_headers
 from ..security_state import get_user, set_profile
 
 bp = Blueprint("profile_v1", __name__, url_prefix="/api/v1/profile")
@@ -55,7 +56,7 @@ def get_profile():
         session['profile_complete'] = prof["profile_complete"]
     except Exception:
         pass
-    return jsonify({"ok": True, "profile": prof})
+    resp = jsonify({"ok": True, "profile": prof}); return ensure_csrf_headers(resp)
 
 @bp.post("")
 def save_profile():
@@ -76,4 +77,4 @@ def save_profile():
     except Exception:
         pass
     out = _load_profile(email)
-    return jsonify({"ok": True, "profile": out})
+    resp = jsonify({"ok": True, "profile": out}); return ensure_csrf_headers(resp)

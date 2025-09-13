@@ -38,6 +38,7 @@ export async function prefillProfile(){
       }
     }
   }catch(_){ /* ignore */ }
+  } finally { window.__auth_eval_lock = false; }
 }
 
 export async function saveProfile(){
@@ -74,6 +75,7 @@ export async function saveProfile(){
     el('profileMsg').textContent = 'Save failed.';
     return false;
   }
+  } finally { window.__auth_eval_lock = false; }
 }
 
 async function login(email){
@@ -88,6 +90,7 @@ async function login(email){
 }
 
 async function evaluate(){
+  if (window.__auth_eval_lock) return; window.__auth_eval_lock = true; try {
   try{
     const r = await fetch('/api/v1/auth/me', {credentials:'include'});
     const j = await r.json();
@@ -114,6 +117,7 @@ async function evaluate(){
     setStartEnabled(false);
     showLogin(true);
   }
+  } finally { window.__auth_eval_lock = false; }
 }
 
 function wire(){
@@ -143,6 +147,7 @@ function wire(){
       await evaluate();
     };
   }
+  } finally { window.__auth_eval_lock = false; }
 }
 
 document.addEventListener('DOMContentLoaded', ()=>{

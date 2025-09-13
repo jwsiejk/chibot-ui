@@ -37,3 +37,37 @@
   };
 })();
 </script>
+
+
+<script>
+// CSRF bootstrap + fetch wrapper (same-origin only)
+(function(){
+  const CSRF_HEADER = "X-CSRF-Token";
+  function sameOrigin(url){
+    try{ const u=new URL(url, location.href); return u.origin===location.origin; }catch(_){ return true; }
+  }
+  async function ensureCsrf(){
+    try{
+      const r = await fetch('/api/v1/csrf', {credentials:'include'});
+      const tok = r.headers.get(CSRF_HEADER);
+      if (tok) window.__csrf = tok;
+    }catch(e){ /* no-op */ }
+  }
+  if(!window.__csrf_wrapped){
+    window.__csrf_wrapped = true;
+    const _fetch = window.fetch;
+    window.fetch = async function(url, opts){
+      opts = opts || {};
+      const method = (opts.method||'GET').toUpperCase();
+      if((method!=='GET' && method!=='HEAD' && method!=='OPTIONS') && sameOrigin(url)){
+        if(!window.__csrf) await ensureCsrf();
+        opts.headers = Object.assign({}, opts.headers||{}, window.__csrf ? {[CSRF_HEADER]: window.__csrf} : {});
+      }
+      const res = await _fetch(url, opts);
+      try{ const tok = res.headers.get(CSRF_HEADER); if(tok) window.__csrf = tok; }catch(e){}
+      return res;
+    };
+    ensureCsrf();
+  }
+})();
+</script>

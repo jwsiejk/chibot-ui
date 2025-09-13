@@ -1,3 +1,12 @@
+# OPERATING INSTRUCTIONS
+
+> **Phase 2 Release Note (2025-09-13)**  
+> Login/Profile gate is **Neon-backed**:
+> - On `POST /api/v1/auth/login`, the server checks Neon for an existing profile (when `DATABASE_URL` is set).  
+> - If found → user is taken **directly** to the main interface; **Start** is enabled.  
+> - If not found → the **Profile** modal is displayed; `POST /api/v1/profile` persists to Neon; after save, the main interface is entered and **Start** is enabled.  
+> - CSRF is required for state-changing endpoints (`/api/v1/auth/login`, `/api/v1/profile`).
+
 ## 📋 Ask Chip — Operating Instructions (paste this into a new chat)
 
 You are my build assistant for the Ask Chip app. Follow these rules exactly:

@@ -1,6 +1,7 @@
 
 from flask import Blueprint, request, jsonify, session, abort
 from ..security_state import set_user, get_user, set_profile, get_profile
+from ..middleware.csrf import ensure_csrf_headers
 from ..db import persist_enabled
 
 bp = Blueprint("auth_v1", __name__, url_prefix="/api/v1/auth")
@@ -13,7 +14,7 @@ def login():
     data = request.get_json(silent=True) or {}
     email = _normalize_email(data.get("email") or "")
     if not email:
-        return jsonify({"ok": False, "error": "email_required"}), 400
+        resp = jsonify({"ok": False, "error": "email_required"}), 400
     # Persist user in session
     set_user(email)
     session["user"] = {"email": email}
@@ -34,14 +35,16 @@ def login():
         set_profile(prof or {})
         session["profile_complete"] = bool((prof or {}).get("profile_complete") or ((prof or {}).get("name") and (prof or {}).get("title")))
 
-    return jsonify({"ok": True, "email": email, "profile_complete": bool(session.get("profile_complete")), "profile": prof}), 200
+    return jsonify({"ok": True, "email": email, "profile_complete": bool(session.get("profile_complete")), "profile": prof})
+    return ensure_csrf_headers(resp), 200
 
 @bp.post("/logout")
 def logout():
     session.clear()
     set_user(None)
     set_profile({})
-    return jsonify({"ok": True}), 200
+    resp = jsonify({"ok": True})
+    return ensure_csrf_headers(resp), 200
 
 @bp.get("/me")
 def me():
@@ -60,13 +63,14 @@ def me():
         except Exception:
             prof = {}
             profile_complete = bool(session.get('profile_complete', False))
-    return jsonify({
+    resp = jsonify({
         "ok": True,
         "authenticated": authenticated,
         "email": email,
         "profile_complete": profile_complete,
         "profile": prof
-    }), 200
+    })
+    return ensure_csrf_headers(resp), 200
 
 @bp.post("/profile/save")
 def profile_save():
