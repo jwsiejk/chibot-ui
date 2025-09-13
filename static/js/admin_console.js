@@ -1,13 +1,10 @@
 // Ask Chip — Admin Console wiring
-// Uses GET/POST /api/v1/admin/config and diagnostics routes.
 
-// ---- Helpers ----
 function getCookie(name){
   const m = document.cookie.match(new RegExp('(?:^|;\\s*)'+name+'=([^;]+)')); return m ? decodeURIComponent(m[1]) : '';
 }
 async function apiGet(url){
-  const r = await fetch(url, {credentials:'include'});
-  if(!r.ok) throw new Error(await r.text()); return r.json();
+  const r = await fetch(url, {credentials:'include'}); if(!r.ok) throw new Error(await r.text()); return r.json();
 }
 async function apiPost(url, body){
   const headers = {'content-type':'application/json'};
@@ -16,7 +13,7 @@ async function apiPost(url, body){
   if(!r.ok) throw new Error(await r.text()); return r.json();
 }
 
-// ---- Tabs
+// Tabs
 const tabsEl = document.getElementById('tabs');
 tabsEl.addEventListener('click', (e)=>{
   const btn = e.target.closest('button'); if(!btn) return;
@@ -27,7 +24,7 @@ tabsEl.addEventListener('click', (e)=>{
   document.getElementById(`tab-${id}`).classList.add('active');
 });
 
-// ---- Load config into UI
+// ---------------------- Load current config into UI ----------------------
 async function loadConfig(){
   const cfg = await apiGet('/api/v1/admin/config');
 
@@ -77,13 +74,14 @@ async function loadConfig(){
   setChk('nlp_memory_blend', cfg.nlp_memory_blend ?? true);
   setVal('nlg_summary_pref', cfg.nlg_summary_pref ?? 'auto');
 }
+
 function setVal(id, v){ const el=document.getElementById(id); if(el) el.value = v; }
 function setChk(id, v){ const el=document.getElementById(id); if(el) el.checked = !!v; }
 function num(id){ const el=document.getElementById(id); return el ? Number(el.value) : undefined; }
 function chk(id){ const el=document.getElementById(id); return el ? !!el.checked : undefined; }
 function val(id){ const el=document.getElementById(id); return el ? el.value : undefined; }
 
-// ---- Save handlers
+// ---------------------- Save handlers ----------------------
 async function saveUX(){
   const updates = {
     theme: val('theme'),
@@ -153,7 +151,7 @@ async function savePTM(){
   alert('Saved PTM');
 }
 
-// ---- Diagnostics wiring (with CSRF + timeout)
+// ---------------------- Diagnostics wiring ----------------------
 async function runDiagnostics(){
   const statusEl = document.getElementById('diag-status');
   const bodyEl   = document.getElementById('diag-body');
@@ -161,16 +159,14 @@ async function runDiagnostics(){
   bodyEl.innerHTML = '';
 
   try {
-    await apiGet('/api/v1/admin/diagnostics'); // quick presence check
+    await apiGet('/api/v1/admin/diagnostics');
     const ac = new AbortController();
     const tm = setTimeout(()=>ac.abort(), 10000);
-
     const headers = {};
     const csrf = getCookie('XSRF-TOKEN'); if(csrf) headers['X-CSRF-Token'] = csrf;
     const r = await fetch('/api/v1/admin/diagnostics/run', {
       method:'POST', credentials:'include', headers, signal: ac.signal
     });
-
     clearTimeout(tm);
     if(!r.ok) throw new Error(await r.text());
     const j = await r.json();
@@ -179,20 +175,52 @@ async function runDiagnostics(){
       tr.innerHTML = `<td>${row.name}</td><td>${row.ok ? '✅' : '❌'}</td><td>${row.details||''}</td>`;
       bodyEl.appendChild(tr);
     });
-    statusEl.textContent = 'done';
+    statusEl.textContent = j.ok ? 'ok' : 'done (some failed)';
   } catch(e) {
     statusEl.textContent = 'error';
     const tr=document.createElement('tr');
     tr.innerHTML = `<td>diagnostics</td><td>❌</td><td>${(e && e.message) || e}</td>`;
-    document.getElementById('diag-body').appendChild(tr);
+    bodyEl.appendChild(tr);
   }
 }
 
-// ---- Wire buttons & bootstrap
-document.getElementById('save-ux').addEventListener('click', ()=>saveUX().catch(e=>alert(e)));
-document.getElementById('save-flow').addEventListener('click', ()=>saveFlow().catch(e=>alert(e)));
-document.getElementById('save-vendor').addEventListener('click', ()=>saveVendor().catch(e=>alert(e)));
-document.getElementById('save-ptm').addEventListener('click', ()=>savePTM().catch(e=>alert(e)));
-document.getElementById('run-diag').addEventListener('click', ()=>runDiagnostics().catch(e=>alert(e)));
+async function runDiagnosticsFull(){
+  const statusEl = document.getElementById('diag-full-status');
+  const bodyEl   = document.getElementById('diag-full-body');
+  statusEl.textContent = 'running...';
+  bodyEl.innerHTML = '';
 
-loadConfig().catch(e=>alert(e));
+  try {
+    const headers = {};
+    const csrf = getCookie('XSRF-TOKEN'); if(csrf) headers['X-CSRF-Token'] = csrf;
+    const ac = new AbortController();
+    const tm = setTimeout(()=>ac.abort(), 15000);
+    const r = await fetch('/api/v1/admin/diagnostics/full', {
+      method:'POST', credentials:'include', headers, signal: ac.signal
+    });
+    clearTimeout(tm);
+    if(!r.ok) throw new Error(await r.text());
+    const j = await r.json();
+    (j.results||[]).forEach(row=>{
+      const tr=document.createElement('tr');
+      tr.innerHTML = `<td>${row.name}</td><td>${row.ok ? '✅' : '❌'}</td><td>${row.details||''}</td>`;
+      bodyEl.appendChild(tr);
+    });
+    statusEl.textContent = j.ok ? 'ok' : 'done (some failed)';
+  } catch(e) {
+    statusEl.textContent = 'error';
+    const tr=document.createElement('tr');
+    tr.innerHTML = `<td>full</td><td>❌</td><td>${(e && e.message) || e}</td>`;
+    bodyEl.appendChild(tr);
+  }
+}
+
+// Wire buttons
+const btnQuick = document.getElementById('run-diag');
+if (btnQuick) btnQuick.addEventListener('click', ()=>runDiagnostics().catch(e=>alert(e)));
+
+const btnFull = document.getElementById('run-diag-full');
+if (btnFull) btnFull.addEventListener('click', ()=>runDiagnosticsFull().catch(e=>alert(e)));
+
+// Bootstrap
+loadConfig().catch(()=>{});
