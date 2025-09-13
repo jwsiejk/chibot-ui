@@ -127,8 +127,25 @@ table{width:100%;border-collapse:collapse}
 th,td{font-size:13px;border-bottom:1px solid var(--border);padding:8px}
 
 /* ---------------- Unify Diagnostics under Admin ---------------- */
+/* Hide any legacy Diagnostics menu entry, regardless of variant */
 nav .menu a[href="/diagnostics"],
-nav .menu a[href="/diagnostics/"]{display:none !important}
+nav .menu a[href="/diagnostics/"],
+nav .menu a[href$="/diagnostics"],
+nav .menu a[href*="/diagnostics"],
+nav .menu a[href*="diagnostics.html"],
+nav .menu a[href*="diagnostics/index"],
+nav .menu a[href*="?view=diagnostics"],
+nav .menu [data-route="diagnostics"],
+nav .menu [data-link="diagnostics"],
+/* fallbacks if your menu isn’t inside nav.menu */
+a[href="/diagnostics"],
+a[href="/diagnostics/"],
+a[href$="/diagnostics"],
+a[href*="/diagnostics"],
+a[data-route="diagnostics"],
+a[data-link="diagnostics"]{
+  display:none !important;
+}
 
 /* ---------------- AskChip menu branding (orange) ---------------- */
 /* Style the Admin/AskChip menu trigger to match old orange brand text */
