@@ -9,6 +9,18 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 const on = (el, ev, fn) => el && el.addEventListener(ev, fn);
 
 // ---------- UI helpers ----------
+function prefillFromMe(me){
+  try{
+    const prof = (me && me.profile) || {};
+    const em = document.getElementById('prof_email');
+    if (em) { em.value = (me && me.email) || (prof.email || ''); em.disabled = true; }
+    const nm = document.getElementById('prof_name');     if (nm && prof.name   != null) nm.value   = prof.name   || '';
+    const rl = document.getElementById('prof_role');     if (rl){ const t = (prof.title!=null?prof.title:prof.role); if (t!=null) rl.value = t || ''; }
+    const rg = document.getElementById('prof_region');   if (rg && prof.region != null) rg.value   = prof.region || '';
+    const co = document.getElementById('prof_company');  if (co && prof.company!= null) co.value   = prof.company|| '';
+  }catch(_){}
+}
+
 function setStartEnabled(enabled) {
   const btn = $('#startButton') || $('#start');
   if (btn) {
@@ -80,6 +92,17 @@ export async function evaluateAuth() {
     if (!me.authenticated) {
       show(loginModal, true);
       show(profileModal, false);
+      setStartEnabled(false);
+      return;
+    }
+
+    // Prefill visible fields with server profile
+    prefillFromMe(me);
+
+    // If profile is not complete, open the profile modal and keep Start disabled
+    if (!me.profile_complete) {
+      show(loginModal, false);
+      show(profileModal, true);
       setStartEnabled(false);
       return;
     }
