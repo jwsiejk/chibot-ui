@@ -133,7 +133,7 @@ async def ws_chat(scope, receive, send):
                         pass
                     _, frames = make_assistant_frames(msg.get("text") or "")
                     for fr in frames:
-                        if fr.get("type") == "text":
+                        if fr.get("type") in ("text","assistant_chunk"):
                             last_tid = fr.get("turn_id")
                         await send({"type":"websocket.send","text": json.dumps(_normalize_frame(fr), separators=(",",":"))})
     finally:

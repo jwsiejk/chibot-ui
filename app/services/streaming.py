@@ -90,9 +90,12 @@ def make_assistant_frames(seed_text: str, session_id: str | None = None, meta: d
     frames.append({"type":"assistant_end","turn_id":tid})
     return tid, frames
 
-def schedule_frames(session_id: str, frames: List[Dict], delay_ms: int = 120, **kw):
+def schedule_frames(session_id: str, frames: List[Dict], delay_ms: int = 120, correlation_user_msg_id: str | None = None, **kw):
     def run():
         for fr in frames:
+            # annotate correlation id if provided
+            if correlation_user_msg_id and 'correlation_user_msg_id' not in fr:
+                fr['correlation_user_msg_id'] = correlation_user_msg_id
             try:
                 bus.broadcast(session_id, fr)
             except Exception:

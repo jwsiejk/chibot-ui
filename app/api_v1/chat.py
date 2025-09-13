@@ -10,6 +10,11 @@ from ..ws.bus import bus
 bp = Blueprint("chat", __name__)
 _TTS_MEMO = {}
 
+# Phase 1: map Idempotency-Key header to user_msg_id for correlation
+
+def _get_user_msg_id():
+    return (request.headers.get('Idempotency-Key') or request.headers.get('X-User-Msg-Id') or '').strip()
+
 @bp.before_request
 def _chat_rl_guard():
     # Rate-limit guard (returns a response on limit breach)
@@ -80,7 +85,7 @@ def post_chat():
     except Exception:
         from ..services.streaming import make_assistant_frames_text_only
         tid, frames = make_assistant_frames_text_only((text or "chat"), sid)
-    schedule_frames(sid, frames)
+    schedule_frames(sid, frames, correlation_user_msg_id=_get_user_msg_id())
     try:
         from ..api_v1.admin import _emit
         if sid=='default': _emit('warn', label='chat:default_sid', note='frames scheduled to default sid')
