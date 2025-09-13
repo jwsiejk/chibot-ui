@@ -1,3 +1,4 @@
+
 import base64
 from flask import Blueprint, jsonify, request, session
 from ..db import db
@@ -6,12 +7,12 @@ from ..services.mailer import send_transcript
 from ..services.streaming import make_assistant_frames, schedule_frames
 from ..middleware.rate_limit import limit, check_now
 from ..ws.bus import bus
+import os, uuid
 
 bp = Blueprint("chat", __name__)
 _TTS_MEMO = {}
 
-# Phase 1: map Idempotency-Key header to user_msg_id for correlation
-
+# Phase 1/2: map Idempotency-Key header to user_msg_id for correlation
 def _get_user_msg_id():
     return (request.headers.get('Idempotency-Key') or request.headers.get('X-User-Msg-Id') or '').strip()
 
@@ -22,7 +23,6 @@ def _chat_rl_guard():
     return rv
 
 @limit("chat")
-@bp.post("/")
 @bp.post("")
 def post_chat():
     # Unified chat entrypoint used by the UI
@@ -38,68 +38,53 @@ def post_chat():
     except Exception:
         pass
 
-    # Nudge controls
-    if cmd == "nudge":
-        s = db.ensure_session(sid, email)
-        if s.get("nudges", 0) < 1:
+    user_msg_id = _get_user_msg_id()
+    if not user_msg_id:
+        return jsonify(ok=False, error="missing_idempotency_key", detail="Provide Idempotency-Key header", session_id=sid), 400
+
+    # Typed chat idempotency store
+    idem = db.memory.setdefault("chat_turns", {}).setdefault(sid, {})
+
+    # If duplicate, return same turn_id and mark idempotent
+    if user_msg_id in idem:
+        tid = idem[user_msg_id]
+        try:
+            from ..api_v1.admin import _emit
+            _emit('chat:idempotent', session_id=sid, user_msg_id=user_msg_id, turn_id=tid)
+        except Exception:
+            pass
+        return jsonify(ok=True, user_msg_id=user_msg_id, turn_id=tid, idempotent=True), 200
+
+    # First time this user_msg_id seen for this session: allocate a turn_id
+    tid = uuid.uuid4().hex
+    idem[user_msg_id] = tid
+
+    # If vendors are available, schedule frames; else explicit error (no silent degrade)
+    have_openai = bool(os.environ.get("OPENAI_API_KEY"))
+    have_eleven = bool(os.environ.get("ELEVENLABS_API_KEY"))
+    if have_openai and have_eleven:
+        try:
+            tid2, frames = make_assistant_frames(text, sid)
+            # Prefer provider-generated turn_id if returned
+            if isinstance(tid2, str):
+                tid = tid2
+                idem[user_msg_id] = tid
+            schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
             try:
-                from ..policy.nudges import arm_nudge
-                arm_nudge(sid)
-                s["nudges"] = s.get("nudges", 0) + 1
-                for fr in [{"type":"state","phase":"assistant_speaking"},
-                           {"type":"assistant_chunk","text":"(nudge) Just checking in — want me to continue?"},
-                           {"type":"assistant_end"}]:
-                    try:
-                        bus.broadcast(sid, fr)
-                    except Exception:
-                        pass
-                return jsonify({"ok": True, "nudged": True, "count": s["nudges"]})
+                from ..api_v1.admin import _emit
+                _emit('chat:scheduled', label='chat:scheduled', session_id=sid, n=len(frames))
+                _emit('chat:ok', label='chat:ok – frames ready', turn_id=tid, n=len(frames))
             except Exception:
                 pass
-        return jsonify({"ok": True, "nudged": False, "count": s.get("nudges", 0)})
-    if cmd == "end_session":
-        body = db.get_transcript(sid)
-        try:
-            send_transcript(email, "Ask Chip — transcript", body)
-        except Exception:
-            pass
-        return jsonify({"ok": True, "emailed": True})
-
-    # Normal chat turn
-    if text:
-        db.ensure_session(sid, email)
-        db.add_message(sid, "user", text)
-        try:
-            _emit('chat:req', label='chat:req – user_text', route='/api/v1/chat', text=text)
-        except Exception:
-            pass
-        try:
-            from ..policy.nudges import cancel_nudge
-            cancel_nudge(sid)
-        except Exception:
-            pass
-
-    # Compose + schedule frames (TTS is internally gated by feature_audio)
-    try:
-        tid, frames = make_assistant_frames((text or "chat"), sid)
-    except Exception:
-        from ..services.streaming import make_assistant_frames_text_only
-        tid, frames = make_assistant_frames_text_only((text or "chat"), sid)
-    schedule_frames(sid, frames, correlation_user_msg_id=_get_user_msg_id())
-    try:
-        from ..api_v1.admin import _emit
-        if sid=='default': _emit('warn', label='chat:default_sid', note='frames scheduled to default sid')
-    except Exception:
-        pass
-    try:
-        _emit('chat:scheduled', label='chat:scheduled', session_id=sid, n=len(frames))
-    except Exception:
-        pass
-    try:
-        _emit('chat:ok', label='chat:ok – frames ready', turn_id=tid, n=len(frames))
-    except Exception:
-        pass
-    return jsonify({"ok": True, "turn_id": tid})
+            return jsonify(ok=True, user_msg_id=user_msg_id, turn_id=tid), 200
+        except Exception as e:
+            # Fall through to explicit error below
+            reason = f"vendor_error:{e.__class__.__name__}"
+            return jsonify(ok=False, error=reason, user_msg_id=user_msg_id, turn_id=tid, session_id=sid), 500
+    else:
+        # Explicit, actionable error (no mocks, no silent degrade)
+        return jsonify(ok=False, error="missing_vendor_keys", user_msg_id=user_msg_id, turn_id=tid, session_id=sid,
+                       detail="Set OPENAI_API_KEY and ELEVENLABS_API_KEY to enable chat synthesis"), 400
 
 @limit("voice_tts")
 @bp.post("/tts-with-visemes")
