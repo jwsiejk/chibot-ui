@@ -1,8 +1,4 @@
 # app/asgi_gateway.py
-# Starlette ASGI app that serves:
-#   • WebSocket /ws/v1/chat  (native ASGI)
-#   • All HTTP via mounted Flask WSGI app
-
 import asyncio, time, json, os
 from app import create_app
 from starlette.applications import Starlette
@@ -15,16 +11,14 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from app.ws.protocol import dumps, PROTO_ID, DEFAULT_HEARTBEAT_MS
 from app.ws.bus import bus
 
-# Optional admin log emitter
 try:
     from app.api_v1.admin import _emit as _admin_emit
 except Exception:
     def _admin_emit(*a, **k): pass
 
-# Build the Flask WSGI app
 flask_app = create_app()
 
-# ---------- Legacy Diagnostics → Admin Diagnostics (unification) ----------
+# ----- Legacy Diagnostics → Admin Diagnostics -----
 try:
     from flask import redirect
     @flask_app.get("/diagnostics")
@@ -37,7 +31,7 @@ try:
     def _legacy_diag_redirect_idx():   return redirect("/admin?tab=diag", code=302)
 except Exception:
     pass
-# -------------------------------------------------------------------------
+# --------------------------------------------------
 
 def _normalize_frame(fr: dict) -> dict:
     try:
@@ -64,7 +58,6 @@ async def _keepalive_task(websocket: WebSocket, heartbeat_ms: int):
     except asyncio.CancelledError:
         return
 
-# --- WebSocket endpoint ---
 async def chat_ws(websocket: WebSocket):
     await websocket.accept()
     session_id = websocket.query_params.get("session_id", "") or "default"
@@ -123,15 +116,12 @@ async def chat_ws(websocket: WebSocket):
 
             if isinstance(payload, dict):
                 t = str(payload.get("type","")).lower()
-
                 if t in ("ping", "keepalive"):
                     await websocket.send_text(dumps({"type":"pong","echo": payload.get("ts"), "ts": int(time.time()*1000)}))
                     continue
-
                 if t == "interrupt":
                     await websocket.send_text(dumps({"type":"interrupt_ack","ts": int(time.time()*1000)}))
                     continue
-
                 if t == "close":
                     break
 
@@ -155,7 +145,6 @@ async def chat_ws(websocket: WebSocket):
         except Exception:
             pass
 
-# --- Compose Starlette app ---
 routes = [
     WebSocketRoute("/ws/v1/chat", chat_ws),
     Mount("/", app=WSGIMiddleware(flask_app)),
@@ -166,17 +155,16 @@ _allow = os.environ.get("CORS_ALLOWLIST","").strip()
 if _allow:
     _cors_origins = [o.strip() for o in _allow.split(",") if o.strip()]
 
-middleware = [Middleware(GZipMiddleware, minimum_size=1024)]
+middleware = [GZipMiddleware(minimum_size=1024)]
 if _cors_origins:
-    middleware.insert(0, Middleware(CORSMiddleware,
+    middleware.insert(0, CORSMiddleware(
         allow_origins=_cors_origins,
         allow_methods=["GET","POST","OPTIONS"],
         allow_headers=["Content-Type","X-CSRF-Token"],
         allow_credentials=True))
 
-asgi = Starlette(routes=routes, middleware=middleware)
+asgi = Starlette(routes=routes, middleware=[Middleware(m) if not isinstance(m, type) else Middleware(m) for m in middleware] if isinstance(middleware, list) else middleware)
 
-# --- Idempotent blueprint registration to avoid double-register crashes ---
 def _register_bp_once(name: str, bp):
     if name not in flask_app.blueprints:
         flask_app.register_blueprint(bp)
@@ -187,14 +175,12 @@ _register_bp_once("voice_mode_v1", voice_mode_bp)
 from app.api_v1.voice_stream import bp as voice_stream_bp
 _register_bp_once("voice_stream_v1", voice_stream_bp)
 
-# Admin Diagnostics
 try:
     from app.api_v1.admin_diagnostics import bp as admin_diag_bp
     _register_bp_once("admin_diag_v1", admin_diag_bp)
 except Exception:
     pass
 
-# --- Graceful shutdown: stop streaming manager loop/thread on SIGTERM ---
 try:
     from app.services.streaming_asr.stream_manager import shutdown_manager
     async def _shutdown_streaming():
