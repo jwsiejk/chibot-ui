@@ -1,42 +1,34 @@
 // static/js/auth_gate.js
-// Production-safe auth/profile gate controller (no re-entrancy, CSRF-aware)
+// Auth/profile gate for chibot-uiv150: matches #prof_* fields and #profileSave,
+// CSRF-aware via csrf.js, de-dup wired handlers, and re-entrancy guard on evaluate.
 
 import { ensureCSRF, installFetchInterceptor } from './csrf.js';
 
-const $ = (s) => document.querySelector(s);
+const $  = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const on = (el, ev, fn) => el && el.addEventListener(ev, fn);
 
-function qsAny(selectors) {
-  for (const sel of selectors) {
-    const el = document.querySelector(sel);
-    if (el) return el;
-  }
-  return null;
-}
-
+// ---------- UI helpers ----------
 function setStartEnabled(enabled) {
-  const btn = document.getElementById('startButton') || document.getElementById('start');
+  const btn = $('#startButton') || $('#start');
   if (btn) {
     btn.disabled = !enabled;
     btn.title = enabled ? '' : 'Please complete your profile to continue';
   }
 }
-
-function showEl(el, yes) {
+function show(el, yes) {
   if (!el) return;
-  // Prefer 'hidden' class if present, otherwise use style
   if (el.classList) el.classList.toggle('hidden', !yes);
   else el.style.display = yes ? '' : 'none';
 }
 
+// ---------- HTTP helpers ----------
 async function getJSON(url, init = {}) {
   init.credentials = init.credentials || 'include';
   const res = await fetch(url, init);
   if (!res.ok) throw new Error(`HTTP ${res.status} on ${url}`);
   return res.json();
 }
-
 async function postJSON(url, body) {
   return getJSON(url, {
     method: 'POST',
@@ -45,50 +37,34 @@ async function postJSON(url, body) {
   });
 }
 
-// -------- Field/ID resolution that tolerates markup differences --------
-function readValue(labelFallbacks, idFallbacks, nameFallbacks, dataFallbacks) {
-  let el = qsAny(idFallbacks.map((id) => `#${id}`))
-        || qsAny(nameFallbacks.map((nm) => `input[name="${nm}"]`))
-        || qsAny(dataFallbacks.map((d) => `[data-field="${d}"]`));
-
-  if (!el) {
-    // very defensive: try to find by label text
-    const labels = $$('label');
-    const match = labels.find((l) => {
-      const txt = (l.textContent || '').trim().toLowerCase();
-      return labelFallbacks.some((want) => txt === want || txt.startsWith(want + ' '));
-    });
-    if (match) {
-      const forId = match.getAttribute('for');
-      if (forId) el = document.getElementById(forId);
-      if (!el) el = match.nextElementSibling && match.nextElementSibling.tagName === 'INPUT'
-        ? match.nextElementSibling : null;
-    }
+// ---------- Field accessors (match your DOM) ----------
+function valueById(id) {
+  const el = document.getElementById(id);
+  return el && 'value' in el ? (el.value || '').trim() : '';
+}
+function readProfileFields() {
+  // Your current template uses #prof_name, #prof_role, #prof_region
+  const name   = valueById('prof_name')   || valueFromLabel(['name']);
+  const title  = valueById('prof_role')   || valueById('profileTitle') || valueFromLabel(['role','title']);
+  const region = valueById('prof_region') || valueFromLabel(['region']);
+  return { name, title, region };
+}
+function valueFromLabel(labelsLower) {
+  const lbl = $$('label').find(L => {
+    const t = (L.textContent || '').trim().toLowerCase();
+    return labelsLower.some(w => t === w || t.startsWith(`${w} `));
+  });
+  if (!lbl) return '';
+  const forId = lbl.getAttribute('for');
+  if (forId) {
+    const el = document.getElementById(forId);
+    return el && 'value' in el ? (el.value || '').trim() : '';
   }
-  return (el && 'value' in el) ? (el.value || '') : '';
+  const sib = lbl.nextElementSibling;
+  return (sib && sib.tagName === 'INPUT') ? (sib.value || '').trim() : '';
 }
 
-function findSaveButton() {
-  return qsAny([
-    '#saveProfileButton',
-    '[data-action="profile-save"]',
-    '#profileModal button.save',
-    '.profile button.save',
-    'button#save',         // last resort patterns
-    'button.save'
-  ]);
-}
-
-function findLoginButton() {
-  return qsAny([
-    '#loginButton',
-    '[data-action="auth-login"]',
-    'button#login',
-    'button.login'
-  ]);
-}
-
-// -------- Gate evaluation --------
+// ---------- Gate evaluation ----------
 let evalLock = false;
 
 export async function evaluateAuth() {
@@ -98,37 +74,37 @@ export async function evaluateAuth() {
     await ensureCSRF();
 
     const me = await getJSON('/api/v1/auth/me');
-
-    const loginModal   = document.getElementById('loginModal');
-    const profileModal = document.getElementById('profileModal');
+    const loginModal   = $('#loginModal');
+    const profileModal = $('#profileModal');
 
     if (!me.authenticated) {
-      showEl(loginModal, true);
-      showEl(profileModal, false);
+      show(loginModal, true);
+      show(profileModal, false);
       setStartEnabled(false);
       return;
     }
 
     if (!me.profile_complete) {
-      showEl(loginModal, false);
-      showEl(profileModal, true);
+      show(loginModal, false);
+      show(profileModal, true);
       setStartEnabled(false);
       return;
     }
 
-    showEl(loginModal, false);
-    showEl(profileModal, false);
+    // Ready
+    show(loginModal, false);
+    show(profileModal, false);
     setStartEnabled(true);
     document.dispatchEvent(new CustomEvent('auth_ready', { detail: me }));
-  } catch (err) {
-    console.warn('[auth_gate] evaluateAuth failed:', err);
+  } catch (e) {
+    console.warn('[auth_gate] evaluateAuth failed:', e);
     setStartEnabled(false);
   } finally {
     evalLock = false;
   }
 }
 
-// -------- Wire once --------
+// ---------- Wire once ----------
 let wired = false;
 
 export function wireAuthGate() {
@@ -138,49 +114,43 @@ export function wireAuthGate() {
   try { installFetchInterceptor(); } catch {}
 
   // LOGIN
-  const loginBtn = findLoginButton();
+  const loginBtn = $('#inlineLoginSubmit') || $('#loginButton') || $('[data-action="auth-login"]');
   if (loginBtn && !loginBtn.__wired) {
     loginBtn.__wired = true;
-    on(loginBtn, 'click', async () => {
+    on(loginBtn, 'click', async (e) => {
+      e.preventDefault();
       try {
-        const email = readValue(
-          ['email'],
-          ['loginEmail'],
-          ['email'],
-          ['email']
-        );
+        const email = ($('#inlineLoginEmail') && $('#inlineLoginEmail').value || '').trim();
         if (!email) return;
         await postJSON('/api/v1/auth/login', { email });
         await evaluateAuth();
-      } catch (e) {
-        console.warn('[auth_gate] login failed:', e);
+      } catch (err) {
+        console.warn('[auth_gate] login failed:', err);
       }
     });
   }
 
-  // PROFILE SAVE
-  const saveBtn = findSaveButton();
+  // PROFILE SAVE (your button id is #profileSave)
+  const saveBtn = $('#profileSave') || $('#saveProfileButton') || $('[data-action="profile-save"]');
   if (saveBtn && !saveBtn.__wired) {
     saveBtn.__wired = true;
-    on(saveBtn, 'click', async () => {
+    on(saveBtn, 'click', async (e) => {
+      e.preventDefault();
       try {
-        const name   = readValue(['name'],  ['profileName'],  ['name'],  ['name']);
-        const title  = readValue(['role','title'], ['profileTitle'], ['title','role'], ['title','role']);
-        const region = readValue(['region'], ['profileRegion'], ['region'], ['region']);
+        const { name, title, region } = readProfileFields();
         await postJSON('/api/v1/profile', { name, title, region });
         window.dispatchEvent(new CustomEvent('profile_saved', { detail: { complete: !!(name && title) } }));
         await evaluateAuth();
-      } catch (e) {
-        console.warn('[auth_gate] profile save failed:', e);
+      } catch (err) {
+        console.warn('[auth_gate] profile save failed:', err);
       }
     });
   }
 
-  // Kick once on DOM ready
+  // Kick once on DOM ready (guarded)
   if (document.readyState !== 'loading') evaluateAuth();
   else document.addEventListener('DOMContentLoaded', evaluateAuth);
 }
 
-// Auto-boot when imported
+// Auto-boot
 try { wireAuthGate(); } catch (e) { console.warn('[auth_gate] wire failed:', e); }
-``
