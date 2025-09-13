@@ -1,5 +1,7 @@
+
 from flask import Blueprint, request, jsonify, session, abort
 from ..security_state import set_user, get_user, set_profile, get_profile
+from ..db import persist_enabled
 
 bp = Blueprint("auth_v1", __name__, url_prefix="/api/v1/auth")
 
@@ -12,17 +14,27 @@ def login():
     email = _normalize_email(data.get("email") or "")
     if not email:
         return jsonify({"ok": False, "error": "email_required"}), 400
-    # Persist in both process-global (for backward compatibility) and session
+    # Persist user in session
     set_user(email)
     session["user"] = {"email": email}
-    # Optional profile bootstrap
-    profile = data.get("profile") or {}
-    if profile:
-        set_profile(profile)
-        session["profile_complete"] = bool(profile.get("completed", False))
+
+    # If a profile payload is provided, accept it; otherwise, try to load from Neon
+    provided_profile = data.get("profile") or {}
+    if provided_profile:
+        set_profile(provided_profile)
+        session["profile_complete"] = bool(provided_profile.get("completed") or (provided_profile.get("name") and provided_profile.get("title")))
+        prof = provided_profile
     else:
-        session.setdefault("profile_complete", False)
-    return jsonify({"ok": True, "email": email, "profile_complete": bool(session["profile_complete"])}), 200
+        # Load existing profile from Neon (or in-memory fallback) and compute completeness
+        try:
+            from .profile import _load_profile
+            prof = _load_profile(email) or {}
+        except Exception:
+            prof = {}
+        set_profile(prof or {})
+        session["profile_complete"] = bool((prof or {}).get("profile_complete") or ((prof or {}).get("name") and (prof or {}).get("title")))
+
+    return jsonify({"ok": True, "email": email, "profile_complete": bool(session.get("profile_complete")), "profile": prof}), 200
 
 @bp.post("/logout")
 def logout():
@@ -35,12 +47,23 @@ def logout():
 def me():
     email = (session.get("user") or {}).get("email")
     authenticated = bool(email)
-    prof = get_profile() if authenticated else {}
-    profile_complete = bool(session.get("profile_complete") or (prof.get("completed") if prof else False))
+    prof = {}
+    profile_complete = False
+    if authenticated:
+        try:
+            from .profile import _load_profile
+            prof = _load_profile(email) or {}
+            profile_complete = bool(prof.get("profile_complete") or (prof.get("name") and prof.get("title")))
+            from ..security_state import set_profile
+            set_profile(prof)
+            session['profile_complete'] = profile_complete
+        except Exception:
+            prof = {}
+            profile_complete = bool(session.get('profile_complete', False))
     return jsonify({
         "ok": True,
         "authenticated": authenticated,
-        "email": email or "",
+        "email": email,
         "profile_complete": profile_complete,
         "profile": prof
     }), 200
@@ -53,7 +76,6 @@ def profile_save():
     if data.get("completed"):
         session["profile_complete"] = True
     return jsonify({"ok": True, "profile_complete": bool(session.get("profile_complete"))}), 200
-
 
 @bp.get("/csrf")
 def csrf_get_alias():
