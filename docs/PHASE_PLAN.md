@@ -1,0 +1,3 @@
+# PHASE_PLAN
+
+See RULES.md and docs/OPERATING_INSTRUCTIONS.md.

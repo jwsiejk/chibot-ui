@@ -1,54 +1,77 @@
-from ..middleware.csrf import ensure_csrf_headers
-from flask import Blueprint, jsonify, request
+
+# app/api_v1/greet.py — Phase 0 hardening
+from __future__ import annotations
+import os, uuid
+from flask import Blueprint, jsonify, request, session
 from ..db import db
-from ..security_state import get_user
-from ..services.streaming import make_assistant_frames, schedule_frames
+from ..middleware.csrf import ensure_csrf_headers
 try:
     from ..api_v1.admin import _emit
-except Exception:
-    def _emit(*a, **k):
+except Exception:  # admin not required for greet
+    def _emit(*a, **k):  # no-op
         pass
+
 bp = Blueprint("greet", __name__)
+
+def _session_id() -> str:
+    # Prefer explicit session_id; fall back to cookie-bound session or 'default'
+    sid = (request.args.get("session_id") or request.headers.get("X-Session-Id") or "").strip()
+    if not sid:
+        sid = session.get("sid") or "default"
+    return sid
+
 @bp.get("")
 def greet():
-    try:
-        _emit('start', msg='test run started', mode='chat', settings=db.get_config(), label='start: test run started')
-    except Exception:
-        pass
-    sid=request.args.get("session_id","default"); email=get_user()
-    try:
-        _emit('greet:req', label='greet:req', route='/api/v1/greet', session_id=sid)
-    except Exception:
-        pass
-    if db.get_config().get("profile_gate_enabled") and not db.memory['profiles'].get(email):
+    sid = _session_id()
+    turns = db.memory.setdefault("greet_turns", {})
+    if sid in turns:
+        tid = turns[sid]
         try:
-            _emit('greet:err', label='greet:err – profile_required', route='/api/v1/greet', error='profile_required')
+            _emit('greet:req', label='greet:req (repeat)', route='/api/v1/greet', session_id=sid, turn_id=tid)
         except Exception:
             pass
-        return jsonify({"ok": False, "error": "profile_required"}), 400
-    db.ensure_session(sid, email)
-    db.add_message(sid, "system", "greet")
-    try:
-        _emit('greet:req', label="greet:req – make_assistant_frames('greet')", route="/api/v1/greet")
-    except Exception:
-        pass
-    try:
-        tid, frames = make_assistant_frames("greet", sid)
+        resp = jsonify({"ok": True, "turn_id": tid, "idempotent": True})
+        return ensure_csrf_headers(resp), 200
+
+    # Create a new turn id (UUID is acceptable per spec). Do NOT depend on vendors.
+    tid = uuid.uuid4().hex
+    turns[sid] = tid
+
+    # Optionally schedule audio if vendors are configured. Otherwise, skip explicitly.
+    audio_scheduled = False
+    reason = None
+    have_openai = bool(os.environ.get("OPENAI_API_KEY"))
+    have_eleven = bool(os.environ.get("ELEVENLABS_API_KEY"))
+    if have_openai and have_eleven:
         try:
-            _emit('greet:ok', label='greet:ok – frames ready', turn_id=tid, n=len(frames))
-        except Exception:
-            pass
-    except Exception:
-        from ..services.streaming import make_assistant_frames_text_only
-        tid, frames = make_assistant_frames_text_only("greet", sid)
-    schedule_frames(sid, frames, enable_nudge=False)
+            from ..services.streaming import make_assistant_frames, schedule_frames
+            # Build minimal greet text; persona preamble handled in streaming
+            _tid, frames = make_assistant_frames("greet", sid)
+            # Ensure make_assistant_frames returns our tid or ignore and use ours
+            if isinstance(_tid, str):
+                tid = _tid
+                turns[sid] = tid
+            schedule_frames(sid, frames, enable_nudge=False)
+            audio_scheduled = True
+            try:
+                _emit('greet:scheduled', label='greet:scheduled', session_id=sid, n=len(frames))
+            except Exception:
+                pass
+        except Exception as e:
+            reason = f"vendor_error: {e.__class__.__name__}"
+    else:
+        reason = "missing_vendor_keys"
+
+    payload = {"ok": True, "turn_id": tid}
+    if not audio_scheduled:
+        # Make the non-audio behavior explicit to avoid silent degrade
+        payload["audio_scheduled"] = False
+        if reason:
+            payload["note"] = reason
+
+    resp = jsonify(payload)
     try:
-        _emit('greet:scheduled', label='greet:scheduled', session_id=sid, n=len(frames))
+        _emit('greet:resp', label='greet:resp', session_id=sid, turn_id=tid, audio_scheduled=audio_scheduled)
     except Exception:
         pass
-    try:
-        _emit('greet:audio', label='greet:audio – summary', audio_chunks=0, total_bytes=0, viseme_sets=0)
-    except Exception:
-        pass
-    resp = jsonify({"ok": True, "turn_id": tid});
-    return ensure_csrf_headers(resp)
+    return ensure_csrf_headers(resp), 200

@@ -1,3 +1,8 @@
+## Docs Quick Links
+- [RULES.md](RULES.md)
+- [Phase Plan](docs/PHASE_PLAN.md)
+- [Operating Instructions](docs/OPERATING_INSTRUCTIONS.md)
+
 # Ask Chip — Phase 4 (Real WebSocket, Admin Config, Rate Limits)
 
 **This phase adds:**
