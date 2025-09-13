@@ -1,158 +1,119 @@
+// static/js/auth_gate.js
+// Production-safe auth/profile gate controller (no double calls, CSRF-aware)
 
-import { ensureCSRF } from './csrf.js';
+import { ensureCSRF, installFetchInterceptor } from './csrf.js';
 
-const $ = (s)=>document.querySelector(s);
-const el = (id)=>document.getElementById(id);
+const $ = (s) => document.querySelector(s);
+const on = (el, ev, fn) => el && el.addEventListener(ev, fn);
 
-function setStartEnabled(on){
-  const btn = el('startButton');
-  if (!btn) return;
-  btn.disabled = !on;
-}
-
-function showLogin(on){
-  const m = el('loginModal');
-  if (!m) return;
-  m.classList.toggle('hidden', !on);
-  if (on) setTimeout(()=>el('inlineLoginEmail')?.focus(), 0);
-}
-
-function showProfile(on){
-  const m = el('profileModal');
-  if (!m) return;
-  m.classList.toggle('hidden', !on);
-}
-
-export async function prefillProfile(){
-  try{
-    const r = await fetch('/api/v1/profile', {credentials:'include'});
-    if(!r.ok) return;
-    const j = await r.json();
-    const prof = j && j.profile || {};
-    // Map UI fields
-    const map = { name:'prof_name', email:'prof_email', title:'prof_role', region:'prof_region' };
-    for(const k of Object.keys(map)){
-      const x = el(map[k]);
-      if(x && prof[k] != null){
-        x.value = prof[k];
-      }
-    }
-  }catch(_){ /* ignore */ }
-  } finally { window.__auth_eval_lock = false; }
-}
-
-export async function saveProfile(){
-  try{
-    await ensureCSRF();
-    const payload = {
-      name: el('prof_name')?.value?.trim() || '',
-      email: el('prof_email')?.value?.trim() || '',
-      title: el('prof_role')?.value?.trim() || '',
-      region: el('prof_region')?.value?.trim() || ''
-    };
-    const r = await fetch('/api/v1/profile', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      credentials:'include',
-      body: JSON.stringify(payload)
-    });
-    if(!r.ok){
-      el('profileMsg').textContent = 'Save failed.';
-      return false;
-    }
-    const j = await r.json();
-    const complete = !!(j && j.profile && j.profile.profile_complete);
-    if(complete){
-      el('profileMsg').textContent = 'Saved.';
-      setStartEnabled(true);
-      showProfile(false);
-    }else{
-      el('profileMsg').textContent = 'Saved — please complete required fields.';
-      setStartEnabled(false);
-    }
-    return complete;
-  }catch(e){
-    el('profileMsg').textContent = 'Save failed.';
-    return false;
+function setStartEnabled(enabled) {
+  const btn = document.getElementById('startButton') || document.getElementById('start');
+  if (btn) {
+    btn.disabled = !enabled;
+    btn.title = enabled ? '' : 'Please complete your profile to continue';
   }
-  } finally { window.__auth_eval_lock = false; }
 }
 
-async function login(email){
-  await ensureCSRF();
-  const r = await fetch('/api/v1/auth/login', {
+function show(el, yes) {
+  if (!el) return;
+  el.classList.toggle('hidden', !yes);
+}
+
+async function getJSON(url, init = {}) {
+  init.credentials = init.credentials || 'include';
+  const res = await fetch(url, init);
+  if (!res.ok) throw new Error(`HTTP ${res.status} on ${url}`);
+  return res.json();
+}
+
+async function postJSON(url, body) {
+  return getJSON(url, {
     method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    credentials:'include',
-    body: JSON.stringify({ email })
-  }).catch(()=>null);
-  return r && r.ok;
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
 }
 
-async function evaluate(){
-  if (window.__auth_eval_lock) return; window.__auth_eval_lock = true; try {
-  try{
-    const r = await fetch('/api/v1/auth/me', {credentials:'include'});
-    const j = await r.json();
-    const authed = !!(j && j.authenticated);
-    const complete = !!(j && j.profile_complete);
-    if(!authed){
+// ---- Gate evaluation ----
+let evalLock = false;
+
+export async function evaluateAuth() {
+  if (evalLock) return;
+  evalLock = true;
+  try {
+    // Make sure CSRF is primed before first POST
+    await ensureCSRF();
+
+    const me = await getJSON('/api/v1/auth/me');
+
+    const loginModal = document.getElementById('loginModal');
+    const profileModal = document.getElementById('profileModal');
+
+    if (!me.authenticated) {
+      show(loginModal, true);
+      show(profileModal, false);
       setStartEnabled(false);
-      showProfile(false);
-      showLogin(true);
       return;
     }
-    // Authed:
-    if(!complete){
+
+    // Authenticated
+    if (!me.profile_complete) {
+      show(loginModal, false);
+      show(profileModal, true);
       setStartEnabled(false);
-      await prefillProfile();
-      showLogin(false);
-      showProfile(true);
-    }else{
-      setStartEnabled(true);
-      showLogin(false);
-      showProfile(false);
+      return;
     }
-  }catch(_){
+
+    // Ready
+    show(loginModal, false);
+    show(profileModal, false);
+    setStartEnabled(true);
+    document.dispatchEvent(new CustomEvent('auth_ready', { detail: me }));
+  } catch (err) {
+    // Non-fatal: keep UI usable but show a hint
+    console.warn('[auth_gate] evaluateAuth failed:', err);
     setStartEnabled(false);
-    showLogin(true);
+  } finally {
+    evalLock = false;
   }
-  } finally { window.__auth_eval_lock = false; }
 }
 
-function wire(){
-  const form = el('inlineLoginForm');
-  const emailInput = el('inlineLoginEmail');
-  const cancel = el('inlineLoginCancel');
-  const msg = el('inlineLoginMsg');
-  if(cancel) cancel.onclick = ()=>showLogin(false);
-  if(form && !form.__wired){
-    form.__wired = true;
-    form.onsubmit = async (e)=>{
-      e.preventDefault();
-      msg.textContent = '';
-      const email = emailInput?.value?.trim().toLowerCase();
-      if(!email){ msg.textContent = 'Email required.'; return; }
-      const ok = await login(email);
-      if(!ok){ msg.textContent = 'Login failed.'; return; }
-      showLogin(false);
-      await evaluate();
-    };
-  }
-  const save = el('profileSave');
-  if(save && !save.__wired){
-    save.__wired = true;
-    save.onclick = async ()=>{
-      await saveProfile();
-      await evaluate();
-    };
-  }
-  } finally { window.__auth_eval_lock = false; }
+// ---- Wiring ----
+export function wireAuthGate() {
+  // Make fetch CSRF-aware (idempotent in csrf.js)
+  try { installFetchInterceptor(); } catch {}
+
+  const loginBtn = document.getElementById('loginButton');
+  const profileSaveBtn = document.getElementById('saveProfileButton');
+
+  on(loginBtn, 'click', async () => {
+    try {
+      const email = (document.getElementById('loginEmail') || {}).value || '';
+      if (!email) return;
+      await postJSON('/api/v1/auth/login', { email });
+      await evaluateAuth();
+    } catch (e) {
+      console.warn('[auth_gate] login failed:', e);
+    }
+  });
+
+  on(profileSaveBtn, 'click', async () => {
+    try {
+      const name = (document.getElementById('profileName') || {}).value || '';
+      const title = (document.getElementById('profileTitle') || {}).value || '';
+      const region = (document.getElementById('profileRegion') || {}).value || '';
+      await postJSON('/api/v1/profile', { name, title, region });
+      window.dispatchEvent(new CustomEvent('profile_saved', { detail: { complete: !!(name && title) } }));
+      await evaluateAuth();
+    } catch (e) {
+      console.warn('[auth_gate] profile save failed:', e);
+    }
+  });
+
+  // Kick once on DOM ready
+  if (document.readyState !== 'loading') evaluateAuth();
+  else document.addEventListener('DOMContentLoaded', evaluateAuth);
 }
 
-document.addEventListener('DOMContentLoaded', ()=>{
-  wire();
-  setTimeout(evaluate,0);
-});
-
-export { evaluate as evaluateAuth };
+// Auto-boot when imported as a module
+try { wireAuthGate(); } catch (e) { console.warn('[auth_gate] wire failed:', e); }
