@@ -1,9 +1,12 @@
 # app/asgi_gateway.py
 # Starlette ASGI app that serves:
 #   • WebSocket /ws/v1/chat  (native ASGI)
-#   • All HTTP via mounted Flask WSGI app
+#   • Static  /static/*      (ASGI StaticFiles — production optimal)
+#   • All other HTTP via mounted Flask WSGI app
 
 import asyncio, time, json, os
+from pathlib import Path
+
 from app import create_app
 from starlette.applications import Starlette
 from starlette.routing import WebSocketRoute, Mount
@@ -12,6 +15,8 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware import Middleware
 from starlette.websockets import WebSocket, WebSocketDisconnect
+from starlette.staticfiles import StaticFiles
+
 from app.ws.protocol import dumps, PROTO_ID, DEFAULT_HEARTBEAT_MS
 from app.ws.bus import bus
 
@@ -19,20 +24,27 @@ from app.ws.bus import bus
 try:
     from app.api_v1.admin import _emit as _admin_emit
 except Exception:
-    def _admin_emit(*a, **k): pass
+    def _admin_emit(*a, **k):  # no-op if admin not loaded yet
+        pass
 
 # Build the Flask WSGI app
 flask_app = create_app()
+# Export alias for tests/imports that expect "app"
+app = flask_app
 
 # ---------- Legacy Diagnostics → Admin Diagnostics (unification) ----------
 try:
     from flask import redirect
+
     @flask_app.get("/diagnostics")
     def _legacy_diag_redirect():       return redirect("/admin?tab=diag", code=302)
+
     @flask_app.get("/diagnostics/")
     def _legacy_diag_redirect_slash(): return redirect("/admin?tab=diag", code=302)
+
     @flask_app.get("/diagnostics.html")
     def _legacy_diag_redirect_html():  return redirect("/admin?tab=diag", code=302)
+
     @flask_app.get("/diagnostics/index")
     def _legacy_diag_redirect_idx():   return redirect("/admin?tab=diag", code=302)
 except Exception:
@@ -43,7 +55,7 @@ def _normalize_frame(fr: dict) -> dict:
     try:
         t = fr.get("type")
         if t == "text":
-            return {"type": "assistant_chunk", "text": fr.get("content","")}
+            return {"type": "assistant_chunk", "text": fr.get("content", "")}
         if t == "end":
             out = {"type": "assistant_end"}
             if "finish_reason" in fr:
@@ -51,14 +63,14 @@ def _normalize_frame(fr: dict) -> dict:
             return out
         return fr
     except Exception:
-        return {"type":"error","message":"frame_normalization_failed"}
+        return {"type": "error", "message": "frame_normalization_failed"}
 
 async def _keepalive_task(websocket: WebSocket, heartbeat_ms: int):
     try:
         while True:
             await asyncio.sleep(max(heartbeat_ms, 1000) / 1000.0)
             try:
-                await websocket.send_text(dumps({"type":"keepalive","ts": int(time.time()*1000)}))
+                await websocket.send_text(dumps({"type": "keepalive", "ts": int(time.time()*1000)}))
             except Exception:
                 return
     except asyncio.CancelledError:
@@ -75,7 +87,8 @@ async def chat_ws(websocket: WebSocket):
     except Exception:
         pass
 
-    ready = {"type":"ready","session_id":session_id,"proto":PROTO_ID,"heartbeat_ms":DEFAULT_HEARTBEAT_MS,"ts": int(time.time()*1000)}
+    ready = {"type": "ready", "session_id": session_id, "proto": PROTO_ID,
+             "heartbeat_ms": DEFAULT_HEARTBEAT_MS, "ts": int(time.time()*1000)}
     await websocket.send_text(dumps(ready))
 
     loop = asyncio.get_running_loop()
@@ -122,21 +135,23 @@ async def chat_ws(websocket: WebSocket):
                 payload = None
 
             if isinstance(payload, dict):
-                t = str(payload.get("type","")).lower()
+                t = str(payload.get("type", "")).lower()
 
                 if t in ("ping", "keepalive"):
-                    await websocket.send_text(dumps({"type":"pong","echo": payload.get("ts"), "ts": int(time.time()*1000)}))
+                    await websocket.send_text(dumps({"type": "pong", "echo": payload.get("ts"),
+                                                     "ts": int(time.time()*1000)}))
                     continue
 
                 if t == "interrupt":
-                    await websocket.send_text(dumps({"type":"interrupt_ack","ts": int(time.time()*1000)}))
+                    await websocket.send_text(dumps({"type": "interrupt_ack", "ts": int(time.time()*1000)}))
                     continue
 
                 if t == "close":
                     break
 
             try:
-                _admin_emit("ws_in", session_id=session_id, payload=(msg[:256] if isinstance(msg,str) else "<binary>"))
+                _admin_emit("ws_in", session_id=session_id,
+                            payload=(msg[:256] if isinstance(msg, str) else "<binary>"))
             except Exception:
                 pass
 
@@ -156,14 +171,22 @@ async def chat_ws(websocket: WebSocket):
             pass
 
 # --- Compose Starlette app ---
+BASE_DIR = Path(__file__).resolve().parents[1]
+STATIC_DIR = BASE_DIR / "static"
+
 routes = [
     WebSocketRoute("/ws/v1/chat", chat_ws),
+
+    # Serve static assets via ASGI StaticFiles (fixes 502s on large JS through WSGI)
+    Mount("/static", app=StaticFiles(directory=str(STATIC_DIR), check_dir=True), name="static"),
+
+    # Mount Flask for everything else (templates, API, admin, etc.)
     Mount("/", app=WSGIMiddleware(flask_app)),
 ]
 
 # ✅ Correct: use Starlette's Middleware descriptors (do NOT instantiate middlewares here)
 _cors_origins = []
-_allow = os.environ.get("CORS_ALLOWLIST","").strip()
+_allow = os.environ.get("CORS_ALLOWLIST", "").strip()
 if _allow:
     _cors_origins = [o.strip() for o in _allow.split(",") if o.strip()]
 
@@ -172,8 +195,8 @@ if _cors_origins:
     middleware.insert(0, Middleware(
         CORSMiddleware,
         allow_origins=_cors_origins,
-        allow_methods=["GET","POST","OPTIONS"],
-        allow_headers=["Content-Type","X-CSRF-Token"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "X-CSRF-Token"],
         allow_credentials=True
     ))
 
@@ -184,13 +207,14 @@ def _register_bp_once(name: str, bp):
     if name not in flask_app.blueprints:
         flask_app.register_blueprint(bp)
 
+# Keep any extra blueprints your app expects
 from app.api_v1.voice_mode import bp as voice_mode_bp
 _register_bp_once("voice_mode_v1", voice_mode_bp)
 
 from app.api_v1.voice_stream import bp as voice_stream_bp
 _register_bp_once("voice_stream_v1", voice_stream_bp)
 
-# Admin Diagnostics
+# Admin Diagnostics (if present)
 try:
     from app.api_v1.admin_diagnostics import bp as admin_diag_bp
     _register_bp_once("admin_diag_v1", admin_diag_bp)
