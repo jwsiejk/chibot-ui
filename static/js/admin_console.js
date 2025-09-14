@@ -1,226 +1,233 @@
-// Ask Chip — Admin Console wiring
+// static/js/admin_console.js
+//
+// Admin diagnostics helpers, including the "Full System Test" that verifies:
+//   1) We can subscribe to WS /ws/v1/chat for a unique session_id.
+//   2) We can POST a voice chunk to /api/v1/voice/chunk with CSRF and IDs.
+//   3) (If real speech is present) we see user_partial / user_final frames.
+//
+// This file intentionally avoids importing app ws/voice modules so diagnostics
+// can run even if the main client code is broken. It uses only basic browser APIs.
 
-function getCookie(name){
-  const m = document.cookie.match(new RegExp('(?:^|;\\s*)'+name+'=([^;]+)')); return m ? decodeURIComponent(m[1]) : '';
-}
-async function apiGet(url){
-  const r = await fetch(url, {credentials:'include'}); if(!r.ok) throw new Error(await r.text()); return r.json();
-}
-async function apiPost(url, body){
-  const headers = {'content-type':'application/json'};
-  const csrf = getCookie('XSRF-TOKEN'); if(csrf) headers['X-CSRF-Token']=csrf;
-  const r = await fetch(url,{method:'POST',headers,credentials:'include',body:JSON.stringify(body||{})});
-  if(!r.ok) throw new Error(await r.text()); return r.json();
-}
+(function(){
+  const TABLE_SELECTORS = [
+    '#full-system-results',
+    '#fullSystemResults',
+    '[data-admin="full-system-results"]'
+  ];
+  const BUTTON_SELECTORS = [
+    '#btn-full-system-test',
+    '#btn-run-full-system-test',
+    '#runFullSystemTest',
+    '[data-action="run-full-system-test"]'
+  ];
 
-// Tabs
-const tabsEl = document.getElementById('tabs');
-tabsEl.addEventListener('click', (e)=>{
-  const btn = e.target.closest('button'); if(!btn) return;
-  [...tabsEl.querySelectorAll('button')].forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-  const id = btn.dataset.tab;
-  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-  document.getElementById(`tab-${id}`).classList.add('active');
-});
+  // ---------- DOM helpers ----------
+  function $(sel) { return document.querySelector(sel); }
+  function $any(selectors) { for(const s of selectors){ const el=$(s); if(el) return el; } return null; }
+  function ensureResultsTable(){
+    let table = $any(TABLE_SELECTORS);
+    if (table) return table;
 
-// ---------------------- Load current config into UI ----------------------
-async function loadConfig(){
-  const cfg = await apiGet('/api/v1/admin/config');
-
-  // UX
-  setVal('theme', cfg.theme ?? 'light');
-  setChk('show_instruction_strip', !!cfg.show_instruction_strip);
-  setChk('show_state_dots', !!cfg.show_state_dots);
-  setChk('suggestions_enabled', !!cfg.suggestions_enabled);
-  setVal('suggestions_max_items', cfg.suggestions_max_items ?? 4);
-  setVal('suggestions_max_words', cfg.suggestions_max_words ?? 7);
-  setChk('nudges_enabled', !!cfg.nudges_enabled);
-  setVal('nudge_delay_ms', cfg.nudge_delay_ms ?? 4200);
-  setVal('nudge_backoff_after_ignored', cfg.nudge_backoff_after_ignored ?? 2);
-  setVal('ws_ping_interval_ms', cfg.ws_ping_interval_ms ?? 25000);
-  setVal('ws_idle_timeout_ms', cfg.ws_idle_timeout_ms ?? 30000);
-
-  // Flow
-  setVal('tm_summarize_next_actions', cfg.tm_summarize_next_actions ?? 0.5);
-  setVal('tm_check_understanding',   cfg.tm_check_understanding   ?? 0.5);
-  setVal('tm_deep_dive',             cfg.tm_deep_dive             ?? 0.5);
-  setVal('confirm_ms', cfg.confirm_ms ?? 420);
-  setVal('echo_threshold_boost', cfg.echo_threshold_boost ?? 1.9);
-  setVal('min_speech_ms', cfg.min_speech_ms ?? 200);
-
-  // Vendor/VAD
-  setVal('deepgram_model', cfg.deepgram_model ?? 'nova-3');
-  setVal('deepgram_language', cfg.deepgram_language ?? 'en');
-  setChk('deepgram_smart_format', !!cfg.deepgram_smart_format);
-  setVal('deepgram_listen_url', cfg.deepgram_listen_url ?? 'wss://api.deepgram.com/v1/listen');
-  setVal('deepgram_encoding', cfg.deepgram_encoding ?? 'opus');
-  setVal('deepgram_sample_rate', cfg.deepgram_sample_rate ?? 48000);
-  setChk('deepgram_interim_results', !!cfg.deepgram_interim_results);
-  setVal('vad_attack_ms', cfg.vad_attack_ms ?? 12);
-  setVal('vad_release_ms', cfg.vad_release_ms ?? 240);
-  setVal('vad_dbfs_threshold', cfg.vad_dbfs_threshold ?? -42);
-
-  // PTM
-  setVal('openai_model', cfg.openai_model ?? 'gpt-4o-mini');
-  setVal('gen_temperature', cfg.gen_temperature ?? 0.3);
-  setVal('gen_top_p', cfg.gen_top_p ?? 1.0);
-  setVal('gen_max_sentences', cfg.gen_max_sentences ?? 4);
-  setVal('gen_target_verbosity', cfg.gen_target_verbosity ?? 'medium');
-  setVal('nebraska_persona_level', cfg.nebraska_persona_level ?? 0.13);
-  setChk('nebraska_quotes_enabled', cfg.nebraska_quotes_enabled ?? true);
-  setChk('nlu_intent', cfg.nlu_intent ?? true);
-  setChk('nlu_sentiment', cfg.nlu_sentiment ?? true);
-  setChk('nlp_memory_blend', cfg.nlp_memory_blend ?? true);
-  setVal('nlg_summary_pref', cfg.nlg_summary_pref ?? 'auto');
-}
-
-function setVal(id, v){ const el=document.getElementById(id); if(el) el.value = v; }
-function setChk(id, v){ const el=document.getElementById(id); if(el) el.checked = !!v; }
-function num(id){ const el=document.getElementById(id); return el ? Number(el.value) : undefined; }
-function chk(id){ const el=document.getElementById(id); return el ? !!el.checked : undefined; }
-function val(id){ const el=document.getElementById(id); return el ? el.value : undefined; }
-
-// ---------------------- Save handlers ----------------------
-async function saveUX(){
-  const updates = {
-    theme: val('theme'),
-    show_instruction_strip: chk('show_instruction_strip'),
-    show_state_dots: chk('show_state_dots'),
-    suggestions_enabled: chk('suggestions_enabled'),
-    suggestions_max_items: num('suggestions_max_items'),
-    suggestions_max_words: num('suggestions_max_words'),
-    nudges_enabled: chk('nudges_enabled'),
-    nudge_delay_ms: num('nudge_delay_ms'),
-    nudge_backoff_after_ignored: num('nudge_backoff_after_ignored'),
-    ws_ping_interval_ms: num('ws_ping_interval_ms'),
-    ws_idle_timeout_ms: num('ws_idle_timeout_ms'),
-  };
-  await apiPost('/api/v1/admin/config', { updates });
-  alert('Saved UX');
-}
-
-async function saveFlow(){
-  const updates = {
-    tm_summarize_next_actions: Number(val('tm_summarize_next_actions')),
-    tm_check_understanding:   Number(val('tm_check_understanding')),
-    tm_deep_dive:             Number(val('tm_deep_dive')),
-    confirm_ms: num('confirm_ms'),
-    echo_threshold_boost: Number(val('echo_threshold_boost')),
-    min_speech_ms: num('min_speech_ms'),
-  };
-  await apiPost('/api/v1/admin/config', { updates });
-  alert('Saved Flow');
-}
-
-async function saveVendor(){
-  const updates = {
-    deepgram_model: val('deepgram_model'),
-    deepgram_language: val('deepgram_language'),
-    deepgram_smart_format: chk('deepgram_smart_format'),
-    deepgram_listen_url: val('deepgram_listen_url'),
-    deepgram_encoding: val('deepgram_encoding'),
-    deepgram_sample_rate: num('deepgram_sample_rate'),
-    deepgram_interim_results: chk('deepgram_interim_results'),
-    vad_attack_ms: num('vad_attack_ms'),
-    vad_release_ms: num('vad_release_ms'),
-    vad_dbfs_threshold: num('vad_dbfs_threshold'),
-  };
-  if(!updates.deepgram_listen_url.startsWith('wss://')) return alert('listen_url must start with wss://');
-  if(updates.deepgram_encoding !== 'opus') return alert("encoding must be 'opus'");
-  if(updates.deepgram_sample_rate !== 48000) return alert('sample_rate must be 48000');
-  await apiPost('/api/v1/admin/config', { updates });
-  alert('Saved Vendor/VAD');
-}
-
-async function savePTM(){
-  const updates = {
-    openai_model: val('openai_model'),
-    gen_temperature: Number(val('gen_temperature')),
-    gen_top_p: Number(val('gen_top_p')),
-    gen_max_sentences: Number(val('gen_max_sentences')),
-    gen_target_verbosity: val('gen_target_verbosity'),
-    nebraska_persona_level: Number(val('nebraska_persona_level')),
-    nebraska_quotes_enabled: chk('nebraska_quotes_enabled'),
-    nlu_intent: chk('nlu_intent'),
-    nlu_sentiment: chk('nlu_sentiment'),
-    nlp_memory_blend: chk('nlp_memory_blend'),
-    nlg_summary_pref: val('nlg_summary_pref'),
-  };
-  await apiPost('/api/v1/admin/config', { updates });
-  alert('Saved PTM');
-}
-
-// ---------------------- Diagnostics wiring ----------------------
-async function runDiagnostics(){
-  const statusEl = document.getElementById('diag-status');
-  const bodyEl   = document.getElementById('diag-body');
-  statusEl.textContent = 'running...';
-  bodyEl.innerHTML = '';
-
-  try {
-    await apiGet('/api/v1/admin/diagnostics');
-    const ac = new AbortController();
-    const tm = setTimeout(()=>ac.abort(), 10000);
-    const headers = {};
-    const csrf = getCookie('XSRF-TOKEN'); if(csrf) headers['X-CSRF-Token'] = csrf;
-    const r = await fetch('/api/v1/admin/diagnostics/run', {
-      method:'POST', credentials:'include', headers, signal: ac.signal
-    });
-    clearTimeout(tm);
-    if(!r.ok) throw new Error(await r.text());
-    const j = await r.json();
-    (j.results||[]).forEach(row=>{
-      const tr=document.createElement('tr');
-      tr.innerHTML = `<td>${row.name}</td><td>${row.ok ? '✅' : '❌'}</td><td>${row.details||''}</td>`;
-      bodyEl.appendChild(tr);
-    });
-    statusEl.textContent = j.ok ? 'ok' : 'done (some failed)';
-  } catch(e) {
-    statusEl.textContent = 'error';
-    const tr=document.createElement('tr');
-    tr.innerHTML = `<td>diagnostics</td><td>❌</td><td>${(e && e.message) || e}</td>`;
-    bodyEl.appendChild(tr);
+    // Create a simple table if page doesn't provide one
+    table = document.createElement('table');
+    table.id = 'full-system-results';
+    table.style.width = '100%';
+    table.style.borderCollapse = 'collapse';
+    table.innerHTML = `
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:6px;border-bottom:1px solid #2a2f3a;">Check</th>
+          <th style="text-align:left;padding:6px;border-bottom:1px solid #2a2f3a;">OK</th>
+          <th style="text-align:left;padding:6px;border-bottom:1px solid #2a2f3a;">Details</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    `;
+    const host = document.querySelector('#admin-diagnostics') || document.body;
+    const wrap = document.createElement('div');
+    wrap.style.marginTop = '12px';
+    wrap.appendChild(table);
+    host.appendChild(wrap);
+    return table;
   }
-}
-
-async function runDiagnosticsFull(){
-  const statusEl = document.getElementById('diag-full-status');
-  const bodyEl   = document.getElementById('diag-full-body');
-  statusEl.textContent = 'running...';
-  bodyEl.innerHTML = '';
-
-  try {
-    const headers = {};
-    const csrf = getCookie('XSRF-TOKEN'); if(csrf) headers['X-CSRF-Token'] = csrf;
-    const ac = new AbortController();
-    const tm = setTimeout(()=>ac.abort(), 15000);
-    const r = await fetch('/api/v1/admin/diagnostics/full', {
-      method:'POST', credentials:'include', headers, signal: ac.signal
-    });
-    clearTimeout(tm);
-    if(!r.ok) throw new Error(await r.text());
-    const j = await r.json();
-    (j.results||[]).forEach(row=>{
-      const tr=document.createElement('tr');
-      tr.innerHTML = `<td>${row.name}</td><td>${row.ok ? '✅' : '❌'}</td><td>${row.details||''}</td>`;
-      bodyEl.appendChild(tr);
-    });
-    statusEl.textContent = j.ok ? 'ok' : 'done (some failed)';
-  } catch(e) {
-    statusEl.textContent = 'error';
-    const tr=document.createElement('tr');
-    tr.innerHTML = `<td>full</td><td>❌</td><td>${(e && e.message) || e}</td>`;
-    bodyEl.appendChild(tr);
+  function tbodyOf(table){
+    return table.tBodies[0] || table.createTBody();
   }
-}
+  function rowId(key) { return `diag-${key}`; }
+  function setRow(table, key, ok, details){
+    const tb = tbodyOf(table);
+    const id = rowId(key);
+    let tr = tb.querySelector(`tr[data-key="${id}"]`);
+    if (!tr){
+      tr = document.createElement('tr');
+      tr.dataset.key = id;
+      tr.innerHTML = `
+        <td style="padding:6px;border-bottom:1px solid #2a2f3a;"></td>
+        <td style="padding:6px;border-bottom:1px solid #2a2f3a;"></td>
+        <td style="padding:6px;border-bottom:1px solid #2a2f3a;"></td>
+      `;
+      tb.appendChild(tr);
+    }
+    const [c0, c1, c2] = tr.children;
+    c0.textContent = key;
+    c1.textContent = ok ? '✔' : '✖';
+    c1.style.color = ok ? '#44d07b' : '#ff5a63';
+    c2.textContent = (details == null ? '' : String(details));
+  }
 
-// Wire buttons
-const btnQuick = document.getElementById('run-diag');
-if (btnQuick) btnQuick.addEventListener('click', ()=>runDiagnostics().catch(e=>alert(e)));
+  // ---------- CSRF helper ----------
+  async function getCSRF(){
+    // Try the explicit CSRF endpoint first; fall back to health header/cookie
+    try {
+      const r = await fetch('/api/v1/csrf', { credentials: 'include' });
+      const tok = r.headers.get('X-CSRF-Token') || r.headers.get('X-CSRFToken');
+      if (tok) return tok;
+    } catch(_){}
+    try {
+      const r = await fetch('/api/v1/health', { credentials: 'include' });
+      const tok = r.headers.get('X-CSRF-Token') || r.headers.get('X-CSRFToken');
+      if (tok) return tok;
+    } catch(_){}
+    // Cookie fallback (if server sets XSRF-TOKEN)
+    const m = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
 
-const btnFull = document.getElementById('run-diag-full');
-if (btnFull) btnFull.addEventListener('click', ()=>runDiagnosticsFull().catch(e=>alert(e)));
+  // ---------- WS helper for a single session ----------
+  function openDiagWS(sessionId, onFrame){
+    return new Promise((resolve, reject) => {
+      try {
+        const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+        const url = new URL(proto + location.host + '/ws/v1/chat');
+        url.searchParams.set('session_id', sessionId);
+        const ws = new WebSocket(url.toString());
+        ws.onopen = () => resolve(ws);
+        ws.onmessage = (ev) => {
+          try {
+            const fr = JSON.parse(ev.data);
+            onFrame && onFrame(fr);
+          } catch(_){}
+        };
+        ws.onerror = (e) => reject(e);
+        // ws.onclose handled by caller if needed
+      } catch (e){
+        reject(e);
+      }
+    });
+  }
 
-// Bootstrap
-loadConfig().catch(()=>{});
+  // ---------- Diagnostic chunk (small, neutral payload) ----------
+  function diagChunkB64(){
+    // 256 bytes of zero — not valid audio, but sufficient to exercise the path.
+    // Deepgram won't emit partial/final for this; that's expected.
+    const bytes = new Uint8Array(256);
+    let bin = '';
+    for (let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+
+  // ---------- Full System Test ----------
+  async function runFullSystemTest(){
+    const btn = $any(BUTTON_SELECTORS);
+    const table = ensureResultsTable();
+    function set(key, ok, details){ setRow(table, key, ok, details); }
+
+    if (btn) {
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = 'Running…';
+      setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 4000);
+    }
+
+    const sid = `diag-${Math.random().toString(36).slice(2,10)}`;
+    const userMsgId = 'diag-1';
+    const chunkSeq = 1;
+
+    // 1) WS subscribe
+    let ws;
+    let partials = 0;
+    let finals = 0;
+    let wsErr = null;
+    try {
+      ws = await openDiagWS(sid, (fr) => {
+        if (!fr || typeof fr !== 'object') return;
+        if (fr.type === 'user_partial'){
+          // When server has user_msg_id on ASR frames, prefer to count our diag id only
+          if (!fr.user_msg_id || fr.user_msg_id === userMsgId) partials++;
+        } else if (fr.type === 'user_final'){
+          if (!fr.user_msg_id || fr.user_msg_id === userMsgId) finals++;
+        }
+      });
+      set('bus_subscribe', true, `session=${sid}`);
+    } catch(e){
+      wsErr = e;
+      set('bus_subscribe', false, 'failed to subscribe ws');
+    }
+
+    // 2) POST a chunk to /api/v1/voice/chunk (replaces legacy stt/stream)
+    let postOk = false;
+    try {
+      const csrf = await getCSRF();
+      const body = {
+        sid,
+        user_msg_id: userMsgId,
+        chunk_seq: chunkSeq,
+        audio_b64: diagChunkB64()
+      };
+      const r = await fetch('/api/v1/voice/chunk', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'X-CSRF-Token': csrf },
+        credentials: 'include',
+        body: JSON.stringify(body)
+      });
+      postOk = r.ok;
+      set('chunk_post', r.ok, r.ok ? 'ok' : `HTTP ${r.status}`);
+      if (!r.ok) {
+        // If server enforces 413 for large chunks (or CSRF error), show details
+        try { set('enqueue_ok', false, (await r.text()).slice(0,120)); } catch(_){}
+      }
+    } catch(e){
+      set('chunk_post', false, 'exception');
+    }
+
+    // 3) Wait briefly for ASR frames (optional) — 2.5s
+    const waitMs = 2500;
+    const start = performance.now();
+    while (performance.now() - start < waitMs) {
+      await new Promise(r => setTimeout(r, 150));
+    }
+
+    // 4) Summarize
+    set('enqueue_ok', !!postOk, postOk ? 'ok' : 'failed');
+    set('partials_seen', partials > 0, String(partials));
+    set('final_seen', finals > 0, finals > 0 ? 'ok' : 'no user_final within window');
+
+    // Close WS
+    try { ws && ws.close(); } catch(_){}
+  }
+
+  // ---------- Wire up ----------
+  function attachButton(){
+    let btn = $any(BUTTON_SELECTORS);
+    if (!btn){
+      // Create a simple button if one doesn't exist
+      btn = document.createElement('button');
+      btn.id = 'btn-full-system-test';
+      btn.textContent = 'Run full system test';
+      btn.style.marginTop = '12px';
+      const host = document.querySelector('#admin-diagnostics') || document.body;
+      host.appendChild(btn);
+    }
+    btn.addEventListener('click', runFullSystemTest);
+  }
+
+  // Initialize on DOM ready
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', attachButton);
+  } else {
+    attachButton();
+  }
+
+  // Expose for manual triggering from console
+  window.AdminDiagnostics = { runFullSystemTest };
+})();
