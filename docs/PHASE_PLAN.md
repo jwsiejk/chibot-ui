@@ -12,8 +12,10 @@ This document tracks acceptance items per phase and serves as the canonical chec
   - CSRF honored on all state-changing calls.
   - Tests: `tests/phase2/test_auth_profile_neon_phase2.py` validate both present/absent paths using a SQLite DSN (compatible with Neon path).
 
-## Phase 3 — Next
+## Phase 3 — Completed (2025-09-14)
 **Objective:** Implement **server-side barge-in** and **abortable TTS** per Operating Instructions.
+
+**Status:** Implemented; tests added in `tests/phase3/*` to verify confirm timing (~420 ms), abort suppression of audio after cancel, and frame IDs.
 
 **Acceptance (must pass):**
 - Soft barge-in confirm (~420 ms) before commit; on **commit**, cancel the active `turn_id`.

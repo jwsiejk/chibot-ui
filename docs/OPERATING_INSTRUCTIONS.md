@@ -1,5 +1,8 @@
 # OPERATING INSTRUCTIONS
 
+> **Phase 3 Release Note (2025-09-14)**  
+> Server-side **barge-in** (soft confirm ~420 ms) with **commit** canceling the active `turn_id`, and **abortable TTS** — no further audio frames emitted after cancel. Assistant frames include `turn_id` + `correlation_user_msg_id`.
+
 > **Phase 2 Release Note (2025-09-13)**  
 > Login/Profile gate is **Neon-backed**:
 > - On `POST /api/v1/auth/login`, the server checks Neon for an existing profile (when `DATABASE_URL` is set).  
