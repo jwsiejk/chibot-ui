@@ -5,7 +5,7 @@ from flask import Flask, Blueprint, render_template, request, session
 
 from .api_v1 import create_v1_blueprint
 from .api_v1.health import bp as health_bp
-from .middleware.csrf import csrf_before_request, make_csrf_route
+from .middleware.csrf import csrf_before_request, make_csrf_route, ensure_csrf_headers
 from .middleware.rate_limit import register_before_request as rate_limit_register
 
 # ---------- Core blueprint (UI shells / docs) ----------
@@ -60,6 +60,9 @@ def create_app():
     app.register_blueprint(create_v1_blueprint(), url_prefix="/api/v1")
     app.register_blueprint(core_bp)
     app.register_blueprint(health_bp)
+
+    # Ensure CSRF header/cookie attached to responses
+    app.after_request(ensure_csrf_headers)
 
     # Middleware
     app.before_request(csrf_before_request)
