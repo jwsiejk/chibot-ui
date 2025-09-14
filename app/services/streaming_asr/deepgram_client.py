@@ -18,9 +18,7 @@ class DeepgramClient:
         if not self.api_key:
             raise RuntimeError("DEEPGRAM_API_KEY is not set — no mock ASR provider is allowed.")
 
-        # allow env override; else cfg; else default
         listen = os.environ.get("DEEPGRAM_LISTEN_URL") or (self.cfg.get("deepgram") or {}).get("listen_url") or "wss://api.deepgram.com/v1/listen"
-        # sanitize URL (must have scheme/netloc)
         p = urlparse(listen)
         if not p.scheme or not p.netloc:
             listen = "wss://api.deepgram.com/v1/listen"
@@ -39,7 +37,6 @@ class DeepgramClient:
         self._connected = False
 
     async def connect(self):
-        # httpx handles headers; avoids websockets+uvloop kwarg mismatch entirely
         self._client = httpx.AsyncClient(
             headers={
                 "Authorization": f"Token {self.api_key}",
