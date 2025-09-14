@@ -1,10 +1,10 @@
-
 # app/api_v1/voice.py — /api/v1/voice/chunk production handler
 from __future__ import annotations
 import base64, binascii
 from flask import Blueprint, jsonify, request
 from ..middleware.rate_limit import check_now
 from ..services.streaming_asr.stream_manager import get_manager
+from ..api_v1.admin import _emit
 
 bp = Blueprint("voice", __name__)
 
@@ -25,18 +25,28 @@ def chunk():
         return jsonify(ok=False, error="bad_request", detail="sid, audio_b64, chunk_seq, user_msg_id required"), 400
     try:
         audio = base64.b64decode(b64, validate=True)
-    except (binascii.Error, ValueError) as e:
+    except (binascii.Error, ValueError):
         return jsonify(ok=False, error="bad_audio_b64"), 400
+    # 413 if too large
+    MAX = int(__import__('os').environ.get('VOICE_CHUNK_MAX_BYTES', '262144'))
+    if len(audio) > MAX:
+        return jsonify(ok=False, error="chunk_too_large", max_bytes=MAX), 413
     try:
+        _emit('voice:chunk', session_id=sid, seq=int(chunk_seq), bytes=len(audio))
         mgr = get_manager()
         mgr.enqueue(sid, {"data": audio, "user_msg_id": str(user_msg_id), "chunk_seq": int(chunk_seq)})
-    except Exception as e:
+    except Exception:
         return jsonify(ok=False, error="enqueue_failed"), 500
     return jsonify(ok=True, received_seq=int(chunk_seq))
 
-# ---------- Legacy endpoints: hard 410 (gone) ----------
+# ---------- Legacy endpoints inside v1 → hard 410 (gone) ----------
+
 @bp.post("/stt")
 def legacy_stt():
+    return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
+
+@bp.post("/stt/stream")
+def legacy_stt_stream():
     return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
 
 @bp.post("/tts-with-visemes")
