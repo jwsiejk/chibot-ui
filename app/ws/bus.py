@@ -28,7 +28,7 @@ class StreamBus:
         for fr in pend:
             try:
                 t = fr.get('type')
-                if t in {'text','audio_chunk','end','suggestions'}:
+                if t in {'text','audio_chunk','end','assistant_end','suggestions'}:
                     tid = fr.get('turn_id')
                     if tid and (sid, tid) in self._canceled:
                         continue
@@ -39,7 +39,7 @@ class StreamBus:
 
     def broadcast(self, sid, frame: dict):
         t = frame.get('type')
-        if t in {'text','audio_chunk','end','suggestions'}:
+        if t in {'text','audio_chunk','end','assistant_end','suggestions'}:
             tid = frame.get('turn_id')
             if tid and (sid, tid) in self._canceled:
                 return
@@ -85,7 +85,7 @@ class StreamBus:
             if buf:
                 self._pending[sid] = [
                     fr for fr in buf
-                    if not (fr.get('turn_id') == tid and fr.get('type') in {'text','audio_chunk','end','suggestions'})
+                    if not (fr.get('turn_id') == tid and fr.get('type') in {'text','audio_chunk','end','assistant_end','suggestions'})
                 ]
 
 bus = StreamBus()

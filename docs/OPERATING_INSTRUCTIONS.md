@@ -1,7 +1,7 @@
 # OPERATING INSTRUCTIONS
 
-> **Phase 3 Release Note (2025-09-14)**  
-> Server-side **barge-in** (soft confirm ~420 ms) with **commit** canceling the active `turn_id`, and **abortable TTS** — no further audio frames emitted after cancel. Assistant frames include `turn_id` + `correlation_user_msg_id`.
+> **Phase 5 Release Note (2025-09-14)**  
+> Added WS **speech streamer**. `schedule_tts_audio()` splits MP3 into `audio_chunk`s; after `cancel_turn`, further chunks and `assistant_end` for that `turn_id` are suppressed.
 
 > **Phase 2 Release Note (2025-09-13)**  
 > Login/Profile gate is **Neon-backed**:

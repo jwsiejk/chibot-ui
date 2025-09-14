@@ -11,11 +11,12 @@ def _make_frames(tid):
 
 def _schedule(session_id, frames, delay_ms: int, correlation_user_msg_id):
     def run():
+        import time as _t
         for fr in frames:
             if correlation_user_msg_id and 'correlation_user_msg_id' not in fr:
                 fr['correlation_user_msg_id'] = correlation_user_msg_id
             bus.broadcast(session_id, fr)
-            time.sleep(delay_ms/1000.0)
+            _t.sleep(delay_ms/1000.0)
     threading.Thread(target=run, daemon=True).start()
 
 def test_frames_have_turn_and_correlation_ids():

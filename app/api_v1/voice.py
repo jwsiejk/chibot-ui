@@ -5,6 +5,7 @@ import base64
 from flask import Blueprint, jsonify, request
 from ..middleware.rate_limit import check_now, limit
 from ..ws.bus import bus
+from ..services.streaming_asr.stream_manager import get_manager
 
 bp = Blueprint("voice", __name__)
 
@@ -45,6 +46,17 @@ def voice_chunk():
     }
     # Publish to the WS bus for ASR/Orchestrator; ASR hookup lands in later phases
     bus.broadcast(sid, frame)
+    try:
+        mgr = get_manager()
+        if isinstance(audio_b64, str) and audio_b64:
+            import base64 as _b64
+            _data = _b64.b64decode(audio_b64.encode('ascii'), validate=False)
+        else:
+            _data = b''
+        if _data:
+            mgr.enqueue(sid, _data)
+    except Exception:
+        pass
     return jsonify(ok=True, received_seq=int(chunk_seq))
 
 # ---------- Legacy endpoints: hard 410 (gone) ----------

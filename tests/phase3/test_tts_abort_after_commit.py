@@ -12,16 +12,14 @@ def _make_audio_frames(turn_id: str, n=24):
     return frames
 
 def _schedule_frames(session_id, frames, delay_ms: int, correlation_user_msg_id=None):
-    # Lightweight inline scheduler to avoid depending on provider wiring
     def run():
+        import time as _t
         for fr in frames:
             if correlation_user_msg_id and 'correlation_user_msg_id' not in fr:
                 fr['correlation_user_msg_id'] = correlation_user_msg_id
-            try:
-                bus.broadcast(session_id, fr)
-            except Exception:
-                pass
-            time.sleep(max(0, delay_ms)/1000.0)
+            try: bus.broadcast(session_id, fr)
+            except Exception: pass
+            _t.sleep(max(0, delay_ms)/1000.0)
     threading.Thread(target=run, daemon=True).start()
 
 def test_tts_abort_drops_future_audio_chunks():
@@ -34,23 +32,19 @@ def test_tts_abort_drops_future_audio_chunks():
 
     got_audio = 0
     committed = False
+    import time
     deadline = time.time() + 3.0
 
     while time.time() < deadline:
-        try:
-            fr = q.get(timeout=0.2)
-        except Empty:
-            break
+        try: fr = q.get(timeout=0.2)
+        except Empty: break
         if fr.get("type") == "audio_chunk" and fr.get("turn_id") == tid:
             got_audio += 1
-            # Commit once a few audio frames have flowed
             if got_audio == 6 and not committed:
-                bus.cancel_turn(sid, tid)  # barge commit: abort further audio for this turn
+                bus.cancel_turn(sid, tid)
                 committed = True
-        # If we see assistant_end after commit, that's a failure
         if committed and fr.get("type") == "assistant_end" and fr.get("turn_id") == tid:
             assert False, "assistant_end should be dropped after cancel_turn"
-        # Stop after some time post-commit
         if committed and got_audio > 8:
             break
 
