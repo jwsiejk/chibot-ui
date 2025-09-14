@@ -1,15 +1,18 @@
+
 from __future__ import annotations
 
 import asyncio
-import time
 import threading
+import time
 from collections import deque
-from typing import Deque, Dict, Optional
+from typing import Deque, Dict, Optional, Any
 
 from app.ws.bus import bus
-from .deepgram_client import FakeDeepgramClient
+from app.config_store import get_config
+from .deepgram_client import DeepgramClient
 
-_METRICS = {
+# Simple circuit breaker counters (kept in-process)
+_METRICS: Dict[str, int] = {
     "partials": 0,
     "finals": 0,
     "queue_drops": 0,
@@ -17,134 +20,160 @@ _METRICS = {
     "sessions": 0,
 }
 
-_CB = {
-    "open_until": 0.0,
-    "error_count": 0,
-    "trip_threshold": 8,
-    "cooldown": 60.0,
-}
+_MAX_QUEUE = 128
+_IDLE_CLOSE_MS = 7_000           # close if no chunks for this long
+_CB_OPEN_UNTIL_MS = 0            # epoch ms until we allow new sessions
+_CB_BACKOFF_MS = 10_000          # after provider error, back off
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
 def _cb_opened() -> bool:
-    return time.time() < _CB["open_until"]
+    return _now_ms() < _CB_OPEN_UNTIL_MS
 
-def _cb_trip():
-    _CB["open_until"] = time.time() + _CB["cooldown"]
-    _CB["error_count"] = 0
+class _Session:
+    def __init__(self, sid: str, cfg: Dict[str, Any]):
+        self.sid = sid
+        self.cfg = cfg
+        self.q: Deque[Dict[str, Any]] = deque()
+        self.last_msg_ms = _now_ms()
+        self.user_msg_id: Optional[str] = None
+        self._closing = False
+        self._thread: Optional[threading.Thread] = None
 
-def _cb_note_error():
-    _CB["error_count"] += 1
-    if _CB["error_count"] >= _CB["trip_threshold"]:
-        _cb_trip()
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        t = threading.Thread(target=self._run, daemon=True, name=f"asr-{self.sid}")
+        self._thread = t
+        t.start()
 
-class StreamSession:
-    def __init__(self, session_id: str, provider):
-        self.session_id = session_id
-        self.provider = provider
-        self.queue: Deque[bytes] = deque(maxlen=32)
-        self.last_enqueue = time.time()
-        self.closed = False
-
-    def put(self, data: bytes) -> None:
-        if len(self.queue) == self.queue.maxlen:
+    def enqueue(self, item: Dict[str, Any]):
+        # Drop oldest if full
+        if len(self.q) >= _MAX_QUEUE:
+            self.q.popleft()
             _METRICS["queue_drops"] += 1
-        else:
-            self.queue.append(data)
-            self.last_enqueue = time.time()
+        self.q.append(item)
+        self.last_msg_ms = _now_ms()
 
-class StreamManager:
-    def __init__(self) -> None:
-        self.sessions: Dict[str, StreamSession] = {}
-        self.loop = asyncio.new_event_loop()
-        self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
-        self.thread.start()
+    def shutdown(self):
+        self._closing = True
 
-    def _get_provider(self):
-        return FakeDeepgramClient({})
-
-    def enqueue(self, session_id: str, data: bytes) -> None:
-        if _cb_opened():
-            return
-        sess = self.sessions.get(session_id)
-        if not sess:
-            provider = self._get_provider()
-            sess = self.sessions[session_id] = StreamSession(session_id, provider)
-            _METRICS["sessions"] += 1
-            asyncio.run_coroutine_threadsafe(self._run_session(sess), self.loop)
-        sess.put(data)
-
-    async def _run_session(self, sess: StreamSession) -> None:
+    def _run(self):
+        global _CB_OPEN_UNTIL_MS
         try:
-            await sess.provider.connect()
+            cfg = get_config() or {}
         except Exception:
-            _METRICS["provider_errors"] += 1
-            _cb_note_error()
+            cfg = {}
+        # fail fast if breaker open
+        if _cb_opened():
+            bus.broadcast(self.sid, {"type":"asr_error","error":"provider_backoff"})
             return
 
-        IDLE_TIMEOUT = 9.0
         try:
-            while not sess.closed:
-                if (time.time() - sess.last_enqueue) > IDLE_TIMEOUT and not sess.queue:
-                    try: await sess.provider.close()
-                    finally:
-                        sess.closed = True
-                        break
+            client = DeepgramClient(cfg)
+        except Exception as e:
+            _METRICS["provider_errors"] += 1
+            _CB_OPEN_UNTIL_MS = _now_ms() + _CB_BACKOFF_MS
+            bus.broadcast(self.sid, {"type":"asr_error","error":str(e)})
+            return
 
-                if sess.queue:
-                    data = sess.queue.popleft()
-                    try:
-                        await sess.provider.send(data)
-                    except Exception:
-                        _METRICS["provider_errors"] += 1
-                        _cb_note_error()
-                        bus.broadcast(sess.session_id, {
-                            "type": "system_notice",
-                            "level": "warn",
-                            "text": "Streaming ASR provider error; will retry.",
-                        })
-                        await asyncio.sleep(0.05)
+        async def stream_loop():
+            await client.connect()
+            poll_task = asyncio.create_task(_poll_events(client, self.sid, self))
+            try:
+                while not self._closing:
+                    # idle close
+                    if self.q:
+                        item = self.q.popleft()
+                    else:
+                        if _now_ms() - self.last_msg_ms > _IDLE_CLOSE_MS:
+                            break
+                        await asyncio.sleep(0.01)
                         continue
 
-                    count = getattr(sess.provider, "_count", 0)
-                    if count in (2, 4):
-                        _METRICS["partials"] += 1
-                        bus.broadcast(sess.session_id, {"type":"user_partial","text":f"hello {count}"})
-                    if count == 6:
-                        _METRICS["finals"] += 1
-                        bus.broadcast(sess.session_id, {"type":"user_final","text":"final hello"})
+                    data = item.get("data") or b""
+                    if self.user_msg_id is None:
+                        self.user_msg_id = item.get("user_msg_id")
+                    try:
+                        await client.send(data)
+                    except Exception as e:
+                        _METRICS["provider_errors"] += 1
+                        bus.broadcast(self.sid, {"type":"asr_error","error":"send_failed"})
+                        break
+            finally:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+                try:
+                    poll_task.cancel()
+                except Exception:
+                    pass
 
-                await asyncio.sleep(0.01)
-        finally:
-            try: await sess.provider.close()
-            except Exception: pass
+        asyncio.run(stream_loop())
 
-    def shutdown(self, join_timeout: float = 2.0) -> None:
-        if not self.thread or not self.loop:
-            return
+def _asr_partial_frame(sid: str, sess: _Session, text: str) -> Dict[str, Any]:
+    _METRICS["partials"] += 1
+    fr = {"type":"user_partial","text":text}
+    if sess.user_msg_id:
+        fr["user_msg_id"] = sess.user_msg_id
+    return fr
 
-        async def _close_all():
-            for sess in list(self.sessions.values()):
-                try: await sess.provider.close()
-                except Exception: pass
+def _asr_final_frame(sid: str, sess: _Session, text: str) -> Dict[str, Any]:
+    _METRICS["finals"] += 1
+    fr = {"type":"user_final","text":text}
+    if sess.user_msg_id:
+        fr["user_msg_id"] = sess.user_msg_id
+    return fr
 
-        try:
-            fut = asyncio.run_coroutine_threadsafe(_close_all(), self.loop)
-            try: fut.result(timeout=join_timeout)
-            except Exception: pass
-        except Exception:
-            pass
+async def _poll_events(client: DeepgramClient, sid: str, sess: _Session):
+    try:
+        async for evt in client.poll_events(timeout=0.05):
+            if not isinstance(evt, dict):
+                continue
+            t = evt.get("type")
+            if t == "user_partial":
+                bus.broadcast(sid, _asr_partial_frame(sid, sess, evt.get("text","")))
+            elif t == "user_final":
+                bus.broadcast(sid, _asr_final_frame(sid, sess, evt.get("text","")))
+            elif t == "noop":
+                await asyncio.sleep(0.005)
+            else:
+                # ignore unknown
+                await asyncio.sleep(0.001)
+    except Exception as e:
+        _METRICS["provider_errors"] += 1
+        bus.broadcast(sid, {"type":"asr_error","error":"poll_failed"})
 
-        try: self.loop.call_soon_threadsafe(self.loop.stop)
-        except Exception: pass
-        try:
-            if self.thread.is_alive(): self.thread.join(timeout=join_timeout)
-        except Exception: pass
+# ---- global manager facade ----
 
-_MANAGER: Optional[StreamManager] = None
+_MANAGER: Optional["_Manager"] = None
 
-def get_manager() -> StreamManager:
+class _Manager:
+    def __init__(self):
+        self._sessions: Dict[str, _Session] = {}
+
+    def get(self, sid: str) -> _Session:
+        sess = self._sessions.get(sid)
+        if not sess:
+            sess = _Session(sid, get_config())
+            self._sessions[sid] = sess
+            _METRICS["sessions"] += 1
+            sess.start()
+        return sess
+
+    def enqueue(self, sid: str, item: Dict[str, Any]):
+        self.get(sid).enqueue(item)
+
+    def shutdown(self):
+        for sess in list(self._sessions.values()):
+            sess.shutdown()
+
+def get_manager() -> _Manager:
     global _MANAGER
     if _MANAGER is None:
-        _MANAGER = StreamManager()
+        _MANAGER = _Manager()
     return _MANAGER
 
 async def shutdown_manager():

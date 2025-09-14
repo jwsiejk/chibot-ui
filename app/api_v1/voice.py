@@ -1,10 +1,9 @@
 
-# app/api_v1/voice.py — Phase 0 migration to /api/v1/voice/chunk
+# app/api_v1/voice.py — /api/v1/voice/chunk production handler
 from __future__ import annotations
-import base64
+import base64, binascii
 from flask import Blueprint, jsonify, request
-from ..middleware.rate_limit import check_now, limit
-from ..ws.bus import bus
+from ..middleware.rate_limit import check_now
 from ..services.streaming_asr.stream_manager import get_manager
 
 bp = Blueprint("voice", __name__)
@@ -15,52 +14,27 @@ def _voice_rl_guard():
     if rv is not None:
         return rv
 
-def _session_id() -> str:
-    sid = (request.args.get("session_id") or request.headers.get("X-Session-Id") or "").strip()
-    return sid or "default"
-
 @bp.post("/chunk")
-@limit('voice_chunk')
-def voice_chunk():
-    data = request.get_json(silent=True) or {}
-    user_msg_id = (data.get("user_msg_id") or "").strip()
-    chunk_seq = data.get("chunk_seq")
-    audio_b64 = data.get("audio_b64")
-    fmt = (data.get("format") or "webm-opus").strip().lower()
-    if not user_msg_id or not isinstance(chunk_seq, int) or audio_b64 is None:
-        return jsonify(ok=False, error="bad_request", detail="Expected user_msg_id:str, chunk_seq:int, audio_b64:str"), 400
-    # Validate base64
+def chunk():
+    j = request.get_json(silent=True) or {}
+    sid = j.get("sid")
+    b64 = j.get("audio_b64")
+    chunk_seq = j.get("chunk_seq")
+    user_msg_id = j.get("user_msg_id")
+    if not sid or b64 is None or chunk_seq is None or user_msg_id is None:
+        return jsonify(ok=False, error="bad_request", detail="sid, audio_b64, chunk_seq, user_msg_id required"), 400
     try:
-        _ = base64.b64decode(audio_b64, validate=True)
-    except Exception:
-        return jsonify(ok=False, error="bad_request", detail="audio_b64 must be valid base64"), 400
-
-    sid = _session_id()
-    frame = {
-        "type": "voice_chunk",
-        "session_id": sid,
-        "user_msg_id": user_msg_id,
-        "chunk_seq": int(chunk_seq),
-        "format": fmt,
-        "base64": audio_b64,
-    }
-    # Publish to the WS bus for ASR/Orchestrator; ASR hookup lands in later phases
-    bus.broadcast(sid, frame)
+        audio = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError) as e:
+        return jsonify(ok=False, error="bad_audio_b64"), 400
     try:
         mgr = get_manager()
-        if isinstance(audio_b64, str) and audio_b64:
-            import base64 as _b64
-            _data = _b64.b64decode(audio_b64.encode('ascii'), validate=False)
-        else:
-            _data = b''
-        if _data:
-            mgr.enqueue(sid, _data)
-    except Exception:
-        pass
+        mgr.enqueue(sid, {"data": audio, "user_msg_id": str(user_msg_id), "chunk_seq": int(chunk_seq)})
+    except Exception as e:
+        return jsonify(ok=False, error="enqueue_failed"), 500
     return jsonify(ok=True, received_seq=int(chunk_seq))
 
 # ---------- Legacy endpoints: hard 410 (gone) ----------
-
 @bp.post("/stt")
 def legacy_stt():
     return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
