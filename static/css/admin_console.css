@@ -1,0 +1,242 @@
+/* static/css/admin_console.css
+   Production-grade styles for the Admin Diagnostics panel and
+   the "Full System Test" table. Fully scoped to #admin-diagnostics.
+   Safe to include alongside your existing app.css.
+*/
+
+:root {
+  --ac-bg: #141824;
+  --ac-panel: #0b0f15;
+  --ac-text: #e6e9ef;
+  --ac-muted: #a8b0bf;
+  --ac-border: #202533;
+  --ac-primary: #5ab0ff;
+  --ac-primary-press: #3a99ea;
+  --ac-success: #44d07b;
+  --ac-danger: #ff5a63;
+  --ac-warning: #ffc857;
+  --ac-focus: #89c2ff;
+  --ac-radius: 12px;
+  --ac-shadow: 0 10px 30px -15px rgba(0,0,0,.45);
+}
+
+#admin-diagnostics {
+  color: var(--ac-text);
+  --card-bg: var(--ac-panel);
+}
+
+/* ---------- Controls bar ---------- */
+#admin-diagnostics-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+#admin-diagnostics-controls button {
+  appearance: none;
+  background: var(--ac-primary);
+  color: #0b111a;
+  border: 1px solid #2b7fcf;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: .01em;
+  cursor: pointer;
+  transition: transform .05s ease, background .12s ease, box-shadow .12s ease;
+  box-shadow: 0 0 0 0 rgba(90,176,255,0);
+}
+
+#admin-diagnostics-controls button:hover {
+  background: var(--ac-primary-press);
+  transform: translateY(-0.5px);
+  box-shadow: 0 6px 16px -8px rgba(90,176,255,.38);
+}
+
+#admin-diagnostics-controls button:active {
+  transform: translateY(0);
+  box-shadow: 0 0 0 0 rgba(90,176,255,0);
+}
+
+#admin-diagnostics-controls button:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+#diag-mic-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ac-muted);
+  user-select: none;
+  font-size: 14px;
+}
+
+#diag-mic-wrap input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ac-primary);
+}
+
+/* ---------- Results table ---------- */
+#full-system-results {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--card-bg);
+  border: 1px solid var(--ac-border);
+  border-radius: var(--ac-radius);
+  overflow: hidden;
+  box-shadow: var(--ac-shadow);
+}
+
+#full-system-results thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  padding: 12px 12px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--ac-muted);
+  background: #101522;
+  border-bottom: 1px solid var(--ac-border);
+}
+
+#full-system-results tbody td {
+  padding: 10px 12px;
+  font-size: 14px;
+  border-bottom: 1px solid var(--ac-border);
+  vertical-align: top;
+}
+
+#full-system-results tbody tr:nth-child(2n) {
+  background: rgba(255,255,255,0.02);
+}
+
+#full-system-results tbody tr:hover {
+  background: rgba(255,255,255,0.035);
+}
+
+/* OK/Fail indicator cell (2nd col) */
+#full-system-results tbody tr td:nth-child(2) {
+  width: 64px;
+  font-weight: 700;
+}
+
+/* ---------- Status chips (optional utility) ---------- */
+.ac-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  border: 1px solid var(--ac-border);
+  background: rgba(255,255,255,0.04);
+  color: var(--ac-muted);
+}
+
+.ac-chip.success {
+  color: #0c2217;
+  background: var(--ac-success);
+  border-color: #2b5b40;
+}
+
+.ac-chip.danger {
+  color: #2d0a0d;
+  background: var(--ac-danger);
+  border-color: #7a2b2f;
+}
+
+.ac-chip.warn {
+  color: #2b2200;
+  background: var(--ac-warning);
+  border-color: #7a6520;
+}
+
+/* ---------- Accessibility ---------- */
+#admin-diagnostics a {
+  color: var(--ac-primary);
+  text-decoration: none;
+}
+#admin-diagnostics a:hover { text-decoration: underline; }
+
+#admin-diagnostics :focus-visible {
+  outline: 2px solid var(--ac-focus);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Screen-reader only helper */
+#admin-diagnostics .sr-only {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0);
+  white-space: nowrap; border: 0;
+}
+
+/* ---------- Reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  #admin-diagnostics * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 780px) {
+  #admin-diagnostics-controls {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  #full-system-results thead {
+    display: none;
+  }
+  #full-system-results tbody tr {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-row-gap: 6px;
+    padding: 8px 8px;
+  }
+  #full-system-results tbody td {
+    border-bottom: none;
+    padding: 4px 6px;
+  }
+  #full-system-results tbody td:nth-child(1) {
+    grid-column: 1 / -1;
+    font-weight: 600;
+  }
+  #full-system-results tbody td:nth-child(2) {
+    justify-self: start;
+  }
+  #full-system-results tbody td:nth-child(3) {
+    grid-column: 1 / -1;
+    color: var(--ac-muted);
+  }
+}
+
+/* ---------- Print-friendly ---------- */
+@media print {
+  #admin-diagnostics-controls { display: none !important; }
+  #full-system-results {
+    box-shadow: none;
+    border-color: #999;
+  }
+  #full-system-results thead th {
+    background: #ddd !important;
+    color: #111 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  #full-system-results tbody tr:nth-child(2n) {
+    background: #f6f6f6 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
