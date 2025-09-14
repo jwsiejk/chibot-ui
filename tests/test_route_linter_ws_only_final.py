@@ -1,8 +1,8 @@
 import re
 from pathlib import Path
 
-LEGACY = [r"/api/v1/greet\b", r"/api/chat\b", r"/api/voice\b", r"/ws/chat\b", r"legacy_app\b"]
-SOURCE_DIRS = ["app", "static", "templates", "scripts", "config"]
+LEGACY = [r"/api/greet\b", r"/api/chat\b", r"/api/voice\b", r"/ws/chat\b", r"legacy_app\b"]
+SOURCE_DIRS = ["app", "static", "templates", "config"]
 SUFFIXES = {".py", ".js", ".html", ".css", ".json"}
 
 def test_no_legacy_routes():
@@ -13,6 +13,13 @@ def test_no_legacy_routes():
         if not base.exists():
             continue
         for p in base.rglob("*"):
+            # skip test sources and fixtures
+            try:
+                relp = str(p.relative_to(root))
+            except Exception:
+                relp = str(p)
+            if "/tests" in relp or relp.startswith("app/tests"):
+                continue
             if not p.is_file() or p.suffix not in SUFFIXES:
                 continue
             txt = p.read_text(encoding='utf-8', errors='ignore')

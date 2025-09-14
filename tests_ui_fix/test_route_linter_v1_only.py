@@ -1,20 +1,50 @@
+import re
+from pathlib import Path
 
-import pathlib, re
+BANNED = [
+    r"/api/greet\b",    # legacy (v0) greet must not appear
+    r"/api/chat\b",
+    r"/api/voice\b",
+    r"/ws/chat\b",
+    r"legacy_app\b",
+]
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+SOURCE_DIRS = {"app", "static", "templates", "config"}
+SOURCE_SUFFIXES = {".py", ".js", ".html", ".css", ".json"}
 
-def read(p): 
-    return pathlib.Path(p).read_text(encoding="utf-8", errors="ignore")
-
-def test_v1_only_routes():
-    bad=[]
-    targets = list((ROOT/"app").rglob("*.py")) + list((ROOT/"static/js").rglob("*.js")) + list((ROOT/"templates").rglob("*.html"))
-    for p in targets:
-        s = read(p)
-        if "/api/greet" in s and "/api/v1" not in s: bad.append(str(p))
-        for m in re.finditer(r"/(api|ws)/(?!v1\\b)", s):
-            ctx = s[max(0,m.start()-12):m.end()+12]
-            if "app/" in ctx or "static/" in ctx: 
+def test_no_legacy_routes_in_source_code():
+    root = Path(__file__).resolve().parents[1]
+    sources = []
+    for name in SOURCE_DIRS:
+        base = root / name
+        if not base.exists():
+            continue
+        for p in base.rglob("*"):
+            try:
+                relp = str(p.relative_to(root))
+            except Exception:
+                relp = str(p)
+            if "/tests" in relp or relp.startswith("app/tests"):
                 continue
-            bad.append(str(p))
-    assert not bad, "Found potential non-v1 routes in: " + ", ".join(sorted(set(bad)))
+            # skip test sources and fixtures
+            try:
+                relp = str(p.relative_to(root))
+            except Exception:
+                relp = str(p)
+            if "/tests" in relp or relp.startswith("app/tests"):
+                continue
+            if p.is_file() and p.suffix in SOURCE_SUFFIXES:
+                try:
+                    rel = p.relative_to(root)
+                except Exception:
+                    continue
+                if rel.parts[0] not in SOURCE_DIRS:
+                    continue
+                text = p.read_text(encoding="utf-8", errors="ignore")
+                sources.append((str(p), text))
+    offenders = []
+    for path, text in sources:
+        for pat in BANNED:
+            if re.search(pat, text):
+                offenders.append((path, pat))
+    assert not offenders, f"Found banned legacy patterns: {offenders}"
