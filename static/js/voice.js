@@ -1,5 +1,6 @@
 // static/js/voice.js — MediaRecorder 96ms timeslices → POST /api/v1/voice/chunk
 import { ensureCSRF } from './csrf.js';
+import { getSID } from './util/sid.js';
 
 export let currentStream = null;
 let rec = null;
@@ -7,13 +8,6 @@ let queue = [];
 let inflight = false;
 let chunkSeq = 0;
 let currentUserMsgId = null;
-
-function sid(){
-  const k='chip.sid';
-  let s=localStorage.getItem(k);
-  if(!s){ s=crypto.randomUUID(); localStorage.setItem(k,s); }
-  return s;
-}
 
 export async function initMic(){
   if (currentStream && currentStream.active) return currentStream;
@@ -44,35 +38,35 @@ async function sendLoop(){
     while(queue.length){
       const bytes = queue.shift();
       const payload = {
-        sid: sid(),
-        user_msg_id: currentUserMsgId || null,
+        sid: getSID(),
+        user_msg_id: currentUserMsgId,             // non-null (see armVAD)
         chunk_seq: chunkSeq++,
         audio_b64: b64(bytes)
       };
       const headers = new Headers({ 'Content-Type':'application/json' });
-      const csrf = await ensureCSRF().catch(()=>'');
+      const csrf = await ensureCSRF().catch(()=> '');
       if (csrf) headers.set('X-CSRF-Token', csrf);
+
       const res = await fetch('/api/v1/voice/chunk', {
         method: 'POST',
         headers,
         body: JSON.stringify(payload),
         credentials: 'include'
       });
-      if(!res.ok){
+      if (!res.ok) {
         console.warn('[voice] chunk POST failed', res.status);
-        break;
+        break; // avoid tight loop on persistent errors
       }
     }
-  }finally{
-    inflight = false;
-  }
+  } finally { inflight = false; }
 }
 
 export async function armVAD(stream, opts={}){
   if (!stream) throw new Error('armVAD requires a MediaStream');
-  if (rec && rec.state !== 'inactive') return; // already running
+  if (rec && rec.state !== 'inactive') return;    // already running
 
   chunkSeq = 0;
+  // Generate a stable id for this user utterance if caller didn't pass one
   currentUserMsgId = opts.userMsgId || (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random()));
 
   const mimeOptions = [
@@ -85,25 +79,25 @@ export async function armVAD(stream, opts={}){
     if (MediaRecorder.isTypeSupported(m)){ mime = m; break; }
   }
 
-  try{
+  try {
     rec = new MediaRecorder(stream, { mimeType: mime || undefined, audioBitsPerSecond: 128000 });
-  }catch(e){
+  } catch {
     rec = new MediaRecorder(stream); // last resort
   }
 
   rec.ondataavailable = async (ev) => {
     try{
-      if(!ev.data || ev.data.size===0) return;
+      if (!ev.data || ev.data.size === 0) return;
       const buf = new Uint8Array(await ev.data.arrayBuffer());
       queue.push(buf);
-      if (!inflight) { sendLoop(); }
+      if (!inflight) sendLoop();
     }catch(e){ console.warn('[voice] dataavailable error', e); }
   };
-  rec.onerror = (e)=> console.warn('[voice] recorder error', e);
+  rec.onerror = (e) => console.warn('[voice] recorder error', e);
   rec.onstop = ()=>{};
 
-  // 96 ms slices
-  try{ rec.start(96); }catch{ rec.start(); }
+  // 96 ms slices (server accepts 64–128 ms)
+  try { rec.start(96); } catch { rec.start(); }
 }
 
 export function disarmVAD(){
@@ -115,5 +109,5 @@ export function disarmVAD(){
   currentUserMsgId = null;
 }
 
-// parity only (we don't expose tuning in this build)
-export function setVadBoost(_){}
+// kept for API parity; not exposed to UI in this build
+export function setVadBoost(_v){}
