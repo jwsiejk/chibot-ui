@@ -100,7 +100,7 @@ class StreamingASRManager:
                 async for ev in client.events():
                     t = ev.get("type")
                     text = (ev.get("text") or "").strip()
-                    if not t:  # ignore noise
+                    if not t:
                         continue
                     if t == "user_partial":
                         _METRICS["partials"] += 1
@@ -117,13 +117,13 @@ class StreamingASRManager:
 
         rx_task = asyncio.create_task(_rx())
 
-        # send queued slices (with initial coalesce so DG sees a proper WebM header)
+        # send queued slices (coalesce initial header)
         try:
             q = self._queues.get(sid, deque())
 
-            # Coalesce the very first chunks (>= ~1 KB) before first send
+            # Coalesce the first chunks so DG sees a proper WebM header (>= ~8 KB)
             prefix = bytearray()
-            while q and len(prefix) < 1024:
+            while q and len(prefix) < 8192:
                 prefix.extend(q.popleft())
             if prefix:
                 try:
@@ -150,8 +150,8 @@ class StreamingASRManager:
                     except Exception: pass
                     break
 
-            # give the provider a bit more drain time to emit a final
-            await asyncio.sleep(1.2)
+            # give the provider more time to emit a final
+            await asyncio.sleep(3.0)
         finally:
             try: await client.close()
             except Exception: pass
