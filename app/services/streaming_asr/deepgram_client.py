@@ -3,27 +3,27 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import AsyncGenerator, Optional, Any
+from typing import AsyncGenerator, Optional
 
-import websockets  # provided by uvicorn[standard]
-
+# Force the async client from websockets, avoiding sync create_connection() path.
+try:
+    from websockets.legacy.client import connect as ws_connect  # async
+except Exception:  # very old/new layouts
+    from websockets.client import connect as ws_connect  # async in legacy
 
 def _dg_url() -> str:
-    """Return the Deepgram listen URL with safe defaults."""
     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
-    # append defaults if not present (helps when proxies ignore Configure frame)
+    # append sane defaults if missing (helps when proxies ignore Configure frame)
     if "encoding=" not in base:
         sep = "&" if "?" in base else "?"
         base = base + sep + "encoding=opus&sample_rate=48000&channels=1&interim_results=true"
     return base
-
 
 def _auth_header() -> str:
     key = os.getenv("DEEPGRAM_API_KEY", "").strip()
     if not key:
         raise RuntimeError("DEEPGRAM_API_KEY is not set")
     return f"Token {key}"
-
 
 def _initial_config() -> dict:
     model = os.getenv("DG_MODEL")
@@ -39,10 +39,8 @@ def _initial_config() -> dict:
         cfg["model"] = model
     return cfg
 
-
 class DeepgramClient:
     """Minimal async wrapper for Deepgram streaming WS."""
-
     def __init__(self, _cfg: Optional[dict] = None) -> None:
         self._ws = None  # type: ignore
         self._rx_task: Optional[asyncio.Task] = None
@@ -52,22 +50,12 @@ class DeepgramClient:
     async def connect(self) -> None:
         if self._ws:
             return
-        # First try with list[tuple] headers (newer style)
-        try:
-            self._ws = await websockets.connect(
-                _dg_url(),
-                extra_headers=[("Authorization", _auth_header())],
-            )
-        except TypeError:
-            # Fallback: some builds accept dict headers instead
-            self._ws = await websockets.connect(
-                _dg_url(),
-                extra_headers={"Authorization": _auth_header()},
-            )
-
-        # Send initial configuration to enable partials.
+        # Use async legacy client; extra_headers is valid here.
+        self._ws = await ws_connect(
+            _dg_url(),
+            extra_headers=[("Authorization", _auth_header())],
+        )
         await self._ws.send(json.dumps(_initial_config()))
-        # Start receiver
         self._rx_task = asyncio.create_task(self._rx_loop())
         await self._ev_queue.put({"type": "asr_open"})
 
