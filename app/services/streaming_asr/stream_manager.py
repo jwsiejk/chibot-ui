@@ -9,11 +9,11 @@ from queue import Queue, Empty
 from typing import Dict, Optional, Any
 from urllib.parse import urlencode
 
-# Use the sync client from websockets (already in your requirements)
+# Use the sync client from 'websockets' (already in your env).
 from websockets.sync.client import connect as ws_connect
 import websockets.exceptions as ws_exceptions
 
-# Try to import Admin SSE emitter; fall back if unavailable.
+# Admin SSE emitter is optional; if missing, no-op.
 try:
     from ...api_v1.admin import _emit  # type: ignore
 except Exception:  # pragma: no cover
@@ -24,19 +24,19 @@ except Exception:  # pragma: no cover
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 DG_BASE = os.getenv("DEEPGRAM_WSS_URL", "wss://api.deepgram.com/v1/listen")
 
-# Defaults match browser mic: WebM/Opus 48 kHz, mono
+# Defaults for browser mic: WebM/Opus 48 kHz mono.
 DG_PARAMS_DEFAULT = {
     "encoding": "opus",
     "sample_rate": 48000,
     "channels": 1,
-    "interim_results": "true",  # needed to surface partials
+    "interim_results": "true",
     "smart_format": "true",
     "punctuate": "true",
     "vad_events": "true",
     "utterance_end_ms": "1200",  # encourage timely finals
 }
 
-# Optional model/language tuning from env (if present)
+# Optional model/language overrides via env.
 _opt_model = os.getenv("DG_MODEL", "").strip()
 _opt_lang = os.getenv("DG_LANGUAGE", "").strip()
 if _opt_model:
@@ -52,7 +52,7 @@ def _deepgram_listen_url() -> str:
 class _DGSession:
     """
     One Deepgram streaming session per AskChip session_id (sid).
-    Handles: open → send binary audio chunks → receive JSON results → counters/SSE.
+    open → send binary audio → receive JSON → count partials/finals.
     """
 
     def __init__(self, sid: str):
@@ -63,7 +63,7 @@ class _DGSession:
         self.send_t: Optional[threading.Thread] = None
         self.recv_t: Optional[threading.Thread] = None
 
-        # simple stats for Diagnostics
+        # counters used by Diagnostics
         self.partials = 0
         self.finals = 0
         self.error: Optional[str] = None
@@ -79,7 +79,7 @@ class _DGSession:
         headers = [("Authorization", f"Token {DEEPGRAM_API_KEY}")]
         ctx = ssl.create_default_context()
         try:
-            # websockets.sync uses 'additional_headers' (dict/list) and 'ssl'
+            # websockets.sync uses 'additional_headers' and 'ssl'
             self.ws = ws_connect(
                 _deepgram_listen_url(),
                 additional_headers=headers,
@@ -87,7 +87,7 @@ class _DGSession:
                 open_timeout=10,
             )
             _emit("asr", label="provider_open", provider="deepgram", session_id=self.sid)
-        except Exception as e:  # connection error
+        except Exception as e:
             self.error = f"provider_connect:{type(e).__name__}:{e}"
             _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
             return
@@ -138,8 +138,7 @@ class _DGSession:
                 if not buf or self.ws is None:
                     continue
                 try:
-                    # websockets.sync: sending bytes automatically uses a binary frame
-                    self.ws.send(buf)
+                    self.ws.send(buf)  # bytes → binary frame
                 except Exception as e:
                     self.error = f"send_error:{type(e).__name__}:{e}"
                     _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
@@ -168,15 +167,14 @@ class _DGSession:
                     break
 
                 if isinstance(msg, (bytes, bytearray)):
-                    # ignore any binary echoes
-                    continue
+                    continue  # ignore any binary echoes
 
                 try:
                     data = json.loads(msg)
                 except Exception:
                     continue
 
-                # Deepgram result frames include is_final on transcripts
+                # Deepgram result frames include 'is_final' on transcripts.
                 is_final = data.get("is_final")
                 if is_final is True:
                     self.finals += 1
