@@ -20,7 +20,7 @@
     .btn.primary:hover{background:#3a99ea}
     .muted{color:#9aa4b2;font-size:13px}
     table{width:100%;border-collapse:collapse;background:#101522;border:1px solid #202533;border-radius:12px;overflow:hidden}
-    thead th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:#9aa4b2;background:#0e1220}
+    thead th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:#9aa0b2;background:#0e1220}
     th,td{font-size:13px;border-bottom:1px solid #202533;padding:8px}
     .back{display:inline-block;margin-bottom:8px;color:#7aa0ff;text-decoration:none}
     .back:hover{text-decoration:underline}
@@ -37,7 +37,8 @@
     <button data-tab="ux" class="active">User Experience</button>
     <button data-tab="flow">Conversational Flow</button>
     <button data-tab="vendor">Vendor — Streaming ASR (Deepgram) / VAD</button>
-    <button data-tab="ptm">PTM Personality (NLP / NLU / NLG)</button>
+    <button data-tab="ptm">PTM / Persona</button>
+    <button data-tab="ops">Ops & WS</button>
     <button data-tab="diag">Diagnostics</button>
   </div>
 
@@ -70,33 +71,21 @@
   <section class="panel" id="tab-flow">
     <h3>Conversational Flow</h3>
     <div class="grid">
-      <label>Teacher move — summarize_next_actions (0..1)
-        <input id="tm_summarize_next_actions" type="number" step="0.05" min="0" max="1"/>
-      </label>
-      <label>Teacher move — check_understanding (0..1)
-        <input id="tm_check_understanding" type="number" step="0.05" min="0" max="1"/>
-      </label>
-      <label>Teacher move — deep_dive (0..1)
-        <input id="tm_deep_dive" type="number" step="0.05" min="0" max="1"/>
-      </label>
-      <label>Suggestions guard (max chips)
-        <input id="suggestions_max_items2" type="number" min="0" value="4"/>
-      </label>
+      <label>Teacher move — summarize_next_actions (0..1) <input id="tm_summarize" type="number" step="0.05" min="0" max="1" value="0.6"/></label>
+      <label>Teacher move — check_understanding (0..1) <input id="tm_check" type="number" step="0.05" min="0" max="1" value="0.5"/></label>
+      <label>Teacher move — visualize (0..1) <input id="tm_visualize" type="number" step="0.05" min="0" max="1" value="0.2"/></label>
     </div>
     <div class="actions"><button class="btn primary" id="save-flow">Save</button></div>
   </section>
 
   <!-- Vendor -->
   <section class="panel" id="tab-vendor">
-    <h3>Vendor — Streaming ASR (Deepgram) / VAD</h3>
+    <h3>Vendor — Streaming ASR / VAD</h3>
     <div class="grid">
-      <label>ASR provider <input id="stt_provider" value="deepgram"/></label>
-      <label>VAD attack (ms) <input id="vad_attack_ms" type="number" value="12"/></label>
-      <label>VAD release (ms) <input id="vad_release_ms" type="number" value="240"/></label>
-      <label>VAD dbFS threshold <input id="vad_dbfs_threshold" type="number" value="-42"/></label>
-    </div>
-    <div class="muted" style="margin-top:6px">
-      Secrets (Deepgram API key) remain in environment variables; not editable here.
+      <label>Deepgram model <input id="dg_model" value="nova-2-general"/></label>
+      <label>Interim results <input id="dg_partials" type="checkbox" checked/></label>
+      <label>VAD confirm (ms) <input id="vad_confirm_ms" type="number" value="420"/></label>
+      <label>Echo threshold boost <input id="echo_threshold_boost" type="number" value="12"/></label>
     </div>
     <div class="actions"><button class="btn primary" id="save-vendor">Save</button></div>
   </section>
@@ -113,7 +102,7 @@
         <option>short</option><option selected>medium</option><option>long</option></select>
       </label>
 
-      <label>Persona intensity (Nebraska %) <input id="nebraska_persona_level" type="number" step="0.01" min="0" max="1" value="0.13"/></label>
+      <label>Persona intensity (Nebraska %) <input id="nebraska_persona" type="number" step="0.01" min="0" max="1" value="0.13"/></label>
       <label>Use persona quotes <input id="nebraska_quotes_enabled" type="checkbox" checked/></label>
 
       <label>NLU: intent classification <input id="nlu_intent" type="checkbox" checked/></label>
@@ -124,6 +113,16 @@
       </label>
     </div>
     <div class="actions"><button class="btn primary" id="save-ptm">Save</button></div>
+  </section>
+
+  <!-- Ops -->
+  <section class="panel" id="tab-ops">
+    <h3>Ops & WebSocket</h3>
+    <div class="grid">
+      <label>Ping interval (ms) <input id="ops_ping_interval" type="number" value="15000"/></label>
+      <label>Idle timeout (ms) <input id="ops_idle_timeout" type="number" value="60000"/></label>
+    </div>
+    <div class="actions"><button class="btn primary" id="save-ops">Save</button></div>
   </section>
 
   <!-- Diagnostics -->
@@ -138,6 +137,19 @@
         <thead><tr><th>Check</th><th>OK</th><th>Details</th></tr></thead>
         <tbody id="diag-body"></tbody>
       </table>
+    </div>
+
+    <!-- Streaming status (ASR) -->
+    <h3 style="margin-top:18px">Streaming status (ASR)</h3>
+    <div class="row">
+      <button class="btn" id="stream-refresh" type="button">Refresh</button>
+      <span class="muted">Source: /api/v1/admin/diagnostics/streaming_status</span>
+    </div>
+    <div class="grid" style="margin-top:10px">
+      <label>partials <input id="stream-partials" readonly value="0"/></label>
+      <label>finals <input id="stream-finals" readonly value="0"/></label>
+      <label>provider_errors <input id="stream-errors" readonly value="0"/></label>
+      <label>breaker_open <input id="stream-breaker" readonly value="false"/></label>
     </div>
 
     <h3 style="margin-top:18px">Full System Test</h3>
@@ -173,6 +185,36 @@
     btns.forEach(b => b.addEventListener('click', () => activate(b.dataset.tab)));
     const want = new URLSearchParams(location.search).get('tab') || 'ux';
     activate(want);
+  })();
+</script>
+
+<!-- Lightweight poller for Streaming status -->
+<script>
+  (function(){
+    async function fetchJSON(url){
+      const r = await fetch(url, { credentials: 'same-origin' });
+      if (!r.ok) throw new Error('HTTP '+r.status);
+      return await r.json();
+    }
+    async function loadStreamingStatus(){
+      try{
+        const j = await fetchJSON('/api/v1/admin/diagnostics/streaming_status');
+        const set = (id, v) => { const el=document.getElementById(id); if(el){ if('value' in el) el.value=String(v); else el.textContent=String(v);} };
+        set('stream-partials', j.partials ?? 0);
+        set('stream-finals', j.finals ?? 0);
+        set('stream-errors', j.provider_errors ?? 0);
+        set('stream-breaker', j.breaker_open ? 'true' : 'false');
+      }catch(e){ /* no-op */ }
+    }
+    const btn = document.getElementById('stream-refresh');
+    if (btn) btn.addEventListener('click', loadStreamingStatus);
+    // light polling only when Diagnostics tab is visible
+    setInterval(() => {
+      var panel = document.getElementById('tab-diag');
+      if (panel && panel.classList.contains('active')) loadStreamingStatus();
+    }, 1000);
+    // first paint
+    loadStreamingStatus();
   })();
 </script>
 </body>
