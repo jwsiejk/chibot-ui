@@ -10,20 +10,21 @@ export async function unlockAudio(){
     if (_ctx.state === 'suspended') await _ctx.resume();
     const o = _ctx.createOscillator();
     const g = _ctx.createGain();
-    g.gain.value = 0.00001;
+    g.gain.value = 0.00001;           // inaudible tick to unlock
     o.connect(g).connect(_ctx.destination);
     o.start();
     o.stop(_ctx.currentTime + 0.01);
-  }catch(e){ /* ignore */ }
+  }catch(_){}
 }
 
-// Accepts an array of Uint8Array MP3 chunks (or a single chunk).
+// Accepts a Uint8Array or an array of Uint8Array MP3 chunks.
 export function playStream(chunks){
   try{
     const list = Array.isArray(chunks) ? chunks : [chunks];
     if (!list.length) return;
     const total = list.reduce((n, c)=> n + (c?.length || 0), 0);
     if (!total) return;
+
     const buf = new Uint8Array(total);
     let off = 0;
     for (const c of list){
@@ -31,11 +32,12 @@ export function playStream(chunks){
       buf.set(c, off);
       off += c.length;
     }
+
     const blob = new Blob([buf], { type: 'audio/mpeg' });
     if (_audio){ try{ _audio.pause(); }catch{} }
     _audio = new Audio(URL.createObjectURL(blob));
-    _audio.addEventListener('ended', ()=> {
-      try{ window.dispatchEvent(new CustomEvent('chip:tts-ended')); }catch{}
+    _audio.addEventListener('ended', ()=>{
+      try { window.dispatchEvent(new CustomEvent('chip:tts-ended')); } catch {}
     });
     _audio.play().catch(()=>{});
   }catch(e){
@@ -45,6 +47,4 @@ export function playStream(chunks){
 
 export function stopPlayback(){ try{ _audio?.pause(); }catch{} }
 export function isPlaying(){ return !!(_audio && !_audio.paused); }
-
-// no-op; placeholder for alignment callbacks when used
-export function setVisemeCallback(fn){ /* not used in 2D mode */ }
+export function setVisemeCallback(_fn){ /* not used in 2D mode */ }
