@@ -32,6 +32,8 @@ blinker>=1.7.0
 # --- Optional (safe to keep; remove if unused) ---
 sse-starlette>=1.6.1        # if you prefer Starlette-based SSE for /api/v1/admin/logs
 python-multipart>=0.0.9     # if you accept uploads on ASGI routes (not needed for Flask uploads)
+websockets>=12.0
+
 
 pytest
 
