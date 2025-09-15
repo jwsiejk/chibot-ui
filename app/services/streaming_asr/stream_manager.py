@@ -1,173 +1,151 @@
-# app/services/streaming_asr/stream_manager.py
 from __future__ import annotations
 
 import asyncio
 import threading
 import time
 from collections import deque
-from typing import Deque, Dict, Optional, Any
+from typing import Any, Deque, Dict, Optional
 
-from app.ws.bus import bus
-from app.config_store import get_config
-from .deepgram_client import DeepgramClient
-from app.api_v1.admin import _emit  # <-- admin SSE emitter
+from app.services.streaming_asr.deepgram_client import DeepgramClient
 
-# In-proc metrics & breaker
+# Your bus must exist; Diagnostics listens for these events.
+from app.ws.bus import bus  # broadcasting: bus.broadcast(session_id, payload)
+
+# simple circuit-breaker + counters (observable via diagnostics endpoint)
 _METRICS: Dict[str, int] = {
+    "provider_errors": 0,
     "partials": 0,
     "finals": 0,
-    "provider_errors": 0,
     "sessions": 0,
 }
-_CB_OPEN_UNTIL_MS: int = 0
-_CB_BACKOFF_MS: int = 60_000  # 60s backoff on provider errors
+_CB_BACKOFF_MS = 4000
+_CB_OPEN_UNTIL = 0
 
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _cb_opened() -> bool:
-    return _now_ms() < _CB_OPEN_UNTIL_MS
+def _cb_open() -> bool:
+    return _now_ms() < _CB_OPEN_UNTIL
 
 
 def _cb_trip() -> None:
-    global _CB_OPEN_UNTIL_MS
-    _CB_OPEN_UNTIL_MS = _now_ms() + _CB_BACKOFF_MS
+    global _CB_OPEN_UNTIL
+    _CB_OPEN_UNTIL = _now_ms() + _CB_BACKOFF_MS
 
 
 class StreamingASRManager:
     """
-    Orchestrates per-session live ASR with Deepgram.
-    - Opens provider session on first enqueue.
-    - Flushes any queued slices immediately after connect.
-    - Emits user_partial/user_final over the WS bus.
+    Manages a provider session per Ask Chip session id.
+    Accepts mic slices via enqueue(); opens Deepgram; relays partial/final text over the WS bus.
     """
 
     def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()
         self._thr = threading.Thread(target=self._loop.run_forever, name="asr-loop", daemon=True)
         self._thr.start()
-
         self._queues: Dict[str, Deque[bytes]] = {}
         self._tasks: Dict[str, asyncio.Future] = {}
-        self._turn_id: Dict[str, str] = {}  # last user_msg_id per session (optional)
-
-    # ---- public API ---------------------------------------------------------
+        self._user_msg_id: Dict[str, str] = {}
 
     def enqueue(self, sid: str, item: Any) -> None:
         """
-        Accepts either raw bytes or a dict {"data": bytes, "user_msg_id": str, "chunk_seq": int}
+        item may be:
+          - raw bytes
+          - dict: {"data": bytes, "user_msg_id": str, "chunk_seq": int}
         """
         if isinstance(item, dict):
             data = item.get("data") or b""
-            user_msg_id = str(item.get("user_msg_id") or "")
-            if user_msg_id:
-                self._turn_id[sid] = user_msg_id
+            umid = str(item.get("user_msg_id") or "")
+            if umid:
+                self._user_msg_id[sid] = umid
         else:
-            data = item
-
+            data = bytes(item or b"")
         if not data:
             return
 
         q = self._queues.setdefault(sid, deque())
         q.append(data)
-        # ensure a running task for this session
-        if sid not in self._tasks or self._tasks[sid].done():
+
+        task = self._tasks.get(sid)
+        if task is None or task.done():
             fut = asyncio.run_coroutine_threadsafe(self._run_session(sid), self._loop)
             self._tasks[sid] = fut
 
     def shutdown(self) -> None:
         try:
-            for f in list(self._tasks.values()):
-                try:
-                    f.cancel()
-                except Exception:
-                    pass
             self._loop.call_soon_threadsafe(self._loop.stop)
         except Exception:
             pass
 
-    # ---- internal -----------------------------------------------------------
+    # -------------------- internals --------------------
 
     async def _run_session(self, sid: str) -> None:
-        global _METRICS
-        if _cb_opened():
-            bus.broadcast(sid, {"type": "asr_error", "error": "provider_backoff"})
+        if _cb_open():
+            bus.broadcast(sid, {"type": "asr_error", "error": "breaker_open"})
             return
 
-        client: Optional[DeepgramClient] = None
-        try:
-            cfg = get_config() or {}
-        except Exception:
-            cfg = {}
+        _METRICS["sessions"] += 1
+        client = DeepgramClient()
 
+        # connect
         try:
-            client = DeepgramClient(cfg)
             await client.connect()
-            _METRICS["sessions"] += 1
-            # Admin SSE: session opened
-            _emit("asr:open", label="asr_open", session_id=sid)
             bus.broadcast(sid, {"type": "asr_open"})
         except Exception as e:
             _METRICS["provider_errors"] += 1
             _cb_trip()
-            # Admin SSE: provider connect error
-            _emit("asr:error", label="asr_error", session_id=sid, error=f"provider_connect:{e.__class__.__name__}")
-            bus.broadcast(sid, {"type": "asr_error", "error": "provider_connect"})
+            bus.broadcast(sid, {"type": "asr_error", "error": f"provider_connect:{e.__class__.__name__}"})
             return
 
-        # receiver task: forward partials/finals to bus
         async def _rx():
             try:
                 async for ev in client.events():
                     t = ev.get("type")
-                    text = ev.get("text") or ""
-                    if not text:
-                        continue
                     if t == "user_partial":
                         _METRICS["partials"] += 1
                     elif t == "user_final":
                         _METRICS["finals"] += 1
-                    bus.broadcast(sid, {"type": t, "text": text})
+                    bus.broadcast(
+                        sid,
+                        {
+                            "type": t,
+                            "text": ev.get("text", ""),
+                            "user_msg_id": self._user_msg_id.get(sid),
+                        },
+                    )
             except Exception:
-                # swallow; sender side will close
-                pass
+                pass  # sender handles close
 
         rx_task = asyncio.create_task(_rx())
 
-        # send loop: flush backlog then idle-wait
         try:
-            last_send = _now_ms()
-
-            while True:
-                # flush any queued chunks
-                q = self._queues.get(sid)
-                while q and q:
-                    data = q.popleft()
-                    await client.send_bytes(data)
-                    last_send = _now_ms()
-
-                # idle termination after ~4s without new audio
-                if _now_ms() - last_send > 4000:
+            q = self._queues.get(sid, deque())
+            while q:
+                chunk = q.popleft()
+                try:
+                    await client.send(chunk)
+                except Exception as e:
+                    _METRICS["provider_errors"] += 1
+                    _cb_trip()
+                    bus.broadcast(sid, {"type": "asr_error", "error": f"send:{e.__class__.__name__}"})
                     break
 
-                await asyncio.sleep(0.02)
-
-        except Exception:
-            pass
+            # give the provider a short drain window to emit a final
+            await asyncio.sleep(0.6)
         finally:
-            try:
-                rx_task.cancel()
-            except Exception:
-                pass
             try:
                 await client.close()
             except Exception:
                 pass
+            try:
+                rx_task.cancel()
+            except Exception:
+                pass
 
-    # ------------------------------------------------------------------------
 
+# ------------- module-level helpers used by diagnostics ----------------------
 
 _MANAGER: Optional[StreamingASRManager] = None
 
@@ -179,15 +157,15 @@ def get_manager() -> StreamingASRManager:
     return _MANAGER
 
 
-async def shutdown_manager():
-    mgr = _MANAGER
-    if mgr is not None:
-        mgr.shutdown()
+def shutdown_manager() -> None:
+    m = _MANAGER
+    if m:
+        m.shutdown()
 
 
 def get_streaming_status() -> Dict[str, object]:
     return {
-        "breaker_open": _cb_opened(),
+        "breaker_open": _cb_open(),
         "provider_errors": _METRICS["provider_errors"],
         "partials": _METRICS["partials"],
         "finals": _METRICS["finals"],
