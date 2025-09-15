@@ -1,7 +1,7 @@
 // static/js/admin_console.js
 //
-// Diagnostics tab (Admin > Diagnostics). No-ops unless #admin-diagnostics exists.
-// Production-aligned checks; avoids false negatives in your current environment.
+// Diagnostics tab (Admin > Diagnostics). Strict checks enabled.
+// No-ops unless #admin-diagnostics exists.
 
 (function(){
   function rootEl(){ return document.querySelector('#admin-diagnostics'); }
@@ -10,7 +10,7 @@
   // ---------- tiny DOM helpers ----------
   function $(sel, scope){ return (scope||document).querySelector(sel); }
   function create(tag, attrs){ const el=document.createElement(tag); if(attrs) Object.assign(el, attrs); return el; }
-  function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+  const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
 
   // ---------- controls/table ----------
   function ensureControls(){
@@ -47,9 +47,7 @@
     if(!table){
       table = create('table', { id: 'full-system-results' });
       table.innerHTML = `
-        <thead>
-          <tr><th>Check</th><th>OK</th><th>Details</th></tr>
-        </thead>
+        <thead><tr><th>Check</th><th>OK</th><th>Details</th></tr></thead>
         <tbody></tbody>
       `;
       root.appendChild(table);
@@ -133,13 +131,24 @@
     return { start, stop };
   }
 
-  // ---------- checks ----------
+  // ---------- strict info from server ----------
+  async function getVendorStatus(){
+    const r = await fetch('/api/v1/admin/diagnostics/vendor_status', { credentials:'include' });
+    if(!r.ok) return { deepgram_enabled: null, elevenlabs_enabled: null };
+    return r.json();
+  }
+  async function getRateLimits(){
+    const r = await fetch('/api/v1/admin/diagnostics/rate_limits', { credentials:'include' });
+    if(!r.ok) return { chat:{}, voice_chunk:{} };
+    return r.json();
+  }
+
+  // ---------- functional checks ----------
   async function greetIdempotent(sid){
     const r1=await fetch(`/api/v1/greet?session_id=${encodeURIComponent(sid)}`,{credentials:'include'}); const j1=await r1.json().catch(()=>({}));
     const r2=await fetch(`/api/v1/greet?session_id=${encodeURIComponent(sid)}`,{credentials:'include'}); const j2=await r2.json().catch(()=>({}));
     return { ok: j1.turn_id && j2.turn_id && j1.turn_id===j2.turn_id, d:`${j1.turn_id||'?'} == ${j2.turn_id||'?'}` };
   }
-
   async function chatIdempotent(sid){
     const csrf=await getCSRF();
     const key=`diag-chat-${Math.random().toString(36).slice(2,8)}`;
@@ -152,16 +161,16 @@
     return { ok, d: ok ? `turn_id=${j1.turn_id}` : `unexpected: ${JSON.stringify(j2).slice(0,140)}` };
   }
 
-  async function rateLimitCheck(){
-    // Your server default often allows >=2 requests/sec; treat 200(OK) as OK(limit≥2).
+  async function rateLimitCheckStrict(chatMax){
+    // If chatMax <= 1 → expect the second request in the same window to be 429.
+    // If chatMax >= 2 → expect 200.
     const csrf=await getCSRF();
     const h1={'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':`rl-1-${Math.random().toString(36).slice(2,6)}`};
     const h2={'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':`rl-2-${Math.random().toString(36).slice(2,6)}`};
     await fetch('/api/v1/chat',{method:'POST',headers:h1,credentials:'include',body:JSON.stringify({text:'rl-1'})});
     const r2=await fetch('/api/v1/chat',{method:'POST',headers:h2,credentials:'include',body:JSON.stringify({text:'rl-2'})});
-    const ok = (r2.status===429 || r2.status===200);
-    const msg = r2.status===429 ? 'limit=1: got 429' : 'limit≥2: status2=200';
-    return { ok, d: msg };
+    const expect = (chatMax <= 1) ? 429 : 200;
+    return { ok: r2.status === expect, d:`status2=${r2.status} (expected ${expect})` };
   }
 
   async function guard413(sid){
@@ -170,27 +179,6 @@
     const r=await postChunk({sid, csrf, userMsgId:'diag-big', seq:1, b64:big});
     let txt=''; try{ txt=await r.text(); }catch(_){}
     return { ok: r.status===413, d:`status=${r.status} ${txt.slice(0,180)}` };
-  }
-
-  async function vendorFlags(){
-    // Your admin APIs may not expose vendor booleans. Treat absence as "unknown (info)" not failure.
-    try{
-      // Prefer diagnostics endpoints if present
-      let r = await fetch('/api/v1/admin/diagnostics',{credentials:'include'});
-      if(!r.ok) r = await fetch('/api/v1/admin/config',{credentials:'include'});
-      if(!r.ok) return { ok:true, d:'unknown (API not exposing vendor flags)' };
-
-      const j = await r.json().catch(()=> ({}));
-      const v = j.vendors || j || {};
-      const deep = (v.deepgram===true) || (v.has_deepgram===true) || (v.deepgram_enabled===true) || (v.asr_enabled===true);
-      const elev = (v.elevenlabs===true) || (v.tts_enabled===true) || (v.elevenlabs_enabled===true);
-      if (deep || elev) return { ok: (deep && elev), d:`deepgram=${!!deep}, elevenlabs=${!!elev}` };
-
-      // No booleans present → informational
-      return { ok:true, d:'unknown (API not exposing vendor flags)' };
-    }catch(_){
-      return { ok:true, d:'unknown (fetch error)' };
-    }
   }
 
   async function adminSSE(){
@@ -205,8 +193,24 @@
     });
   }
 
+  function attachASRWatch(ws, sid, diagPrefix){
+    let counts = { partials:0, finals:0, asr_error:false };
+    function onmsg(fr){
+      if(!fr || typeof fr!=='object') return;
+      if(fr.type==='user_partial'){
+        if(!fr.user_msg_id || String(fr.user_msg_id).startsWith(diagPrefix)) counts.partials++;
+      } else if(fr.type==='user_final'){
+        if(!fr.user_msg_id || String(fr.user_msg_id).startsWith(diagPrefix)) counts.finals++;
+      } else if(fr.type==='asr_error'){
+        counts.asr_error = true;
+      }
+    }
+    const detach = attachWSListener(ws, onmsg);
+    return { counts, detach };
+  }
+
   async function ttsCancelSmoke({ws, sid, csrf, micMode}){
-    if(!micMode || !ws) return { ok:true, d:'skipped (mic mode off)' }; // neutral
+    if(!micMode || !ws) return { ok:true, d:'skipped (mic mode off)' };
     const hdr={'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':`cancel-${Math.random().toString(36).slice(2,6)}`};
     const body=JSON.stringify({ text:'Please say a long response so I can interrupt you.', session_id:sid });
 
@@ -246,49 +250,68 @@
     const sid = `diag-${Math.random().toString(36).slice(2,10)}`;
     const csrf = await getCSRF();
 
-    // WS
-    let ws=null, partials=0, finals=0, sawAsrErr=false;
+    // WS + ASR watch
+    let ws=null;
+    let asrWatch;
     try{
-      ws = await openWS(sid,(fr)=>{
-        if(fr.type==='user_partial'){ if(!fr.user_msg_id || String(fr.user_msg_id).startsWith('diag')) partials++; }
-        else if(fr.type==='user_final'){ if(!fr.user_msg_id || String(fr.user_msg_id).startsWith('diag')) finals++; }
-        else if(fr.type==='asr_error'){ sawAsrErr=true; }
-      });
+      ws = await openWS(sid);
       set('bus_subscribe', true, `session=${sid}`);
+      asrWatch = attachASRWatch(ws, sid, 'diag');
     }catch(_){ set('bus_subscribe', false, 'ws failed'); return; }
 
-    // greet/chat idempotency
+    // Strict server facts
+    const vendors = await getVendorStatus().catch(()=> ({}));
+    const limits  = await getRateLimits().catch(()=> ({}));
+
+    const deepOK = vendors && vendors.deepgram_enabled === true;
+    const elevOK = vendors && vendors.elevenlabs_enabled === true;
+    set('vendor_keys_ok', (deepOK && elevOK), `deepgram=${!!vendors.deepgram_enabled}, elevenlabs=${!!vendors.elevenlabs_enabled}`);
+
+    const chatMax = (limits && limits.chat && typeof limits.chat.max_per_window === 'number')
+      ? limits.chat.max_per_window
+      : null;
+
+    // Functional checks
     try{ const r=await greetIdempotent(sid); set('greet_idempotent', r.ok, r.d); }catch(_){ set('greet_idempotent', false, 'error'); }
     try{ const r=await chatIdempotent(sid); set('chat_idempotent', r.ok, r.d); }catch(_){ set('chat_idempotent', false, 'error'); }
 
-    // rate limit & 413
-    try{ const r=await rateLimitCheck(); set('rate_limit_ok', r.ok, r.d); }catch(_){ set('rate_limit_ok', true, 'unknown'); }
+    // Strict rate-limit: must match expected behavior from server config
+    if (chatMax == null){
+      set('rate_limit_ok', true, 'unknown (no server value)'); // do not fail if server didn’t report
+    }else{
+      try{
+        const r = await rateLimitCheckStrict(chatMax);
+        set('rate_limit_ok', r.ok, r.d);
+      }catch(_){
+        set('rate_limit_ok', false, 'error');
+      }
+    }
+
+    // 413 guard
     try{ const r=await guard413(sid); set('413_guard', r.ok, r.d); }catch(_){ set('413_guard', false, 'error'); }
 
-    // vendor flags (informational if API doesn’t expose booleans)
-    try{ const r=await vendorFlags(); set('vendor_keys_ok', r.ok, r.d); }catch(_){ set('vendor_keys_ok', true, 'unknown'); }
-
-    // chunk posting: silent vs mic
+    // POST chunks
     let postOk=false;
     if(!micMode){
       try{ const r=await postChunk({sid, csrf, userMsgId:'diag-1', seq:1, b64:b64OfBytes(256)}); postOk=r.ok; set('chunk_post', r.ok, r.ok?'ok':`HTTP ${r.status}`); }
       catch(_){ set('chunk_post', false, 'exception'); }
     }else{
-      const streamer=makeMicStreamer({sid, csrf, userMsgId:'diag-mic'});
+      const streamer = makeMicStreamer({sid, csrf, userMsgId:'diag-mic'});
       try{ await streamer.start(); await sleep(2000); streamer.stop(); postOk=true; set('chunk_post', true, 'mic slices sent'); }
       catch(_){ try{streamer.stop();}catch(_){ } set('chunk_post', false, 'mic error'); }
     }
     set('enqueue_ok', postOk, postOk?'ok':'failed');
 
-    // ASR outcomes
+    // Observe ASR
     await sleep(micMode?2000:600);
+    const { partials, finals, asr_error } = (asrWatch && asrWatch.counts) || {partials:0,finals:0,asr_error:false};
     if(!micMode){
       set('asr_path_ok', true, 'skipped (silent mode)');
       set('partials_seen', false, '0');
       set('final_seen', false, 'silent mode (expected)');
     }else{
-      const asrOk = (partials>0 || finals>0 || sawAsrErr);
-      set('asr_path_ok', asrOk, `partials=${partials}, finals=${finals}, asr_error=${sawAsrErr}`);
+      const ok = (partials>0 || finals>0 || asr_error);
+      set('asr_path_ok', ok, `partials=${partials}, finals=${finals}, asr_error=${asr_error}`);
       set('partials_seen', partials>0, String(partials));
       set('final_seen', finals>0, finals>0?'ok':'no final in window');
     }
@@ -297,7 +320,7 @@
     try{ const r=await adminSSE(); set('admin_sse_ok', r.ok, r.d); }catch(_){ set('admin_sse_ok', false, 'error'); }
     try{ const r=await ttsCancelSmoke({ws, sid, csrf, micMode}); set('tts_cancel_ok', r.ok, r.d); }catch(_){ set('tts_cancel_ok', true, 'skipped'); }
 
-    try{ ws && ws.close(); }catch(_){}
+    try{ asrWatch && asrWatch.detach(); ws && ws.close(); }catch(_){}
   }
 
   // init
