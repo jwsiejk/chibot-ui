@@ -188,3 +188,62 @@ def diag_stream():
             _t.sleep(0.35)
 
     return Response(gen(), mimetype="text/event-stream")
+
+# ----------------- Admin Diagnostics (GET+POST) -----------------
+# These match what your Admin UI calls and avoid 405s.
+
+@bp.route("/diagnostics/vendor_status", methods=["GET", "POST"])
+def _diag_vendor_status():
+    _require_admin()
+    def _has(v): return bool(v and str(v).strip())
+    deepgram_ok = _has(os.getenv("DEEPGRAM_API_KEY"))
+    eleven_key_ok = _has(os.getenv("ELEVENLABS_API_KEY"))
+    eleven_voice_ok = _has(os.getenv("ELEVENLABS_VOICE_ID"))
+    return jsonify(
+        ok=True,
+        deepgram=deepgram_ok,
+        elevenlabs=(eleven_key_ok and eleven_voice_ok),
+        elevenlabs_key=eleven_key_ok,
+        elevenlabs_voice=eleven_voice_ok,
+    ), 200
+
+
+@bp.route("/diagnostics/streaming_status", methods=["GET", "POST"])
+def _diag_streaming_status():
+    _require_admin()
+    # Import here to avoid circular import at module load time.
+    from ..services.streaming_asr.stream_manager import get_manager  # type: ignore
+
+    sid = request.args.get("sid") or request.args.get("session_id")
+    mgr = get_manager()
+
+    if sid:
+        s = mgr.stats(sid)
+        return jsonify(
+            ok=True,
+            sid=sid,
+            partials=int(s.get("partials", 0)),
+            finals=int(s.get("finals", 0)),
+            asr_error=bool(s.get("err")),
+            err=s.get("err"),
+        ), 200
+
+    # Aggregate if available; fall back to zeros if manager lacks stats_all.
+    if hasattr(mgr, "stats_all"):
+        agg = mgr.stats_all()  # type: ignore[attr-defined]
+        return jsonify(
+            ok=True,
+            partials=int(agg.get("partials", 0)),
+            finals=int(agg.get("finals", 0)),
+            asr_error=agg.get("err_count", 0) > 0,
+            err_count=int(agg.get("err_count", 0)),
+            sessions=agg.get("sessions", {}),
+        ), 200
+    else:
+        return jsonify(ok=True, partials=0, finals=0, asr_error=False), 200
+
+
+@bp.route("/diagnostics/rate_limits", methods=["GET", "POST"])
+def _diag_rate_limits():
+    _require_admin()
+    return jsonify(ok=True, status2=200), 200
