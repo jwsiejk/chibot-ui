@@ -99,7 +99,7 @@ class StreamingASRManager:
         except Exception as e:
             _METRICS["provider_errors"] += 1
             _cb_trip()
-            bus.broadcast(sid, {"type": "asr_error", "error": f"provider_connect:{e.__class__.__name__}"});
+            bus.broadcast(sid, {"type": "asr_error", "error": f"provider_connect:{e.__class__.__name__}:{str(e)}"});
             try: _emit('asr', label='asr_error', session_id=sid, error=f'provider_connect:{e.__class__.__name__}')
             except Exception: pass
             return
@@ -121,7 +121,7 @@ class StreamingASRManager:
                         },
                     )
             except Exception as e:
-                try: _emit('asr', label='asr_error', session_id=sid, error=f'rx:{e.__class__.__name__}')
+                try: _emit('asr', label='asr_error', session_id=sid, error=f'rx:{e.__class__.__name__}:{str(e)}')
                 except Exception: pass
                 pass  # sender handles close
 
@@ -136,7 +136,7 @@ class StreamingASRManager:
                 except Exception as e:
                     _METRICS["provider_errors"] += 1
                     _cb_trip()
-                    bus.broadcast(sid, {"type": "asr_error", "error": f"send:{e.__class__.__name__}"});
+                    bus.broadcast(sid, {"type": "asr_error", "error": f"send:{e.__class__.__name__}:{str(e)}"});
                     try: _emit('asr', label='asr_error', session_id=sid, error=f'send:{e.__class__.__name__}')
                     except Exception: pass
                     break

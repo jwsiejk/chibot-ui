@@ -59,8 +59,6 @@ class DeepgramClient:
             return websockets.connect(
                 _dg_url(),
                 extra_headers=extra_headers,
-                ping_interval=20,
-                ping_timeout=20,
             )
         # Try tuple header format first (modern recommended form)
         conn = _connect([("Authorization", _auth_header())])
