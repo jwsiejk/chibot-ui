@@ -50,36 +50,27 @@ class DeepgramClient:
         self._ev_queue: asyncio.Queue = asyncio.Queue()
         self._closed = False
 
-    async def connect(self) -> None:
-        if self._ws:
-            return
-        # Build a connection object that works across websockets versions.
-        # Some versions return an awaitable; others are async context managers.
-        def _connect(extra_headers: Any) -> Any:
-            return websockets.connect(
-                _dg_url(),
-                extra_headers=extra_headers,
-            )
-        # Try tuple header format first (modern recommended form)
-        conn = _connect([("Authorization", _auth_header())])
-        try:
-            if hasattr(conn, "__aenter__"):
-                self._ws = await conn.__aenter__()
-            else:
-                self._ws = await conn  # awaitable
-        except TypeError:
-            # Fallback for versions that expect a dict for extra_headers
-            conn2 = _connect({"Authorization": _auth_header()})
-            if hasattr(conn2, "__aenter__"):
-                self._ws = await conn2.__aenter__()
-            else:
-                self._ws = await conn2
+    
+async def connect(self) -> None:
+    if self._ws:
+        return
+    # First try with list[tuple] headers (newer style)
+    try:
+        self._ws = await websockets.connect(
+            _dg_url(),
+            extra_headers=[("Authorization", _auth_header())],
+        )
+    except TypeError:
+        # Fallback: some builds accept dict headers instead
+        self._ws = await websockets.connect(
+            _dg_url(),
+            extra_headers={"Authorization": _auth_header()},
+        )
+    # Send config and prime RX
+    await self._ws.send(json.dumps(_initial_config()))
+    self._rx_task = asyncio.create_task(self._rx_loop())
+    await self._ev_queue.put({"type": "asr_open"})
 
-        # Send initial configuration to enable partials.
-        await self._ws.send(json.dumps(_initial_config()))
-        # Start receiver
-        self._rx_task = asyncio.create_task(self._rx_loop())
-        await self._ev_queue.put({"type": "asr_open"})
 
     async def close(self) -> None:
         self._closed = True

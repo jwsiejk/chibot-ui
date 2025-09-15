@@ -49,17 +49,42 @@ def logs_ui():
     _require_admin()
     return render_template("admin_logs.html")
 
+
 @bp.get("/logs")
 def logs_sse():
     _require_admin()
+    live = request.args.get("live") in ("1","true","yes")
     def stream():
-        yield "event: heartbeat\n"
-        yield "data: " + json.dumps({"ts": time.time(), "kind": "heartbeat", "msg": "ok"}) + "\n\n"
-        # drain any queued events (short stream for tests)
-        while _LOG_Q:
-            evt = _LOG_Q.popleft()
-            yield "data: " + json.dumps(evt) + "\n\n"
+        import time as _t
+        # initial heartbeat
+        yield "event: heartbeat
+"
+        yield "data: " + json.dumps({"ts": _t.time(), "kind": "heartbeat", "msg": "ok"}) + "
+
+"
+        last_hb = _t.time()
+        while True:
+            sent = False
+            while _LOG_Q:
+                evt = _LOG_Q.popleft()
+                yield "data: " + json.dumps(evt) + "
+
+"
+                sent = True
+            # keep-alive heartbeats
+            now = _t.time()
+            if now - last_hb > 5:
+                yield "event: heartbeat
+"
+                yield "data: " + json.dumps({"ts": now, "kind": "heartbeat", "msg": "ok"}) + "
+
+"
+                last_hb = now
+            if not live and not sent:
+                break
+            _t.sleep(0.3)
     return Response(stream(), mimetype="text/event-stream")
+
 
 
 @bp.get("/runtime")
