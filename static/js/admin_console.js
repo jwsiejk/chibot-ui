@@ -76,7 +76,7 @@
   async function getCSRF(){
     try{ const r=await fetch('/api/v1/csrf',{credentials:'include'}); const t=r.headers.get('X-CSRF-Token')||r.headers.get('X-CSRFToken'); if(t) return t; }catch(_){}
     try{ const r=await fetch('/api/v1/health',{credentials:'include'}); const t=r.headers.get('X-CSRF-Token')||r.headers.get('X-CSRFToken'); if(t) return t; }catch(_){}
-    const m=document.cookie.match(/(?:^|;\\s*)XSRF-TOKEN=([^;]+)/); return m?decodeURIComponent(m[1]):'';
+    const m=document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/); return m?decodeURIComponent(m[1]):'';
   }
   function b64OfBytes(n){ const a=new Uint8Array(n); let s=''; for(let i=0;i<n;i++) s+=String.fromCharCode(a[i]); return btoa(s); }
   async function postChunk({sid, csrf, userMsgId, seq, b64}){
@@ -131,7 +131,7 @@
     return { start, stop };
   }
 
-  // ---------- strict info from server ----------
+  // ---------- strict server info ----------
   async function getVendorStatus(){
     const r = await fetch('/api/v1/admin/diagnostics/vendor_status', { credentials:'include' });
     if(!r.ok) return { deepgram_enabled: null, elevenlabs_enabled: null };
@@ -160,10 +160,7 @@
     const ok=!!(j1.turn_id && j2.turn_id && j1.turn_id===j2.turn_id && j2.idempotent===true);
     return { ok, d: ok ? `turn_id=${j1.turn_id}` : `unexpected: ${JSON.stringify(j2).slice(0,140)}` };
   }
-
   async function rateLimitCheckStrict(chatMax){
-    // If chatMax <= 1 → expect the second request in the same window to be 429.
-    // If chatMax >= 2 → expect 200.
     const csrf=await getCSRF();
     const h1={'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':`rl-1-${Math.random().toString(36).slice(2,6)}`};
     const h2={'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':`rl-2-${Math.random().toString(36).slice(2,6)}`};
@@ -172,7 +169,6 @@
     const expect = (chatMax <= 1) ? 429 : 200;
     return { ok: r2.status === expect, d:`status2=${r2.status} (expected ${expect})` };
   }
-
   async function guard413(sid){
     const csrf=await getCSRF();
     const big=b64OfBytes(270_000);
@@ -180,7 +176,6 @@
     let txt=''; try{ txt=await r.text(); }catch(_){}
     return { ok: r.status===413, d:`status=${r.status} ${txt.slice(0,180)}` };
   }
-
   async function adminSSE(){
     return new Promise(res=>{
       let got=false;
@@ -192,10 +187,9 @@
       }catch(_){ res({ok:false,d:'EventSource error'}); }
     });
   }
-
-  function attachASRWatch(ws, sid, diagPrefix){
-    let counts = { partials:0, finals:0, asr_error:false };
-    function onmsg(fr){
+  function attachWSWatch(ws, diagPrefix){
+    const counts = { partials:0, finals:0, asr_error:false };
+    const detach = attachWSListener(ws, (fr)=>{
       if(!fr || typeof fr!=='object') return;
       if(fr.type==='user_partial'){
         if(!fr.user_msg_id || String(fr.user_msg_id).startsWith(diagPrefix)) counts.partials++;
@@ -204,16 +198,13 @@
       } else if(fr.type==='asr_error'){
         counts.asr_error = true;
       }
-    }
-    const detach = attachWSListener(ws, onmsg);
+    });
     return { counts, detach };
   }
-
   async function ttsCancelSmoke({ws, sid, csrf, micMode}){
     if(!micMode || !ws) return { ok:true, d:'skipped (mic mode off)' };
     const hdr={'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':`cancel-${Math.random().toString(36).slice(2,6)}`};
     const body=JSON.stringify({ text:'Please say a long response so I can interrupt you.', session_id:sid });
-
     let turnId=null, audioChunks=0, afterInterrupt=0;
     const unlisten = attachWSListener(ws, fr=>{
       if(fr.type==='assistant_chunk' && fr.turn_id && !turnId) turnId=fr.turn_id;
@@ -222,14 +213,11 @@
       }
       if(fr.type==='assistant_end' && fr.turn_id===turnId && afterInterrupt>0){ afterInterrupt+=1000; }
     });
-
     try{ await fetch('/api/v1/chat',{method:'POST',headers:hdr,credentials:'include',body}); }catch(_){ unlisten(); return { ok:false, d:'chat failed' }; }
     await sleep(500);
     const streamer = makeMicStreamer({sid, csrf, userMsgId:`barge-${Math.random().toString(36).slice(2,6)}`});
     try{ await streamer.start(); }catch(_){ unlisten(); return { ok:false, d:'mic denied' }; }
-    await sleep(800); streamer.stop();
-    await sleep(1200); unlisten();
-
+    await sleep(800); streamer.stop(); await sleep(1200); unlisten();
     const ok = (audioChunks>0) && (afterInterrupt<2);
     return { ok, d: audioChunks===0 ? 'no audio observed' : (ok?'ok':'late audio after cancel') };
   }
@@ -252,17 +240,16 @@
 
     // WS + ASR watch
     let ws=null;
-    let asrWatch;
+    let watch;
     try{
       ws = await openWS(sid);
       set('bus_subscribe', true, `session=${sid}`);
-      asrWatch = attachASRWatch(ws, sid, 'diag');
+      watch = attachWSWatch(ws, 'diag');
     }catch(_){ set('bus_subscribe', false, 'ws failed'); return; }
 
     // Strict server facts
     const vendors = await getVendorStatus().catch(()=> ({}));
     const limits  = await getRateLimits().catch(()=> ({}));
-
     const deepOK = vendors && vendors.deepgram_enabled === true;
     const elevOK = vendors && vendors.elevenlabs_enabled === true;
     set('vendor_keys_ok', (deepOK && elevOK), `deepgram=${!!vendors.deepgram_enabled}, elevenlabs=${!!vendors.elevenlabs_enabled}`);
@@ -275,16 +262,12 @@
     try{ const r=await greetIdempotent(sid); set('greet_idempotent', r.ok, r.d); }catch(_){ set('greet_idempotent', false, 'error'); }
     try{ const r=await chatIdempotent(sid); set('chat_idempotent', r.ok, r.d); }catch(_){ set('chat_idempotent', false, 'error'); }
 
-    // Strict rate-limit: must match expected behavior from server config
+    // Strict rate-limit
     if (chatMax == null){
-      set('rate_limit_ok', true, 'unknown (no server value)'); // do not fail if server didn’t report
+      set('rate_limit_ok', true, 'unknown (no server value)');
     }else{
-      try{
-        const r = await rateLimitCheckStrict(chatMax);
-        set('rate_limit_ok', r.ok, r.d);
-      }catch(_){
-        set('rate_limit_ok', false, 'error');
-      }
+      try{ const r=await rateLimitCheckStrict(chatMax); set('rate_limit_ok', r.ok, r.d); }
+      catch(_){ set('rate_limit_ok', false, 'error'); }
     }
 
     // 413 guard
@@ -304,11 +287,13 @@
 
     // Observe ASR
     await sleep(micMode?2000:600);
-    const { partials, finals, asr_error } = (asrWatch && asrWatch.counts) || {partials:0,finals:0,asr_error:false};
+    const { partials, finals, asr_error } = (watch && watch.counts) || {partials:0,finals:0,asr_error:false};
+
     if(!micMode){
+      // ⬇️ changed: show green “skipped (silent mode)” for both rows
       set('asr_path_ok', true, 'skipped (silent mode)');
-      set('partials_seen', false, '0');
-      set('final_seen', false, 'silent mode (expected)');
+      set('partials_seen', true, 'skipped (silent mode)');
+      set('final_seen', true, 'skipped (silent mode)');
     }else{
       const ok = (partials>0 || finals>0 || asr_error);
       set('asr_path_ok', ok, `partials=${partials}, finals=${finals}, asr_error=${asr_error}`);
@@ -320,7 +305,7 @@
     try{ const r=await adminSSE(); set('admin_sse_ok', r.ok, r.d); }catch(_){ set('admin_sse_ok', false, 'error'); }
     try{ const r=await ttsCancelSmoke({ws, sid, csrf, micMode}); set('tts_cancel_ok', r.ok, r.d); }catch(_){ set('tts_cancel_ok', true, 'skipped'); }
 
-    try{ asrWatch && asrWatch.detach(); ws && ws.close(); }catch(_){}
+    try{ watch && watch.detach(); ws && ws.close(); }catch(_){}
   }
 
   // init
