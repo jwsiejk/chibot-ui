@@ -1,255 +1,77 @@
-# app/services/streaming_asr/stream_manager.py
+# app/api_v1/admin_diagnostics.py
+# Diagnostics endpoints used by the Admin console.
+# NOTE: lives directly under api_v1 (no subfolder).
+
 from __future__ import annotations
 
-import json
 import os
-import ssl
-import threading
-from queue import Queue, Empty
-from typing import Dict, Optional, Any
-from urllib.parse import urlencode
+from flask import Blueprint, jsonify, request
 
-# Use the sync client from 'websockets' (already in your env).
-from websockets.sync.client import connect as ws_connect
-import websockets.exceptions as ws_exceptions
+from ..services.streaming_asr.stream_manager import get_manager
 
-# Admin SSE emitter is optional; if missing, no-op.
-try:
-    from ...api_v1.admin import _emit  # type: ignore
-except Exception:  # pragma: no cover
-    def _emit(*_args, **_kwargs):
-        return None
+# URL pattern: /api/v1/admin/diagnostics/...
+bp = Blueprint("admin_diagnostics", __name__, url_prefix="/api/v1/admin/diagnostics")
 
 
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
-DG_BASE = os.getenv("DEEPGRAM_WSS_URL", "wss://api.deepgram.com/v1/listen")
-
-# Defaults for browser mic: WebM/Opus 48 kHz mono.
-DG_PARAMS_DEFAULT = {
-    "encoding": "opus",
-    "sample_rate": 48000,
-    "channels": 1,
-    "interim_results": "true",
-    "smart_format": "true",
-    "punctuate": "true",
-    "vad_events": "true",
-    "utterance_end_ms": "1200",  # encourage timely finals
-}
-
-# Optional model/language overrides via env.
-_opt_model = os.getenv("DG_MODEL", "").strip()
-_opt_lang = os.getenv("DG_LANGUAGE", "").strip()
-if _opt_model:
-    DG_PARAMS_DEFAULT["model"] = _opt_model
-if _opt_lang:
-    DG_PARAMS_DEFAULT["language"] = _opt_lang
+def _has(v: str | None) -> bool:
+    return bool(v and v.strip())
 
 
-def _deepgram_listen_url() -> str:
-    return f"{DG_BASE}?{urlencode(DG_PARAMS_DEFAULT)}"
-
-
-class _DGSession:
+@bp.route("/vendor_status", methods=["GET", "POST"])
+def vendor_status():
     """
-    One Deepgram streaming session per AskChip session_id (sid).
-    open → send binary audio → receive JSON → count partials/finals.
+    Returns whether required vendor keys are present on the server.
+    Admin UI reads this for 'vendor_keys_ok'.
     """
-
-    def __init__(self, sid: str):
-        self.sid = sid
-        self.ws: Optional[Any] = None  # websockets.sync connection
-        self.q: Queue[bytes] = Queue(maxsize=256)
-        self.stop_flag = threading.Event()
-        self.send_t: Optional[threading.Thread] = None
-        self.recv_t: Optional[threading.Thread] = None
-
-        # counters used by Diagnostics
-        self.partials = 0
-        self.finals = 0
-        self.error: Optional[str] = None
-
-    # ---- lifecycle ---------------------------------------------------------
-
-    def start(self):
-        if not DEEPGRAM_API_KEY:
-            self.error = "missing_deepgram_key"
-            _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
-            return
-
-        headers = [("Authorization", f"Token {DEEPGRAM_API_KEY}")]
-        ctx = ssl.create_default_context()
-        try:
-            # websockets.sync uses 'additional_headers' and 'ssl'
-            self.ws = ws_connect(
-                _deepgram_listen_url(),
-                additional_headers=headers,
-                ssl=ctx,
-                open_timeout=10,
-            )
-            _emit("asr", label="provider_open", provider="deepgram", session_id=self.sid)
-        except Exception as e:
-            self.error = f"provider_connect:{type(e).__name__}:{e}"
-            _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
-            return
-
-        # start IO threads
-        self.send_t = threading.Thread(target=self._send_loop, name=f"dg-send-{self.sid}", daemon=True)
-        self.recv_t = threading.Thread(target=self._recv_loop, name=f"dg-recv-{self.sid}", daemon=True)
-        self.send_t.start()
-        self.recv_t.start()
-
-    def close(self):
-        self.stop_flag.set()
-        try:
-            if self.ws is not None:
-                self.ws.close()
-        except Exception:
-            pass
-        _emit("asr", label="provider_close", provider="deepgram", session_id=self.sid)
-
-    # ---- public ------------------------------------------------------------
-
-    def enqueue(self, audio_bytes: bytes):
-        if self.stop_flag.is_set():
-            return
-        try:
-            self.q.put_nowait(audio_bytes)
-        except Exception:
-            # drop oldest if full to avoid unbounded growth
-            try:
-                _ = self.q.get_nowait()
-            except Exception:
-                pass
-            try:
-                self.q.put_nowait(audio_bytes)
-            except Exception:
-                pass
-
-    # ---- internals ---------------------------------------------------------
-
-    def _send_loop(self):
-        """Send binary audio frames to Deepgram (bytes → binary opcode automatically)."""
-        try:
-            while not self.stop_flag.is_set():
-                try:
-                    buf = self.q.get(timeout=0.25)
-                except Empty:
-                    continue
-                if not buf or self.ws is None:
-                    continue
-                try:
-                    self.ws.send(buf)  # bytes → binary frame
-                except Exception as e:
-                    self.error = f"send_error:{type(e).__name__}:{e}"
-                    _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
-                    self.stop_flag.set()
-                    break
-        finally:
-            try:
-                if self.ws is not None:
-                    self.ws.close()
-            except Exception:
-                pass
-
-    def _recv_loop(self):
-        """Receive JSON messages; count partials/finals."""
-        try:
-            while not self.stop_flag.is_set() and self.ws is not None:
-                try:
-                    msg = self.ws.recv()
-                except ws_exceptions.ConnectionClosed:
-                    self.stop_flag.set()
-                    break
-                except Exception as e:
-                    self.error = f"recv_error:{type(e).__name__}:{e}"
-                    _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
-                    self.stop_flag.set()
-                    break
-
-                if isinstance(msg, (bytes, bytearray)):
-                    continue  # ignore any binary echoes
-
-                try:
-                    data = json.loads(msg)
-                except Exception:
-                    continue
-
-                # Deepgram result frames include 'is_final' on transcripts.
-                is_final = data.get("is_final")
-                if is_final is True:
-                    self.finals += 1
-                    _emit("asr", label="final", session_id=self.sid, finals=self.finals)
-                elif is_final is False:
-                    self.partials += 1
-                    _emit("asr", label="partial", session_id=self.sid, partials=self.partials)
-        finally:
-            self.stop_flag.set()
-            try:
-                if self.ws is not None:
-                    self.ws.close()
-            except Exception:
-                pass
+    deepgram_ok = _has(os.getenv("DEEPGRAM_API_KEY"))
+    eleven_key_ok = _has(os.getenv("ELEVENLABS_API_KEY"))
+    eleven_voice_ok = _has(os.getenv("ELEVENLABS_VOICE_ID"))
+    return jsonify(
+        ok=True,
+        deepgram=deepgram_ok,
+        elevenlabs=eleven_key_ok and eleven_voice_ok,
+        elevenlabs_key=eleven_key_ok,
+        elevenlabs_voice=eleven_voice_ok,
+    ), 200
 
 
-# --------------------- Manager (singleton) -----------------------------------
+@bp.route("/streaming_status", methods=["GET", "POST"])
+def streaming_status():
+    """
+    Returns ASR streaming counters.
+    - If ?sid=... provided, returns stats for that session id.
+    - Otherwise returns an aggregate across active sessions.
+    Admin UI uses partials/finals/asr_error to drive the checks.
+    """
+    sid = request.args.get("sid") or request.args.get("session_id")
+    mgr = get_manager()
 
-class StreamManager:
-    """Creates/owns _DGSession instances keyed by AskChip session id."""
+    if sid:
+        s = mgr.stats(sid)
+        return jsonify(
+            ok=True,
+            sid=sid,
+            partials=int(s.get("partials", 0)),
+            finals=int(s.get("finals", 0)),
+            asr_error=bool(s.get("err")),
+            err=s.get("err"),
+        ), 200
 
-    def __init__(self):
-        self._lock = threading.Lock()
-        self._sessions: Dict[str, _DGSession] = {}
-
-    def _ensure(self, sid: str) -> _DGSession:
-        with self._lock:
-            s = self._sessions.get(sid)
-            if s is None or s.stop_flag.is_set():
-                s = _DGSession(sid)
-                self._sessions[sid] = s
-                s.start()
-            return s
-
-    def enqueue(self, sid: str, item: dict):
-        """item = {'data': bytes, 'user_msg_id': str|None, 'chunk_seq': int}"""
-        data = item.get("data")
-        if not data:
-            return
-        sess = self._ensure(sid)
-        sess.enqueue(data)
-
-    def stats(self, sid: str) -> dict:
-        with self._lock:
-            s = self._sessions.get(sid)
-            if not s:
-                return {"partials": 0, "finals": 0, "err": None}
-            return {"partials": s.partials, "finals": s.finals, "err": s.error}
-
-    def stats_all(self) -> dict:
-        """Aggregate counters across all active sessions (for Diagnostics GET without sid)."""
-        with self._lock:
-            partials = finals = err_count = 0
-            sessions: Dict[str, dict] = {}
-            for sid, s in self._sessions.items():
-                sessions[sid] = {"partials": s.partials, "finals": s.finals, "err": s.error}
-                partials += s.partials
-                finals += s.finals
-                if s.error:
-                    err_count += 1
-            return {"partials": partials, "finals": finals, "err_count": err_count, "sessions": sessions}
-
-    def close(self, sid: str):
-        with self._lock:
-            s = self._sessions.pop(sid, None)
-            if s:
-                s.close()
+    agg = mgr.stats_all()
+    return jsonify(
+        ok=True,
+        partials=int(agg.get("partials", 0)),
+        finals=int(agg.get("finals", 0)),
+        asr_error=agg.get("err_count", 0) > 0,
+        err_count=int(agg.get("err_count", 0)),
+        sessions=agg.get("sessions", {}),
+    ), 200
 
 
-# global singleton
-_MANAGER: Optional[StreamManager] = None
-
-
-def get_manager() -> StreamManager:
-    global _MANAGER
-    if _MANAGER is None:
-        _MANAGER = StreamManager()
-    return _MANAGER
+@bp.route("/rate_limits", methods=["GET", "POST"])
+def rate_limits():
+    """
+    Lightweight health for rate limit check in Diagnostics.
+    If you later expose real counters, add them here.
+    """
+    return jsonify(ok=True, status2=200), 200
