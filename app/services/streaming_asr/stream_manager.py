@@ -5,7 +5,6 @@ import json
 import os
 import ssl
 import threading
-import time
 from queue import Queue, Empty
 from typing import Dict, Optional
 from urllib.parse import urlencode
@@ -16,7 +15,6 @@ from websocket import ABNF
 
 # Try to import Admin SSE emitter; fall back if unavailable.
 try:
-    # package root: app/
     from ...api_v1.admin import _emit  # type: ignore
 except Exception:  # pragma: no cover
     def _emit(*_args, **_kwargs):
@@ -81,7 +79,7 @@ class _DGSession:
         try:
             self.ws = websocket.create_connection(
                 _deepgram_listen_url(),
-                header=headers,
+                header=headers,  # NOTE: websocket-client uses 'header', not 'extra_headers'
                 sslopt={"cert_reqs": ssl.CERT_REQUIRED},
                 enable_multithread=True,
                 ping_interval=20,
@@ -218,7 +216,6 @@ class StreamManager:
         sess = self._ensure(sid)
         sess.enqueue(data)
 
-    # Optional helpers Diagnostics may call (kept for completeness)
     def stats(self, sid: str) -> dict:
         with self._lock:
             s = self._sessions.get(sid)
@@ -238,7 +235,7 @@ _MANAGER: Optional[StreamManager] = None
 
 
 def get_manager() -> StreamManager:
-    global _MANAGER
+    global __MANAGER
     if _MANAGER is None:
         _MANAGER = StreamManager()
     return _MANAGER
