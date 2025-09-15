@@ -6,12 +6,12 @@ import os
 import ssl
 import threading
 from queue import Queue, Empty
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from urllib.parse import urlencode
 
-# Use websocket-client (sync). This is NOT the async 'websockets' lib.
-import websocket
-from websocket import ABNF
+# Use the sync client from websockets (you already have websockets installed)
+from websockets.sync.client import connect as ws_connect
+import websockets.exceptions as ws_exceptions
 
 # Try to import Admin SSE emitter; fall back if unavailable.
 try:
@@ -29,10 +29,11 @@ DG_PARAMS_DEFAULT = {
     "encoding": "opus",
     "sample_rate": 48000,
     "channels": 1,
-    "interim_results": "true",
+    "interim_results": "true",  # needed to surface partials
     "smart_format": "true",
     "punctuate": "true",
     "vad_events": "true",
+    "utterance_end_ms": "1200",  # encourage timely finals
 }
 
 # Optional model/language tuning from env (if present)
@@ -56,7 +57,7 @@ class _DGSession:
 
     def __init__(self, sid: str):
         self.sid = sid
-        self.ws: Optional[websocket.WebSocket] = None
+        self.ws: Optional[Any] = None  # websockets.sync connection
         self.q: Queue[bytes] = Queue(maxsize=256)
         self.stop_flag = threading.Event()
         self.send_t: Optional[threading.Thread] = None
@@ -75,15 +76,15 @@ class _DGSession:
             _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
             return
 
-        headers = [f"Authorization: Token {DEEPGRAM_API_KEY}"]
+        headers = [("Authorization", f"Token {DEEPGRAM_API_KEY}")]
+        ctx = ssl.create_default_context()
         try:
-            self.ws = websocket.create_connection(
+            # websockets.sync uses 'additional_headers' (dict or list of pairs) and 'ssl'
+            self.ws = ws_connect(
                 _deepgram_listen_url(),
-                header=headers,  # NOTE: websocket-client uses 'header', not 'extra_headers'
-                sslopt={"cert_reqs": ssl.CERT_REQUIRED},
-                enable_multithread=True,
-                ping_interval=20,
-                ping_timeout=10,
+                additional_headers=headers,
+                ssl=ctx,
+                open_timeout=10,
             )
             _emit("asr", label="provider_open", provider="deepgram", session_id=self.sid)
         except Exception as e:  # connection error
@@ -127,7 +128,7 @@ class _DGSession:
     # ---- internals ---------------------------------------------------------
 
     def _send_loop(self):
-        """Send binary audio frames to Deepgram."""
+        """Send binary audio frames to Deepgram (bytes → binary opcode automatically)."""
         try:
             while not self.stop_flag.is_set():
                 try:
@@ -136,9 +137,9 @@ class _DGSession:
                     continue
                 if not buf or self.ws is None:
                     continue
-                # websocket-client binary send
                 try:
-                    self.ws.send(buf, opcode=ABNF.OPCODE_BINARY)
+                    # websockets.sync: sending 'bytes' automatically uses a binary frame
+                    self.ws.send(buf)
                 except Exception as e:
                     self.error = f"send_error:{type(e).__name__}:{e}"
                     _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
@@ -157,8 +158,10 @@ class _DGSession:
             while not self.stop_flag.is_set() and self.ws is not None:
                 try:
                     msg = self.ws.recv()
+                except ws_exceptions.ConnectionClosed:
+                    self.stop_flag.set()
+                    break
                 except Exception as e:
-                    # socket closed or network issue
                     self.error = f"recv_error:{type(e).__name__}:{e}"
                     _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
                     self.stop_flag.set()
@@ -235,7 +238,7 @@ _MANAGER: Optional[StreamManager] = None
 
 
 def get_manager() -> StreamManager:
-    global __MANAGER
+    global _MANAGER
     if _MANAGER is None:
         _MANAGER = StreamManager()
     return _MANAGER
