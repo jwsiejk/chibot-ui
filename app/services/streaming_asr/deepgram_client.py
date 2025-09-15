@@ -8,7 +8,7 @@ from typing import AsyncGenerator, Optional
 # Force the async client from websockets (avoids sync create_connection path).
 try:
     from websockets.legacy.client import connect as ws_connect  # async
-except Exception:
+except Exception:  # fallback for other layouts
     from websockets.client import connect as ws_connect  # async
 
 def _dg_url() -> str:
@@ -28,7 +28,7 @@ def _auth_header() -> str:
 def _initial_config() -> dict:
     """
     WebM/Opus mic slices:
-      • container MUST be 'webm' for DG to parse MediaRecorder output
+      • container MUST be 'webm' for MediaRecorder output
       • encoding 'opus', sample_rate 48000, channels=1
       • interim_results on for partials
     """
@@ -36,7 +36,7 @@ def _initial_config() -> dict:
     interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
     cfg = {
         "type": "Configure",
-        "container": "webm",       # <-- the missing hint
+        "container": "webm",       # <— critical for MediaRecorder chunks
         "encoding": "opus",
         "sample_rate": 48000,
         "channels": 1,
@@ -47,6 +47,7 @@ def _initial_config() -> dict:
     if model:
         cfg["model"] = model
     return cfg
+
 
 class DeepgramClient:
     """Minimal async wrapper for Deepgram streaming WS."""
@@ -61,7 +62,9 @@ class DeepgramClient:
             return
         # Use async client; extra_headers is valid here
         self._ws = await ws_connect(_dg_url(), extra_headers=[("Authorization", _auth_header())])
+        # Send initial configuration to enable partials & correct container/codec
         await self._ws.send(json.dumps(_initial_config()))
+        # Start receiver
         self._rx_task = asyncio.create_task(self._rx_loop())
         await self._ev_queue.put({"type": "asr_open"})
 
@@ -97,10 +100,13 @@ class DeepgramClient:
                     msg = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
                 except Exception:
                     continue
+
+                # Normalize Deepgram messages to our minimal events.
                 t = (msg.get("type") or "").lower()
                 if t in ("results", "transcript", "partialtranscript", "speech.update"):
                     text = ""
                     is_final = False
+
                     if "channel" in msg:
                         try:
                             alts = msg["channel"]["alternatives"]
@@ -109,21 +115,26 @@ class DeepgramClient:
                         except Exception:
                             pass
                         is_final = bool(msg.get("is_final"))
+
                     if "transcript" in msg and not text:
                         text = (msg.get("transcript") or "").strip()
                     if "speech_final" in msg:
                         is_final = is_final or bool(msg.get("speech_final"))
+
                     if not text:
                         continue
+
                     await self._ev_queue.put(
                         {"type": "user_final" if is_final else "user_partial", "text": text}
                     )
+
                 elif t in ("metadata", "listening", "connected", "ready"):
                     continue
                 elif t in ("error", "close"):
                     await self._ev_queue.put({"type": "asr_error", "error": t})
                 else:
                     continue
+
         except asyncio.CancelledError:
             return
         except Exception as e:
