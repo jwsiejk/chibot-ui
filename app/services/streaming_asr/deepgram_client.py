@@ -1,32 +1,29 @@
-
 from __future__ import annotations
 
 import asyncio
 import json
 import os
-from typing import AsyncGenerator, Optional, Union, Any
+from typing import AsyncGenerator, Optional, Any
 
 import websockets  # provided by uvicorn[standard]
 
+
 def _dg_url() -> str:
-    """Return the Deepgram listen URL with safe defaults.">
-    Base may be overridden via env; we append query params if missing so
-    proxies/CDNs that rely on URL params (instead of the Configure frame)
-    still get correct hints.
-    """
+    """Return the Deepgram listen URL with safe defaults."""
     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
-    # If the base already contains our keys, don't duplicate them.
-    sep = "&" if "?" in base else "?"
-    q = "encoding=opus&sample_rate=48000&channels=1&interim_results=true"
-    if "encoding=" in base:
-        return base
-    return base + sep + q
+    # append defaults if not present (helps when proxies ignore Configure frame)
+    if "encoding=" not in base:
+        sep = "&" if "?" in base else "?"
+        base = base + sep + "encoding=opus&sample_rate=48000&channels=1&interim_results=true"
+    return base
+
 
 def _auth_header() -> str:
     key = os.getenv("DEEPGRAM_API_KEY", "").strip()
     if not key:
         raise RuntimeError("DEEPGRAM_API_KEY is not set")
     return f"Token {key}"
+
 
 def _initial_config() -> dict:
     model = os.getenv("DG_MODEL")
@@ -42,35 +39,37 @@ def _initial_config() -> dict:
         cfg["model"] = model
     return cfg
 
+
 class DeepgramClient:
     """Minimal async wrapper for Deepgram streaming WS."""
+
     def __init__(self, _cfg: Optional[dict] = None) -> None:
         self._ws = None  # type: ignore
         self._rx_task: Optional[asyncio.Task] = None
         self._ev_queue: asyncio.Queue = asyncio.Queue()
         self._closed = False
 
-    
-async def connect(self) -> None:
-    if self._ws:
-        return
-    # First try with list[tuple] headers (newer style)
-    try:
-        self._ws = await websockets.connect(
-            _dg_url(),
-            extra_headers=[("Authorization", _auth_header())],
-        )
-    except TypeError:
-        # Fallback: some builds accept dict headers instead
-        self._ws = await websockets.connect(
-            _dg_url(),
-            extra_headers={"Authorization": _auth_header()},
-        )
-    # Send config and prime RX
-    await self._ws.send(json.dumps(_initial_config()))
-    self._rx_task = asyncio.create_task(self._rx_loop())
-    await self._ev_queue.put({"type": "asr_open"})
+    async def connect(self) -> None:
+        if self._ws:
+            return
+        # First try with list[tuple] headers (newer style)
+        try:
+            self._ws = await websockets.connect(
+                _dg_url(),
+                extra_headers=[("Authorization", _auth_header())],
+            )
+        except TypeError:
+            # Fallback: some builds accept dict headers instead
+            self._ws = await websockets.connect(
+                _dg_url(),
+                extra_headers={"Authorization": _auth_header()},
+            )
 
+        # Send initial configuration to enable partials.
+        await self._ws.send(json.dumps(_initial_config()))
+        # Start receiver
+        self._rx_task = asyncio.create_task(self._rx_loop())
+        await self._ev_queue.put({"type": "asr_open"})
 
     async def close(self) -> None:
         self._closed = True
