@@ -5,15 +5,15 @@ import json
 import os
 from typing import AsyncGenerator, Optional
 
-# Force the async client from websockets, avoiding sync create_connection() path.
+# Force the async client from websockets (avoids sync create_connection path).
 try:
     from websockets.legacy.client import connect as ws_connect  # async
-except Exception:  # very old/new layouts
-    from websockets.client import connect as ws_connect  # async in legacy
+except Exception:
+    from websockets.client import connect as ws_connect  # async
 
 def _dg_url() -> str:
     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
-    # append sane defaults if missing (helps when proxies ignore Configure frame)
+    # Append sane defaults if missing (helps when proxies ignore Configure frame)
     if "encoding=" not in base:
         sep = "&" if "?" in base else "?"
         base = base + sep + "encoding=opus&sample_rate=48000&channels=1&interim_results=true"
@@ -26,14 +26,23 @@ def _auth_header() -> str:
     return f"Token {key}"
 
 def _initial_config() -> dict:
+    """
+    WebM/Opus mic slices:
+      • container MUST be 'webm' for DG to parse MediaRecorder output
+      • encoding 'opus', sample_rate 48000, channels=1
+      • interim_results on for partials
+    """
     model = os.getenv("DG_MODEL")
     interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
     cfg = {
         "type": "Configure",
+        "container": "webm",       # <-- the missing hint
         "encoding": "opus",
         "sample_rate": 48000,
+        "channels": 1,
         "interim_results": interim,
         "vad_events": False,
+        "language": os.getenv("OPENAI_STT_LANGUAGE", "en"),
     }
     if model:
         cfg["model"] = model
@@ -50,11 +59,8 @@ class DeepgramClient:
     async def connect(self) -> None:
         if self._ws:
             return
-        # Use async legacy client; extra_headers is valid here.
-        self._ws = await ws_connect(
-            _dg_url(),
-            extra_headers=[("Authorization", _auth_header())],
-        )
+        # Use async client; extra_headers is valid here
+        self._ws = await ws_connect(_dg_url(), extra_headers=[("Authorization", _auth_header())])
         await self._ws.send(json.dumps(_initial_config()))
         self._rx_task = asyncio.create_task(self._rx_loop())
         await self._ev_queue.put({"type": "asr_open"})
