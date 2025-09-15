@@ -11,12 +11,14 @@ from ..services.streaming_asr.stream_manager import get_manager
 
 bp = Blueprint("voice", __name__)
 
+# ---- rate limit guard for all /voice/* ----
 @bp.before_request
 def _voice_rl_guard():
     rv = check_now("voice_chunk")
     if rv is not None:
         return rv
 
+# Max decoded payload per chunk (bytes) — must match Diagnostics 413 guard
 _MAX_BYTES = 262_144  # 256 KiB
 
 
@@ -48,25 +50,7 @@ def post_voice_chunk():
     if len(data) > _MAX_BYTES:
         return jsonify(ok=False, error="chunk_too_large", max_bytes=_MAX_BYTES), 413
 
+    # Enqueue REAL bytes to the streaming ASR manager
     get_manager().enqueue(sid, {"data": data, "user_msg_id": user_msg_id, "chunk_seq": seq})
 
-    try:
-        _emit("voice:chunk", session_id=sid, seq=seq, bytes=len(data))
-    except Exception:
-        pass
-
-    return jsonify(ok=True, received_seq=seq), 200
-
-
-# ---------- Legacy endpoints inside v1 → hard 410 (gone) ----------
-@bp.post("/stt")
-def legacy_stt():
-    return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
-
-@bp.post("/stt/stream")
-def legacy_stt_stream():
-    return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
-
-@bp.post("/tts-with-visemes")
-def legacy_tts():
-    return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
+    # Admin SSE: show
