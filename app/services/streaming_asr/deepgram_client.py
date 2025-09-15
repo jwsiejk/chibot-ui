@@ -1,173 +1,150 @@
+
 from __future__ import annotations
 
 import asyncio
 import json
 import os
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Optional, Union, Any
 
-import websockets  # provided transitively by uvicorn[standard]
-
+import websockets  # provided by uvicorn[standard]
 
 def _dg_url() -> str:
+    """Return the Deepgram listen URL with safe defaults.">
+    Base may be overridden via env; we append query params if missing so
+    proxies/CDNs that rely on URL params (instead of the Configure frame)
+    still get correct hints.
+    """
     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
-    # Add sane defaults via querystring for providers that expect URL-config
+    # If the base already contains our keys, don't duplicate them.
     sep = "&" if "?" in base else "?"
     q = "encoding=opus&sample_rate=48000&channels=1&interim_results=true"
-    return base + (sep + q if "encoding=" not in base else "")
-
+    if "encoding=" in base:
+        return base
+    return base + sep + q
 
 def _auth_header() -> str:
     key = os.getenv("DEEPGRAM_API_KEY", "").strip()
     if not key:
         raise RuntimeError("DEEPGRAM_API_KEY is not set")
-    # Deepgram supports either "Token {key}" or "Bearer {key}"
     return f"Token {key}"
 
-
 def _initial_config() -> dict:
-    """
-    Minimal but sane defaults for WebM/Opus 48 kHz, interim partials on.
-    You can extend via env if desired (e.g., DG_MODEL=nova-2-general).
-    """
-    model = os.getenv("DG_MODEL")  # optional
-    enable_partials = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
-    out: dict = {
+    model = os.getenv("DG_MODEL")
+    interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
+    cfg = {
         "type": "Configure",
         "encoding": "opus",
         "sample_rate": 48000,
-        "interim_results": enable_partials,
+        "interim_results": interim,
         "vad_events": False,
     }
     if model:
-        out["model"] = model
-    return out
-
+        cfg["model"] = model
+    return cfg
 
 class DeepgramClient:
-    """
-    Thin async wrapper over Deepgram's v1 streaming WS.
-
-    Usage:
-        dg = DeepgramClient()
-        await dg.connect()
-        async for ev in dg.events(): ...
-        await dg.send(b"...binary audio chunk...")
-        await dg.close()
-    """
-
+    """Minimal async wrapper for Deepgram streaming WS."""
     def __init__(self, _cfg: Optional[dict] = None) -> None:
-        # _cfg present for parity with other providers; not required here.
-        self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._ws = None  # type: ignore
         self._rx_task: Optional[asyncio.Task] = None
         self._ev_queue: asyncio.Queue = asyncio.Queue()
-        self._closed: bool = False
+        self._closed = False
 
     async def connect(self) -> None:
         if self._ws:
             return
-        headers = {"Authorization": _auth_header()}
-        conn = websockets.connect(_dg_url(), extra_headers=[("Authorization", _auth_header())], ping_interval=20, ping_timeout=20)
-# websockets compatibility: Connect objects are awaitable in some versions, async-context managers in others
-if hasattr(conn, "__await__"):
-    self._ws = await conn
-else:
-    self._ws = await conn.__aenter__(), extra_headers=headers, ping_interval=20, ping_timeout=20)
+        # Build a connection object that works across websockets versions.
+        # Some versions return an awaitable; others are async context managers.
+        def _connect(extra_headers: Any) -> Any:
+            return websockets.connect(
+                _dg_url(),
+                extra_headers=extra_headers,
+                ping_interval=20,
+                ping_timeout=20,
+            )
+        # Try tuple header format first (modern recommended form)
+        conn = _connect([("Authorization", _auth_header())])
+        try:
+            if hasattr(conn, "__aenter__"):
+                self._ws = await conn.__aenter__()
+            else:
+                self._ws = await conn  # awaitable
+        except TypeError:
+            # Fallback for versions that expect a dict for extra_headers
+            conn2 = _connect({"Authorization": _auth_header()})
+            if hasattr(conn2, "__aenter__"):
+                self._ws = await conn2.__aenter__()
+            else:
+                self._ws = await conn2
 
-        # Send initial config to enable interim results etc.
-        cfg = _initial_config()
-        await self._ws.send(json.dumps(cfg))
-
-        # Kick off receiver
+        # Send initial configuration to enable partials.
+        await self._ws.send(json.dumps(_initial_config()))
+        # Start receiver
         self._rx_task = asyncio.create_task(self._rx_loop())
-        # surface an "open" event to callers who want to reflect state
         await self._ev_queue.put({"type": "asr_open"})
 
     async def close(self) -> None:
         self._closed = True
         try:
-            if self._ws and self._ws.open:
+            if self._ws and getattr(self._ws, "open", True):
                 await self._ws.close()
         finally:
             self._ws = None
             if self._rx_task:
-                self._rx_task.cancel()
-                self._rx_task = None
+                try:
+                    self._rx_task.cancel()
+                finally:
+                    self._rx_task = None
 
     async def send(self, chunk: bytes) -> None:
-        if not self._ws or not self._ws.open:
+        if not self._ws or not getattr(self._ws, "open", False):
             raise RuntimeError("deepgram_not_connected")
         if not isinstance(chunk, (bytes, bytearray)):
             raise TypeError("chunk must be bytes")
         await self._ws.send(chunk)
 
     async def events(self) -> AsyncGenerator[dict, None]:
-        """
-        Yields dict events with at least:
-          - {"type": "user_partial", "text": "..."}
-          - {"type": "user_final",   "text": "..."}
-        Also surfaces:
-          - {"type": "asr_open"}
-          - {"type": "asr_error", "error": "..."}
-        """
         while True:
             ev = await self._ev_queue.get()
             yield ev
 
-    # -------------------- internals --------------------
-
     async def _rx_loop(self) -> None:
         try:
-            assert self._ws is not None
-            async for raw in self._ws:
-                # Deepgram sends JSON result frames (and config acks). Coerce to dict.
+            async for raw in self._ws:  # type: ignore
                 try:
                     msg = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
                 except Exception:
-                    # unexpected frame; ignore
                     continue
-
-                # Normalize various DG shapes to our minimal events.
-                # Common DG payload (v1 listen):
-                # {"type":"Results","channel":{"alternatives":[{"transcript":"..."}]},"is_final":false}
                 t = (msg.get("type") or "").lower()
                 if t in ("results", "transcript", "partialtranscript", "speech.update"):
-                    # Pull transcript text if available
                     text = ""
                     is_final = False
-
                     if "channel" in msg:
                         try:
                             alts = msg["channel"]["alternatives"]
-                            if alts and isinstance(alts, list):
+                            if isinstance(alts, list) and alts:
                                 text = (alts[0].get("transcript") or "").strip()
                         except Exception:
                             pass
                         is_final = bool(msg.get("is_final"))
-
-                    # Some variants:
                     if "transcript" in msg and not text:
                         text = (msg.get("transcript") or "").strip()
                     if "speech_final" in msg:
                         is_final = is_final or bool(msg.get("speech_final"))
-
                     if not text:
                         continue
-
                     await self._ev_queue.put(
                         {"type": "user_final" if is_final else "user_partial", "text": text}
                     )
                 elif t in ("metadata", "listening", "connected", "ready"):
-                    # Non-text info; ignore.
                     continue
                 elif t in ("error", "close"):
                     await self._ev_queue.put({"type": "asr_error", "error": t})
                 else:
-                    # Unknown control message; ignore quietly.
                     continue
         except asyncio.CancelledError:
             return
         except Exception as e:
-            # Bubble a terminal error to consumers
             try:
                 await self._ev_queue.put({"type": "asr_error", "error": f"rx:{e.__class__.__name__}"})
             except Exception:
