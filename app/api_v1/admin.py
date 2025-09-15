@@ -94,6 +94,7 @@ def runtime():
         "python": sys.version.split()[0],
         "starlette": _v("starlette"),
         "uvicorn": _v("uvicorn"),
+        "websockets": _v("websockets"),
     }
     return jsonify({"ok": True, "runtime": {"keys": {
         "database_url": bool(os.environ.get("DATABASE_URL")),

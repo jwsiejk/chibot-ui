@@ -65,13 +65,13 @@ class DeepgramClient:
     async def connect(self) -> None:
         if self._ws:
             return
-        headers = {
-            "Authorization": _auth_header(),
-            "User-Agent": "AskChip-ASR/1.0",
-            "Accept": "application/json",
-            "Content-Type": "audio/webm; codecs=opus",
-        }
-        self._ws = await websockets.connect(_dg_url(), extra_headers=headers, ping_interval=20, ping_timeout=20)
+        headers = {"Authorization": _auth_header()}
+        conn = websockets.connect(_dg_url(), extra_headers=[("Authorization", _auth_header())], ping_interval=20, ping_timeout=20)
+# websockets compatibility: Connect objects are awaitable in some versions, async-context managers in others
+if hasattr(conn, "__await__"):
+    self._ws = await conn
+else:
+    self._ws = await conn.__aenter__(), extra_headers=headers, ping_interval=20, ping_timeout=20)
 
         # Send initial config to enable interim results etc.
         cfg = _initial_config()
