@@ -7,12 +7,10 @@ from collections import deque
 from typing import Any, Deque, Dict, Optional
 
 from app.services.streaming_asr.deepgram_client import DeepgramClient
-
-# Your bus must exist; Diagnostics listens for these events.
 from app.ws.bus import bus
-from app.api_v1.admin import _emit  # broadcasting: bus.broadcast(session_id, payload)
+from app.api_v1.admin import _emit  # emit ASR open/errors to Admin SSE
 
-# simple circuit-breaker + counters (observable via diagnostics endpoint)
+# simple circuit-breaker + counters
 _METRICS: Dict[str, int] = {
     "provider_errors": 0,
     "partials": 0,
@@ -22,19 +20,15 @@ _METRICS: Dict[str, int] = {
 _CB_BACKOFF_MS = 4000
 _CB_OPEN_UNTIL = 0
 
-
 def _now_ms() -> int:
     return int(time.time() * 1000)
-
 
 def _cb_open() -> bool:
     return _now_ms() < _CB_OPEN_UNTIL
 
-
 def _cb_trip() -> None:
     global _CB_OPEN_UNTIL
     _CB_OPEN_UNTIL = _now_ms() + _CB_BACKOFF_MS
-
 
 class StreamingASRManager:
     """
@@ -93,15 +87,20 @@ class StreamingASRManager:
         # connect
         try:
             await client.connect()
-            bus.broadcast(sid, {"type": "asr_open"});
-            try: _emit('asr', label='asr_open', session_id=sid)
-            except Exception: pass
+            bus.broadcast(sid, {"type": "asr_open"})
+            try:
+                _emit("asr", label="asr_open", session_id=sid)
+            except Exception:
+                pass
         except Exception as e:
             _METRICS["provider_errors"] += 1
             _cb_trip()
-            bus.broadcast(sid, {"type": "asr_error", "error": f"provider_connect:{e.__class__.__name__}:{str(e)}"});
-            try: _emit('asr', label='asr_error', session_id=sid, error=f'provider_connect:{e.__class__.__name__}')
-            except Exception: pass
+            err_text = f"provider_connect:{e.__class__.__name__}:{str(e)}"
+            bus.broadcast(sid, {"type": "asr_error", "error": err_text})
+            try:
+                _emit("asr", label="asr_error", session_id=sid, error=err_text)
+            except Exception:
+                pass
             return
 
         async def _rx():
@@ -121,9 +120,10 @@ class StreamingASRManager:
                         },
                     )
             except Exception as e:
-                try: _emit('asr', label='asr_error', session_id=sid, error=f'rx:{e.__class__.__name__}:{str(e)}')
-                except Exception: pass
-                pass  # sender handles close
+                try:
+                    _emit("asr", label="asr_error", session_id=sid, error=f"rx:{e.__class__.__name__}:{str(e)}")
+                except Exception:
+                    pass  # sender handles close
 
         rx_task = asyncio.create_task(_rx())
 
@@ -136,9 +136,12 @@ class StreamingASRManager:
                 except Exception as e:
                     _METRICS["provider_errors"] += 1
                     _cb_trip()
-                    bus.broadcast(sid, {"type": "asr_error", "error": f"send:{e.__class__.__name__}:{str(e)}"});
-                    try: _emit('asr', label='asr_error', session_id=sid, error=f'send:{e.__class__.__name__}')
-                    except Exception: pass
+                    err_text = f"send:{e.__class__.__name__}:{str(e)}"
+                    bus.broadcast(sid, {"type": "asr_error", "error": err_text})
+                    try:
+                        _emit("asr", label="asr_error", session_id=sid, error=err_text)
+                    except Exception:
+                        pass
                     break
 
             # give the provider a short drain window to emit a final
@@ -153,11 +156,9 @@ class StreamingASRManager:
             except Exception:
                 pass
 
-
 # ------------- module-level helpers used by diagnostics ----------------------
 
 _MANAGER: Optional[StreamingASRManager] = None
-
 
 def get_manager() -> StreamingASRManager:
     global _MANAGER
@@ -165,12 +166,10 @@ def get_manager() -> StreamingASRManager:
         _MANAGER = StreamingASRManager()
     return _MANAGER
 
-
 def shutdown_manager() -> None:
     m = _MANAGER
     if m:
         m.shutdown()
-
 
 def get_streaming_status() -> Dict[str, object]:
     return {
