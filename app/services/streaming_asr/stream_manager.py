@@ -161,7 +161,7 @@ class StreamingASRManager:
                     break
 
             # give the provider a short drain window to emit a final
-            await asyncio.sleep(0.6)
+            await asyncio.sleep(1.2)
         finally:
             try:
                 await client.close()
