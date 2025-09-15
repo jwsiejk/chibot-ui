@@ -1,8 +1,9 @@
-import { playStream, setVisemeCallback } from './audio.js';
-import { armVAD, disarmVAD, setVadBoost, initMic, currentStream } from './voice.js';
-import { ensureCSRF } from './csrf.js';
+import { playStream, setVisemeCallback, unlockAudio } from './audio.js';
+import { armVAD, disarmVAD, setVadBoost, initMic, getCurrentStream } from './voice.js';
 
-let _ws=null,_url=null,_onOpen=[],_audio=[],_text='',_div=null,_ping=null;
+let _ws=null,_onOpen=[];
+let _audioChunks=[];
+let _pendingText='', _turnDiv=null;
 
 function sid(){
   const k='chip.sid';
@@ -11,119 +12,98 @@ function sid(){
   return s;
 }
 
-export function isOpen(){return _ws&&_ws.readyState===WebSocket.OPEN;}
-export function waitWSOpen(){return new Promise(res=>{if(isOpen())return res();_onOpen.push(res);});}
+export function isOpen(){ return _ws && _ws.readyState===WebSocket.OPEN; }
+export function waitWSOpen(){ return new Promise(res=>{ if(isOpen()) return res(); _onOpen.push(res); }); }
 
-// === NEW: ensure mic is opened here if not already, then arm streaming
+function _notifyOpen(){ for(const fn of _onOpen.splice(0)) try{ fn(); }catch{} }
+
 async function _tryStartStreamingOnce(){
-  // Ensure the mode is fetched (server returns "stream")
-  try { await (window.ASKCHIP_FETCH_STT_MODE && window.ASKCHIP_FETCH_STT_MODE()); } catch(e){}
-
-  // 1) Get stream; if none, open mic now (asks permission once).
-  let s = currentStream ? currentStream() : null;
-  if(!s){
-    try {
-      s = await initMic(); // <— opens the mic if not already opened
-    } catch(e) {
-      console.warn("mic open failed or denied", e);
-      return; // don't try to stream without a mic
-    }
-  }
-
-  // 2) Use the same session id as the WS
-  const sess = window.__ASKCHIP_SESSION_ID || sid();
-
-  // 3) CSRF token for POSTs
-  let csrf = "";
-  try { csrf = await ensureCSRF(); } catch(e){}
-
-  // 4) Start timeslice loop (voice.js guards duplicates)
-  try {
-    window.ASKCHIP_START_TIMESLICE_IF_ENABLED && window.ASKCHIP_START_TIMESLICE_IF_ENABLED(s, sess, csrf);
-  } catch(e){
-    console.warn("start timeslice failed", e);
+  try{
+    const stream = getCurrentStream() || await initMic();
+    await armVAD(stream);
+  }catch(e){
+    console.warn('[ws] start streaming failed', e);
   }
 }
 
 export function openWS(){
-  if(isOpen())return _ws;
-  const proto = location.protocol==='https:'?'wss':'ws';
-  const _sid = sid();
-  const q=new URLSearchParams({session_id:_sid,tab:crypto.randomUUID()}).toString();
-  _url=`${proto}://${location.host}/ws/v1/chat?${q}`;
-  _ws=new WebSocket(_url);
+  if (isOpen()) return _ws;
+  const url = new URL((location.origin.replace(/^http/, 'ws')) + '/ws/v1/chat');
+  url.searchParams.set('session_id', sid());
+  _ws = new WebSocket(url.toString());
+  _ws.onopen = ()=> _notifyOpen();
+  _ws.onerror = (e)=> console.warn('[ws] error', e);
+  _ws.onclose = ()=>{ try{ disarmVAD(); }catch{} _ws=null; };
 
-  // Expose the WS session id to other modules (voice.js timeslices)
-  try { window.__ASKCHIP_SESSION_ID = _sid; } catch(e){}
-
-  _ws.onopen=()=>{
-    try{ clearInterval(_ping); }catch{}
-    try{ if(isOpen()) _ws.send(JSON.stringify({type:'ping',ts:Date.now()})); }catch{}
-    _ping=setInterval(()=>{ try{ if(isOpen()) _ws.send(JSON.stringify({type:'ping',ts:Date.now()})); }catch{} },20000);
-
-    // allow listeners waiting on open
-    for(const cb of _onOpen) { try{ cb(); }catch{} }
-    _onOpen = [];
-
-    // Prime streaming on connect
-    _tryStartStreamingOnce();
-  };
-
-  _ws.onclose=()=>{ try{clearInterval(_ping);}catch{} _ping=null; };
-  _ws.onerror=()=>{};
-
-  _ws.onmessage=(ev)=>{
+  _ws.onmessage = async (ev)=>{
     try{
-      const fr=JSON.parse(ev.data);
-      const t=fr.type||fr.kind;
-      if(t==='ready'){
-        // make sure streaming is armed as soon as we're ready
-        _tryStartStreamingOnce();
-        return;
+      const msg = JSON.parse(ev.data);
+      if (!msg || !msg.type) return;
+      switch(msg.type){
+        case 'state':
+          // state: 'speaking'|'thinking'|'ready' etc.
+          if (msg.state === 'ready'){
+            // WS says assistant is ready to listen again
+            await _tryStartStreamingOnce();
+          }
+          break;
+        case 'text':
+          {
+            const pane = document.getElementById('chatMessages');
+            if (!_turnDiv){
+              _turnDiv = document.createElement('div');
+              _turnDiv.className = 'msg assistant';
+              pane && pane.appendChild(_turnDiv);
+            }
+            _pendingText += msg.text || '';
+            _turnDiv.textContent = _pendingText;
+          }
+          break;
+        case 'audio_chunk':
+          {
+            // bytes as base64 → Uint8Array
+            const b64 = msg.bytes || msg.data || '';
+            if (b64){
+              const bin = atob(b64);
+              const len = bin.length;
+              const arr = new Uint8Array(len);
+              for (let i=0;i<len;i++) arr[i] = bin.charCodeAt(i);
+              _audioChunks.push(arr);
+            }
+          }
+          break;
+        case 'suggestions':
+          {
+            // optional: render chips
+          }
+          break;
+        case 'end':
+          {
+            // Turn is done: play audio and then re-arm VAD after playback ends
+            try{
+              await unlockAudio();
+              if (_audioChunks.length) playStream(_audioChunks);
+            }catch(e){}
+            _audioChunks = [];
+            _pendingText = '';
+            _turnDiv = null;
+            // Resume listening after TTS ends
+            const onEnd = async () => {
+              window.removeEventListener('chip:tts-ended', onEnd);
+              await _tryStartStreamingOnce();
+            };
+            window.addEventListener('chip:tts-ended', onEnd);
+          }
+          break;
       }
-      if(t==='state'){
-        const ph = fr.phase || '';
-        if(ph==='assistant_speaking'){
-          try{ setVadBoost(1.9); armVAD(); }catch(e){}
-        } else if(ph==='assistant_end' || ph==='ready'){
-          try{ setVadBoost(1.0); armVAD(); }catch(e){}
-          // also attempt to start streaming when we return to ready
-          _tryStartStreamingOnce();
-        }
-        return;
-      }
-      if(t==='assistant_chunk'||t==='text'){
-        const text=fr.text||'';
-        if(!_div){
-          const box=document.getElementById('chatMessages');
-          if(box){ _div=document.createElement('div'); _div.className='msg assistant'; _div.textContent=''; box.appendChild(_div); }
-        }
-        _text+=text;
-        if(_div)_div.textContent=_text;
-      }
-      else if(t==='audio_chunk'){
-        const b64=fr.base64||fr.data||fr.bytes||'';
-        if(b64)_audio.push(Uint8Array.from(atob(b64),c=>c.charCodeAt(0)));
-      }
-      else if(t==='visemes'){
-        try{ setVisemeCallback(()=>{});}catch{}
-      }
-      else if(t==='assistant_end'||t==='end'){
-        if(_audio.length){
-          const chunks=_audio.slice(); _audio=[];
-          playStream(chunks);
-        }
-        _text=''; _div=null;
-        try{ armVAD(); }catch{}
-        // try again after a turn ends in case mic opened mid-turn
-        _tryStartStreamingOnce();
-      }
-    }catch(_){}
+    }catch(e){
+      console.warn('[ws] message error', e);
+    }
   };
   return _ws;
 }
 
 export function closeWS(){
-  try{ if(isOpen())_ws.close(); }catch{}
-  _ws=null; _audio=[]; _text=''; _div=null;
+  try{ if(isOpen()) _ws.close(); }catch{}
+  _ws=null; _audioChunks=[]; _pendingText=''; _turnDiv=null;
 }

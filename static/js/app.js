@@ -1,30 +1,28 @@
-// Clean, safe app.js (no optional-chaining on assignment)
+// app.js — session control and typed chat
 import { installFetchInterceptor, ensureCSRF } from './csrf.js';
 import { openWS, waitWSOpen, closeWS } from './ws.js';
-import { initMic, armVAD, disarmVAD } from './voice.js';
+import { initMic, armVAD, disarmVAD, getCurrentStream } from './voice.js';
+import { unlockAudio } from './audio.js';
 
 const $ = (s)=>document.querySelector(s);
 
 function setDot(state){
   const dot = document.getElementById('stateDot');
-  if (dot){
-    dot.className = 'dot ' + (
-      state==='listening' ? 'dot-listening' :
-      state==='speaking'  ? 'dot-speaking'  :
-      state==='thinking'  ? 'dot-thinking'  : 'dot-ready'
-    );
-  }
-  const st = document.getElementById('statusText');
-  if (st) st.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+  if (!dot) return;
+  dot.className = 'dot ' + (
+    state==='listening' ? 'dot-listening' :
+    state==='speaking'  ? 'dot-speaking'  :
+    state==='thinking'  ? 'dot-thinking'  : 'dot-ready'
+  );
 }
 
 function addChatMessage(role, text){
   const box = document.getElementById('chatMessages');
   if (!box) return;
-  const div = document.createElement('div');
-  div.className = `msg ${role}`;
-  div.textContent = text;
-  box.appendChild(div);
+  const el = document.createElement('div');
+  el.className = 'msg ' + (role==='user' ? 'user' : 'assistant');
+  el.textContent = text;
+  box.appendChild(el);
   box.scrollTop = box.scrollHeight;
 }
 
@@ -32,37 +30,30 @@ async function onStart(){
   try{
     installFetchInterceptor();
     await ensureCSRF();
-  }catch{}
-  try{
-    // Ensure SID
-    if (!localStorage.getItem('chip.sid')) localStorage.setItem('chip.sid', crypto.randomUUID());
-
-    // WS + mic
+    await unlockAudio();
     openWS();
     await waitWSOpen();
-    await initMic();
-    // VAD will arm from WS state frames after greet
-
-    // Greet
-    const sid = localStorage.getItem('chip.sid');
-    await fetch(`/api/v1/greet?session_id=${encodeURIComponent(sid)}`, { credentials:'include' });
-
+    const stream = await initMic();
+    await armVAD(stream);
     setDot('listening');
     const endBtn = document.getElementById('endButton');
     const startBtn = document.getElementById('startButton');
     if (endBtn) endBtn.disabled = false;
     if (startBtn) startBtn.disabled = true;
+    // Fire greet after WS up so audio can stream
+    fetch('/api/v1/greet', { credentials:'include' }).catch(()=>{});
   }catch(e){
-    console.error('start failed', e);
+    console.error('[app] start failed', e);
   }
 }
 
 async function onEnd(){
-  try{ disarmVAD(); closeWS(); setDot('ready'); }catch{}
+  try{ disarmVAD(); closeWS(); }catch{}
+  setDot('ready');
   const endBtn = document.getElementById('endButton');
   const startBtn = document.getElementById('startButton');
   if (startBtn) startBtn.disabled = false;
-  if (endBtn) endBtn.disabled = true;
+  if (endBtn)   endBtn.disabled = true;
 }
 
 async function onSend(){
@@ -77,12 +68,18 @@ async function onSend(){
   addChatMessage('user', text);
 
   const sid = localStorage.getItem('chip.sid') || '';
-  const csrf = (document.head.querySelector('meta[name=csrf]') || {}).content || '';
-  await fetch('/api/v1/chat', {
-    method:'POST',
-    credentials:'include',
-    headers:{ 'Content-Type':'application/json','X-CSRF-Token': csrf },
-    body: JSON.stringify({ text, session_id: sid })
+  const headers = new Headers({ 'Content-Type':'application/json' });
+  const csrf = await ensureCSRF().catch(()=>'');
+  if (csrf) headers.set('X-CSRF-Token', csrf);
+  try{
+    const idem = (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random()));
+    headers.set('Idempotency-Key', String(idem));
+  }catch{}
+  fetch('/api/v1/chat', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ text, session_id: sid }),
+    credentials: 'include'
   }).catch(console.warn);
   setDot('thinking');
 }

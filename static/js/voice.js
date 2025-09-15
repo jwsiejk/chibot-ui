@@ -1,127 +1,113 @@
-// static/js/voice.js
-//
-// Exports expected by your ws/app code:
-//   - initMic(): Promise<MediaStream>
-//   - armVAD(stream, opts?): start 96 ms timeslicing → POST /api/v1/voice/chunk
-//   - disarmVAD(): stop recorder & clear queues
-//   - setVadBoost(val:number): no-op placeholder to keep parity with callers
-//   - currentStream: last opened MediaStream
-//
-// Notes:
-//  • Uses X-CSRF-Token header (server issues via /api/v1/csrf or other GETs).
-//  • Sends { sid, user_msg_id, chunk_seq, audio_b64 } to /api/v1/voice/chunk.
-//  • 96 ms slices (within 64–128 ms acceptance window).
-//  • No dependencies on legacy /voice/stt/stream.
-//
-
+// static/js/voice.js — MediaRecorder 96ms timeslices → POST /api/v1/voice/chunk
 import { ensureCSRF } from './csrf.js';
 
 export let currentStream = null;
-
 let rec = null;
-let inflight = false;
 let queue = [];
+let inflight = false;
 let chunkSeq = 0;
 let currentUserMsgId = null;
-let vadBoost = 1.0;
 
-/** Optional parity hook used by older code paths */
-export function setVadBoost(val){
-  try {
-    const n = Number(val);
-    if (!Number.isNaN(n) && n > 0) vadBoost = n;
-  } catch (_) {}
+function sid(){
+  const k='chip.sid';
+  let s=localStorage.getItem(k);
+  if(!s){ s=crypto.randomUUID(); localStorage.setItem(k,s); }
+  return s;
 }
 
-/** Request microphone and return a MediaStream (echoCancellation on) */
-export async function initMic() {
+export async function initMic(){
   if (currentStream && currentStream.active) return currentStream;
-  const constraints = {
+  currentStream = await navigator.mediaDevices.getUserMedia({
     audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
       channelCount: 1,
-      sampleRate: 48000
-    }
-  };
-  currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+      sampleRate: 48000,
+      echoCancellation: true,
+      noiseSuppression: true
+    },
+    video: false
+  });
   return currentStream;
 }
 
-async function postChunk(sid, csrf, blob, seq, userMsgId){
-  const buf = await blob.arrayBuffer();
-  const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-  const payload = { sid, audio_b64: b64, chunk_seq: seq, user_msg_id: userMsgId };
-  const res = await fetch('/api/v1/voice/chunk', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-CSRF-Token': csrf
-    },
-    body: JSON.stringify(payload),
-    credentials: 'include'
-  });
-  if (!res.ok){
-    const t = await res.text().catch(()=> '');
-    console.warn('voice/chunk failed', res.status, t);
+export function getCurrentStream(){ return currentStream; }
+
+function b64(bytes){
+  let bin=''; const len=bytes.length;
+  for(let i=0;i<len;i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+async function sendLoop(){
+  if (inflight) return;
+  inflight = true;
+  try{
+    while(queue.length){
+      const bytes = queue.shift();
+      const payload = {
+        sid: sid(),
+        user_msg_id: currentUserMsgId || null,
+        chunk_seq: chunkSeq++,
+        audio_b64: b64(bytes)
+      };
+      const headers = new Headers({ 'Content-Type':'application/json' });
+      const csrf = await ensureCSRF().catch(()=>'');
+      if (csrf) headers.set('X-CSRF-Token', csrf);
+      const res = await fetch('/api/v1/voice/chunk', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        credentials: 'include'
+      });
+      if(!res.ok){
+        console.warn('[voice] chunk POST failed', res.status);
+        break;
+      }
+    }
+  }finally{
+    inflight = false;
   }
 }
 
-function pump(sid, csrf){
-  if(inflight || queue.length === 0) return;
-  inflight = true;
-  const [blob, seq, userMsgId] = queue.shift();
-  postChunk(sid, csrf, blob, seq, userMsgId)
-    .catch(err => console.warn('postChunk error', err))
-    .finally(() => {
-      inflight = false;
-      pump(sid, csrf);
-    });
-}
-
-/**
- * Start 96 ms timeslicing on an existing MediaStream.
- * opts: { sid?: string, csrf?: string }
- */
-export async function armVAD(stream, opts = {}){
+export async function armVAD(stream, opts={}){
   if (!stream) throw new Error('armVAD requires a MediaStream');
-  if (rec) return; // already armed
+  if (rec && rec.state !== 'inactive') return; // already running
 
-  const sid = (opts && opts.sid) || 'default';
-  let csrf = (opts && opts.csrf) || '';
+  chunkSeq = 0;
+  currentUserMsgId = opts.userMsgId || null;
 
-  // Ensure CSRF token
-  try {
-    await ensureCSRF();
-    if (!csrf) {
-      const r = await fetch('/api/v1/csrf', { credentials: 'include' });
-      csrf = r.headers.get('X-CSRF-Token') || '';
-    }
-  } catch (_) {}
+  const mimeOptions = [
+    'audio/webm;codecs=opus',
+    'audio/webm;codecs=opus,pcm',
+    'audio/webm'
+  ];
+  let mime = '';
+  for (const m of mimeOptions){
+    if (MediaRecorder.isTypeSupported(m)){ mime = m; break; }
+  }
 
-  currentUserMsgId = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+  try{
+    rec = new MediaRecorder(stream, { mimeType: mime || undefined, audioBitsPerSecond: 128000 });
+  }catch(e){
+    rec = new MediaRecorder(stream); // last resort
+  }
 
-  rec = new MediaRecorder(stream, {
-    mimeType: 'audio/webm;codecs=opus',
-    audioBitsPerSecond: 128000
-  });
-
-  rec.ondataavailable = ev => {
-    if (ev.data && ev.data.size > 0) {
-      // (Optional) could use vadBoost to gate push, but we just keep parity API
-      queue.push([ev.data, ++chunkSeq, currentUserMsgId]);
-      pump(sid, csrf);
-    }
+  rec.ondataavailable = async (ev) => {
+    try{
+      if(!ev.data || ev.data.size===0) return;
+      const buf = new Uint8Array(await ev.data.arrayBuffer());
+      queue.push(buf);
+      if (!inflight) { sendLoop(); }
+    }catch(e){ console.warn('[voice] dataavailable error', e); }
   };
+  rec.onerror = (e)=> console.warn('[voice] recorder error', e);
+  rec.onstop = ()=>{};
 
-  // Target 96 ms (within 64–128 ms requirement)
-  rec.start(96);
+  // 96 ms slices
+  try{ rec.start(96); }catch{ rec.start(); }
 }
 
-/** Stop timeslicing and reset internal state */
 export function disarmVAD(){
-  try { if(rec) rec.stop(); } catch(_) {}
+  try{ if (rec && rec.state !== 'inactive') rec.stop(); }catch{}
   rec = null;
   inflight = false;
   queue = [];
@@ -129,11 +115,5 @@ export function disarmVAD(){
   currentUserMsgId = null;
 }
 
-/** Utility the UI sometimes calls to check server STT mode (kept for parity) */
-export async function fetchSttMode(){
-  try{
-    const r = await fetch('/api/v1/diag', { credentials: 'include' });
-    const j = await r.json();
-    return j.stt_mode || 'streaming';
-  }catch(_){ return 'streaming'; }
-}
+// parity only (we don't expose tuning in this build)
+export function setVadBoost(_){}

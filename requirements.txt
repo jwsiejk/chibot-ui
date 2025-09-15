@@ -44,3 +44,4 @@ alembic
 SQLAlchemy
 
 beautifulsoup4
+websockets>=12.0
