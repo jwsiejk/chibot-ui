@@ -53,4 +53,24 @@ def post_voice_chunk():
     # Enqueue REAL bytes to the streaming ASR manager
     get_manager().enqueue(sid, {"data": data, "user_msg_id": user_msg_id, "chunk_seq": seq})
 
-    # Admin SSE: show
+    # Admin SSE: show decoded byte count
+    try:
+        _emit("voice:chunk", session_id=sid, seq=seq, bytes=len(data))
+    except Exception:
+        pass
+
+    return jsonify(ok=True, received_seq=seq), 200
+
+
+# ---------- Legacy endpoints inside v1 → hard 410 (gone) ----------
+@bp.post("/stt")
+def legacy_stt():
+    return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
+
+@bp.post("/stt/stream")
+def legacy_stt_stream():
+    return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
+
+@bp.post("/tts-with-visemes")
+def legacy_tts():
+    return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
