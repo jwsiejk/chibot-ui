@@ -9,7 +9,8 @@ from typing import Any, Deque, Dict, Optional
 from app.services.streaming_asr.deepgram_client import DeepgramClient
 
 # Your bus must exist; Diagnostics listens for these events.
-from app.ws.bus import bus  # broadcasting: bus.broadcast(session_id, payload)
+from app.ws.bus import bus
+from app.api_v1.admin import _emit  # broadcasting: bus.broadcast(session_id, payload)
 
 # simple circuit-breaker + counters (observable via diagnostics endpoint)
 _METRICS: Dict[str, int] = {
@@ -92,11 +93,15 @@ class StreamingASRManager:
         # connect
         try:
             await client.connect()
-            bus.broadcast(sid, {"type": "asr_open"})
+            bus.broadcast(sid, {"type": "asr_open"});
+            try: _emit('asr', label='asr_open', session_id=sid)
+            except Exception: pass
         except Exception as e:
             _METRICS["provider_errors"] += 1
             _cb_trip()
-            bus.broadcast(sid, {"type": "asr_error", "error": f"provider_connect:{e.__class__.__name__}"})
+            bus.broadcast(sid, {"type": "asr_error", "error": f"provider_connect:{e.__class__.__name__}"});
+            try: _emit('asr', label='asr_error', session_id=sid, error=f'provider_connect:{e.__class__.__name__}')
+            except Exception: pass
             return
 
         async def _rx():
@@ -115,7 +120,9 @@ class StreamingASRManager:
                             "user_msg_id": self._user_msg_id.get(sid),
                         },
                     )
-            except Exception:
+            except Exception as e:
+                try: _emit('asr', label='asr_error', session_id=sid, error=f'rx:{e.__class__.__name__}')
+                except Exception: pass
                 pass  # sender handles close
 
         rx_task = asyncio.create_task(_rx())
@@ -129,7 +136,9 @@ class StreamingASRManager:
                 except Exception as e:
                     _METRICS["provider_errors"] += 1
                     _cb_trip()
-                    bus.broadcast(sid, {"type": "asr_error", "error": f"send:{e.__class__.__name__}"})
+                    bus.broadcast(sid, {"type": "asr_error", "error": f"send:{e.__class__.__name__}"});
+                    try: _emit('asr', label='asr_error', session_id=sid, error=f'send:{e.__class__.__name__}')
+                    except Exception: pass
                     break
 
             # give the provider a short drain window to emit a final

@@ -188,7 +188,7 @@
     });
   }
   function attachWSWatch(ws, diagPrefix){
-    const counts = { partials:0, finals:0, asr_error:false };
+    const counts = { partials:0, finals:0, asr_error:false, last_error:'' };
     const detach = attachWSListener(ws, (fr)=>{
       if(!fr || typeof fr!=='object') return;
       if(fr.type==='user_partial'){
@@ -197,6 +197,7 @@
         if(!fr.user_msg_id || String(fr.user_msg_id).startsWith(diagPrefix)) counts.finals++;
       } else if(fr.type==='asr_error'){
         counts.asr_error = true;
+        if(fr.error) counts.last_error = String(fr.error);
       }
     });
     return { counts, detach };
@@ -296,7 +297,8 @@
       set('final_seen', true, 'skipped (silent mode)');
     }else{
       const ok = (partials>0 || finals>0 || asr_error);
-      set('asr_path_ok', ok, `partials=${partials}, finals=${finals}, asr_error=${asr_error}`);
+      const last_err = (watch && watch.counts && watch.counts.last_error) || '';
+      set('asr_path_ok', ok, `partials=${partials}, finals=${finals}, asr_error=${asr_error}${last_err?`, err=${last_err}`:''}`);
       set('partials_seen', partials>0, String(partials));
       set('final_seen', finals>0, finals>0?'ok':'no final in window');
     }

@@ -2,6 +2,7 @@ from flask import Blueprint, request, session, abort, render_template, Response
 from ..utils.admin import is_admin_email
 from ..security_state import get_user
 import json, time
+from ..services.config_store import get_config
 
 
 # --- minimal in-memory event queue for admin log ---
@@ -60,18 +61,19 @@ def logs_sse():
             yield "data: " + json.dumps(evt) + "\n\n"
     return Response(stream(), mimetype="text/event-stream")
 
+
 @bp.get("/runtime")
 def runtime():
     import os, sys, platform
     allow_open = bool(os.environ.get("ALLOW_MOCK_PROVIDERS") or os.environ.get("CI_FAST"))
     if not allow_open: _require_admin()
+    cfg = get_config()
     def _safe(fnpath):
         try:
             mod_name, func_name = fnpath.rsplit(".", 1)
             mod = __import__(mod_name, fromlist=[func_name])
             fn = getattr(mod, func_name, None)
-            val = fn() if callable(fn) else None
-            return str(val or "unknown")
+            return str(fn(cfg) if callable(fn) else "unknown")
         except Exception:
             return "unknown"
     providers = {
@@ -79,25 +81,27 @@ def runtime():
         "stt": _safe("app.services.stt_provider.get_stt_provider_name"),
         "tts": _safe("app.services.tts_provider.get_tts_provider_name"),
     }
-    keys = {
-        "openai": bool(os.environ.get("OPENAI_API_KEY")),
-        "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY")),
-        "smtp": bool(os.environ.get("EMAIL_HOST") or os.environ.get("FROM_EMAIL")),
-        "database_url": bool(os.environ.get("DATABASE_URL")),
-    }
     def _v(name):
         try:
-            m=__import__(name); return getattr(m,"__version__","unknown")
-        except Exception: return "unknown"
+            mod = __import__(name, fromlist=["__version__"])
+            return getattr(mod, "__version__", "unknown")
+        except Exception:
+            return "unknown"
     versions = {
-        "python": sys.version.split()[0],
+        "anyio": _v("anyio"),
         "flask": _v("flask"),
+        "platform": platform.platform(),
+        "python": sys.version.split()[0],
         "starlette": _v("starlette"),
         "uvicorn": _v("uvicorn"),
-        "anyio": _v("anyio"),
-        "platform": platform.platform()
     }
-    return jsonify({"ok": True, "runtime": {"providers": providers, "keys": keys, "versions": versions}}), 200
+    return jsonify({"ok": True, "runtime": {"keys": {
+        "database_url": bool(os.environ.get("DATABASE_URL")),
+        "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY")),
+        "openai": bool(os.environ.get("OPENAI_API_KEY")),
+        "smtp": bool(os.environ.get("EMAIL_HOST")),
+    }, "providers": providers, "versions": versions}}), 200
+
 
 
 from flask import jsonify

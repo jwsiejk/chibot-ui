@@ -9,8 +9,11 @@ import websockets  # provided transitively by uvicorn[standard]
 
 
 def _dg_url() -> str:
-    # Allow override if you’ve set a custom DG endpoint; otherwise default.
-    return os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
+    base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
+    # Add sane defaults via querystring for providers that expect URL-config
+    sep = "&" if "?" in base else "?"
+    q = "encoding=opus&sample_rate=48000&channels=1&interim_results=true"
+    return base + (sep + q if "encoding=" not in base else "")
 
 
 def _auth_header() -> str:
@@ -64,7 +67,8 @@ class DeepgramClient:
             return
         headers = {
             "Authorization": _auth_header(),
-            # This helps Deepgram infer Opus stream if content-type sniffing is used.
+            "User-Agent": "AskChip-ASR/1.0",
+            "Accept": "application/json",
             "Content-Type": "audio/webm; codecs=opus",
         }
         self._ws = await websockets.connect(_dg_url(), extra_headers=headers, ping_interval=20, ping_timeout=20)
