@@ -1,115 +1,170 @@
-# app/services/streaming_asr/deepgram_client.py
 from __future__ import annotations
 
+import asyncio
 import json
 import os
-from typing import AsyncGenerator, Dict, Any, Optional
+from typing import AsyncGenerator, Optional
 
 import websockets  # provided transitively by uvicorn[standard]
-from websockets.exceptions import WebSocketException
+
+
+def _dg_url() -> str:
+    # Allow override if you’ve set a custom DG endpoint; otherwise default.
+    return os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
+
+
+def _auth_header() -> str:
+    key = os.getenv("DEEPGRAM_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("DEEPGRAM_API_KEY is not set")
+    # Deepgram supports either "Token {key}" or "Bearer {key}"
+    return f"Token {key}"
+
+
+def _initial_config() -> dict:
+    """
+    Minimal but sane defaults for WebM/Opus 48 kHz, interim partials on.
+    You can extend via env if desired (e.g., DG_MODEL=nova-2-general).
+    """
+    model = os.getenv("DG_MODEL")  # optional
+    enable_partials = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
+    out: dict = {
+        "type": "Configure",
+        "encoding": "opus",
+        "sample_rate": 48000,
+        "interim_results": enable_partials,
+        "vad_events": False,
+    }
+    if model:
+        out["model"] = model
+    return out
 
 
 class DeepgramClient:
     """
-    Production Deepgram live transcription client (no SDK).
-    - Uses 'websockets' for a stable WS client.
-    - Explicitly declares WebM/Opus @ 48 kHz so partials/finals are emitted.
-    - Streams binary chunks; yields normalized partial/final events.
+    Thin async wrapper over Deepgram's v1 streaming WS.
+
+    Usage:
+        dg = DeepgramClient()
+        await dg.connect()
+        async for ev in dg.events(): ...
+        await dg.send(b"...binary audio chunk...")
+        await dg.close()
     """
 
-    def __init__(self, cfg: Dict[str, Any] | None):
-        cfg = cfg or {}
-        dgc = cfg.get("deepgram") or {}
-        self.api_key: str = os.environ.get("DEEPGRAM_API_KEY") or dgc.get("api_key") or ""
-        if not self.api_key:
-            raise RuntimeError("DEEPGRAM_API_KEY missing")
-
-        self.model: str = dgc.get("model") or "nova-2"
-        self.sample_rate: int = int(dgc.get("sample_rate") or 48000)
-        self.channels: int = int(dgc.get("channels") or 1)
-        self.interim_results: bool = bool(dgc.get("interim_results", True))
-        self.smart_format: bool = bool(dgc.get("smart_format", True))
-        self.punctuate: bool = bool(dgc.get("punctuate", True))
-
-        base = (dgc.get("url") or "wss://api.deepgram.com/v1/listen").rstrip("/")
-        # IMPORTANT: encoding/container/sample_rate/channels explicitly declared
-        self.ws_url: str = (
-            f"{base}"
-            f"?encoding=opus"
-            f"&container=webm"
-            f"&sample_rate={self.sample_rate}"
-            f"&channels={self.channels}"
-            f"&model={self.model}"
-            f"&interim_results={'true' if self.interim_results else 'false'}"
-            f"&punctuate={'true' if self.punctuate else 'false'}"
-            f"&smart_format={'true' if self.smart_format else 'false'}"
-        )
-
+    def __init__(self, _cfg: Optional[dict] = None) -> None:
+        # _cfg present for parity with other providers; not required here.
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._rx_task: Optional[asyncio.Task] = None
+        self._ev_queue: asyncio.Queue = asyncio.Queue()
+        self._closed: bool = False
 
     async def connect(self) -> None:
-        try:
-            self._ws = await websockets.connect(
-                self.ws_url,
-                extra_headers={
-                    "Authorization": f"Token {self.api_key}",
-                    "User-Agent": "AskChip/DeepgramWS",
-                },
-                max_size=None,  # let provider frames be large
-            )
-        except Exception as e:
-            raise RuntimeError(f"deepgram_connect_failed: {e.__class__.__name__}")
-
-    async def send_bytes(self, data: bytes) -> None:
-        ws = self._ws
-        if not ws:
+        if self._ws:
             return
-        try:
-            await ws.send(data)  # binary
-        except WebSocketException:
-            # let caller close and reopen on next enqueue cycle
-            pass
+        headers = {
+            "Authorization": _auth_header(),
+            # This helps Deepgram infer Opus stream if content-type sniffing is used.
+            "Content-Type": "audio/webm; codecs=opus",
+        }
+        self._ws = await websockets.connect(_dg_url(), extra_headers=headers, ping_interval=20, ping_timeout=20)
 
-    async def events(self) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Yields: {"type": "user_partial"|"user_final", "text": str}
-        """
-        ws = self._ws
-        if not ws:
-            return
-        try:
-            async for text in ws:
-                # Deepgram sends text frames with JSON "Results"
-                if not isinstance(text, str):
-                    continue
-                try:
-                    msg = json.loads(text)
-                except Exception:
-                    continue
-                if (msg.get("type") or "").lower() != "results":
-                    continue
-                ch = msg.get("channel") or {}
-                alts = ch.get("alternatives") or []
-                if not alts:
-                    continue
+        # Send initial config to enable interim results etc.
+        cfg = _initial_config()
+        await self._ws.send(json.dumps(cfg))
 
-                transcript = alts[0].get("transcript") or ""
-                if transcript == "":
-                    # skip empty partials
-                    continue
-
-                if msg.get("is_final"):
-                    yield {"type": "user_final", "text": transcript}
-                else:
-                    yield {"type": "user_partial", "text": transcript}
-        except WebSocketException:
-            # upstream closed or errored
-            return
+        # Kick off receiver
+        self._rx_task = asyncio.create_task(self._rx_loop())
+        # surface an "open" event to callers who want to reflect state
+        await self._ev_queue.put({"type": "asr_open"})
 
     async def close(self) -> None:
+        self._closed = True
         try:
-            if self._ws:
+            if self._ws and self._ws.open:
                 await self._ws.close()
-        except Exception:
-            pass
-        self._ws = None
+        finally:
+            self._ws = None
+            if self._rx_task:
+                self._rx_task.cancel()
+                self._rx_task = None
+
+    async def send(self, chunk: bytes) -> None:
+        if not self._ws or not self._ws.open:
+            raise RuntimeError("deepgram_not_connected")
+        if not isinstance(chunk, (bytes, bytearray)):
+            raise TypeError("chunk must be bytes")
+        await self._ws.send(chunk)
+
+    async def events(self) -> AsyncGenerator[dict, None]:
+        """
+        Yields dict events with at least:
+          - {"type": "user_partial", "text": "..."}
+          - {"type": "user_final",   "text": "..."}
+        Also surfaces:
+          - {"type": "asr_open"}
+          - {"type": "asr_error", "error": "..."}
+        """
+        while True:
+            ev = await self._ev_queue.get()
+            yield ev
+
+    # -------------------- internals --------------------
+
+    async def _rx_loop(self) -> None:
+        try:
+            assert self._ws is not None
+            async for raw in self._ws:
+                # Deepgram sends JSON result frames (and config acks). Coerce to dict.
+                try:
+                    msg = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
+                except Exception:
+                    # unexpected frame; ignore
+                    continue
+
+                # Normalize various DG shapes to our minimal events.
+                # Common DG payload (v1 listen):
+                # {"type":"Results","channel":{"alternatives":[{"transcript":"..."}]},"is_final":false}
+                t = (msg.get("type") or "").lower()
+                if t in ("results", "transcript", "partialtranscript", "speech.update"):
+                    # Pull transcript text if available
+                    text = ""
+                    is_final = False
+
+                    if "channel" in msg:
+                        try:
+                            alts = msg["channel"]["alternatives"]
+                            if alts and isinstance(alts, list):
+                                text = (alts[0].get("transcript") or "").strip()
+                        except Exception:
+                            pass
+                        is_final = bool(msg.get("is_final"))
+
+                    # Some variants:
+                    if "transcript" in msg and not text:
+                        text = (msg.get("transcript") or "").strip()
+                    if "speech_final" in msg:
+                        is_final = is_final or bool(msg.get("speech_final"))
+
+                    if not text:
+                        continue
+
+                    await self._ev_queue.put(
+                        {"type": "user_final" if is_final else "user_partial", "text": text}
+                    )
+                elif t in ("metadata", "listening", "connected", "ready"):
+                    # Non-text info; ignore.
+                    continue
+                elif t in ("error", "close"):
+                    await self._ev_queue.put({"type": "asr_error", "error": t})
+                else:
+                    # Unknown control message; ignore quietly.
+                    continue
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            # Bubble a terminal error to consumers
+            try:
+                await self._ev_queue.put({"type": "asr_error", "error": f"rx:{e.__class__.__name__}"})
+            except Exception:
+                pass
