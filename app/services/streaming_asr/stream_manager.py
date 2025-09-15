@@ -10,6 +10,7 @@ from typing import Deque, Dict, Optional, Any
 from app.ws.bus import bus
 from app.config_store import get_config
 from .deepgram_client import DeepgramClient
+from app.api_v1.admin import _emit  # <-- admin SSE emitter
 
 # In-proc metrics & breaker
 _METRICS: Dict[str, int] = {
@@ -92,7 +93,6 @@ class StreamingASRManager:
     async def _run_session(self, sid: str) -> None:
         global _METRICS
         if _cb_opened():
-            # surface breaker to the UI via bus (optional)
             bus.broadcast(sid, {"type": "asr_error", "error": "provider_backoff"})
             return
 
@@ -106,9 +106,14 @@ class StreamingASRManager:
             client = DeepgramClient(cfg)
             await client.connect()
             _METRICS["sessions"] += 1
-        except Exception:
+            # Admin SSE: session opened
+            _emit("asr:open", label="asr_open", session_id=sid)
+            bus.broadcast(sid, {"type": "asr_open"})
+        except Exception as e:
             _METRICS["provider_errors"] += 1
             _cb_trip()
+            # Admin SSE: provider connect error
+            _emit("asr:error", label="asr_error", session_id=sid, error=f"provider_connect:{e.__class__.__name__}")
             bus.broadcast(sid, {"type": "asr_error", "error": "provider_connect"})
             return
 
@@ -131,9 +136,8 @@ class StreamingASRManager:
 
         rx_task = asyncio.create_task(_rx())
 
-        # send loop: flush backlog then idle-wait for a short window
+        # send loop: flush backlog then idle-wait
         try:
-            idle_ms = 0
             last_send = _now_ms()
 
             while True:
@@ -144,8 +148,8 @@ class StreamingASRManager:
                     await client.send_bytes(data)
                     last_send = _now_ms()
 
-                # simple idle termination (no chunks for ~2s)
-                if _now_ms() - last_send > 2000:
+                # idle termination after ~4s without new audio
+                if _now_ms() - last_send > 4000:
                     break
 
                 await asyncio.sleep(0.02)
