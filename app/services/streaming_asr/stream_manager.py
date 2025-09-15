@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+import sys, inspect
 from collections import deque
 from typing import Any, Deque, Dict, Optional
 
@@ -83,6 +84,21 @@ class StreamingASRManager:
 
         _METRICS["sessions"] += 1
         client = DeepgramClient()
+
+        # Hard defensive check: make sure the loaded class actually has connect()
+        if not callable(getattr(client, "connect", None)):
+            mod = DeepgramClient.__module__
+            m = sys.modules.get(mod)
+            src = getattr(m, "__file__", None)
+            msg = f"MissingConnect:module={mod},file={src}"
+            _METRICS["provider_errors"] += 1
+            _cb_trip()
+            bus.broadcast(sid, {"type": "asr_error", "error": f"provider_connect:{msg}"})
+            try:
+                _emit("asr", label="asr_error", session_id=sid, error=f"provider_connect:{msg}")
+            except Exception:
+                pass
+            return
 
         # connect
         try:
