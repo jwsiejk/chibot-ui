@@ -42,7 +42,6 @@ def admin_console():
     if not is_admin_email((email or "").strip().lower()):
         abort(403)
     return _rt("admin_console.html")
-
 def create_app():
     app = Flask(
         __name__,
