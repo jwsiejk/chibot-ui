@@ -1,197 +1,244 @@
+# app/services/streaming_asr/stream_manager.py
 from __future__ import annotations
 
-import asyncio
+import json
+import os
+import ssl
 import threading
 import time
-import sys, inspect
-from collections import deque
-from typing import Any, Deque, Dict, Optional
+from queue import Queue, Empty
+from typing import Dict, Optional
+from urllib.parse import urlencode
 
-from app.services.streaming_asr.deepgram_client import DeepgramClient
-from app.ws.bus import bus
-from app.api_v1.admin import _emit  # emit ASR open/errors to Admin SSE
+# Use websocket-client (sync). This is NOT the async 'websockets' lib.
+import websocket
+from websocket import ABNF
 
-# simple circuit-breaker + counters
-_METRICS: Dict[str, int] = {
-    "provider_errors": 0,
-    "partials": 0,
-    "finals": 0,
-    "sessions": 0,
+# Try to import Admin SSE emitter; fall back if unavailable.
+try:
+    # package root: app/
+    from ...api_v1.admin import _emit  # type: ignore
+except Exception:  # pragma: no cover
+    def _emit(*_args, **_kwargs):
+        return None
+
+
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
+DG_BASE = os.getenv("DEEPGRAM_WSS_URL", "wss://api.deepgram.com/v1/listen")
+
+# Defaults match browser mic: WebM/Opus 48 kHz, mono
+DG_PARAMS_DEFAULT = {
+    "encoding": "opus",
+    "sample_rate": 48000,
+    "channels": 1,
+    "interim_results": "true",
+    "smart_format": "true",
+    "punctuate": "true",
+    "vad_events": "true",
 }
-_CB_BACKOFF_MS = 4000
-_CB_OPEN_UNTIL = 0
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
+# Optional model/language tuning from env (if present)
+_opt_model = os.getenv("DG_MODEL", "").strip()
+_opt_lang = os.getenv("DG_LANGUAGE", "").strip()
+if _opt_model:
+    DG_PARAMS_DEFAULT["model"] = _opt_model
+if _opt_lang:
+    DG_PARAMS_DEFAULT["language"] = _opt_lang
 
-def _cb_open() -> bool:
-    return _now_ms() < _CB_OPEN_UNTIL
 
-def _cb_trip() -> None:
-    global _CB_OPEN_UNTIL
-    _CB_OPEN_UNTIL = _now_ms() + _CB_BACKOFF_MS
+def _deepgram_listen_url() -> str:
+    return f"{DG_BASE}?{urlencode(DG_PARAMS_DEFAULT)}"
 
-class StreamingASRManager:
+
+class _DGSession:
     """
-    Manages a provider session per Ask Chip session id.
-    Accepts mic slices via enqueue(); opens Deepgram; relays partial/final text over the WS bus.
+    One Deepgram streaming session per AskChip session_id (sid).
+    Handles: open → send binary audio chunks → receive JSON results → counters/SSE.
     """
 
-    def __init__(self) -> None:
-        self._loop = asyncio.new_event_loop()
-        self._thr = threading.Thread(target=self._loop.run_forever, name="asr-loop", daemon=True)
-        self._thr.start()
-        self._queues: Dict[str, Deque[bytes]] = {}
-        self._tasks: Dict[str, asyncio.Future] = {}
-        self._user_msg_id: Dict[str, str] = {}
+    def __init__(self, sid: str):
+        self.sid = sid
+        self.ws: Optional[websocket.WebSocket] = None
+        self.q: Queue[bytes] = Queue(maxsize=256)
+        self.stop_flag = threading.Event()
+        self.send_t: Optional[threading.Thread] = None
+        self.recv_t: Optional[threading.Thread] = None
 
-    def enqueue(self, sid: str, item: Any) -> None:
-        """
-        item may be:
-          - raw bytes
-          - dict: {"data": bytes, "user_msg_id": str, "chunk_seq": int}
-        """
-        if isinstance(item, dict):
-            data = item.get("data") or b""
-            umid = str(item.get("user_msg_id") or "")
-            if umid:
-                self._user_msg_id[sid] = umid
-        else:
-            data = bytes(item or b"")
-        if not data:
+        # simple stats for Diagnostics
+        self.partials = 0
+        self.finals = 0
+        self.error: Optional[str] = None
+
+    # ---- lifecycle ---------------------------------------------------------
+
+    def start(self):
+        if not DEEPGRAM_API_KEY:
+            self.error = "missing_deepgram_key"
+            _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
             return
 
-        q = self._queues.setdefault(sid, deque())
-        q.append(data)
-
-        task = self._tasks.get(sid)
-        if task is None or task.done():
-            fut = asyncio.run_coroutine_threadsafe(self._run_session(sid), self._loop)
-            self._tasks[sid] = fut
-
-    def shutdown(self) -> None:
+        headers = [f"Authorization: Token {DEEPGRAM_API_KEY}"]
         try:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            self.ws = websocket.create_connection(
+                _deepgram_listen_url(),
+                header=headers,
+                sslopt={"cert_reqs": ssl.CERT_REQUIRED},
+                enable_multithread=True,
+                ping_interval=20,
+                ping_timeout=10,
+            )
+            _emit("asr", label="provider_open", provider="deepgram", session_id=self.sid)
+        except Exception as e:  # connection error
+            self.error = f"provider_connect:{type(e).__name__}:{e}"
+            _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
+            return
+
+        # start IO threads
+        self.send_t = threading.Thread(target=self._send_loop, name=f"dg-send-{self.sid}", daemon=True)
+        self.recv_t = threading.Thread(target=self._recv_loop, name=f"dg-recv-{self.sid}", daemon=True)
+        self.send_t.start()
+        self.recv_t.start()
+
+    def close(self):
+        self.stop_flag.set()
+        try:
+            if self.ws is not None:
+                self.ws.close()
         except Exception:
             pass
+        _emit("asr", label="provider_close", provider="deepgram", session_id=self.sid)
 
-    # -------------------- internals --------------------
+    # ---- public ------------------------------------------------------------
 
-    async def _run_session(self, sid: str) -> None:
-        if _cb_open():
-            bus.broadcast(sid, {"type": "asr_error", "error": "breaker_open"})
+    def enqueue(self, audio_bytes: bytes):
+        if self.stop_flag.is_set():
             return
-
-        _METRICS["sessions"] += 1
-        client = DeepgramClient()
-
-        # Hard defensive check: make sure the loaded class actually has connect()
-        if not callable(getattr(client, "connect", None)):
-            mod = DeepgramClient.__module__
-            m = sys.modules.get(mod)
-            src = getattr(m, "__file__", None)
-            msg = f"MissingConnect:module={mod},file={src}"
-            _METRICS["provider_errors"] += 1
-            _cb_trip()
-            bus.broadcast(sid, {"type": "asr_error", "error": f"provider_connect:{msg}"})
-            try:
-                _emit("asr", label="asr_error", session_id=sid, error=f"provider_connect:{msg}")
-            except Exception:
-                pass
-            return
-
-        # connect
         try:
-            await client.connect()
-            bus.broadcast(sid, {"type": "asr_open"})
+            self.q.put_nowait(audio_bytes)
+        except Exception:
+            # drop oldest if full to avoid unbounded growth
             try:
-                _emit("asr", label="asr_open", session_id=sid)
+                _ = self.q.get_nowait()
             except Exception:
                 pass
-        except Exception as e:
-            _METRICS["provider_errors"] += 1
-            _cb_trip()
-            err_text = f"provider_connect:{e.__class__.__name__}:{str(e)}"
-            bus.broadcast(sid, {"type": "asr_error", "error": err_text})
             try:
-                _emit("asr", label="asr_error", session_id=sid, error=err_text)
+                self.q.put_nowait(audio_bytes)
             except Exception:
                 pass
-            return
 
-        async def _rx():
-            try:
-                async for ev in client.events():
-                    t = ev.get("type")
-                    if t == "user_partial":
-                        _METRICS["partials"] += 1
-                    elif t == "user_final":
-                        _METRICS["finals"] += 1
-                    bus.broadcast(
-                        sid,
-                        {
-                            "type": t,
-                            "text": ev.get("text", ""),
-                            "user_msg_id": self._user_msg_id.get(sid),
-                        },
-                    )
-            except Exception as e:
-                try:
-                    _emit("asr", label="asr_error", session_id=sid, error=f"rx:{e.__class__.__name__}:{str(e)}")
-                except Exception:
-                    pass  # sender handles close
+    # ---- internals ---------------------------------------------------------
 
-        rx_task = asyncio.create_task(_rx())
-
+    def _send_loop(self):
+        """Send binary audio frames to Deepgram."""
         try:
-            q = self._queues.get(sid, deque())
-            while q:
-                chunk = q.popleft()
+            while not self.stop_flag.is_set():
                 try:
-                    await client.send(chunk)
+                    buf = self.q.get(timeout=0.25)
+                except Empty:
+                    continue
+                if not buf or self.ws is None:
+                    continue
+                # websocket-client binary send
+                try:
+                    self.ws.send(buf, opcode=ABNF.OPCODE_BINARY)
                 except Exception as e:
-                    _METRICS["provider_errors"] += 1
-                    _cb_trip()
-                    err_text = f"send:{e.__class__.__name__}:{str(e)}"
-                    bus.broadcast(sid, {"type": "asr_error", "error": err_text})
-                    try:
-                        _emit("asr", label="asr_error", session_id=sid, error=err_text)
-                    except Exception:
-                        pass
+                    self.error = f"send_error:{type(e).__name__}:{e}"
+                    _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
+                    self.stop_flag.set()
                     break
-
-            # give the provider a short drain window to emit a final
-            await asyncio.sleep(0.6)
         finally:
             try:
-                await client.close()
+                if self.ws is not None:
+                    self.ws.close()
             except Exception:
                 pass
+
+    def _recv_loop(self):
+        """Receive JSON messages; count partials/finals."""
+        try:
+            while not self.stop_flag.is_set() and self.ws is not None:
+                try:
+                    msg = self.ws.recv()
+                except Exception as e:
+                    # socket closed or network issue
+                    self.error = f"recv_error:{type(e).__name__}:{e}"
+                    _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
+                    self.stop_flag.set()
+                    break
+
+                if isinstance(msg, (bytes, bytearray)):
+                    # ignore any binary echoes
+                    continue
+
+                try:
+                    data = json.loads(msg)
+                except Exception:
+                    continue
+
+                # Deepgram result frames include is_final on transcripts
+                is_final = data.get("is_final")
+                if is_final is True:
+                    self.finals += 1
+                    _emit("asr", label="final", session_id=self.sid, finals=self.finals)
+                elif is_final is False:
+                    self.partials += 1
+                    _emit("asr", label="partial", session_id=self.sid, partials=self.partials)
+        finally:
+            self.stop_flag.set()
             try:
-                rx_task.cancel()
+                if self.ws is not None:
+                    self.ws.close()
             except Exception:
                 pass
 
-# ------------- module-level helpers used by diagnostics ----------------------
 
-_MANAGER: Optional[StreamingASRManager] = None
+# --------------------- Manager (singleton) -----------------------------------
 
-def get_manager() -> StreamingASRManager:
+class StreamManager:
+    """Creates/owns _DGSession instances keyed by AskChip session id."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._sessions: Dict[str, _DGSession] = {}
+
+    def _ensure(self, sid: str) -> _DGSession:
+        with self._lock:
+            s = self._sessions.get(sid)
+            if s is None or s.stop_flag.is_set():
+                s = _DGSession(sid)
+                self._sessions[sid] = s
+                s.start()
+            return s
+
+    def enqueue(self, sid: str, item: dict):
+        """item = {'data': bytes, 'user_msg_id': str|None, 'chunk_seq': int}"""
+        data = item.get("data")
+        if not data:
+            return
+        sess = self._ensure(sid)
+        sess.enqueue(data)
+
+    # Optional helpers Diagnostics may call (kept for completeness)
+    def stats(self, sid: str) -> dict:
+        with self._lock:
+            s = self._sessions.get(sid)
+            if not s:
+                return {"partials": 0, "finals": 0, "err": None}
+            return {"partials": s.partials, "finals": s.finals, "err": s.error}
+
+    def close(self, sid: str):
+        with self._lock:
+            s = self._sessions.pop(sid, None)
+            if s:
+                s.close()
+
+
+# global singleton
+_MANAGER: Optional[StreamManager] = None
+
+
+def get_manager() -> StreamManager:
     global _MANAGER
     if _MANAGER is None:
-        _MANAGER = StreamingASRManager()
+        _MANAGER = StreamManager()
     return _MANAGER
-
-def shutdown_manager() -> None:
-    m = _MANAGER
-    if m:
-        m.shutdown()
-
-def get_streaming_status() -> Dict[str, object]:
-    return {
-        "breaker_open": _cb_open(),
-        "provider_errors": _METRICS["provider_errors"],
-        "partials": _METRICS["partials"],
-        "finals": _METRICS["finals"],
-        "sessions": _METRICS["sessions"],
-    }
