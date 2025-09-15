@@ -57,28 +57,20 @@ def logs_sse():
     def stream():
         import time as _t
         # initial heartbeat
-        yield "event: heartbeat
-"
-        yield "data: " + json.dumps({"ts": _t.time(), "kind": "heartbeat", "msg": "ok"}) + "
-
-"
+        yield "event: heartbeat\n"
+        yield "data: " + json.dumps({"ts": _t.time(), "kind": "heartbeat", "msg": "ok"}) + "\n\n"
         last_hb = _t.time()
         while True:
             sent = False
             while _LOG_Q:
                 evt = _LOG_Q.popleft()
-                yield "data: " + json.dumps(evt) + "
-
-"
+                yield "data: " + json.dumps(evt) + "\n\n"
                 sent = True
             # keep-alive heartbeats
             now = _t.time()
             if now - last_hb > 5:
-                yield "event: heartbeat
-"
-                yield "data: " + json.dumps({"ts": now, "kind": "heartbeat", "msg": "ok"}) + "
-
-"
+                yield "event: heartbeat\n"
+                yield "data: " + json.dumps({"ts": now, "kind": "heartbeat", "msg": "ok"}) + "\n\n"
                 last_hb = now
             if not live and not sent:
                 break
