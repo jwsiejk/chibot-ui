@@ -9,7 +9,7 @@ from queue import Queue, Empty
 from typing import Dict, Optional, Any
 from urllib.parse import urlencode
 
-# Use the sync client from websockets (you already have websockets installed)
+# Use the sync client from websockets (already in your requirements)
 from websockets.sync.client import connect as ws_connect
 import websockets.exceptions as ws_exceptions
 
@@ -79,7 +79,7 @@ class _DGSession:
         headers = [("Authorization", f"Token {DEEPGRAM_API_KEY}")]
         ctx = ssl.create_default_context()
         try:
-            # websockets.sync uses 'additional_headers' (dict or list of pairs) and 'ssl'
+            # websockets.sync uses 'additional_headers' (dict/list) and 'ssl'
             self.ws = ws_connect(
                 _deepgram_listen_url(),
                 additional_headers=headers,
@@ -138,7 +138,7 @@ class _DGSession:
                 if not buf or self.ws is None:
                     continue
                 try:
-                    # websockets.sync: sending 'bytes' automatically uses a binary frame
+                    # websockets.sync: sending bytes automatically uses a binary frame
                     self.ws.send(buf)
                 except Exception as e:
                     self.error = f"send_error:{type(e).__name__}:{e}"
@@ -225,6 +225,19 @@ class StreamManager:
             if not s:
                 return {"partials": 0, "finals": 0, "err": None}
             return {"partials": s.partials, "finals": s.finals, "err": s.error}
+
+    def stats_all(self) -> dict:
+        """Aggregate counters across all active sessions (for Diagnostics GET without sid)."""
+        with self._lock:
+            partials = finals = err_count = 0
+            sessions: Dict[str, dict] = {}
+            for sid, s in self._sessions.items():
+                sessions[sid] = {"partials": s.partials, "finals": s.finals, "err": s.error}
+                partials += s.partials
+                finals += s.finals
+                if s.error:
+                    err_count += 1
+            return {"partials": partials, "finals": finals, "err_count": err_count, "sessions": sessions}
 
     def close(self, sid: str):
         with self._lock:
