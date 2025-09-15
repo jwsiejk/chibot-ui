@@ -1,8 +1,9 @@
 // app.js — session control and typed chat
 import { installFetchInterceptor, ensureCSRF } from './csrf.js';
 import { openWS, waitWSOpen, closeWS } from './ws.js';
-import { initMic, armVAD, disarmVAD, getCurrentStream } from './voice.js';
+import { initMic, disarmVAD } from './voice.js';
 import { unlockAudio } from './audio.js';
+import { getSID } from './util/sid.js';
 
 const $ = (s)=>document.querySelector(s);
 
@@ -31,16 +32,25 @@ async function onStart(){
     installFetchInterceptor();
     await ensureCSRF();
     await unlockAudio();
+
+    // Open WS first and wait, so greet frames have a subscriber
     openWS();
     await waitWSOpen();
+
+    // Prime mic permission once; VAD will arm when assistant is ready
     await initMic();
-    setDot('listening');
-    const endBtn = document.getElementById('endButton');
-    const startBtn = document.getElementById('startButton');
+
+    // Call greet with the SAME SID the WS is using
+    const sid = getSID();
+    fetch(`/api/v1/greet?session_id=${encodeURIComponent(sid)}`, {
+      credentials: 'include'
+    }).catch(()=>{});
+
+    setDot('thinking'); // will flip to speaking/listening via ws events
+    const endBtn = $('#endButton');
+    const startBtn = $('#startButton');
     if (endBtn) endBtn.disabled = false;
     if (startBtn) startBtn.disabled = true;
-    // Fire greet after WS up so audio can stream
-    fetch('/api/v1/greet', { credentials:'include' }).catch(()=>{});
   }catch(e){
     console.error('[app] start failed', e);
   }
@@ -49,8 +59,8 @@ async function onStart(){
 async function onEnd(){
   try{ disarmVAD(); closeWS(); }catch{}
   setDot('ready');
-  const endBtn = document.getElementById('endButton');
-  const startBtn = document.getElementById('startButton');
+  const endBtn = $('#endButton');
+  const startBtn = $('#startButton');
   if (startBtn) startBtn.disabled = false;
   if (endBtn)   endBtn.disabled = true;
 }
@@ -66,9 +76,8 @@ async function onSend(){
   if (inp) inp.value = '';
   addChatMessage('user', text);
 
-  const sid = localStorage.getItem('chip.sid') || '';
   const headers = new Headers({ 'Content-Type':'application/json' });
-  const csrf = await ensureCSRF().catch(()=>'');
+  const csrf = await ensureCSRF().catch(()=> '');
   if (csrf) headers.set('X-CSRF-Token', csrf);
   try{
     const idem = (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random()));
@@ -77,9 +86,10 @@ async function onSend(){
   fetch('/api/v1/chat', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ text, session_id: sid }),
+    body: JSON.stringify({ text, session_id: getSID() }),
     credentials: 'include'
   }).catch(console.warn);
+
   setDot('thinking');
 }
 
