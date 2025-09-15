@@ -20,7 +20,8 @@ function _notifyOpen(){ for(const fn of _onOpen.splice(0)) try{ fn(); }catch{} }
 async function _tryStartStreamingOnce(){
   try{
     const stream = getCurrentStream() || await initMic();
-    await armVAD(stream);
+    const msgId = (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random()));
+    await armVAD(stream, { userMsgId: msgId });
   }catch(e){
     console.warn('[ws] start streaming failed', e);
   }

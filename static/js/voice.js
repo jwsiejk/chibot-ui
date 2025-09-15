@@ -73,7 +73,7 @@ export async function armVAD(stream, opts={}){
   if (rec && rec.state !== 'inactive') return; // already running
 
   chunkSeq = 0;
-  currentUserMsgId = opts.userMsgId || null;
+  currentUserMsgId = opts.userMsgId || (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random()));
 
   const mimeOptions = [
     'audio/webm;codecs=opus',

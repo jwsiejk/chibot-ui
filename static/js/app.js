@@ -33,8 +33,7 @@ async function onStart(){
     await unlockAudio();
     openWS();
     await waitWSOpen();
-    const stream = await initMic();
-    await armVAD(stream);
+    await initMic();
     setDot('listening');
     const endBtn = document.getElementById('endButton');
     const startBtn = document.getElementById('startButton');
