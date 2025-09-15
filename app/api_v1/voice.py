@@ -19,7 +19,8 @@ def _voice_rl_guard():
         return rv
 
 # Max decoded payload per chunk (bytes) — must match Diagnostics 413 guard
-_MAX_BYTES = 262144  # 256 KiB
+_MAX_BYTES = 262_144  # 256 KiB
+
 
 @bp.post("/chunk")
 def post_voice_chunk():
@@ -66,9 +67,11 @@ def post_voice_chunk():
 def legacy_stt():
     return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
 
+
 @bp.post("/stt/stream")
 def legacy_stt_stream():
     return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
+
 
 @bp.post("/tts-with-visemes")
 def legacy_tts():
