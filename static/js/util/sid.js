@@ -1,9 +1,10 @@
+// static/js/util/sid.js — single source of truth for session id
 export function getSID(){
-  const key = "chip.sid";
-  let sid = sessionStorage.getItem(key);
-  if (!sid){
-    sid = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
-    sessionStorage.setItem(key, sid);
+  const k = 'chip.sid';
+  let s = localStorage.getItem(k);
+  if (!s) {
+    s = (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random()));
+    localStorage.setItem(k, s);
   }
-  return sid;
+  return s;
 }
