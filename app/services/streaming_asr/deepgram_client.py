@@ -1,77 +1,70 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-from typing import AsyncGenerator, Optional
+from typing import Optional, AsyncGenerator
 
-# Force the async client from websockets (avoids sync create_connection path).
+# Force the async client from websockets (avoid sync create_connection path)
 try:
     from websockets.legacy.client import connect as ws_connect  # async
-except Exception:  # fallback for other layouts
+except Exception:
     from websockets.client import connect as ws_connect  # async
 
+
 def _dg_url() -> str:
+    """
+    Build the Deepgram listen URL with explicit container/codec hints.
+    We keep everything in the URL to avoid providers that ignore JSON config.
+    """
     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
-    # Append sane defaults if missing (helps when proxies ignore Configure frame)
+    parts = []
+    # Explicit container + codec + format
+    if "container=" not in base:
+        parts.append("container=webm")
     if "encoding=" not in base:
+        parts.append("encoding=opus")
+    if "sample_rate=" not in base:
+        parts.append("sample_rate=48000")
+    if "channels=" not in base:
+        parts.append("channels=1")
+    if "interim_results=" not in base:
+        parts.append("interim_results=true")
+    if parts:
         sep = "&" if "?" in base else "?"
-        base = base + sep + "encoding=opus&sample_rate=48000&channels=1&interim_results=true"
+        base = base + sep + "&".join(parts)
     return base
 
+
 def _auth_header() -> str:
-    key = os.getenv("DEEPGRAM_API_KEY", "").strip()
+    key = (os.getenv("DEEPGRAM_API_KEY") or "").strip()
     if not key:
         raise RuntimeError("DEEPGRAM_API_KEY is not set")
     return f"Token {key}"
 
-def _initial_config() -> dict:
-    """
-    WebM/Opus mic slices:
-      • container MUST be 'webm' for MediaRecorder output
-      • encoding 'opus', sample_rate 48000, channels=1
-      • interim_results on for partials
-    """
-    model = os.getenv("DG_MODEL")
-    interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
-    cfg = {
-        "type": "Configure",
-        "container": "webm",       # <— critical for MediaRecorder chunks
-        "encoding": "opus",
-        "sample_rate": 48000,
-        "channels": 1,
-        "interim_results": interim,
-        "vad_events": False,
-        "language": os.getenv("OPENAI_STT_LANGUAGE", "en"),
-    }
-    if model:
-        cfg["model"] = model
-    return cfg
-
 
 class DeepgramClient:
-    """Minimal async wrapper for Deepgram streaming WS."""
+    """
+    Minimal async wrapper for Deepgram's v1 listen WS.
+    We do not send a JSON 'configure' frame — URL params carry all settings.
+    """
+
     def __init__(self, _cfg: Optional[dict] = None) -> None:
         self._ws = None  # type: ignore
         self._rx_task: Optional[asyncio.Task] = None
         self._ev_queue: asyncio.Queue = asyncio.Queue()
-        self._closed = False
 
     async def connect(self) -> None:
         if self._ws:
             return
-        # Use async client; extra_headers is valid here
+        # Async client; extra_headers works here
         self._ws = await ws_connect(_dg_url(), extra_headers=[("Authorization", _auth_header())])
-        # Send initial configuration to enable partials & correct container/codec
-        await self._ws.send(json.dumps(_initial_config()))
-        # Start receiver
+        # Start receiver after open
         self._rx_task = asyncio.create_task(self._rx_loop())
         await self._ev_queue.put({"type": "asr_open"})
 
     async def close(self) -> None:
-        self._closed = True
         try:
-            if self._ws and getattr(self._ws, "open", True):
+            if self._ws and getattr(self._ws, "open", False):
                 await self._ws.close()
         finally:
             self._ws = None
@@ -96,17 +89,18 @@ class DeepgramClient:
     async def _rx_loop(self) -> None:
         try:
             async for raw in self._ws:  # type: ignore
+                # Deepgram replies are JSON text frames; avoid strict schema — surface key types we care about.
                 try:
+                    import json
                     msg = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
                 except Exception:
                     continue
 
-                # Normalize Deepgram messages to our minimal events.
                 t = (msg.get("type") or "").lower()
-                if t in ("results", "transcript", "partialtranscript", "speech.update"):
+                # Common payload: {"type":"Results","channel":{"alternatives":[{"transcript":"..."}]},"is_final":false}
+                if t in ("results", "result", "transcript", "partialtranscript", "speech.update"):
                     text = ""
-                    is_final = False
-
+                    is_final = bool(msg.get("is_final"))
                     if "channel" in msg:
                         try:
                             alts = msg["channel"]["alternatives"]
@@ -114,27 +108,23 @@ class DeepgramClient:
                                 text = (alts[0].get("transcript") or "").strip()
                         except Exception:
                             pass
-                        is_final = bool(msg.get("is_final"))
-
                     if "transcript" in msg and not text:
                         text = (msg.get("transcript") or "").strip()
                     if "speech_final" in msg:
                         is_final = is_final or bool(msg.get("speech_final"))
-
                     if not text:
                         continue
-
                     await self._ev_queue.put(
                         {"type": "user_final" if is_final else "user_partial", "text": text}
                     )
-
                 elif t in ("metadata", "listening", "connected", "ready"):
+                    # informative but not textual — ignore
                     continue
                 elif t in ("error", "close"):
                     await self._ev_queue.put({"type": "asr_error", "error": t})
                 else:
+                    # unknown control type; ignore quietly
                     continue
-
         except asyncio.CancelledError:
             return
         except Exception as e:
