@@ -350,87 +350,56 @@ async def asr_end(session_id: str, wait_for_final: bool = True):
     finally:
         _streams.pop(session_id, None)
 
-
 # ---- Compatibility shim for legacy callers ----------------------------------
-
 import os as _os
+import asyncio as _asyncio
 
 class _CompatManager:
-    """
-    Back-compat manager exposing .enqueue(session_id, data) for legacy endpoints.
-    It lazily opens the Deepgram stream on first enqueue and forwards chunks.
-    """
     def __init__(self):
         self._opened = set()
 
     def _api_key(self) -> str:
-        key = _os.getenv("DEEPGRAM_API_KEY", "").strip()
-        if not key:
-            raise RuntimeError("DEEPGRAM_API_KEY not set")
+        key = _os.getenv("DEEPGRAM_API_KEY","").strip()
+        if not key: raise RuntimeError("DEEPGRAM_API_KEY not set")
         return key
 
     def _emit(self, *a, **k):
-        # Optional: plumb Admin SSE emitter here if needed
         return
 
     async def _ensure_open(self, session_id: str):
-        if session_id in self._opened:
-            return
+        if session_id in self._opened: return
         await asr_open(session_id=session_id, api_key=self._api_key(), emit=self._emit)
         self._opened.add(session_id)
 
     def enqueue(self, session_id: str, data: bytes):
-        """Synchronous-looking wrapper used by Flask views; schedules async send."""
-        loop = None
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            pass
+        try: loop = _asyncio.get_event_loop()
+        except RuntimeError: loop = None
 
         async def _send():
             await self._ensure_open(session_id)
             await asr_send_chunk(session_id, data, seq=None)
 
         if loop and loop.is_running():
-            fut = asyncio.run_coroutine_threadsafe(_send(), loop)
+            fut = _asyncio.run_coroutine_threadsafe(_send(), loop)
             fut.result(timeout=5)
         else:
-            asyncio.run(_send())
+            _asyncio.run(_send())
 
     def end(self, session_id: str, wait_for_final: bool = True):
-        """Convenience wrapper for legacy stop handlers."""
-        loop = None
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            pass
+        try: loop = _asyncio.get_event_loop()
+        except RuntimeError: loop = None
 
         async def _end():
             await asr_end(session_id, wait_for_final=wait_for_final)
             self._opened.discard(session_id)
 
         if loop and loop.is_running():
-            fut = asyncio.run_coroutine_threadsafe(_end(), loop)
+            fut = _asyncio.run_coroutine_threadsafe(_end(), loop)
             fut.result(timeout=10)
         else:
-            asyncio.run(_end())
-
+            _asyncio.run(_end())
 
 _COMPAT_SINGLETON = _CompatManager()
 
 def get_manager():
-    """Legacy export retained for existing endpoints/tests."""
     return _COMPAT_SINGLETON
-
-
-async def shutdown_manager():
-    """Optional ASGI shutdown hook to close all streams gracefully."""
-    try:
-        # snapshot keys to avoid dict-size change during iteration
-        for sid in list(_streams.keys()):
-            try:
-                await asr_end(sid, wait_for_final=False)
-            except Exception:
-                pass
-    except Exception:
-        pass

@@ -1,5 +1,5 @@
-# app/api_v1/voice_stream.py
-from __future__ import annotations
+# voice_stream.py
+from __future__ annotations
 from flask import Blueprint, request, jsonify
 import asyncio
 import time
@@ -8,15 +8,14 @@ from ..services.streaming_asr.stream_manager import get_manager, asr_end
 
 bp = Blueprint("voice_stream_v1", __name__, url_prefix="/api/v1/voice")
 
-# simple in-proc RPS limiter per session_id
-_RPS = {}  # sid -> [timestamps (sec)]
+_RPS = {{}}
 _RPS_WINDOW = 1.0
 _RPS_MAX = 6
+_MAX_CHUNK = 512 * 1024
 
 def _rps_ok(sid: str) -> bool:
     now = time.time()
     arr = _RPS.get(sid) or []
-    # drop anything older than window
     arr = [t for t in arr if now - t <= _RPS_WINDOW]
     if len(arr) >= _RPS_MAX:
         _RPS[sid] = arr
@@ -25,25 +24,37 @@ def _rps_ok(sid: str) -> bool:
     _RPS[sid] = arr
     return True
 
+def _get_session_id() -> str | None:
+    return (
+        request.args.get("session_id")
+        or request.form.get("session_id")
+        or request.headers.get("X-Session-Id")
+    )
+
+def _read_audio_bytes() -> bytes | None:
+    f = request.files.get("chunk")
+    if f:
+        try: return f.read()
+        except Exception: return None
+    try:
+        body = request.get_data(cache=False) or b""
+        return body if body else None
+    except Exception:
+        return None
+
 @bp.post("/chunk")
 def voice_chunk():
-    sess = request.args.get("session_id") or            (request.get_json(silent=True) or {}).get("session_id") or            request.form.get("session_id") or            request.headers.get("X-Session-Id")
+    sess = _get_session_id()
     if not sess:
         return jsonify(error="missing session_id"), 400
-
     if not _rps_ok(sess):
         return jsonify(error="rate_limited"), 429
 
-    f = request.files.get("chunk")
-    if f:
-        data = f.read()
-    else:
-        data = request.get_data(cache=False) or b""
-
+    data = _read_audio_bytes()
     if not data:
-        return jsonify(error="missing chunk"), 400
-    if len(data) > 512 * 1024:
-        return jsonify(error="chunk too large"), 413
+        return jsonify(error="missing_or_invalid_chunk"), 400
+    if len(data) > _MAX_CHUNK:
+        return jsonify(error="chunk too large", max_bytes=_MAX_CHUNK), 413
 
     mgr = get_manager()
     try:
@@ -54,8 +65,7 @@ def voice_chunk():
 
 @bp.post("/end")
 def voice_end():
-    """Gracefully end the Deepgram ASR stream for a session (waits for final)."""
-    sess = request.args.get("session_id") or            (request.get_json(silent=True) or {}).get("session_id") or            request.form.get("session_id") or            request.headers.get("X-Session-Id")
+    sess = _get_session_id()
     if not sess:
         return jsonify(error="missing session_id"), 400
     try:
@@ -66,7 +76,6 @@ def voice_end():
         else:
             loop.run_until_complete(asr_end(sess, wait_for_final=True))
     except Exception:
-        # fallback: run in a new loop
         try:
             asyncio.run(asr_end(sess, wait_for_final=True))
         except Exception:

@@ -1,76 +1,83 @@
-# app/api_v1/voice.py — /api/v1/voice/chunk production handler
-from __future__ import annotations
+# voice.py
+from __future__ annotations
+from flask import Blueprint, request, jsonify
+import asyncio
+import time
 
-import base64
-import binascii
-from flask import Blueprint, jsonify, request
+from ..services.streaming_asr.stream_manager import get_manager, asr_end
 
-from ..middleware.rate_limit import check_now
-from ..api_v1.admin import _emit
-from ..services.streaming_asr.stream_manager import get_manager
+bp = Blueprint("voice", __name__, url_prefix="/api/v1/voice")
 
-bp = Blueprint("voice", __name__)
+_RPS = {{}}
+_RPS_WINDOW = 1.0
+_RPS_MAX = 6
+_MAX_CHUNK = 512 * 1024
 
-# ---- rate limit guard for all /voice/* ----
-@bp.before_request
-def _voice_rl_guard():
-    rv = check_now("voice_chunk")
-    if rv is not None:
-        return rv
+def _rps_ok(sid: str) -> bool:
+    now = time.time()
+    arr = _RPS.get(sid) or []
+    arr = [t for t in arr if now - t <= _RPS_WINDOW]
+    if len(arr) >= _RPS_MAX:
+        _RPS[sid] = arr
+        return False
+    arr.append(now)
+    _RPS[sid] = arr
+    return True
 
-# Max decoded payload per chunk (bytes) — must match Diagnostics 413 guard
-_MAX_BYTES = 262_144  # 256 KiB
+def _get_session_id() -> str | None:
+    return (
+        request.args.get("session_id")
+        or request.form.get("session_id")
+        or request.headers.get("X-Session-Id")
+    )
 
+def _read_audio_bytes() -> bytes | None:
+    f = request.files.get("chunk")
+    if f:
+        try: return f.read()
+        except Exception: return None
+    try:
+        body = request.get_data(cache=False) or b""
+        return body if body else None
+    except Exception:
+        return None
 
 @bp.post("/chunk")
-def post_voice_chunk():
-    """
-    Accepts JSON (canonical keys), also accepts legacy synonyms:
-      canonical: sid, user_msg_id, chunk_seq, audio_b64
-      legacy:   session_id,       (same), seq,       b64
-    """
-    js = request.get_json(force=True, silent=True) or {}
+def voice_chunk():
+    sess = _get_session_id()
+    if not sess:
+        return jsonify(error="missing session_id"), 400
+    if not _rps_ok(sess):
+        return jsonify(error="rate_limited"), 429
 
-    sid = (js.get("sid") or js.get("session_id") or "").strip() or "diag-unknown"
-    user_msg_id = (js.get("user_msg_id") or "").strip() or None
-    seq = int(js.get("chunk_seq") or js.get("seq") or 0)
-
-    b64 = js.get("audio_b64") or js.get("b64") or ""
-    if not b64:
-        return jsonify(ok=False, error="missing_b64"), 400
-
-    try:
-        data = base64.b64decode(b64, validate=True)
-    except (binascii.Error, ValueError):
-        return jsonify(ok=False, error="invalid_base64"), 400
-
+    data = _read_audio_bytes()
     if not data:
-        return jsonify(ok=False, error="empty_audio"), 400
+        return jsonify(error="missing_or_invalid_chunk"), 400
+    if len(data) > _MAX_CHUNK:
+        return jsonify(error="chunk too large", max_bytes=_MAX_CHUNK), 413
 
-    if len(data) > _MAX_BYTES:
-        return jsonify(ok=False, error="chunk_too_large", max_bytes=_MAX_BYTES), 413
-
-    # Enqueue REAL bytes to the streaming ASR manager
-    get_manager().enqueue(sid, {"data": data, "user_msg_id": user_msg_id, "chunk_seq": seq})
-
-    # Admin SSE: show decoded byte count
+    mgr = get_manager()
     try:
-        _emit("voice:chunk", session_id=sid, seq=seq, bytes=len(data))
+        mgr.enqueue(sess, data)
+    except Exception as e:
+        return jsonify(error="enqueue_failed", detail=str(e)), 500
+    return jsonify(ok=True), 200
+
+@bp.post("/end")
+def voice_end():
+    sess = _get_session_id()
+    if not sess:
+        return jsonify(error="missing session_id"), 400
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            fut = asyncio.run_coroutine_threadsafe(asr_end(sess, wait_for_final=True), loop)
+            fut.result(timeout=10)
+        else:
+            loop.run_until_complete(asr_end(sess, wait_for_final=True))
     except Exception:
-        pass
-
-    return jsonify(ok=True, received_seq=seq), 200
-
-
-# ---------- Legacy endpoints inside v1 → hard 410 (gone) ----------
-@bp.post("/stt")
-def legacy_stt():
-    return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
-
-@bp.post("/stt/stream")
-def legacy_stt_stream():
-    return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
-
-@bp.post("/tts-with-visemes")
-def legacy_tts():
-    return jsonify(ok=False, error="gone", replacement="/api/v1/voice/chunk"), 410
+        try:
+            asyncio.run(asr_end(sess, wait_for_final=True))
+        except Exception:
+            pass
+    return jsonify(ok=True), 200
