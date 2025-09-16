@@ -1,306 +1,351 @@
-# app/services/streaming_asr/stream_manager.py
-from __future__ import annotations
-
+import asyncio
 import json
-import os
-import ssl
-import threading
-from queue import Queue, Empty
-from typing import Dict, Optional, Any
-from urllib.parse import urlencode
+import logging
+import time
+from typing import Callable, Dict, Optional
 
-from websockets.sync.client import connect as ws_connect
-import websockets.exceptions as ws_exceptions
+import websockets  # uses your existing WebSocket client lib
 
-# Admin SSE emitter is optional; if missing, no-op.
-try:
-    from ...api_v1.admin import _emit  # type: ignore
-except Exception:  # pragma: no cover
-    def _emit(*_args, **_kwargs):
-        return None
+logger = logging.getLogger(__name__)
 
+# ---- Types ------------------------------------------------------------------
 
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
-DG_BASE = os.getenv("DEEPGRAM_WSS_URL", "wss://api.deepgram.com/v1/listen")
+EmitFn = Callable[[str, str], None]
+EmitDictFn = Callable[[str, str, dict], None]
 
-# IMPORTANT: Browser mic → containerized WebM/Opus.
-# For containerized streams, DO NOT set encoding/sample_rate/channels — Deepgram
-# reads these from the container header. Keep only feature flags (model/lang optional).
-DG_PARAMS_DEFAULT = {
-    "interim_results": "true",
-    "smart_format": "true",
-    "punctuate": "true",
-    "vad_events": "true",
-    "utterance_end_ms": "1200",
-}
+# ---- Helpers ----------------------------------------------------------------
 
-# Optional model/language overrides via env (safe to include)
-_opt_model = os.getenv("DG_MODEL", "").strip()
-_opt_lang = os.getenv("DG_LANGUAGE", "").strip()
-if _opt_model:
-    DG_PARAMS_DEFAULT["model"] = _opt_model
-if _opt_lang:
-    DG_PARAMS_DEFAULT["language"] = _opt_lang
+def _noop_emit(kind: str, label: str, extra: Optional[dict] = None):
+    # Safe no-op if no SSE emitter is provided
+    pass
 
-
-def _deepgram_listen_url() -> str:
-    qs = urlencode(DG_PARAMS_DEFAULT)
-    return f"{DG_BASE}?{qs}" if qs else DG_BASE
-
-
-def _bool_env(name: str) -> bool:
-    v = os.getenv(name)
-    return bool(v) and str(v).strip().lower() not in ("0", "false", "no")
-
-
-def make_ssl_context() -> ssl.SSLContext:
+def _mk_emit(emit: Optional[Callable[..., None]]):
     """
-    Secure by default.
-    - If DG_TLS_INSECURE=1 → disables verification (diagnostic only).
-    - If DG_CAFILE is set → loads additional CA file (PEM) in addition to system bundle.
+    Accepts:
+      - emit(kind, label) or
+      - emit(kind, label, **extra)
+    Returns a normalized emitter fn.
     """
-    if _bool_env("DG_TLS_INSECURE"):
-        return ssl._create_unverified_context()
+    if emit is None:
+        return _noop_emit
 
-    cafile = os.getenv("DG_CAFILE", "").strip() or None
-    ctx = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
-
-    if cafile:
+    def _wrapped(kind: str, label: str, extra: Optional[dict] = None):
         try:
-            ctx.load_verify_locations(cafile=cafile)
-        except Exception as e:
-            _emit("asr", label="tls_warn", error=f"load_cafile_failed:{e}")
-
-    ctx.check_hostname = True
-    ctx.verify_mode = ssl.CERT_REQUIRED
-    return ctx
-
-
-class _DGSession:
-    """
-    One Deepgram streaming session per AskChip session_id (sid).
-    open → send binary WebM/Opus chunks → receive JSON → count partials/finals.
-    """
-
-    def __init__(self, sid: str):
-        self.sid = sid
-        self.ws: Optional[Any] = None  # websockets.sync connection
-        self.q: Queue[bytes] = Queue(maxsize=256)
-        self.stop_flag = threading.Event()
-        self.send_t: Optional[threading.Thread] = None
-        self.recv_t: Optional[threading.Thread] = None
-
-        # diagnostics counters
-        self.partials = 0
-        self.finals = 0
-        self.error: Optional[str] = None
-
-        # gate: avoid corrupting stream start if browser emits a tiny sentinel
-        self._first_payload_seen = False
-
-    # ---- lifecycle ---------------------------------------------------------
-
-    def start(self):
-        if not DEEPGRAM_API_KEY:
-            self.error = "missing_deepgram_key"
-            _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
-            return
-
-        headers = [("Authorization", f"Token {DEEPGRAM_API_KEY}")]
-        ctx = make_ssl_context()
-        url = _deepgram_listen_url()
-
-        try:
-            self.ws = ws_connect(
-                url,
-                additional_headers=headers,
-                ssl=ctx,
-                open_timeout=15,
-            )
-            _emit("asr", label="provider_open", provider="deepgram", session_id=self.sid, url=url)
-            _emit("asr", label="asr_open", session_id=self.sid)
-        except Exception as e:  # connection error
-            self.error = f"provider_connect:{type(e).__name__}:{e}"
-            _emit("asr", label="provider_connect", session_id=self.sid, error=self.error)
-            _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
-            return
-
-        self.send_t = threading.Thread(target=self._send_loop, name=f"dg-send-{self.sid}", daemon=True)
-        self.recv_t = threading.Thread(target=self._recv_loop, name=f"dg-recv-{self.sid}", daemon=True)
-        self.send_t.start()
-        self.recv_t.start()
-
-    def close(self):
-        self.stop_flag.set()
-        try:
-            if self.ws is not None:
-                self.ws.close()
+            if extra:
+                emit(kind, label, **extra)
+            else:
+                emit(kind, label)
+        except TypeError:
+            # Older emitter signature without kwargs
+            try:
+                emit(kind, label)
+            except Exception:
+                pass
         except Exception:
             pass
-        _emit("asr", label="provider_close", provider="deepgram", session_id=self.sid)
 
-    # ---- public ------------------------------------------------------------
+    return _wrapped
 
-    def enqueue(self, audio_bytes: bytes, seq: Optional[int] = None):
+# ---- Manager ----------------------------------------------------------------
+
+class DeepgramStreamManager:
+    """
+    Minimal, production-safe Deepgram streaming client.
+
+    Key behavior (aligns with Deepgram demo):
+      • Drop the tiny first chunk (1–few bytes) used by some capture stacks.
+      • Send explicit {"type":"CloseStream"} before closing.
+      • Keep the socket open long enough to receive final results.
+    """
+
+    DG_URL = (
+        "wss://api.deepgram.com/v1/listen"
+        "?interim_results=true"
+        "&smart_format=true"
+        "&punctuate=true"
+        "&vad_events=true"
+        "&utterance_end_ms=1200"
+    )
+
+    def __init__(
+        self,
+        api_key: str,
+        session_id: str,
+        emit: Optional[Callable[..., None]] = None,
+        min_valid_bytes: int = 64,
+        final_wait_s: float = 8.0,
+        linger_after_last_chunk_ms: int = 600,
+        connect_timeout_s: float = 10.0,
+        recv_max_wait_s: float = 30.0,
+    ):
+        self.api_key = api_key
+        self.session_id = session_id
+        self.emit = _mk_emit(emit)
+        self.min_valid_bytes = int(min_valid_bytes)
+        self.final_wait_s = float(final_wait_s)
+        self.linger_ms = int(linger_after_last_chunk_ms)
+        self.connect_timeout_s = float(connect_timeout_s)
+        self.recv_max_wait_s = float(recv_max_wait_s)
+
+        self.ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._opened = False
+        self._closing = False
+        self._first_real_chunk_sent = False
+        self._last_chunk_ts = 0.0
+
+        self._recv_task: Optional[asyncio.Task] = None
+        self._final_event = asyncio.Event()
+        self._any_result = False
+
+    # -- lifecycle -------------------------------------------------------------
+
+    async def open(self):
+        headers = [("Authorization", f"Token {self.api_key}")]
+        self.emit("asr", "provider_open", {
+            "provider": "deepgram",
+            "session_id": self.session_id,
+            "url": self.DG_URL,
+        })
+
+        try:
+            self.ws = await asyncio.wait_for(
+                websockets.connect(self.DG_URL, extra_headers=headers, max_size=None),
+                timeout=self.connect_timeout_s,
+            )
+            self._opened = True
+            self.emit("asr", "asr_open", {"session_id": self.session_id})
+        except asyncio.TimeoutError as e:
+            self.emit("asr", "asr_error", {
+                "session_id": self.session_id,
+                "error": f"connect_timeout:{self.connect_timeout_s}s",
+            })
+            raise
+        except Exception as e:
+            self.emit("asr", "asr_error", {
+                "session_id": self.session_id,
+                "error": f"connect_failed:{type(e).__name__}:{e}",
+            })
+            raise
+
+        # Start receive loop
+        self._recv_task = asyncio.create_task(self._recv_loop(), name=f"dg-recv-{self.session_id}")
+
+    async def send_chunk(self, data: bytes, seq: Optional[int] = None):
         """
-        item from /voice/chunk: raw WebM/Opus bytes and chunk_seq.
-        Drop tiny first-chunk sentinels (e.g., seq==1 & <128 bytes) so the stream
-        starts with the real container header.
+        Forward a user mic frame to Deepgram.
+
+        Rules:
+          • If this is the very first incoming frame and it's tiny (< min_valid_bytes),
+            drop and log as 'drop_small_first_chunk'.
+          • Otherwise send as binary and record last send time.
         """
-        if not self._first_payload_seen:
-            if (seq is not None and seq <= 1 and len(audio_bytes) < 128):
-                _emit("asr", label="drop_small_first_chunk", session_id=self.sid, bytes=len(audio_bytes))
-                return
-            self._first_payload_seen = True
-
-        if self.stop_flag.is_set():
-            return
-        try:
-            self.q.put_nowait(audio_bytes)
-        except Exception:
-            try:
-                _ = self.q.get_nowait()
-            except Exception:
-                pass
-            try:
-                self.q.put_nowait(audio_bytes)
-            except Exception:
-                pass
-
-    # ---- internals ---------------------------------------------------------
-
-    def _send_loop(self):
-        """Send binary audio frames to Deepgram (bytes → binary opcode automatically)."""
-        try:
-            while not self.stop_flag.is_set():
-                try:
-                    buf = self.q.get(timeout=0.25)
-                except Empty:
-                    continue
-                if not buf or self.ws is None:
-                    continue
-                try:
-                    self.ws.send(buf)  # bytes → binary frame
-                except Exception as e:
-                    self.error = f"send_error:{type(e).__name__}:{e}"
-                    _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
-                    self.stop_flag.set()
-                    break
-        finally:
-            try:
-                if self.ws is not None:
-                    self.ws.close()
-            except Exception:
-                pass
-
-    def _recv_loop(self):
-        """Receive JSON messages; count partials/finals."""
-        try:
-            while not self.stop_flag.is_set() and self.ws is not None:
-                try:
-                    msg = self.ws.recv()
-                except ws_exceptions.ConnectionClosed as e:
-                    code = getattr(e, "code", None)
-                    reason = getattr(e, "reason", "")
-                    # Normal shutdown (1000/1001) → just note and exit
-                    if code in (1000, 1001):
-                        _emit("asr", label="provider_closed", session_id=self.sid, code=code, reason=reason)
-                    else:
-                        self.error = f"recv_closed:{code}:{reason}"
-                        _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
-                    self.stop_flag.set()
-                    break
-                except Exception as e:
-                    self.error = f"recv_error:{type(e).__name__}:{e}"
-                    _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
-                    self.stop_flag.set()
-                    break
-
-                if isinstance(msg, (bytes, bytearray)):
-                    continue  # ignore any binary echoes
-
-                try:
-                    data = json.loads(msg)
-                except Exception:
-                    continue
-
-                # Deepgram result frames include 'is_final' on transcripts.
-                is_final = data.get("is_final")
-                if is_final is True:
-                    self.finals += 1
-                    _emit("asr", label="final", session_id=self.sid, finals=self.finals)
-                elif is_final is False:
-                    self.partials += 1
-                    _emit("asr", label="partial", session_id=self.sid, partials=self.partials)
-        finally:
-            self.stop_flag.set()
-            try:
-                if self.ws is not None:
-                    self.ws.close()
-            except Exception:
-                pass
-
-
-# --------------------- Manager (singleton) -----------------------------------
-
-class StreamManager:
-    """Creates/owns _DGSession instances keyed by AskChip session id."""
-
-    def __init__(self):
-        self._lock = threading.Lock()
-        self._sessions: Dict[str, _DGSession] = {}
-
-    def _ensure(self, sid: str) -> _DGSession:
-        with self._lock:
-            s = self._sessions.get(sid)
-            if s is None or s.stop_flag.is_set():
-                s = _DGSession(sid)
-                self._sessions[sid] = s
-                s.start()
-            return s
-
-    def enqueue(self, sid: str, item: dict):
-        """item = {'data': bytes, 'user_msg_id': str|None, 'chunk_seq': int}"""
-        data = item.get("data")
         if not data:
             return
-        seq = item.get("chunk_seq")
-        sess = self._ensure(sid)
-        sess.enqueue(data, seq)
 
-    def stats(self, sid: str) -> dict:
-        with self._lock:
-            s = self._sessions.get(sid)
-            if not s:
-                return {"partials": 0, "finals": 0, "err": None}
-            return {"partials": s.partials, "finals": s.finals, "err": s.error}
+        if not self._first_real_chunk_sent and len(data) < self.min_valid_bytes:
+            self.emit("asr", "drop_small_first_chunk", {
+                "session_id": self.session_id,
+                "bytes": len(data),
+            })
+            # Do not mark as first real chunk; just ignore the preamble.
+            return
 
-    def stats_all(self) -> dict:
-        """Aggregate counters across all active sessions (for Diagnostics GET without sid)."""
-        with self._lock:
-            partials = finals = err_count = 0
-            sessions: Dict[str, dict] = {}
-            for sid, s in self._sessions.items():
-                sessions[sid] = {"partials": s.partials, "finals": s.finals, "err": s.error}
-                partials += s.partials
-                finals += s.finals
-                if s.error:
-                    err_count += 1
-            return {"partials": partials, "finals": finals, "err_count": err_count, "sessions": sessions}
+        self._first_real_chunk_sent = True
 
-    def close(self, sid: str):
-        with self._lock:
-            s = self._sessions.pop(sid, None)
-            if s:
-                s.close()
+        if self.ws is None or not self._opened:
+            # Not open; this is a logic error upstream.
+            self.emit("asr", "asr_error", {
+                "session_id": self.session_id,
+                "error": "send_before_open",
+            })
+            return
+
+        try:
+            await self.ws.send(data)
+            self._last_chunk_ts = time.time()
+            self.emit("voice:chunk", "voice:chunk", {
+                "session_id": self.session_id,
+                "seq": seq if seq is not None else -1,
+                "bytes": len(data),
+            })
+        except Exception as e:
+            self.emit("asr", "asr_error", {
+                "session_id": self.session_id,
+                "error": f"send_failed:{type(e).__name__}:{e}",
+            })
+            raise
+
+    async def end(self, wait_for_final: bool = True):
+        """
+        Graceful shutdown:
+          1) Linger briefly after the last audio chunk.
+          2) Send {"type":"CloseStream"} sentinel.
+          3) Optionally wait for a final result (or timeout).
+          4) Close WS.
+        """
+        if self._closing:
+            return
+        self._closing = True
+
+        # 1) Linger a bit to let Deepgram flush interim → final
+        now = time.time()
+        if self._last_chunk_ts > 0:
+            elapsed_ms = int((now - self._last_chunk_ts) * 1000)
+            delay_ms = max(0, self.linger_ms - elapsed_ms)
+            if delay_ms > 0:
+                await asyncio.sleep(delay_ms / 1000.0)
+
+        # 2) Explicit end-of-stream
+        try:
+            if self.ws is not None and self._opened:
+                await self.ws.send(json.dumps({"type": "CloseStream"}))
+        except Exception as e:
+            # Not fatal — continue shutdown
+            self.emit("asr", "asr_error", {
+                "session_id": self.session_id,
+                "error": f"close_stream_send_failed:{type(e).__name__}:{e}",
+            })
+
+        # 3) Wait for a final transcript (or the recv loop to mark final)
+        if wait_for_final:
+            try:
+                await asyncio.wait_for(self._final_event.wait(), timeout=self.final_wait_s)
+            except asyncio.TimeoutError:
+                # No final arrived in time — log for diagnostics
+                self.emit("asr", "asr_error", {
+                    "session_id": self.session_id,
+                    "error": f"final_timeout:{self.final_wait_s}s",
+                })
+
+        # 4) Close websocket
+        try:
+            if self.ws is not None:
+                await self.ws.close()
+                self.emit("ws_close", "ws_close", {"session_id": self.session_id})
+        finally:
+            self._opened = False
+
+        # Ensure recv loop ends
+        if self._recv_task:
+            try:
+                await asyncio.wait_for(self._recv_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                self._recv_task.cancel()
+
+    # -- receive loop ----------------------------------------------------------
+
+    async def _recv_loop(self):
+        """
+        Consume Deepgram messages and surface partial/final results.
+        """
+        if self.ws is None:
+            return
+
+        deadline = time.time() + self.recv_max_wait_s
+        try:
+            while True:
+                # Safety max wait guard: avoid dangling forever
+                if time.time() > deadline and self._closing:
+                    break
+
+                try:
+                    msg = await asyncio.wait_for(self.ws.recv(), timeout=2.5)
+                except asyncio.TimeoutError:
+                    # Normal idle; loop again
+                    continue
+
+                # Text frames from Deepgram carry JSON
+                if isinstance(msg, (str, bytes)):
+                    try:
+                        payload = json.loads(msg if isinstance(msg, str) else msg.decode("utf-8"))
+                    except Exception:
+                        # Some control frames may not be JSON; ignore
+                        continue
+
+                    # Typical Deepgram schema: { "type": "Results", "channel": { "alternatives":[{"transcript":"...","confidence":...,"words":[...]}], "is_final": bool } }
+                    evt_type = payload.get("type")
+                    channel = payload.get("channel") or {}
+                    is_final = bool(channel.get("is_final"))
+
+                    # Emit partials/finals for admin trace
+                    if evt_type == "Results" and channel.get("alternatives"):
+                        alt = channel["alternatives"][0]
+                        transcript = alt.get("transcript", "")
+                        if transcript:
+                            kind = "asr_result_final" if is_final else "asr_result_partial"
+                            self.emit("asr", kind, {
+                                "session_id": self.session_id,
+                                "text": transcript,
+                            })
+                            self._any_result = True
+
+                        if is_final:
+                            # Signal final obtained
+                            self._final_event.set()
+
+                    # Some accounts emit VAD 'speech_final' events
+                    if evt_type == "UtteranceEnd" or payload.get("speech_final") is True:
+                        self._final_event.set()
+
+                else:
+                    # Non-text message types: ignore
+                    continue
+
+        except websockets.ConnectionClosed as e:
+            # If we already got a final, this is normal. Otherwise, log.
+            if not self._any_result and not self._closing:
+                self.emit("asr", "asr_error", {
+                    "session_id": self.session_id,
+                    "error": f"recv_closed:{e.code}:{e.reason}",
+                })
+        except Exception as e:
+            self.emit("asr", "asr_error", {
+                "session_id": self.session_id,
+                "error": f"recv_loop_error:{type(e).__name__}:{e}",
+            })
 
 
-# global singleton
-_MANAGER: Optional[StreamManager] = None
+# ---- Session registry (one ASR stream per diagnostics/user session) ----------
+
+_streams: Dict[str, DeepgramStreamManager] = {}
 
 
-def get_manager() -> StreamManager:
-    global _MANAGER
-    if _MANAGER is None:
-        _MANAGER = StreamManager()
-    return _MANAGER
+def _get(api_key: str, session_id: str, emit: Optional[Callable[..., None]]):
+    mgr = _streams.get(session_id)
+    if mgr is None:
+        mgr = DeepgramStreamManager(api_key=api_key, session_id=session_id, emit=emit)
+        _streams[session_id] = mgr
+    return mgr
+
+
+# ---- Public API used by the diagnostics / app --------------------------------
+
+async def asr_open(session_id: str, api_key: str, emit: Optional[Callable[..., None]] = None):
+    """
+    Open Deepgram realtime stream for this session.
+    """
+    mgr = _get(api_key=api_key, session_id=session_id, emit=emit)
+    await mgr.open()
+
+
+async def asr_send_chunk(session_id: str, data: bytes, seq: Optional[int] = None):
+    """
+    Forward one mic frame to Deepgram (binary Opus/PCM bytes).
+    """
+    mgr = _streams.get(session_id)
+    if mgr is None:
+        raise RuntimeError("asr_send_chunk called before asr_open")
+    await mgr.send_chunk(data, seq=seq)
+
+
+async def asr_end(session_id: str, wait_for_final: bool = True):
+    """
+    Finish the stream gracefully and close the socket after final (or timeout).
+    """
+    mgr = _streams.get(session_id)
+    if mgr is None:
+        return
+    try:
+        await mgr.end(wait_for_final=wait_for_final)
+    finally:
+        _streams.pop(session_id, None)
