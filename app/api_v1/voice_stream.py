@@ -3,8 +3,6 @@ from __future__ annotations
 from flask import Blueprint, request, jsonify
 import asyncio
 import time
-import base64
-import binascii
 
 from ..services.streaming_asr.stream_manager import get_manager, asr_end
 
@@ -62,9 +60,7 @@ def voice_chunk():
     try:
         mgr.enqueue(sess, data)
     except Exception as e:
-        # Keep this explicit for production diagnostics
         return jsonify(error="enqueue_failed", detail=str(e)), 500
-
     return jsonify(ok=True), 200
 
 @bp.post("/end")
