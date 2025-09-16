@@ -207,7 +207,6 @@ function makeMicStreamer({sid, csrf, userMsgId}){
   return { start, stop };
 }
 
-  }
 
   // ---------- main runner ----------
   async function runFullSystemTest(){
