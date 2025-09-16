@@ -9,7 +9,6 @@ from queue import Queue, Empty
 from typing import Dict, Optional, Any
 from urllib.parse import urlencode
 
-# Use the sync client from 'websockets' (already in your env).
 from websockets.sync.client import connect as ws_connect
 import websockets.exceptions as ws_exceptions
 
@@ -24,20 +23,18 @@ except Exception:  # pragma: no cover
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 DG_BASE = os.getenv("DEEPGRAM_WSS_URL", "wss://api.deepgram.com/v1/listen")
 
-# Defaults for browser mic: WebM/Opus 48 kHz mono (your app path).
-# If you ever test raw PCM to match the local script, you'd set encoding=linear16 & sample_rate=16000 here.
+# IMPORTANT: Browser mic → containerized WebM/Opus.
+# For containerized streams, DO NOT set encoding/sample_rate/channels — Deepgram
+# reads these from the container header. Keep only feature flags (model/lang optional).
 DG_PARAMS_DEFAULT = {
-    "encoding": "opus",
-    "sample_rate": 48000,
-    "channels": 1,
     "interim_results": "true",
     "smart_format": "true",
     "punctuate": "true",
     "vad_events": "true",
-    "utterance_end_ms": "1200",  # encourage timely finals
+    "utterance_end_ms": "1200",
 }
 
-# Optional model/language overrides via env.
+# Optional model/language overrides via env (safe to include)
 _opt_model = os.getenv("DG_MODEL", "").strip()
 _opt_lang = os.getenv("DG_LANGUAGE", "").strip()
 if _opt_model:
@@ -47,7 +44,8 @@ if _opt_lang:
 
 
 def _deepgram_listen_url() -> str:
-    return f"{DG_BASE}?{urlencode(DG_PARAMS_DEFAULT)}"
+    qs = urlencode(DG_PARAMS_DEFAULT)
+    return f"{DG_BASE}?{qs}" if qs else DG_BASE
 
 
 def _bool_env(name: str) -> bool:
@@ -62,15 +60,11 @@ def make_ssl_context() -> ssl.SSLContext:
     - If DG_CAFILE is set → loads additional CA file (PEM) in addition to system bundle.
     """
     if _bool_env("DG_TLS_INSECURE"):
-        # LAST RESORT — use only to confirm TLS interception is the blocker.
         return ssl._create_unverified_context()
 
     cafile = os.getenv("DG_CAFILE", "").strip() or None
-
-    # Try system default first (Render should be fine)
     ctx = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
 
-    # If user provided an extra corporate root, add it
     if cafile:
         try:
             ctx.load_verify_locations(cafile=cafile)
@@ -85,7 +79,7 @@ def make_ssl_context() -> ssl.SSLContext:
 class _DGSession:
     """
     One Deepgram streaming session per AskChip session_id (sid).
-    open → send binary audio → receive JSON → count partials/finals.
+    open → send binary WebM/Opus chunks → receive JSON → count partials/finals.
     """
 
     def __init__(self, sid: str):
@@ -96,10 +90,13 @@ class _DGSession:
         self.send_t: Optional[threading.Thread] = None
         self.recv_t: Optional[threading.Thread] = None
 
-        # counters used by Diagnostics
+        # diagnostics counters
         self.partials = 0
         self.finals = 0
         self.error: Optional[str] = None
+
+        # gate: avoid corrupting stream start if browser emits a tiny sentinel
+        self._first_payload_seen = False
 
     # ---- lifecycle ---------------------------------------------------------
 
@@ -111,29 +108,21 @@ class _DGSession:
 
         headers = [("Authorization", f"Token {DEEPGRAM_API_KEY}")]
         ctx = make_ssl_context()
-
         url = _deepgram_listen_url()
+
         try:
-            # websockets.sync uses 'additional_headers' and 'ssl'
             self.ws = ws_connect(
                 url,
                 additional_headers=headers,
                 ssl=ctx,
                 open_timeout=15,
             )
-            _emit(
-                "asr",
-                label="provider_open",
-                provider="deepgram",
-                session_id=self.sid,
-                url=url,
-            )
+            _emit("asr", label="provider_open", provider="deepgram", session_id=self.sid, url=url)
         except Exception as e:  # connection error
             self.error = f"provider_connect:{type(e).__name__}:{e}"
             _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
             return
 
-        # start IO threads
         self.send_t = threading.Thread(target=self._send_loop, name=f"dg-send-{self.sid}", daemon=True)
         self.recv_t = threading.Thread(target=self._recv_loop, name=f"dg-recv-{self.sid}", daemon=True)
         self.send_t.start()
@@ -150,13 +139,23 @@ class _DGSession:
 
     # ---- public ------------------------------------------------------------
 
-    def enqueue(self, audio_bytes: bytes):
+    def enqueue(self, audio_bytes: bytes, seq: Optional[int] = None):
+        """
+        item from /voice/chunk: raw WebM/Opus bytes and chunk_seq.
+        Drop tiny first-chunk sentinels (e.g., seq==1 & <128 bytes) so the stream
+        starts with the real container header.
+        """
+        if not self._first_payload_seen:
+            if (seq is not None and seq <= 1 and len(audio_bytes) < 128):
+                _emit("asr", label="drop_small_first_chunk", session_id=self.sid, bytes=len(audio_bytes))
+                return
+            self._first_payload_seen = True
+
         if self.stop_flag.is_set():
             return
         try:
             self.q.put_nowait(audio_bytes)
         except Exception:
-            # drop oldest if full to avoid unbounded growth
             try:
                 _ = self.q.get_nowait()
             except Exception:
@@ -263,8 +262,9 @@ class StreamManager:
         data = item.get("data")
         if not data:
             return
+        seq = item.get("chunk_seq")
         sess = self._ensure(sid)
-        sess.enqueue(data)
+        sess.enqueue(data, seq)
 
     def stats(self, sid: str) -> dict:
         with self._lock:
