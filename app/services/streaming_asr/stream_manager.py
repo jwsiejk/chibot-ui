@@ -72,7 +72,7 @@ import threading
 
 
 class _BGLoop(threading.Thread):
-    _inst: Optional["._BGLoop"] = None
+    _inst: Optional["_BGLoop"] = None
     _lock = threading.Lock()
 
     def __init__(self):
@@ -93,7 +93,7 @@ class _BGLoop(threading.Thread):
                 pass
 
     @classmethod
-    def get(cls) -> "._BGLoop":
+    def get(cls) -> "_BGLoop":
         with cls._lock:
             if cls._inst is None:
                 cls._inst = _BGLoop()
@@ -200,7 +200,9 @@ class DeepgramStreamManager:
             self._opened = True
             self.emit("asr", "asr_open", {"session_id": self.session_id})
             # Start receiver
-            self._recv_task = asyncio.create_task(self._recv_loop(), name=f"dg-recv-{self.session_id}")
+            self._recv_task = asyncio.create_task(
+                self._recv_loop(), name=f"dg-recv-{self.session_id}"
+            )
         except Exception as e:
             self.emit(
                 "asr",
@@ -259,18 +261,14 @@ class DeepgramStreamManager:
         """Read Deepgram frames; detect partial/final and notify Admin SSE."""
         try:
             self._any_result = False
-            last_rx = time.time()
             while self.ws and not self._closing:
                 try:
                     msg = await asyncio.wait_for(self.ws.recv(), timeout=self.recv_max_wait_s)
                 except asyncio.TimeoutError:
-                    # No frames for a while — keep loop alive; DG will still time out server-side if idle.
                     continue
 
-                last_rx = time.time()
                 try:
                     if isinstance(msg, (bytes, bytearray)):
-                        # DG uses text JSON — but future-proofs if binary lands.
                         try:
                             msg = msg.decode("utf-8", "ignore")
                         except Exception:
@@ -280,11 +278,9 @@ class DeepgramStreamManager:
                     continue
 
                 # Heuristic: mark partial/final based on DG schema
-                # v1 "Results" → {'channel':{'alternatives':[{'transcript': '...','confidence':...}],'is_final':bool}}
                 is_final = False
                 try:
                     if isinstance(j, dict):
-                        # dg realtime various shapes; be defensive
                         if j.get("type") in ("Results", "results", "transcript"):
                             ch = j.get("channel") or {}
                             if isinstance(ch, dict):
@@ -301,7 +297,6 @@ class DeepgramStreamManager:
                     self.emit("asr", "asr_final", {"session_id": self.session_id})
                     self._final_event.set()
                 else:
-                    # Treat any result as a partial
                     self._any_result = True
                     self.emit("asr", "asr_partial", {"session_id": self.session_id})
 
@@ -355,7 +350,9 @@ class DeepgramStreamManager:
     # -------------------------------------------------------------------------
 
 
-def _get(*, api_key: str, session_id: str, emit: Optional[Callable[..., None]] = None) -> DeepgramStreamManager:
+def _get(
+    *, api_key: str, session_id: str, emit: Optional[Callable[..., None]] = None
+) -> "DeepgramStreamManager":
     mgr = _streams.get(session_id)
     if mgr is None:
         mgr = DeepgramStreamManager(api_key=api_key, session_id=session_id, emit=emit)
