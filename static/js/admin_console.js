@@ -148,7 +148,7 @@ async function postChunk({sid, csrf, userMsgId, seq, blob}){
   fd.append('chunk', blob, 'mic.webm');
   const r = await fetch(`/api/v1/voice/chunk?session_id=${encodeURIComponent(sid)}`, {
     method: 'POST', credentials: 'include',
-    headers: { 'X-CSRF-Token': csrf },
+    headers: { 'X-CSRF-Token': csrf, 'X-User-Msg-Id': userMsgId || 'diag-mic', 'X-Seq': String(seq||0) },
     body: fd
   });
   return r;
@@ -175,138 +175,38 @@ async function postChunk({sid, csrf, userMsgId, seq, blob}){
 
   // Mic slice sender (96ms cadence)
   
+
 function makeMicStreamer({sid, csrf, userMsgId}){
   let stream=null, rec=null, seq=0, stopped=false;
-  const FIRST_MIN = 512; // coalesce first tiny frames
-  let firstBuf = []; let firstBytes = 0;
 
   async function start(){
     try{
-      stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, channelCount:1, sampleRate:48000}});
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio:{
+          echoCancellation:true,
+          noiseSuppression:true,
+          channelCount:1,
+          sampleRate:48000
+        }
+      });
     }catch(_){ throw new Error('mic denied'); }
     rec = new MediaRecorder(stream, { mimeType:'audio/webm;codecs=opus', audioBitsPerSecond:128000 });
     rec.ondataavailable = async (ev)=>{
       if(stopped) return;
       if(ev.data && ev.data.size>0){
-        const blob = ev.data;
-        if(firstBytes < FIRST_MIN){
-          const buf = new Uint8Array(await blob.arrayBuffer());
-          firstBuf.push(buf); firstBytes += buf.byteLength;
-          if(firstBytes < FIRST_MIN) return;
-          const merged = new Uint8Array(firstBytes);
-          let o=0; for(const b of firstBuf){ merged.set(b,o); o+=b.byteLength; }
-          firstBuf=[]; firstBytes=0;
-          await postChunk({sid, csrf, userMsgId, seq: ++seq, blob: new Blob([merged], {type:'application/octet-stream'})});
-        }else{
-          await postChunk({sid, csrf, userMsgId, seq: ++seq, blob});
-        }
+        // Send EACH chunk unmodified so the first one includes the WebM/Opus header.
+        await postChunk({sid, csrf, userMsgId, seq: ++seq, blob: ev.data});
       }
     };
-    rec.start(200);
+    rec.start(96); // ~96ms cadence
   }
   function stop(){
-    stopped = true;
-    try{ if(rec) rec.stop(); }catch(_){}
-    try{ if(stream) stream.getTracks().forEach(t=>t.stop()); }catch(_){}
+    try{ stopped=true; rec && rec.stop(); }catch(_){}
+    try{ stream && stream.getTracks().forEach(t=>t.stop()); }catch(_){}
   }
   return { start, stop };
 }
 
-
-  // ---------- strict server info ----------
-  async function getVendorStatus(){
-    const r = await fetch('/api/v1/admin/diagnostics/vendor_status', { credentials:'include' });
-    if(!r.ok) return { deepgram_enabled: null, elevenlabs_enabled: null };
-    return r.json();
-  }
-  async function getRateLimits(){
-    const r = await fetch('/api/v1/admin/diagnostics/rate_limits', { credentials:'include' });
-    if(!r.ok) return { chat:{}, voice_chunk:{} };
-    return r.json();
-  }
-
-  // ---------- functional checks ----------
-  async function greetIdempotent(sid){
-    const r1=await fetch(`/api/v1/greet?session_id=${encodeURIComponent(sid)}`,{credentials:'include'}); const j1=await r1.json().catch(()=>({}));
-    const r2=await fetch(`/api/v1/greet?session_id=${encodeURIComponent(sid)}`,{credentials:'include'}); const j2=await r2.json().catch(()=>({}));
-    return { ok: j1.turn_id && j2.turn_id && j1.turn_id===j2.turn_id, d:`${j1.turn_id||'?'} == ${j2.turn_id||'?'}` };
-  }
-  async function chatIdempotent(sid){
-    const csrf=await getCSRF();
-    const key=`diag-chat-${Math.random().toString(36).slice(2,8)}`;
-    const hdr={'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':key};
-    const r1=await fetch('/api/v1/chat',{method:'POST',headers:hdr,credentials:'include',body:JSON.stringify({text:'diagnostic ping',session_id:sid})});
-    const j1=await r1.json().catch(()=>({}));
-    const r2=await fetch('/api/v1/chat',{method:'POST',headers:hdr,credentials:'include',body:JSON.stringify({text:'diagnostic ping again',session_id:sid})});
-    const j2=await r2.json().catch(()=>({}));
-    const ok=!!(j1.turn_id && j2.turn_id && j1.turn_id===j2.turn_id && j2.idempotent===true);
-    return { ok, d: ok ? `turn_id=${j1.turn_id}` : `unexpected: ${JSON.stringify(j2).slice(0,140)}` };
-  }
-  async function rateLimitCheckStrict(chatMax){
-    const csrf=await getCSRF();
-    const h1={'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':`rl-1-${Math.random().toString(36).slice(2,6)}`};
-    const h2={'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':`rl-2-${Math.random().toString(36).slice(2,6)}`};
-    await fetch('/api/v1/chat',{method:'POST',headers:h1,credentials:'include',body:JSON.stringify({text:'rl-1'})});
-    const r2=await fetch('/api/v1/chat',{method:'POST',headers:h2,credentials:'include',body:JSON.stringify({text:'rl-2'})});
-    const expect = (chatMax <= 1) ? 429 : 200;
-    return { ok: r2.status === expect, d:`status2=${r2.status} (expected ${expect})` };
-  }
-  async function guard413(sid){
-  const csrf = await getCSRF();
-  const big = new Uint8Array(620*1024 + 1);
-  const fd = new FormData();
-  fd.append('chunk', new Blob([big], {type:'application/octet-stream'}), 'big.bin');
-  const r = await fetch(`/api/v1/voice/chunk?session_id=${encodeURIComponent(sid)}`, {
-    method:'POST', credentials:'include', headers:{'X-CSRF-Token': csrf}, body: fd
-  });
-  let txt=''; try{ txt=await r.text(); }catch(_){}
-  return { ok: r.status===413, d:`status=${r.status} ${txt.slice(0,180)}` };
-}
-  async function adminSSE(){
-    return new Promise(res=>{
-      let got=false;
-      try{
-        const es=new EventSource('/api/v1/admin/logs');
-        setTimeout(()=>{ try{es.close();}catch(_){ } res({ok:got,d:got?'ok':'no events in 1.5s'}); },1500);
-        es.onmessage=()=>{ got=true; };
-        es.onerror=()=>{};
-      }catch(_){ res({ok:false,d:'EventSource error'}); }
-    });
-  }
-  function attachWSWatch(ws, diagPrefix){
-    const counts = { partials:0, finals:0, asr_error:false, last_error:'' };
-    const detach = attachWSListener(ws, (fr)=>{
-      if(!fr || typeof fr!=='object') return;
-      if(fr.type==='user_partial'){
-        if(!fr.user_msg_id || String(fr.user_msg_id).startsWith(diagPrefix)) counts.partials++;
-      } else if(fr.type==='user_final'){
-        if(!fr.user_msg_id || String(fr.user_msg_id).startsWith(diagPrefix)) counts.finals++;
-      } else if(fr.type==='asr_error'){
-        counts.asr_error = true;
-        if(fr.error) counts.last_error = String(fr.error);
-      }
-    });
-    return { counts, detach };
-  }
-  async function ttsCancelSmoke({ws, sid, csrf, micMode}){
-    if(!micMode || !ws) return { ok:true, d:'skipped (mic mode off)' };
-    const hdr={'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':`cancel-${Math.random().toString(36).slice(2,6)}`};
-    const body=JSON.stringify({ text:'Please say a long response so I can interrupt you.', session_id:sid });
-    let turnId=null, audioChunks=0, afterInterrupt=0;
-    const unlisten = attachWSListener(ws, fr=>{
-      if(fr.type==='assistant_chunk' && fr.turn_id && !turnId) turnId=fr.turn_id;
-      if(fr.type==='audio_chunk' && fr.turn_id===turnId){
-        audioChunks++; if(afterInterrupt>0) afterInterrupt++;
-      }
-      if(fr.type==='assistant_end' && fr.turn_id===turnId && afterInterrupt>0){ afterInterrupt+=1000; }
-    });
-    try{ await fetch('/api/v1/chat',{method:'POST',headers:hdr,credentials:'include',body}); }catch(_){ unlisten(); return { ok:false, d:'chat failed' }; }
-    await sleep(500);
-    const streamer = makeMicStreamer({sid, csrf, userMsgId:`barge-${Math.random().toString(36).slice(2,6)}`});
-    try{ await streamer.start(); }catch(_){ unlisten(); return { ok:false, d:'mic denied' }; }
-await sleep(800); streamer.stop(); {   const _csrf2 = await getCSRF();   await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {     method: 'POST',     credentials: 'include',     headers: { 'X-CSRF-Token': _csrf2 }   }); } await sleep(1200); unlisten();
-    const ok = (audioChunks>0) && (afterInterrupt<2);
-    return { ok, d: audioChunks===0 ? 'no audio observed' : (ok?'ok':'late audio after cancel') };
   }
 
   // ---------- main runner ----------
