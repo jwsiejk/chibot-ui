@@ -76,6 +76,10 @@ export async function evaluateAuth() {
     const me = await getJSON('/api/v1/auth/me');
     const loginModal   = $('#loginModal');
     const profileModal = $('#profileModal');
+    // Always mirror email into the profile form so it never appears blank
+    const emailField = document.getElementById('prof_email');
+    if (emailField && me.email) { try { emailField.value = me.email; } catch(e){} }
+
 
     if (!me.authenticated) {
       show(loginModal, true);

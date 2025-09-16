@@ -118,8 +118,10 @@ class _DGSession:
                 open_timeout=15,
             )
             _emit("asr", label="provider_open", provider="deepgram", session_id=self.sid, url=url)
+            _emit("asr", label="asr_open", session_id=self.sid)
         except Exception as e:  # connection error
             self.error = f"provider_connect:{type(e).__name__}:{e}"
+            _emit("asr", label="provider_connect", session_id=self.sid, error=self.error)
             _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
             return
 

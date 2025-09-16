@@ -1,48 +1,58 @@
-
-from flask import Blueprint, request, jsonify, session, abort
-from ..security_state import set_user, get_user, set_profile, get_profile
+from __future__ import annotations
+from flask import Blueprint, request, jsonify, session
+from ..security_state import set_user, set_profile, get_profile
 from ..middleware.csrf import ensure_csrf_headers
-from ..db import persist_enabled
 
 bp = Blueprint("auth_v1", __name__, url_prefix="/api/v1/auth")
 
-def _normalize_email(e):
+def _normalize_email(e: str | None) -> str:
     return (e or "").strip().lower()
 
 @bp.post("/login")
 def login():
     data = request.get_json(silent=True) or {}
-    email = _normalize_email(data.get("email") or "")
+    email = _normalize_email(data.get("email"))
     if not email:
-        resp = jsonify({"ok": False, "error": "email_required"}), 400
-    # Persist user in session
-    set_user(email)
+        return jsonify({"ok": False, "error": "email_required"}), 400
+
+    # Persist user in session (authoritative) and global helper (best-effort)
     session["user"] = {"email": email}
+    try:
+        set_user(email)
+    except Exception:
+        pass
 
-    # If a profile payload is provided, accept it; otherwise, try to load from Neon
-    provided_profile = data.get("profile") or {}
-    if provided_profile:
-        set_profile(provided_profile)
-        session["profile_complete"] = bool(provided_profile.get("completed") or (provided_profile.get("name") and provided_profile.get("title")))
-        prof = provided_profile
-    else:
-        # Load existing profile from Neon (or in-memory fallback) and compute completeness
-        try:
-            from .profile import _load_profile
-            prof = _load_profile(email) or {}
-        except Exception:
-            prof = {}
+    # Try to load existing profile to set completeness now (non-fatal)
+    prof = {}
+    try:
+        from .profile import _load_profile
+        prof = _load_profile(email) or {}
+    except Exception:
+        # If DB is temporarily unavailable, keep going — UI will retry.
+        prof = get_profile() or {}
+    complete = bool((prof.get("name") or "").strip() and (prof.get("title") or "").strip())
+
+    # Mirror profile + completeness into helpers/session
+    try:
         set_profile(prof or {})
-        session["profile_complete"] = bool((prof or {}).get("profile_complete") or ((prof or {}).get("name") and (prof or {}).get("title")))
+        session["profile_complete"] = complete
+    except Exception:
+        pass
 
-    return jsonify({"ok": True, "email": email, "profile_complete": bool(session.get("profile_complete")), "profile": prof})
+    resp = jsonify({"ok": True, "email": email, "profile_complete": bool(session.get("profile_complete")), "profile": prof})
     return ensure_csrf_headers(resp), 200
 
 @bp.post("/logout")
 def logout():
-    session.clear()
-    set_user(None)
-    set_profile({})
+    try:
+        session.clear()
+    except Exception:
+        pass
+    try:
+        set_user(None)  # type: ignore[arg-type]
+        set_profile({})
+    except Exception:
+        pass
     resp = jsonify({"ok": True})
     return ensure_csrf_headers(resp), 200
 
@@ -51,33 +61,40 @@ def me():
     email = (session.get("user") or {}).get("email")
     authenticated = bool(email)
     prof = {}
-    profile_complete = False
+    complete = False
     if authenticated:
+        # Load from DB; if it fails, fall back to last-known profile in memory/session.
         try:
             from .profile import _load_profile
             prof = _load_profile(email) or {}
-            profile_complete = bool(prof.get("profile_complete") or (prof.get("name") and prof.get("title")))
-            from ..security_state import set_profile
-            set_profile(prof)
-            session['profile_complete'] = profile_complete
         except Exception:
-            prof = {}
-            profile_complete = bool(session.get('profile_complete', False))
+            prof = get_profile() or {}
+        complete = bool((prof.get("name") or "").strip() and (prof.get("title") or "").strip())
+        try:
+            set_profile(prof)
+            session["profile_complete"] = complete
+        except Exception:
+            pass
+
     resp = jsonify({
         "ok": True,
         "authenticated": authenticated,
         "email": email,
-        "profile_complete": profile_complete,
-        "profile": prof
+        "profile_complete": complete if authenticated else False,
+        "profile": prof if authenticated else {}
     })
     return ensure_csrf_headers(resp), 200
 
+# Legacy compatibility: some clients post here instead of /api/v1/profile
 @bp.post("/profile/save")
 def profile_save():
     data = request.get_json(silent=True) or {}
-    # basic shape: {name, company, role, ... , completed: true}
-    set_profile(data)
-    if data.get("completed"):
+    # Accept minimal shape and mark completion flag
+    try:
+        set_profile(data or {})
+    except Exception:
+        pass
+    if bool(data.get("completed")):
         session["profile_complete"] = True
     return jsonify({"ok": True, "profile_complete": bool(session.get("profile_complete"))}), 200
 
@@ -85,7 +102,6 @@ def profile_save():
 def csrf_get_alias():
     # Provide CSRF token at legacy path expected by some frontends: /api/v1/auth/csrf
     import secrets
-    from flask import jsonify, session
     token = session.get("_csrf_token") or secrets.token_hex(16)
     session["_csrf_token"] = token
     resp = jsonify({"ok": True, "csrf": token})
