@@ -1,6 +1,7 @@
 # app/api_v1/voice_stream.py
 from __future__ import annotations
 from flask import Blueprint, request, jsonify
+import asyncio
 import time
 
 from ..services.streaming_asr.stream_manager import get_manager
@@ -50,4 +51,33 @@ def voice_stt_stream():
 
     mgr = get_manager()
     mgr.enqueue(sess, data)
+    return jsonify(ok=True), 200
+
+
+@bp.post("/end")
+def voice_end():
+    """Gracefully end the Deepgram ASR stream for a session (waits for final)."""
+    sess = request.args.get("session_id") or \
+           (request.get_json(silent=True) or {}).get("session_id") or \
+           request.form.get("session_id") or \
+           request.headers.get("X-Session-Id")
+    if not sess:
+        return jsonify(error="missing session_id"), 400
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Schedule and wait in running loop (ASGI/Werkzeug can be running)
+            fut = asyncio.run_coroutine_threadsafe(
+                __import__("app").services.streaming_asr.stream_manager.asr_end(sess, wait_for_final=True),
+                loop
+            )
+            fut.result(timeout=10)
+        else:
+            loop.run_until_complete(__import__("app").services.streaming_asr.stream_manager.asr_end(sess, wait_for_final=True))
+    except Exception:
+        # As a fallback, try a direct asyncio.run (new loop)
+        try:
+            asyncio.run(__import__("app").services.streaming_asr.stream_manager.asr_end(sess, wait_for_final=True))
+        except Exception:
+            pass
     return jsonify(ok=True), 200
