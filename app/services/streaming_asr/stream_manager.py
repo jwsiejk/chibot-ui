@@ -346,9 +346,11 @@ async def asr_end(session_id: str, wait_for_final: bool = True):
 
 import os as _os
 
+
 class _CompatManager:
     """
-    Back-compat manager exposing .enqueue(session_id, data) for legacy endpoints.
+    Back-compat manager exposing .enqueue(session_id, item) for legacy endpoints.
+    Accepts either raw bytes or a dict like {'data': bytes, 'chunk_seq': int, ...}.
     Lazily opens the Deepgram stream on first enqueue and forwards chunks.
     """
     def __init__(self):
@@ -360,9 +362,13 @@ class _CompatManager:
             raise RuntimeError("DEEPGRAM_API_KEY not set")
         return key
 
-    def _emit(self, *a, **k):
-        # Optional: plumb Admin SSE emitter here if needed
-        return
+    def _emit(self, kind: str, label: str, **extra):
+        try:
+            from app.admin_log import emit as admin_emit
+            admin_emit(kind, label=label, **(extra or {}))
+        except Exception:
+            # Do not let logging break streaming
+            pass
 
     async def _ensure_open(self, session_id: str):
         if session_id in self._opened:
@@ -370,8 +376,22 @@ class _CompatManager:
         await asr_open(session_id=session_id, api_key=self._api_key(), emit=self._emit)
         self._opened.add(session_id)
 
-    def enqueue(self, session_id: str, data: bytes):
-        """Synchronous-looking wrapper used by Flask views; schedules async send."""
+    def enqueue(self, session_id: str, item):
+        """Accepts bytes or a legacy dict with {'data': bytes, 'chunk_seq': int, ...}."""
+        seq = None
+        data = b""
+        if isinstance(item, (bytes, bytearray, memoryview)):
+            data = bytes(item)
+        elif isinstance(item, dict):
+            data = item.get("data") or item.get("bytes") or b""
+            try:
+                seq = int(item.get("chunk_seq")) if item.get("chunk_seq") is not None else None
+            except Exception:
+                seq = None
+        else:
+            # Unknown type — ignore safely
+            return
+
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
@@ -379,7 +399,7 @@ class _CompatManager:
 
         async def _send():
             await self._ensure_open(session_id)
-            await asr_send_chunk(session_id, data, seq=None)
+            await asr_send_chunk(session_id, data, seq=seq)
 
         if loop and loop.is_running():
             fut = asyncio.run_coroutine_threadsafe(_send(), loop)
@@ -388,7 +408,7 @@ class _CompatManager:
             asyncio.run(_send())
 
     def end(self, session_id: str, wait_for_final: bool = True):
-        """Convenience wrapper for legacy stop handlers."""
+        """Synchronous wrapper to end the stream gracefully (used by /voice/end)."""
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
@@ -403,8 +423,6 @@ class _CompatManager:
             fut.result(timeout=10)
         else:
             asyncio.run(_end())
-
-
 _COMPAT_SINGLETON = _CompatManager()
 
 def get_manager():

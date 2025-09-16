@@ -190,7 +190,7 @@ function makeMicStreamer({sid, csrf, userMsgId}){
   }
   async function guard413(sid){
   const csrf = await getCSRF();
-  const big = new Uint8Array(270000);
+  const big = new Uint8Array(620*1024 + 1);
   const fd = new FormData();
   fd.append('chunk', new Blob([big], {type:'application/octet-stream'}), 'big.bin');
   const r = await fetch(`/api/v1/voice/chunk?session_id=${encodeURIComponent(sid)}`, {
@@ -241,7 +241,7 @@ function makeMicStreamer({sid, csrf, userMsgId}){
     await sleep(500);
     const streamer = makeMicStreamer({sid, csrf, userMsgId:`barge-${Math.random().toString(36).slice(2,6)}`});
     try{ await streamer.start(); }catch(_){ unlisten(); return { ok:false, d:'mic denied' }; }
-    await sleep(800); streamer.stop(); { const _csrf = await getCSRF(); await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, { method:'POST', credentials:'include', headers:{'X-CSRF-Token': _csrf} }); } await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {method:'POST', credentials:'include'}); await sleep(1200); unlisten();
+    await sleep(800); streamer.stop(); { const _csrf = await getCSRF(); await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, { method:'POST', credentials:'include', headers:{'X-CSRF-Token': _csrf} }); } await fetch(`/api/v1/voice/end?session_id=${ headers: { 'X-CSRF-Token': await getCSRF() }, encodeURIComponent(sid)}`, {method:'POST', credentials:'include'}); await sleep(1200); unlisten();
     const ok = (audioChunks>0) && (afterInterrupt<2);
     return { ok, d: audioChunks===0 ? 'no audio observed' : (ok?'ok':'late audio after cancel') };
   }

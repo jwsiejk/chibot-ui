@@ -14,9 +14,10 @@ def csrf_before_request():
     m = (request.method or "GET").upper()
     if m in ("GET", "HEAD", "OPTIONS"):
         return
-    sent = request.headers.get(CSRF_HEADER, "")
+    sent = request.headers.get(CSRF_HEADER, "") or request.headers.get("X-CSRFToken", "")
     want = session.get(CSRF_SESSION_KEY, "")
-    if not sent or not want or sent != want:
+    cookie_tok = request.cookies.get("XSRF-TOKEN", "")
+    if not want or not (sent == want or cookie_tok == want):
         resp = jsonify({"ok": False, "error": "csrf_missing_or_invalid"})
         resp.status_code = 403
         return resp
