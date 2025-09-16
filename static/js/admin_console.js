@@ -75,7 +75,28 @@
     });
   }
 
-  // ---------- controls/table ----------
+  
+  // ---------- admin fetch helpers ----------
+  async function _fetchJSON(url){
+    const r = await fetch(url, { credentials: 'include' });
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    try{ return await r.json(); }catch(_){ return {}; }
+  }
+  async function getVendorStatus(){
+    const cand = ['/api/v1/admin/vendor_status', '/api/v1/admin/diagnostics/vendor_status', '/admin/diagnostics/vendor_status'];
+    for(const u of cand){
+      try{ const j = await _fetchJSON(u); if(j) return j; }catch(_){}
+    }
+    return {};
+  }
+  async function getRateLimits(){
+    const cand = ['/api/v1/admin/rate_limits', '/api/v1/admin/limits', '/api/v1/admin/config/rate_limits'];
+    for(const u of cand){
+      try{ const j = await _fetchJSON(u); if(j && (j.chat || j.rate_limits || j.limits)) return j; }catch(_){}
+    }
+    return {};
+  }
+// ---------- controls/table ----------
   function ensureControls(){
     const root = rootEl();
     let bar = $('#admin-diagnostics-controls', root);
