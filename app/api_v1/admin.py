@@ -6,7 +6,7 @@ import sys
 import time
 import platform
 from collections import deque
-from flask import Blueprint, request, session, abort, render_template, Response, jsonify
+from flask import Blueprint, request, session, abort, Response, jsonify
 
 from ..utils.admin import is_admin_email
 from ..security_state import get_user
@@ -140,7 +140,7 @@ def runtime():
 
     return jsonify({"ok": True, "runtime": {"keys": keys, "providers": providers, "versions": versions}}), 200
 
-# ----------------- Admin config API -----------------
+# ----------------- Shared vendor truth -----------------
 
 def _vendor_status_payload() -> dict:
     """Single source of truth for vendor key presence."""
@@ -155,11 +155,19 @@ def _vendor_status_payload() -> dict:
         "elevenlabs_voice": eleven_voice_ok,
     }
 
+def _no_store(resp: Response) -> Response:
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+# ----------------- Admin config API -----------------
+
 @bp.get("/config")
 def get_settings_api():
     _require_admin()
-    # Keep settings from cfg, but compute vendors here so Diagnostics and /config agree
-    return jsonify({"ok": True, "settings": cfg.get_settings(), "vendors": _vendor_status_payload()}), 200
+    payload = {"ok": True, "settings": cfg.get_settings(), "vendors": _vendor_status_payload()}
+    return _no_store(jsonify(payload)), 200
 
 @bp.post("/config")
 def post_settings_api():
@@ -204,16 +212,11 @@ def diag_stream():
     return Response(gen(), mimetype="text/event-stream")
 
 # ----------------- Admin Diagnostics (GET+POST) -----------------
-# These match what the Admin UI calls; both return the same vendor truth.
 
 @bp.route("/diagnostics/vendor_status", methods=["GET", "POST"])
 def _diag_vendor_status():
     _require_admin()
-    payload = _vendor_status_payload()
-    # explicit no-store to avoid any caching weirdness
-    resp = jsonify(payload)
-    resp.headers["Cache-Control"] = "no-store"
-    return resp, 200
+    return _no_store(jsonify(_vendor_status_payload())), 200
 
 @bp.route("/diagnostics/streaming_status", methods=["GET", "POST"])
 def _diag_streaming_status():
@@ -226,31 +229,27 @@ def _diag_streaming_status():
 
     if sid:
         s = mgr.stats(sid)
-        resp = jsonify(
+        return _no_store(jsonify(
             ok=True,
             sid=sid,
             partials=int(s.get("partials", 0)),
             finals=int(s.get("finals", 0)),
             asr_error=bool(s.get("err")),
             err=s.get("err"),
-        )
-        resp.headers["Cache-Control"] = "no-store"
-        return resp, 200
+        )), 200
 
     if hasattr(mgr, "stats_all"):
         agg = mgr.stats_all()  # type: ignore[attr-defined]
-        resp = jsonify(
+        return _no_store(jsonify(
             ok=True,
             partials=int(agg.get("partials", 0)),
             finals=int(agg.get("finals", 0)),
             asr_error=agg.get("err_count", 0) > 0,
             err_count=int(agg.get("err_count", 0)),
             sessions=agg.get("sessions", {}),
-        )
-        resp.headers["Cache-Control"] = "no-store"
-        return resp, 200
+        )), 200
 
-    return jsonify(ok=True, partials=0, finals=0, asr_error=False), 200
+    return _no_store(jsonify(ok=True, partials=0, finals=0, asr_error=False)), 200
 
 @bp.route("/diagnostics/rate_limits", methods=["GET", "POST"])
 def _diag_rate_limits():
