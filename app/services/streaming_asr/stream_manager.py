@@ -114,6 +114,7 @@ def _submit_bg(coro, *, timeout: Optional[float] = None):
 # Deepgram stream manager
 
 _streams: Dict[str, "DeepgramStreamManager"] = {}
+_streams_lock = threading.Lock()  # ensure single manager per session_id
 
 
 class DeepgramStreamManager:
@@ -174,6 +175,8 @@ class DeepgramStreamManager:
     # -- lifecycle -------------------------------------------------------------
 
     async def open(self):
+        if self._opened:
+            return
         headers = [("Authorization", f"Token {self.api_key}")]
         self.emit(
             "asr",
@@ -353,11 +356,12 @@ class DeepgramStreamManager:
 def _get(
     *, api_key: str, session_id: str, emit: Optional[Callable[..., None]] = None
 ) -> "DeepgramStreamManager":
-    mgr = _streams.get(session_id)
-    if mgr is None:
-        mgr = DeepgramStreamManager(api_key=api_key, session_id=session_id, emit=emit)
-        _streams[session_id] = mgr
-    return mgr
+    with _streams_lock:
+        mgr = _streams.get(session_id)
+        if mgr is None:
+            mgr = DeepgramStreamManager(api_key=api_key, session_id=session_id, emit=emit)
+            _streams[session_id] = mgr
+        return mgr
 
 
 # Public async helpers used by the compat manager
@@ -367,20 +371,23 @@ async def asr_open(session_id: str, api_key: str, emit: Optional[Callable[..., N
 
 
 async def asr_send_chunk(session_id: str, data: bytes, seq: Optional[int] = None):
-    mgr = _streams.get(session_id)
+    with _streams_lock:
+        mgr = _streams.get(session_id)
     if mgr is None:
         raise RuntimeError("asr_send_chunk called before asr_open")
     await mgr.send_chunk(data, seq=seq)
 
 
 async def asr_end(session_id: str, wait_for_final: bool = True):
-    mgr = _streams.get(session_id)
+    with _streams_lock:
+        mgr = _streams.get(session_id)
     if mgr is None:
         return
     try:
         await mgr.end(wait_for_final=wait_for_final)
     finally:
-        _streams.pop(session_id, None)
+        with _streams_lock:
+            _streams.pop(session_id, None)
 
 
 # -----------------------------------------------------------------------------
@@ -391,9 +398,12 @@ class _CompatManager:
     Back-compat manager exposing .enqueue(session_id, item) for legacy endpoints.
     Accepts either raw bytes or a dict {'data': bytes, 'chunk_seq': int, 'user_msg_id': str}.
     Uses a SINGLE background asyncio loop so futures are always bound to the same loop.
+    Also serializes open() so only ONE Deepgram WS is created per session_id.
     """
     def __init__(self):
         self._opened = set()
+        self._opening = set()
+        self._lock = threading.Lock()
 
     def _api_key(self) -> str:
         key = _os.getenv("DEEPGRAM_API_KEY", "").strip()
@@ -409,10 +419,20 @@ class _CompatManager:
             pass
 
     def _ensure_open_sync(self, session_id: str):
-        if session_id in self._opened:
-            return
-        _submit_bg(asr_open(session_id=session_id, api_key=self._api_key(), emit=self._emit), timeout=10)
-        self._opened.add(session_id)
+        with self._lock:
+            if session_id in self._opened or session_id in self._opening:
+                return
+            # mark as opening under lock so parallel threads don't double-open
+            self._opening.add(session_id)
+        ok = False
+        try:
+            _submit_bg(asr_open(session_id=session_id, api_key=self._api_key(), emit=self._emit), timeout=10)
+            ok = True
+        finally:
+            with self._lock:
+                self._opening.discard(session_id)
+                if ok:
+                    self._opened.add(session_id)
 
     def enqueue(self, session_id: str, item):
         # Normalize inputs
@@ -440,7 +460,8 @@ class _CompatManager:
         try:
             _submit_bg(asr_end(session_id, wait_for_final=wait_for_final), timeout=12)
         finally:
-            self._opened.discard(session_id)
+            with self._lock:
+                self._opened.discard(session_id)
 
 
 _COMPAT_SINGLETON = _CompatManager()
