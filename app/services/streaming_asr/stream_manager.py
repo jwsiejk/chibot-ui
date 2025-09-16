@@ -24,7 +24,8 @@ except Exception:  # pragma: no cover
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 DG_BASE = os.getenv("DEEPGRAM_WSS_URL", "wss://api.deepgram.com/v1/listen")
 
-# Defaults for browser mic: WebM/Opus 48 kHz mono.
+# Defaults for browser mic: WebM/Opus 48 kHz mono (your app path).
+# If you ever test raw PCM to match the local script, you'd set encoding=linear16 & sample_rate=16000 here.
 DG_PARAMS_DEFAULT = {
     "encoding": "opus",
     "sample_rate": 48000,
@@ -47,6 +48,38 @@ if _opt_lang:
 
 def _deepgram_listen_url() -> str:
     return f"{DG_BASE}?{urlencode(DG_PARAMS_DEFAULT)}"
+
+
+def _bool_env(name: str) -> bool:
+    v = os.getenv(name)
+    return bool(v) and str(v).strip().lower() not in ("0", "false", "no")
+
+
+def make_ssl_context() -> ssl.SSLContext:
+    """
+    Secure by default.
+    - If DG_TLS_INSECURE=1 → disables verification (diagnostic only).
+    - If DG_CAFILE is set → loads additional CA file (PEM) in addition to system bundle.
+    """
+    if _bool_env("DG_TLS_INSECURE"):
+        # LAST RESORT — use only to confirm TLS interception is the blocker.
+        return ssl._create_unverified_context()
+
+    cafile = os.getenv("DG_CAFILE", "").strip() or None
+
+    # Try system default first (Render should be fine)
+    ctx = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
+
+    # If user provided an extra corporate root, add it
+    if cafile:
+        try:
+            ctx.load_verify_locations(cafile=cafile)
+        except Exception as e:
+            _emit("asr", label="tls_warn", error=f"load_cafile_failed:{e}")
+
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    return ctx
 
 
 class _DGSession:
@@ -77,17 +110,25 @@ class _DGSession:
             return
 
         headers = [("Authorization", f"Token {DEEPGRAM_API_KEY}")]
-        ctx = ssl.create_default_context()
+        ctx = make_ssl_context()
+
+        url = _deepgram_listen_url()
         try:
             # websockets.sync uses 'additional_headers' and 'ssl'
             self.ws = ws_connect(
-                _deepgram_listen_url(),
+                url,
                 additional_headers=headers,
                 ssl=ctx,
-                open_timeout=10,
+                open_timeout=15,
             )
-            _emit("asr", label="provider_open", provider="deepgram", session_id=self.sid)
-        except Exception as e:
+            _emit(
+                "asr",
+                label="provider_open",
+                provider="deepgram",
+                session_id=self.sid,
+                url=url,
+            )
+        except Exception as e:  # connection error
             self.error = f"provider_connect:{type(e).__name__}:{e}"
             _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
             return
@@ -157,7 +198,15 @@ class _DGSession:
             while not self.stop_flag.is_set() and self.ws is not None:
                 try:
                     msg = self.ws.recv()
-                except ws_exceptions.ConnectionClosed:
+                except ws_exceptions.ConnectionClosed as e:
+                    code = getattr(e, "code", None)
+                    reason = getattr(e, "reason", "")
+                    # Normal shutdown (1000/1001) → just note and exit
+                    if code in (1000, 1001):
+                        _emit("asr", label="provider_closed", session_id=self.sid, code=code, reason=reason)
+                    else:
+                        self.error = f"recv_closed:{code}:{reason}"
+                        _emit("asr", label="asr_error", session_id=self.sid, error=self.error)
                     self.stop_flag.set()
                     break
                 except Exception as e:
