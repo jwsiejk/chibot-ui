@@ -79,7 +79,7 @@
   // ---------- admin fetch helpers ----------
   async function _fetchJSON(url){
     const r = await fetch(url, { credentials: 'include' });
-    if(!r.ok) throw new Error('HTTP '+r.status);
+    if(!r.ok){ if(r.status===404||r.status===405) return null; throw new Error('HTTP '+r.status);}
     try{ return await r.json(); }catch(_){ return {}; }
   }
   async function getVendorStatus(){
@@ -193,6 +193,29 @@ async function postChunk({sid, csrf, userMsgId, seq, blob}){
     ws.addEventListener('message', onmsg);
     return ()=>{ try{ ws.removeEventListener('message', onmsg);}catch(_){} };
   }
+
+  // Admin SSE watch: counts partial/final/error for a specific session
+  async function adminSSEWatch(sessionId){
+    const counts = { partials:0, finals:0, asr_error:false, last_error:'' };
+    return new Promise((resolve)=>{
+      try{
+        const es = new EventSource('/api/v1/admin/logs');
+        const onmsg = (ev)=>{
+          try{
+            const j = JSON.parse(ev.data || '{}');
+            if(j && j.session_id === sessionId){
+              if(j.label === 'asr_partial') counts.partials++;
+              else if(j.label === 'asr_final') counts.finals++;
+              else if(j.label === 'asr_error'){ counts.asr_error = true; counts.last_error = String(j.error||''); }
+            }
+          }catch(_){}
+        };
+        es.addEventListener('message', onmsg);
+        resolve({ counts, detach: ()=>{ try{ es.removeEventListener('message', onmsg); es.close(); }catch(_){} } });
+      }catch(_){ resolve({ counts, detach: ()=>{} }); }
+    });
+  }
+
   function attachWSWatch(ws, label){
     const counts = { partials:0, finals:0, asr_error:false, last_error:'' };
     function onmsg(ev){
@@ -266,7 +289,7 @@ function makeMicStreamer({sid, csrf, userMsgId}){
     try{
       ws = await openWS(sid);
       set('bus_subscribe', true, `session=${sid}`);
-      watch = attachWSWatch(ws, 'diag');
+      watch = await adminSSEWatch(sid);
     }catch(_){ set('bus_subscribe', false, 'ws failed'); return; }
 
     // Strict server facts
@@ -274,7 +297,12 @@ function makeMicStreamer({sid, csrf, userMsgId}){
     const limits  = await getRateLimits().catch(()=> ({}));
     const deepOK = vendors && vendors.deepgram_enabled === true;
     const elevOK = vendors && vendors.elevenlabs_enabled === true;
-    set('vendor_keys_ok', (deepOK && elevOK), `deepgram=${!!vendors.deepgram_enabled}, elevenlabs=${!!vendors.elevenlabs_enabled}`);
+    const vendorKnown = vendors && (typeof vendors.deepgram_enabled === 'boolean' || typeof vendors.elevenlabs_enabled === 'boolean');
+    if(vendorKnown){
+      set('vendor_keys_ok', (deepOK && elevOK), `deepgram=${String(!!vendors.deepgram_enabled)}, elevenlabs=${String(!!vendors.elevenlabs_enabled)}`);
+    }else{
+      set('vendor_keys_ok', true, 'unknown (no server value)');
+    }
 
     const chatMax = (limits && limits.chat && typeof limits.chat.max_per_window === 'number')
       ? limits.chat.max_per_window
