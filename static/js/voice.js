@@ -9,6 +9,9 @@ let inflight = false;
 let chunkSeq = 0;
 let currentUserMsgId = null;
 
+// NEW: drop the very first tiny blob some browsers emit
+let firstBlobSeen = false;
+
 export async function initMic(){
   if (currentStream && currentStream.active) return currentStream;
   currentStream = await navigator.mediaDevices.getUserMedia({
@@ -39,7 +42,7 @@ async function sendLoop(){
       const bytes = queue.shift();
       const payload = {
         sid: getSID(),
-        user_msg_id: currentUserMsgId,             // non-null (see armVAD)
+        user_msg_id: currentUserMsgId,
         chunk_seq: chunkSeq++,
         audio_b64: b64(bytes)
       };
@@ -66,9 +69,10 @@ export async function armVAD(stream, opts={}){
   if (rec && rec.state !== 'inactive') return;    // already running
 
   chunkSeq = 0;
-  // Generate a stable id for this user utterance if caller didn't pass one
   currentUserMsgId = opts.userMsgId || (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random()));
+  firstBlobSeen = false;
 
+  // Prefer containerized WebM/Opus (Deepgram reads header automatically)
   const mimeOptions = [
     'audio/webm;codecs=opus',
     'audio/webm;codecs=opus,pcm',
@@ -88,6 +92,13 @@ export async function armVAD(stream, opts={}){
   rec.ondataavailable = async (ev) => {
     try{
       if (!ev.data || ev.data.size === 0) return;
+
+      // Skip the very first tiny blob so DG sees a valid container header first
+      if (!firstBlobSeen) {
+        firstBlobSeen = true;
+        if (ev.data.size < 128) return;
+      }
+
       const buf = new Uint8Array(await ev.data.arrayBuffer());
       queue.push(buf);
       if (!inflight) sendLoop();
@@ -107,6 +118,7 @@ export function disarmVAD(){
   queue = [];
   chunkSeq = 0;
   currentUserMsgId = null;
+  firstBlobSeen = false;
 }
 
 // kept for API parity; not exposed to UI in this build
