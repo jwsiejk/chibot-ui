@@ -12,6 +12,69 @@
   function create(tag, attrs){ const el=document.createElement(tag); if(attrs) Object.assign(el, attrs); return el; }
   const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
 
+  
+  // ---------- mic prompt helpers ----------
+  function showMicPromptUI({title="Press Continue to record audio", state="idle"}={}){
+    const root = rootEl();
+    let wrap = document.querySelector('#mic-prompt-overlay');
+    if(!wrap){
+      wrap = document.createElement('div');
+      wrap.id = 'mic-prompt-overlay';
+      wrap.style.position='fixed';
+      wrap.style.inset='0';
+      wrap.style.background='rgba(0,0,0,.55)';
+      wrap.style.zIndex='2000';
+      wrap.style.display='flex';
+      wrap.style.alignItems='center';
+      wrap.style.justifyContent='center';
+      const card = document.createElement('div');
+      card.className='sheet';
+      card.style.background='#141824';
+      card.style.border='1px solid #202533';
+      card.style.borderRadius='12px';
+      card.style.padding='16px';
+      card.style.minWidth='360px';
+      card.style.textAlign='center';
+      card.innerHTML = `
+        <div id="mic-prompt-title" style="font-weight:600;margin-bottom:8px;">${title}</div>
+        <div id="mic-prompt-status" style="opacity:.9;margin-bottom:12px;">${state==='idle'?'Ready':''}</div>
+        <div style="display:flex;gap:8px;justify-content:center;">
+          <button id="mic-prompt-continue">Continue</button>
+          <button id="mic-prompt-cancel">Cancel</button>
+        </div>`;
+      wrap.appendChild(card);
+      root.appendChild(wrap);
+    }else{
+      const t = wrap.querySelector('#mic-prompt-title'); if(t) t.textContent = title;
+      const st = wrap.querySelector('#mic-prompt-status'); if(st) st.textContent = (state==='idle'?'Ready':state);
+      wrap.style.display='flex';
+    }
+    return wrap;
+  }
+  function hideMicPromptUI(){
+    const wrap = document.querySelector('#mic-prompt-overlay');
+    if(wrap){ wrap.style.display='none'; }
+  }
+  async function promptForRecording({onStart, onStop}={}){
+    const ui = showMicPromptUI({title:'Press Continue to record audio', state:'idle'});
+    const btnGo = ui.querySelector('#mic-prompt-continue');
+    const btnCancel = ui.querySelector('#mic-prompt-cancel');
+    return new Promise((resolve)=>{
+      function cleanup(){ try{btnGo.onclick=null; btnCancel.onclick=null;}catch(_){ } }
+      btnCancel.onclick = ()=>{ cleanup(); hideMicPromptUI(); resolve({proceed:false}); };
+      btnGo.onclick = async ()=>{
+        cleanup();
+        const status = ui.querySelector('#mic-prompt-status');
+        if(status) status.textContent = 'Recording…';
+        try{ onStart && await onStart(); }catch(_){}
+        await new Promise(r=>setTimeout(r, 5000)); // 5s window
+        try{ onStop && await onStop(); }catch(_){}
+        if(status) status.textContent = 'Audio captured (sending)…';
+        setTimeout(()=>{ hideMicPromptUI(); resolve({proceed:true}); }, 400);
+      };
+    });
+  }
+
   // ---------- controls/table ----------
   function ensureControls(){
     const root = rootEl();
@@ -304,10 +367,34 @@ await sleep(800); streamer.stop(); {   const _csrf2 = await getCSRF();   await f
       catch(_){ set('chunk_post', false, 'exception'); }
     }else{
       const streamer = makeMicStreamer({sid, csrf, userMsgId:'diag-mic'});
-      try{ await streamer.start(); await sleep(2000); streamer.stop(); { const _csrf = await getCSRF(); await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, { method:'POST', credentials:'include', headers:{'X-CSRF-Token': _csrf} }); } await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {method:'POST', credentials:'include'}); postOk=true; set('chunk_post', true, 'mic slices sent'); }
-      catch(_){ try{streamer.stop(); { const _csrf = await getCSRF(); await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, { method:'POST', credentials:'include', headers:{'X-CSRF-Token': _csrf} }); } await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {method:'POST', credentials:'include'});}catch(_){ } set('chunk_post', false, 'mic error'); }
+      let micOk=false;
+      try{
+        const res = await promptForRecording({
+          onStart: async () => { await streamer.start(); },
+          onStop:  async () => { streamer.stop(); }
+        });
+        if(res && res.proceed){
+          const _csrf2 = await getCSRF();
+          await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'X-CSRF-Token': _csrf2 }
+          });
+          micOk=true; set('chunk_post', true, 'mic slices sent');
+        }else{
+          set('chunk_post', false, 'cancelled');
+        }
+      }catch(_){
+        try{
+          streamer.stop();
+          const _csrf = await getCSRF();
+          await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, { method:'POST', credentials:'include', headers:{'X-CSRF-Token':_csrf} });
+        }catch(_){ }
+        set('chunk_post', false, 'mic error');
+      }
+      postOk = micOk;
     }
-    set('enqueue_ok', postOk, postOk?'ok':'failed');
+set('enqueue_ok', postOk, postOk?'ok':'failed');
 
     // Observe ASR
     await sleep(micMode?2000:600);
