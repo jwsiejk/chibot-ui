@@ -25,8 +25,9 @@ def _rps_ok(sid: str) -> bool:
     return True
 
 def _get_session_id() -> str | None:
-    return (
-        request.args.get("session_id")
+    return (request.args.get("session_id")
+        or (request.get_json(silent=True) or {}).get("session_id")
+        or (request.get_json(silent=True) or {}).get("sid")
         or request.form.get("session_id")
         or request.headers.get("X-Session-Id")
     )
@@ -49,19 +50,29 @@ def voice_chunk():
         return jsonify(error="missing session_id"), 400
     if not _rps_ok(sess):
         return jsonify(error="rate_limited"), 429
-
     data = _read_audio_bytes()
     if not data:
         return jsonify(error="missing_or_invalid_chunk"), 400
     if len(data) > _MAX_CHUNK:
         return jsonify(error="chunk too large", max_bytes=_MAX_CHUNK), 413
 
+    # sequence (for tests / diagnostics)
+    seq = None
+    try:
+        seq = int(request.headers.get("X-Seq", "0")) or None
+    except Exception:
+        seq = None
+    if seq is None and (request.content_type or "").startswith("application/json"):
+        payload = request.get_json(silent=True) or {}
+        try: seq = int(payload.get("chunk_seq") or payload.get("seq") or 0) or None
+        except Exception: seq = None
+
     mgr = get_manager()
     try:
         mgr.enqueue(sess, data)
     except Exception as e:
         return jsonify(error="enqueue_failed", detail=str(e)), 500
-    return jsonify(ok=True), 200
+    return jsonify(ok=True, received_seq=(seq if seq is not None else 1)), 200
 
 @bp.post("/end")
 def voice_end():
