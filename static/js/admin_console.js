@@ -198,8 +198,7 @@ function makeMicStreamer({sid, csrf, userMsgId}){
   });
   let txt=''; try{ txt=await r.text(); }catch(_){}
   return { ok: r.status===413, d:`status=${r.status} ${txt.slice(0,180)}` };
-} ${txt.slice(0,180)}` };
-  }
+}
   async function adminSSE(){
     return new Promise(res=>{
       let got=false;
