@@ -172,6 +172,21 @@ async function postChunk({sid, csrf, userMsgId, seq, blob}){
     ws.addEventListener('message', onmsg);
     return ()=>{ try{ ws.removeEventListener('message', onmsg);}catch(_){} };
   }
+  function attachWSWatch(ws, label){
+    const counts = { partials:0, finals:0, asr_error:false, last_error:'' };
+    function onmsg(ev){
+      try{
+        const fr = JSON.parse(ev.data);
+        // Normalize a few shapes: either server 'asr_*' frames or assistant/metadata with ASR hints
+        if(fr && (fr.type==='asr_partial' || fr.label==='asr_partial')) counts.partials++;
+        if(fr && (fr.type==='asr_final'   || fr.label==='asr_final'))   counts.finals++;
+        if(fr && fr.label==='asr_error'){ counts.asr_error=true; counts.last_error=String(fr.error||''); }
+      }catch(_){}
+    }
+    ws.addEventListener('message', onmsg);
+    return { counts, detach: ()=>{ try{ ws.removeEventListener('message', onmsg);}catch(_){}} };
+  }
+
 
   // Mic slice sender (96ms cadence)
   
