@@ -79,17 +79,18 @@
     const m=document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/); return m?decodeURIComponent(m[1]):'';
   }
   function b64OfBytes(n){ const a=new Uint8Array(n); let s=''; for(let i=0;i<n;i++) s+=String.fromCharCode(a[i]); return btoa(s); }
-  async function postChunk({sid, csrf, userMsgId, seq, blob}){
-    const fd = new FormData();
-    fd.append('chunk', blob, 'mic.webm');
-    const r = await fetch(`/api/v1/voice/chunk?session_id=${encodeURIComponent(sid)}`, {
-      method:'POST', credentials:'include',
-      headers:{'X-CSRF-Token': csrf},
-      body: fd
-    });
-    return r;
+  
+async function postChunk({sid, csrf, userMsgId, seq, blob}){
+  const fd = new FormData();
+  fd.append('chunk', blob, 'mic.webm');
+  const r = await fetch(`/api/v1/voice/chunk?session_id=${encodeURIComponent(sid)}`, {
+    method: 'POST', credentials: 'include',
+    headers: { 'X-CSRF-Token': csrf },
+    body: fd
   });
-  }
+  return r;
+}
+
   function openWS(sessionId, onFrame){
     return new Promise((resolve,reject)=>{
       try{
@@ -110,45 +111,44 @@
   }
 
   // Mic slice sender (96ms cadence)
-  function makeMicStreamer({sid, csrf, userMsgId}){
-    let stream=null, rec=null, seq=0, stopped=false;
-    const FIRST_MIN = 512; // coalesce first tiny frames
-    let firstBuf = [];
-    let firstBytes = 0;
+  
+function makeMicStreamer({sid, csrf, userMsgId}){
+  let stream=null, rec=null, seq=0, stopped=false;
+  const FIRST_MIN = 512; // coalesce first tiny frames
+  let firstBuf = []; let firstBytes = 0;
 
-    async function start(){
-      try{
-        stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, channelCount:1, sampleRate:48000}});
-      }catch(_){ throw new Error('mic denied'); }
-      rec = new MediaRecorder(stream, { mimeType:'audio/webm;codecs=opus', audioBitsPerSecond:128000 });
-      rec.ondataavailable = async ev=>{
-        if(stopped) return;
-        if(ev.data && ev.data.size>0){
-          const blob = ev.data;
-          // Coalesce initial tiny frames to avoid 1-byte preamble
-          if(firstBytes < FIRST_MIN){
-            const buf = new Uint8Array(await blob.arrayBuffer());
-            firstBuf.push(buf);
-            firstBytes += buf.byteLength;
-            if(firstBytes < FIRST_MIN) return;
-            const merged = new Uint8Array(firstBytes);
-            let o=0; for(const b of firstBuf){ merged.set(b,o); o+=b.byteLength; }
-            firstBuf=[]; firstBytes=0;
-            await postChunk({sid, csrf, userMsgId, seq: ++seq, blob: new Blob([merged], {type:'application/octet-stream'})});
-          }else{
-            await postChunk({sid, csrf, userMsgId, seq: ++seq, blob});
-          }
+  async function start(){
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, channelCount:1, sampleRate:48000}});
+    }catch(_){ throw new Error('mic denied'); }
+    rec = new MediaRecorder(stream, { mimeType:'audio/webm;codecs=opus', audioBitsPerSecond:128000 });
+    rec.ondataavailable = async (ev)=>{
+      if(stopped) return;
+      if(ev.data && ev.data.size>0){
+        const blob = ev.data;
+        if(firstBytes < FIRST_MIN){
+          const buf = new Uint8Array(await blob.arrayBuffer());
+          firstBuf.push(buf); firstBytes += buf.byteLength;
+          if(firstBytes < FIRST_MIN) return;
+          const merged = new Uint8Array(firstBytes);
+          let o=0; for(const b of firstBuf){ merged.set(b,o); o+=b.byteLength; }
+          firstBuf=[]; firstBytes=0;
+          await postChunk({sid, csrf, userMsgId, seq: ++seq, blob: new Blob([merged], {type:'application/octet-stream'})});
+        }else{
+          await postChunk({sid, csrf, userMsgId, seq: ++seq, blob});
         }
-      };
-      rec.start(200); // ~200ms slices
-    }
-    function stop(){
-      stopped = true;
-      try{ if(rec) rec.stop(); }catch(_){}
-      try{ if(stream) stream.getTracks().forEach(t=>t.stop()); }catch(_){}
-    }
-    return { start, stop };
+      }
+    };
+    rec.start(200);
   }
+  function stop(){
+    stopped = true;
+    try{ if(rec) rec.stop(); }catch(_){}
+    try{ if(stream) stream.getTracks().forEach(t=>t.stop()); }catch(_){}
+  }
+  return { start, stop };
+}
+
 
   // ---------- strict server info ----------
   async function getVendorStatus(){
@@ -189,17 +189,16 @@
     return { ok: r2.status === expect, d:`status2=${r2.status} (expected ${expect})` };
   }
   async function guard413(sid){
-    const csrf = await getCSRF();
-    // build a ~270kB binary blob directly (not base64) to validate 413 guard
-    const big = new Uint8Array(270000);
-    const fd = new FormData();
-    fd.append('chunk', new Blob([big],{type:'application/octet-stream'}), 'big.bin');
-    const r = await fetch(`/api/v1/voice/chunk?session_id=${encodeURIComponent(sid)}`, {
-      method:'POST', credentials:'include', headers:{'X-CSRF-Token': csrf}, body: fd
-    });
-    let txt=''; try{ txt=await r.text(); }catch(_){}
-    return { ok: r.status===413, d:`status=${r.status} ${txt.slice(0,180)}` };
-  } ${txt.slice(0,180)}` };
+  const csrf = await getCSRF();
+  const big = new Uint8Array(270000);
+  const fd = new FormData();
+  fd.append('chunk', new Blob([big], {type:'application/octet-stream'}), 'big.bin');
+  const r = await fetch(`/api/v1/voice/chunk?session_id=${encodeURIComponent(sid)}`, {
+    method:'POST', credentials:'include', headers:{'X-CSRF-Token': csrf}, body: fd
+  });
+  let txt=''; try{ txt=await r.text(); }catch(_){}
+  return { ok: r.status===413, d:`status=${r.status} ${txt.slice(0,180)}` };
+} ${txt.slice(0,180)}` };
   }
   async function adminSSE(){
     return new Promise(res=>{
@@ -243,7 +242,7 @@
     await sleep(500);
     const streamer = makeMicStreamer({sid, csrf, userMsgId:`barge-${Math.random().toString(36).slice(2,6)}`});
     try{ await streamer.start(); }catch(_){ unlisten(); return { ok:false, d:'mic denied' }; }
-    await sleep(800); streamer.stop(); await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {method:'POST', credentials:'include'}); await sleep(1200); unlisten();
+    await sleep(800); streamer.stop(); await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {method:'POST', credentials:'include'}); await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {method:'POST', credentials:'include'}); await sleep(1200); unlisten();
     const ok = (audioChunks>0) && (afterInterrupt<2);
     return { ok, d: audioChunks===0 ? 'no audio observed' : (ok?'ok':'late audio after cancel') };
   }
@@ -306,8 +305,8 @@
       catch(_){ set('chunk_post', false, 'exception'); }
     }else{
       const streamer = makeMicStreamer({sid, csrf, userMsgId:'diag-mic'});
-      try{ await streamer.start(); await sleep(2000); streamer.stop(); await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {method:'POST', credentials:'include'}); postOk=true; set('chunk_post', true, 'mic slices sent'); }
-      catch(_){ try{streamer.stop(); await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {method:'POST', credentials:'include'});}catch(_){ } set('chunk_post', false, 'mic error'); }
+      try{ await streamer.start(); await sleep(2000); streamer.stop(); await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {method:'POST', credentials:'include'}); await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {method:'POST', credentials:'include'}); postOk=true; set('chunk_post', true, 'mic slices sent'); }
+      catch(_){ try{streamer.stop(); await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {method:'POST', credentials:'include'}); await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {method:'POST', credentials:'include'});}catch(_){ } set('chunk_post', false, 'mic error'); }
     }
     set('enqueue_ok', postOk, postOk?'ok':'failed');
 

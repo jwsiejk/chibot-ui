@@ -1,5 +1,5 @@
 # voice_stream.py
-from __future__ annotations
+from __future__ import annotations
 from flask import Blueprint, request, jsonify
 import asyncio
 import time
@@ -8,7 +8,7 @@ from ..services.streaming_asr.stream_manager import get_manager, asr_end
 
 bp = Blueprint("voice_stream_v1", __name__, url_prefix="/api/v1/voice")
 
-_RPS = {{}}
+_RPS = {}
 _RPS_WINDOW = 1.0
 _RPS_MAX = 6
 _MAX_CHUNK = 512 * 1024
