@@ -142,17 +142,31 @@ def runtime():
 
 # ----------------- Admin config API -----------------
 
+def _vendor_status_payload() -> dict:
+    """Single source of truth for vendor key presence."""
+    deepgram_ok = bool(os.environ.get("DEEPGRAM_API_KEY"))
+    eleven_key_ok = bool(os.environ.get("ELEVENLABS_API_KEY"))
+    eleven_voice_ok = bool(os.environ.get("ELEVENLABS_VOICE_ID"))
+    return {
+        "ok": True,
+        "deepgram": deepgram_ok,
+        "elevenlabs": (eleven_key_ok and eleven_voice_ok),
+        "elevenlabs_key": eleven_key_ok,
+        "elevenlabs_voice": eleven_voice_ok,
+    }
+
 @bp.get("/config")
 def get_settings_api():
     _require_admin()
-    return jsonify({"ok": True, "settings": cfg.get_settings(), "vendors": cfg.vendor_status()})
+    # Keep settings from cfg, but compute vendors here so Diagnostics and /config agree
+    return jsonify({"ok": True, "settings": cfg.get_settings(), "vendors": _vendor_status_payload()}), 200
 
 @bp.post("/config")
 def post_settings_api():
     _require_admin()
     payload = request.get_json(silent=True) or {}
     updated = cfg.update_settings(payload)
-    return jsonify({"ok": True, "settings": updated})
+    return jsonify({"ok": True, "settings": updated}), 200
 
 # ----------------- Diagnostics runner & hooks -----------------
 
@@ -190,28 +204,21 @@ def diag_stream():
     return Response(gen(), mimetype="text/event-stream")
 
 # ----------------- Admin Diagnostics (GET+POST) -----------------
-# These match what your Admin UI calls and avoid 405s.
+# These match what the Admin UI calls; both return the same vendor truth.
 
 @bp.route("/diagnostics/vendor_status", methods=["GET", "POST"])
 def _diag_vendor_status():
     _require_admin()
-    def _has(v): return bool(v and str(v).strip())
-    deepgram_ok = _has(os.getenv("DEEPGRAM_API_KEY"))
-    eleven_key_ok = _has(os.getenv("ELEVENLABS_API_KEY"))
-    eleven_voice_ok = _has(os.getenv("ELEVENLABS_VOICE_ID"))
-    return jsonify(
-        ok=True,
-        deepgram=deepgram_ok,
-        elevenlabs=(eleven_key_ok and eleven_voice_ok),
-        elevenlabs_key=eleven_key_ok,
-        elevenlabs_voice=eleven_voice_ok,
-    ), 200
-
+    payload = _vendor_status_payload()
+    # explicit no-store to avoid any caching weirdness
+    resp = jsonify(payload)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp, 200
 
 @bp.route("/diagnostics/streaming_status", methods=["GET", "POST"])
 def _diag_streaming_status():
     _require_admin()
-    # Import here to avoid circular import at module load time.
+    # Import inside to avoid circular import at module import time
     from ..services.streaming_asr.stream_manager import get_manager  # type: ignore
 
     sid = request.args.get("sid") or request.args.get("session_id")
@@ -219,29 +226,31 @@ def _diag_streaming_status():
 
     if sid:
         s = mgr.stats(sid)
-        return jsonify(
+        resp = jsonify(
             ok=True,
             sid=sid,
             partials=int(s.get("partials", 0)),
             finals=int(s.get("finals", 0)),
             asr_error=bool(s.get("err")),
             err=s.get("err"),
-        ), 200
+        )
+        resp.headers["Cache-Control"] = "no-store"
+        return resp, 200
 
-    # Aggregate if available; fall back to zeros if manager lacks stats_all.
     if hasattr(mgr, "stats_all"):
         agg = mgr.stats_all()  # type: ignore[attr-defined]
-        return jsonify(
+        resp = jsonify(
             ok=True,
             partials=int(agg.get("partials", 0)),
             finals=int(agg.get("finals", 0)),
             asr_error=agg.get("err_count", 0) > 0,
             err_count=int(agg.get("err_count", 0)),
             sessions=agg.get("sessions", {}),
-        ), 200
-    else:
-        return jsonify(ok=True, partials=0, finals=0, asr_error=False), 200
+        )
+        resp.headers["Cache-Control"] = "no-store"
+        return resp, 200
 
+    return jsonify(ok=True, partials=0, finals=0, asr_error=False), 200
 
 @bp.route("/diagnostics/rate_limits", methods=["GET", "POST"])
 def _diag_rate_limits():
