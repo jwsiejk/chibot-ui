@@ -7,13 +7,49 @@ from .schema_v1 import parse_client_json, make_keepalive_ack, make_results, make
 from .turn_buffer import TurnBuffer
 from app.services.streaming_asr.deepgram_client import DeepgramClient
 from app.security.ws_token import verify as verify_ws_token
+from app.ws.bus import bus
 
 def _dumps(obj) -> str:
     import json as _json
     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
 
+
+def _get_session_id(scope) -> str:
+    try:
+        raw = (scope.get("query_string") or b"").decode("utf-8", "ignore")
+        if raw:
+            for pair in raw.split("&"):
+                if not pair: continue
+                if "=" not in pair: continue
+                k,v = pair.split("=",1)
+                if k == "session_id":
+                    return v or "default"
+    except Exception:
+        pass
+    return "default"
+
+
 def _has_deepgram_key() -> bool:
     return bool((os.getenv("DEEPGRAM_API_KEY") or "").strip())
+
+
+async def _pump_bus_to_client(sid: str, send):
+    """Forward frames from StreamBus to the WS client as JSON."""
+    import json as _json
+    from queue import Empty
+    q = bus.subscribe(sid)
+    while True:
+        try:
+            fr = q.get(timeout=0.05)
+        except Empty:
+            await asyncio.sleep(0.01)
+            continue
+        try:
+            await send({ "type": "websocket.send", "text": _json.dumps(fr, separators=(",",":"), ensure_ascii=False) })
+        except Exception:
+            # Non-fatal; continue pumping
+            await asyncio.sleep(0.01)
+    
 
 async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen):
     """Relay Deepgram events to client as Results/UtteranceEnd."""
@@ -49,6 +85,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return
 
     await send({"type":"websocket.accept"})
+
+    # Subscribe to StreamBus and start pump task
+    sid = _get_session_id(scope)
+    bus_task = asyncio.create_task(_pump_bus_to_client(sid, send))
+    try:
+        # Send initial 'ready' for UI consistency
+        await send({"type":"websocket.send", "text": _dumps({"type":"ready","session_id": sid})})
+    except Exception:
+        pass
 
     cfg: Dict[str, Any] = {}
     buf = TurnBuffer()
@@ -152,6 +197,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             try:
                 if rx_task:
                     rx_task.cancel()
+                try:
+                    bus_task.cancel()
+                except Exception:
+                    pass
                     with contextlib.suppress(Exception):
                         await rx_task
             except Exception:

@@ -35,10 +35,11 @@ function _startKeepAlive(){
 }
 function _stopKeepAlive(){ if (_keepaliveTimer){ clearInterval(_keepaliveTimer); _keepaliveTimer = null; }}
 
-export function openWS(){
+export function openWS(token){
   if (isOpen()) return _ws;
   const base = location.origin.replace(/^http/, 'ws');
   const url = new URL(base + '/ws/v1/chat');
+  if (token) url.searchParams.set('ws_token', token);
   url.searchParams.set('session_id', getSID());
   // Single-socket policy: close any previous socket
   if (_ws && _ws.readyState === WebSocket.OPEN){

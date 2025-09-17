@@ -7,6 +7,15 @@ import { getSID } from './util/sid.js';
 
 const $ = (s)=>document.querySelector(s);
 
+async function _fetchWSToken(sid){
+  try{
+    const r = await fetch(`/api/v1/auth/ws-token?session_id=${encodeURIComponent(sid)}`, { credentials: 'include' });
+    const j = await r.json();
+    return j && j.token;
+  }catch(e){ console.warn('ws-token fetch failed', e); return null; }
+}
+
+
 function setDot(state){
   const dot = document.getElementById('stateDot');
   if (!dot) return;
@@ -33,16 +42,17 @@ async function onStart(){
     await ensureCSRF();
     await unlockAudio();
 
-    // Open WS first and wait, so greet frames have a subscriber
-    openWS();
+    // Open WS with auth and wait, so greet frames have a subscriber
+    const sid = getSID();
+    const _tok = await _fetchWSToken(sid);
+    openWS(_tok);
     await waitWSOpen();
 
     // Prime mic permission once; VAD will arm when assistant is ready
     await initMic();
 
     // Call greet with the SAME SID the WS is using
-    const sid = getSID();
-    fetch(`/api/v1/greet?session_id=${encodeURIComponent(sid)}`, {
+    fetch(`/api/v1/greet?session_id=${encodeURIComponent(getSID())}`, {
       credentials: 'include'
     }).catch(()=>{});
 
