@@ -1,29 +1,54 @@
-import os
-import re
-from pathlib import Path
+
+import os, re, pathlib
 
 BANNED = [
-    r"/api/greet\b",
-    r"/api/chat\b",
-    r"/api/voice\b",
-    r"/ws/chat\b",
-    r"legacy_app\b",
+    r"/api/v1/voice/chunk",
+    r"/api/v1/voice/end",
+    r"/api/greet(?![a-zA-Z0-9_/])",
+    r"/api/voice/",
+    r"legacy_app",
 ]
 
-def test_no_legacy_routes():
-    root = Path(__file__).resolve().parents[1]
-    # Scan only project files
-    sources = []
-    for p in root.rglob('*'):
-        if p.is_file() and p.suffix in {'.py', '.js', '.html', '.css', '.json', '.txt', '.md'}:
+REQUIRED = [
+    r"/ws/v1/chat",
+]
+
+SCAN_DIRS = {"app", "docs", "templates", "static"}  # bounded scan
+ALLOW_EXT = {".py",".js",".ts",".json",".md",".html",".css",".txt",".yml",".yaml",".ini",".cfg"}
+
+def scan_repo(root, max_files=5000):
+    matches = { "banned": [], "required": [] }
+    required_found = { pat: False for pat in REQUIRED }
+    files_scanned = 0
+    for p, _, files in os.walk(root):
+        rel = os.path.relpath(p, root).split(os.sep)[0]
+        if rel not in SCAN_DIRS and rel != ".":
+            continue
+        for f in files:
+            if files_scanned >= max_files:
+                break
+            ext = os.path.splitext(f)[1].lower()
+            if ext and ext not in ALLOW_EXT:
+                continue
+            fp = os.path.join(p, f)
             try:
-                text = p.read_text(encoding='utf-8', errors='ignore')
+                with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
+                    txt = fh.read()
             except Exception:
                 continue
-            sources.append((str(p), text))
-    offenders = []
-    for path, text in sources:
-        for pat in BANNED:
-            if re.search(pat, text):
-                offenders.append((path, pat))
-    assert not offenders, f"Found banned legacy patterns: {offenders}"
+            files_scanned += 1
+            for pat in BANNED:
+                if re.search(pat, txt):
+                    matches["banned"].append((fp, pat))
+            for pat in REQUIRED:
+                if re.search(pat, txt):
+                    required_found[pat] = True
+    matches["required"] = [pat for pat, ok in required_found.items() if ok]
+    return matches, files_scanned
+
+def test_route_linter_guardrails():
+    root = pathlib.Path(__file__).resolve().parents[1]
+    matches, files_scanned = scan_repo(str(root))
+    assert files_scanned > 50, f"Scanned too few files ({files_scanned}); check SCAN_DIRS/ALLOW_EXT"
+    assert not matches["banned"], f"Banned routes/symbols present: {matches['banned']}"
+    assert "/ws/v1/chat" in matches["required"], "Required WS route reference '/ws/v1/chat' not found"

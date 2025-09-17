@@ -19,7 +19,7 @@ def _key(name: str):
 def _allowed_for(name: str) -> int:
     return _MAX_VOICE if name == 'voice_chunk' else _MAX
 
-def register_before_request(app, paths=("/api/v1/chat", "/api/v1/voice/stt", "/api/v1/voice/chunk")):
+def register_before_request(app, paths=("/api/v1/chat", "/api/v1/voice/stt", "/ws/v1/chat")):
     @app.before_request
     def _rate_limit_guard():
         path = request.path or ""

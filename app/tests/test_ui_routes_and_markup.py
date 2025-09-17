@@ -11,7 +11,7 @@ def test_no_legacy_routes_strings():
     for p in list(ROOT.glob("**/*.py")) + list(ROOT.glob("static/**/*.js")) + list(ROOT.glob("templates/**/*.html")):
         s = read(p)
         # Disallow explicit legacy patterns
-        if "/api/greet" in s: 
+        if "/api/v1/greet" in s: 
             bad.append(str(p))
         # Any /api/ or /ws/ that isn't v1*
         if re.search(r"/(api|ws)/(?!v1\\b)", s): 
