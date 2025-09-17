@@ -3,19 +3,45 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AskChip — Diagnostics</title>
+  <title>AskChip — Diagnostics (WS-only)</title>
   <link rel="stylesheet" href="/static/css/app.css" />
+  <style>
+    .card{background:#fff;border:1px solid #ddd;border-radius:12px;padding:16px;margin:16px auto;max-width:900px;}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+    .kpi{background:#f7f7f7;border-radius:10px;padding:12px;text-align:center}
+    .kpi .label{font-size:.9rem;opacity:.8}
+    .kpi .value{font-size:1.4rem;font-weight:600}
+    .ok{color:#0a7a28} .warn{color:#b58900} .fail{color:#c0392b}
+    .actions{display:flex;gap:8px;justify-content:flex-start;margin-top:8px}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;}
+  </style>
 </head>
 <body class="page">
   <header class="toolbar">
     <a href="/" class="brand">⟵ Back</a>
     <h1>AskChip — Diagnostics</h1>
   </header>
+
   <section class="card">
-    <div id="overall">Ready. Click “Run checks”.</div>
-    <div class="actions"><button id="runBtn" class="primary">Run checks</button></div>
-    <table id="results"><thead><tr><th>#</th><th>Check</th><th>Status</th><th>Details</th></tr></thead><tbody></tbody></table>
+    <h3>WebSocket Pipe Test</h3>
+    <p>This test uses the <span class="mono">/ws/v1/chat</span> lane only. It records your mic for <b>5 seconds</b>, sends audio as binary WebM/Opus, and watches Admin SSE for ASR events tied to your session.</p>
+    <div class="grid">
+      <div class="kpi"><div class="label">Pipe alive</div><div id="kpi-pipe" class="value">—</div></div>
+      <div class="kpi"><div class="label">ASR partials</div><div id="kpi-partials" class="value">0</div></div>
+      <div class="kpi"><div class="label">ASR finals</div><div id="kpi-finals" class="value">0</div></div>
+    </div>
+    <div id="status" style="margin-top:8px;opacity:.85">Idle.</div>
+    <div class="actions">
+      <button id="btn-record" class="primary">Record 5 s</button>
+      <button id="btn-stop" disabled>Stop</button>
+    </div>
   </section>
+
+  <section class="card">
+    <h3>Admin Log (live)</h3>
+    <pre id="admin-log" class="log mono" style="height:180px;overflow:auto;background:#0b0b0b;color:#ddd;padding:10px;border-radius:8px;"></pre>
+  </section>
+
   <script type="module" src="/static/js/diagnostics.js"></script>
 </body>
 </html>

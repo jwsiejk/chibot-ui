@@ -1,17 +1,111 @@
-function $id(id){return document.getElementById(id);} function $qs(s){return document.querySelector(s);}
-const tbody = (function(){ const t=document.getElementById('results'); return t.querySelector('tbody'); })();
-function addRow(i,name,status,details){ const tr=document.createElement('tr'); tr.innerHTML=`<td>${i}</td><td>${name}</td><td class="status ${status}">${status.toUpperCase()}</td><td>${details||''}</td>`; tbody.appendChild(tr); }
-async function run(){ let i=0; $id('overall').textContent='Running checks…'; try{
-  // CSRF warmup
-  try{ await fetch('/api/v1/csrf', { credentials:'include' }); }catch{}
-  // Checks
-  const checks=[
-    ['Greet endpoint', async()=>{ const r=await fetch('/api/v1/greet'); return [r.ok?'pass':'fail','HTTP '+r.status]; }],
-    ['Admin SSE', async()=>{ const r=await fetch('/api/v1/admin/logs',{credentials:'include'}); return [r.ok?'pass':'warn','HTTP '+r.status]; }],
-    ['Chat POST (CSRF)', async()=>{ const t=await fetch('/api/v1/csrf',{credentials:'include'}).then(r=>r.headers.get('X-CSRF-Token')); const r=await fetch('/api/v1/chat',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json','X-CSRF-Token':t},body:JSON.stringify({text:'diag chat','session_id':localStorage.getItem('chip.sid')||''})}); return [r.ok?'pass':'fail','HTTP '+r.status]; }],
-    ['STT POST (probe)', async()=>{ const t=await fetch('/api/v1/csrf',{credentials:'include'}).then(r=>r.headers.get('X-CSRF-Token')); const fd=new FormData(); fd.append('file', new Blob(['dummy'],{type:'audio/webm'}),'a.webm'); fd.append('meta', JSON.stringify({session_id:localStorage.getItem('chip.sid')||'',language:'en'})); const r=await fetch('/api/v1/voice/stt',{method:'POST',credentials:'include',headers:{'X-CSRF-Token':t},body:fd}); return [r.status===403?'warn':(r.ok?'pass':'warn'),'HTTP '+r.status]; }],
-  ];
-  for(const c of checks){ const [name,fn]=c; try{ const [s,d]=await fn(); addRow(++i,name,s,d);}catch(e){ addRow(++i,name,'fail',String(e)); } }
-  $id('overall').textContent='Done.';
-}catch(e){ $id('overall').textContent='Diagnostic failed: '+e.message; }}
-document.addEventListener('DOMContentLoaded', ()=>{ document.getElementById('runBtn').onclick=run; });
+// WS-only Diagnostics for Phase 6
+import { openWS, waitWSOpen, closeWS, sendCloseStream } from './ws.js';
+import { initMic, armVAD, disarmVAD } from './voice.js';
+import { getSID } from './util/sid.js';
+
+const $ = (s)=>document.querySelector(s);
+const logEl = ()=> $('#admin-log');
+const sid = getSID();
+
+function log(line){
+  const el = logEl(); if(!el) return;
+  el.textContent += line + "\n";
+  el.scrollTop = el.scrollHeight;
+}
+
+function setKPI(id, val, cls=''){
+  const el = $('#'+id); if(!el) return;
+  el.textContent = val;
+  el.classList.remove('ok','warn','fail');
+  if (cls) el.classList.add(cls);
+}
+
+async function watchAdminSSE(onEvent){
+  try{
+    const sse = new EventSource('/api/v1/admin/logs', { withCredentials:true });
+    sse.onmessage = (e)=>{
+      try{
+        const j = JSON.parse(e.data);
+        if (j && j.kind){
+          log(e.data);
+          onEvent?.(j);
+        }
+      }catch(_){}
+    };
+    return { close: ()=>{ try{sse.close();}catch(_){}} };
+  }catch(e){
+    log('SSE open failed: '+e.message);
+    return { close: ()=>{} };
+  }
+}
+
+async function recordFiveSeconds(){
+  const btnRec = $('#btn-record');
+  const btnStop = $('#btn-stop');
+  const status = $('#status');
+  setKPI('kpi-partials','0'); setKPI('kpi-finals','0');
+  setKPI('kpi-pipe','—');
+
+  let partials = 0, finals = 0, sawOpen = false;
+  const watcher = await watchAdminSSE((ev)=>{
+    try{
+      const k = String(ev.kind||''); const lbl = String(ev.label||'');
+      const evSid = String(ev.session_id || ev.sid || '');
+      if (evSid && evSid !== sid) return; // filter to our session only
+      if (k === 'asr' && lbl === 'asr_open'){ sawOpen = true; setKPI('kpi-pipe','open','ok'); }
+      if (k === 'asr' && lbl === 'asr_partial'){ partials++; setKPI('kpi-partials', String(partials)); }
+      if (k === 'asr' && lbl === 'asr_final'){ finals++; setKPI('kpi-finals', String(finals)); }
+      if (k === 'asr' && lbl === 'asr_error'){ setKPI('kpi-pipe','error','fail'); }
+    }catch(_){}
+  });
+
+  try{
+    status.textContent = 'Opening WebSocket…';
+    openWS(); await waitWSOpen();
+    status.textContent = 'Requesting microphone…';
+    const stream = await initMic();
+    status.textContent = 'Recording…';
+    btnRec.disabled = true; btnStop.disabled = false;
+
+    await armVAD(stream);
+    // stop after 5 seconds or when Stop clicked
+    const stopPromise = new Promise((resolve)=>{
+      btnStop.onclick = ()=> resolve('manual');
+      setTimeout(()=> resolve('timer'), 5000);
+    });
+    const reason = await stopPromise;
+    btnStop.disabled = true;
+
+    status.textContent = 'Stopping…';
+    disarmVAD();
+    try{ sendCloseStream(); }catch(_){}
+    status.textContent = 'Audio captured (sending)…';
+
+    // wait briefly for finals to land
+    await new Promise(r=> setTimeout(r, 1200));
+    if (sawOpen && (partials+finals)>=1){
+      setKPI('kpi-pipe','ok','ok');
+    }else{
+      setKPI('kpi-pipe', sawOpen ? 'no results' : 'no open', 'warn');
+    }
+    status.textContent = 'Done.';
+  }catch(e){
+    status.textContent = 'Error: ' + e.message;
+    setKPI('kpi-pipe','error','fail');
+  }finally{
+    try{ closeWS(); }catch(_){}
+    try{ watcher.close(); }catch(_){}
+    btnRec.disabled = false; btnStop.disabled = true;
+  }
+}
+
+function init(){
+  const btnRec = $('#btn-record');
+  const btnStop = $('#btn-stop');
+  if (btnRec) btnRec.addEventListener('click', recordFiveSeconds);
+  if (btnStop) btnStop.disabled = true;
+  log('Session: '+sid);
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+else init();
