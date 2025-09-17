@@ -42,7 +42,7 @@ async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen):
         except Exception:
             pass
 
-async def ws_chat(scope, receive, send):
+async def _ws_chat_asgi_impl(scope, receive, send):
     if scope.get("type") != "websocket":
         await send({"type":"http.response.start","status":404,"headers":[]})
         await send({"type":"http.response.body","body":b"not found"})
@@ -160,3 +160,55 @@ async def ws_chat(scope, receive, send):
                 await send({"type":"websocket.close"})
             except Exception:
                 pass
+
+
+# --- Compatibility wrapper ---
+# Supports both:
+#   • ASGI style: ws_chat(scope, receive, send)
+#   • Starlette style: ws_chat(websocket)
+try:
+    # Starlette's WebSocket class (only used if available)
+    from starlette.websockets import WebSocket as _StarletteWebSocket
+except Exception:  # pragma: no cover
+    _StarletteWebSocket = None
+
+async def ws_chat(websocket_or_scope, receive=None, send=None):
+    # If called Starlette-style, we'll be given a single WebSocket object.
+    if receive is None and send is None:
+        websocket = websocket_or_scope
+        # Guard: if the import isn't available or object doesn't look like Starlette's WebSocket,
+        # fall back to treating it as ASGI scope (unlikely in production).
+        if _StarletteWebSocket is None or not hasattr(websocket, "receive"):
+            # Treat the single arg as scope (ASGI) and expect external receive/send (cannot proceed cleanly)
+            raise TypeError("ws_chat(websocket) called but no Starlette WebSocket available")
+        
+        async def _receive():
+            # Starlette returns dicts with 'type' ('websocket.receive'/'websocket.disconnect')
+            # and 'text' or 'bytes' for payloads. This matches what our ASGI impl expects.
+            return await websocket.receive()
+        
+        async def _send(event: dict):
+            et = event.get("type")
+            if et == "websocket.accept":
+                # Accept with defaults
+                await websocket.accept()
+            elif et == "websocket.send":
+                if "text" in event and event["text"] is not None:
+                    await websocket.send_text(event["text"])
+                elif "bytes" in event and event["bytes"] is not None:
+                    await websocket.send_bytes(event["bytes"])
+                else:
+                    # No payload; send empty text (harmless)
+                    await websocket.send_text("")
+            elif et == "websocket.close":
+                code = event.get("code", 1000)
+                await websocket.close(code=code)
+            else:
+                # ignore other event types
+                pass
+        
+        # Delegate to the original ASGI implementation using the adapters
+        return await _ws_chat_asgi_impl(websocket.scope, _receive, _send)
+    
+    # Otherwise treat it as raw ASGI 3-callable.
+    return await _ws_chat_asgi_impl(websocket_or_scope, receive, send)
