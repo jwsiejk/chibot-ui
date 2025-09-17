@@ -2,7 +2,7 @@
 import { installFetchInterceptor, ensureCSRF } from './csrf.js';
 import { openWS, waitWSOpen, closeWS } from './ws.js';
 import { initMic, disarmVAD, bargeIn } from './voice.js';
-import { unlockAudio } from './audio.js';
+import { unlockAudio, stopPlayback } from './audio.js';
 import { getSID } from './util/sid.js';
 
 const $ = (s)=>document.querySelector(s);
@@ -57,6 +57,8 @@ async function onStart(){
 }
 
 async function onEnd(){
+  try{ stopPlayback(); }catch{}
+
   try{ bargeIn(); }catch{}
 
   try{ disarmVAD(); closeWS(); }catch{}
@@ -117,5 +119,13 @@ window.addEventListener('askchip-ws', (ev)=>{
     dot.className = 'dot dot-thinking';
   } else if (msg.type === 'Error'){
     dot.className = 'dot dot-ready';
+  }
+});
+
+
+document.addEventListener('keydown', (e)=>{
+  if (e.key === 'Escape'){
+    try{ stopPlayback(); }catch{}
+    try{ bargeIn(); }catch{}
   }
 });
