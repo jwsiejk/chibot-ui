@@ -66,8 +66,6 @@ async def ws_chat(scope, receive, send):
             turn_id_ref[0] = buf.turn_seq + 1
             rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen))
 
-    try:
-        
     # ws_token_checked
     require_token = (os.getenv("WS_TOKEN_REQUIRED","1").lower() not in ("0","false","no"))
     token = None
