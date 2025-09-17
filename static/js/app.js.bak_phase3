@@ -1,7 +1,7 @@
 // app.js — session control and typed chat
 import { installFetchInterceptor, ensureCSRF } from './csrf.js';
 import { openWS, waitWSOpen, closeWS } from './ws.js';
-import { initMic, disarmVAD, bargeIn } from './voice.js';
+import { initMic, disarmVAD } from './voice.js';
 import { unlockAudio } from './audio.js';
 import { getSID } from './util/sid.js';
 
@@ -57,8 +57,6 @@ async function onStart(){
 }
 
 async function onEnd(){
-  try{ bargeIn(); }catch{}
-
   try{ disarmVAD(); closeWS(); }catch{}
   setDot('ready');
   const endBtn = $('#endButton');
@@ -103,19 +101,4 @@ document.addEventListener('DOMContentLoaded', () => {
   if (endBtn)   endBtn.addEventListener('click', onEnd);
   if (sendBtn)  sendBtn.addEventListener('click', onSend);
   setDot('ready');
-});
-
-
-// Phase 4: wire UI state to WS events
-window.addEventListener('askchip-ws', (ev)=>{
-  const msg = ev.detail || {};
-  const dot = document.getElementById('stateDot');
-  if (!dot) return;
-  if (msg.type === 'Results'){
-    dot.className = 'dot dot-listening'; // still speaking/interims
-  } else if (msg.type === 'UtteranceEnd'){
-    dot.className = 'dot dot-thinking';
-  } else if (msg.type === 'Error'){
-    dot.className = 'dot dot-ready';
-  }
 });

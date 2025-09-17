@@ -1,15 +1,12 @@
-// static/js/voice.js — MediaRecorder 96ms timeslices → POST /ws/v1/chat
-import { ensureCSRF } from './csrf.js';
-import { getSID } from './util/sid.js';
+
+// static/js/voice.js — Phase 4 WS-only mic sender + controls
+import { sendAudioChunk, sendCloseStream, configure, bufferedAmount, waitWSOpen, openWS } from './ws.js';
 
 export let currentStream = null;
 let rec = null;
-let queue = [];
-let inflight = false;
+let backoffTimer = null;
 let chunkSeq = 0;
 let currentUserMsgId = null;
-
-// NEW: drop the very first tiny blob some browsers emit
 let firstBlobSeen = false;
 
 export async function initMic(){
@@ -17,62 +14,36 @@ export async function initMic(){
   currentStream = await navigator.mediaDevices.getUserMedia({
     audio: {
       channelCount: 1,
-      sampleRate: 48000,
+      noiseSuppression: true,
       echoCancellation: true,
-      noiseSuppression: true
-    },
-    video: false
+      autoGainControl: true,
+      sampleRate: 48000,
+      sampleSize: 16,
+    }
   });
   return currentStream;
 }
 
-export function getCurrentStream(){ return currentStream; }
-
-function b64(bytes){
-  let bin=''; const len=bytes.length;
-  for(let i=0;i<len;i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin);
+function _pauseRecorder(){
+  try{ if (rec && rec.state === 'recording') rec.pause(); }catch{}
 }
-
-async function sendLoop(){
-  if (inflight) return;
-  inflight = true;
-  try{
-    while(queue.length){
-      const bytes = queue.shift();
-      const payload = {
-        sid: getSID(),
-        user_msg_id: currentUserMsgId,
-        chunk_seq: chunkSeq++,
-        audio_b64: b64(bytes)
-      };
-      const headers = new Headers({ 'Content-Type':'application/json' });
-      const csrf = await ensureCSRF().catch(()=> '');
-      if (csrf) headers.set('X-CSRF-Token', csrf);
-
-      const res = await fetch('/ws/v1/chat', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-        credentials: 'include'
-      });
-      if (!res.ok) {
-        console.warn('[voice] chunk POST failed', res.status);
-        break; // avoid tight loop on persistent errors
-      }
-    }
-  } finally { inflight = false; }
+function _resumeRecorder(){
+  try{ if (rec && rec.state === 'paused') rec.resume(); }catch{}
 }
 
 export async function armVAD(stream, opts={}){
   if (!stream) throw new Error('armVAD requires a MediaStream');
   if (rec && rec.state !== 'inactive') return;    // already running
 
+  // Ensure WS is open before starting
+  openWS();
+  await waitWSOpen();
+
   chunkSeq = 0;
   currentUserMsgId = opts.userMsgId || (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random()));
   firstBlobSeen = false;
 
-  // Prefer containerized WebM/Opus (Deepgram reads header automatically)
+  // Prefer WebM/Opus
   const mimeOptions = [
     'audio/webm;codecs=opus',
     'audio/webm;codecs=opus,pcm',
@@ -82,44 +53,65 @@ export async function armVAD(stream, opts={}){
   for (const m of mimeOptions){
     if (MediaRecorder.isTypeSupported(m)){ mime = m; break; }
   }
+  if (!mime) mime = 'audio/webm';
 
-  try {
-    rec = new MediaRecorder(stream, { mimeType: mime || undefined, audioBitsPerSecond: 128000 });
-  } catch {
-    rec = new MediaRecorder(stream); // last resort
-  }
+  rec = new MediaRecorder(stream, { mimeType: mime, audioBitsPerSecond: 128000 });
 
   rec.ondataavailable = async (ev) => {
-    try{
-      if (!ev.data || ev.data.size === 0) return;
+    const blob = ev.data;
+    if (!blob || !blob.size) return;
 
-      // Skip the very first tiny blob so DG sees a valid container header first
-      if (!firstBlobSeen) {
-        firstBlobSeen = true;
-        if (ev.data.size < 128) return;
+    // Some browsers emit a tiny primer chunk; drop only if truly tiny (<32 bytes)
+    if (!firstBlobSeen){
+      if (blob.size < 32){
+        // drop primer
+        return;
       }
+      firstBlobSeen = true;
+    }
 
-      const buf = new Uint8Array(await ev.data.arrayBuffer());
-      queue.push(buf);
-      if (!inflight) sendLoop();
-    }catch(e){ console.warn('[voice] dataavailable error', e); }
+    // Backpressure: if bufferedAmount too large, pause until it drains
+    const HIGH_WATER = 1.5 * 1024 * 1024; // 1.5 MB
+    if (bufferedAmount() > HIGH_WATER){
+      _pauseRecorder();
+      if (backoffTimer) clearInterval(backoffTimer);
+      backoffTimer = setInterval(()=>{
+        if (bufferedAmount() < 256 * 1024){ // 256 KB
+          clearInterval(backoffTimer); backoffTimer = null;
+          _resumeRecorder();
+        }
+      }, 100);
+    }
+
+    try{
+      await sendAudioChunk(blob);
+      chunkSeq++;
+    }catch(e){
+      console.warn('[voice] failed to send chunk', e);
+    }
   };
   rec.onerror = (e) => console.warn('[voice] recorder error', e);
   rec.onstop = ()=>{};
 
-  // 96 ms slices (server accepts 64–128 ms)
-  try { rec.start(96); } catch { rec.start(); }
+  // Kick off recording with ~150–200 ms slices
+  try { rec.start(150); } catch { rec.start(); }
+
+  // Send a Configure frame at the start of the turn (optional; placeholder for future tuning)
+  configure({ type: "Configure", vad: "client", media: "webm_opus", userMsgId: currentUserMsgId });
 }
 
 export function disarmVAD(){
   try{ if (rec && rec.state !== 'inactive') rec.stop(); }catch{}
   rec = null;
-  inflight = false;
-  queue = [];
+  if (backoffTimer){ try{ clearInterval(backoffTimer); }catch{} backoffTimer = null; }
   chunkSeq = 0;
   currentUserMsgId = null;
   firstBlobSeen = false;
 }
 
-// kept for API parity; not exposed to UI in this build
-export function setVadBoost(_v){}
+export function bargeIn(){
+  try { sendCloseStream(); } catch {}
+  // TTS should be paused by the UI’s player; app.js can listen to this and stop playback
+}
+
+export function setVadBoost(_v){} // retained for API parity
