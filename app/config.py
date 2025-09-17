@@ -28,3 +28,11 @@ class Settings:
 
 def load_settings() -> Settings:
     return Settings()
+
+
+import os
+
+# Usage caps / rate limits (Phase 3)
+MAX_TURN_SEC = int(os.getenv("MAX_TURN_SEC", "30"))
+MAX_SESSION_MIN = int(os.getenv("MAX_SESSION_MIN", "15"))
+RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))  # requests per minute

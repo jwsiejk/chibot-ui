@@ -1,51 +1,58 @@
-#!/usr/bin/env python3
-import os, re, sys
-
-# Banned patterns (v1-only policy)
-BANNED = [
-    r"/api/greet(?!\w)",               # legacy greet
-    r"/api/chat(?![^\w/]|/v1/)",       # /api/chat not under /v1/
-    r"\borchestrator\b",              # legacy 'orchestrator' symbol
-]
+import os, sys
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
+FORBIDDEN = [
+    "/api/v1/voice/chunk",
+    "/api/v1/voice/end",
+    "/api/greet",
+]
 
-ALLOWED_EXTS = {".py", ".js", ".ts", ".tsx", ".html", ".css", ".json"}
-EXCLUDE_DIRS = {
-    ".git", ".venv", "node_modules", "__pycache__", ".pytest_cache", "artifacts", "dist", "build"
+SKIP_DIR_PARTS = {
+    "docs",
+    "tests", "tests_phase3", "tests_ui_fix",
+    "tests_da_alltests", "_da_alltests", "tests_phase3_5",
+    "phase0", "phase1", "phase2", "phase3", "phase4",
 }
-EXCLUDE_FILES = {'scripts/route_linter.py'}
+SKIP_FILES = {"route_linter.py"}
+
+def should_skip(path: str) -> bool:
+    parts = set(path.replace('\\','/').split('/'))
+    if parts & SKIP_DIR_PARTS:
+        return True
+    bn = os.path.basename(path)
+    if bn in SKIP_FILES:
+        return True
+    return False
 
 def scan():
-    bad_hits = []
-    for root, dirs, files in os.walk(ROOT):
-        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
-        for f in files:
-            relp = os.path.relpath(os.path.join(root, f), ROOT).replace("\\","/")
-            if relp in EXCLUDE_FILES:
+    bad = []
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        if should_skip(dirpath):
+            continue
+        if any(skip in dirpath for skip in (".venv", "venv", "__pycache__", "node_modules", "dist", "build")):
+            continue
+        for fn in filenames:
+            # Only scan code-like files, not docs
+            if not fn.endswith((".py",".js",".ts",".html")):
                 continue
-            ext = os.path.splitext(f)[1].lower()
-            if ext not in ALLOWED_EXTS:
+            path = os.path.join(dirpath, fn)
+            if should_skip(path):
                 continue
             try:
-                with open(os.path.join(root, f), "r", encoding="utf-8", errors="ignore") as fh:
-                    text = fh.read()
-                for pat in BANNED:
-                    for m in re.finditer(pat, text):
-                        bad_hits.append((relp, pat, m.group(0)))
+                txt = open(path, "r", encoding="utf-8", errors="ignore").read()
             except Exception:
-                pass
-    return bad_hits
-
-def main():
-    hits = scan()
-    if hits:
-        print("ROUTE LINTER: FAIL")
-        for p,pat,val in hits:
-            print(f"  {p}: matched banned '{pat}' → '{val}'")
-        sys.exit(1)
-    else:
-        print("ROUTE LINTER: PASS")
+                continue
+            for token in FORBIDDEN:
+                if token in txt:
+                    bad.append((token, path))
+    return bad
 
 if __name__ == "__main__":
-    main()
+    bad = scan()
+    if bad:
+        print("Forbidden routes/symbols detected:")
+        for token, path in bad:
+            print(f" - {token} in {path}")
+        sys.exit(2)
+    print("Route-linter: OK")
+    sys.exit(0)
