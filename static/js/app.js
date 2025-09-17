@@ -128,6 +128,21 @@ window.addEventListener('askchip-ws', (ev)=>{
   } else if (msg.type === 'UtteranceEnd'){
     dot.className = 'dot dot-thinking';
   } else if (msg.type === 'Error'){
+    // fall-through below
+  }
+  // Additional WS frames
+  if (msg.type === 'suggestions' && Array.isArray(msg.items)){
+    setSuggestions(msg.items);
+  } else if (msg.type === 'assistant_chunk'){
+    window.__ac_text = (window.__ac_text || '') + String(msg.text||'');
+  } else if (msg.type === 'assistant_end'){
+    const text = (window.__ac_text || '').trim(); window.__ac_text = '';
+    if (text){ appendMessage('assistant', text); try{ speakText(text); }catch{} }
+    if (typeof setDot==='function') setDot('ready');
+  } else if (msg.type === 'state'){
+    if (msg.phase === 'assistant_speaking' && typeof setDot==='function') setDot('speaking');
+    if ((msg.phase === 'assistant_end' || msg.phase === 'ready') && typeof setDot==='function') setDot('ready');
+  } else if (msg.type === 'Error'){
     dot.className = 'dot dot-ready';
   }
 });
@@ -139,3 +154,30 @@ document.addEventListener('keydown', (e)=>{
     try{ bargeIn(); }catch{}
   }
 });
+
+function appendMessage(role, text){
+  const box = document.getElementById('chatMessages'); if (!box) return;
+  const el = document.createElement('div');
+  el.className = 'msg ' + (role==='user' ? 'user' : 'assistant');
+  el.textContent = (text||'').trim();
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+}
+
+function setSuggestions(items){
+  const ul = document.getElementById('sugg'); if (!ul) return;
+  ul.innerHTML='';
+  (items||[]).slice(0,4).forEach(t=>{
+    const li=document.createElement('li'); const b=document.createElement('button');
+    b.textContent=t; b.addEventListener('click',()=>{ const i=document.getElementById('composer'); if(i){ i.value=t; i.focus(); }});
+    li.appendChild(b); ul.appendChild(li);
+  });
+}
+
+async function speakText(text){
+  try{
+    const r = await fetch('/api/v1/voice/tts-with-visemes', { method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify({ text }) });
+    const j = await r.json(); const b64 = (j && j.audio_b64) || '';
+    if (b64){ const bytes = Uint8Array.from(atob(b64), c=>c.charCodeAt(0)); const mod = await import('./audio.js'); await mod.playBytesStream(bytes); }
+  }catch(e){ console.warn('[tts] synth failed', e); }
+}
