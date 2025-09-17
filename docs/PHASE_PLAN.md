@@ -27,3 +27,14 @@ This document tracks acceptance items per phase and serves as the canonical chec
 ---
 
 **Note:** Phase ordering and content remain aligned with the locked architecture and public v1 surfaces.
+
+## Phase 4 — Completed (2025-09-14)
+**Objective:** Bridge `/api/v1/voice/chunk` to the streaming ASR manager and verify end-to-end **ASR partial/final** events over the WS bus.
+
+**Status:** Implemented. The voice chunk endpoint now enqueues decoded audio into the streaming ASR manager (Deepgram path). Tests in `tests/phase4/*` send multiple chunks and assert at least one `user_partial` and a `user_final` are received on the bus.
+
+**Acceptance (must pass):**
+- `/api/v1/voice/chunk` decodes base64 audio and **enqueues** into the streaming ASR manager.
+- **No fallbacks/mocks** wired for providers; bus contract remains explicit.
+- Rate limiting updated to permit **~16 RPS** for voice chunks (64–128 ms cadence).
+- WS bus receives **user_partial** and **user_final** frames after enough chunks.

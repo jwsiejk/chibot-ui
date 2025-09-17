@@ -12,3 +12,5 @@ Front-end Presence & Behavior (v1-only, single WS per tab)
 8. Error banner shows exact failing route + HTTP status; no hidden fallbacks.
 9. Route linter: fails if any legacy routes are present (e.g., '/api/greet', '/api/chat' without '/v1/', 'orchestrator').
 10. Design Mode (Atomic) remains inert when off; does not alter normal layout flow.
+
+\1Verified: 2025-09-17 via Data Analysis tests
