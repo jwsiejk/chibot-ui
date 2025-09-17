@@ -3,7 +3,7 @@ from __future__ import annotations
 import json, os
 from typing import Any, Dict
 
-DEFAULTS = {
+DEFAULTS = {\n    "llm_provider": "auto",\n    "openai_model": "gpt-4o-mini",\n
     "stt_mode": "batch",
     "deepgram": {
         "model": "nova-3",
