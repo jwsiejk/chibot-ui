@@ -9,9 +9,31 @@ from typing import AsyncGenerator, Optional, Any
 import websockets  # provided by uvicorn[standard]
 
 
+
+# Test-mode and last-observed info for CI assertions
+DG_TEST_MODE = os.getenv("DG_TEST_MODE", "").strip() == "1"
+DG_LAST_URL: str | None = None
+DG_LAST_CONFIG: dict | None = None
+
+
+class _FakeWSForTests:
+    def __init__(self):
+        self.open = True
+        self.sent = []
+    async def send(self, data):
+        self.sent.append(data)
+    async def close(self):
+        self.open = False
+    def __aiter__(self):
+        # No incoming provider frames in test mode
+        async def _gen():
+            if False:
+                yield None
+        return _gen()
+
 # ------------------------- URL & Config Helpers -------------------------------
 
-def _dg_url() -> str:
+def _dg_url(overrides: Optional[dict] = None) -> str:
     """Return the Deepgram listen URL with safe defaults."""
     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
     # Append defaults if not present (helps when proxies ignore Configure frame)
@@ -22,9 +44,24 @@ def _dg_url() -> str:
             + sep
             + "encoding=opus&sample_rate=48000&channels=1&interim_results=true&vad_events=true&smart_format=true&punctuate=true&utterance_end_ms=1200"
         )
+    # Apply overrides into query string if present
+    try:
+        if overrides:
+            import urllib.parse as _p
+            parts = _p.urlsplit(base)
+            q = _p.parse_qsl(parts.query, keep_blank_values=True)
+            qd = {k: v for k, v in q}
+            def _fmt(v):
+                if isinstance(v, bool): return "true" if v else "false"
+                return str(int(v)) if isinstance(v, (int,)) else str(v)
+            for k in ("encoding","sample_rate","channels","interim_results","smart_format","punctuate","vad_events","utterance_end_ms","model"):
+                if k in overrides and overrides[k] is not None:
+                    qd[k] = _fmt(overrides[k])
+            query = _p.urlencode(qd)
+            base = _p.urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+    except Exception:
+        pass
     return base
-
-
 def _auth_header() -> str:
     key = os.getenv("DEEPGRAM_API_KEY", "").strip()
     if not key:
@@ -32,7 +69,7 @@ def _auth_header() -> str:
     return f"Token {key}"
 
 
-def _initial_config() -> dict:
+def _initial_config(overrides: Optional[dict] = None) -> dict:
     model = os.getenv("DG_MODEL")
     interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
     cfg = {
@@ -47,6 +84,14 @@ def _initial_config() -> dict:
     }
     if model:
         cfg["model"] = model
+    # Apply overrides
+    try:
+        if overrides:
+            for k in ("encoding","sample_rate","channels","interim_results","smart_format","punctuate","vad_events","utterance_end_ms","model"):
+                if k in overrides and overrides[k] is not None:
+                    cfg[k] = overrides[k]
+    except Exception:
+        pass
     return cfg
 
 
@@ -62,6 +107,7 @@ class DeepgramClient:
     """
 
     def __init__(self, _cfg: Optional[dict] = None) -> None:
+        self._cfg = _cfg or {}
         self._ws = None  # type: ignore
         self._rx_task: Optional[asyncio.Task] = None
         self._ev_queue: asyncio.Queue = asyncio.Queue()
@@ -83,27 +129,38 @@ class DeepgramClient:
     # -- lifecycle -------------------------------------------------------------
 
     async def connect(self) -> None:
+        global DG_LAST_URL, DG_LAST_CONFIG
         if self._ws:
             return
-        # Try tuple headers first; fall back to dict headers for older stacks.
+        url = _dg_url(self._cfg)
+        if DG_TEST_MODE:
+            # No network — use a fake socket and record URL/config for tests
+            self._ws = _FakeWSForTests()
+            DG_LAST_URL = url
+            DG_LAST_CONFIG = _initial_config(self._cfg)
+            await self._ev_queue.put({"type":"asr_open"})
+            return
+        # Real network path
         try:
             self._ws = await websockets.connect(
-                _dg_url(),
+                url,
                 extra_headers=[("Authorization", _auth_header())],
                 max_size=None,
             )
         except TypeError:
             self._ws = await websockets.connect(
-                _dg_url(),
+                url,
                 extra_headers={"Authorization": _auth_header()},
                 max_size=None,
             )
-
         # Send initial configuration to enable partials / VAD / formatting.
-        await self._ws.send(json.dumps(_initial_config()))
+        DG_LAST_URL = url
+        DG_LAST_CONFIG = _initial_config(self._cfg)
+        await self._ws.send(json.dumps(DG_LAST_CONFIG))
         # Start receiver
         self._rx_task = asyncio.create_task(self._rx_loop())
         await self._ev_queue.put({"type": "asr_open"})
+
 
     async def close(
         self,

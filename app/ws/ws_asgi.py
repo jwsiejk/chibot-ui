@@ -14,7 +14,7 @@ def _dumps(obj) -> str:
 def _has_deepgram_key() -> bool:
     return bool((os.getenv("DEEPGRAM_API_KEY") or "").strip())
 
-async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref):
+async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen):
     """Relay Deepgram events to client as Results/UtteranceEnd."""
     try:
         async for ev in dg.events():
@@ -27,10 +27,13 @@ async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref):
                 text = ev.get("text") or ""
                 await send({"type":"websocket.send","text": _dumps(make_results(turn_id_ref[0], transcript=text, confidence=0.0, is_final=is_final))})
                 if is_final:
+                    final_seen[0] = True
                     await send({"type":"websocket.send","text": _dumps(make_utterance_end(turn_id_ref[0]))})
             elif et == "asr_error":
                 await send({"type":"websocket.send","text": _dumps(make_error("asr_error", str(ev.get("error") or "unknown")))})
             # else: ignore unknown
+    except asyncio.CancelledError:
+        return
     except Exception as e:
         # Non-fatal in tests without vendor
         try:
@@ -51,15 +54,16 @@ async def ws_chat(scope, receive, send):
     dg: Optional[DeepgramClient] = None
     rx_task: Optional[asyncio.Task] = None
     turn_id_ref = [0]  # box for closure
+    final_seen = [False]
 
     async def _ensure_dg_connected():
         nonlocal dg, rx_task
         if dg is None and _has_deepgram_key():
-            dg = DeepgramClient({})
+            dg = DeepgramClient(cfg)
             await dg.connect()  # dg.connect
             # set current turn id
             turn_id_ref[0] = buf.turn_seq + 1
-            rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref))
+            rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen))
 
     try:
         while True:
@@ -93,6 +97,12 @@ async def ws_chat(scope, receive, send):
                             if _has_deepgram_key() and dg is not None:
                                 await dg.close(wait_for_final=True)  # dg.close
                                 # rx_task will emit final + utterance_end
+                                if not final_seen[0]:
+                                    # Provider did not return a final; emit a minimal final to satisfy contract
+                                    await send({"type":"websocket.send","text": _dumps(make_results(turn_id, transcript="", is_final=True))})
+                                    await send({"type":"websocket.send","text": _dumps(make_utterance_end(turn_id))})
+                                    await send({"type":"websocket.send","text": _dumps(make_results(turn_id, transcript="", is_final=True))})
+                                    await send({"type":"websocket.send","text": _dumps(make_utterance_end(turn_id))})
                             else:
                                 # No vendor: emit an empty final to satisfy contract
                                 await send({"type":"websocket.send","text": _dumps(make_results(turn_id, transcript="", is_final=True))})
