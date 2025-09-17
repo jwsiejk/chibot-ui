@@ -91,10 +91,11 @@ async def ws_chat(scope, receive, send):
         if token:
             try: _payload = verify_ws_token(token)
             except Exception: pass
-while True:
+    try:
+        while True:
             ev = await receive()
             et = ev.get("type")
-
+        
             if et == "websocket.receive":
                 # Binary frames → forward to Deepgram when enabled; always buffer locally
                 if ev.get("bytes") is not None:
@@ -105,7 +106,7 @@ while True:
                         if dg is not None:
                             await dg.send(chunk)  # dg.send
                     continue
-
+        
                 if ev.get("text") is not None:
                     try:
                         obj = parse_client_json(ev.get("text") or "")
@@ -134,7 +135,7 @@ while True:
                                 await send({"type":"websocket.send","text": _dumps(make_utterance_end(turn_id))})
                     except ValueError as e:
                         await send({"type":"websocket.send","text": _dumps(make_error("bad_message", str(e)))})
-
+        
             elif et == "websocket.disconnect":
                 break
             else:
