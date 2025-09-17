@@ -1,77 +1,199 @@
-# OPERATING INSTRUCTIONS
+# OPERATING_INSTRUCTIONS (WS‑Only Edition)
 
-> **Phase 5 Release Note (2025-09-14)**  
-> Added WS **speech streamer**. `schedule_tts_audio()` splits MP3 into `audio_chunk`s; after `cancel_turn`, further chunks and `assistant_end` for that `turn_id` are suppressed.
+**Status:** Production | **Transport:** WebSocket‑only (no HTTP mic ingest) | **API surface:** v1‑only
 
-> **Phase 2 Release Note (2025-09-13)**  
-> Login/Profile gate is **Neon-backed**:
-> - On `POST /api/v1/auth/login`, the server checks Neon for an existing profile (when `DATABASE_URL` is set).  
-> - If found → user is taken **directly** to the main interface; **Start** is enabled.  
-> - If not found → the **Profile** modal is displayed; `POST /api/v1/profile` persists to Neon; after save, the main interface is entered and **Start** is enabled.  
-> - CSRF is required for state-changing endpoints (`/api/v1/auth/login`, `/api/v1/profile`).
+This document explains how to run, monitor, and troubleshoot Ask Chip after the migration to a **WebSocket‑only** audio lane that mirrors Deepgram’s realtime WS patterns. It replaces any prior instructions that referenced HTTP `/api/v1/voice/chunk` or `/api/v1/voice/end`.
 
-## 📋 Ask Chip — Operating Instructions (paste this into a new chat)
+---
 
-You are my build assistant for the Ask Chip app. Follow these rules exactly:
+## 1) Scope & Audience
+- **Operators:** start/stop the service, deploy on Render, check health, inspect logs.
+- **Admins:** use the in‑app Admin Console, review live logs (SSE), toggle runtime settings.
+- **Developers:** understand message flow, where to modify WS handler & mic sender, and how to run diagnostics.
 
-### 0) Scope & Sources
-- **Use only the repo zip I attach in this session.** Do not reference or import anything else.
-- **No browsing, no external docs, no speculation.** If something’s missing, state the gap and propose the smallest safe addition.
+---
 
-### 1) Tooling & Output Policy
-- **Do NOT use tools to write or modify code.** Provide **full file contents** inline for every file you change (no diffs).
-- **Tests every update.** If I explicitly allow tools for test execution, you may run them; otherwise:
-  - provide runnable test scripts/pytest files,
-  - list exact commands to run locally,
-  - state the expected outputs.
-- If I ask for a zip, provide a file tree + exact packaging steps; only generate a zip if I explicitly say tools are OK.
+## 2) System Overview (Post‑Migration)
+- **One socket per tab:** `wss://<host>/ws/v1/chat` carries:
+  - **Binary** mic audio frames (WebM/Opus)
+  - **Text JSON** control (e.g., `CloseStream`, `KeepAlive`, `BargeIn`, optional `Configure`)
+  - **Assistant events** (e.g., interim/final transcripts, `UtteranceEnd`, errors)
+  - *(Optional)* streamed TTS audio (binary) if enabled
+- **HTTP (unchanged):**
+  - `POST /api/v1/greet`
+  - `POST /api/v1/chat`
+  - `POST /api/v1/voice/tts-with-visemes` (if TTS stays over HTTP)
+  - `GET  /api/v1/admin/logs` (Server‑Sent Events; live admin log stream)
+  - `GET  /api/v1/health` (basic readiness probe)
+- **Removed (no fallbacks):**
+  - `POST /api/v1/voice/chunk` ❌
+  - `POST /api/v1/voice/end` ❌
 
-### 2) Architecture & Public Surfaces (locked)
-- **Hybrid transport (production):** Client mic → **HTTP chunks (64–128 ms)** → Gateway; Gateway → **WS** to Deepgram (ASR) + server-side barge-in; Orchestrator → **HTTP** TTS (abortable) → Gateway → **WS** audio to client.
-- **v1-only endpoints:**  
-  HTTP: `/api/v1/health`, `/api/v1/greet` (kept, idempotent), `/api/v1/chat`, `/api/v1/voice/chunk`  
-  WS: `/ws/v1/chat` (**one WS per tab**)
-- **No legacy routes or fallbacks.** If present, remove or 404/410 them and update tests.
+---
 
-### 3) Greet Policy (kept) & Idempotency
-- Keep `GET /api/v1/greet`. First call per session creates a greet turn and returns `turn_id`.  
-- Subsequent calls in the same session return the **same `turn_id`** (or `409` with that id).  
-- Small rate-limit (e.g., 1 greet / 10 s). Feature flag: `FEATURE_GREET_ENABLED`.
+## 3) Message Schema (Summary)
+**Client → Server (Text JSON)**
+- `{"type":"Configure","encoding":"opus","sample_rate":48000,"channels":1,"interim_results":true,"smart_format":true,"punctuate":true,"vad_events":true,"utterance_end_ms":1200}` *(optional, once)*
+- `{"type":"CloseStream"}` — end the user turn (server forwards provider close)
+- `{"type":"KeepAlive"}` — send every ~4s during long silences
+- `{"type":"BargeIn"}` — app‑level: stop TTS, close current turn, prep next
 
-### 4) Message Identifiers (required)
-- `session_id` — server session key (cookie-bound).  
-- `user_msg_id` — **UUID/ULID per user turn** (typed or voice).  
-  - Typed chat: accept optional `Idempotency-Key` header and use it as `user_msg_id`.  
-  - Voice: client creates at **speechstart**; attach to every `/voice/chunk` with `chunk_seq` (1,2,3…).  
-- `turn_id` — **UUID/ULID per assistant turn** (greet/chat/auto).  
-- **Correlation:** assistant frames include `correlation_user_msg_id` when a turn answers a specific user turn.  
-- **Idempotency:** repeated `Idempotency-Key` on `/chat` → return the **same** `{user_msg_id, turn_id}`; repeated `(user_msg_id, chunk_seq)` chunks are ignored.
+**Client → Server (Binary)**
+- **Mic audio slices** produced by `MediaRecorder('audio/webm;codecs=opus')` at 150–200 ms cadence. **First blob must include the container header** (send blobs unmodified).
 
-### 5) Barge-in & TTS Cancel (must have)
-- Soft barge-in: pause on VAD onset during playback → confirm (~420 ms) → **commit**: `cancel_turn(session_id, last_turn_id)`, stop audio/visemes, return to Listening.  
-- TTS calls must be **abortable**; if provider returns a full buffer, **slice** into 200–300 ms WS chunks; after commit, **no new chunks** may be emitted.
+**Server → Client (Text JSON)**
+- `{"type":"Results","channel":{"alternatives":[{"transcript":"...","confidence":0.93}],"is_final":false}}` *(pass‑through interim)*
+- `{"type":"Results", ... "is_final":true}` *(final for the span)*
+- `{"type":"UtteranceEnd"}` *(when VAD is enabled and the gap crosses `utterance_end_ms`)*
+- `{"type":"Error","code":"...","message":"..."}`
 
-### 6) Delivery Format for Each Phase
-When I say “complete Phase X”, do **all** of the following in **one** message:
+**Server → Client (Binary, optional)**
+- TTS streaming over WS (if enabled): `TTSStart` / binary chunks / `TTSEnd`.
 
-1) **Phase Summary & Objectives** — plain English of what you’re changing and why.  
-2) **File Plan** — list every file to **add/update/delete** with one-line reasons.  
-3) **Full Files** — include the complete contents of each changed file. (No diffs.)  
-4) **Deletion Sweep** — explicit list of files to remove.  
-5) **Tests** — new/updated tests (full files), how to run them, and the expected output.  
-6) **Acceptance Checklist** — restate the phase-specific checks and show how the code meets them.  
-7) **Rollback note** — how to revert if needed (one paragraph).
+> Full protocol details live in **docs/WS_PHASE_PLAN**.
 
-### 7) Acceptance Targets (always verify)
-- WS opens; **one-tab** enforced; greet is **idempotent**.  
-- Voice chunks at **64–128 ms** cadence (~15–16 RPS); server RPS matches.  
-- ASR `user_partial` < **200 ms p50**; `user_final` per phrase; DG WS lifecycle handled (open on first chunk, idle close, reconnect).  
-- Barge-in: pause immediately; commit ~**420 ms**; **no late frames** for canceled `turn_id`.  
-- TTS: start-to-first-audio < **600 ms p50** on short replies; **abortable** on interrupt.  
-- IDs: `/chat` returns `{ ok, user_msg_id, turn_id }`; ASR frames carry `user_msg_id`; assistant frames carry `turn_id` + `correlation_user_msg_id`.  
-- v1-only routes; explicit errors; admin logs & metrics for greet/chat/ASR/barge/TTS/WS.
+---
 
-### 8) Style & Safety
-- Be concise, deterministic, and production-minded.  
-- No persona/color in engineering deliverables.  
-- If any ambiguity exists, **choose the safest interpretation and proceed**; document assumptions at the top before delivering files.
+## 4) Quick Start (Local)
+**Prereqs**
+- Python 3.10+ (or container runtime if using Docker)
+- Environment variables set (see §6)
+- Ports open locally
+
+**Run (ASGI via Uvicorn/Gunicorn)**
+```bash
+# dev
+uvicorn app.asgi_gateway:asgi --host 0.0.0.0 --port 8000 --reload
+
+# prod‑like
+gunicorn -k uvicorn.workers.UvicornWorker -w 1 -b 0.0.0.0:8000 app.asgi_gateway:asgi
+```
+
+**Open the app**
+- `http://localhost:8000` (main UI)
+- Admin Console (in‑app): Admin menu → Diagnostics / Logs
+
+---
+
+## 5) Render Deployment
+**Service type:** Web Service (Docker *or* Native Build)  
+**Command:** (example)
+```bash
+gunicorn -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-1} -b 0.0.0.0:$PORT app.asgi_gateway:asgi
+```
+**Notes**
+- Start with `WEB_CONCURRENCY=1`. Increase after stability testing.
+- WebSockets are supported on Render Web Services by default.
+- Health check: `GET /api/v1/health` returns `{"ok":true}`.
+- If running a headless agent alongside the web process, ensure the web process still binds to `$PORT` and stays healthy.
+
+---
+
+## 6) Environment Variables (minimum)
+- `OPENAI_API_KEY` — LLM
+- `ELEVENLABS_API_KEY` — TTS
+- `DATABASE_URL` — Neon (Postgres)
+- `SECRET_KEY` — Flask session secret
+- `FEATURE_*` — Any runtime feature toggles you use (persona %, suggestions, etc.)
+- *(Optional, provider flags)* If you externalize ASR flags, keep them server‑side defaults; `Configure` can override per connection.
+
+> Keep all route/feature names aligned with the “v1‑only” policy — **no legacy routes**.
+
+---
+
+## 7) How a Call Works (Runtime State)
+1. **Connect** `/ws/v1/chat` (cookie auth; origin checked).  
+2. **(Optional) Configure** — client sends `Configure` once; server dials provider WS flags.  
+3. **Listening** — client streams binary mic slices every 150–200 ms.  
+4. **Interims** — server relays interim `Results` to the client; UI shows live transcription.  
+5. **CloseStream** — client ends the user turn; server sends provider close, lingers ~600 ms, waits for **final** (≤ 8 s).  
+6. **Thinking → Responding** — LLM + TTS; visemes sync the avatar.  
+7. **Barge‑in** — user starts talking; client sends `BargeIn` and pauses/stops TTS immediately; next turn begins.
+
+---
+
+## 8) Admin & Diagnostics
+- **Admin Log (SSE)**: `GET /api/v1/admin/logs` — live JSON events, e.g., `asr_open`, `Results (is_final)`, `UtteranceEnd`, `asr_error`, `tts_start/tts_end`.
+- **Diagnostics flow** (WS‑only):
+  - “Press Continue to record 5 s” → “Recording…” → “Audio captured (sending)…”.  
+  - Rows: **pipe alive**, **partials_seen**, **final_seen**, **admin_sse_ok**, **tts_cancel_ok**.
+- **What green looks like**: one `provider_open`, one `asr_open`, several `Results (is_final:false)`, one final, maybe `UtteranceEnd`.
+
+---
+
+## 9) Operational Runbook
+**A) No interims (silence or gibberish)**
+- Ensure **first blob** is unmodified (header present).  
+- Verify provider URL flags (encoding=opus, sample_rate=48000, channels=1, `interim_results=true`).  
+- Check network egress to provider.
+
+**B) “send_before_open” in logs**
+- Verify WS handler gates `open→send` with a lock and sets an “opened” event before allowing chunks.
+
+**C) Final timeout after `CloseStream`**
+- Set `utterance_end_ms` ~1200–1500; linger ~600 ms; final wait ≤ 8 s.  
+- Confirm the client actually sent `CloseStream` (see Admin SSE).
+
+**D) Idle socket closes unexpectedly**
+- Client should send `{"type":"KeepAlive"}` every ~4 s.  
+- Server ping/pong every ~25–30 s; drop stale connections.
+
+**E) Backpressure / audio backlog**
+- If `ws.bufferedAmount` grows > ~256 KiB on the client, pause recorder; resume when drained.  
+- Cap server inbound queue to ~1–2 s of audio; drop oldest if needed (with a metric).
+
+**F) Mobile/Background tabs**
+- Safari iOS: require a user gesture before audio playback.  
+- Background tabs throttle timers; show a “Paused; tab inactive” banner and resume on focus.
+
+---
+
+## 10) Security & Compliance
+- Cookie‑based auth; **Origin** check at WS handshake.
+- No CSRF on WS frames; keep CSRF for HTTP POST routes.
+- PII redaction in logs; do not log transcripts verbatim in error paths.
+- Rate limiting: per‑session LLM tokens, ASR minutes, TTS minutes; clear UI errors when caps are exceeded.
+
+---
+
+## 11) Performance Targets (initial)
+- **Interim time‑to‑first:** ≤ 0.8–1.2 s after speech start.
+- **Barge‑in cut time:** ≤ 150–250 ms to stop TTS.
+- **Final after `CloseStream`:** ≤ 8 s hard cap.
+
+Tune:
+- `utterance_end_ms` 1200–1500 (quick responsiveness vs premature finals)
+- MediaRecorder slice 150–200 ms
+- Provider linger ~600 ms
+
+---
+
+## 12) Acceptance Checklist (WS‑Only)
+- ❑ No `/api/v1/voice/chunk|end` routes (linter enforced)  
+- ❑ Exactly one provider open per WS; **no** “send_before_open”  
+- ❑ Interims appear during speech; final within bound after `CloseStream`  
+- ❑ Barge‑in cancels TTS immediately; next turn accepts audio  
+- ❑ Admin SSE shows expected sequence; Diagnostics all green  
+- ❑ Security (origin check, redaction) & cost caps in place  
+- ❑ Soak test (≥ 2 h) stable; idle keep‑alive proven
+
+---
+
+## 13) File Map (where code lives)
+- **WS handler:** `app/.../ws_chat.py` (or your actual WS endpoint module)  
+- **Provider bridge:** `app/services/streaming_asr/...` (Deepgram WS client)  
+- **Mic sender:** `static/js/...` (client WS module; MediaRecorder → WS)  
+- **Admin SSE:** `app/api_v1/admin.py` (logs), `static/js/admin_console.js` (viewer)  
+- **Docs:** `docs/WS_PHASE_PLAN` (protocol + phases), **this file**
+
+---
+
+## 14) Decommissioned Endpoints
+- `POST /api/v1/voice/chunk` — **removed**  
+- `POST /api/v1/voice/end` — **removed**
+
+If any code or tests reference these, treat as a **defect**.
+
+---
+
+*Last updated:* WS‑Only Edition, v1
