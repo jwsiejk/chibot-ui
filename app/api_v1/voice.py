@@ -7,7 +7,7 @@ from ..services.tts_provider import get_tts_provider
 from ..ws.bus import bus
 from ..services.streaming import schedule_frames
 
-bp = Blueprint("voice", __name__, url_prefix="/api/v1/voice")
+bp = Blueprint("voice", __name__)
 
 @bp.post("/stt")
 def stt_stub():

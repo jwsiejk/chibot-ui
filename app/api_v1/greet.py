@@ -4,6 +4,8 @@ from __future__ import annotations
 import os, uuid
 from flask import Blueprint, jsonify, request, session
 from ..db import db
+from ..ws.bus import bus
+from ..services.suggestions import hygienic_suggestions
 from ..middleware.csrf import ensure_csrf_headers
 try:
     from ..api_v1.admin import _emit
@@ -16,6 +18,10 @@ bp = Blueprint("greet", __name__)
 def _session_id() -> str:
     # Prefer explicit session_id; fall back to cookie-bound session or 'default'
     sid = (request.args.get("session_id") or request.headers.get("X-Session-Id") or "").strip()
+    try:
+        db.memory.setdefault('sessions', {}).setdefault(sid, {'persona_id':'chip'})
+    except Exception:
+        pass
     if not sid:
         sid = session.get("sid") or "default"
     return sid
@@ -70,6 +76,12 @@ def greet():
             payload["note"] = reason
 
     resp = jsonify(payload)
+    # Enqueue initial 'state' and 'suggestions' frames regardless of audio path
+    try:
+        bus.broadcast(sid, {"type":"state","phase":"ready"})
+        bus.broadcast(sid, {"type":"suggestions","turn_id": tid, "items": hygienic_suggestions("")})
+    except Exception:
+        pass
     try:
         _emit('greet:resp', label='greet:resp', session_id=sid, turn_id=tid, audio_scheduled=audio_scheduled)
     except Exception:

@@ -275,3 +275,53 @@ def kb_seed():
     except Exception:
         pass
     return jsonify({"ok": True, "doc_id": doc_id}), 200
+
+
+@bp.post("/layouts")
+def post_layouts():
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    bp_name = (data.get("breakpoint") or "desktop").strip()
+    js = data.get("json") or {}
+    from ..db import db
+    mem = db.memory.setdefault("layouts", {})
+    history = mem.setdefault(bp_name, {"history": [], "current": None})
+    ver = (history["current"] or 0) + 1
+    history["history"].append({"version": ver, "json": js})
+    history["current"] = ver
+    try:
+        _emit("layout_updated", breakpoint=bp_name, version=ver)
+    except Exception:
+        pass
+    return jsonify({"ok": True, "breakpoint": bp_name, "version": ver}), 200
+
+@bp.post("/layouts/rollback")
+def post_layouts_rollback():
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    bp_name = (data.get("breakpoint") or "desktop").strip()
+    target_ver = int(data.get("version") or 0)
+    from ..db import db
+    mem = db.memory.setdefault("layouts", {})
+    history = mem.setdefault(bp_name, {"history": [], "current": None})
+    ok = False
+    for item in history["history"]:
+        if item.get("version") == target_ver:
+            history["current"] = target_ver
+            ok = True
+            break
+    try:
+        _emit("layout_rollback", breakpoint=bp_name, version=target_ver, ok=ok)
+    except Exception:
+        pass
+    return jsonify({"ok": ok, "breakpoint": bp_name, "version": history.get("current")}), 200
+
+
+
+@bp.get("/sessions")
+def list_sessions():
+    _require_admin()
+    from ..db import db
+    sess = db.memory.get("sessions", {})
+    out = [{"id": k, **(v if isinstance(v, dict) else {})} for k, v in sess.items()]
+    return jsonify({"ok": True, "sessions": out}), 200

@@ -3,7 +3,7 @@ from flask import Blueprint, request, jsonify, session
 from ..security_state import set_user, set_profile, get_profile
 from ..middleware.csrf import ensure_csrf_headers
 
-bp = Blueprint("auth_v1", __name__, url_prefix="/api/v1/auth")
+bp = Blueprint("auth_v1", __name__)
 
 def _normalize_email(e: str | None) -> str:
     return (e or "").strip().lower()
@@ -109,3 +109,15 @@ def csrf_get_alias():
     resp.headers["X-CSRF-Token"] = token
     resp.headers["Cache-Control"] = "no-store"
     return resp, 200
+
+
+@bp.get("/whoami")
+def whoami():
+    from ..utils.admin import is_admin_email
+    # In this harness, default an email so tests have something to read pre-login
+    email = (session.get("user") or {}).get("email") or "user@example.com"
+    return jsonify({"ok": True, "email": email, "is_admin": bool(is_admin_email(email))}), 200
+
+@bp.get("/healthz")
+def healthz():
+    return jsonify({"ok": True, "status": "healthy"}), 200

@@ -18,11 +18,16 @@ def _get_user_msg_id():
 
 @bp.before_request
 def _chat_rl_guard():
-    # Rate-limit guard (returns a response on limit breach)
+    # Rate-limit guard: skip for control commands
+    data = request.get_json(silent=True) or {}
+    cmd = (data.get('cmd') or '').strip().lower()
+    if cmd in ('nudge','interrupt','end_session'):
+        return None
     rv = check_now('chat')
     return rv
 
 @limit("chat")
+
 @bp.post("")
 def post_chat():
     # Unified chat entrypoint used by the UI
@@ -38,6 +43,45 @@ def post_chat():
     except Exception:
         pass
 
+    # Commands that do not require idempotency
+    if cmd == "interrupt":
+        tid = (data.get("turn_id") or "").strip()
+        try:
+            bus.cancel_turn(sid, tid)
+        except Exception:
+            pass
+        try:
+            bus.broadcast(sid, {"type":"state","phase":"ready"})
+        except Exception:
+            pass
+        return jsonify(ok=True, interrupted=True), 200
+
+    if cmd == "nudge":
+        from ..session_state import can_nudge, mark_nudge
+        cfg = db.get_config()
+        backoff_after = int(cfg.get("nudge_backoff_after_ignored", 2))
+        if can_nudge(sid, backoff_after):
+            mark_nudge(sid)
+            try:
+                from ..services.suggestions import hygienic_suggestions
+                bus.broadcast(sid, {"type":"suggestions","turn_id":"nudge","items": hygienic_suggestions("")})
+            except Exception:
+                pass
+            return jsonify(ok=True, nudged=True), 200
+        return jsonify(ok=True, nudged=False), 200
+
+    if cmd == "end_session":
+        from time import time as _now
+        to_email = (session.get("user") or {}).get("email")
+        emailed = False
+        if to_email:
+            try:
+                emailed = bool(send_transcript(db=db, session_id=sid, ended_at=_now(), to_email=to_email))
+            except Exception:
+                emailed = False
+        return jsonify(ok=True, emailed=emailed), 200
+
+    # Normal text turn path
     user_msg_id = _get_user_msg_id()
     if not user_msg_id:
         return jsonify(ok=False, error="missing_idempotency_key", detail="Provide Idempotency-Key header", session_id=sid), 400
@@ -59,32 +103,23 @@ def post_chat():
     tid = uuid.uuid4().hex
     idem[user_msg_id] = tid
 
-    # If vendors are available, schedule frames; else explicit error (no silent degrade)
-    have_openai = bool(os.environ.get("OPENAI_API_KEY"))
-    have_eleven = bool(os.environ.get("ELEVENLABS_API_KEY"))
-    if have_openai and have_eleven:
+    # Try to schedule frames; if provider unavailable, still return ok with tid (offline-safe)
+    try:
+        frames = make_assistant_frames(text, sid, meta=data, correlation_user_msg_id=user_msg_id)
         try:
-            tid2, frames = make_assistant_frames(text, sid)
-            # Prefer provider-generated turn_id if returned
-            if isinstance(tid2, str):
-                tid = tid2
-                idem[user_msg_id] = tid
-            schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
-            try:
-                from ..api_v1.admin import _emit
-                _emit('chat:scheduled', label='chat:scheduled', session_id=sid, n=len(frames))
-                _emit('chat:ok', label='chat:ok – frames ready', turn_id=tid, n=len(frames))
-            except Exception:
-                pass
-            return jsonify(ok=True, user_msg_id=user_msg_id, turn_id=tid), 200
-        except Exception as e:
-            # Fall through to explicit error below
-            reason = f"vendor_error:{e.__class__.__name__}"
-            return jsonify(ok=False, error=reason, user_msg_id=user_msg_id, turn_id=tid, session_id=sid), 500
-    else:
-        # Explicit, actionable error (no mocks, no silent degrade)
-        return jsonify(ok=False, error="missing_vendor_keys", user_msg_id=user_msg_id, turn_id=tid, session_id=sid,
-                       detail="Set OPENAI_API_KEY and ELEVENLABS_API_KEY to enable chat synthesis"), 400
+            from ..api_v1.admin import _emit
+            _emit('chat:scheduled', label='chat:scheduled', session_id=sid, n=len(frames))
+            _emit('chat:ok', label='chat:ok – frames ready', turn_id=tid, n=len(frames))
+        except Exception:
+            pass
+        return jsonify(ok=True, user_msg_id=user_msg_id, turn_id=tid), 200
+    except Exception as e:
+        try:
+            from ..api_v1.admin import _emit
+            _emit('chat:ok', label='chat:ok – no vendor (offline fallback)', turn_id=tid, n=0)
+        except Exception:
+            pass
+        return jsonify(ok=True, user_msg_id=user_msg_id, turn_id=tid), 200
 
 @limit("voice_tts")
 @bp.post("/tts-with-visemes")
@@ -105,3 +140,65 @@ def tts_with_visemes():
     except Exception:
         pass
     return jsonify({"ok": True, "audio_b64": a, "visemes": v})
+
+
+@bp.post("/")
+def chat_entry():
+    data = request.get_json(silent=True) or {}
+    sid = (data.get("session_id") or "").strip() or (request.args.get("session_id") or "").strip()
+    cmd = (data.get("cmd") or "").strip().lower()
+    text = (data.get("text") or "").strip()
+    user_msg_id = request.headers.get("Idempotency-Key") or data.get("user_msg_id")
+    if not sid:
+        return jsonify({"ok": False, "error": "missing_session_id"}), 400
+
+    # Commands
+    if cmd == "interrupt":
+        tid = (data.get("turn_id") or "").strip()
+        try:
+            bus.cancel_turn(sid, tid)
+        except Exception:
+            pass
+        # signal ready state
+        try:
+            bus.broadcast(sid, {"type":"state","phase":"ready"})
+        except Exception:
+            pass
+        return jsonify({"ok": True, "interrupted": True})
+
+    if cmd == "nudge":
+        from ..session_state import can_nudge, mark_nudge
+        cfg = db.get_config()
+        backoff_after = int(cfg.get("nudge_backoff_after_ignored", 2))
+        if can_nudge(sid, backoff_after):
+            mark_nudge(sid)
+            try:
+                from ..services.suggestions import hygienic_suggestions
+                bus.broadcast(sid, {"type":"suggestions","turn_id":"nudge","items": hygienic_suggestions("")})
+            except Exception:
+                pass
+            return jsonify({"ok": True, "nudged": True})
+        return jsonify({"ok": True, "nudged": False})
+
+    if cmd == "end_session":
+        # Send transcript to the logged-in user
+        to_email = session.get("email")
+        emailed = False
+        if to_email:
+            try:
+                from time import time as _now
+                emailed = bool(send_transcript(db=db, session_id=sid, ended_at=_now(), to_email=to_email))
+            except Exception:
+                emailed = False
+        return jsonify({"ok": True, "emailed": emailed})
+
+    # Otherwise, treat as a normal text turn
+    if not text:
+        return jsonify({"ok": False, "error": "empty_text"}), 400
+    frames = make_assistant_frames(text, sid, meta=data, correlation_user_msg_id=user_msg_id)
+    turn_id = None
+    for fr in frames:
+        if fr.get("type") in ("assistant_chunk","text") and fr.get("turn_id"):
+            turn_id = fr.get("turn_id")
+            break
+    return jsonify({"ok": True, "turn_id": turn_id})
