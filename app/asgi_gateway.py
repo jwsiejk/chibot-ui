@@ -1,3 +1,4 @@
+from app.ws.ws_asgi import ws_chat
 # app/asgi_gateway.py
 # Starlette ASGI app that serves:
 #   • WebSocket /ws/v1/chat  (native ASGI)
@@ -86,7 +87,7 @@ async def chat_ws(websocket):
 
 # --- Compose Starlette app ---
 routes = [
-    WebSocketRoute("/ws/v1/chat", chat_ws),
+    WebSocketRoute("/ws/v1/chat", ws_chat),
     Mount("/", app=WSGIMiddleware(flask_app)),
 ]
 _cors_origins = []

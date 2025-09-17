@@ -1,9 +1,9 @@
-
-# app/ws/ws_asgi.py — Phase 2 (Deepgram wired; pass-through Results)
-import json, asyncio, time
-from typing import Optional
-from .schema_v1 import parse_client_json, make_keepalive_ack
-from app.services.streaming_asr.deepgram_client import DeepgramClient
+# app/ws/ws_asgi.py — Phase 1 (protocol only; vendor wiring in Phase 2)
+from __future__ import annotations
+import asyncio
+from typing import Optional, Dict, Any
+from .schema_v1 import parse_client_json, make_keepalive_ack, make_results, make_utterance_end, make_error
+from .turn_buffer import TurnBuffer
 
 def _qparam(scope: dict, key: str, default: Optional[str] = None) -> Optional[str]:
     try:
@@ -15,90 +15,57 @@ def _qparam(scope: dict, key: str, default: Optional[str] = None) -> Optional[st
 
 async def ws_chat(scope, receive, send):
     if scope.get("type") != "websocket":
-        await send({"type":"http.response.start","status":404,"headers":[(b'content-type', b'text/plain')]})
-        await send({"type":"http.response.body","body": b'not found'})
+        # Not a websocket request — 404 response
+        await send({"type":"http.response.start","status":404,"headers":[]})
+        await send({"type":"http.response.body","body":b"not found"})
         return
 
+    # Accept immediately; we don't negotiate subprotocol here
     await send({"type":"websocket.accept"})
-    session_id = _qparam(scope, "session_id", "default")
 
-    dg: Optional[DeepgramClient] = None
-    rx_task: Optional[asyncio.Task] = None
-
-    async def ensure_connect():
-        nonlocal dg, rx_task
-        if dg is not None:
-            return
-        dg = DeepgramClient()
-        await dg.connect()
-        async def pump():
-            async for ev in dg.events():
-                try:
-                    # Pass through Deepgram JSON messages we care about
-                    # We forward only Results and UtteranceEnd to the client.
-                    t = ev.get("type")
-                    if t == "Results" or t == "UtteranceEnd":
-                        await send({"type":"websocket.send","text": json.dumps(ev, separators=(",",":"))})
-                except Exception:
-                    # swallow to keep pump alive
-                    pass
-        rx_task = asyncio.create_task(pump())
+    cfg: Dict[str, Any] = {}
+    buf = TurnBuffer()
 
     try:
         while True:
-            event = await receive()
-            etype = event.get("type")
-            if etype == "websocket.receive":
-                if event.get("bytes") is not None:
-                    # Binary mic frame
-                    if dg is None:
-                        try:
-                            await ensure_connect()
-                        except Exception:
-                            # Cannot connect ASR; close gracefully
-                            await send({"type":"websocket.send","text": json.dumps({"type":"Error","error":"asr_connect_failed"}, separators=(",",":"))})
-                            break
+            ev = await receive()
+            et = ev.get("type")
+
+            if et == "websocket.receive":
+                # Binary audio frame
+                if ev.get("bytes") is not None:
+                    buf.append(ev.get("bytes") or b"")
+                    continue
+                # Text control frame
+                if ev.get("text") is not None:
                     try:
-                        await dg.send(event["bytes"])
-                    except Exception:
-                        # Ignore send errors to keep loop alive
-                        pass
-                elif event.get("text") is not None:
-                    # Control JSON: KeepAlive or CloseStream
-                    try:
-                        msg = parse_client_json(event["text"])
-                    except ValueError:
-                        continue
-                    mtype = msg["type"]
-                    if mtype == "KeepAlive":
-                        await send({"type":"websocket.send","text": json.dumps(make_keepalive_ack(), separators=(",",":"))})
-                    elif mtype == "CloseStream":
-                        if dg is not None:
-                            try:
-                                await dg.close(wait_for_final=True)
-                            except Exception:
-                                pass
-                            # Create a new Deepgram stream on next binary
-                            dg = None
-                            if rx_task:
-                                try: rx_task.cancel()
-                                except Exception: pass
-                                rx_task = None
-                # else: ignore unknown
-            elif etype == "websocket.disconnect":
+                        obj = parse_client_json(ev.get("text") or "")
+                        t = obj.get("type")
+                        if t == "KeepAlive":
+                            await send({"type":"websocket.send","text":__dumps(make_keepalive_ack())})
+                        elif t == "Configure":
+                            cfg.update(obj)  # record for Phase 2
+                            # Optional ack could be added in later phases
+                        elif t == "CloseStream":
+                            turn_id, _pcm = buf.close_turn()
+                            # Phase 1: we don't decode audio yet — emit an empty final
+                            await send({"type":"websocket.send","text":__dumps(make_results(turn_id, transcript=""))})
+                            await send({"type":"websocket.send","text":__dumps(make_utterance_end(turn_id))})
+                    except ValueError as e:
+                        await send({"type":"websocket.send","text":__dumps(make_error("bad_message", str(e)))})
+
+            elif et == "websocket.disconnect":
                 break
             else:
                 # ignore other event types
                 pass
     finally:
         try:
-            if dg is not None:
-                try:
-                    await dg.close(wait_for_final=False)
-                except Exception:
-                    pass
-        finally:
-            try:
-                await send({"type":"websocket.close"})
-            except Exception:
-                pass
+            await send({"type":"websocket.close"})
+        except Exception:
+            pass
+
+# Local compact JSON (avoid orjson reliance in tests)
+def __dumps(obj) -> str:
+    import json
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
