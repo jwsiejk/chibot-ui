@@ -45,12 +45,12 @@ def parse_client_json(text: str) -> Dict[str, Any]:
             raise ValueError("bad_channels")
     return obj
 
-def make_results(turn_id: int, transcript: str = "", confidence: float = 0.0) -> Dict[str, Any]:
+def make_results(turn_id: int, transcript: str = "", confidence: float = 0.0, is_final: bool = True) -> Dict[str, Any]:
     return {
         "type": "Results",
         "channel": {
             "alternatives": [{"transcript": transcript or "", "confidence": confidence}],
-            "is_final": True,
+            "is_final": bool(is_final),
         },
         "turn_id": int(turn_id),
     }
