@@ -1,10 +1,10 @@
-# WS-Everywhere Plan — Phase 0
+# WS-Everywhere Plan — Phase 0 — **COMPLETE**
 
 **WS-only** migration groundwork.
 Use `/ws/v1/chat` exclusively for audio.
 
 
-## Phase 1 — WS Schema (Deepgram-aligned) ✅
+## Phase 1 — **COMPLETE** — WS Schema (Deepgram-aligned) ✅
 **Goal:** Implement the client/server message types on `/ws/v1/chat` without vendor calls.
 
 ### Client → Server
@@ -22,3 +22,11 @@ Use `/ws/v1/chat` exclusively for audio.
 - Unit: turn buffer collects bytes, increments turn_id on CloseStream.
 - Static check: `app/ws/ws_asgi.py` references `KeepAlive`, `CloseStream`, `UtteranceEnd`, and `Results`.
 - Route-linter still passes; no banned routes/symbols; `/ws/v1/chat` present.
+
+
+## Phase 2 — Deepgram Wiring (pass-through) — **COMPLETE**
+- WS handler opens Deepgram WS on first binary frame.
+- Forwards bytes via `DeepgramClient.send()`.
+- Pass-through of Deepgram `Results` and `UtteranceEnd` messages to client.
+- `KeepAlive` → `KeepAliveAck`.
+- **Removed** HTTP `/api/v1/voice/chunk` and `/api/v1/voice/end` endpoints.

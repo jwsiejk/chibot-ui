@@ -1,56 +1,104 @@
 
-# app/ws/ws_asgi.py — Phase 1 schema-compliant WS handler
+# app/ws/ws_asgi.py — Phase 2 (Deepgram wired; pass-through Results)
 import json, asyncio, time
-from .schema_v1 import parse_client_json, make_results, make_utterance_end, make_keepalive_ack
-from .turn_buffer import TurnBuffer
+from typing import Optional
+from .schema_v1 import parse_client_json, make_keepalive_ack
+from app.services.streaming_asr.deepgram_client import DeepgramClient
+
+def _qparam(scope: dict, key: str, default: Optional[str] = None) -> Optional[str]:
+    try:
+        qs = (scope.get("query_string") or b"").decode("utf-8", "ignore")
+        import urllib.parse as _p
+        return (_p.parse_qs(qs).get(key) or [default])[0]
+    except Exception:
+        return default
 
 async def ws_chat(scope, receive, send):
-    """
-    ASGI WebSocket endpoint for /ws/v1/chat
-    - Accepts binary frames as mic audio
-    - Accepts JSON control frames: KeepAlive, CloseStream
-    - On CloseStream, emits Results (empty transcript for Phase 1) and UtteranceEnd
-    """
     if scope.get("type") != "websocket":
         await send({"type":"http.response.start","status":404,"headers":[(b'content-type', b'text/plain')]})
         await send({"type":"http.response.body","body": b'not found'})
         return
+
     await send({"type":"websocket.accept"})
-    buf = TurnBuffer()
+    session_id = _qparam(scope, "session_id", "default")
+
+    dg: Optional[DeepgramClient] = None
+    rx_task: Optional[asyncio.Task] = None
+
+    async def ensure_connect():
+        nonlocal dg, rx_task
+        if dg is not None:
+            return
+        dg = DeepgramClient()
+        await dg.connect()
+        async def pump():
+            async for ev in dg.events():
+                try:
+                    # Pass through Deepgram JSON messages we care about
+                    # We forward only Results and UtteranceEnd to the client.
+                    t = ev.get("type")
+                    if t == "Results" or t == "UtteranceEnd":
+                        await send({"type":"websocket.send","text": json.dumps(ev, separators=(",",":"))})
+                except Exception:
+                    # swallow to keep pump alive
+                    pass
+        rx_task = asyncio.create_task(pump())
 
     try:
         while True:
             event = await receive()
             etype = event.get("type")
             if etype == "websocket.receive":
-                if "bytes" in event and event["bytes"] is not None:
+                if event.get("bytes") is not None:
                     # Binary mic frame
-                    buf.append(event["bytes"])
-                elif "text" in event and event["text"] is not None:
-                    # Control frame (JSON)
+                    if dg is None:
+                        try:
+                            await ensure_connect()
+                        except Exception:
+                            # Cannot connect ASR; close gracefully
+                            await send({"type":"websocket.send","text": json.dumps({"type":"Error","error":"asr_connect_failed"}, separators=(",",":"))})
+                            break
+                    try:
+                        await dg.send(event["bytes"])
+                    except Exception:
+                        # Ignore send errors to keep loop alive
+                        pass
+                elif event.get("text") is not None:
+                    # Control JSON: KeepAlive or CloseStream
                     try:
                         msg = parse_client_json(event["text"])
                     except ValueError:
-                        # ignore invalid control
                         continue
                     mtype = msg["type"]
                     if mtype == "KeepAlive":
                         await send({"type":"websocket.send","text": json.dumps(make_keepalive_ack(), separators=(",",":"))})
                     elif mtype == "CloseStream":
-                        turn_id, _pcm = buf.close_turn()
-                        # Phase 1: we don't call STT; emit minimal Results + UtteranceEnd
-                        await send({"type":"websocket.send","text": json.dumps(make_results(turn_id, ""), separators=(",",":"))})
-                        await send({"type":"websocket.send","text": json.dumps(make_utterance_end(turn_id), separators=(",",":"))})
-                else:
-                    # Unknown frame: ignore
-                    pass
+                        if dg is not None:
+                            try:
+                                await dg.close(wait_for_final=True)
+                            except Exception:
+                                pass
+                            # Create a new Deepgram stream on next binary
+                            dg = None
+                            if rx_task:
+                                try: rx_task.cancel()
+                                except Exception: pass
+                                rx_task = None
+                # else: ignore unknown
             elif etype == "websocket.disconnect":
                 break
             else:
-                # ignore other event types (e.g., lifespan)
+                # ignore other event types
                 pass
     finally:
         try:
-            await send({"type":"websocket.close"})
-        except Exception:
-            pass
+            if dg is not None:
+                try:
+                    await dg.close(wait_for_final=False)
+                except Exception:
+                    pass
+        finally:
+            try:
+                await send({"type":"websocket.close"})
+            except Exception:
+                pass
