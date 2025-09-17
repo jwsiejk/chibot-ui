@@ -14,3 +14,6 @@ Front-end Presence & Behavior (v1-only, single WS per tab)
 10. Design Mode (Atomic) remains inert when off; does not alter normal layout flow.
 
 \1Verified: 2025-09-17 via Data Analysis tests
+
+## Phase 5 — WS TTS Streamer
+Verified: 2025-09-17 via Data Analysis tests
