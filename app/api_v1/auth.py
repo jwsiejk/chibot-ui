@@ -121,3 +121,24 @@ def whoami():
 @bp.get("/healthz")
 def healthz():
     return jsonify({"ok": True, "status": "healthy"}), 200
+
+@bp.route("/ws-token", methods=["GET","POST"])
+def ws_token():
+    from ..security_state import get_user
+    try:
+        from ..security.ws_token import issue
+    except Exception as e:
+        import base64, hmac, json, time, hashlib, os as _os
+        _SECRET = (_os.environ.get("SECRET_KEY","dev-secret") or "dev-secret").encode("utf-8")
+        def _issue(sid: str, sub: str, ttl_s: int = 300) -> str:
+            payload = {"sid": sid, "sub": sub, "iat": int(time.time()), "exp": int(time.time()) + ttl_s}
+            b = json.dumps(payload, separators=(",",":")).encode("utf-8")
+            sig = hmac.new(_SECRET, b, hashlib.sha256).digest()
+            return base64.urlsafe_b64encode(b).decode("ascii") + "." + base64.urlsafe_b64encode(sig).decode("ascii")
+        issue = _issue
+    data = request.get_json(silent=True) or {}
+    sid = (data.get("session_id") or request.args.get("session_id") or "").strip() or "default"
+    ttl = int((data.get("ttl_s") or request.args.get("ttl_s") or 300))
+    user = get_user() or (session.get("user") or {}).get("email") or "anonymous"
+    tok = issue(sid, user, ttl_s=ttl)
+    return jsonify({"ok": True, "token": tok, "expires_in": ttl}), 200

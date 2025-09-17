@@ -2,6 +2,8 @@
 import os, secrets
 from flask import request, jsonify, session
 
+CSRF_EXEMPT_PATHS = { "/api/v1/auth/ws-token" }
+
 CSRF_HEADER = "X-CSRF-Token"
 CSRF_SESSION_KEY = "_csrf_token"
 

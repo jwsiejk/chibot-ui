@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any
 from .schema_v1 import parse_client_json, make_keepalive_ack, make_results, make_utterance_end, make_error
 from .turn_buffer import TurnBuffer
 from app.services.streaming_asr.deepgram_client import DeepgramClient
+from app.security.ws_token import verify as verify_ws_token
 
 def _dumps(obj) -> str:
     import json as _json
@@ -66,7 +67,33 @@ async def ws_chat(scope, receive, send):
             rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen))
 
     try:
-        while True:
+        
+    # ws_token_checked
+    require_token = (os.getenv("WS_TOKEN_REQUIRED","1").lower() not in ("0","false","no"))
+    token = None
+    try:
+        hdrs = {k.decode().lower(): v.decode() for k,v in (scope.get('headers') or [])}
+        if 'authorization' in hdrs and hdrs['authorization'].lower().startswith('bearer '):
+            token = hdrs['authorization'].split(' ',1)[1].strip()
+    except Exception:
+        pass
+    if not token and scope.get('query_string'):
+        try:
+            q = dict([tuple(p.split('=',1)) for p in scope.get('query_string').decode().split('&') if '=' in p])
+            token = q.get('ws_token') or token
+        except Exception:
+            pass
+    if require_token:
+        try:
+            _payload = verify_ws_token(token or "")
+        except Exception:
+            await send({'type':'websocket.close','code':4401})
+            return
+    else:
+        if token:
+            try: _payload = verify_ws_token(token)
+            except Exception: pass
+while True:
             ev = await receive()
             et = ev.get("type")
 
