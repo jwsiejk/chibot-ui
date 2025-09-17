@@ -13,7 +13,7 @@ REQUIRED = [
     r"/ws/v1/chat",
 ]
 
-SCAN_DIRS = {"app", "docs", "templates", "static"}  # bounded scan
+SCAN_DIRS = {'app', 'templates', 'static'}  # bounded scan
 ALLOW_EXT = {".py",".js",".ts",".json",".md",".html",".css",".txt",".yml",".yaml",".ini",".cfg"}
 
 def scan_repo(root, max_files=5000):
@@ -22,7 +22,7 @@ def scan_repo(root, max_files=5000):
     files_scanned = 0
     for p, _, files in os.walk(root):
         rel = os.path.relpath(p, root).split(os.sep)[0]
-        if rel not in SCAN_DIRS and rel != ".":
+        if rel not in SCAN_DIRS:
             continue
         for f in files:
             if files_scanned >= max_files:

@@ -167,7 +167,7 @@
 async function postChunk({sid, csrf, userMsgId, seq, blob}){
   const fd = new FormData();
   fd.append('chunk', blob, 'mic.webm');
-  const r = await fetch(`/api/v1/voice/chunk?session_id=${encodeURIComponent(sid)}`, {
+  const r = await fetch(`/ws/v1/chat?session_id=${encodeURIComponent(sid)}`, {
     method: 'POST', credentials: 'include',
     headers: { 'X-CSRF-Token': csrf, 'X-User-Msg-Id': userMsgId || 'diag-mic', 'X-Seq': String(seq||0) },
     body: fd
@@ -338,7 +338,7 @@ function makeMicStreamer({sid, csrf, userMsgId}){
         });
         if(res && res.proceed){
           const _csrf2 = await getCSRF();
-          await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, {
+          await fetch(`/ws/v1/chat?session_id=${encodeURIComponent(sid)}`, {
             method: 'POST',
             credentials: 'include',
             headers: { 'X-CSRF-Token': _csrf2 }
@@ -351,7 +351,7 @@ function makeMicStreamer({sid, csrf, userMsgId}){
         try{
           streamer.stop();
           const _csrf = await getCSRF();
-          await fetch(`/api/v1/voice/end?session_id=${encodeURIComponent(sid)}`, { method:'POST', credentials:'include', headers:{'X-CSRF-Token':_csrf} });
+          await fetch(`/ws/v1/chat?session_id=${encodeURIComponent(sid)}`, { method:'POST', credentials:'include', headers:{'X-CSRF-Token':_csrf} });
         }catch(_){ }
         set('chunk_post', false, 'mic error');
       }

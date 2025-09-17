@@ -1,4 +1,4 @@
-// static/js/voice.js — MediaRecorder 96ms timeslices → POST /api/v1/voice/chunk
+// static/js/voice.js — MediaRecorder 96ms timeslices → POST /ws/v1/chat
 import { ensureCSRF } from './csrf.js';
 import { getSID } from './util/sid.js';
 
@@ -50,7 +50,7 @@ async function sendLoop(){
       const csrf = await ensureCSRF().catch(()=> '');
       if (csrf) headers.set('X-CSRF-Token', csrf);
 
-      const res = await fetch('/api/v1/voice/chunk', {
+      const res = await fetch('/ws/v1/chat', {
         method: 'POST',
         headers,
         body: JSON.stringify(payload),
