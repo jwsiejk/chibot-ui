@@ -1,7 +1,7 @@
 
 import os, re, json, base64, importlib, sys, types, pathlib
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
+REPO = pathlib.Path(__file__).resolve().parents[2]
 
 def find_file(patterns, exts):
     hits = []

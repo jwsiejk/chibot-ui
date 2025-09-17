@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 
-LEGACY = [r"/api/v1/greet\b", r"/api/chat\b", r"/api/voice\b", r"/ws/chat\b", r"legacy_app\b"]
+LEGACY = [r"/api/greet\b", r"/api/chat\b", r"/api/voice\b", r"/ws/chat\b", r"legacy_app\b"]
 SOURCE_DIRS = ["app", "static", "templates", "scripts", "config"]
 SUFFIXES = {".py", ".js", ".html", ".css", ".json"}
 

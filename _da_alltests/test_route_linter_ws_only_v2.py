@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-LEGACY=[r"/api/v1/greet\b", r"/api/chat\b", r"/api/voice\b", r"/ws/chat\b", r"legacy_app\b"]
+LEGACY=[r"/api/greet\b", r"/api/chat\b", r"/api/voice\b", r"/ws/chat\b", r"legacy_app\b"]
 def test_no_legacy_routes():
     root=Path(__file__).resolve().parents[1]; offenders=[]
     for base in ['app','static','templates','scripts','config']:

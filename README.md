@@ -1,19 +1,12 @@
-## Docs Quick Links
-- [RULES.md](RULES.md)
-- [Phase Plan](docs/PHASE_PLAN.md)
-- [Operating Instructions](docs/OPERATING_INSTRUCTIONS.md)
+# Ask Chip — Phase 0 (WS groundwork)
 
-# Ask Chip — Phase 4 (Real WebSocket, Admin Config, Rate Limits)
+This snapshot passes Phase 0 acceptance (v1-only surfaces + route-linter) and is ready for Render deployment.
 
-**This phase adds:**
-- Real **WebSocket** endpoint on `/ws/v1/chat` (ASGI), while keeping HTTP v1 routes.
-- In-memory **Admin Config** (GET/POST) + **SSE broadcast** on updates.
-- Simple **rate limits** on `/api/v1/chat` and `/api/v1/voice/stt` (token-bucket style).
-- Still 100% mocked vendors (LLM/STT/TTS/Email); no network calls.
+## Deploy
+See **docs/DEPLOY_RENDER.md** for start command and notes.
 
-Entrypoint stays `app.asgi_gateway:asgi` per the architecture.
+## Operate
+See **docs/OPERATING_INSTRUCTIONS.md**.
 
-## Production Provider Policy (No Mocks)
-- The app will **refuse to boot with mock providers** unless `CI_FAST` is set.
-- LLM requires `OPENAI_API_KEY` (set `OPENAI_MODEL` optionally).
-- TTS requires `ELEVENLABS_API_KEY` (+ `ELEVENLABS_VOICE_ID`).
+## Phases
+See **docs/WS_PHASE_PLAN.md**.

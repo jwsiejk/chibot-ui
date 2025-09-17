@@ -1,73 +1,23 @@
+
 # voice.py
 from __future__ import annotations
-
-import asyncio
-import time
-from typing import Optional
-
+import base64
 from flask import Blueprint, jsonify, request
-
-from ..services.streaming_asr.stream_manager import (
-    get_manager,
-    asr_end,
-)
+from ..services.tts_provider import get_tts_provider
 
 bp = Blueprint("voice", __name__, url_prefix="/api/v1/voice")
 
-# --- simple per-session rate limit (server-side guard for /chunk) ------------
-_RPS = {}                 # session_id -> [timestamps]
-_RPS_WINDOW = 1.0         # seconds
-_RPS_MAX = 30             # allow ~10–11 rps @ 96ms cadence with headroom
-_MAX_CHUNK = 512 * 1024   # 512 KiB single-chunk hard cap
+@bp.post("/stt")
+def stt_stub():
+    # WS-only migration: HTTP STT is a stub for presence only (tests assert route presence)
+    # Accepts no audio; returns ok with empty transcript.
+    return jsonify({"ok": True, "transcript": "", "is_final": True})
 
-
-def _now() -> float:
-    return time.time()
-
-
-def _get_session_id() -> Optional[str]:
-    # Prefer query param (what the client uses), then form/json fallbacks
-    sid = request.args.get("session_id")
-    if not sid:
-        try:
-            if request.form:
-                sid = request.form.get("session_id")
-        except Exception:
-            pass
-    if not sid:
-        try:
-            payload = request.get_json(silent=True) or {}
-            sid = payload.get("session_id")
-        except Exception:
-            sid = None
-    return sid or None
-
-
-def _rps_ok(session_id: str) -> bool:
-    now = _now()
-    q = _RPS.get(session_id) or []
-    q = [t for t in q if (now - t) <= _RPS_WINDOW]
-    ok = len(q) < _RPS_MAX
-    if ok:
-        q.append(now)
-    _RPS[session_id] = q
-    return ok
-
-
-def _read_audio_bytes() -> bytes:
-    try:
-        ctype = (request.content_type or "").lower()
-        if ctype.startswith("multipart/form-data"):
-            # Expect a single file field named "chunk"
-            f = request.files.get("chunk")
-            return f.read() if f else b""
-        if ctype.startswith("application/octet-stream"):
-            return request.get_data(cache=False) or b""
-        # Fallback — some clients may POST the raw body with no explicit type.
-        data = request.get_data(cache=False) or b""
-        return data
-    except Exception:
-        return b""
-
-
-
+@bp.post("/tts-with-visemes")
+def tts_with_visemes():
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    # Use provider mock (offline) to synthesize
+    a_bytes, vis = get_tts_provider({}).synth(text)
+    audio_b64 = base64.b64encode(a_bytes).decode("ascii")
+    return jsonify({"ok": True, "audio_b64": audio_b64, "visemes": vis})

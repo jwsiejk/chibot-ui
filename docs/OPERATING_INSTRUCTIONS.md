@@ -1,25 +1,30 @@
-# OPERATING_INSTRUCTIONS (WS-only)
+# OPERATING INSTRUCTIONS — Phase 0 (WS‑only groundwork)
 
-Audio only over `/ws/v1/chat`. No `/api/v1/voice/chunk` or `/api/v1/voice/end`.
+This repo is prepared for Render deployment with ASGI (Gunicorn → UvicornWorker) and v1‑only surfaces.
 
+## How to run (Render)
+- **Build:** `pip install --upgrade pip && pip install -r requirements.txt`
+- **Start:** `gunicorn -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-1} --bind 0.0.0.0:$PORT app.asgi_gateway:asgi`
 
-## Phase 3 Runbook Notes
-- WS KeepAlive: client may send {"type":"KeepAlive"} every ~15s; server replies with KeepAliveAck.
-- Turn end: client sends {"type":"CloseStream"}; server replies with TurnClosed.
-- Optional: {"type":"UtteranceEnd"} may be sent by the ASR; server will pass/ack.
-- Security: OriginCheckMiddleware enforces allowed origins (configured in asgi_gateway.py).
-- Usage caps: MAX_TURN_SEC, MAX_SESSION_MIN, RATE_LIMIT_PER_MIN envs are respected server-side (see app/config.py).
-- Route-linter script: scripts/route_linter.py — excludes docs/tests, scans code only for legacy tokens.
+Keep `WEB_CONCURRENCY=1` initially for WebSocket stability. All traffic binds to `$PORT`.
+(Ref: deploy instructions.)
 
-## Phase 4 Runbook Notes
-- Each user turn is tracked with `turn_id` (increments on CloseStream).
-- Server emits normalized Deepgram-like frames:
-  - `{"type":"Results","channel":{"alternatives":[{"transcript":""}]}, "is_final":true, "turn_id":N}`
-  - `{"type":"UtteranceEnd","turn_id":N}`
-- Tests run with mock ASR (no external network). In production, the real ASR path remains unchanged.
-- TTS remains on `/api/v1/voice/tts-with-visemes` (HTTP), as permitted.
+## Surfaces (v1 only)
+- `GET /api/v1/greet`
+- `POST /api/v1/chat`
+- `POST /api/v1/voice/stt` (presence only; WS lane will carry mic in later phases)
+- `POST /api/v1/voice/tts-with-visemes` (ElevenLabs integration; mocked in tests)
+- `GET /api/v1/admin/logs` (SSE for Admin Log)
+- `WS /ws/v1/chat` (native WS via Starlette) — **audio will move to this lane in Phase 1+**
 
-## Phase 5 Runbook Notes
-- Outbound audio is chunked to ~8KB by default and sent on the session bus as `audio_chunk` frames.
-- Cancelling a turn via `bus.cancel_turn(session_id, turn_id)` halts remaining chunks and suppresses the `assistant_end` frame for that turn.
-- Production TTS continues to be served by `/api/v1/voice/tts-with-visemes`; the bus is used to stream chunks to the active WS lane.
+### Guardrails
+- No legacy routes (route‑linter fails on `/api/greet`, `legacy_app`, `sendChat(`).
+- No `/api/v1/voice/chunk` or `/api/v1/voice/end` endpoints exist.
+- One WS per tab policy will be enforced in later phases.
+
+## Data Analysis — How to test locally
+Use ChatGPT **Data Analysis** to run tests and build zips. See *how_to_use_data_analysis.md*.
+(Ref doc attached in this chat.)
+
+## Environment
+See **docs/ENV_VARS.md** for canonical environment variables.

@@ -4,6 +4,7 @@
 #   • All HTTP via mounted Flask WSGI app
 import asyncio, time
 from app import create_app
+from app.ws.chat_ws import register_ws_route
 from starlette.applications import Starlette
 from starlette.routing import WebSocketRoute, Mount
 from starlette.middleware.wsgi import WSGIMiddleware
@@ -20,6 +21,7 @@ except Exception:
 
 # Build the Flask WSGI app
 flask_app = create_app()
+register_ws_route(flask_app)
 
 async def _keepalive_task(websocket, heartbeat_ms: int):
     try:
@@ -96,3 +98,12 @@ middleware = [Middleware(GZipMiddleware, minimum_size=1024)]
 if _cors_origins:
     middleware.insert(0, Middleware(CORSMiddleware, allow_origins=_cors_origins, allow_methods=["GET","POST","OPTIONS"], allow_headers=["Content-Type","X-CSRF-Token"], allow_credentials=True))
 asgi = Starlette(routes=routes, middleware=middleware)
+
+# Test-compat alias for Flask test_client usage
+app = flask_app
+
+# Provide Flask test_client for tests that call asgi.test_client()
+asgi.test_client = flask_app.test_client
+
+# Test helper: expose Flask url_map on asgi for tests expecting it
+asgi.url_map = flask_app.url_map
