@@ -46,7 +46,7 @@ def make_assistant_frames(seed_text: str, session_id: str, meta: Dict | None = N
     teacher_move = policy.get('teacher_move')
 
     # Retrieval (optional; offline-friendly)
-    kb = kb_search(seed_text, top_k=0) if hasattr(kb_search, '__call__') else []
+    kb = kb_search(seed_text, top_k=3) if hasattr(kb_search, '__call__') else []
 
     # Prompt build
     prompt = _build_prompt(seed_text, persona, kb, teacher_move)

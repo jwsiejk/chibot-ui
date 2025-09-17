@@ -77,5 +77,8 @@ class OpenAIProvider:
             stream=False,
         )
         out = (resp.choices[0].message.content or "").strip()
+        kb = (context or {}).get('kb') or []
+        if isinstance(kb, list):
+            out = f"{out} [KB:{len(kb)}]"
         out = _limit_sentences(out, max_s)
         return out

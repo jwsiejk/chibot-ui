@@ -255,3 +255,23 @@ def _diag_streaming_status():
 def _diag_rate_limits():
     _require_admin()
     return jsonify(ok=True, status2=200), 200
+
+
+# ----------------- KB Seed (Phase 8) -----------------
+
+@bp.post("/kb/seed")
+def kb_seed():
+    _require_admin()
+    from ..services.retrieval import add_document
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "").strip() or "Untitled"
+    body  = (data.get("body") or "").strip()
+    tags  = (data.get("tags") or "").strip()
+    if not body:
+        return jsonify({"ok": False, "error": "body required"}), 400
+    doc_id = add_document(title, body, tags)
+    try:
+        _emit("kb:seed", doc_id=doc_id, title=title)
+    except Exception:
+        pass
+    return jsonify({"ok": True, "doc_id": doc_id}), 200
