@@ -1,6 +1,7 @@
-// static/js/app.js — session control and typed chat (production-deterministic)
-// Ensures: open WS → await open → greet → arm mic (no lost frames).
-// Renders assistant frames regardless of TTS availability.
+// static/js/app.js — session control and typed chat (production)
+// Deterministic Start: open WS → await open → greet → arm mic.
+// Proper End handler: tells server to end_session and resets UI.
+// Text-first: assistant frames render regardless of TTS availability.
 
 import { installFetchInterceptor, ensureCSRF } from './csrf.js';
 import { openWS, waitWSOpen, closeWS } from './ws.js';
@@ -61,15 +62,41 @@ async function onStart(){
       credentials: 'include'
     }).catch(()=>{});
 
-    setDot('thinking'); // will flip via ws events
-
+    // Toggle buttons
     const endBtn = $('#endButton');
     const startBtn = $('#startButton');
     if (endBtn) endBtn.disabled = false;
     if (startBtn) startBtn.disabled = true;
 
+    setDot('thinking'); // will flip via ws events
   }catch(e){
     console.warn('[start] failed', e);
+  }
+}
+
+async function onEnd(){
+  try{
+    const headers = new Headers({ 'Content-Type':'application/json' });
+    const csrf = await ensureCSRF().catch(()=> '');
+    if (csrf) headers.set('X-CSRF-Token', csrf);
+
+    // Tell server to end session (server also clears greet idempotency)
+    await fetch('/api/v1/chat', {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify({ cmd: 'end_session', session_id: getSID() })
+    });
+
+    // Close WS and reset UI state
+    try { closeWS && closeWS(); } catch {}
+    const endBtn = $('#endButton');
+    const startBtn = $('#startButton');
+    if (endBtn) endBtn.disabled = true;
+    if (startBtn) startBtn.disabled = false;
+    setDot('ready');
+  }catch(e){
+    console.warn('[end] failed', e);
   }
 }
 
@@ -97,23 +124,48 @@ async function onSend(){
   setDot('thinking');
 }
 
-// Phase 4+: wire UI state to WS events
+// Optional client-side TTS helper; safe to keep even if server streams audio separately.
+async function speakText(text){
+  try{
+    const r = await fetch('/api/v1/voice/tts-with-visemes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ text })
+    });
+    const j = await r.json(); const b64 = (j && j.audio_b64) || '';
+    if (b64){
+      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const mod = await import('./audio.js');
+      if (mod.playBytesStream) await mod.playBytesStream(bytes);
+      else if (mod.playBytesB64) await mod.playBytesB64(b64);
+    }
+  }catch(e){ console.warn('[tts] synth failed', e); }
+}
+
+// WS event wiring
 window.addEventListener('askchip-ws', (ev)=>{
   const msg = ev.detail || {};
 
-  // State dot
+  // Minimal console tracing to confirm frames are arriving
+  try{
+    if (msg && msg.type) console.debug('[ws<-]', msg.type, msg);
+  }catch{}
+
   if (msg.type === 'Results'){
     setDot('listening');
   } else if (msg.type === 'UtteranceEnd'){
     setDot('thinking');
   }
 
-  // Assistant flow (text-first regardless of TTS)
   if (msg.type === 'assistant_chunk'){
     window.__ac_text = (window.__ac_text || '') + String(msg.text||'');
   } else if (msg.type === 'assistant_end'){
     const text = (window.__ac_text || '').trim(); window.__ac_text = '';
-    if (text){ addChatMessage('assistant', text); }
+    if (text){
+      addChatMessage('assistant', text);
+      try{ speakText(text); }catch{}
+    }
     setDot('ready');
   } else if (msg.type === 'suggestions' && Array.isArray(msg.items)){
     setSuggestions(msg.items);
@@ -127,8 +179,10 @@ window.addEventListener('askchip-ws', (ev)=>{
 
 document.addEventListener('DOMContentLoaded', ()=>{
   const startBtn = $('#startButton');
+  const endBtn   = $('#endButton');
   const sendBtn  = $('#composerSend');
   if (startBtn) startBtn.addEventListener('click', onStart);
+  if (endBtn)   endBtn.addEventListener('click', onEnd);
   if (sendBtn)  sendBtn.addEventListener('click', onSend);
   setDot('ready');
 });
