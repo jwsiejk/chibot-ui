@@ -1,7 +1,10 @@
-# app/services/streaming.py — Phase 7: LLM provider + persona prompt; assistant_* frames
+# app/services/streaming.py — Production-grade assistant framing
+# Guarantees assistant_* frames are broadcast even if the LLM provider fails.
+# Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
+
 from __future__ import annotations
 from typing import List, Dict, Tuple, Optional
-import threading, time
+import threading, time as _t
 
 from .llm_provider import get_provider
 from .awareness import annotate
@@ -12,6 +15,12 @@ from .persona_prompt import build_persona_preamble, format_kb_context
 from .suggestions import hygienic_suggestions
 from ..db import db
 from ..ws.bus import bus
+
+try:
+    from ..api_v1.admin import _emit as _admin_emit  # SSE to Admin
+except Exception:
+    def _admin_emit(*a, **k):  # no-op if admin channel absent
+        pass
 
 def _get_persona_for_session(session_id: str) -> Dict:
     try:
@@ -30,78 +39,129 @@ def _build_prompt(seed_text: str, persona: Dict, kb_snippets: List[str], teacher
     parts.append(f"User said: {seed_text.strip()}")
     return "\n\n".join(parts)
 
-def make_assistant_frames(seed_text: str, session_id: str, meta: Dict | None = None, correlation_user_msg_id: Optional[str] = None) -> List[Dict]:
-    """Produce assistant frames for a given user seed text using the configured LLM provider.
-    Frames use the Phase 7 schema: 'assistant_chunk' then 'assistant_end' (optionally 'suggestions').
-    Returns the list of frames and also broadcasts them onto the WS bus.
+def make_assistant_frames(seed_text: str,
+                          session_id: str,
+                          meta: Optional[Dict] = None,
+                          correlation_user_msg_id: Optional[str] = None) -> Tuple[str, List[Dict]]:
+    """
+    Produce assistant frames for a given user seed text using the configured LLM provider.
+    ALWAYS returns a frames list that includes at least:
+        - one 'assistant_chunk' (with either model text OR a safe fallback), and
+        - one 'assistant_end'.
+    Also broadcasts frames to the WS bus as they are prepared.
     """
     meta = meta or {}
     cfg = db.get_config()
-    provider = get_provider(cfg)
     persona = _get_persona_for_session(session_id)
+
     # Awareness + dialog policy
     labels = annotate(seed_text, meta)
     labels['engagement'] = score_engagement(seed_text, meta)
     policy = pick_policy(labels, cfg)
-    teacher_move = policy.get('teacher_move')
+    teacher_move = (policy or {}).get('teacher_move')
 
-    # Retrieval (optional; offline-friendly)
-    kb = kb_search(seed_text, top_k=3) if hasattr(kb_search, '__call__') else []
+    # Light retrieval – safe to fail closed
+    kb = []
+    try:
+        if cfg.get('kb_enabled', False):
+            kb = kb_search(seed_text, top_k=int(cfg.get('kb_top_k', 3)))
+    except Exception:
+        kb = []
 
-    # Prompt build
     prompt = _build_prompt(seed_text, persona, kb, teacher_move)
-    turn_id = getattr(provider, 'new_turn_id', lambda: str(int(time.time()*1000)))()
 
-    # Generate single reply (non-stream for offline tests)
-    reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
+    # Choose provider (may raise if OPENAI_API_KEY missing/invalid)
+    try:
+        provider = get_provider(cfg)
+    except Exception as e:
+        provider = None
+        _admin_emit("llm_provider_error", error=e.__class__.__name__)
+
+    # --- Generate reply (with safe fallback) ---------------------------------
+    reply: str
+    error_note: Optional[str] = None
+    if provider is not None:
+        try:
+            reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
+        except Exception as e:
+            # Fallback text if provider errors out
+            error_note = f"llm_error:{e.__class__.__name__}"
+            reply = "Hi! I’m ready to help. (Model is warming up.)"
+            _admin_emit("llm_generate_error", error=e.__class__.__name__)
+    else:
+        error_note = "llm_not_available"
+        reply = "Hi! I’m ready to help."
+
+    # --- Build frames --------------------------------------------------------
+    turn_id = db.memory.setdefault('turn_seq', 0) + 1
+    db.memory['turn_seq'] = turn_id  # simple monotonic id; greet may override externally
 
     frames: List[Dict] = []
-    # assistant_chunk
-    chunk = {'type': 'assistant_chunk', 'turn_id': turn_id, 'text': reply}
+
+    chunk = {'type': 'assistant_chunk', 'turn_id': str(turn_id), 'text': reply}
     if correlation_user_msg_id:
         chunk['correlation_user_msg_id'] = correlation_user_msg_id
+    if error_note:
+        chunk['note'] = error_note
     frames.append(chunk)
 
-    # optional suggestions (respect config flags)
+    # Optional suggestions (respect config flags)
     try:
         if cfg.get('suggestions_enabled', True):
-            frames.append({'type': 'suggestions', 'turn_id': turn_id, 'items': hygienic_suggestions(reply)})
+            frames.append({'type': 'suggestions', 'turn_id': str(turn_id), 'items': hygienic_suggestions(reply)})
     except Exception:
         pass
 
-    # assistant_end
-    end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
+    end_fr = {'type': 'assistant_end', 'turn_id': str(turn_id)}
     if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
     frames.append(end_fr)
 
-    # Broadcast
+    # --- Broadcast -----------------------------------------------------------
     try:
         for fr in frames:
             bus.broadcast(session_id, fr)
+            # Trace important milestones to Admin SSE
+            if fr.get('type') == 'assistant_chunk':
+                _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(turn_id))
+            elif fr.get('type') == 'assistant_end':
+                _admin_emit('assistant_end', session_id=session_id, turn_id=str(turn_id))
     except Exception:
         pass
-    return frames
 
-def schedule_frames(session_id: str, frames: List[Dict], delay_ms: int = 0, correlation_user_msg_id: Optional[str] = None):
-    """Enqueue frames over time onto the WS bus (used by greet)."""
+    return str(turn_id), frames
+
+
+def schedule_frames(session_id: str,
+                    frames: List[Dict],
+                    delay_ms: int = 0,
+                    correlation_user_msg_id: Optional[str] = None) -> None:
+    """
+    Optionally schedule frames with a delay (for pacing). Ensures an assistant_end is emitted.
+    Non-blocking: runs in a background thread.
+    """
     def _run():
-        import time as _t
-        for fr in frames:
-            if correlation_user_msg_id and 'correlation_user_msg_id' not in fr:
-                fr['correlation_user_msg_id'] = correlation_user_msg_id
+        try:
+            if delay_ms and delay_ms > 0:
+                _t.sleep(max(0, delay_ms) / 1000.0)
+            for fr in frames:
+                try:
+                    bus.broadcast(session_id, fr)
+                except Exception:
+                    pass
+            # Ensure an assistant_end terminator exists
+            if not any(fr.get('type') in ('assistant_end', 'end') for fr in frames):
+                end_fr = {'type': 'assistant_end', 'turn_id': frames[-1].get('turn_id') if frames else None}
+                if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
+                    end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+                try:
+                    bus.broadcast(session_id, end_fr)
+                except Exception:
+                    pass
+        finally:
             try:
-                bus.broadcast(session_id, fr)
+                _admin_emit('schedule_frames_done', session_id=session_id)
             except Exception:
                 pass
-            _t.sleep(max(0, delay_ms)/1000.0)
-        # Ensure an assistant_end terminator exists
-        if not any(fr.get('type') in ('assistant_end','end') for fr in frames):
-            end_fr = {'type': 'assistant_end', 'turn_id': frames[-1].get('turn_id') if frames else None}
-            if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
-                end_fr['correlation_user_msg_id'] = correlation_user_msg_id
-            try:
-                bus.broadcast(session_id, end_fr)
-            except Exception:
-                pass
+
     threading.Thread(target=_run, daemon=True).start()
