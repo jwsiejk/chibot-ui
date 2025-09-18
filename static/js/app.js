@@ -52,7 +52,7 @@ async function onStart(){
     await initMic();
 
     // Call greet with the SAME SID the WS is using
-    fetch(`/api/v1/greet?session_id=${encodeURIComponent(getSID())}`, {
+    fetch(`/api/v1/greet?reset=1&session_id=${encodeURIComponent(getSID())}`, {
       credentials: 'include'
     }).catch(()=>{});
 

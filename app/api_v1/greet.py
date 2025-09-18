@@ -41,9 +41,23 @@ def greet():
                 pass
     except Exception:
         pass
+    ttl_sec = 600
     if sid in turns:
         existing = turns[sid]
-        tid = (existing.get('tid') if isinstance(existing, dict) else existing)
+        _ts = 0.0
+        try:
+            _ts = float(existing.get('ts', 0.0)) if isinstance(existing, dict) else 0.0
+        except Exception:
+            _ts = 0.0
+        _age_ok = (_ts > 0 and (__import__('time').time() - _ts) < ttl_sec)
+        if _age_ok and not (request.args.get('reset') or request.args.get('force')):
+            tid = (existing.get('tid') if isinstance(existing, dict) else existing)
+            try:
+                _emit('greet:req', label='greet:req (repeat)', route='/api/v1/greet', session_id=sid, turn_id=tid)
+            except Exception:
+                pass
+            resp = jsonify({'ok': True, 'turn_id': tid, 'idempotent': True})
+            return ensure_csrf_headers(resp), 200
         try:
             _emit('greet:req', label='greet:req (repeat)', route='/api/v1/greet', session_id=sid, turn_id=tid)
         except Exception:

@@ -89,6 +89,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     # Subscribe to StreamBus and start pump task
     sid = _get_session_id(scope)
+    # Reset greet idempotency on new WS session
+    try:
+        db.memory.setdefault('greet_turns', {}).pop(sid, None)
+    except Exception:
+        pass
     bus_task = asyncio.create_task(_pump_bus_to_client(sid, send))
     try:
         # Send initial 'ready' for UI consistency
