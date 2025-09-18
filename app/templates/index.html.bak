@@ -73,22 +73,13 @@
 })();
 </script>
 
+</body></html>
 
-<!-- moved trailing scripts back before closing tags -->
 <script>
 (function(){
   const START_SEL = '[data-role="start-btn"], #start';
   const CHAT_SEL  = '[data-role="chat-pane"], #chat';
-  function sid(){
-  try{
-    const k='chip.sid'; let s = localStorage.getItem(k);
-    if(!s){ s = (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random())); localStorage.setItem(k, s); }
-    return s;
-  }catch(_){
-    return (window.askchipSessionId ||= (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random())));
-  }
-}
-const WS_URL = () => `/ws/v1/chat?session_id=${encodeURIComponent(sid())}${window.askchipWSToken?`&ws_token=${encodeURIComponent(window.askchipWSToken)}`:''}`;
+  const WS_URL    = () => `/ws/v1/chat?session_id=${encodeURIComponent(window.askchipSessionId)}`;
 
   // Generate a stable per-tab session id
   function uuidv4(){
@@ -110,14 +101,10 @@ const WS_URL = () => `/ws/v1/chat?session_id=${encodeURIComponent(sid())}${windo
     pane.classList.add('open');
   }
 
-  async function ensureWS(){
-  if (window.askchipWS && window.askchipWS.readyState === 1) return;
-  try{
-    const r = await fetch(`/api/v1/auth/ws-token?session_id=${encodeURIComponent(sid())}`, {credentials:'include'});
-    const j = await r.json(); if (j && j.ok && j.token) window.askchipWSToken = j.token;
-  }catch(e){ /* proceed without token if server allows */ }
-  const ws = new WebSocket(WS_URL());
-  window.askchipWS = ws;
+  function ensureWS(){
+    if (window.askchipWS && window.askchipWS.readyState === 1) return;
+    const ws = new WebSocket(WS_URL());
+    window.askchipWS = ws;
     ws.onopen = () => { window.askchipLog && window.askchipLog({kind:'ws_open', session_id: window.askchipSessionId}); };
     ws.onmessage = ev => {
       // Optional: basic debug sink
@@ -129,8 +116,8 @@ const WS_URL = () => `/ws/v1/chat?session_id=${encodeURIComponent(sid())}${windo
   }
 
   async function greet(){
-    try{
-      const r = await fetch(`/api/v1/greet?session_id=${encodeURIComponent(sid())}&reset=1`, {credentials:'include'});
+    try {
+      const r = await fetch('/api/v1/greet', {credentials:'include'});
       // No need to inspect body; WS will deliver frames
       window.askchipLog && window.askchipLog({kind:'greet', status:r.status});
     } catch(e){
@@ -138,12 +125,14 @@ const WS_URL = () => `/ws/v1/chat?session_id=${encodeURIComponent(sid())}${windo
     }
   }
 
-  async function onStartClick(e){
+  function onStartClick(e){
     // Respect profile gate if present
     if (window.profileComplete === false) {
       alert('Please complete your profile first.'); return;
     }
-    openChatPane(); await ensureWS(); await greet();
+    openChatPane();
+    ensureWS();
+    greet();
   }
 
   function wire(){
@@ -178,4 +167,3 @@ const WS_URL = () => `/ws/v1/chat?session_id=${encodeURIComponent(sid())}${windo
   });
 })();
 </script>
-</body></html>
