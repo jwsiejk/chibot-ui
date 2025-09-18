@@ -27,7 +27,6 @@ def _chat_rl_guard():
     return rv
 
 @limit("chat")
-
 @bp.post("")
 def post_chat():
     # Unified chat entrypoint used by the UI
@@ -86,7 +85,8 @@ def post_chat():
             db.memory.setdefault("greet_turns", {}).pop(sid, None)
         except Exception:
             pass
-# Normal text turn path
+
+    # Normal text turn path
     user_msg_id = _get_user_msg_id()
     if not user_msg_id:
         return jsonify(ok=False, error="missing_idempotency_key", detail="Provide Idempotency-Key header", session_id=sid), 400
@@ -111,6 +111,8 @@ def post_chat():
     # Try to schedule frames; if provider unavailable, still return ok with tid (offline-safe)
     try:
         frames = make_assistant_frames(text, sid, meta=data, correlation_user_msg_id=user_msg_id)
+        # ✅ Broadcast them to the WS client
+        schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
         try:
             from ..api_v1.admin import _emit
             _emit('chat:scheduled', label='chat:scheduled', session_id=sid, n=len(frames))
@@ -145,7 +147,6 @@ def tts_with_visemes():
     except Exception:
         pass
     return jsonify({"ok": True, "audio_b64": a, "visemes": v})
-
 
 @bp.post("/")
 def chat_entry():
@@ -201,6 +202,8 @@ def chat_entry():
     if not text:
         return jsonify({"ok": False, "error": "empty_text"}), 400
     frames = make_assistant_frames(text, sid, meta=data, correlation_user_msg_id=user_msg_id)
+    # ✅ Broadcast them to the WS client (fallback path too)
+    schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
     turn_id = None
     for fr in frames:
         if fr.get("type") in ("assistant_chunk","text") and fr.get("turn_id"):
