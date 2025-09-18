@@ -30,8 +30,20 @@ def _session_id() -> str:
 def greet():
     sid = _session_id()
     turns = db.memory.setdefault("greet_turns", {})
+    # Allow clients to force a fresh greet for this session (e.g., on Start)
+    try:
+        _force = (request.args.get('reset') or request.args.get('force') or '').lower()
+        if _force in ('1','true','yes'):
+            try:
+                turns.pop(sid, None)
+                _emit('greet:reset', label='greet:reset', route='/api/v1/greet', session_id=sid)
+            except Exception:
+                pass
+    except Exception:
+        pass
     if sid in turns:
-        tid = turns[sid]
+        existing = turns[sid]
+        tid = (existing.get('tid') if isinstance(existing, dict) else existing)
         try:
             _emit('greet:req', label='greet:req (repeat)', route='/api/v1/greet', session_id=sid, turn_id=tid)
         except Exception:
@@ -41,13 +53,19 @@ def greet():
 
     # Create a new turn id (UUID is acceptable per spec). Do NOT depend on vendors.
     tid = uuid.uuid4().hex
-    turns[sid] = tid
+    turns[sid] = {'tid': tid, 'ts': __import__('time').time()}
 
     # Optionally schedule audio if vendors are configured. Otherwise, skip explicitly.
     audio_scheduled = False
     reason = None
-    have_openai = bool(os.environ.get("OPENAI_API_KEY"))
-    have_eleven = bool(os.environ.get("ELEVENLABS_API_KEY"))
+    try:
+        from ..api_v1.admin import _vendor_status_payload
+        v = _vendor_status_payload()
+        have_openai = bool(os.environ.get("OPENAI_API_KEY"))
+        have_eleven = bool(v.get("elevenlabs")) or bool(os.environ.get("ELEVENLABS_API_KEY"))
+    except Exception:
+        have_openai = bool(os.environ.get("OPENAI_API_KEY"))
+        have_eleven = bool(os.environ.get("ELEVENLABS_API_KEY"))
     if have_openai and have_eleven:
         try:
             from ..services.streaming import make_assistant_frames, schedule_frames
@@ -56,9 +74,14 @@ def greet():
             # Ensure make_assistant_frames returns our tid or ignore and use ours
             if isinstance(_tid, str):
                 tid = _tid
-                turns[sid] = tid
+                turns[sid] = {'tid': tid, 'ts': __import__('time').time()}
             schedule_frames(sid, frames, enable_nudge=False)
             audio_scheduled = True
+            try:
+                rec = turns.get(sid)
+                if isinstance(rec, dict): rec['audio_scheduled'] = True
+            except Exception:
+                pass
             try:
                 _emit('greet:scheduled', label='greet:scheduled', session_id=sid, n=len(frames))
             except Exception:

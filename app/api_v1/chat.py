@@ -81,7 +81,12 @@ def post_chat():
                 emailed = False
         return jsonify(ok=True, emailed=emailed), 200
 
-    # Normal text turn path
+            # Clear greet idempotency so next Start greets again
+        try:
+            db.memory.setdefault("greet_turns", {}).pop(sid, None)
+        except Exception:
+            pass
+# Normal text turn path
     user_msg_id = _get_user_msg_id()
     if not user_msg_id:
         return jsonify(ok=False, error="missing_idempotency_key", detail="Provide Idempotency-Key header", session_id=sid), 400

@@ -137,7 +137,7 @@ window.addEventListener('askchip-ws', (ev)=>{
     window.__ac_text = (window.__ac_text || '') + String(msg.text||'');
   } else if (msg.type === 'assistant_end'){
     const text = (window.__ac_text || '').trim(); window.__ac_text = '';
-    if (text){ appendMessage('assistant', text); try{ speakText(text); }catch{} }
+    if (text){ addChatMessage('assistant', text); try{ speakText(text); }catch{} }
     if (typeof setDot==='function') setDot('ready');
   } else if (msg.type === 'state'){
     if (msg.phase === 'assistant_speaking' && typeof setDot==='function') setDot('speaking');

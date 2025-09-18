@@ -8,6 +8,7 @@ from .turn_buffer import TurnBuffer
 from app.services.streaming_asr.deepgram_client import DeepgramClient
 from app.security.ws_token import verify as verify_ws_token
 from app.ws.bus import bus
+from app.db import db
 
 def _dumps(obj) -> str:
     import json as _json
