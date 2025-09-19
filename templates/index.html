@@ -6,6 +6,30 @@
   <meta name="csrf" content="" />
   <title>Ask Chip</title>
   <link rel="stylesheet" href="/static/css/app.css" />
+
+<script>
+// --- AskChip: stable per-tab session id helper (localStorage) ---
+(function(){
+  function sid(){
+    try{
+      const k='chip.sid';
+      let s = localStorage.getItem(k);
+      if(!s){
+        s = (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random()));
+        localStorage.setItem(k, s);
+      }
+      return s;
+    }catch(_){
+      // fallback on window if localStorage unavailable
+      return (window.askchipSessionId ||= (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random())));
+    }
+  }
+  // expose both for legacy code paths
+  window.getAskChipSID = sid;
+  window.askchipSessionId = window.askchipSessionId || sid();
+})();
+</script>
+
 </head>
 <body class="zoom">
   <header class="topbar">
@@ -80,5 +104,66 @@
   <script type="module" src="/static/js/ui_menu.js?v=v20250911b"></script>
   <script type="module" src="/static/js/auth_gate.js?v=v20250911b"></script>
   <script type="module" src="/static/js/app.js?v=v20250911b"></script>
+
+<script type="module">
+/* AskChip bootstrap — ensures WS token, opens WS bound to sid(), greets deterministically */
+import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
+try { installFetchInterceptor(); } catch(_) {}
+
+let openWS, waitWSOpen;
+try{
+  const wsmod = await import('/static/js/ws.js');
+  openWS = wsmod.openWS; waitWSOpen = wsmod.waitWSOpen;
+}catch(_){
+  // Minimal inline WS open fallback if ws.js isn't present
+  window._dbg = window._dbg || {};
+  openWS = async function(token){
+    const sid = window.getAskChipSID();
+    const wsurl = `${location.origin.replace(/^http/,'ws')}/ws/v1/chat?session_id=${encodeURIComponent(sid)}${token?`&ws_token=${encodeURIComponent(token)}`:''}`;
+    const ws = new WebSocket(wsurl);
+    window._dbg.ws = ws;
+    return new Promise(res=>{ ws.onopen=()=>res(ws); });
+  };
+  waitWSOpen = ()=>Promise.resolve();
+}
+
+async function fetchWsToken(){
+  const sid = window.getAskChipSID();
+  try{
+    const r = await fetch(`/api/v1/auth/ws-token?session_id=${encodeURIComponent(sid)}`, {credentials:'include'});
+    const j = await r.json();
+    if (j && j.ok && j.token) return j.token;
+  }catch(_){}
+  return null;
+}
+
+async function greet(){
+  const sid = window.getAskChipSID();
+  const r = await fetch(`/api/v1/greet?session_id=${encodeURIComponent(sid)}&reset=1`, {credentials:'include'});
+  return r.ok;
+}
+
+async function startAskChip(){
+  const token = await fetchWsToken();
+  await openWS(token);
+  await waitWSOpen();
+  await greet();
+}
+
+function wireStart(){
+  const btn = document.getElementById('startButton') || document.querySelector('[data-role="start-btn"]');
+  if (!btn) return;
+  btn.disabled = false;
+  btn.addEventListener('click', async (e)=>{
+    e.preventDefault();
+    btn.disabled = true;
+    try{ await startAskChip(); } finally { btn.disabled = false; }
+  }, { once: false });
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireStart);
+else wireStart();
+</script>
+
 </body>
 </html>
