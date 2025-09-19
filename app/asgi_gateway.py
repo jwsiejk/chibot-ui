@@ -43,7 +43,7 @@ async def _keepalive_task(websocket, heartbeat_ms: int):
 
 # --- Compose Starlette app ---
 routes = [
-    WebSocketRoute("/ws/v1/chat", _ws_chat_asgi_impl),  # bind directly to ASGI handler
+    Mount("/ws/v1/chat", app=_ws_chat_asgi_impl),  # bind directly to ASGI handler
     Mount("/", app=WSGIMiddleware(flask_app)),
 ]
 print(">>> routes configured:", routes)
