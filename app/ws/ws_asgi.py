@@ -228,14 +228,14 @@ except Exception:  # pragma: no cover
     _StarletteWebSocket = None
 
 async def ws_chat(websocket):
-    """Production WS: accept, validate, send ready, then pump bus->client until disconnect."""
+    """Accept, validate, send ready, then pump frames to keep the connection alive."""
     await websocket.accept()
     try:
         sid = _get_session_id(websocket.scope)
     except Exception:
         sid = "default"
 
-    # Optional token validation if required by config/env
+    # Token validation (if required)
     try:
         if _ws_token_required():
             tok = _get_ws_token(websocket.scope)
@@ -246,11 +246,11 @@ async def ws_chat(websocket):
         finally:
             return
 
-    # Send initial ready
+    # Initial ready frame
     try:
         await websocket.send_text(dumps({
             "type": "ready",
-            "session_id": sid,
+            "session_id": sid
         }))
     except Exception:
         try:
@@ -258,11 +258,10 @@ async def ws_chat(websocket):
         finally:
             return
 
-    # Critical: keep pumping frames to client; never return until client disconnects
+    # Pump bus -> client; do not return until disconnect
     try:
         await _pump_bus_to_client(sid, websocket.send_text)
     except Exception:
-        # swallow to ensure clean close; server logs will capture details
         pass
     finally:
         try:
