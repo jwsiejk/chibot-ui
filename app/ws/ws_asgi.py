@@ -9,7 +9,6 @@ from app.services.streaming_asr.deepgram_client import DeepgramClient
 from app.security.ws_token import verify as verify_ws_token
 from app.ws.bus import bus
 from app.db import db
-from app.api_v1.profile import _load_profile
 
 def _dumps(obj) -> str:
     import json as _json
@@ -137,7 +136,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         try:
             _payload = verify_ws_token(token or "")
         except Exception:
-            await send({'type':'websocket.close','code':4401, 'reason':'invalid_or_expired_token'})
+            await send({'type':'websocket.close','code':4401})
             return
     else:
         if token:
@@ -244,29 +243,9 @@ async def ws_chat(websocket):
             _validate_token(tok, sid)
     except Exception:
         try:
-            await websocket.close(code=4401, reason="invalid_or_expired_token")
+            await websocket.close(code=4401)
         finally:
             return
-
-
-    # Profile gate — require name, title, region for the token's subject
-    try:
-        if _ws_token_required():
-            try:
-                payload = verify_ws_token(tok)
-            except Exception:
-                payload = None
-            email = (payload or {}).get("sub")
-            prof = _load_profile(email) if email else {}
-            name_ok = bool((prof.get("name") or "").strip())
-            title_ok = bool((prof.get("title") or "").strip())
-            region_ok = bool((prof.get("region") or "").strip())
-            if not (name_ok and title_ok and region_ok and (email or "").strip()):
-                await websocket.close(code=4401, reason="profile_incomplete")
-                return
-    except Exception:
-        # Do not block WS on unexpected profile errors; proceed conservatively
-        pass
 
     # Initial ready frame
     try:
@@ -290,3 +269,4 @@ async def ws_chat(websocket):
             await websocket.close()
         except Exception:
             pass
+

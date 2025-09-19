@@ -51,11 +51,8 @@ async function onStart(){
     await ensureCSRF();
 
     // 1) Open WS and wait until subscribed (prevents greet frames from being missed)
-    const sid = getSID();
-const tok = await fetch(`/api/v1/auth/ws-token?session_id=${encodeURIComponent(sid)}`, { credentials: 'include' }).then(r=>r.json());
-if (!tok || !tok.ok || !tok.token) { throw new Error('ws-token fetch failed'); }
-openWS(tok.token);
-await waitWSOpen();
+    openWS();
+    await waitWSOpen();
 
     // 2) Prime mic permission early; VAD arms later
     await initMic().catch(()=>{ /* ignore mic deny for greet text */ });

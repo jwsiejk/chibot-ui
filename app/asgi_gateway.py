@@ -38,53 +38,6 @@ async def _keepalive_task(websocket, heartbeat_ms: int):
         pass
 
 # --- WebSocket endpoint ---
-async def chat_ws(websocket):
-    await websocket.accept()
-    session_id = websocket.query_params.get("session_id", "")
-
-    # Announce open to admin log
-    try:
-        _admin_emit("ws_open", session_id=session_id, proto=PROTO_ID)
-    except Exception:
-        pass
-
-    # Send 'ready' FIRST, deterministically encoded
-    ready = {"type":"ready","session_id":session_id,"proto":PROTO_ID,"heartbeat_ms":DEFAULT_HEARTBEAT_MS,"ts": int(time.time()*1000)}
-    await websocket.send_text(dumps(ready))
-
-    # Start keepalive pings from server (optional; client may also ping)
-    ka = asyncio.create_task(_keepalive_task(websocket, DEFAULT_HEARTBEAT_MS))
-
-    try:
-        while True:
-            try:
-                text = await websocket.receive_text()
-            except RuntimeError:
-                # Non-text or close
-                data = await websocket.receive()
-                if data.get("type") == "websocket.disconnect":
-                    break
-                # ignore binary or others
-                continue
-            if text == "ping":
-                await websocket.send_text("pong")
-            # ignore other inbound messages for now
-    except Exception:
-        pass
-    finally:
-        try:
-            ka.cancel()
-        except Exception:
-            pass
-        try:
-            _admin_emit("ws_close", session_id=session_id)
-        except Exception:
-            pass
-        try:
-            await websocket.close(code=1000)
-        except Exception:
-            pass
-
 # --- Compose Starlette app ---
 routes = [
     WebSocketRoute("/ws/v1/chat", ws_chat),
