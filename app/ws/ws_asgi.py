@@ -146,6 +146,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             _payload = verify_ws_token(token or "")
         except Exception:
             print(">>> _ws_chat_asgi_impl invalid token for sid:", sid)
+            if (os.getenv("WS_DEV_VERBOSE_CLOSE","0").lower() in ("1","true","yes")):
+                try:
+                    await send({"type": "websocket.send", "text": _dumps(make_error("invalid_or_expired_token"))})
+                except Exception:
+                    pass
+                try:
+                    await send({"type": "websocket.close", "code": 1000, "reason": "invalid_or_expired_token"})
+                except Exception:
+                    pass
+                await asyncio.sleep(0.05)
+                return
             await send({"type": "websocket.close", "code": 4401, "reason": "invalid_or_expired_token"})
             await asyncio.sleep(0.05)  # flush close frame
             return
