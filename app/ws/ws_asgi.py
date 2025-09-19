@@ -77,7 +77,7 @@ async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen):
                     await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id_ref[0]))})
             elif et == "asr_error":
                 await send(
-                    {"type": "websocket.send", "text": _dumps(make_error("asr_error", str(ev.get("error") or "unknown")))}
+                    {"type": "websocket.send", "text": _dumps(make_error("asr_error", str(ev.get("error") or "unknown"))) }
                 )
     except asyncio.CancelledError:
         return
@@ -147,6 +147,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         except Exception:
             print(">>> _ws_chat_asgi_impl invalid token for sid:", sid)
             await send({"type": "websocket.close", "code": 4401, "reason": "invalid_or_expired_token"})
+            await asyncio.sleep(0.05)  # flush close frame
             return
     else:
         if token:
@@ -183,22 +184,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 await dg.close(wait_for_final=True)
                                 if not final_seen[0]:
                                     await send(
-                                        {
-                                            "type": "websocket.send",
-                                            "text": _dumps(
-                                                make_results(turn_id, transcript="", is_final=True)
-                                            ),
-                                        }
+                                        {"type": "websocket.send", "text": _dumps(make_results(turn_id, transcript="", is_final=True))}
                                     )
                                     await send(
                                         {"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))}
                                     )
                             else:
                                 await send(
-                                    {
-                                        "type": "websocket.send",
-                                        "text": _dumps(make_results(turn_id, transcript="", is_final=True)),
-                                    }
+                                    {"type": "websocket.send", "text": _dumps(make_results(turn_id, transcript="", is_final=True))}
                                 )
                                 await send(
                                     {"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))}
@@ -260,16 +253,16 @@ async def ws_chat(websocket):
         print(">>> ws_chat invalid token for sid:", sid)
         try:
             await websocket.close(code=4401, reason="invalid_or_expired_token")
+            await asyncio.sleep(0.05)  # flush close frame
         finally:
             return
 
     try:
-        await websocket.send_text(
-            dumps({"type": "ready", "session_id": sid})
-        )
+        await websocket.send_text(dumps({"type": "ready", "session_id": sid}))
     except Exception:
         try:
             await websocket.close(code=1011, reason="initial_ready_failed")
+            await asyncio.sleep(0.05)
         finally:
             return
 
@@ -280,5 +273,6 @@ async def ws_chat(websocket):
     finally:
         try:
             await websocket.close(code=1000, reason="normal_shutdown")
+            await asyncio.sleep(0.05)
         except Exception:
             pass
