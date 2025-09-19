@@ -46,6 +46,7 @@ routes = [
     WebSocketRoute("/ws/v1/chat", ws_chat),    # only the ASGI handler now
     Mount("/", app=WSGIMiddleware(flask_app)),
 ]
+print(">>> routes configured:", routes)
 _cors_origins = []
 import os as _os
 _allow = _os.environ.get("CORS_ALLOWLIST", "").strip()
