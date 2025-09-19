@@ -14,6 +14,9 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware import Middleware
 from app.ws.protocol import dumps, PROTO_ID, DEFAULT_HEARTBEAT_MS
 
+# On import, log what ws_chat is bound to
+print(">>> asgi_gateway loaded, using ws_chat from:", getattr(ws_chat, "__module__", ws_chat))
+
 # Optional admin log emitter
 try:
     from app.api_v1.admin import _emit as _admin_emit
@@ -37,7 +40,6 @@ async def _keepalive_task(websocket, heartbeat_ms: int):
     except Exception:
         pass
 
-# --- WebSocket endpoint ---
 # --- Compose Starlette app ---
 routes = [
     WebSocketRoute("/ws/v1/chat", ws_chat),
@@ -50,7 +52,11 @@ if _allow:
     _cors_origins = [o.strip() for o in _allow.split(",") if o.strip()]
 middleware = [Middleware(GZipMiddleware, minimum_size=1024)]
 if _cors_origins:
-    middleware.insert(0, Middleware(CORSMiddleware, allow_origins=_cors_origins, allow_methods=["GET","POST","OPTIONS"], allow_headers=["Content-Type","X-CSRF-Token"], allow_credentials=True))
+    middleware.insert(0, Middleware(CORSMiddleware,
+                                    allow_origins=_cors_origins,
+                                    allow_methods=["GET","POST","OPTIONS"],
+                                    allow_headers=["Content-Type","X-CSRF-Token"],
+                                    allow_credentials=True))
 asgi = Starlette(routes=routes, middleware=middleware)
 
 # Test-compat alias for Flask test_client usage
