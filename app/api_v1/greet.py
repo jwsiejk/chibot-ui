@@ -110,13 +110,31 @@ def greet():
                 tid = _tid
                 turns[sid] = {"tid": tid, "ts": _now()}
             # Broadcast the frames (non-blocking; TTS is handled elsewhere or by downstream logic)
-            schedule_frames(sid, frames, enable_nudge=False)
+            schedule_frames(sid, frames)
             # TTS availability influences only the audio flag (optional)
             if have_eleven:
                 audio_scheduled = True
         except Exception as e:
-            # If LLM path failed despite OPENAI presence, record a reason and continue to render suggestions/state
+            # If LLM path failed despite OPENAI presence, record a reason and provide a safe fallback
             note = f"llm_error:{e.__class__.__name__}"
+            import traceback as _tb
+            try:
+                trace = _tb.format_exc()
+            except Exception:
+                trace = ""
+            # Attempt a minimal fallback greeting so the UI is not dead
+            try:
+                fallback_text = "Hi, I’m Chip. How can I help today?"
+                from ..services.streaming import make_assistant_frames, schedule_frames
+                _tid2, frames2 = make_assistant_frames(fallback_text, sid, meta={"source":"greet_fallback"})
+                if isinstance(_tid2, str) and _tid2:
+                    tid = _tid2
+                    turns[sid] = {"tid": tid, "ts": _now()}
+                schedule_frames(sid, frames2)
+                if have_eleven:
+                    audio_scheduled = True
+            except Exception:
+                pass
     else:
         note = "missing_openai_key"
 
@@ -134,6 +152,12 @@ def greet():
             "have_eleven": bool(have_eleven),
             "pid": os.getpid(),
         }
+        # Include traceback when an LLM error occurred
+        try:
+            if 'trace' in locals() and note:
+                payload["diag"]["trace"] = trace
+        except Exception:
+            pass
     except Exception:
         pass
 
