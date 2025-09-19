@@ -1,7 +1,7 @@
-from app.ws.ws_asgi import ws_chat
+from app.ws.ws_asgi import _ws_chat_asgi_impl
 # app/asgi_gateway.py
 # Starlette ASGI app that serves:
-#   • WebSocket /ws/v1/chat  (native ASGI)
+#   • WebSocket /ws/v1/chat  (native ASGI via _ws_chat_asgi_impl)
 #   • All HTTP via mounted Flask WSGI app
 import asyncio, time
 from app import create_app
@@ -13,8 +13,8 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware import Middleware
 from app.ws.protocol import dumps, PROTO_ID, DEFAULT_HEARTBEAT_MS
 
-# On import, log what ws_chat is bound to
-print(">>> asgi_gateway loaded, using ws_chat from:", getattr(ws_chat, "__module__", ws_chat))
+# On import, log what ws handler is bound to
+print(">>> asgi_gateway loaded, using _ws_chat_asgi_impl from:", getattr(_ws_chat_asgi_impl, "__module__", _ws_chat_asgi_impl))
 
 # Optional admin log emitter
 try:
@@ -43,15 +43,17 @@ async def _keepalive_task(websocket, heartbeat_ms: int):
 
 # --- Compose Starlette app ---
 routes = [
-    WebSocketRoute("/ws/v1/chat", ws_chat),    # only the ASGI handler now
+    WebSocketRoute("/ws/v1/chat", _ws_chat_asgi_impl),  # bind directly to ASGI handler
     Mount("/", app=WSGIMiddleware(flask_app)),
 ]
 print(">>> routes configured:", routes)
+
 _cors_origins = []
 import os as _os
 _allow = _os.environ.get("CORS_ALLOWLIST", "").strip()
 if _allow:
     _cors_origins = [o.strip() for o in _allow.split(",") if o.strip()]
+
 middleware = [Middleware(GZipMiddleware, minimum_size=1024)]
 if _cors_origins:
     middleware.insert(0, Middleware(
@@ -61,6 +63,7 @@ if _cors_origins:
         allow_headers=["Content-Type", "X-CSRF-Token"],
         allow_credentials=True
     ))
+
 asgi = Starlette(routes=routes, middleware=middleware)
 
 # Test-compat alias for Flask test_client usage
