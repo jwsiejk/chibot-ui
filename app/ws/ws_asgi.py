@@ -227,6 +227,7 @@ try:
 except Exception:  # pragma: no cover
     _StarletteWebSocket = None
 
+
 async def ws_chat(websocket):
     """Accept, validate, send ready, then pump frames to keep the connection alive."""
     await websocket.accept()
