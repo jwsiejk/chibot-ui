@@ -5,7 +5,6 @@ from app.ws.ws_asgi import ws_chat
 #   • All HTTP via mounted Flask WSGI app
 import asyncio, time
 from app import create_app
-from app.ws.chat_ws import register_ws_route
 from starlette.applications import Starlette
 from starlette.routing import WebSocketRoute, Mount
 from starlette.middleware.wsgi import WSGIMiddleware
@@ -25,14 +24,16 @@ except Exception:
 
 # Build the Flask WSGI app
 flask_app = create_app()
-register_ws_route(flask_app)
 
 async def _keepalive_task(websocket, heartbeat_ms: int):
     try:
         while True:
             await asyncio.sleep(max(heartbeat_ms, 1000) / 1000.0)
             try:
-                await websocket.send_text(dumps({"type":"keepalive","ts": int(time.time()*1000)}))
+                await websocket.send_text(dumps({
+                    "type": "keepalive",
+                    "ts": int(time.time() * 1000)
+                }))
             except Exception:
                 break
     except asyncio.CancelledError:
@@ -42,21 +43,23 @@ async def _keepalive_task(websocket, heartbeat_ms: int):
 
 # --- Compose Starlette app ---
 routes = [
-    WebSocketRoute("/ws/v1/chat", ws_chat),
+    WebSocketRoute("/ws/v1/chat", ws_chat),    # only the ASGI handler now
     Mount("/", app=WSGIMiddleware(flask_app)),
 ]
 _cors_origins = []
 import os as _os
-_allow = _os.environ.get("CORS_ALLOWLIST","").strip()
+_allow = _os.environ.get("CORS_ALLOWLIST", "").strip()
 if _allow:
     _cors_origins = [o.strip() for o in _allow.split(",") if o.strip()]
 middleware = [Middleware(GZipMiddleware, minimum_size=1024)]
 if _cors_origins:
-    middleware.insert(0, Middleware(CORSMiddleware,
-                                    allow_origins=_cors_origins,
-                                    allow_methods=["GET","POST","OPTIONS"],
-                                    allow_headers=["Content-Type","X-CSRF-Token"],
-                                    allow_credentials=True))
+    middleware.insert(0, Middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "X-CSRF-Token"],
+        allow_credentials=True
+    ))
 asgi = Starlette(routes=routes, middleware=middleware)
 
 # Test-compat alias for Flask test_client usage
