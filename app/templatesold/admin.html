@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8"><title>Ask Chip — Admin</title></head>
+  <body>
+    <div id="dbBadge" style="padding:6px 10px;border-radius:6px;background:#eee;display:inline-block;">DB: checking…</div>
+    <script>
+    (async () => {
+      try {
+        const r = await fetch('/api/v1/admin/db/health');
+        const j = await r.json();
+        const el = document.getElementById('dbBadge');
+        if (j && j.ok) {
+          const txt = j.dialect === 'postgresql' ? 'DB: Neon (Postgres) ✓' :
+                      (j.dialect === 'sqlite' ? 'DB: SQLite ✓' :
+                      (j.dialect === 'memory' ? 'DB: In-memory' : 'DB: ' + j.dialect));
+          el.textContent = txt;
+          el.style.background = j.connected ? '#d7f7df' : '#fde2e2';
+        } else {
+          el.textContent = 'DB: error';
+          el.style.background = '#fde2e2';
+        }
+      } catch(e) {
+        const el = document.getElementById('dbBadge');
+        el.textContent = 'DB: error';
+        el.style.background = '#fde2e2';
+      }
+    })();
+    </script>
+  <script src="/static/admin.js"></script>
+</body>
+</html>
+<p><a href="/api/v1/admin/ws-metrics">WebSocket Metrics</a> — (admin only)</p>

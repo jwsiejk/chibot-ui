@@ -68,7 +68,7 @@ def test_route_linter_no_legacy():
 
 def test_profile_gate_ui_marker():
     # Check that index.html has a Start button disabled and a small gating script
-    pages = glob("templates/*.html") + glob("app/templates/*.html")
+    pages = glob("templates/*.html") + glob("templates/*.html")
     assert pages, "No templates found"
     html = "\\n".join(read(p) for p in pages if "index" in p or "base" in p)
     assert 'id="startBtn"' in html or "start-button" in html

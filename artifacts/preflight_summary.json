@@ -82,7 +82,7 @@
     "app/services/suggestions.py": "6d858e1bd152f3a1131424e67f7ac7677d2cdbc1d3bf71d1da6930d46dc83765",
     "app/services/tts_provider.py": "3cb5d79e95b67a762fdcf867e879309807bb142ffec648fbbf3b7ba3917fd572",
     "app/session_state.py": "e189f22553b3756b8b63c6b34001e764b5fcb05da65bfa3c32cfa1efb28c8e96",
-    "app/templates/admin.html": "ac6d9b03470347d008e63471b9e5f0e66de5fb11ce61c7ec88ae009caf82f3f8",
+    "templates/admin.html": "ac6d9b03470347d008e63471b9e5f0e66de5fb11ce61c7ec88ae009caf82f3f8",
     "app/ws/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "app/ws/asgi_chat.py": "5da1e5dd62e3fce80cd6924b5c271f000d6a7eaf63df2b89e2efb033d64ced5a",
     "app/ws/barge.py": "c7268275674abf8498e8b1808e8702db5341b8777203e51aa6f24173470b024a",

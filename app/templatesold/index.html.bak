@@ -1,0 +1,169 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Ask Chip</title></head>
+<body>
+  <button id="startButton" data-role="start-btn">Start</button>
+  <div id="chat" data-role="chat-pane" style="display:none"></div>
+{% include '_ui_status.html' %}
+
+<script type="module">
+  import { installFetchInterceptor } from '/static/js/csrf.js';
+  installFetchInterceptor();
+  import '/static/js/auth_gate.js';
+</script>
+
+<script>
+(function(){
+  if (!window.askchipSetStatus || !window.askchipToast) return;
+  // Attempt to attach to global ws/greet flow used in the previous patch
+  const origEnsureWS = window.ensureWS;
+  const origGreet = window.greet;
+  if (typeof origEnsureWS === 'function'){
+    window.ensureWS = function(){
+      const wsWas = (window.askchipWS && window.askchipWS.readyState===1);
+      origEnsureWS();
+      const ws = window.askchipWS;
+      if (ws && !ws.__uiWired){
+        ws.__uiWired = true;
+        const backoffMs = 3000; let retried = false;
+        ws.addEventListener('open', ()=>{ window.askchipToast('Connected to Chip','ok'); window.askchipSetStatus('Ready'); });
+        ws.addEventListener('close', ()=>{
+          if (!retried){
+            window.askchipSetStatus('Disconnected — retrying in 3s…');
+            window.askchipToast('Disconnected — retrying…','warn', 3000);
+            retried = true;
+            setTimeout(()=>{ try{ window.ensureWS(); }catch(e){} }, backoffMs);
+          }
+        });
+        ws.addEventListener('error', ()=>{ window.askchipToast('WebSocket error','err', 3000); });
+        ws.addEventListener('message', (ev)=>{
+          try{ const msg = JSON.parse(ev.data);
+            if (msg.type==='state'){
+              if (msg.phase==='assistant_speaking'){ window.askchipSetStatus('Responding…'); }
+              else if (msg.phase==='assistant_end'){ window.askchipSetStatus('Ready'); }
+              else if (msg.phase==='ready'){ window.askchipSetStatus('Ready'); }
+            }
+          }catch(_){}
+        });
+      }
+    };
+  }
+  if (typeof origGreet === 'function'){
+    window.greet = async function(){
+      try{
+        window.askchipToast('Greeting Chip…');
+        window.askchipSetStatus('Thinking…');
+        const r = await origGreet();
+        if (r && r.status && r.status!==200){
+          if (r.status===401 || r.status===403){
+            window.askchipToast('Sign in required (CSRF)','err', 4000);
+            window.askchipSetStatus('Not signed in');
+          }else{
+            window.askchipToast('Greet failed ('+r.status+')','err', 3500);
+          }
+        }else{
+          window.askchipToast('Greeting queued ✅','ok');
+        }
+        return r;
+      }catch(e){
+        window.askchipToast('Greet error','err', 3500);
+        throw e;
+      }
+    };
+  }
+})();
+</script>
+
+</body></html>
+
+<script>
+(function(){
+  const START_SEL = '[data-role="start-btn"], #start';
+  const CHAT_SEL  = '[data-role="chat-pane"], #chat';
+  const WS_URL    = () => `/ws/v1/chat?session_id=${encodeURIComponent(window.askchipSessionId)}`;
+
+  // Generate a stable per-tab session id
+  function uuidv4(){
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = Math.random()*16|0, v = c === 'x' ? r : (r&0x3|0x8);
+      return v.toString(16);
+    });
+  }
+  if (!window.askchipSessionId) {
+    try {
+      window.askchipSessionId = (crypto.randomUUID && crypto.randomUUID()) || uuidv4();
+    } catch(e) { window.askchipSessionId = uuidv4(); }
+  }
+
+  function openChatPane(){
+    const pane = document.querySelector(CHAT_SEL);
+    if (!pane) return;
+    pane.style.display = '';
+    pane.classList.add('open');
+  }
+
+  function ensureWS(){
+    if (window.askchipWS && window.askchipWS.readyState === 1) return;
+    const ws = new WebSocket(WS_URL());
+    window.askchipWS = ws;
+    ws.onopen = () => { window.askchipLog && window.askchipLog({kind:'ws_open', session_id: window.askchipSessionId}); };
+    ws.onmessage = ev => {
+      // Optional: basic debug sink
+      try { const msg = JSON.parse(ev.data); (window.askchipOnFrame || function(){})(msg); }
+      catch(_) {}
+    };
+    ws.onclose = () => { window.askchipLog && window.askchipLog({kind:'ws_close'}); };
+    ws.onerror = (e) => { window.askchipLog && window.askchipLog({kind:'ws_error', err: String(e)}); };
+  }
+
+  async function greet(){
+    try {
+      const r = await fetch('/api/v1/greet', {credentials:'include'});
+      // No need to inspect body; WS will deliver frames
+      window.askchipLog && window.askchipLog({kind:'greet', status:r.status});
+    } catch(e){
+      window.askchipLog && window.askchipLog({kind:'greet_error', msg:String(e)});
+    }
+  }
+
+  function onStartClick(e){
+    // Respect profile gate if present
+    if (window.profileComplete === false) {
+      alert('Please complete your profile first.'); return;
+    }
+    openChatPane();
+    ensureWS();
+    greet();
+  }
+
+  function wire(){
+    const btn = document.querySelector(START_SEL);
+    if (btn && !btn.__wired) { btn.addEventListener('click', onStartClick); btn.__wired = true; }
+  }
+
+  // optional client->admin log bridge if provided by earlier patch
+  if (!window.askchipLog) {
+    window.askchipLog = function(obj){
+      try {
+        fetch('/api/v1/admin/log', { // endpoint may not exist; ignore errors
+          method:'POST',
+          headers:{'Content-Type':'application/json','X-CSRF-Token': (window.csrfToken||'')},
+          body: JSON.stringify(obj),
+          credentials:'include'
+        }).catch(()=>{});
+      } catch(e){}
+    };
+  }
+
+  // wire immediately and on DOM ready
+  if (document.readyState !== 'loading') wire();
+  else document.addEventListener('DOMContentLoaded', wire);
+
+  // if profile becomes complete later, allow Start without reload
+  window.addEventListener('profile_saved', (e)=>{
+    if (e.detail && e.detail.complete) {
+      const btn = document.querySelector(START_SEL);
+      if (btn) { btn.disabled = false; btn.title = ''; }
+    }
+  });
+})();
+</script>
