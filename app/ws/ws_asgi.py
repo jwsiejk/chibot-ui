@@ -9,7 +9,37 @@ from app.services.streaming_asr.deepgram_client import DeepgramClient
 from app.security.ws_token import verify as verify_ws_token
 from app.ws.bus import bus
 from app.db import db
+from app.metrics import ws_metrics
+try:
+    from app.api_v1.admin import _emit as _admin_emit
+except Exception:
+    _admin_emit = None
 
+
+def _client_ip_from_scope(scope) -> str:
+    try:
+        c = scope.get("client") or ()
+        if isinstance(c, (list, tuple)) and c:
+            return str(c[0])
+    except Exception:
+        pass
+    try:
+        hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
+        xff = hdrs.get("x-forwarded-for","").split(",")[0].strip()
+        if xff:
+            return xff
+    except Exception:
+        pass
+    return "unknown"
+
+def _jlog(event: str, **fields):
+    try:
+        import time as _t, json as _json
+        fields.setdefault("event", event)
+        fields.setdefault("ts", _t.time())
+        print(_json.dumps(fields, separators=(",",":"), ensure_ascii=False))
+    except Exception:
+        pass
 def _dumps(obj) -> str:
     import json as _json
     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
@@ -96,7 +126,61 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         await send({"type": "http.response.body", "body": b"not found"})
         return
 
-    await send({"type": "websocket.accept"})
+    
+    # === Production: pre-accept auth (WS subprotocols preferred) ===
+    require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in ("0","false","no")
+    bearer_only   = os.getenv("WS_BEARER_ONLY", "1").lower() not in ("0","false","no")
+    fail_limit = int(os.getenv("WS_FAIL_LIMIT","10"))
+    fail_window_sec = float(os.getenv("WS_FAIL_WINDOW_SEC","60"))
+    client_ip = _client_ip_from_scope(scope)
+
+    token = None
+
+    # 1) Subprotocols: ['bearer', 'bearer.<JWT>']
+    try:
+        for _sp in (scope.get("subprotocols") or []):
+            if isinstance(_sp, str) and _sp.startswith("bearer."):
+                token = _sp.split(".", 1)[1].strip()
+                break
+    except Exception:
+        pass
+
+    # 2) Authorization: Bearer <token> (non-browser clients)
+    if not token:
+        try:
+            hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
+            if "authorization" in hdrs and hdrs["authorization"].lower().startswith("bearer "):
+                token = hdrs["authorization"].split(" ", 1)[1].strip()
+        except Exception:
+            pass
+
+    # 3) Optional query fallback only if WS_BEARER_ONLY=0
+    if (not bearer_only) and (not token) and scope.get("query_string"):
+        try:
+            q = dict([tuple(p.split("=", 1)) for p in scope.get("query_string").decode().split("&") if "=" in p])
+            token = q.get("ws_token") or token
+        except Exception:
+            pass
+
+    if require_token:
+        try:
+            _ = verify_ws_token(token or "")
+        except Exception:
+            over = ws_metrics.record_fail(client_ip, fail_limit, fail_window_sec)
+            _jlog("ws_auth_fail", ip=client_ip, sid=sid, over_limit=over, via="preaccept")
+            if _admin_emit:
+                try:
+                    _admin_emit("ws_auth_fail", sid=sid, ip=client_ip, over_limit=over)
+                except Exception:
+                    pass
+            try:
+                await send({"type": "websocket.close", "code": 4401})
+            except Exception:
+                pass
+            return
+    # === End pre-accept auth ===
+
+    await send({"type": "websocket.accept", "subprotocol": "bearer"})
 
     sid = _get_session_id(scope)
     try:
@@ -146,17 +230,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             _payload = verify_ws_token(token or "")
         except Exception:
             print(">>> _ws_chat_asgi_impl invalid token for sid:", sid)
-            if (os.getenv("WS_DEV_VERBOSE_CLOSE","0").lower() in ("1","true","yes")):
-                try:
-                    await send({"type": "websocket.send", "text": _dumps(make_error("invalid_or_expired_token"))})
-                except Exception:
-                    pass
-                try:
-                    await send({"type": "websocket.close", "code": 1000, "reason": "invalid_or_expired_token"})
-                except Exception:
-                    pass
-                await asyncio.sleep(0.05)
-                return
             await send({"type": "websocket.close", "code": 4401, "reason": "invalid_or_expired_token"})
             await asyncio.sleep(0.05)  # flush close frame
             return

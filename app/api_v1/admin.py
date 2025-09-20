@@ -325,3 +325,10 @@ def list_sessions():
     sess = db.memory.get("sessions", {})
     out = [{"id": k, **(v if isinstance(v, dict) else {})} for k, v in sess.items()]
     return jsonify({"ok": True, "sessions": out}), 200
+
+
+@bp.get("/ws-metrics")
+def ws_metrics_page():
+    _require_admin()
+    from flask import render_template
+    return render_template("admin_ws_metrics.html")

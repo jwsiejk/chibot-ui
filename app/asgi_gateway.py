@@ -1,4 +1,5 @@
 from app.ws.ws_asgi import _ws_chat_asgi_impl
+import app.logging_setup as _logsetup; _logsetup.install()
 # app/asgi_gateway.py
 # Starlette ASGI app that serves:
 #   • WebSocket /ws/v1/chat  (native ASGI via _ws_chat_asgi_impl)
@@ -46,7 +47,6 @@ routes = [
     Mount("/ws/v1/chat", app=_ws_chat_asgi_impl),  # bind directly to ASGI handler
     Mount("/", app=WSGIMiddleware(flask_app)),
 ]
-print(">>> routes configured:", routes)
 
 _cors_origins = []
 import os as _os
