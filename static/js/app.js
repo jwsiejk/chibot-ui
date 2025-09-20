@@ -1,3 +1,21 @@
+
+// Re-export API so pages can import from a single module
+export { openWS, waitWSOpen } from '/static/js/ws.js?v=v20250911b';
+export { ensureCSRF } from '/static/js/csrf.js?v=v20250911b';
+export { initMic } from '/static/js/voice.js?v=v20250911b';
+export { getSID } from '/static/js/util/sid.js';
+// Consolidated imports to avoid duplicate loads
+import '/static/js/csrf.js?v=v20250911b';
+import '/static/js/audio.js?v=v20250911b';
+import '/static/js/voice.js?v=v20250911b';
+import '/static/js/ws.js?v=v20250911b';
+import '/static/js/ui_menu.js?v=v20250911b';
+import '/static/js/auth_gate.js?v=v20250911b';
+
+// --- one-time init guard to avoid double-binding ---
+if (window.__askchipBound) { console.warn('AskChip: init skipped (already bound)'); }
+if (!window.__askchipBound) {
+  window.__askchipBound = true;
 // static/js/app.js — session control and typed chat (production)
 // Deterministic Start: open WS → await open → greet → arm mic.
 // Proper End handler: tells server to end_session and resets UI.
@@ -186,3 +204,5 @@ document.addEventListener('DOMContentLoaded', ()=>{
   if (sendBtn)  sendBtn.addEventListener('click', onSend);
   setDot('ready');
 });
+
+}

@@ -72,21 +72,10 @@
     </div>
   </div>
 
-  <!-- Scripts -->
-  <script type="module" src="/static/js/csrf.js?v=v20250911b"></script>
-  <script type="module" src="/static/js/audio.js?v=v20250911b"></script>
-  <script type="module" src="/static/js/voice.js?v=v20250911b"></script>
-  <script type="module" src="/static/js/ws.js?v=v20250911b"></script>
-  <script type="module" src="/static/js/ui_menu.js?v=v20250911b"></script>
-  <script type="module" src="/static/js/auth_gate.js?v=v20250911b"></script>
-  <script type="module" src="/static/js/app.js?v=v20250911b"></script>
-
-<!-- AskChip bootstrap: tokenized WS open + deterministic greet -->
+  <!-- Scripts --><!-- AskChip bootstrap: tokenized WS open + deterministic greet -->
 <script type="module">
-import { openWS, waitWSOpen } from '/static/js/ws.js';
-import { ensureCSRF } from '/static/js/csrf.js';
-import { getSID } from '/static/js/util/sid.js';
-import { initMic } from '/static/js/voice.js';
+import { openWS, waitWSOpen, ensureCSRF, getSID, initMic } from '/static/js/app.js?v=v20250911b';
+
 
 async function fetchWsToken(){
   const sid = getSID();
@@ -131,5 +120,6 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 else wireStartOverride();
 </script>
 
+<script type="module" src="/static/js/app.js?v=v20250911b"></script>
 </body>
 </html>
