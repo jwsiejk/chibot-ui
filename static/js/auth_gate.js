@@ -1,6 +1,6 @@
 // static/js/auth_gate.js
-// Auth/profile gate for chibot-uiv150: matches #prof_* fields and #profileSave,
-// CSRF-aware via csrf.js, de-dup wired handlers, and re-entrancy guard on evaluate.
+// Auth/profile gate for AskChip UI: enables/disables Start based on /auth/me,
+// wires Login + Profile Save, CSRF-aware, de-duplicated wiring, fail-open on errors.
 
 import { ensureCSRF, installFetchInterceptor } from './csrf.js';
 
@@ -21,6 +21,12 @@ function show(el, yes) {
   if (el.classList) el.classList.toggle('hidden', !yes);
   else el.style.display = yes ? '' : 'none';
 }
+function showBanner(msg) {
+  const b = $('#inlineLoginMsg');
+  if (!b) { console.warn('[auth_gate]', msg); return; }
+  b.textContent = msg;
+  b.classList.add('warn');
+}
 
 // ---------- HTTP helpers ----------
 async function getJSON(url, init = {}) {
@@ -30,6 +36,7 @@ async function getJSON(url, init = {}) {
   return res.json();
 }
 async function postJSON(url, body) {
+  await ensureCSRF();
   return getJSON(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -41,13 +48,6 @@ async function postJSON(url, body) {
 function valueById(id) {
   const el = document.getElementById(id);
   return el && 'value' in el ? (el.value || '').trim() : '';
-}
-function readProfileFields() {
-  // Your current template uses #prof_name, #prof_role, #prof_region
-  const name   = valueById('prof_name')   || valueFromLabel(['name']);
-  const title  = valueById('prof_role')   || valueById('profileTitle') || valueFromLabel(['role','title']);
-  const region = valueById('prof_region') || valueFromLabel(['region']);
-  return { name, title, region };
 }
 function valueFromLabel(labelsLower) {
   const lbl = $$('label').find(L => {
@@ -63,6 +63,13 @@ function valueFromLabel(labelsLower) {
   const sib = lbl.nextElementSibling;
   return (sib && sib.tagName === 'INPUT') ? (sib.value || '').trim() : '';
 }
+function readProfileFields() {
+  // Supported ids: #prof_name, #prof_role (or #profileTitle), #prof_region
+  const name   = valueById('prof_name')   || valueFromLabel(['name']);
+  const title  = valueById('prof_role')   || valueById('profileTitle') || valueFromLabel(['role','title']);
+  const region = valueById('prof_region') || valueFromLabel(['region']);
+  return { name, title, region };
+}
 
 // ---------- Gate evaluation ----------
 let evalLock = false;
@@ -71,27 +78,34 @@ export async function evaluateAuth() {
   if (evalLock) return;
   evalLock = true;
   try {
-    await ensureCSRF();
-
     const me = await getJSON('/api/v1/auth/me');
+    // Fire a state event for observability/tools
+    window.dispatchEvent(new CustomEvent('askchip-auth-state', { detail: me }));
+
     const loginModal   = $('#loginModal');
     const profileModal = $('#profileModal');
+
     // Always mirror email into the profile form so it never appears blank
     const emailField = document.getElementById('prof_email');
-    if (emailField && me.email) { try { emailField.value = me.email; } catch(e){} }
-
+    const emailVal = me?.profile?.email || me?.email || '';
+    if (emailField && emailVal) { try { emailField.value = emailVal; } catch(e){} }
 
     if (!me.authenticated) {
       show(loginModal, true);
       show(profileModal, false);
       setStartEnabled(false);
+      showBanner('Please log in to continue.');
       return;
     }
 
-    if (!me.profile_complete) {
+    // Prefer top-level profile_complete, fall back to nested
+    const complete = !!(me.profile_complete || me.profile?.profile_complete);
+
+    if (!complete) {
       show(loginModal, false);
       show(profileModal, true);
       setStartEnabled(false);
+      showBanner('Please fill out your profile to continue.');
       return;
     }
 
@@ -99,10 +113,13 @@ export async function evaluateAuth() {
     show(loginModal, false);
     show(profileModal, false);
     setStartEnabled(true);
+    // Back-compat + explicit event
     document.dispatchEvent(new CustomEvent('auth_ready', { detail: me }));
+    window.dispatchEvent(new CustomEvent('askchip-auth-ready', { detail: me }));
   } catch (e) {
-    console.warn('[auth_gate] evaluateAuth failed:', e);
-    setStartEnabled(false);
+    // Fail-open so the user isn't stranded if /auth/me is temporarily failing
+    console.warn('[auth_gate] evaluateAuth failed (fail-open):', e);
+    setStartEnabled(true);
   } finally {
     evalLock = false;
   }
@@ -124,12 +141,14 @@ export function wireAuthGate() {
     on(loginBtn, 'click', async (e) => {
       e.preventDefault();
       try {
-        const email = ($('#inlineLoginEmail') && $('#inlineLoginEmail').value || '').trim();
-        if (!email) return;
+        const emailEl = $('#inlineLoginEmail');
+        const email = (emailEl && emailEl.value || '').trim();
+        if (!email) { showBanner('Enter your email to log in.'); return; }
         await postJSON('/api/v1/auth/login', { email });
         await evaluateAuth();
       } catch (err) {
         console.warn('[auth_gate] login failed:', err);
+        showBanner('Login failed. Try again.');
       }
     });
   }
@@ -143,10 +162,12 @@ export function wireAuthGate() {
       try {
         const { name, title, region } = readProfileFields();
         await postJSON('/api/v1/profile', { name, title, region });
-        window.dispatchEvent(new CustomEvent('profile_saved', { detail: { complete: !!(name && title) } }));
+        // Let the rest of the app know we’re good now
+        window.dispatchEvent(new CustomEvent('askchip-profile-saved', { detail: { complete: !!(name && title) } }));
         await evaluateAuth();
       } catch (err) {
         console.warn('[auth_gate] profile save failed:', err);
+        showBanner('Profile save failed. Check fields and try again.');
       }
     });
   }
