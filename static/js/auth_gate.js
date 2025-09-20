@@ -78,6 +78,10 @@ export async function evaluateAuth() {
   if (evalLock) return;
   evalLock = true;
   try {
+    // ✅ Fail-open immediately so first paint has Start enabled.
+    // We'll only disable if we KNOW the user must be gated.
+    setStartEnabled(true);
+
     const me = await getJSON('/api/v1/auth/me');
     // Fire a state event for observability/tools
     window.dispatchEvent(new CustomEvent('askchip-auth-state', { detail: me }));
@@ -171,6 +175,9 @@ export function wireAuthGate() {
       }
     });
   }
+
+  // Re-enable Start when a session ends (quality-of-life, harmless if unused)
+  window.addEventListener('askchip-session-ended', () => setStartEnabled(true));
 
   // Kick once on DOM ready (guarded)
   if (document.readyState !== 'loading') evaluateAuth();
