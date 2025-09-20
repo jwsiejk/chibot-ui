@@ -158,7 +158,6 @@ function wireUI(){
   setDot('ready');
   window.__askchip_bootstrap_loaded = true;
   console.log('[AskChip] bootstrap loaded');
-});
 
   if (sendBtn) sendBtn.disabled = true;
   if (endBtn)  endBtn.disabled  = true;
