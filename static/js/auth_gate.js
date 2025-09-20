@@ -1,8 +1,8 @@
+import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
 // static/js/auth_gate.js
 // Auth/profile gate for AskChip UI: enables/disables Start based on /auth/me,
 // wires Login + Profile Save, CSRF-aware, de-duplicated wiring, fail-open on errors.
 
-import { ensureCSRF, installFetchInterceptor } from './csrf.js';
 
 const $  = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -133,6 +133,13 @@ export async function evaluateAuth() {
 let wired = false;
 
 export function wireAuthGate() {
+  // Safety guard: prevent duplicate profile-gate wiring
+  if (window.__authgateWired) {
+    console.warn('[auth_gate] duplicate wiring prevented');
+    return;
+  }
+  window.__authgateWired = true;
+
   if (wired) return;
   wired = true;
 

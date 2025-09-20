@@ -1,7 +1,9 @@
+// /static/js/app.js — chat helpers only (imports constrained by spec)
+import { closeWS } from '/static/js/ws.js?v=v20250911b';
+import { getSID } from '/static/js/util/sid.js';
+
 // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
 // Exports: onEnd, onSend, handleAssistantFrame
-import { openWS, waitWSOpen, closeWS } from '/static/js/ws.js?v=v20250911b';
-import { getSID } from '/static/js/util/sid.js';
 
 const $  = (s)=>document.querySelector(s);
 

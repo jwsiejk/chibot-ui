@@ -1,10 +1,12 @@
-// /static/js/bootstrap.js — single owner of Start/End/Send + audio unlock + WS→UI wiring
-import { openWS, waitWSOpen, isOpen } from '/static/js/ws.js?v=v20250911b';
-import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js?v=v20250911b';
-import { initMic } from '/static/js/voice.js?v=v20250911b';
+// /static/js/bootstrap.js — owns Start/End/Send + greet (canonical imports)
+import { openWS, waitWSOpen, isWSOpen, closeWS } from '/static/js/ws.js?v=v20250911b';
+import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
+import { initMic } from '/static/js/voice.js';
+import { unlockAudio } from '/static/js/audio.js';
 import { getSID } from '/static/js/util/sid.js';
-import { onEnd, onSend, handleAssistantFrame } from '/static/js/app.js?v=v20250911b';
-import { unlockAudio } from '/static/js/audio.js?v=v20250911b';
+import * as App from '/static/js/app.js';
+
+// /static/js/bootstrap.js — single owner of Start/End/Send + audio unlock + WS→UI wiring
 
 const $ = (s) => document.querySelector(s);
 
@@ -141,6 +143,13 @@ async function startOnce(){
 }
 
 function wireUI(){
+  // Safety guard: prevent duplicate UI wiring if module loaded twice
+  if (window.__bootstrapWired) {
+    console.warn('[bootstrap] duplicate wiring prevented');
+    return;
+  }
+  window.__bootstrapWired = true;
+
   const startBtn = document.getElementById('startButton');
   const endBtn   = document.getElementById('endButton');
   const sendBtnA = document.getElementById('composerSend');

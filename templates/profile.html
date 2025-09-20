@@ -25,7 +25,7 @@
     </div>
     <div id="profileMsg" class="msgline"></div>
   </section>
-  <script type="module" src="/static/js/csrf.js"></script>
+  
   <script type="module" src="/static/js/auth_gate.js"></script>
   <script type="module">
     import { prefillProfile, saveProfile } from '/static/js/auth_gate.js';
@@ -34,5 +34,7 @@
       document.getElementById('profileSave').addEventListener('click', saveProfile);
     });
   </script>
+  <script type="module" src="/static/js/bootstrap.js"></script>
+  <script type="module" src="/static/js/auth_gate.js"></script>
 </body>
 </html>
