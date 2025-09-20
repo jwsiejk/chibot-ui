@@ -8,6 +8,12 @@ except Exception:
 
 
 class StreamBus:
+    def is_canceled(self, sid, tid):
+        try:
+            return (sid, tid) in self._canceled
+        except Exception:
+            return False
+
     def __init__(self):
         self._subs = {}          # sid -> [Queue]
         self._locks = {}         # sid -> Lock

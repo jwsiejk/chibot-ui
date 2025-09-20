@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 from typing import List, Dict, Tuple, Optional
+import base64
 import threading, time as _t
 
 from .llm_provider import get_provider
@@ -132,6 +133,77 @@ def make_assistant_frames(seed_text: str,
     return str(turn_id), frames
 
 
+
+# --- NEW: WS TTS scheduling (audio over WS) ----------------------------------
+def schedule_tts_audio(session_id: str,
+                       text: str,
+                       turn_id: str | None = None,
+                       correlation_user_msg_id: Optional[str] = None,
+                       chunk_bytes: int = 8192,
+                       delay_ms: int = 0) -> None:
+    """Synthesize TTS for `text` and stream as WS frames.
+    Emits frames like:
+        { "type":"assistant_audio", "turn_id": turn_id, "audio_chunks":[<b64>, ...] }
+    Non-blocking: runs in a background thread.
+    """
+    if not text:
+        return
+    cfg = db.get_config()
+    feature_audio = bool(cfg.get("feature_audio", True))
+    if not feature_audio:
+        return
+
+    def _run():
+        try:
+            # Small pacing delay if requested
+            if delay_ms and delay_ms > 0:
+                _t.sleep(max(0, delay_ms) / 1000.0)
+
+            # Pick provider (mock in CI if ELEVEN not configured)
+            try:
+                from ..services.tts_provider import get_tts_provider  # type: ignore
+            except Exception:
+                from ..tts_provider import get_tts_provider  # fallback path
+            provider = get_tts_provider(cfg or {})
+
+            # Synthesize
+            try:
+                audio_bytes, _vis = provider.synth(text)
+            except Exception:
+                # On failure, do nothing (text already rendered)
+                return
+
+            # Chunk and broadcast
+            mv = memoryview(audio_bytes)
+            idx = 0
+            max_frames = 256
+            sent = 0
+            while idx < len(mv):
+                # stop early if canceled
+                try:
+                    from ..ws.bus import bus as _bus_ref
+                    if _bus_ref.is_canceled(session_id, str(turn_id) if turn_id else None):
+                        break
+                except Exception:
+                    pass
+                part = bytes(mv[idx: idx + chunk_bytes])
+                idx += chunk_bytes
+                try:
+                    b64 = base64.b64encode(part).decode("ascii")
+                    fr = {"type": "assistant_audio", "turn_id": str(turn_id) if turn_id else None, "audio_chunks": [b64]}
+                    if correlation_user_msg_id:
+                        fr["correlation_user_msg_id"] = correlation_user_msg_id
+                    bus.broadcast(session_id, fr)
+                    sent += 1
+                    if sent >= max_frames:
+                        break
+                except Exception:
+                    pass
+        finally:
+            try:
+                _admin_emit('schedule_tts_done', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
+            except Exception:
+                pass
 def schedule_frames(session_id: str,
                     frames: List[Dict],
                     delay_ms: int = 0,
