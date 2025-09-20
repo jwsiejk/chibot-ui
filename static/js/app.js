@@ -4,6 +4,7 @@ export { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js?v=v20250
 export { initMic } from '/static/js/voice.js?v=v20250911b';
 export { getSID } from '/static/js/util/sid.js';
 
+// Side-effect imports (idempotent modules)
 import '/static/js/csrf.js?v=v20250911b';
 import '/static/js/audio.js?v=v20250911b';
 import '/static/js/voice.js?v=v20250911b';
@@ -17,15 +18,15 @@ import { initMic } from '/static/js/voice.js?v=v20250911b';
 import { getSID } from '/static/js/util/sid.js';
 
 // ---------- UI helpers ----------
-const $ = (s)=>document.querySelector(s);
+const $ = (s) => document.querySelector(s);
 
 function setDot(state){
   const dot = document.getElementById('stateDot');
   if (!dot) return;
   dot.className = 'dot ' + (
-    state==='listening' ? 'dot-listening' :
-    state==='speaking'  ? 'dot-speaking'  :
-    state==='thinking'  ? 'dot-thinking'  : 'dot-ready'
+    state === 'listening' ? 'dot-listening' :
+    state === 'speaking'  ? 'dot-speaking'  :
+    state === 'thinking'  ? 'dot-thinking'  : 'dot-ready'
   );
 }
 
@@ -33,7 +34,7 @@ function addChatBubble(role, text){
   const box = document.getElementById('chatMessages');
   if (!box) return null;
   const el = document.createElement('div');
-  el.className = 'msg ' + (role==='user' ? 'user' : 'assistant');
+  el.className = 'msg ' + (role === 'user' ? 'user' : 'assistant');
   el.textContent = text;
   box.appendChild(el);
   box.scrollTop = box.scrollHeight;
@@ -41,15 +42,23 @@ function addChatBubble(role, text){
 }
 
 function setSuggestions(items){
-  const ul = document.getElementById('sugg'); if (!ul) return;
+  const ul = document.getElementById('sugg');
+  if (!ul) return;
+
   ul.innerHTML = '';
-  (items || []).slice(0,4).forEach(item=>{
-    const label = (typeof item === 'string') ? item : (item?.label ?? item?.text ?? String(item));
-    const value = (typeof item === 'string') ? item : (item?.value ?? label);
+  (items || []).slice(0, 4).forEach((item) => {
+    // Accept strings or objects: {label, value?} or {text}
+    const label = typeof item === 'string'
+      ? item
+      : (item?.label ?? item?.text ?? String(item));
+    const value = typeof item === 'string'
+      ? item
+      : (item?.value ?? label);
+
     const li = document.createElement('li');
     const b  = document.createElement('button');
     b.textContent = label;
-    b.addEventListener('click', ()=>{
+    b.addEventListener('click', () => {
       const i = document.getElementById('composer');
       if (i){ i.value = value; i.focus(); }
     });
@@ -57,25 +66,19 @@ function setSuggestions(items){
     ul.appendChild(li);
   });
 }
-    });
-    li.appendChild(b);
-    ul.appendChild(li);
-  });
-}
 
 // ---------- Single-bubble coalescing for assistant turns ----------
-const turnState = new Map(); // turn_id -> { el, final:boolean, text:string, ttsStarted:boolean }
-const turnDebounce = new Map(); // turn_id -> timeout handle
+const turnState = new Map();     // turn_id -> { el, final:boolean, text:string, ttsStarted:boolean }
+const turnDebounce = new Map();  // turn_id -> timeout handle
 
 function upsertAssistantTurn(turnId, text, isFinal){
   const box = document.getElementById('chatMessages'); if (!box) return;
   let st = turnState.get(turnId);
   if (!st){
     const el = addChatBubble('assistant', text || '');
-    st = { el, final:false, text:text||'', ttsStarted:false };
+    st = { el, final:false, text:text || '', ttsStarted:false };
     turnState.set(turnId, st);
   } else {
-    // Update the existing bubble (don’t create another)
     st.text = (text != null) ? text : st.text;
     if (st.el) st.el.textContent = st.text;
   }
@@ -83,11 +86,12 @@ function upsertAssistantTurn(turnId, text, isFinal){
   return st;
 }
 
-// Optional client-side TTS helper (fallback if server’s scheduled audio doesn’t play)
+// ---------- Client-side TTS fallback (with CSRF + robust playback) ----------
 async function speakText(text){
   if (!text) return;
   try{
     const headers = new Headers({ 'Content-Type': 'application/json' });
+    // Add CSRF (many servers require it for POST JSON)
     try {
       const csrf = await ensureCSRF().catch(()=> '');
       if (csrf) headers.set('X-CSRF-Token', csrf);
@@ -113,6 +117,7 @@ async function speakText(text){
       return;
     }
 
+    // Prefer WebAudio helpers if present
     try{
       const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
       const mod = await import('/static/js/audio.js?v=v20250911b');
@@ -122,61 +127,7 @@ async function speakText(text){
       console.warn('[tts] WebAudio path failed, falling back to <audio>', e);
     }
 
-    try{
-      const binary = atob(b64);
-      const len = binary.length;
-      const buf = new Uint8Array(len);
-      for (let i=0;i<len;i++) buf[i] = binary.charCodeAt(i);
-      const blob = new Blob([buf], { type: 'audio/mpeg' });
-      const url  = URL.createObjectURL(blob);
-      const a = new Audio(url);
-      a.onended = ()=> URL.revokeObjectURL(url);
-      await a.play();
-    }catch(e){
-      console.error('[tts] <audio> playback failed', e);
-    }
-
-  }catch(e){
-    console.error('[tts] unexpected error', e);
-  }
-});
-    // Add CSRF (many servers require it even for POST JSON)
-    try {
-      const csrf = await ensureCSRF().catch(()=> '');
-      if (csrf) headers.set('X-CSRF-Token', csrf);
-    } catch {}
-
-    const resp = await fetch('/api/v1/voice/tts-with-visemes', {
-      method: 'POST',
-      headers,
-      credentials: 'include',
-      body: JSON.stringify({ text })
-    });
-
-    if (!resp.ok){
-      const t = await resp.text().catch(()=> '');
-      console.error('[tts] HTTP', resp.status, t);
-      return;
-    }
-
-    const j = await resp.json().catch(e=>{ console.error('[tts] bad JSON', e); return null; });
-    const b64 = j && j.audio_b64;
-    if (!b64){
-      console.warn('[tts] no audio_b64 in response');
-      return;
-    }
-
-    // Primary path: WebAudio helpers (if available)
-    try{
-      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-      const mod = await import('/static/js/audio.js?v=v20250911b');
-      if (mod.playBytesStream) { await mod.playBytesStream(bytes); return; }
-      if (mod.playBytesB64)    { await mod.playBytesB64(b64);    return; }
-    }catch(e){
-      console.warn('[tts] WebAudio path failed, falling back to <audio>', e);
-    }
-
-    // Fallback path: HTMLAudioElement (broad compatibility)
+    // Fallback: HTMLAudioElement
     try{
       const binary = atob(b64);
       const len = binary.length;
@@ -196,7 +147,7 @@ async function speakText(text){
   }
 }
 
-// Expose handlers used by bootstrap
+// ---------- Exposed handlers used by bootstrap ----------
 export async function onEnd(){
   const headers = new Headers({ 'Content-Type':'application/json' });
   try{
@@ -260,23 +211,6 @@ export async function onSend(){
   }
 
   setDot('thinking');
-});
-  try{
-    const csrf = await ensureCSRF().catch(()=> '');
-    if (csrf) headers.set('X-CSRF-Token', csrf);
-  }catch{}
-  try{
-    const idem = (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random()));
-    headers.set('Idempotency-Key', String(idem));
-  }catch{}
-  fetch('/api/v1/chat', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ type:'UserText', text, session_id: getSID() }),
-    credentials: 'include'
-  }).catch(console.warn);
-
-  setDot('thinking');
 }
 
 // ---------- WS event hook (called by ws.js) ----------
@@ -293,10 +227,10 @@ export function handleAssistantFrame(msg){
   let text = '';
   let isFinal = false;
 
-  // 1) Preferred explicit types
+  // 1) Explicit types
   if (msg.type === 'assistant_text'){ text = msg.text || ''; isFinal = false; }
   else if (msg.type === 'assistant_final'){ text = msg.text || ''; isFinal = true; }
-  // 2) Your greet stream shows type: 'assistant_chunk'
+  // 2) Streaming chunks
   else if (msg.type === 'assistant_chunk'){ text = msg.text || ''; isFinal = false; }
   // 3) Generic assistant role
   else if (msg.role === 'assistant'){ text = msg.content || msg.message || ''; isFinal = true; }
@@ -339,7 +273,6 @@ export function handleAssistantFrame(msg){
 
   // Debounced auto-finalize for streaming chunk-only turns
   if (msg.type === 'assistant_chunk' || msg.type === 'assistant_text'){
-    // reset per-turn debounce
     clearTimeout(turnDebounce.get(turnId));
     const h = setTimeout(()=>{
       const s = turnState.get(turnId);
