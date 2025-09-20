@@ -1,4 +1,3 @@
-// /static/js/bootstrap.js — owns Start/End/Send + greet (canonical imports)
 import { openWS, waitWSOpen, isOpen, closeWS } from '/static/js/ws.js?v=v20250911b';
 import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
 import { initMic } from '/static/js/voice.js';
@@ -12,6 +11,23 @@ const $ = (s) => document.querySelector(s);
 
 let startInFlight = false;
 let started = false;
+
+// ----- NEW: assistant text de-dupe (turn_id + text) -----
+const _assistantSeen = new Set();
+function _isAssistantTextFrame(d) {
+  const t = d?.type;
+  return t === 'assistant_text' || t === 'assistant_chunk' || t === 'assistant_final' || d?.role === 'assistant';
+}
+function _dedupeAssistant(d) {
+  // tolerate servers that send without turn_id (fallback to "na")
+  const turnId = d?.turn_id ?? 'na';
+  const text   = d?.text ?? d?.delta ?? d?.content ?? '';
+  const key    = `${turnId}::${text}`;
+  if (!text) return true; // empty texts don't render anyway
+  if (_assistantSeen.has(key)) return false;
+  _assistantSeen.add(key);
+  return true;
+}
 
 function setDot(state){
   const dot = $('#stateDot');
@@ -37,20 +53,26 @@ function wireWSEventsOnce(){
   // Log first few frames to verify payload shape
   let seen = 0;
   window.addEventListener('askchip-ws', (ev) => {
-    // Try to play audio chunks if present on known keys
     const d = ev.detail || {};
     const t = d.type || '';
+
+    // Try to play audio chunks if present on known keys
     const audioChunks = d.audio_chunks || d.chunks || d.audio || null;
-    if (audioChunks && (t==='assistant_audio' || t==='AudioChunk' || t==='TTSChunk' || t==='audio')) {
+    if (audioChunks && (t === 'assistant_audio' || t === 'AudioChunk' || t === 'TTSChunk' || t === 'audio')) {
       try { playStream(audioChunks); } catch(e){ console.warn('[bootstrap] audio play error', e); }
     }
 
-    const obj = ev.detail;
     if (seen < 5) {
-      try { console.log('[WS→UI]', JSON.stringify(obj)); } catch {}
+      try { console.log('[WS→UI]', JSON.stringify(d)); } catch {}
       seen++;
     }
-    try { App.handleAssistantFrame(obj); } catch (e) { console.warn('App.handleAssistantFrame error', e); }
+
+    // De-dupe assistant text frames so greet can't double-render
+    if (_isAssistantTextFrame(d)) {
+      if (!_dedupeAssistant(d)) return; // swallow duplicate
+    }
+
+    try { App.handleAssistantFrame(d); } catch (e) { console.warn('App.handleAssistantFrame error', e); }
   });
 
   window.addEventListener('askchip-ws-close', (ev) => {
@@ -117,9 +139,7 @@ async function startOnce(){
     let gotAssistant = false;
     const markAssistant = (ev) => {
       const d = ev.detail || {};
-      if (d.type === 'assistant_text' || d.type === 'assistant_chunk' || d.type === 'assistant_final' || d.role === 'assistant') {
-        gotAssistant = true;
-      }
+      if (_isAssistantTextFrame(d)) gotAssistant = true;
     };
     window.addEventListener('askchip-ws', markAssistant, { once: true });
 
