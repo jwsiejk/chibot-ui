@@ -1,27 +1,22 @@
-
-// Re-export API so pages can import from a single module
+// static/js/app.js — side-effect-free chat helpers + render with single-bubble coalescing
 export { openWS, waitWSOpen } from '/static/js/ws.js?v=v20250911b';
-export { ensureCSRF } from '/static/js/csrf.js?v=v20250911b';
+export { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js?v=v20250911b';
 export { initMic } from '/static/js/voice.js?v=v20250911b';
 export { getSID } from '/static/js/util/sid.js';
-// Consolidated imports to avoid duplicate loads
+
 import '/static/js/csrf.js?v=v20250911b';
 import '/static/js/audio.js?v=v20250911b';
 import '/static/js/voice.js?v=v20250911b';
 import '/static/js/ws.js?v=v20250911b';
 import '/static/js/ui_menu.js?v=v20250911b';
 import '/static/js/auth_gate.js?v=v20250911b';
+
 import { installFetchInterceptor, ensureCSRF } from '/static/js/csrf.js?v=v20250911b';
 import { openWS, waitWSOpen, closeWS } from '/static/js/ws.js?v=v20250911b';
 import { initMic } from '/static/js/voice.js?v=v20250911b';
 import { getSID } from '/static/js/util/sid.js';
 
-// static/js/app.js — session control and typed chat (production)
-// Deterministic Start: open WS → await open → greet → arm mic.
-// Proper End handler: tells server to end_session and resets UI.
-// Text-first: assistant frames render regardless of TTS availability.
-
-
+// ---------- UI helpers ----------
 const $ = (s)=>document.querySelector(s);
 
 function setDot(state){
@@ -34,14 +29,15 @@ function setDot(state){
   );
 }
 
-function addChatMessage(role, text){
+function addChatBubble(role, text){
   const box = document.getElementById('chatMessages');
-  if (!box) return;
+  if (!box) return null;
   const el = document.createElement('div');
   el.className = 'msg ' + (role==='user' ? 'user' : 'assistant');
   el.textContent = text;
   box.appendChild(el);
   box.scrollTop = box.scrollHeight;
+  return el;
 }
 
 function setSuggestions(items){
@@ -55,90 +51,31 @@ function setSuggestions(items){
       const i = document.getElementById('composer');
       if (i){ i.value = t; i.focus(); }
     });
-    li.appendChild(b); ul.appendChild(li);
+    li.appendChild(b);
+    ul.appendChild(li);
   });
 }
 
-async function onStart(){
-  try{
-    installFetchInterceptor();
-    await ensureCSRF();
+// ---------- Single-bubble coalescing for assistant turns ----------
+const turnState = new Map(); // turn_id -> { el, final:boolean, text:string, ttsStarted:boolean }
 
-    // 1) Open WS and wait until subscribed (prevents greet frames from being missed)
-    openWS();
-    await waitWSOpen();
-
-    // 2) Prime mic permission early; VAD arms later
-    await initMic().catch(()=>{ /* ignore mic deny for greet text */ });
-
-    // 3) Call greet with the SAME SID the WS is using
-    fetch(`/api/v1/greet?reset=1&session_id=${encodeURIComponent(getSID())}`, {
-      credentials: 'include'
-    }).catch(()=>{});
-
-    // Toggle buttons
-    const endBtn = $('#endButton');
-    const startBtn = $('#startButton');
-    if (endBtn) endBtn.disabled = false;
-    if (startBtn) startBtn.disabled = true;
-
-    setDot('thinking'); // will flip via ws events
-  }catch(e){
-    console.warn('[start] failed', e);
+function upsertAssistantTurn(turnId, text, isFinal){
+  const box = document.getElementById('chatMessages'); if (!box) return;
+  let st = turnState.get(turnId);
+  if (!st){
+    const el = addChatBubble('assistant', text || '');
+    st = { el, final:false, text:text||'', ttsStarted:false };
+    turnState.set(turnId, st);
+  } else {
+    // Update the existing bubble (don’t create another)
+    st.text = text || st.text;
+    if (st.el) st.el.textContent = st.text;
   }
+  if (isFinal) st.final = true;
+  return st;
 }
 
-async function onEnd(){
-  try{
-    const headers = new Headers({ 'Content-Type':'application/json' });
-    const csrf = await ensureCSRF().catch(()=> '');
-    if (csrf) headers.set('X-CSRF-Token', csrf);
-
-    // Tell server to end session (server also clears greet idempotency)
-    await fetch('/api/v1/chat', {
-      method: 'POST',
-      headers,
-      credentials: 'include',
-      body: JSON.stringify({ cmd: 'end_session', session_id: getSID() })
-    });
-
-    // Close WS and reset UI state
-    try { closeWS && closeWS(); } catch {}
-    const endBtn = $('#endButton');
-    const startBtn = $('#startButton');
-    if (endBtn) endBtn.disabled = true;
-    if (startBtn) startBtn.disabled = false;
-    setDot('ready');
-  }catch(e){
-    console.warn('[end] failed', e);
-  }
-}
-
-async function onSend(){
-  const inp = document.getElementById('composer');
-  const text = (inp && inp.value || '').trim();
-  if (!text) return;
-  if (inp) inp.value = '';
-  addChatMessage('user', text);
-
-  const headers = new Headers({ 'Content-Type':'application/json' });
-  const csrf = await ensureCSRF().catch(()=> '');
-  if (csrf) headers.set('X-CSRF-Token', csrf);
-  try{
-    const idem = (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random()));
-    headers.set('Idempotency-Key', String(idem));
-  }catch{}
-  fetch('/api/v1/chat', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ text, session_id: getSID() }),
-    credentials: 'include'
-  }).catch(console.warn);
-
-  setDot('thinking');
-}
-
-// Optional client-side TTS helper; safe to keep even if server streams audio separately.
+// Optional client-side TTS helper (fallback if server’s scheduled audio doesn’t play)
 async function speakText(text){
   try{
     const r = await fetch('/api/v1/voice/tts-with-visemes', {
@@ -150,47 +87,101 @@ async function speakText(text){
     const j = await r.json(); const b64 = (j && j.audio_b64) || '';
     if (b64){
       const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-      const mod = await import('./audio.js');
+      const mod = await import('/static/js/audio.js?v=v20250911b');
       if (mod.playBytesStream) await mod.playBytesStream(bytes);
       else if (mod.playBytesB64) await mod.playBytesB64(b64);
     }
-  }catch(e){ console.warn('[tts] synth failed', e); }
+  }catch(e){
+    console.warn('tts error', e);
+  }
 }
 
-// WS event wiring
-window.addEventListener('askchip-ws', (ev)=>{
-  const msg = ev.detail || {};
-
-  // Minimal console tracing to confirm frames are arriving
+// Expose handlers used by bootstrap
+export async function onEnd(){
   try{
-    if (msg && msg.type) console.debug('[ws<-]', msg.type, msg);
-  }catch{}
+    fetch('/api/v1/chat', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ type:'EndSession' })
+    }).catch(()=>{});
+  }finally{
+    try { closeWS(); } catch {}
+    setDot('ready');
+  }
+}
 
-  if (msg.type === 'Results'){
-    setDot('listening');
-  } else if (msg.type === 'UtteranceEnd'){
-    setDot('thinking');
+export async function onSend(){
+  const inp = document.getElementById('composer');
+  const text = (inp && inp.value || '').trim();
+  if (!text) return;
+  if (inp) inp.value = '';
+  addChatBubble('user', text);
+
+  const headers = new Headers({ 'Content-Type':'application/json' });
+  try{
+    const csrf = await ensureCSRF().catch(()=> '');
+    if (csrf) headers.set('X-CSRF-Token', csrf);
+  }catch{}
+  try{
+    const idem = (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random()));
+    headers.set('Idempotency-Key', String(idem));
+  }catch{}
+  fetch('/api/v1/chat', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ type:'UserText', text, session_id: getSID() }),
+    credentials: 'include'
+  }).catch(console.warn);
+
+  setDot('thinking');
+}
+
+// ---------- WS event hook (called by ws.js) ----------
+/**
+ * Call this from ws.js when receiving frames.
+ * Expected msg shape examples:
+ *  - { type:'assistant_text', turn_id, text }
+ *  - { type:'assistant_final', turn_id, text }
+ *  - { type:'suggestions', items:[...] }
+ *  - { type:'state', phase:'assistant_speaking' | 'ready' | ... }
+ */
+export function handleAssistantFrame(msg){
+  if (!msg || !msg.type) return;
+
+  if (msg.type === 'assistant_text'){
+    if (!msg.turn_id) return;
+    upsertAssistantTurn(msg.turn_id, msg.text || '', false);
+    setDot('speaking');
+    return;
   }
 
-  if (msg.type === 'assistant_chunk'){
-    window.__ac_text = (window.__ac_text || '') + String(msg.text||'');
-  } else if (msg.type === 'assistant_end'){
-    const text = (window.__ac_text || '').trim(); window.__ac_text = '';
-    if (text){
-      addChatMessage('assistant', text);
-      try{ speakText(text); }catch{}
+  if (msg.type === 'assistant_final'){
+    if (!msg.turn_id) return;
+    const st = upsertAssistantTurn(msg.turn_id, msg.text || '', true);
+
+    // If server-side audio didn’t start, do a client-side TTS fallback once per turn
+    if (st && !st.ttsStarted && st.text){
+      st.ttsStarted = true;
+      // fire-and-forget; don’t block UI
+      speakText(st.text).catch(()=>{});
     }
     setDot('ready');
-  } else if (msg.type === 'suggestions' && Array.isArray(msg.items)){
+    return;
+  }
+
+  if (msg.type === 'suggestions' && Array.isArray(msg.items)){
     setSuggestions(msg.items);
-  } else if (msg.type === 'state'){
+    return;
+  }
+
+  if (msg.type === 'state'){
     if (msg.phase === 'assistant_speaking') setDot('speaking');
     if (msg.phase === 'assistant_end' || msg.phase === 'ready') setDot('ready');
-  } else if (msg.type === 'Error'){
+    return;
+  }
+
+  if (msg.type === 'Error'){
     console.warn('[ws] server error:', msg.code, msg.message);
   }
-});
-
-
-
-export { onEnd, onSend };
+}
