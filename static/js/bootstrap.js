@@ -21,8 +21,8 @@ function setDot(state){
 }
 
 function showBanner(msg){
-  let b = $('#inlineLoginMsg');
-  if (!b) return console.warn('[AskChip]', msg);
+  const b = $('#inlineLoginMsg');
+  if (!b) { console.warn('[AskChip]', msg); return; }
   b.textContent = msg;
   b.classList.add('warn');
 }
@@ -30,12 +30,21 @@ function showBanner(msg){
 function wireWSEventsOnce(){
   if (window.__askchip_ws_wired) return;
   window.__askchip_ws_wired = true;
+
+  // Log the first few frames so we can verify payload shape in DevTools
+  let seen = 0;
   window.addEventListener('askchip-ws', (ev)=>{
-    try { handleAssistantFrame(ev.detail); } catch(e){ console.warn('handleAssistantFrame error', e); }
+    const obj = ev.detail;
+    if (seen < 5) {
+      try { console.log('[WS→UI]', JSON.stringify(obj)); } catch {}
+      seen++;
+    }
+    try { handleAssistantFrame(obj); } catch(e){ console.warn('handleAssistantFrame error', e); }
   });
+
   window.addEventListener('askchip-ws-close', (ev)=>{
-    // Optional: reflect disconnected state
-    // setDot('ready');
+    console.warn('[WS close]', ev.detail);
+    // Optional: setDot('ready');
   });
 }
 
@@ -65,14 +74,14 @@ async function startOnce(){
   try{
     if (startBtn) startBtn.disabled = true;
 
-    // 0) Audio unlock so TTS can play
+    // 0) Audio unlock so TTS is permitted by browser autoplay policies
     try { await unlockAudio(); } catch {}
 
-    // 1) Network/CSRF prep
+    // 1) Network/CSRF prep (install fetch interceptor, fetch CSRF)
     try { installFetchInterceptor(); } catch {}
     try { await ensureCSRF(); } catch {}
 
-    // 2) WS first — verify actually OPEN or abort
+    // 2) WS first — verify actually OPEN or abort with user-visible banner
     const ok = await ensureWsOpenOrFail(5000);
     if (!ok){
       showBanner('WebSocket did not open — greet aborted.');
@@ -82,24 +91,40 @@ async function startOnce(){
       return;
     }
 
-    // 3) Wire WS → UI events exactly once
+    // 3) Wire WS → UI exactly once
     wireWSEventsOnce();
 
-    // 4) Mic permission (best effort)
+    // 4) Mic permission (best effort; don’t block greet if denied)
     try { await initMic(); } catch {}
 
-    // 5) Now greet, same session id as the WS
+    // 5) Greet using the SAME session id as WS
     const sid = getSID();
-    await fetch(`/api/v1/greet?reset=1&session_id=${encodeURIComponent(sid)}`, {
+    const greetPromise = fetch(`/api/v1/greet?reset=1&session_id=${encodeURIComponent(sid)}`, {
       credentials: 'include'
     });
 
-    // Mark session active so ws.js auto-reconnects after restarts
-    window.__askchip_session_started = true;
+    // Watchdog: if no assistant frames within 6s after greet returns, warn
+    let gotAssistant = false;
+    const markAssistant = (ev)=>{
+      const d = ev.detail || {};
+      if (d.type === 'assistant_text' || d.type === 'assistant_final' || d.role === 'assistant') {
+        gotAssistant = true;
+      }
+    };
+    window.addEventListener('askchip-ws', markAssistant, { once:true });
 
-    // Ready for user input
+    await greetPromise;
+
+    setTimeout(()=>{
+      if (!gotAssistant) showBanner('No assistant frames after greet — check WS handler/payload.');
+    }, 6000);
+
+    // Enable UI for user input
     if (endBtn)  endBtn.disabled  = false;
     if (sendBtn) sendBtn.disabled = false;
+
+    // Mark session active so ws.js auto-reconnects through restarts
+    window.__askchip_session_started = true;
     started = true;
 
   } catch(e){
@@ -126,7 +151,7 @@ function wireUI(){
   if (endBtn)  endBtn.disabled  = true;
   setDot('ready');
 
-  // breadcrumb so we can confirm bootstrap actually loaded
+  // Breadcrumb so we can confirm bootstrap actually loaded
   window.__askchip_bootstrap_loaded = true;
   console.log('[AskChip] bootstrap loaded');
 }
