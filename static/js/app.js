@@ -57,6 +57,11 @@ function setSuggestions(items){
     ul.appendChild(li);
   });
 }
+    });
+    li.appendChild(b);
+    ul.appendChild(li);
+  });
+}
 
 // ---------- Single-bubble coalescing for assistant turns ----------
 const turnState = new Map(); // turn_id -> { el, final:boolean, text:string, ttsStarted:boolean }
@@ -83,6 +88,59 @@ async function speakText(text){
   if (!text) return;
   try{
     const headers = new Headers({ 'Content-Type': 'application/json' });
+    try {
+      const csrf = await ensureCSRF().catch(()=> '');
+      if (csrf) headers.set('X-CSRF-Token', csrf);
+    } catch {}
+
+    const resp = await fetch('/api/v1/voice/tts-with-visemes', {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify({ text })
+    });
+
+    if (!resp.ok){
+      const t = await resp.text().catch(()=> '');
+      console.error('[tts] HTTP', resp.status, t);
+      return;
+    }
+
+    const j = await resp.json().catch(e=>{ console.error('[tts] bad JSON', e); return null; });
+    const b64 = j && j.audio_b64;
+    if (!b64){
+      console.warn('[tts] no audio_b64 in response');
+      return;
+    }
+
+    try{
+      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const mod = await import('/static/js/audio.js?v=v20250911b');
+      if (mod.playBytesStream) { await mod.playBytesStream(bytes); return; }
+      if (mod.playBytesB64)    { await mod.playBytesB64(b64);    return; }
+    }catch(e){
+      console.warn('[tts] WebAudio path failed, falling back to <audio>', e);
+    }
+
+    try{
+      const binary = atob(b64);
+      const len = binary.length;
+      const buf = new Uint8Array(len);
+      for (let i=0;i<len;i++) buf[i] = binary.charCodeAt(i);
+      const blob = new Blob([buf], { type: 'audio/mpeg' });
+      const url  = URL.createObjectURL(blob);
+      const a = new Audio(url);
+      a.onended = ()=> URL.revokeObjectURL(url);
+      await a.play();
+    }catch(e){
+      console.error('[tts] <audio> playback failed', e);
+    }
+
+  }catch(e){
+    console.error('[tts] unexpected error', e);
+  }
+});
+    // Add CSRF (many servers require it even for POST JSON)
     try {
       const csrf = await ensureCSRF().catch(()=> '');
       if (csrf) headers.set('X-CSRF-Token', csrf);
@@ -137,6 +195,7 @@ async function speakText(text){
     console.error('[tts] unexpected error', e);
   }
 }
+
 // Expose handlers used by bootstrap
 export async function onEnd(){
   const headers = new Headers({ 'Content-Type':'application/json' });

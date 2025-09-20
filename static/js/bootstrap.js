@@ -158,6 +158,7 @@ function wireUI(){
   setDot('ready');
   window.__askchip_bootstrap_loaded = true;
   console.log('[AskChip] bootstrap loaded');
+});
 
   if (sendBtn) sendBtn.disabled = true;
   if (endBtn)  endBtn.disabled  = true;
@@ -170,23 +171,3 @@ function wireUI(){
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireUI);
 else wireUI();
-
-// Auto-arm mic after assistant greeting ends or system becomes ready
-(async () => {
-  const handler = async (ev) => {
-    const d = ev.detail || {};
-    if (d.type !== 'state') return;
-    if (d.phase === 'assistant_end' || d.phase === 'ready') {
-      try {
-        const { initMic, armVAD } = await import('/static/js/voice.js');
-        const stream = await initMic();
-        await armVAD(stream);
-        // console.debug('[voice] armed after greet');
-      } catch (e) {
-        console.warn('Failed to arm mic after greet:', e);
-      }
-    }
-  };
-  window.removeEventListener('askchip-ws', handler);
-  window.addEventListener('askchip-ws', handler);
-})();
