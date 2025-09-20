@@ -58,6 +58,7 @@ function setSuggestions(items){
 
 // ---------- Single-bubble coalescing for assistant turns ----------
 const turnState = new Map(); // turn_id -> { el, final:boolean, text:string, ttsStarted:boolean }
+const turnDebounce = new Map(); // turn_id -> timeout handle
 
 function upsertAssistantTurn(turnId, text, isFinal){
   const box = document.getElementById('chatMessages'); if (!box) return;
@@ -68,7 +69,7 @@ function upsertAssistantTurn(turnId, text, isFinal){
     turnState.set(turnId, st);
   } else {
     // Update the existing bubble (don’t create another)
-    st.text = text || st.text;
+    st.text = (text != null) ? text : st.text;
     if (st.el) st.el.textContent = st.text;
   }
   if (isFinal) st.final = true;
@@ -102,6 +103,10 @@ export async function onEnd(){
   try{
     const csrf = await ensureCSRF().catch(()=> '');
     if (csrf) headers.set('X-CSRF-Token', csrf);
+  }catch{}
+  try{
+    const idem = (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random()));
+    headers.set('Idempotency-Key', String(idem));
   }catch{}
 
   const body = { type:'EndSession', session_id: getSID() };
@@ -152,48 +157,86 @@ export async function onSend(){
 // ---------- WS event hook (called by ws.js) ----------
 /**
  * Call this from ws.js when receiving frames.
- * Expected msg shape examples:
- *  - { type:'assistant_text', turn_id, text }
- *  - { type:'assistant_final', turn_id, text }
- *  - { type:'suggestions', items:[...] }
- *  - { type:'state', phase:'assistant_speaking' | 'ready' | ... }
+ * Handles: assistant_chunk (streaming), assistant_text, assistant_final,
+ * generic role:'assistant', as well as suggestions/state/Error.
  */
 export function handleAssistantFrame(msg){
-  if (!msg || !msg.type) return;
+  if (!msg) return;
 
-  if (msg.type === 'assistant_text'){
-    if (!msg.turn_id) return;
-    upsertAssistantTurn(msg.turn_id, msg.text || '', false);
-    setDot('speaking');
+  // Normalize to {turnId, text, isFinal}
+  let turnId = msg.turn_id || msg.turnId || msg.id || 'greet';
+  let text = '';
+  let isFinal = false;
+
+  // 1) Preferred explicit types
+  if (msg.type === 'assistant_text'){ text = msg.text || ''; isFinal = false; }
+  else if (msg.type === 'assistant_final'){ text = msg.text || ''; isFinal = true; }
+  // 2) Your greet stream shows type: 'assistant_chunk'
+  else if (msg.type === 'assistant_chunk'){ text = msg.text || ''; isFinal = false; }
+  // 3) Generic assistant role
+  else if (msg.role === 'assistant'){ text = msg.content || msg.message || ''; isFinal = true; }
+  // 4) content arrays (OpenAI-style)
+  else if (Array.isArray(msg.content)){
+    const t = msg.content.find(c => (c.type === 'text' && c.text))?.text;
+    if (t){ text = t; isFinal = (msg.type !== 'delta'); }
+  } else if (msg.type === 'delta' && msg.delta){
+    if (typeof msg.delta === 'string') text = msg.delta;
+    else if (msg.delta.content){
+      if (Array.isArray(msg.delta.content)){
+        const t = msg.delta.content.find(c => (c.type === 'text' && c.text))?.text;
+        if (t) text = t;
+      } else if (typeof msg.delta.content === 'string') {
+        text = msg.delta.content;
+      }
+    }
+    isFinal = false;
+  }
+
+  // Non-assistant utility frames
+  if (!text && !isFinal){
+    if (msg.type === 'suggestions' && Array.isArray(msg.items)){
+      setSuggestions(msg.items);
+      return;
+    }
+    if (msg.type === 'state'){
+      if (msg.phase === 'assistant_speaking') setDot('speaking');
+      if (msg.phase === 'assistant_end' || msg.phase === 'ready') setDot('ready');
+      return;
+    }
+    if (msg.type === 'Error'){
+      console.warn('[ws] server error:', msg.code, msg.message);
+    }
     return;
   }
 
-  if (msg.type === 'assistant_final'){
-    if (!msg.turn_id) return;
-    const st = upsertAssistantTurn(msg.turn_id, msg.text || '', true);
+  // Render/update bubble
+  const st = upsertAssistantTurn(turnId, text || '', !!isFinal);
 
-    // If server-side audio didn’t start, do a client-side TTS fallback once per turn
+  // Debounced auto-finalize for streaming chunk-only turns
+  if (msg.type === 'assistant_chunk' || msg.type === 'assistant_text'){
+    // reset per-turn debounce
+    clearTimeout(turnDebounce.get(turnId));
+    const h = setTimeout(()=>{
+      const s = turnState.get(turnId);
+      if (s && !s.final){
+        s.final = true;
+        if (!s.ttsStarted && s.text){
+          s.ttsStarted = true;
+          speakText(s.text).catch(()=>{});
+        }
+        setDot('ready');
+      }
+    }, 500); // finalize after 500ms of no more chunks
+    turnDebounce.set(turnId, h);
+    setDot('speaking');
+  }
+
+  // Explicit final → TTS fallback once
+  if (isFinal){
     if (st && !st.ttsStarted && st.text){
       st.ttsStarted = true;
-      // fire-and-forget; don’t block UI
       speakText(st.text).catch(()=>{});
     }
     setDot('ready');
-    return;
-  }
-
-  if (msg.type === 'suggestions' && Array.isArray(msg.items)){
-    setSuggestions(msg.items);
-    return;
-  }
-
-  if (msg.type === 'state'){
-    if (msg.phase === 'assistant_speaking') setDot('speaking');
-    if (msg.phase === 'assistant_end' || msg.phase === 'ready') setDot('ready');
-    return;
-  }
-
-  if (msg.type === 'Error'){
-    console.warn('[ws] server error:', msg.code, msg.message);
   }
 }
