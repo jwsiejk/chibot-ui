@@ -6,17 +6,18 @@ import { getSID } from '/static/js/util/sid.js';
 import { onEnd, onSend, handleAssistantFrame } from '/static/js/app.js?v=v20250911b';
 import { unlockAudio } from '/static/js/audio.js?v=v20250911b';
 
-const $ = (s)=>document.querySelector(s);
+const $ = (s) => document.querySelector(s);
 
 let startInFlight = false;
 let started = false;
 
 function setDot(state){
-  const dot = $('#stateDot'); if (!dot) return;
+  const dot = $('#stateDot');
+  if (!dot) return;
   dot.className = 'dot ' + (
-    state==='listening' ? 'dot-listening' :
-    state==='speaking'  ? 'dot-speaking'  :
-    state==='thinking'  ? 'dot-thinking'  : 'dot-ready'
+    state === 'listening' ? 'dot-listening' :
+    state === 'speaking'  ? 'dot-speaking'  :
+    state === 'thinking'  ? 'dot-thinking'  : 'dot-ready'
   );
 }
 
@@ -31,30 +32,30 @@ function wireWSEventsOnce(){
   if (window.__askchip_ws_wired) return;
   window.__askchip_ws_wired = true;
 
-  // Log the first few frames so we can verify payload shape in DevTools
+  // Log first few frames to verify payload shape
   let seen = 0;
-  window.addEventListener('askchip-ws', (ev)=>{
+  window.addEventListener('askchip-ws', (ev) => {
     const obj = ev.detail;
     if (seen < 5) {
       try { console.log('[WS→UI]', JSON.stringify(obj)); } catch {}
       seen++;
     }
-    try { handleAssistantFrame(obj); } catch(e){ console.warn('handleAssistantFrame error', e); }
+    try { handleAssistantFrame(obj); } catch (e) { console.warn('handleAssistantFrame error', e); }
   });
 
-  window.addEventListener('askchip-ws-close', (ev)=>{
+  window.addEventListener('askchip-ws-close', (ev) => {
     console.warn('[WS close]', ev.detail);
-    // Optional: setDot('ready');
+    // Optionally: setDot('ready');
   });
 }
 
-async function ensureWsOpenOrFail(timeoutMs=5000){
+async function ensureWsOpenOrFail(timeoutMs = 5000){
   if (isOpen()) return true;
   openWS();
   try {
     await Promise.race([
       waitWSOpen(),
-      new Promise((_,rej)=>setTimeout(()=>rej(new Error('WS timeout')), timeoutMs))
+      new Promise((_, rej) => setTimeout(() => rej(new Error('WS timeout')), timeoutMs))
     ]);
   } catch {
     return false;
@@ -69,7 +70,6 @@ async function startOnce(){
 
   const startBtn = $('#startButton');
   const endBtn   = $('#endButton');
-  const sendBtn  = $('#composerSend');
 
   try{
     if (startBtn) startBtn.disabled = true;
@@ -77,11 +77,11 @@ async function startOnce(){
     // 0) Audio unlock so TTS is permitted by browser autoplay policies
     try { await unlockAudio(); } catch {}
 
-    // 1) Network/CSRF prep (install fetch interceptor, fetch CSRF)
+    // 1) Network/CSRF prep
     try { installFetchInterceptor(); } catch {}
     try { await ensureCSRF(); } catch {}
 
-    // 2) WS first — verify actually OPEN or abort with user-visible banner
+    // 2) WS first — verify actually OPEN or abort
     const ok = await ensureWsOpenOrFail(5000);
     if (!ok){
       showBanner('WebSocket did not open — greet aborted.');
@@ -91,10 +91,10 @@ async function startOnce(){
       return;
     }
 
-    // 3) Wire WS → UI exactly once
+    // 3) Wire WS → UI events exactly once
     wireWSEventsOnce();
 
-    // 4) Mic permission (best effort; don’t block greet if denied)
+    // 4) Mic permission (best effort)
     try { await initMic(); } catch {}
 
     // 5) Greet using the SAME session id as WS
@@ -105,29 +105,33 @@ async function startOnce(){
 
     // Watchdog: if no assistant frames within 6s after greet returns, warn
     let gotAssistant = false;
-    const markAssistant = (ev)=>{
+    const markAssistant = (ev) => {
       const d = ev.detail || {};
-      if (d.type === 'assistant_text' || d.type === 'assistant_final' || d.role === 'assistant') {
+      if (d.type === 'assistant_text' || d.type === 'assistant_chunk' || d.type === 'assistant_final' || d.role === 'assistant') {
         gotAssistant = true;
       }
     };
-    window.addEventListener('askchip-ws', markAssistant, { once:true });
+    window.addEventListener('askchip-ws', markAssistant, { once: true });
 
     await greetPromise;
 
-    setTimeout(()=>{
+    setTimeout(() => {
       if (!gotAssistant) showBanner('No assistant frames after greet — check WS handler/payload.');
     }, 6000);
 
-    // Enable UI for user input
-    if (endBtn)  endBtn.disabled  = false;
-    if (sendBtn) sendBtn.disabled = false;
+    // Ready for user input
+    if (endBtn) endBtn.disabled = false;
+    const sendBtnA = document.getElementById('composerSend');
+    const sendBtnB = document.getElementById('sendBtn');
+    if (sendBtnA) sendBtnA.disabled = false;
+    if (sendBtnB) sendBtnB.disabled = false;
 
     // Mark session active so ws.js auto-reconnects through restarts
     window.__askchip_session_started = true;
     started = true;
+    setDot('ready');
 
-  } catch(e){
+  } catch (e){
     console.error('[bootstrap] start failed', e);
     if (startBtn) startBtn.disabled = false;
     setDot('ready');
@@ -146,10 +150,11 @@ function wireUI(){
   if (startBtn) startBtn.addEventListener('click', startOnce);
   if (endBtn)   endBtn.addEventListener('click', onEnd);
 
-  const bindSend = (btn)=> btn && btn.addEventListener('click', onSend);
+  const bindSend = (btn) => { if (btn) btn.addEventListener('click', onSend); };
   bindSend(sendBtnA);
   bindSend(sendBtnB);
-  if (form) form.addEventListener('submit', (e)=>{ e.preventDefault(); onSend(); });
+
+  if (form) form.addEventListener('submit', (e) => { e.preventDefault(); onSend(); });
 
   if (sendBtnA) sendBtnA.disabled = true;
   if (sendBtnB) sendBtnB.disabled = true;
@@ -158,16 +163,10 @@ function wireUI(){
   setDot('ready');
   window.__askchip_bootstrap_loaded = true;
   console.log('[AskChip] bootstrap loaded');
-});
-
-  if (sendBtn) sendBtn.disabled = true;
-  if (endBtn)  endBtn.disabled  = true;
-  setDot('ready');
-
-  // Breadcrumb so we can confirm bootstrap actually loaded
-  window.__askchip_bootstrap_loaded = true;
-  console.log('[AskChip] bootstrap loaded');
 }
 
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireUI);
-else wireUI();
+if (document.readyState === 'loading'){
+  document.addEventListener('DOMContentLoaded', wireUI);
+} else {
+  wireUI();
+}
