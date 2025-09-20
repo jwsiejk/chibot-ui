@@ -124,6 +124,9 @@ export async function onEnd(){
     // Rotate the session so the next Start is clean
     try { localStorage.removeItem('askchipSessionId'); } catch {}
 
+    // 👉 Notify bootstrap (and anyone else) that the session ended
+    window.dispatchEvent(new CustomEvent('askchip-session-ended'));
+
     // Update UI
     disableForEnded();
     showBanner('Session ended. Press Start to begin a new one.');
