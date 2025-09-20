@@ -108,32 +108,13 @@ async function speakText(text){
       return;
     }
 
+    // Primary path: WebAudio helpers (if available)
     try{
       const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
       const mod = await import('/static/js/audio.js?v=v20250911b');
       if (mod.playBytesStream) { await mod.playBytesStream(bytes); return; }
       if (mod.playBytesB64)    { await mod.playBytesB64(b64);    return; }
     }catch(e){
-      console.warn('[tts] WebAudio path failed, falling back to <audio>', e);
-    }
-
-    try{
-      const binary = atob(b64);
-      const len = binary.length;
-      const buf = new Uint8Array(len);
-      for (let i=0;i<len;i++) buf[i] = binary.charCodeAt(i);
-      const blob = new Blob([buf], { type: 'audio/mpeg' });
-      const url  = URL.createObjectURL(blob);
-      const a = new Audio(url);
-      a.onended = ()=> URL.revokeObjectURL(url);
-      await a.play();
-    }catch(e){
-      console.error('[tts] <audio> playback failed', e);
-    }
-
-  }catch(e){
-    console.error('[tts] unexpected error', e);
-  }
       console.warn('[tts] WebAudio path failed, falling back to <audio>', e);
     }
 
@@ -156,7 +137,6 @@ async function speakText(text){
     console.error('[tts] unexpected error', e);
   }
 }
-
 // Expose handlers used by bootstrap
 export async function onEnd(){
   const headers = new Headers({ 'Content-Type':'application/json' });
