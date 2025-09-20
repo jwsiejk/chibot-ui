@@ -134,4 +134,3 @@ export async function onEnd(){
 }
 
 /* ---------------- Expose minimal helpers (optional) ---------------- */
-export { openWS, waitWSOpen };
