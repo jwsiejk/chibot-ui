@@ -1,5 +1,5 @@
 // /static/js/bootstrap.js — owns Start/End/Send + greet (canonical imports)
-import { openWS, waitWSOpen, isWSOpen, closeWS } from '/static/js/ws.js?v=v20250911b';
+import { openWS, waitWSOpen, isOpen, closeWS } from '/static/js/ws.js?v=v20250911b';
 import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
 import { initMic } from '/static/js/voice.js';
 import { unlockAudio } from '/static/js/audio.js';
@@ -42,7 +42,7 @@ function wireWSEventsOnce(){
       try { console.log('[WS→UI]', JSON.stringify(obj)); } catch {}
       seen++;
     }
-    try { handleAssistantFrame(obj); } catch (e) { console.warn('handleAssistantFrame error', e); }
+    try { App.handleAssistantFrame(obj); } catch (e) { console.warn('App.handleAssistantFrame error', e); }
   });
 
   window.addEventListener('askchip-ws-close', (ev) => {
@@ -157,13 +157,13 @@ function wireUI(){
   const form     = document.getElementById('composerForm');
 
   if (startBtn) startBtn.addEventListener('click', startOnce);
-  if (endBtn)   endBtn.addEventListener('click', onEnd);
+  if (endBtn)   endBtn.addEventListener('click', App.onEnd);
 
-  const bindSend = (btn) => { if (btn) btn.addEventListener('click', onSend); };
+  const bindSend = (btn) => { if (btn) btn.addEventListener('click', App.onSend); };
   bindSend(sendBtnA);
   bindSend(sendBtnB);
 
-  if (form) form.addEventListener('submit', (e) => { e.preventDefault(); onSend(); });
+  if (form) form.addEventListener('submit', (e) => { e.preventDefault(); App.onSend(); });
 
   if (sendBtnA) sendBtnA.disabled = true;
   if (sendBtnB) sendBtnB.disabled = true;
