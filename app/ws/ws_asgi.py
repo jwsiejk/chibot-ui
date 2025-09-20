@@ -121,6 +121,16 @@ async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen):
 
 
 async def _ws_chat_asgi_impl(scope, receive, send):
+
+    # ---- BREADCRUMB: did we enter the handler at all? ----
+    try:
+        from app.api_v1.admin import _emit as _admin_emit
+        _admin_emit("ws_handshake_enter",
+                    path=scope.get("path"),
+                    raw_query=(scope.get("query_string") or b"").decode("utf-8","ignore"))
+    except Exception:
+        pass
+    # ------------------------------------------------------
     if scope.get("type") != "websocket":
         await send({"type": "http.response.start", "status": 404, "headers": []})
         await send({"type": "http.response.body", "body": b"not found"})
