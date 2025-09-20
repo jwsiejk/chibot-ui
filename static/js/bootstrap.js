@@ -137,15 +137,28 @@ async function startOnce(){
 }
 
 function wireUI(){
-  const startBtn = $('#startButton');
-  const endBtn   = $('#endButton');
-  const sendBtn  = $('#composerSend');
-  const form     = $('#composerForm');
+  const startBtn = document.getElementById('startButton');
+  const endBtn   = document.getElementById('endButton');
+  const sendBtnA = document.getElementById('composerSend');
+  const sendBtnB = document.getElementById('sendBtn');
+  const form     = document.getElementById('composerForm');
 
   if (startBtn) startBtn.addEventListener('click', startOnce);
   if (endBtn)   endBtn.addEventListener('click', onEnd);
-  if (sendBtn)  sendBtn.addEventListener('click', onSend);
-  if (form)     form.addEventListener('submit', (e)=>{ e.preventDefault(); onSend(); });
+
+  const bindSend = (btn)=> btn && btn.addEventListener('click', onSend);
+  bindSend(sendBtnA);
+  bindSend(sendBtnB);
+  if (form) form.addEventListener('submit', (e)=>{ e.preventDefault(); onSend(); });
+
+  if (sendBtnA) sendBtnA.disabled = true;
+  if (sendBtnB) sendBtnB.disabled = true;
+  if (endBtn)   endBtn.disabled   = true;
+
+  setDot('ready');
+  window.__askchip_bootstrap_loaded = true;
+  console.log('[AskChip] bootstrap loaded');
+});
 
   if (sendBtn) sendBtn.disabled = true;
   if (endBtn)  endBtn.disabled  = true;
