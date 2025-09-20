@@ -98,13 +98,25 @@ async function speakText(text){
 
 // Expose handlers used by bootstrap
 export async function onEnd(){
+  const headers = new Headers({ 'Content-Type':'application/json' });
   try{
-    fetch('/api/v1/chat', {
+    const csrf = await ensureCSRF().catch(()=> '');
+    if (csrf) headers.set('X-CSRF-Token', csrf);
+  }catch{}
+
+  const body = { type:'EndSession', session_id: getSID() };
+
+  try{
+    const resp = await fetch('/api/v1/chat', {
       method: 'POST',
-      headers: { 'Content-Type':'application/json' },
+      headers,
       credentials: 'include',
-      body: JSON.stringify({ type:'EndSession' })
-    }).catch(()=>{});
+      body: JSON.stringify(body)
+    });
+    if (!resp.ok){
+      const txt = await resp.text().catch(()=> '');
+      console.error('/api/v1/chat EndSession failed', resp.status, txt);
+    }
   }finally{
     try { closeWS(); } catch {}
     setDot('ready');
