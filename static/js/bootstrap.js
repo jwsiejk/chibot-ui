@@ -160,6 +160,14 @@ function wireUI(){
   if (sendBtnB) sendBtnB.disabled = true;
   if (endBtn)   endBtn.disabled   = true;
 
+  // Reset bootstrap state when session ends so Start can be used again
+  window.addEventListener('askchip-session-ended', () => {
+    started = false;
+    const sb = $('#startButton');
+    if (sb) sb.disabled = false;
+    setDot('ready');
+  });
+
   setDot('ready');
   window.__askchip_bootstrap_loaded = true;
   console.log('[AskChip] bootstrap loaded');
