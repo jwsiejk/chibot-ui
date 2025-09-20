@@ -134,40 +134,6 @@ async function speakText(text){
   }catch(e){
     console.error('[tts] unexpected error', e);
   }
-});
-    // Add CSRF (many servers require it even for POST JSON)
-    try {
-      const csrf = await ensureCSRF().catch(()=> '');
-      if (csrf) headers.set('X-CSRF-Token', csrf);
-    } catch {}
-
-    const resp = await fetch('/api/v1/voice/tts-with-visemes', {
-      method: 'POST',
-      headers,
-      credentials: 'include',
-      body: JSON.stringify({ text })
-    });
-
-    if (!resp.ok){
-      const t = await resp.text().catch(()=> '');
-      console.error('[tts] HTTP', resp.status, t);
-      return;
-    }
-
-    const j = await resp.json().catch(e=>{ console.error('[tts] bad JSON', e); return null; });
-    const b64 = j && j.audio_b64;
-    if (!b64){
-      console.warn('[tts] no audio_b64 in response');
-      return;
-    }
-
-    // Primary path: WebAudio helpers (if available)
-    try{
-      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-      const mod = await import('/static/js/audio.js?v=v20250911b');
-      if (mod.playBytesStream) { await mod.playBytesStream(bytes); return; }
-      if (mod.playBytesB64)    { await mod.playBytesB64(b64);    return; }
-    }catch(e){
       console.warn('[tts] WebAudio path failed, falling back to <audio>', e);
     }
 
