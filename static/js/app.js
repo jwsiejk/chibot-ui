@@ -1,12 +1,9 @@
 // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
 // Exports: onEnd, onSend, handleAssistantFrame
 import { openWS, waitWSOpen, closeWS } from '/static/js/ws.js?v=v20250911b';
-import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js?v=v20250911b';
-import { initMic } from '/static/js/voice.js?v=v20250911b';
 import { getSID } from '/static/js/util/sid.js';
 
 const $  = (s)=>document.querySelector(s);
-const $$ = (s)=>Array.from(document.querySelectorAll(s));
 
 /* ---------------- UI helpers ---------------- */
 
@@ -26,13 +23,6 @@ function showBanner(msg){
   b.classList.add('warn');
 }
 
-function enableAfterStart(){
-  const endBtn  = $('#endButton');
-  const sendBtn = $('#composerSend');
-  if (endBtn)  endBtn.disabled  = false;
-  if (sendBtn) sendBtn.disabled = false;
-}
-
 function disableForEnded(){
   const startBtn = $('#startButton');
   const endBtn   = $('#endButton');
@@ -47,9 +37,11 @@ function disableForEnded(){
 
 /* ---------------- Chat output rendering ---------------- */
 
-const chatEl = $('#chat'); // optional; render only if present
+// resolve lazily so DOM timing never throws
+function chatRoot(){ return document.getElementById('chat'); }
 
 function appendBubble(role, text){
+  const chatEl = chatRoot();
   if (!chatEl) return;
   const div = document.createElement('div');
   div.className = role === 'user' ? 'bubble user' : 'bubble assistant';
@@ -80,7 +72,7 @@ export function handleAssistantFrame(frame){
 let ending = false;
 
 export async function onSend(){
-  const input = $('#composerInput') || $('#composer');
+  const input = document.getElementById('composerInput') || document.getElementById('composer');
   const val = (input?.value || '').trim();
   if (!val) return;
   appendBubble('user', val);
@@ -124,8 +116,8 @@ export async function onEnd(){
     // Rotate the session so the next Start is clean
     try { localStorage.removeItem('askchipSessionId'); } catch {}
 
-    // 👉 Notify bootstrap (and anyone else) that the session ended
-    window.dispatchEvent(new CustomEvent('askchip-session-ended'));
+    // Notify others (bootstrap etc.)
+    try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
 
     // Update UI
     disableForEnded();
