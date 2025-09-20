@@ -1,21 +1,31 @@
-// static/js/app.js — production-safe module (no top-level conflicts)
-// Exports used by templates/index.html inline bootstrap
+
+// Re-export API so pages can import from a single module
 export { openWS, waitWSOpen } from '/static/js/ws.js?v=v20250911b';
-export { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js?v=v20250911b';
+export { ensureCSRF } from '/static/js/csrf.js?v=v20250911b';
 export { initMic } from '/static/js/voice.js?v=v20250911b';
 export { getSID } from '/static/js/util/sid.js';
-
-// Side-effect imports once (idempotent modules)
+// Consolidated imports to avoid duplicate loads
 import '/static/js/csrf.js?v=v20250911b';
 import '/static/js/audio.js?v=v20250911b';
 import '/static/js/voice.js?v=v20250911b';
 import '/static/js/ws.js?v=v20250911b';
 import '/static/js/ui_menu.js?v=v20250911b';
 import '/static/js/auth_gate.js?v=v20250911b';
+import { installFetchInterceptor, ensureCSRF } from '/static/js/csrf.js?v=v20250911b';
+import { openWS, waitWSOpen, closeWS } from '/static/js/ws.js?v=v20250911b';
+import { initMic } from '/static/js/voice.js?v=v20250911b';
+import { getSID } from '/static/js/util/sid.js';
 
-// No further imports below this line.
+// --- one-time init guard to avoid double-binding ---
+if (window.__askchipBound) { console.warn('AskChip: init skipped (already bound)'); }
+if (!window.__askchipBound) {
+  window.__askchipBound = true;
+// static/js/app.js — session control and typed chat (production)
+// Deterministic Start: open WS → await open → greet → arm mic.
+// Proper End handler: tells server to end_session and resets UI.
+// Text-first: assistant frames render regardless of TTS availability.
 
-// ---- UI helpers
+
 const $ = (s)=>document.querySelector(s);
 
 function setDot(state){
@@ -26,10 +36,6 @@ function setDot(state){
     state==='speaking'  ? 'dot-speaking'  :
     state==='thinking'  ? 'dot-thinking'  : 'dot-ready'
   );
-  const label = document.getElementById('statusText');
-  if (label){
-    label.textContent = state.charAt(0).toUpperCase()+state.slice(1);
-  }
 }
 
 function addChatMessage(role, text){
@@ -53,30 +59,66 @@ function setSuggestions(items){
       const i = document.getElementById('composer');
       if (i){ i.value = t; i.focus(); }
     });
-    li.appendChild(b);
-    ul.appendChild(li);
+    li.appendChild(b); ul.appendChild(li);
   });
 }
 
-// ---- Session controls (start is handled by templates/index.html token bootstrap)
-export async function onEnd(){
+async function onStart(){
   try{
-    fetch('/api/v1/chat', {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ type:'EndSession' })
+    installFetchInterceptor();
+    await ensureCSRF();
+
+    // 1) Open WS and wait until subscribed (prevents greet frames from being missed)
+    openWS();
+    await waitWSOpen();
+
+    // 2) Prime mic permission early; VAD arms later
+    await initMic().catch(()=>{ /* ignore mic deny for greet text */ });
+
+    // 3) Call greet with the SAME SID the WS is using
+    fetch(`/api/v1/greet?reset=1&session_id=${encodeURIComponent(getSID())}`, {
+      credentials: 'include'
     }).catch(()=>{});
-  }finally{
-    try {
-      const { closeWS } = await import('/static/js/ws.js?v=v20250911b');
-      closeWS();
-    } catch {}
-    setDot('ready');
+
+    // Toggle buttons
+    const endBtn = $('#endButton');
+    const startBtn = $('#startButton');
+    if (endBtn) endBtn.disabled = false;
+    if (startBtn) startBtn.disabled = true;
+
+    setDot('thinking'); // will flip via ws events
+  }catch(e){
+    console.warn('[start] failed', e);
   }
 }
 
-export async function onSend(){
+async function onEnd(){
+  try{
+    const headers = new Headers({ 'Content-Type':'application/json' });
+    const csrf = await ensureCSRF().catch(()=> '');
+    if (csrf) headers.set('X-CSRF-Token', csrf);
+
+    // Tell server to end session (server also clears greet idempotency)
+    await fetch('/api/v1/chat', {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify({ cmd: 'end_session', session_id: getSID() })
+    });
+
+    // Close WS and reset UI state
+    try { closeWS && closeWS(); } catch {}
+    const endBtn = $('#endButton');
+    const startBtn = $('#startButton');
+    if (endBtn) endBtn.disabled = true;
+    if (startBtn) startBtn.disabled = false;
+    setDot('ready');
+  }catch(e){
+    console.warn('[end] failed', e);
+  }
+}
+
+async function onSend(){
   const inp = document.getElementById('composer');
   const text = (inp && inp.value || '').trim();
   if (!text) return;
@@ -84,11 +126,8 @@ export async function onSend(){
   addChatMessage('user', text);
 
   const headers = new Headers({ 'Content-Type':'application/json' });
-  try{
-    const { ensureCSRF } = await import('/static/js/csrf.js?v=v20250911b');
-    const csrf = await ensureCSRF().catch(()=> '');
-    if (csrf) headers.set('X-CSRF-Token', csrf);
-  }catch{}
+  const csrf = await ensureCSRF().catch(()=> '');
+  if (csrf) headers.set('X-CSRF-Token', csrf);
   try{
     const idem = (crypto.randomUUID?.() ?? (Date.now()+'-'+Math.random()));
     headers.set('Idempotency-Key', String(idem));
@@ -96,15 +135,15 @@ export async function onSend(){
   fetch('/api/v1/chat', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ type:'UserText', text }),
+    body: JSON.stringify({ text, session_id: getSID() }),
     credentials: 'include'
   }).catch(console.warn);
 
   setDot('thinking');
 }
 
-// Optional client-side TTS helper
-export async function speakText(text){
+// Optional client-side TTS helper; safe to keep even if server streams audio separately.
+async function speakText(text){
   try{
     const r = await fetch('/api/v1/voice/tts-with-visemes', {
       method: 'POST',
@@ -115,23 +154,55 @@ export async function speakText(text){
     const j = await r.json(); const b64 = (j && j.audio_b64) || '';
     if (b64){
       const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-      const mod = await import('/static/js/audio.js?v=v20250911b');
+      const mod = await import('./audio.js');
       if (mod.playBytesStream) await mod.playBytesStream(bytes);
       else if (mod.playBytesB64) await mod.playBytesB64(b64);
     }
-  }catch(e){
-    console.warn('tts error', e);
-  }
+  }catch(e){ console.warn('[tts] synth failed', e); }
 }
 
-// ---- Boot (do not attach Start handler here; inline bootstrap owns it)
+// WS event wiring
+window.addEventListener('askchip-ws', (ev)=>{
+  const msg = ev.detail || {};
+
+  // Minimal console tracing to confirm frames are arriving
+  try{
+    if (msg && msg.type) console.debug('[ws<-]', msg.type, msg);
+  }catch{}
+
+  if (msg.type === 'Results'){
+    setDot('listening');
+  } else if (msg.type === 'UtteranceEnd'){
+    setDot('thinking');
+  }
+
+  if (msg.type === 'assistant_chunk'){
+    window.__ac_text = (window.__ac_text || '') + String(msg.text||'');
+  } else if (msg.type === 'assistant_end'){
+    const text = (window.__ac_text || '').trim(); window.__ac_text = '';
+    if (text){
+      addChatMessage('assistant', text);
+      try{ speakText(text); }catch{}
+    }
+    setDot('ready');
+  } else if (msg.type === 'suggestions' && Array.isArray(msg.items)){
+    setSuggestions(msg.items);
+  } else if (msg.type === 'state'){
+    if (msg.phase === 'assistant_speaking') setDot('speaking');
+    if (msg.phase === 'assistant_end' || msg.phase === 'ready') setDot('ready');
+  } else if (msg.type === 'Error'){
+    console.warn('[ws] server error:', msg.code, msg.message);
+  }
+});
+
 document.addEventListener('DOMContentLoaded', ()=>{
+  const startBtn = $('#startButton');
   const endBtn   = $('#endButton');
   const sendBtn  = $('#composerSend');
-  if (endBtn)  endBtn.addEventListener('click', onEnd);
-  if (sendBtn) sendBtn.addEventListener('click', onSend);
-  const form = document.getElementById('composerForm');
-  if (form) form.addEventListener('submit', (e)=>{ e.preventDefault(); onSend(); });
+  if (startBtn) startBtn.addEventListener('click', onStart);
+  if (endBtn)   endBtn.addEventListener('click', onEnd);
+  if (sendBtn)  sendBtn.addEventListener('click', onSend);
   setDot('ready');
-  setSuggestions(['What can you do?', 'Explain FlashArray install', 'Teach me Portworx', 'Compare solutions']);
 });
+
+}
