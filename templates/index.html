@@ -73,53 +73,6 @@
   </div>
 
   <!-- Scripts --><!-- AskChip bootstrap: tokenized WS open + deterministic greet -->
-<script type="module">
-import { openWS, waitWSOpen, ensureCSRF, getSID, initMic } from '/static/js/app.js?v=v20250911b';
-
-
-async function fetchWsToken(){
-  const sid = getSID();
-  try{
-    const r = await fetch(`/api/v1/auth/ws-token?session_id=${encodeURIComponent(sid)}`, { credentials:'include' });
-    const j = await r.json();
-    if (j && j.ok && j.token) return j.token;
-  }catch(_){}
-  return null;
-}
-
-async function startWithToken(){
-  const sid = getSID();
-  const tok = await fetchWsToken();
-  openWS(tok);
-  await waitWSOpen();
-  try{ await initMic(); }catch{ /* ignore */ }
-  await fetch(`/api/v1/greet?reset=1&session_id=${encodeURIComponent(sid)}`, { credentials:'include' });
-}
-
-function wireStartOverride(){
-  const orig = document.getElementById('startButton') || document.querySelector('[data-role="start-btn"]');
-  if (!orig) return;
-  // Remove any previously attached listeners by cloning the node
-  const clone = orig.cloneNode(true);
-  orig.parentNode.replaceChild(clone, orig);
-  const startBtn = clone;
-  startBtn.disabled = false;
-  startBtn.title = '';
-  startBtn.addEventListener('click', async (e)=>{
-    e.preventDefault();
-    startBtn.disabled = true;
-    try {
-      await startWithToken();
-    } finally {
-      startBtn.disabled = false;
-    }
-  });
-}
-
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireStartOverride);
-else wireStartOverride();
-</script>
-
-<script type="module" src="/static/js/app.js?v=v20250911b"></script>
+<script type="module" src="/static/js/bootstrap.js?v=v20250911b"></script>
 </body>
 </html>

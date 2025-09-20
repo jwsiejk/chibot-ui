@@ -16,10 +16,6 @@ import { openWS, waitWSOpen, closeWS } from '/static/js/ws.js?v=v20250911b';
 import { initMic } from '/static/js/voice.js?v=v20250911b';
 import { getSID } from '/static/js/util/sid.js';
 
-// --- one-time init guard to avoid double-binding ---
-if (window.__askchipBound) { console.warn('AskChip: init skipped (already bound)'); }
-if (!window.__askchipBound) {
-  window.__askchipBound = true;
 // static/js/app.js — session control and typed chat (production)
 // Deterministic Start: open WS → await open → greet → arm mic.
 // Proper End handler: tells server to end_session and resets UI.
@@ -195,14 +191,6 @@ window.addEventListener('askchip-ws', (ev)=>{
   }
 });
 
-document.addEventListener('DOMContentLoaded', ()=>{
-  const startBtn = $('#startButton');
-  const endBtn   = $('#endButton');
-  const sendBtn  = $('#composerSend');
-  if (startBtn) startBtn.addEventListener('click', onStart);
-  if (endBtn)   endBtn.addEventListener('click', onEnd);
-  if (sendBtn)  sendBtn.addEventListener('click', onSend);
-  setDot('ready');
-});
 
-}
+
+export { onEnd, onSend };
