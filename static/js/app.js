@@ -41,10 +41,26 @@ function disableForEnded(){
 
 // resolve lazily so DOM timing never throws
 function chatRoot(){ return document.getElementById('chat'); }
+function ensureChatContainer(){
+  let c = document.getElementById('chat');
+  if (!c){
+    c = document.createElement('div');
+    c.id = 'chat';
+    c.className = 'chat';
+    // Try to put it before the composer area
+    const composer = document.getElementById('composer');
+    if (composer && composer.parentElement) {
+      composer.parentElement.parentElement.insertBefore(c, composer.parentElement);
+    } else {
+      document.body.appendChild(c);
+    }
+  }
+  return c;
+}
 
 function appendBubble(role, text){
-  const chatEl = chatRoot();
-  if (!chatEl) return;
+  let chatEl = chatRoot();
+  if (!chatEl) chatEl = ensureChatContainer();
   const div = document.createElement('div');
   div.className = role === 'user' ? 'bubble user' : 'bubble assistant';
   div.textContent = text ?? '';
