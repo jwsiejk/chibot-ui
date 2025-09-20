@@ -146,7 +146,7 @@ function wireUI(){
   if (startBtn) startBtn.addEventListener('click', startOnce);
   if (endBtn)   endBtn.addEventListener('click', onEnd);
 
-  const bindSend = (btn)=> btn && btn.addEventListener('click', onSend);
+  const bindSend = (btn)=> { if (btn) btn.addEventListener('click', onSend); };
   bindSend(sendBtnA);
   bindSend(sendBtnB);
   if (form) form.addEventListener('submit', (e)=>{ e.preventDefault(); onSend(); });
@@ -156,18 +156,14 @@ function wireUI(){
   if (endBtn)   endBtn.disabled   = true;
 
   setDot('ready');
-  window.__askchip_bootstrap_loaded = true;
-  console.log('[AskChip] bootstrap loaded');
-});
-
-  if (sendBtn) sendBtn.disabled = true;
-  if (endBtn)  endBtn.disabled  = true;
-  setDot('ready');
 
   // Breadcrumb so we can confirm bootstrap actually loaded
   window.__askchip_bootstrap_loaded = true;
   console.log('[AskChip] bootstrap loaded');
 }
 
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireUI);
-else wireUI();
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', wireUI);
+} else {
+  wireUI();
+}
