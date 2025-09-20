@@ -57,11 +57,6 @@ function setSuggestions(items){
     ul.appendChild(li);
   });
 }
-    });
-    li.appendChild(b);
-    ul.appendChild(li);
-  });
-}
 
 // ---------- Single-bubble coalescing for assistant turns ----------
 const turnState = new Map(); // turn_id -> { el, final:boolean, text:string, ttsStarted:boolean }
