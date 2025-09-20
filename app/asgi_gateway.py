@@ -1,11 +1,13 @@
 from app.ws.ws_asgi import _ws_chat_asgi_impl
 from app.ws.ws_probe import ws_probe  # probe endpoint for infra checks
+from app.ws.ws_dispatch import ws_dispatch  # NEW: catch-all WS dispatcher at /ws
 import app.logging_setup as _logsetup; _logsetup.install()
 
 # app/asgi_gateway.py
 # Starlette ASGI app that serves:
 #   • WebSocket /ws/v1/chat  (native ASGI via _ws_chat_asgi_impl)
 #   • WebSocket /ws/_probe   (minimal probe to verify WS path)
+#   • WebSocket /ws/*        (catch-all dispatcher so WS never falls into WSGI)
 #   • All HTTP via mounted Flask WSGI app
 
 import asyncio, time, os as _os
@@ -63,6 +65,7 @@ class WSArrivalMiddleware:
 routes = [
     Mount("/ws/v1/chat", app=_ws_chat_asgi_impl),  # ASGI WS chat handler
     Mount("/ws/_probe", app=ws_probe),             # ASGI WS probe
+    Mount("/ws", app=ws_dispatch),                 # NEW: catch-all WS prefix
     Mount("/", app=WSGIMiddleware(flask_app)),     # WSGI (HTTP) catch-all LAST
 ]
 
