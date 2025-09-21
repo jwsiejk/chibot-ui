@@ -1,3 +1,4 @@
+// bootstrap.js
 import { openWS, waitWSOpen, isOpen, closeWS, configure } from '/static/js/ws.js?v=v20250911b';
 import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
 import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
