@@ -31,13 +31,19 @@ function disableForEnded(){
   setDot('ready');
 }
 
+// Optional safety: strip legacy debug stamps like "[KB:0]" if any slip through
+const _KB_TAG_RE = /\s*\[(?:KB|kb)\s*:\s*\d+\]\s*/g;
+function _cleanText(s){ return (s||'').replace(_KB_TAG_RE,' ').trim(); }
+
 /* ---------------- Rendering of assistant frames ---------------- */
 
 // Accept either ASR Results or WS assistant text frames
 function _isAssistantTextFrame(d){
   return d && (
     (d.type === 'Results' && d.nlu === undefined && d.alternatives && d.alternatives[0]?.transcript) ||
-    (d.type === 'assistant_chunk' && (d.text || d.delta || d.content))
+    (d.type === 'assistant_chunk' && (d.text || d.delta || d.content)) ||
+    (d.type === 'assistant_text' && (d.text || d.delta || d.content)) ||
+    (d.type === 'assistant_final' && (d.text || d.delta || d.content))
   );
 }
 
@@ -48,9 +54,11 @@ function _dedupeAssistant(d){
     if (!msgs) return true;
     const last = msgs.lastElementChild;
 
-    const text = (d.type === 'assistant_chunk')
+    const raw = (d.type === 'assistant_chunk' || d.type === 'assistant_text' || d.type === 'assistant_final')
       ? (d.text || d.delta || d.content || '')
       : (d.alternatives?.[0]?.transcript || '');
+
+    const text = _cleanText(raw);
 
     if (last && last.dataset && last.dataset.role === 'assistant'){
       last.textContent = text;
@@ -60,6 +68,7 @@ function _dedupeAssistant(d){
     li.dataset.role = 'assistant';
     li.textContent = text;
     msgs.appendChild(li);
+    try { msgs.scrollTop = msgs.scrollHeight; } catch {}
   }catch{}
   return true;
 }
@@ -74,6 +83,10 @@ export function handleAssistantFrame(d){
     return;
   }
 
+  // Lightweight state hints (non-invasive)
+  if (d.type === 'assistant_audio') setDot('speaking');
+  if (d.type === 'UtteranceEnd')    setDot('ready');
+
   if (_isAssistantTextFrame(d)) {
     if (!_dedupeAssistant(d)) return;
   }
@@ -86,6 +99,7 @@ export async function onSend(){
   try{
     const input = $('#composer'); if (!input) return;
     const val = (input.value || '').trim(); if (!val) return;
+
     const sid = getSID();
 
     // Optimistic render of user bubble
@@ -96,16 +110,24 @@ export async function onSend(){
         li.dataset.role = 'user';
         li.textContent = val;
         msgs.appendChild(li);
+        try { msgs.scrollTop = msgs.scrollHeight; } catch {}
       }
     }catch{}
 
-    // WS send (replaces legacy HTTP POST)
-    const userMsgId = (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random()));
+    // WS send (WS-only turns; replaces legacy HTTP POST)
+    const correlation = (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random()));
     try {
-      sendJSON({ type: 'User', text: val, session_id: sid, userMsgId });
+      // Server expects: type='user_msg' and correlation_user_msg_id
+      sendJSON({ type: 'user_msg', text: val, correlation_user_msg_id: correlation, session_id: sid });
+      setDot('thinking');
     } catch (e){
       console.warn('[onSend] WS send failed', e);
+      showBanner('Message failed to send over WebSocket.');
     }
+
+    // Clear composer after send
+    try { input.value = ''; } catch {}
+
   } catch (e){
     console.warn('[onSend] error', e);
   }
