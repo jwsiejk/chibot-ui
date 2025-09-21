@@ -8,6 +8,34 @@ except Exception:
 
 
 class StreamBus:
+    """
+    Lightweight pub/sub for session-scoped assistant frames.
+
+    Notes
+    -----
+    • Cancel-aware: frames for a canceled (sid, turn_id) are dropped for
+      cancellable types.
+    • Backpressure when there are no subscribers: pending buffers are bounded
+      per session and will coalesce adjacent audio frames.
+    • Frame families supported:
+        - text / assistant_chunk (LLM text)
+        - audio_chunk (legacy single base64) / assistant_audio (list of base64)
+        - end / assistant_end
+        - suggestions
+        - state (never canceled)
+    """
+    # Types that should be suppressed after cancel_turn(...)
+    _CANCELLABLE_TYPES = {
+        'text', 'assistant_chunk',
+        'audio_chunk', 'assistant_audio',
+        'end', 'assistant_end',
+        'suggestions',
+    }
+
+    # Coalescing limits for pending audio:
+    _LEGACY_BASE64_SOFT_LIMIT = 32768 * 6   # ~192 KB worth of base64 (heuristic)
+    _ASSIST_AUDIO_MAX_CHUNKS = 256          # cap chunks per assistant_audio frame
+
     def is_canceled(self, sid, tid):
         try:
             return (sid, tid) in self._canceled
@@ -31,10 +59,11 @@ class StreamBus:
         with self._lock(sid):
             self._subs.setdefault(sid, []).append(q)
             pend = self._pending.pop(sid, [])
+        # Drain pending into the new subscriber, honoring cancel state
         for fr in pend:
             try:
                 t = fr.get('type')
-                if t in {'text','audio_chunk','end','assistant_end','suggestions'}:
+                if t in self._CANCELLABLE_TYPES:
                     tid = fr.get('turn_id')
                     if tid and (sid, tid) in self._canceled:
                         continue
@@ -43,32 +72,75 @@ class StreamBus:
                 pass
         return q
 
+    def _coalesce_legacy_audio_chunk(self, buf, frame):
+        """
+        Coalesce adjacent legacy 'audio_chunk' frames with same turn_id by
+        concatenating base64 payload. Split when exceeding a soft limit.
+        """
+        try:
+            if buf and buf[-1].get('type') == 'audio_chunk' and buf[-1].get('turn_id') == frame.get('turn_id'):
+                prev = buf[-1]
+                a = prev.get('base64') or ''
+                b = frame.get('base64') or ''
+                prev['base64'] = a + b
+                if len(prev['base64']) > self._LEGACY_BASE64_SOFT_LIMIT:
+                    prev_data = prev['base64'][:self._LEGACY_BASE64_SOFT_LIMIT]
+                    rem_data = prev['base64'][self._LEGACY_BASE64_SOFT_LIMIT:]
+                    prev['base64'] = prev_data
+                    buf.append({'type': 'audio_chunk', 'turn_id': frame.get('turn_id'), 'base64': rem_data})
+            else:
+                buf.append(frame)
+        except Exception:
+            buf.append(frame)
+
+    def _coalesce_assistant_audio(self, buf, frame):
+        """
+        Coalesce adjacent 'assistant_audio' frames for the same turn by extending
+        the 'audio_chunks' list and splitting if we exceed the max chunk limit.
+        """
+        try:
+            if not isinstance(frame.get('audio_chunks'), list):
+                # Normalize to list if a single chunk was provided by mistake
+                ch = frame.get('audio_chunks')
+                frame['audio_chunks'] = [ch] if ch else []
+
+            if buf and buf[-1].get('type') == 'assistant_audio' and buf[-1].get('turn_id') == frame.get('turn_id'):
+                prev = buf[-1]
+                prev_chunks = prev.get('audio_chunks') or []
+                new_chunks = frame.get('audio_chunks') or []
+                prev_chunks.extend(new_chunks)
+                # Split if too many chunks accumulated
+                if len(prev_chunks) > self._ASSIST_AUDIO_MAX_CHUNKS:
+                    keep = prev_chunks[:self._ASSIST_AUDIO_MAX_CHUNKS]
+                    spill = prev_chunks[self._ASSIST_AUDIO_MAX_CHUNKS:]
+                    prev['audio_chunks'] = keep
+                    if spill:
+                        buf.append({'type': 'assistant_audio', 'turn_id': frame.get('turn_id'), 'audio_chunks': spill})
+            else:
+                buf.append(frame)
+        except Exception:
+            buf.append(frame)
+
     def broadcast(self, sid, frame: dict):
         t = frame.get('type')
-        if t in {'text','audio_chunk','end','assistant_end','suggestions'}:
+        if t in self._CANCELLABLE_TYPES:
             tid = frame.get('turn_id')
             if tid and (sid, tid) in self._canceled:
                 return
+
         with self._lock(sid):
             subs = list(self._subs.get(sid, []))
             if not subs:
                 buf = self._pending.setdefault(sid, [])
-                # Backpressure: coalesce adjacent audio_chunk for same turn
-                if frame.get('type') == 'audio_chunk' and buf and buf[-1].get('type') == 'audio_chunk' and buf[-1].get('turn_id') == frame.get('turn_id'):
-                    try:
-                        prev = buf[-1]
-                        a = prev.get('base64') or ''
-                        b = frame.get('base64') or ''
-                        prev['base64'] = a + b
-                        if len(prev['base64']) > 32768*6:
-                            prev_data = prev['base64'][:32768*6]
-                            rem_data = prev['base64'][32768*6:]
-                            prev['base64'] = prev_data
-                            buf.append({'type':'audio_chunk','turn_id': frame.get('turn_id'),'base64': rem_data})
-                    except Exception:
-                        buf.append(frame)
+                # Backpressure/coalescing for audio while no subscribers are present
+                if t == 'audio_chunk':
+                    self._coalesce_legacy_audio_chunk(buf, frame)
+                elif t == 'assistant_audio':
+                    self._coalesce_assistant_audio(buf, frame)
                 else:
                     buf.append(frame)
+
+                # Enforce pending buffer bound
                 if len(buf) > self._max_pending:
                     drop_n = len(buf) - self._max_pending
                     del buf[:drop_n]
@@ -77,6 +149,8 @@ class StreamBus:
                     except Exception:
                         pass
                 return
+
+        # Push to all active subscribers
         for q in subs:
             try:
                 q.put(frame)
@@ -91,7 +165,11 @@ class StreamBus:
             if buf:
                 self._pending[sid] = [
                     fr for fr in buf
-                    if not (fr.get('turn_id') == tid and fr.get('type') in {'text','audio_chunk','end','assistant_end','suggestions'})
+                    if not (
+                        fr.get('turn_id') == tid and
+                        (fr.get('type') in self._CANCELLABLE_TYPES)
+                    )
                 ]
+
 
 bus = StreamBus()
