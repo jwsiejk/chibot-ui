@@ -7,6 +7,7 @@ from ..services.mailer import send_transcript
 from ..services.streaming import make_assistant_frames, schedule_frames
 from ..middleware.rate_limit import limit, check_now
 from ..ws.bus import bus
+from app.obs import jlog, span
 import os, uuid
 
 bp = Blueprint("chat", __name__)
@@ -29,6 +30,9 @@ def _chat_rl_guard():
 @limit("chat")
 @bp.post("")
 def post_chat():
+    data = request.get_json(silent=True) or {}
+    sid = (data.get('session_id') or 'default')
+    jlog('http:chat:start', session_id=sid, user_text=(data.get('text') or ''))
     # Unified chat entrypoint used by the UI
     data = request.get_json(silent=True) or {}
     cmd = (data.get("cmd") or "").strip().lower()
@@ -119,6 +123,7 @@ def post_chat():
             _emit('chat:ok', label='chat:ok – frames ready', turn_id=tid, n=len(frames))
         except Exception:
             pass
+        jlog('http:chat:ok', session_id=sid or 'default', turn_id=tid)
         return jsonify(ok=True, user_msg_id=user_msg_id, turn_id=tid), 200
     except Exception as e:
         try:
@@ -126,6 +131,7 @@ def post_chat():
             _emit('chat:ok', label='chat:ok – no vendor (offline fallback)', turn_id=tid, n=0)
         except Exception:
             pass
+        jlog('http:chat:ok', session_id=sid or 'default', turn_id=tid)
         return jsonify(ok=True, user_msg_id=user_msg_id, turn_id=tid), 200
 
 @limit("voice_tts")
@@ -209,4 +215,5 @@ def chat_entry():
         if fr.get("type") in ("assistant_chunk","text") and fr.get("turn_id"):
             turn_id = fr.get("turn_id")
             break
+    jlog("http:chat:ok", session_id=sid, turn_id=turn_id)
     return jsonify({"ok": True, "turn_id": turn_id})

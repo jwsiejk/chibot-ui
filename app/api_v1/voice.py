@@ -6,11 +6,13 @@ from flask import Blueprint, jsonify, request
 from ..services.tts_provider import get_tts_provider
 from ..ws.bus import bus
 from ..services.streaming import schedule_frames
+from app.obs import jlog, span
 
 bp = Blueprint("voice", __name__)
 
 @bp.post("/stt")
 def stt_stub():
+    jlog('stt:start')
     # Accept file but do not process (offline/CI). Broadcast basic frames to WS bus.
     sid = request.form.get('session_id') or (request.json or {}).get('session_id') if request.is_json else None
     if sid:
@@ -25,13 +27,16 @@ def stt_stub():
         except Exception:
             pass
         schedule_frames(sid, frs, delay_ms=10)
+    jlog('stt:ok')
     return jsonify({"ok": True, "transcript": "", "is_final": True})
 
 @bp.post("/tts-with-visemes")
 def tts_with_visemes():
+    jlog('tts:http:start')
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
     # Use provider mock (offline) to synthesize
     a_bytes, vis = get_tts_provider({}).synth(text)
     audio_b64 = base64.b64encode(a_bytes).decode("ascii")
+    jlog('tts:http:ok', bytes=len(audio_b64) if audio_b64 else 0)
     return jsonify({"ok": True, "audio_b64": audio_b64, "visemes": vis})

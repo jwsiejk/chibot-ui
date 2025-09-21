@@ -224,3 +224,6 @@ if (document.readyState === 'loading'){
 } else {
   wireUI();
 }
+
+// Debug import (opt-in via localStorage.AskChipDebug='1')
+import '/static/js/debug.js?v=v20250911b';
