@@ -1,4 +1,4 @@
-import { openWS, waitWSOpen, isOpen, closeWS } from '/static/js/ws.js?v=v20250911b';
+import { openWS, waitWSOpen, isOpen, closeWS, configure } from '/static/js/ws.js?v=v20250911b';
 import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
 import { initMic } from '/static/js/voice.js';
 import { unlockAudio, playStream, stopPlayback } from '/static/js/audio.js';
@@ -129,21 +129,18 @@ async function startOnce(){
     // 4) Mic permission (best effort)
     try { await initMic(); } catch {}
 
-    // 5) Greet using the SAME session id as WS
+    // 5) WS-only greet using the SAME session id as WS
     const sid = getSID();
-    const greetPromise = fetch(`/api/v1/greet?reset=1&session_id=${encodeURIComponent(sid)}`, {
-      credentials: 'include'
-    });
+    // Fire the WS Configure greet (no HTTP fetch)
+    configure({ greet: true, reset: 1, session_id: sid });
 
-    // Watchdog: if no assistant frames within 6s after greet returns, warn
+    // Watchdog: if no assistant frames within 6s after sending WS greet, warn
     let gotAssistant = false;
     const markAssistant = (ev) => {
       const d = ev.detail || {};
       if (_isAssistantTextFrame(d)) gotAssistant = true;
     };
     window.addEventListener('askchip-ws', markAssistant, { once: true });
-
-    await greetPromise;
 
     setTimeout(() => {
       if (!gotAssistant) showBanner('No assistant frames after greet — check WS handler/payload.');
