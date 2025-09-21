@@ -1,5 +1,5 @@
 // /static/js/app.js — chat helpers only (imports constrained by spec)
-import { closeWS, sendCloseStream } from '/static/js/ws.js?v=v20250911b';
+import { closeWS, sendCloseStream, sendJSON } from '/static/js/ws.js?v=v20250911b';
 import { getSID } from '/static/js/util/sid.js';
 
 // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
@@ -64,7 +64,7 @@ export function handleAssistantFrame(d){
   // (other frame types can be handled here as needed)
 }
 
-/* ---------------- Send (legacy HTTP until fully WS-ified) ---------------- */
+/* ---------------- Send (WS-only) ---------------- */
 
 export async function onSend(){
   try{
@@ -83,15 +83,15 @@ export async function onSend(){
       }
     }catch{}
 
-    // Legacy HTTP send (kept for now; WS-text send is a later phase)
-    await fetch('/api/v1/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ type: 'user', text: val, session_id: sid })
-    });
+    // WS send (replaces legacy HTTP POST)
+    const userMsgId = (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random()));
+    try {
+      sendJSON({ type: 'User', text: val, session_id: sid, userMsgId });
+    } catch (e){
+      console.warn('[onSend] WS send failed', e);
+    }
   } catch (e){
-    console.warn('[onSend] POST /api/v1/chat failed', e);
+    console.warn('[onSend] error', e);
   }
 }
 
