@@ -114,25 +114,15 @@ export async function onEnd(){
   if (ending) return;
   ending = true;
   try {
-    const sid = getSID();
-
-    // Best-effort tell server we’re ending this session
-    try {
-      await fetch('/api/v1/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ type: 'end', session_id: sid, reason: 'user_end' })
-      });
-    } catch(e){
-      console.debug('[onEnd] notify server failed (continuing):', e);
-    }
+    // Legacy HTTP notify removed — WS is the source of truth for session end.
+    // OPTIONAL: if desired, tell server we're closing the stream first:
+    // try { sendCloseStream(); } catch {}
 
     // Close WS and mark client idle
     try { closeWS(1000, 'user_end'); } catch {}
 
-    // Rotate the session so the next Start is clean
-    try { localStorage.removeItem('askchipSessionId'); } catch {}
+    // Rotate the session so the next Start is clean (correct key)
+    try { localStorage.removeItem('chip.sid'); } catch {}
 
     // Notify others (bootstrap etc.)
     try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
@@ -148,5 +138,4 @@ export async function onEnd(){
     ending = false;
   }
 }
-
 /* ---------------- Expose minimal helpers (optional) ---------------- */
