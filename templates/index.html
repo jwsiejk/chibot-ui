@@ -14,7 +14,24 @@
       <button id="startButton" class="primary">Start</button>
       <button id="endButton" disabled>End</button>
       <span id="stateDot" class="dot dot-ready" title="Ready"></span>
-      <button id="menuBtn" class="ghost">AskChip ▾</button>
+
+      <!-- AskChip menu (IDs + structure expected by ui_menu.js) -->
+      <div class="dropdown">
+        <button
+          id="menuAskChip"
+          class="ghost"
+          aria-haspopup="true"
+          aria-expanded="false"
+          aria-controls="menuDropdown"
+        >
+          AskChip ▾
+        </button>
+        <div id="menuDropdown" class="dropdown-content hidden" role="menu" aria-labelledby="menuAskChip">
+          <a id="menuAdmin"   role="menuitem" href="/admin">Admin</a>
+          <a id="menuProfile" role="menuitem" href="#">Profile</a>
+          <a id="menuLogout"  role="menuitem" href="#">Logout</a>
+        </div>
+      </div>
     </div>
   </header>
 
@@ -72,10 +89,9 @@
     </div>
   </div>
 
-  <!-- Scripts --><!-- AskChip bootstrap: tokenized WS open + deterministic greet -->
-
-
+  <!-- Scripts -->
   <script type="module" src="/static/js/bootstrap.js?v=v20250911b"></script>
-  <script type="module" src="/static/js/auth_gate.js"></script>
+  <script type="module" src="/static/js/auth_gate.js?v=v20250911b"></script>
+  <script type="module" src="/static/js/ui_menu.js?v=v20250911b"></script>
 </body>
 </html>
