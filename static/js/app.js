@@ -33,8 +33,12 @@ function disableForEnded(){
 
 /* ---------------- Rendering of assistant frames ---------------- */
 
+// Accept either ASR Results or WS assistant text frames
 function _isAssistantTextFrame(d){
-  return d && d.type === 'Results' && d.nlu === undefined && d.alternatives && d.alternatives[0]?.transcript;
+  return d && (
+    (d.type === 'Results' && d.nlu === undefined && d.alternatives && d.alternatives[0]?.transcript) ||
+    (d.type === 'assistant_chunk' && (d.text || d.delta || d.content))
+  );
 }
 
 function _dedupeAssistant(d){
@@ -43,7 +47,11 @@ function _dedupeAssistant(d){
     const msgs = $('#chatMessages');
     if (!msgs) return true;
     const last = msgs.lastElementChild;
-    const text = d.alternatives[0]?.transcript || '';
+
+    const text = (d.type === 'assistant_chunk')
+      ? (d.text || d.delta || d.content || '')
+      : (d.alternatives?.[0]?.transcript || '');
+
     if (last && last.dataset && last.dataset.role === 'assistant'){
       last.textContent = text;
       return false; // swallowed
@@ -58,6 +66,14 @@ function _dedupeAssistant(d){
 
 export function handleAssistantFrame(d){
   if (!d) return;
+
+  // Surface server errors to the UI banner
+  if (d.type === 'Error') {
+    const msg = `Error: ${(d.code||'')}${d.message ? ' ' + d.message : ''}`.trim();
+    showBanner(msg || 'An error occurred.');
+    return;
+  }
+
   if (_isAssistantTextFrame(d)) {
     if (!_dedupeAssistant(d)) return;
   }
