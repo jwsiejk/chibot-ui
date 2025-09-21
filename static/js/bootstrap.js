@@ -180,15 +180,27 @@ function wireUI(){
   const sendBtnA = document.getElementById('composerSend');
   const sendBtnB = document.getElementById('sendBtn');
   const form     = document.getElementById('composerForm');
+  const composer = document.getElementById('composer');
 
   if (startBtn) startBtn.addEventListener('click', startOnce);
   if (endBtn)   endBtn.addEventListener('click', App.onEnd);
 
-  const bindSend = (btn) => { if (btn) btn.addEventListener('click', App.onSend); };
+  // Stop TTS as soon as user interacts to send or type (soft barge-in polish)
+  const stopAudio = () => { try { stopPlayback(); } catch {} };
+
+  const bindSend = (btn) => {
+    if (!btn) return;
+    btn.addEventListener('click', (e) => { stopAudio(); App.onSend(); });
+  };
   bindSend(sendBtnA);
   bindSend(sendBtnB);
 
-  if (form) form.addEventListener('submit', (e) => { e.preventDefault(); App.onSend(); });
+  if (form) form.addEventListener('submit', (e) => { e.preventDefault(); stopAudio(); App.onSend(); });
+
+  if (composer) {
+    composer.addEventListener('keydown', stopAudio);
+    composer.addEventListener('input', stopAudio);
+  }
 
   if (sendBtnA) sendBtnA.disabled = true;
   if (sendBtnB) sendBtnB.disabled = true;
