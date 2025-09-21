@@ -1,65 +1,175 @@
-// AskChip menu (Admin, Call Log, Profile, Logout)
-(function(){
-  function ready(fn){ if(document.readyState!=='loading') fn(); else document.addEventListener('DOMContentLoaded', fn); }
-  ready(function(){
-    const btn=document.getElementById('menuBtn'); if(!btn) return;
-    let open=false, menu=null;
+// static/js/ui_menu.js — Production-ready AskChip menu controller
+// - Idempotent wiring (safe on hot reloads / duplicate imports)
+// - Accessible (aria-expanded, Escape/outside click, arrow keys)
+// - Admin gating via /api/v1/auth/me + /api/v1/admin/config (200 => show Admin)
+// - Profile opens modal if present; Logout best-effort call then reload
 
-    // Removed the legacy top-level "Diagnostics" item.
-    const items=[
-      { label:'Admin', href:'/admin' },
-      { label:'Call Log', action:()=>window.open('/api/v1/admin/logs-ui','_blank') },
-      { label:'Profile', href:'/profile' },
-      { label:'Logout', action:()=>{ fetch('/api/v1/auth/logout',{method:'POST',credentials:'include'}).finally(()=>location.href='/'); } }
-    ];
+const $  = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
 
-    btn.addEventListener('click', ()=>{
-      if(!menu){
-        menu=document.createElement('div');
-        menu.className='askchip-menu';
-        menu.innerHTML=items
-          .map(it=>`<button class="menu-item" data-href="${it.href||''}" data-idx="${items.indexOf(it)}">${it.label}</button>`)
-          .join('');
-        document.body.appendChild(menu);
-        menu.addEventListener('click', (e)=>{
-          const b=e.target.closest('.menu-item'); if(!b) return;
-          const href=b.getAttribute('data-href');
-          const idx=+b.getAttribute('data-idx');
-          if(href) location.href=href; else items[idx].action?.();
-          hide();
-        });
-      }
-      open? hide() : show();
+if (!window.__askchip_menu_wired) {
+  window.__askchip_menu_wired = true;
+
+  const btn      = $('#menuAskChip');     // toggle button
+  const menu     = $('#menuDropdown');    // container
+  const adminItm = $('#menuAdmin');
+  const profItm  = $('#menuProfile');
+  const outItm   = $('#menuLogout');
+
+  // If markup not present, bail quietly (no console spam in prod)
+  if (!btn || !menu) {
+    // Flag for debugging if needed
+    window.__askchip_menu_missing = true;
+  } else {
+    // ---- State helpers ----
+    const openMenu = () => {
+      menu.classList.remove('hidden');
+      btn.setAttribute('aria-expanded', 'true');
+      // focus first visible item for keyboard users
+      const itms = $$('#menuDropdown [role="menuitem"]')
+        .filter(n => n.offsetParent !== null);
+      if (itms.length) itms[0].focus();
+    };
+    const closeMenu = () => {
+      if (menu.classList.contains('hidden')) return;
+      menu.classList.add('hidden');
+      btn.setAttribute('aria-expanded', 'false');
+      // return focus to the button for a11y
+      btn.focus({ preventScroll: true });
+    };
+    const toggleMenu = () => {
+      if (menu.classList.contains('hidden')) openMenu(); else closeMenu();
+    };
+
+    // ---- Click binding (idempotent) ----
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleMenu();
+    }, { passive: true });
+
+    // Close on outside click
+    document.addEventListener('click', (e) => {
+      if (menu.classList.contains('hidden')) return;
+      const inside = e.target === btn || menu.contains(e.target);
+      if (!inside) closeMenu();
     });
 
-    function show(){
-      const r=btn.getBoundingClientRect();
-      menu.style.position='absolute';
-      menu.style.top=(r.bottom+6)+'px';
-      menu.style.right=(window.innerWidth-r.right+6)+'px';
-      menu.style.background='#0f141d';
-      menu.style.border='1px solid #202533';
-      menu.style.borderRadius='10px';
-      menu.style.padding='6px';
-      menu.style.zIndex='1500';
-      menu.style.boxShadow='0 6px 20px rgba(0,0,0,.4)';
-      menu.style.minWidth='160px';
-      menu.querySelectorAll('.menu-item').forEach(b=>{
-        b.style.display='block';
-        b.style.width='100%';
-        b.style.background='transparent';
-        b.style.border='1px solid transparent';
-        b.style.color='#e6e9ef';
-        b.style.textAlign='left';
-        b.style.padding='8px 10px';
-        b.style.borderRadius='8px';
-        b.onmouseenter=()=>b.style.background='#111823';
-        b.onmouseleave=()=>b.style.background='transparent';
+    // Keyboard navigation
+    btn.addEventListener('keydown', (e) => {
+      const k = e.key;
+      if (k === ' ' || k === 'Enter' || k === 'ArrowDown') {
+        e.preventDefault();
+        openMenu();
+      } else if (k === 'Escape') {
+        e.preventDefault();
+        closeMenu();
+      }
+    });
+    menu.addEventListener('keydown', (e) => {
+      const items = $$('#menuDropdown [role="menuitem"]')
+        .filter(n => n.offsetParent !== null);
+      if (!items.length) return;
+      const idx = items.indexOf(document.activeElement);
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMenu();
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const next = items[(idx + 1 + items.length) % items.length];
+        next?.focus();
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const prev = items[(idx - 1 + items.length) % items.length];
+        prev?.focus();
+        return;
+      }
+      if (e.key === 'Home') {
+        e.preventDefault();
+        items[0]?.focus();
+        return;
+      }
+      if (e.key === 'End') {
+        e.preventDefault();
+        items[items.length - 1]?.focus();
+        return;
+      }
+    });
+
+    // ---- Menu item actions (safe, best effort) ----
+    if (profItm) {
+      profItm.addEventListener('click', (e) => {
+        e.preventDefault();
+        closeMenu();
+        // Show profile modal if present
+        const modal = $('#profileModal');
+        if (modal) modal.classList.remove('hidden');
+        // Inform others
+        window.dispatchEvent(new CustomEvent('askchip-open-profile'));
       });
-      open=true;
     }
 
-    function hide(){ if(menu) menu.style.top='-9999px'; open=false; }
-    document.addEventListener('click', (e)=>{ if(open && !e.target.closest('#menuBtn') && !e.target.closest('.askchip-menu')) hide(); });
-  });
-})();
+    if (outItm) {
+      outItm.addEventListener('click', async (e) => {
+        e.preventDefault();
+        closeMenu();
+        // Try logout endpoint; fall back to window.location
+        try {
+          const r = await fetch('/api/v1/auth/logout', {
+            method: 'POST', credentials: 'include',
+            headers: {'Content-Type': 'application/json'}
+          });
+          if (r.ok) {
+            window.location.reload();
+          } else {
+            // fallback route if present
+            window.location.href = '/logout';
+          }
+        } catch {
+          window.location.reload();
+        }
+      });
+    }
+
+    // ---- Admin gating (only show Admin if really allowed) ----
+    const hideAdmin = () => { if (adminItm) adminItm.style.display = 'none'; };
+    const showAdmin = () => { if (adminItm) adminItm.style.display = ''; };
+
+    // Start hidden until proven allowed
+    hideAdmin();
+
+    (async () => {
+      try {
+        // 1) Confirm logged-in identity (not strictly needed for gating, but useful for future)
+        await fetch('/api/v1/auth/me', { credentials: 'include' }).then(()=>{});
+      } catch {
+        // Not logged in → keep Admin hidden
+      }
+      try {
+        // 2) Probe admin config; 200 => user is admin & feature flag present
+        const r = await fetch('/api/v1/admin/config', { credentials: 'include' });
+        if (r.ok) {
+          const j = await r.json().catch(()=> ({}));
+          const enabled = !!(j && j.settings && (
+            j.settings.FEATURE_ADMIN_UI === true ||
+            j.settings.feature_admin_ui === true ||
+            j.settings.feature_audio !== undefined // presence of settings implies admin page available
+          ));
+          if (enabled) showAdmin(); else hideAdmin();
+        } else {
+          // 403/404 -> not admin or feature disabled
+          hideAdmin();
+        }
+      } catch {
+        hideAdmin();
+      }
+    })();
+
+    // Expose small debug flag
+    window.__askchip_menu_loaded = true;
+  }
+}
