@@ -1,6 +1,6 @@
 import { openWS, waitWSOpen, isOpen, closeWS, configure } from '/static/js/ws.js?v=v20250911b';
 import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
-import { initMic } from '/static/js/voice.js';
+import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
 import { unlockAudio, stopPlayback } from '/static/js/audio.js';
 import { getSID } from '/static/js/util/sid.js';
 import * as App from '/static/js/app.js';
@@ -120,8 +120,13 @@ async function startOnce(){
     // 3) Wire WS → UI events exactly once
     wireWSEventsOnce();
 
-    // 4) Mic permission (best effort)
-    try { await initMic(); } catch {}
+    // 4) Mic permission + arm echo-aware VAD (voice-first path)
+    try {
+      const stream = await initMic();
+      await armVAD(stream);         // begins voice turns (one blob per user turn)
+    } catch (e) {
+      console.warn('[bootstrap] mic/VAD init failed', e);
+    }
 
     // 5) WS-only greet using the SAME session id as WS
     const sid = getSID();
@@ -177,7 +182,7 @@ function wireUI(){
   const composer = document.getElementById('composer');
 
   if (startBtn) startBtn.addEventListener('click', startOnce);
-  if (endBtn)   endBtn.addEventListener('click', App.onEnd);
+  if (endBtn)   endBtn.addEventListener('click', () => { try { disarmVAD(); } catch {} App.onEnd(); });
 
   // Stop TTS as soon as user interacts to send or type (soft barge-in polish)
   const stopAudio = () => { try { stopPlayback(); } catch {} };
@@ -202,6 +207,7 @@ function wireUI(){
 
   // Reset bootstrap state when session ends so Start can be used again
   window.addEventListener('askchip-session-ended', () => {
+    try { disarmVAD(); } catch {}
     started = false;
     const sb = $('#startButton');
     if (sb) sb.disabled = false;
