@@ -420,7 +420,7 @@ async def ws_chat(websocket):
         sid = "default"
 
     try:
-        await websocket.send_text(_dumps({"type":"ready","session_id":sid})))
+        await websocket.send_text(_dumps({"type":"ready","session_id":sid}))
     except Exception:
         try:
             await websocket.close(code=1011, reason="initial_ready_failed")
