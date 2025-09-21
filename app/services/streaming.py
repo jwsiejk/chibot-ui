@@ -46,17 +46,19 @@ def _build_prompt(seed_text: str, persona: Dict, kb_snippets: List[str], teacher
 
 
 # --- text hygiene -------------------------------------------------------------
-
-_KB_TAG_RE = re.compile(r"\s*\[(?:KB|kb)\s*:\s*\d+\]\s*$")
+# Remove ANY occurrence (not just trailing) of legacy "[KB:n]" stamps, case-insensitive.
+_KB_TAG_RE = re.compile(r"\s*\[(?:KB|kb)\s*:\s*\d+\]\s*")
 
 def _scrub_debug_stamps(s: str) -> str:
     """
-    Remove trailing debug stamps like "[KB:0]" that were historically appended to
+    Remove legacy debug stamps like "[KB:0]" that were historically appended to
     assistant text for telemetry. We keep the value as metadata instead.
+    This removes ALL occurrences safely without touching other content.
     """
     if not s:
         return s
-    return _KB_TAG_RE.sub("", s).strip()
+    # Replace any matches with a single space, then trim.
+    return _KB_TAG_RE.sub(" ", s).strip()
 
 
 def make_assistant_frames(seed_text: str,
@@ -112,7 +114,7 @@ def make_assistant_frames(seed_text: str,
         error_note = "llm_not_available"
         reply = "Hi! I’m ready to help."
 
-    # Scrub any legacy trailing stamps like "[KB:0]" so TTS won't read them aloud
+    # Scrub any legacy stamps like "[KB:0]" so UI/TTS never surface them
     safe_reply = _scrub_debug_stamps(reply)
 
     # --- Build frames --------------------------------------------------------
@@ -125,7 +127,7 @@ def make_assistant_frames(seed_text: str,
         'type': 'assistant_chunk',
         'turn_id': str(turn_id),
         'text': safe_reply,
-        # expose KB hits as metadata (so UI can display it without polluting text)
+        # Expose KB hits as metadata so UI can display it without polluting text.
         'kb_hits': len(kb),
     }
     if correlation_user_msg_id:
@@ -337,6 +339,9 @@ def schedule_frames(session_id: str,
                 _t.sleep(max(0, delay_ms) / 1000.0)
             for fr in frames:
                 try:
+                    # Belt-and-suspenders: never let legacy stamps slip through on rebroadcast.
+                    if isinstance(fr, dict) and fr.get('type') == 'assistant_chunk' and 'text' in fr:
+                        fr['text'] = _scrub_debug_stamps(fr['text'])
                     bus.broadcast(session_id, fr)
                 except Exception:
                     pass
@@ -370,7 +375,8 @@ def run_ws_greet(session_id: str) -> str:
     try:
         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
         if text_for_tts:
-            schedule_tts_audio(session_id, text_for_tts, turn_id=tid)
+            # Pass scrubbed text to TTS (extra safety)
+            schedule_tts_audio(session_id, _scrub_debug_stamps(text_for_tts), turn_id=tid)
     except Exception:
         pass
     # UI nudges
@@ -398,7 +404,8 @@ def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Option
     try:
         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
         if text_for_tts:
-            schedule_tts_audio(session_id, text_for_tts, turn_id=tid, correlation_user_msg_id=correlation_user_msg_id)
+            # Pass scrubbed text to TTS (extra safety)
+            schedule_tts_audio(session_id, _scrub_debug_stamps(text_for_tts), turn_id=tid, correlation_user_msg_id=correlation_user_msg_id)
     except Exception:
         pass
     return tid
