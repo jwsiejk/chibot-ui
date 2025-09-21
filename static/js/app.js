@@ -1,5 +1,5 @@
 // /static/js/app.js — chat helpers only (imports constrained by spec)
-import { closeWS } from '/static/js/ws.js?v=v20250911b';
+import { closeWS, sendCloseStream } from '/static/js/ws.js?v=v20250911b';
 import { getSID } from '/static/js/util/sid.js';
 
 // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
@@ -14,91 +14,76 @@ function setDot(state){
   dot.className = 'dot ' + (
     state==='listening' ? 'dot-listening' :
     state==='speaking'  ? 'dot-speaking'  :
-    state==='thinking'  ? 'dot-thinking'  : 'dot-ready'
+    state==='ready'     ? 'dot-ready'     :
+    'dot-idle'
   );
 }
 
-function showBanner(msg){
-  const b = $('#inlineLoginMsg');
-  if (!b) { console.warn('[AskChip]', msg); return; }
-  b.textContent = msg;
-  b.classList.add('warn');
-}
-
+function showBanner(msg){ const el=$('#statusText'); if(el) el.textContent = msg || ''; }
 function disableForEnded(){
-  const startBtn = $('#startButton');
-  const endBtn   = $('#endButton');
-  const sendBtns = [$('#composerSend'), $('#sendBtn')].filter(Boolean);
-
-  if (startBtn) startBtn.disabled = false;
-  if (endBtn)   endBtn.disabled   = true;
-  for (const b of sendBtns) b.disabled = true;
-
+  const input = $('#composer');
+  const sendA = $('#composerSend');
+  const sendB = $('#sendBtn');
+  const endBtn= $('#endButton');
+  if (input) input.value = '';
+  [sendA, sendB].forEach(b=>{ if(b) b.disabled = true; });
+  if (endBtn) endBtn.disabled = true;
   setDot('ready');
 }
 
-/* ---------------- Chat output rendering ---------------- */
+/* ---------------- Rendering of assistant frames ---------------- */
 
-// resolve lazily so DOM timing never throws
-function chatRoot(){ return document.getElementById('chat'); }
-function ensureChatContainer(){
-  let c = document.getElementById('chat');
-  if (!c){
-    c = document.createElement('div');
-    c.id = 'chat';
-    c.className = 'chat';
-    // Try to put it before the composer area
-    const composer = document.getElementById('composer');
-    if (composer && composer.parentElement) {
-      composer.parentElement.parentElement.insertBefore(c, composer.parentElement);
-    } else {
-      document.body.appendChild(c);
+function _isAssistantTextFrame(d){
+  return d && d.type === 'Results' && d.nlu === undefined && d.alternatives && d.alternatives[0]?.transcript;
+}
+
+function _dedupeAssistant(d){
+  // single-bubble de-dupe; keep only latest revision for same turn
+  try{
+    const msgs = $('#chatMessages');
+    if (!msgs) return true;
+    const last = msgs.lastElementChild;
+    const text = d.alternatives[0]?.transcript || '';
+    if (last && last.dataset && last.dataset.role === 'assistant'){
+      last.textContent = text;
+      return false; // swallowed
     }
+    const li = document.createElement('div');
+    li.dataset.role = 'assistant';
+    li.textContent = text;
+    msgs.appendChild(li);
+  }catch{}
+  return true;
+}
+
+export function handleAssistantFrame(d){
+  if (!d) return;
+  if (_isAssistantTextFrame(d)) {
+    if (!_dedupeAssistant(d)) return;
   }
-  return c;
+  // (other frame types can be handled here as needed)
 }
 
-function appendBubble(role, text){
-  let chatEl = chatRoot();
-  if (!chatEl) chatEl = ensureChatContainer();
-  const div = document.createElement('div');
-  div.className = role === 'user' ? 'bubble user' : 'bubble assistant';
-  div.textContent = text ?? '';
-  chatEl.appendChild(div);
-  chatEl.scrollTop = chatEl.scrollHeight;
-}
-
-/**
- * Handle frames coming from ws.js → UI
- * Expected shapes (examples):
- *  {type:'assistant_text', text:'...'}
- *  {type:'assistant_final', text:'...'}
- *  {role:'assistant', content:'...'}
- */
-export function handleAssistantFrame(frame){
-  try {
-    const t = frame?.text ?? frame?.content ?? '';
-    const role = frame?.role || (frame?.type?.startsWith('assistant') ? 'assistant' : 'other');
-    if (t && role === 'assistant') appendBubble('assistant', t);
-  } catch(err){
-    console.warn('[handleAssistantFrame]', err, frame);
-  }
-}
-
-/* ---------------- Send / End ---------------- */
-
-let ending = false;
+/* ---------------- Send (legacy HTTP until fully WS-ified) ---------------- */
 
 export async function onSend(){
-  const input = document.getElementById('composerInput') || document.getElementById('composer');
-  const val = (input?.value || '').trim();
-  if (!val) return;
-  appendBubble('user', val);
-  if (input) input.value = '';
+  try{
+    const input = $('#composer'); if (!input) return;
+    const val = (input.value || '').trim(); if (!val) return;
+    const sid = getSID();
 
-  const sid = getSID();
+    // Optimistic render of user bubble
+    try{
+      const msgs = $('#chatMessages');
+      if (msgs){
+        const li = document.createElement('div');
+        li.dataset.role = 'user';
+        li.textContent = val;
+        msgs.appendChild(li);
+      }
+    }catch{}
 
-  try {
+    // Legacy HTTP send (kept for now; WS-text send is a later phase)
     await fetch('/api/v1/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -110,15 +95,18 @@ export async function onSend(){
   }
 }
 
+/* ---------------- End session (graceful) ---------------- */
+
+let ending = false;
+
 export async function onEnd(){
   if (ending) return;
   ending = true;
   try {
-    // Legacy HTTP notify removed — WS is the source of truth for session end.
-    // OPTIONAL: if desired, tell server we're closing the stream first:
-    // try { sendCloseStream(); } catch {}
+    // Politely signal end of stream over WS, then close with code 1000
+    try { sendCloseStream(); } catch {}
+    await new Promise(r => setTimeout(r, 100));
 
-    // Close WS and mark client idle
     try { closeWS(1000, 'user_end'); } catch {}
 
     // Rotate the session so the next Start is clean (correct key)
@@ -138,4 +126,7 @@ export async function onEnd(){
     ending = false;
   }
 }
+
 /* ---------------- Expose minimal helpers (optional) ---------------- */
+
+// (Intentionally minimal public surface)
