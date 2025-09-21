@@ -138,6 +138,27 @@ def make_assistant_frames(seed_text: str,
     return str(turn_id), frames
 
 
+# --- MIME mapping helper ------------------------------------------------------
+
+def _guess_tts_mime(output_format: str | None) -> str:
+    """
+    Map configured TTS output format to an appropriate MIME/container for MSE playback.
+    We keep this conservative to avoid mismatches with provider bytes.
+    """
+    fmt = (output_format or os.environ.get('ELEVEN_OUTPUT_FORMAT') or '').lower()
+    # Prefer actual, common provider defaults. If unknown, assume MP3 to avoid mismatches.
+    if 'webm' in fmt and 'opus' in fmt:
+        return 'audio/webm; codecs="opus"'
+    if 'ogg' in fmt and 'opus' in fmt:
+        return 'audio/ogg; codecs="opus"'
+    if 'mp3' in fmt:
+        return 'audio/mpeg'
+    if 'wav' in fmt or 'pcm' in fmt or 'l16' in fmt:
+        return 'audio/wav'
+    # Fallback to MP3 (widely supported; safer than claiming WebM if provider returned MP3)
+    return 'audio/mpeg'
+
+
 # --- WS TTS scheduling (audio over WS) ---------------------------------------
 def schedule_tts_audio(session_id: str,
                        text: str,
@@ -147,18 +168,29 @@ def schedule_tts_audio(session_id: str,
                        delay_ms: int = 0) -> None:
     """Synthesize TTS for `text` and stream as WS frames.
     Emits frames like:
-        { "type":"assistant_audio", "turn_id": turn_id, "audio_chunks":[<b64>, ...] }
+        {
+          "type": "assistant_audio",
+          "turn_id": <str or null>,
+          "mime": "<audio mime>",
+          "audio_chunks": ["<base64>", ...],
+          "is_last": <bool>
+        }
+    After the final chunk, an explicit:
+        { "type": "UtteranceEnd", "turn_id": <str or null> }
+    is broadcast to mark audio-complete.
     Non-blocking: runs in a background thread.
     """
     if not text:
         return
     cfg = db.get_config()
     feature_audio = bool(cfg.get("feature_audio", True))
+
     # Track TTS lifecycle for admin truth
     tts_tbl = db.memory.setdefault('tts_status', {})
     sess_tbl = tts_tbl.setdefault(session_id, {})
     turn_key = str(turn_id) if turn_id is not None else 'greet'
     state = sess_tbl.setdefault(turn_key, {'started': False, 'first_chunk': False, 'done': False, 'error': None})
+
     if not feature_audio:
         return
 
@@ -172,22 +204,8 @@ def schedule_tts_audio(session_id: str,
             from app.services.tts_provider import get_tts_provider
             provider = get_tts_provider(cfg or {})
 
-            # Determine desidesired MIME from format
-            fmt = (cfg.get('tts_output_format') or os.environ.get('ELEVEN_OUTPUT_FORMAT') or 'opus_24000').lower()
-            def _guess_mime(fmt: str) -> str:
-                if 'webm' in fmt and 'opus' in fmt:
-                    return 'audio/webm; codecs=opus'
-                if 'opus' in fmt and 'ogg' in fmt:
-                    return 'audio/ogg; codecs=opus'
-                if 'opus' in fmt and 'webm' not in fmt and 'ogg' not in fmt:
-                    # container-agnostic opus — prefer webm
-                    return 'audio/webm; codecs=opus'
-                if 'mp3' in fmt:
-                    return 'audio/mpeg'
-                if 'pcm' in fmt:
-                    return 'audio/L16'
-                return 'application/octet-stream'
-            desired_mime = _guess_mime(fmt)
+            # Determine desired MIME from configured output format
+            desired_mime = _guess_tts_mime(cfg.get('tts_output_format'))
 
             # Synthesize
             try:
@@ -203,14 +221,20 @@ def schedule_tts_audio(session_id: str,
                     _admin_emit('tts:error', session_id=session_id, turn_id=str(turn_id) if turn_id else None, error=str(e))
                 except Exception:
                     pass
+                # Even on error, signal end-of-utterance so clients can clean up gracefully
+                try:
+                    bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": str(turn_id) if turn_id else None})
+                except Exception:
+                    pass
                 return
 
             # Chunk and broadcast
             mv = memoryview(audio_bytes)
             idx = 0
-            max_frames = 256
+            max_frames = 256  # guardrail
             sent = 0
             first_sent = False
+
             while idx < len(mv):
                 # stop early if canceled
                 try:
@@ -219,14 +243,25 @@ def schedule_tts_audio(session_id: str,
                         break
                 except Exception:
                     pass
-                part = bytes(mv[idx: idx + chunk_bytes])
-                idx += chunk_bytes
+
+                next_idx = idx + int(chunk_bytes)
+                part = bytes(mv[idx: next_idx])
+                idx = next_idx
+
                 try:
                     b64 = base64.b64encode(part).decode("ascii")
-                    fr = {"type": "assistant_audio", "turn_id": str(turn_id) if turn_id else None, "audio_chunks": [b64]}
+                    fr = {
+                        "type": "assistant_audio",
+                        "turn_id": str(turn_id) if turn_id else None,
+                        "mime": desired_mime,
+                        "audio_chunks": [b64],
+                        "is_last": (idx >= len(mv)),
+                    }
                     if correlation_user_msg_id:
                         fr["correlation_user_msg_id"] = correlation_user_msg_id
+
                     bus.broadcast(session_id, fr)
+
                     if not first_sent:
                         first_sent = True
                         state['first_chunk'] = True
@@ -234,16 +269,30 @@ def schedule_tts_audio(session_id: str,
                             _admin_emit('tts:first_chunk', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
                         except Exception:
                             pass
+
                     sent += 1
                     if sent >= max_frames:
+                        # Safety cut: end stream explicitly if we truncated
+                        try:
+                            bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": str(turn_id) if turn_id else None})
+                        except Exception:
+                            pass
                         break
                 except Exception:
+                    # If a single chunk fails, try to continue; we'll still emit UtteranceEnd.
                     pass
         finally:
+            # Always mark tts done (admin), and always signal UtteranceEnd if we haven't already.
             try:
                 _admin_emit('tts:done', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
             except Exception:
                 pass
+
+            try:
+                bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": str(turn_id) if turn_id else None})
+            except Exception:
+                pass
+
             state['done'] = True
 
     threading.Thread(target=_run, daemon=True).start()
