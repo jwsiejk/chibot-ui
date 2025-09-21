@@ -157,19 +157,22 @@ export async function openWS(){
     }
   };
 
-  // be a good citizen on unload
+  // be a good citizen on unload — send a normal "going away" close
   window.addEventListener('beforeunload', () => {
-    try { ws.close(); } catch {}
+    try { ws.close(1001, 'page_unload'); } catch {}
   }, { once:true });
 
   return ws;
 }
 
-export function closeWS(){
+// NOTE: updated to accept a code + reason so we emit a clean close (avoids 1005).
+export function closeWS(code = 1000, reason = ''){
   _stopKeepAlive();
   clearTimeout(_reconnectTimer);
   _reconnecting = false;
-  try { if (_ws && _ws.readyState <= WebSocket.CLOSING) _ws.close(); } catch {}
+  try {
+    if (_ws) _ws.close(code, reason || undefined);
+  } catch {}
   _ws = null;
 }
 
