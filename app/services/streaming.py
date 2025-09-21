@@ -18,7 +18,6 @@ from .persona_prompt import build_persona_preamble, format_kb_context
 from .suggestions import hygienic_suggestions
 from ..db import db
 from ..ws.bus import bus
-from app.obs import jlog, span
 
 try:
     from ..api_v1.admin import _emit as _admin_emit  # SSE to Admin
@@ -82,15 +81,14 @@ def make_assistant_frames(seed_text: str,
     labels['engagement'] = score_engagement(seed_text, meta)
     policy = pick_policy(labels, cfg)
     teacher_move = (policy or {}).get('teacher_move')
+
     # Light retrieval – safe to fail closed
     kb = []
-    with span("retrieval", session_id=session_id, phase="turn"):
-        try:
-            if cfg.get('kb_enabled', False):
-                kb = kb_search(seed_text, top_k=int(cfg.get('kb_top_k', 3)))
-        except Exception:
-            kb = []
-    jlog("retrieval:result", session_id=session_id, kb_hits=len(kb))
+    try:
+        if cfg.get('kb_enabled', False):
+            kb = kb_search(seed_text, top_k=int(cfg.get('kb_top_k', 3)))
+    except Exception:
+        kb = []
 
     prompt = _build_prompt(seed_text, persona, kb, teacher_move)
 
@@ -100,15 +98,13 @@ def make_assistant_frames(seed_text: str,
     except Exception as e:
         provider = None
         _admin_emit("llm_provider_error", error=e.__class__.__name__)
+
     # --- Generate reply (with safe fallback) ---------------------------------
     reply: str
     error_note: Optional[str] = None
     if provider is not None:
         try:
-            with span("llm", session_id=session_id, phase="turn"):
-                reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
-                jlog("llm:ok", session_id=session_id, model=getattr(provider, "model_name","unknown"),
-                     tokens_in=getattr(provider, "last_tokens_in", None), tokens_out=getattr(provider, "last_tokens_out", None))
+            reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
         except Exception as e:
             # Fallback text if provider errors out
             error_note = f"llm_error:{e.__class__.__name__}"
@@ -120,7 +116,6 @@ def make_assistant_frames(seed_text: str,
 
     # Scrub any legacy stamps like "[KB:0]" so UI/TTS never surface them
     safe_reply = _scrub_debug_stamps(reply)
-    jlog("frame:assistant_text", session_id=session_id, assistant_text=safe_reply, kb_hits=len(kb))
 
     # --- Build frames --------------------------------------------------------
     turn_id = db.memory.setdefault('turn_seq', 0) + 1
@@ -152,21 +147,16 @@ def make_assistant_frames(seed_text: str,
     if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
     frames.append(end_fr)
+
     # --- Broadcast -----------------------------------------------------------
     try:
-        with span("frames:broadcast", session_id=session_id, turn_id=str(turn_id)):
-            for fr in frames:
-                # Belt-and-suspenders: scrub again if any legacy tag slipped in
-                if isinstance(fr, dict) and fr.get('type') == 'assistant_chunk' and 'text' in fr:
-                    fr['text'] = _scrub_debug_stamps(fr['text'])
-                bus.broadcast(session_id, fr)
-                # Trace important milestones to Admin SSE + logs
-                if fr.get('type') == 'assistant_chunk':
-                    _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(turn_id))
-                    jlog('broadcast:assistant_chunk', session_id=session_id, turn_id=str(turn_id), size=len(fr.get('text') or ''))
-                elif fr.get('type') == 'assistant_end':
-                    _admin_emit('assistant_end', session_id=session_id, turn_id=str(turn_id))
-                    jlog('broadcast:assistant_end', session_id=session_id, turn_id=str(turn_id))
+        for fr in frames:
+            bus.broadcast(session_id, fr)
+            # Trace important milestones to Admin SSE
+            if fr.get('type') == 'assistant_chunk':
+                _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(turn_id))
+            elif fr.get('type') == 'assistant_end':
+                _admin_emit('assistant_end', session_id=session_id, turn_id=str(turn_id))
     except Exception:
         pass
         pass
@@ -231,35 +221,106 @@ def schedule_tts_audio(session_id: str,
         return
 
     def _run():
-
         try:
+            # Small pacing delay if requested
             if delay_ms and delay_ms > 0:
                 _t.sleep(max(0, delay_ms) / 1000.0)
-            from app.obs import span as _span_local
-            with _span_local("schedule_frames", session_id=session_id):
-                for fr in frames:
-                    try:
-                        # Belt-and-suspenders scrub
-                        if isinstance(fr, dict) and fr.get('type') == 'assistant_chunk' and 'text' in fr:
-                            fr['text'] = _scrub_debug_stamps(fr['text'])
-                        bus.broadcast(session_id, fr)
-                    except Exception:
-                        pass
-            # Ensure an assistant_end terminator exists
-            if not any(fr.get('type') in ('assistant_end', 'end') for fr in frames):
-                end_fr = {'type': 'assistant_end', 'turn_id': frames[-1].get('turn_id') if frames else None}
-                if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
-                    end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+
+            # Pick provider (vendor only)
+            from app.services.tts_provider import get_tts_provider
+            provider = get_tts_provider(cfg or {})
+
+            # Determine desired MIME from configured output format
+            desired_mime = _guess_tts_mime(cfg.get('tts_output_format'))
+
+            # Synthesize
+            try:
+                # Re-scrub here as a safety net in case any upstream callers missed it
+                audio_bytes, _vis = provider.synth(_scrub_debug_stamps(text))
+                state['started'] = True
                 try:
-                    bus.broadcast(session_id, end_fr)
+                    _admin_emit('tts:start', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
                 except Exception:
                     pass
+            except Exception as e:
+                state['error'] = str(e)
+                try:
+                    _admin_emit('tts:error', session_id=session_id, turn_id=str(turn_id) if turn_id else None, error=str(e))
+                except Exception:
+                    pass
+                # Even on error, signal end-of-utterance so clients can clean up gracefully
+                try:
+                    bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": str(turn_id) if turn_id else None})
+                except Exception:
+                    pass
+                return
+
+            # Chunk and broadcast
+            mv = memoryview(audio_bytes)
+            idx = 0
+            max_frames = 256  # guardrail
+            sent = 0
+            first_sent = False
+
+            while idx < len(mv):
+                # stop early if canceled
+                try:
+                    from ..ws.bus import bus as _bus_ref
+                    if _bus_ref.is_canceled(session_id, str(turn_id) if turn_id else None):
+                        break
+                except Exception:
+                    pass
+
+                next_idx = idx + int(chunk_bytes)
+                part = bytes(mv[idx: next_idx])
+                idx = next_idx
+
+                try:
+                    b64 = base64.b64encode(part).decode("ascii")
+                    fr = {
+                        "type": "assistant_audio",
+                        "turn_id": str(turn_id) if turn_id else None,
+                        "mime": desired_mime,
+                        "audio_chunks": [b64],
+                        "is_last": (idx >= len(mv)),
+                    }
+                    if correlation_user_msg_id:
+                        fr["correlation_user_msg_id"] = correlation_user_msg_id
+
+                    bus.broadcast(session_id, fr)
+
+                    if not first_sent:
+                        first_sent = True
+                        state['first_chunk'] = True
+                        try:
+                            _admin_emit('tts:first_chunk', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
+                        except Exception:
+                            pass
+
+                    sent += 1
+                    if sent >= max_frames:
+                        # Safety cut: end stream explicitly if we truncated
+                        try:
+                            bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": str(turn_id) if turn_id else None})
+                        except Exception:
+                            pass
+                        break
+                except Exception:
+                    # If a single chunk fails, try to continue; we'll still emit UtteranceEnd.
+                    pass
         finally:
+            # Always mark tts done (admin), and always signal UtteranceEnd if we haven't already.
             try:
-                _admin_emit('schedule_frames_done', session_id=session_id)
+                _admin_emit('tts:done', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
             except Exception:
                 pass
 
+            try:
+                bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": str(turn_id) if turn_id else None})
+            except Exception:
+                pass
+
+            state['done'] = True
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -273,20 +334,17 @@ def schedule_frames(session_id: str,
     Non-blocking: runs in a background thread.
     """
     def _run():
-
         try:
             if delay_ms and delay_ms > 0:
                 _t.sleep(max(0, delay_ms) / 1000.0)
-            from app.obs import span as _span_local
-            with _span_local("schedule_frames", session_id=session_id):
-                for fr in frames:
-                    try:
-                        # Belt-and-suspenders scrub
-                        if isinstance(fr, dict) and fr.get('type') == 'assistant_chunk' and 'text' in fr:
-                            fr['text'] = _scrub_debug_stamps(fr['text'])
-                        bus.broadcast(session_id, fr)
-                    except Exception:
-                        pass
+            for fr in frames:
+                try:
+                    # Belt-and-suspenders: never let legacy stamps slip through on rebroadcast.
+                    if isinstance(fr, dict) and fr.get('type') == 'assistant_chunk' and 'text' in fr:
+                        fr['text'] = _scrub_debug_stamps(fr['text'])
+                    bus.broadcast(session_id, fr)
+                except Exception:
+                    pass
             # Ensure an assistant_end terminator exists
             if not any(fr.get('type') in ('assistant_end', 'end') for fr in frames):
                 end_fr = {'type': 'assistant_end', 'turn_id': frames[-1].get('turn_id') if frames else None}
@@ -301,7 +359,6 @@ def schedule_frames(session_id: str,
                 _admin_emit('schedule_frames_done', session_id=session_id)
             except Exception:
                 pass
-
 
     threading.Thread(target=_run, daemon=True).start()
 

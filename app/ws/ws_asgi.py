@@ -9,7 +9,6 @@ from app.services.streaming_asr.deepgram_client import DeepgramClient
 from app.security.ws_token import verify as verify_ws_token
 from app.db import db
 from app.metrics import ws_metrics
-from app.obs import jlog, span
 # NEW: invoke LLM on final transcript
 from app.services.streaming import run_ws_user_turn  # NEW
 
@@ -151,7 +150,6 @@ async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen, 
 
 
 async def _ws_chat_asgi_impl(scope, receive, send):
-    jlog('ws:scope_arrived', path=scope.get('path'), raw_query=(scope.get('query_string') or b'').decode(errors='ignore'))
     try:
         _admin_emit and _admin_emit("ws_handshake_enter",
                                     path=scope.get("path"),
@@ -206,9 +204,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             except Exception: pass
             return
 
-    with span("ws:handshake", path=scope.get("path")):
-        await send({"type": "websocket.accept", "subprotocol": "bearer"})
-    jlog("ws:accept", session_id=sid)
+    await send({"type": "websocket.accept", "subprotocol": "bearer"})
 
     try:
         db.memory.setdefault("greet_turns", {}).pop(sid, None)
@@ -232,7 +228,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     try:
         await send({"type": "websocket.send", "text": _dumps({"type": "ready", "session_id": sid})})
-        jlog("ws:ready_sent", session_id=sid)
     except Exception:
         try:
             await send({"type": "websocket.close", "code": 1011, "reason": "initial_ready_failed"})
@@ -379,7 +374,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             pass
         try:
             await send({"type":"websocket.close","code":1000,"reason":"normal_shutdown"})
-            jlog("ws:closed", session_id=sid, code=1000, reason="normal_shutdown")
         except Exception:
             pass
 

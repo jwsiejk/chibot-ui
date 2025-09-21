@@ -13,7 +13,6 @@ from ..db import db
 from ..ws.bus import bus
 from ..services.suggestions import hygienic_suggestions
 from ..middleware.csrf import ensure_csrf_headers
-from app.obs import jlog, span
 
 try:
     # Admin SSE emitter (optional)
@@ -49,9 +48,6 @@ def _now() -> float:
 
 @bp.get("")
 def greet():
-    from flask import request
-    sid = (request.args.get('session_id') or 'default')
-    jlog('http:greet:start', session_id=sid)
     sid = _session_id()
     turns = db.memory.setdefault("greet_turns", {})
 
@@ -87,8 +83,7 @@ def greet():
                 resp.headers['X-Worker-PID'] = str(os.getpid())
             except Exception:
                 pass
-            jlog('http:greet:ok', session_id=sid)
-    return ensure_csrf_headers(resp), 200
+            return ensure_csrf_headers(resp), 200
 
     # Create a new turn id (UUID is acceptable). Do NOT depend on vendors for this.
     tid = uuid.uuid4().hex
@@ -188,5 +183,4 @@ def greet():
     except Exception:
         pass
 
-    jlog('http:greet:ok', session_id=sid)
     return ensure_csrf_headers(resp), 200
