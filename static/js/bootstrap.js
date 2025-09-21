@@ -12,7 +12,7 @@ const $ = (s) => document.querySelector(s);
 let startInFlight = false;
 let started = false;
 
-// ----- NEW: assistant text de-dupe (turn_id + text) -----
+// ----- Assistant text de-dupe (turn_id + text) -----
 const _assistantSeen = new Set();
 function _isAssistantTextFrame(d) {
   const t = d?.type;
@@ -46,6 +46,24 @@ function showBanner(msg){
   b.classList.add('warn');
 }
 
+function _disableButtons() {
+  const endBtn   = $('#endButton');
+  const sendBtnA = $('#composerSend');
+  const sendBtnB = $('#sendBtn');
+  if (sendBtnA) sendBtnA.disabled = true;
+  if (sendBtnB) sendBtnB.disabled = true;
+  if (endBtn)   endBtn.disabled   = true;
+}
+
+function _enableButtons() {
+  const endBtn   = $('#endButton');
+  const sendBtnA = $('#composerSend');
+  const sendBtnB = $('#sendBtn');
+  if (sendBtnA) sendBtnA.disabled = false;
+  if (sendBtnB) sendBtnB.disabled = false;
+  if (endBtn)   endBtn.disabled   = false;
+}
+
 function wireWSEventsOnce(){
   if (window.__askchip_ws_wired) return;
   window.__askchip_ws_wired = true;
@@ -61,6 +79,16 @@ function wireWSEventsOnce(){
       seen++;
     }
 
+    // Lightweight state dot hints (no UI regressions)
+    if (t === 'assistant_audio') setDot('speaking');
+    if (t === 'UtteranceEnd')    setDot('ready');
+    if (t === 'state' && d.phase) {
+      if (d.phase === 'ready')    setDot('ready');
+      if (d.phase === 'thinking') setDot('thinking');
+      if (d.phase === 'speaking') setDot('speaking');
+      if (d.phase === 'listening')setDot('listening');
+    }
+
     // De-dupe assistant text frames so greet can't double-render
     if (_isAssistantTextFrame(d)) {
       if (!_dedupeAssistant(d)) return; // swallow duplicate
@@ -71,7 +99,11 @@ function wireWSEventsOnce(){
 
   window.addEventListener('askchip-ws-close', (ev) => {
     console.warn('[WS close]', ev.detail);
-    // Optionally: setDot('ready');
+    // When WS closes, disable Send/End and re-enable Start
+    _disableButtons();
+    const sb = $('#startButton');
+    if (sb) sb.disabled = false;
+    setDot('ready');
   });
 }
 
@@ -103,7 +135,7 @@ async function startOnce(){
     // 0) Audio unlock so TTS is permitted by browser autoplay policies
     try { await unlockAudio(); } catch {}
 
-    // 1) Network/CSRF prep
+    // 1) Network/CSRF prep (kept for compatibility; harmless in WS-only mode)
     try { installFetchInterceptor(); } catch {}
     try { await ensureCSRF(); } catch {}
 
@@ -131,7 +163,12 @@ async function startOnce(){
     // 5) WS-only greet using the SAME session id as WS
     const sid = getSID();
     // Fire the WS Configure greet (no HTTP fetch)
-    configure({ greet: true, reset: 1, session_id: sid });
+    try {
+      configure({ greet: true, reset: 1, session_id: sid });
+    } catch (e) {
+      console.warn('[bootstrap] WS configure failed, cannot greet', e);
+      showBanner('Greet failed to send — check WS configure()');
+    }
 
     // Watchdog: if no assistant frames within 6s after sending WS greet, warn
     let gotAssistant = false;
@@ -147,10 +184,7 @@ async function startOnce(){
 
     // Ready for user input
     if (endBtn) endBtn.disabled = false;
-    const sendBtnA = document.getElementById('composerSend');
-    const sendBtnB = document.getElementById('sendBtn');
-    if (sendBtnA) sendBtnA.disabled = false;
-    if (sendBtnB) sendBtnB.disabled = false;
+    _enableButtons();
 
     // Mark session active so ws.js auto-reconnects through restarts
     window.__askchip_session_started = true;
@@ -160,6 +194,7 @@ async function startOnce(){
   } catch (e){
     console.error('[bootstrap] start failed', e);
     if (startBtn) startBtn.disabled = false;
+    _disableButtons();
     setDot('ready');
   } finally {
     startInFlight = false;
@@ -201,9 +236,8 @@ function wireUI(){
     composer.addEventListener('input', stopAudio);
   }
 
-  if (sendBtnA) sendBtnA.disabled = true;
-  if (sendBtnB) sendBtnB.disabled = true;
-  if (endBtn)   endBtn.disabled   = true;
+  // Disabled until greet succeeds
+  _disableButtons();
 
   // Reset bootstrap state when session ends so Start can be used again
   window.addEventListener('askchip-session-ended', () => {
@@ -211,6 +245,7 @@ function wireUI(){
     started = false;
     const sb = $('#startButton');
     if (sb) sb.disabled = false;
+    _disableButtons();
     setDot('ready');
   });
 
