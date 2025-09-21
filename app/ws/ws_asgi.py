@@ -268,7 +268,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         elif t == "Configure":
                             cfg.update(obj or {})
 
-                            # Greet handling (unchanged from your last patch)
+                            # Greet handling
                             if obj.get("reset"):
                                 try:
                                     db.memory.setdefault("greet_turns", {}).pop(sid, None)
@@ -283,7 +283,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             if obj.get("greet"):
                                 async def _bg():
                                     try:
-                                        from app.services.streaming import make_assistant_frames, schedule_frames
+                                        from app.services.streaming import make_assistant_frames
                                         from app.services.suggestions import hygienic_suggestions
                                         from app.ws.bus import bus
                                         try:
@@ -291,10 +291,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         except Exception:
                                             fallback_text = "Hello! I'm Chip. How can I help today?"
                                             tid, frames = make_assistant_frames(fallback_text, sid, meta={"source":"ws_greet_fallback"})
-                                        try:
-                                            schedule_frames(sid, frames)
-                                        except Exception:
-                                            pass
+                                        # NOTE: make_assistant_frames already broadcasts frames; avoid double-send.
                                         try:
                                             bus.broadcast(sid, {"type":"state","phase":"ready"})
                                             bus.broadcast(sid, {"type":"suggestions","turn_id":tid,"items":hygienic_suggestions("")})
@@ -315,18 +312,24 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 asyncio.create_task(_bg())
 
                         elif t == "User":
-                            # New: handle user messages over WS
+                            # Handle user messages over WS with validation
                             text = (obj.get("text") or "").strip()
-                            if text:
-                                try:
-                                    from app.services.streaming import make_assistant_frames, schedule_frames
-                                    tid, frames = make_assistant_frames(text, sid, meta={"source": "user_ws"})
-                                    schedule_frames(sid, frames, correlation_user_msg_id=obj.get("userMsgId"))
-                                except Exception as e:
-                                    await send({
-                                        "type":"websocket.send",
-                                        "text":_dumps(make_error("user_fail", e.__class__.__name__))
-                                    })
+                            if not text:
+                                # ignore empty user messages
+                                continue
+                            if len(text) > 8000:
+                                await send({"type":"websocket.send","text":_dumps(make_error("payload_too_large","user_text"))})
+                                continue
+                            try:
+                                from app.services.streaming import make_assistant_frames, schedule_frames
+                                tid, frames = make_assistant_frames(text, sid, meta={"source": "user_ws"})
+                                # schedule_frames ensures pacing + assistant_end if provider streaming differs
+                                schedule_frames(sid, frames, correlation_user_msg_id=obj.get("userMsgId"))
+                            except Exception as e:
+                                await send({
+                                    "type":"websocket.send",
+                                    "text":_dumps(make_error("user_fail", e.__class__.__name__))
+                                })
 
                         elif t == "CloseStream":
                             turn_id, _pcm = buf.close_turn()
