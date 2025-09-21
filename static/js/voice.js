@@ -32,6 +32,7 @@ const state = {
   rec: null,
   recChunks: [],
   turnTimer: null,
+  turnOpen: false,   // NEW: track whether a turn is currently open server-side
 };
 
 // ---- Helpers ----------------------------------------------------------------
@@ -100,13 +101,19 @@ function _disarm() {
   _safeClearTurnTimer();
   _stopRecorder();
   _teardownVADOnly();
+  state.turnOpen = false; // ensure local state is clean
   _emitVoiceState('idle');
 }
 
 function _bargeIn() {
-  // Soft barge-in: pause audio locally, and politely ask server to stop TTS stream
+  // Soft barge-in: pause audio locally
   try { stopPlayback(); } catch {}
-  try { sendCloseStream(); } catch {}
+  // If a prior ASR turn is somehow still open, politely close it.
+  // (Harmless if no turn is open; guarded to avoid duplicate closes.)
+  if (state.turnOpen) {
+    try { sendCloseStream(); } catch {}
+    state.turnOpen = false;
+  }
 }
 
 // ---- VAD wiring -------------------------------------------------------------
@@ -166,18 +173,28 @@ function _startRecorder() {
       const blob = new Blob(state.recChunks, { type: REC_MIME });
       state.recChunks = [];
       if (blob.size > 0) {
-        await sendAudioChunk(blob); // one blob per user turn → WS → server Whisper
+        // One blob per user turn → WS → server STT
+        await sendAudioChunk(blob);
       }
     } catch (e) {
       console.warn('[voice] send audio failed', e);
     } finally {
+      // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
+      if (state.turnOpen) {
+        try { sendCloseStream(); } catch {}
+        state.turnOpen = false;
+      }
       _emitVoiceState('armed');
     }
   };
 
-  try { state.rec.start(); } catch (e) {
+  try {
+    state.rec.start();
+    state.turnOpen = true; // mark an open ASR turn on the server
+  } catch (e) {
     console.warn('[voice] recorder start failed', e);
     state.rec = null;
+    state.turnOpen = false;
     return;
   }
 
@@ -190,7 +207,7 @@ function _startRecorder() {
 }
 
 function _onSpeechStartCommitted() {
-  // Pause Chip TTS and politely notify server to stop current stream
+  // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
   _bargeIn();
 
   _emitVoiceState('recording');
@@ -200,6 +217,7 @@ function _onSpeechStartCommitted() {
 function _onSpeechEndCommitted() {
   _safeClearTurnTimer();
   _stopRecorder();
+  // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
 }
 
 // ---- Utilities --------------------------------------------------------------
