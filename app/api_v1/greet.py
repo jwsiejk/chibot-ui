@@ -178,7 +178,8 @@ def greet():
         pass
 
     try:
-        _admin_emit('greet:resp', label='greet:resp', session_id=sid, turn_id=tid, audio_scheduled=audio_scheduled)
+        _admin_emit('greet:resp', label='greet:resp', session_id=sid, turn_id=tid,
+                 tts_status=db.memory.get('tts_status', {}).get(sid, {}).get(str(tid) if tid else 'greet', {}))
     except Exception:
         pass
 

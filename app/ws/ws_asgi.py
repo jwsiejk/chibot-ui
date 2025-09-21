@@ -85,22 +85,39 @@ async def _pump_bus_to_client(sid: str, send):
             await asyncio.sleep(0.01)
 
 
-async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen):
+async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen, sid):
     """Relay Deepgram events to client as Results/UtteranceEnd."""
     try:
         async for ev in dg.events():
             et = (ev.get("type") or "").lower()
             if et == "asr_open":
+                try:
+                    _admin_emit('asr:start', session_id=sid)
+                except Exception:
+                    pass
                 continue
             if et in ("user_partial", "user_final"):
                 is_final = (et == "user_final")
                 text = ev.get("text") or ""
+                try:
+                    if et == 'user_partial':
+                        _admin_emit('asr:first_partial', session_id=sid)
+                except Exception:
+                    pass
                 await send({"type": "websocket.send",
                             "text": _dumps(make_results(turn_id_ref[0], transcript=text, confidence=0.0, is_final=is_final))})
                 if is_final:
                     final_seen[0] = True
                     await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id_ref[0]))})
+                    try:
+                        _admin_emit('asr:final', session_id=sid)
+                    except Exception:
+                        pass
             elif et == "asr_error":
+                try:
+                    _admin_emit('asr:error', session_id=sid, error=str(ev.get('error') or 'unknown'))
+                except Exception:
+                    pass
                 await send({"type": "websocket.send",
                             "text": _dumps(make_error("asr_error", str(ev.get("error") or "unknown")))})
     except asyncio.CancelledError:
@@ -235,7 +252,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             dg = DeepgramClient(cfg)
             await dg.connect()
             turn_id_ref[0] = buf.turn_seq + 1
-            rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen))
+            rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen, sid))
 
     # ---------------------- MAIN RECEIVE LOOP ----------------------
     try:

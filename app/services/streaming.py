@@ -150,6 +150,11 @@ def schedule_tts_audio(session_id: str,
         return
     cfg = db.get_config()
     feature_audio = bool(cfg.get("feature_audio", True))
+    # Track TTS lifecycle for admin truth
+    tts_tbl = db.memory.setdefault('tts_status', {})
+    sess_tbl = tts_tbl.setdefault(session_id, {})
+    turn_key = str(turn_id) if turn_id is not None else 'greet'
+    state = sess_tbl.setdefault(turn_key, {'started': False, 'first_chunk': False, 'done': False, 'error': None})
     if not feature_audio:
         return
 
@@ -159,21 +164,24 @@ def schedule_tts_audio(session_id: str,
             if delay_ms and delay_ms > 0:
                 _t.sleep(max(0, delay_ms) / 1000.0)
 
-            # Pick provider (prefer canonical providers.tts; keep fallbacks for safety)
-            try:
-                from ..providers.tts import get_tts_provider
-            except Exception:
-                try:
-                    from ..services.tts_provider import get_tts_provider  # type: ignore
-                except Exception:
-                    from ..tts_provider import get_tts_provider  # legacy fallback
+            # Pick provider (vendor only)
+            from app.services.tts_provider import get_tts_provider
             provider = get_tts_provider(cfg or {})
 
             # Synthesize
             try:
                 audio_bytes, _vis = provider.synth(text)
+            state['started'] = True
+            try:
+                _admin_emit('tts:start', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
             except Exception:
-                # On failure, do nothing (text already rendered)
+                pass
+            except Exception as e:
+                state['error'] = str(e)
+                try:
+                    _admin_emit('tts:error', session_id=session_id, turn_id=str(turn_id) if turn_id else None, error=str(e))
+                except Exception:
+                    pass
                 return
 
             # Chunk and broadcast
@@ -204,7 +212,8 @@ def schedule_tts_audio(session_id: str,
                     pass
         finally:
             try:
-                _admin_emit('schedule_tts_done', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
+                _admin_emit('tts:done', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
+            state['done'] = True
             except Exception:
                 pass
 

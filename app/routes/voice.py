@@ -1,6 +1,6 @@
 
 from flask import Blueprint, request, jsonify
-from app.providers.tts import get_tts_provider
+from .tts_provider import get_tts_provider
 import base64
 
 bp_voice = Blueprint("bp_voice", __name__, url_prefix="/api/v1/voice")

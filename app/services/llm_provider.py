@@ -8,10 +8,7 @@ class LLMProvider(Protocol):
                        teacher_move: str | None = None, context: Dict[str, Any] | None = None) -> str: ...
 
 def _allow_mock() -> bool:
-    # Mocks allowed only when explicitly flagged and not in production
-    if os.getenv("APP_ENV","").strip().lower() == "production":
-        return False
-    return bool(os.getenv("ALLOW_MOCK_PROVIDERS"))
+    return False
 
 def get_provider_name(cfg: dict) -> str:
     name = (cfg or {}).get("llm_provider", "auto")
@@ -19,17 +16,11 @@ def get_provider_name(cfg: dict) -> str:
     if name in ("auto", ""):
         if os.environ.get("OPENAI_API_KEY"):
             return "openai"
-        if _allow_mock():
-            return "mock"
-        raise RuntimeError("OPENAI_API_KEY missing and mock providers disallowed; set ALLOW_MOCK_PROVIDERS for non-production use.")
+        raise RuntimeError("OPENAI_API_KEY missing; cannot run without vendor credentials.")
     if name == "openai":
         if not os.environ.get("OPENAI_API_KEY"):
             raise RuntimeError("OPENAI_API_KEY is required for LLM provider 'openai'.")
         return "openai"
-    if name == "mock":
-        if not _allow_mock():
-            raise RuntimeError("Mock LLM provider is disallowed in this environment.")
-        return "mock"
     raise RuntimeError(f"Unknown or disallowed LLM provider: {name}")
 
 def load_provider(name: str, cfg: dict | None = None):
@@ -37,9 +28,6 @@ def load_provider(name: str, cfg: dict | None = None):
         from .providers.openai_provider import OpenAIProvider
         from .vendor_clients import make_openai_client
         return OpenAIProvider(cfg or {}, client_factory=make_openai_client)
-    if name == "mock":
-        from .providers.mock_provider import MockProvider
-        return MockProvider()
     # No other providers permitted
     raise RuntimeError(f"Unknown LLM provider: {name}")
 

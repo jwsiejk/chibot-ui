@@ -41,17 +41,17 @@ def test_admin_log_sse_and_emitters():
 
 def test_vendor_lanes_guarded():
     # STT provider should exist and respect language lock + normalization (mocked path)
-    stt = importlib.import_module("app.providers.stt")
-    p = stt.get_stt_provider()
-    txt = p.transcribe(b"abc", "audio/webm", language="en")
+    stt = importlib.import_module("app.services.stt_provider")
+    p = stt.get_stt_provider({})
+    txt = p.transcribe(b"abc", language="en")
     assert isinstance(txt, str)
     # normalization hook (mock path uses simple transform that includes 'transcript')
     assert "transcript" in txt.lower()
 
     # TTS provider exists and returns audio + visemes (mock path)
-    tts = importlib.import_module("app.providers.tts")
-    t = tts.get_tts_provider()
-    audio, vis = t.synthesize_with_visemes("Hello there")
+    tts = importlib.import_module("app.services.tts_provider")
+    t = tts.get_tts_provider({})
+    audio, vis = t.synth("Hello there")
     assert isinstance(audio, (bytes, bytearray)) and len(audio) > 0
     assert isinstance(vis, list) and len(vis) > 0 and "t_ms" in vis[0]
 
