@@ -3,7 +3,7 @@
 //   • Own a single WebSocket connection per tab to /ws/v1/chat
 //   • Subprotocol auth (bearer + bearer.<token>)
 //   • Auto-reconnect with bounded backoff (only if session is active)
-//   • Helpers: waitWSOpen(), isOpen(), bufferedAmount(), sendJSON/audio
+//   • Helpers: waitWSOpen(), isOpen(), bufferedAmount(), sendJSON/audio, configure()
 //   • DOM events: 'askchip-ws' (messages), 'askchip-ws-close' (terminal close)
 
 import { playStream, audioEnd, unlockAudio } from './audio.js';
@@ -64,6 +64,10 @@ function _scheduleReconnect(){
   _reconnecting = true;
   clearTimeout(_reconnectTimer);
 
+  // light jitter to avoid thundering herd
+  const jitter = 0.85 + Math.random() * 0.3; // 0.85x–1.15x
+  const delay = Math.min(_backoff * jitter, _BACKOFF_MAX);
+
   _reconnectTimer = setTimeout(async ()=>{
     _reconnecting = false;
     try {
@@ -74,11 +78,18 @@ function _scheduleReconnect(){
       // if openWS threw synchronously (unlikely), reschedule
       _scheduleReconnect();
     }
-  }, _backoff);
+  }, delay);
 
-  // reduce backoff again if we stay connected for a while
-  setTimeout(()=>{ _backoff = Math.min(_backoff, 1000); }, _BACKOFF_RESET_MS);
+  // shrink backoff if we remain healthy for a while
+  setTimeout(()=>{ _backoff = 500; }, _BACKOFF_RESET_MS);
 }
+
+// Proactively try to reconnect when network returns
+window.addEventListener('online', () => {
+  if (window.__askchip_session_started && (!isOpen() && !isConnecting())) {
+    _scheduleReconnect();
+  }
+});
 
 // --- Open WS using subprotocol auth (no token in URL, no headers) ---
 // Idempotent: if OPEN/CONNECTING, returns that socket.
@@ -109,6 +120,7 @@ export async function openWS(){
     _startKeepAlive();
     _reconnecting = false;
     _backoff = 500; // successful open → reset backoff
+    try { window.dispatchEvent(new CustomEvent('askchip-ws-open')); } catch {}
   };
 
   ws.onclose = (e) => {
@@ -135,7 +147,11 @@ export async function openWS(){
         const obj = JSON.parse(ev.data);
         const t = obj && obj.type;
 
-        if (t === 'ready') _gotReady = true;
+        if (t === 'ready') {
+          _gotReady = true;
+          // small audio unlock nudge on first ready (harmless if already unlocked)
+          try { unlockAudio().catch(()=>{}); } catch {}
+        }
 
         // Re-emit as DOM events so UI can respond
         window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
@@ -190,12 +206,18 @@ export function closeWS(code = 1000, reason = ''){
 }
 
 export function sendJSON(obj){
-  if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
+  if (!_ws || _ws.readyState !== WebSocket.OPEN) return false;
   try {
-    _ws.send(JSON.stringify(obj));
+    const s = JSON.stringify(obj);
+    if (bufferedAmount() > 5_000_000) { // ~5MB buffer guardrail
+      console.warn('[ws] bufferedAmount high; sending anyway', bufferedAmount());
+    }
+    _ws.send(s);
     _lastUserSendTs = Date.now();
+    return true;
   } catch(e){
     console.warn('[ws] sendJSON error', e);
+    return false;
   }
 }
 
@@ -215,5 +237,8 @@ export function sendCloseStream(){
 }
 
 export function configure(opts = {}){
-  sendJSON({ type: "Configure", ...opts });
+  // ensure session id is included if caller forgot
+  const sid = getSID();
+  const payload = { type: "Configure", session_id: sid, ...opts };
+  sendJSON(payload);
 }
