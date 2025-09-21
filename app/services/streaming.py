@@ -7,6 +7,7 @@ from typing import List, Dict, Tuple, Optional
 import base64
 import threading, time as _t
 import os
+import re
 
 from .llm_provider import get_provider
 from .awareness import annotate
@@ -42,6 +43,20 @@ def _build_prompt(seed_text: str, persona: Dict, kb_snippets: List[str], teacher
         parts.append(f"Teacher move: {teacher_move}.")
     parts.append(f"User said: {seed_text.strip()}")
     return "\n\n".join(parts)
+
+
+# --- text hygiene -------------------------------------------------------------
+
+_KB_TAG_RE = re.compile(r"\s*\[(?:KB|kb)\s*:\s*\d+\]\s*$")
+
+def _scrub_debug_stamps(s: str) -> str:
+    """
+    Remove trailing debug stamps like "[KB:0]" that were historically appended to
+    assistant text for telemetry. We keep the value as metadata instead.
+    """
+    if not s:
+        return s
+    return _KB_TAG_RE.sub("", s).strip()
 
 
 def make_assistant_frames(seed_text: str,
@@ -97,13 +112,22 @@ def make_assistant_frames(seed_text: str,
         error_note = "llm_not_available"
         reply = "Hi! I’m ready to help."
 
+    # Scrub any legacy trailing stamps like "[KB:0]" so TTS won't read them aloud
+    safe_reply = _scrub_debug_stamps(reply)
+
     # --- Build frames --------------------------------------------------------
     turn_id = db.memory.setdefault('turn_seq', 0) + 1
     db.memory['turn_seq'] = turn_id  # simple monotonic id; greet may override externally
 
     frames: List[Dict] = []
 
-    chunk = {'type': 'assistant_chunk', 'turn_id': str(turn_id), 'text': reply}
+    chunk = {
+        'type': 'assistant_chunk',
+        'turn_id': str(turn_id),
+        'text': safe_reply,
+        # expose KB hits as metadata (so UI can display it without polluting text)
+        'kb_hits': len(kb),
+    }
     if correlation_user_msg_id:
         chunk['correlation_user_msg_id'] = correlation_user_msg_id
     if error_note:
@@ -113,7 +137,7 @@ def make_assistant_frames(seed_text: str,
     # Optional suggestions (respect config flags)
     try:
         if cfg.get('suggestions_enabled', True):
-            frames.append({'type': 'suggestions', 'turn_id': str(turn_id), 'items': hygienic_suggestions(reply)})
+            frames.append({'type': 'suggestions', 'turn_id': str(turn_id), 'items': hygienic_suggestions(safe_reply)})
     except Exception:
         pass
 
@@ -209,7 +233,8 @@ def schedule_tts_audio(session_id: str,
 
             # Synthesize
             try:
-                audio_bytes, _vis = provider.synth(text)
+                # Re-scrub here as a safety net in case any upstream callers missed it
+                audio_bytes, _vis = provider.synth(_scrub_debug_stamps(text))
                 state['started'] = True
                 try:
                     _admin_emit('tts:start', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
