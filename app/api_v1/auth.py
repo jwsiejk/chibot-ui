@@ -22,14 +22,15 @@ def login():
     except Exception:
         pass
 
-    # Try to load existing profile to set completeness now (non-fatal)
+    # Load profile from durable USERS row (DAL). Fallback to in-memory only if DAL errors.
     prof = {}
     try:
-        from .profile import _load_profile
-        prof = _load_profile(email) or {}
+        from ..dal.neon_pg import load_profile  # users-only loader
+        prof = load_profile(email) or {}
     except Exception:
         # If DB is temporarily unavailable, keep going — UI will retry.
         prof = get_profile() or {}
+
     complete = bool((prof.get("name") or "").strip() and (prof.get("title") or "").strip())
 
     # Mirror profile + completeness into helpers/session
@@ -39,7 +40,12 @@ def login():
     except Exception:
         pass
 
-    resp = jsonify({"ok": True, "email": email, "profile_complete": bool(session.get("profile_complete")), "profile": prof})
+    resp = jsonify({
+        "ok": True,
+        "email": email,
+        "profile_complete": bool(session.get("profile_complete")),
+        "profile": prof
+    })
     return ensure_csrf_headers(resp), 200
 
 @bp.post("/logout")
@@ -50,7 +56,7 @@ def logout():
         pass
     try:
         set_user(None)  # type: ignore[arg-type]
-        set_profile({})
+        set_profile({})  # clear in-memory
     except Exception:
         pass
     resp = jsonify({"ok": True})
@@ -58,20 +64,26 @@ def logout():
 
 @bp.get("/me")
 def me():
+    """
+    Auth + Profile probe for UI gate.
+    Always read from durable USERS (DAL); never rely on volatile in-memory/profile JSON.
+    """
     email = (session.get("user") or {}).get("email")
     authenticated = bool(email)
     prof = {}
     complete = False
+
     if authenticated:
-        # Load from DB; if it fails, fall back to last-known profile in memory/session.
         try:
-            from .profile import _load_profile
-            prof = _load_profile(email) or {}
+            from ..dal.neon_pg import load_profile  # users-only loader
+            prof = load_profile(email) or {}
         except Exception:
+            # As a last resort, keep last-known (in-memory). Gate will recheck soon.
             prof = get_profile() or {}
+
         complete = bool((prof.get("name") or "").strip() and (prof.get("title") or "").strip())
         try:
-            set_profile(prof)
+            set_profile(prof)                      # keep helper in sync
             session["profile_complete"] = complete
         except Exception:
             pass
@@ -89,7 +101,7 @@ def me():
 @bp.post("/profile/save")
 def profile_save():
     data = request.get_json(silent=True) or {}
-    # Accept minimal shape and mark completion flag
+    # Accept minimal shape and mark completion flag (legacy behavior)
     try:
         set_profile(data or {})
     except Exception:
@@ -109,7 +121,6 @@ def csrf_get_alias():
     resp.headers["X-CSRF-Token"] = token
     resp.headers["Cache-Control"] = "no-store"
     return resp, 200
-
 
 @bp.get("/whoami")
 def whoami():
