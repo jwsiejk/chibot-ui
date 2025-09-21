@@ -9,6 +9,8 @@ from app.services.streaming_asr.deepgram_client import DeepgramClient
 from app.security.ws_token import verify as verify_ws_token
 from app.db import db
 from app.metrics import ws_metrics
+# NEW: invoke LLM on final transcript
+from app.services.streaming import run_ws_user_turn  # NEW
 
 # Optional admin emitter
 try:
@@ -16,8 +18,6 @@ try:
 except Exception:
     _admin_emit = None
 
-
-# ----------------------------- helpers -----------------------------
 
 def _client_ip_from_scope(scope) -> str:
     try:
@@ -70,7 +70,7 @@ async def _pump_bus_to_client(sid: str, send):
     """Forward frames from StreamBus to the WS client as JSON."""
     import json as _json
     from queue import Empty
-    from app.ws.bus import bus  # import here to tolerate file layout variants
+    from app.ws.bus import bus
     q = bus.subscribe(sid)
     while True:
         try:
@@ -81,41 +81,60 @@ async def _pump_bus_to_client(sid: str, send):
         try:
             await send({"type": "websocket.send", "text": _json.dumps(fr, separators=(",", ":"), ensure_ascii=False)})
         except Exception:
-            # Continue pumping; client may be transiently busy
             await asyncio.sleep(0.01)
 
 
 async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen, sid):
-    """Relay Deepgram events to client as Results/UtteranceEnd."""
+    """Relay Deepgram events to client and, on final, kick LLM turn."""
     try:
         async for ev in dg.events():
             et = (ev.get("type") or "").lower()
             if et == "asr_open":
                 try:
-                    _admin_emit('asr:start', session_id=sid)
+                    _admin_emit and _admin_emit('asr:start', session_id=sid)
                 except Exception:
                     pass
                 continue
+
             if et in ("user_partial", "user_final"):
                 is_final = (et == "user_final")
-                text = ev.get("text") or ""
+                text = (ev.get("text") or "").strip()
                 try:
                     if et == 'user_partial':
-                        _admin_emit('asr:first_partial', session_id=sid)
+                        _admin_emit and _admin_emit('asr:first_partial', session_id=sid)
                 except Exception:
                     pass
+
+                # Stream ASR result to client (optional UI)
                 await send({"type": "websocket.send",
                             "text": _dumps(make_results(turn_id_ref[0], transcript=text, confidence=0.0, is_final=is_final))})
+
                 if is_final:
                     final_seen[0] = True
+                    # Let client know the utterance is closed
                     await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id_ref[0]))})
                     try:
-                        _admin_emit('asr:final', session_id=sid)
+                        _admin_emit and _admin_emit('asr:final', session_id=sid)
                     except Exception:
                         pass
+
+                    # NEW: Kick the LLM/Chip turn on final transcript
+                    if text:
+                        async def _bg_turn():
+                            try:
+                                # Offload to thread (streaming pipeline is sync)
+                                await asyncio.to_thread(run_ws_user_turn, sid, text, None)
+                            except Exception as e:
+                                try:
+                                    await send({"type": "websocket.send",
+                                                "text": _dumps(make_error("llm_turn_fail", e.__class__.__name__))})
+                                except Exception:
+                                    pass
+                        asyncio.create_task(_bg_turn())
+
             elif et == "asr_error":
                 try:
-                    _admin_emit('asr:error', session_id=sid, error=str(ev.get('error') or 'unknown'))
+                    _admin_emit and _admin_emit('asr:error', session_id=sid, error=str(ev.get('error') or 'unknown'))
                 except Exception:
                     pass
                 await send({"type": "websocket.send",
@@ -130,15 +149,11 @@ async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen, 
             pass
 
 
-# --------------------------- main ASGI app --------------------------
-
 async def _ws_chat_asgi_impl(scope, receive, send):
-    # Breadcrumb: did we enter the handler?
     try:
-        if _admin_emit:
-            _admin_emit("ws_handshake_enter",
-                        path=scope.get("path"),
-                        raw_query=(scope.get("query_string") or b"").decode("utf-8","ignore"))
+        _admin_emit and _admin_emit("ws_handshake_enter",
+                                    path=scope.get("path"),
+                                    raw_query=(scope.get("query_string") or b"").decode("utf-8","ignore"))
     except Exception:
         pass
 
@@ -147,10 +162,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         await send({"type": "http.response.body", "body": b"not found"})
         return
 
-    # Compute sid early so logs/auth can reference it safely
     sid = _get_session_id(scope)
 
-    # === Pre-accept auth (subprotocols preferred) ===
+    # Auth
     require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in ("0","false","no")
     bearer_only   = os.getenv("WS_BEARER_ONLY", "1").lower() not in ("0","false","no")
     fail_limit = int(os.getenv("WS_FAIL_LIMIT","10"))
@@ -158,7 +172,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     client_ip = _client_ip_from_scope(scope)
 
     token = None
-    # 1) Subprotocols: ['bearer', 'bearer.<JWT>']
     try:
         for _sp in (scope.get("subprotocols") or []):
             if isinstance(_sp, str) and _sp.startswith("bearer."):
@@ -166,8 +179,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 break
     except Exception:
         pass
-
-    # 2) Authorization: Bearer <token> (non-browser clients)
     if not token:
         try:
             hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
@@ -175,37 +186,26 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 token = hdrs["authorization"].split(" ", 1)[1].strip()
         except Exception:
             pass
-
-    # 3) Optional query fallback only if WS_BEARER_ONLY=0
     if (not bearer_only) and (not token) and scope.get("query_string"):
         try:
             q = dict([tuple(p.split("=", 1)) for p in scope.get("query_string").decode().split("&") if "=" in p])
             token = q.get("ws_token") or token
         except Exception:
             pass
-
     if require_token:
         try:
             _ = verify_ws_token(token or "")
         except Exception:
             over = ws_metrics.record_fail(client_ip, fail_limit, fail_window_sec)
             _jlog("ws_auth_fail", ip=client_ip, sid=sid, over_limit=over, via="preaccept")
-            if _admin_emit:
-                try:
-                    _admin_emit("ws_auth_fail", sid=sid, ip=client_ip, over_limit=over)
-                except Exception:
-                    pass
-            try:
-                await send({"type": "websocket.close", "code": 4401})
-            except Exception:
-                pass
+            try: _admin_emit and _admin_emit("ws_auth_fail", sid=sid, ip=client_ip, over_limit=over)
+            except Exception: pass
+            try: await send({"type": "websocket.close", "code": 4401})
+            except Exception: pass
             return
-    # === End pre-accept auth ===
 
-    # Accept with subprotocol 'bearer' so JWT isn't echoed
     await send({"type": "websocket.accept", "subprotocol": "bearer"})
 
-    # Clear greet state (if present), then create pumps
     try:
         db.memory.setdefault("greet_turns", {}).pop(sid, None)
     except Exception:
@@ -213,7 +213,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     bus_task = asyncio.create_task(_pump_bus_to_client(sid, send))
 
-    # Optional server→client keepalive (every 20s)
     async def _ping_loop():
         try:
             while True:
@@ -227,18 +226,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             pass
     ping_task = asyncio.create_task(_ping_loop())
 
-    # Initial READY
     try:
         await send({"type": "websocket.send", "text": _dumps({"type": "ready", "session_id": sid})})
     except Exception:
-        # If we can't even send ready, close fast (should be rare)
         try:
             await send({"type": "websocket.close", "code": 1011, "reason": "initial_ready_failed"})
         except Exception:
             pass
         return
 
-    # Runtime state
     cfg: Dict[str, Any] = {}
     buf = TurnBuffer()
     dg: Optional[DeepgramClient] = None
@@ -254,7 +250,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             turn_id_ref[0] = buf.turn_seq + 1
             rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen, sid))
 
-    # ---------------------- MAIN RECEIVE LOOP ----------------------
     try:
         while True:
             ev = await receive()
@@ -279,32 +274,29 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     try:
                         obj = parse_client_json(ev.get("text") or "")
                         t = obj.get("type")
+
                         if t == "KeepAlive":
                             await send({"type": "websocket.send", "text": _dumps(make_keepalive_ack())})
 
                         elif t == "Configure":
                             cfg.update(obj or {})
 
-                            # Reset greet state if requested
                             if obj.get("reset"):
                                 try:
                                     db.memory.setdefault("greet_turns", {}).pop(sid, None)
                                 except Exception:
                                     pass
                                 try:
-                                    if _admin_emit:
-                                        _admin_emit("greet:reset", route="/ws/v1/chat", label="greet:reset", session_id=sid)
+                                    _admin_emit and _admin_emit("greet:reset", route="/ws/v1/chat",
+                                                                label="greet:reset", session_id=sid)
                                 except Exception:
                                     pass
 
                             if obj.get("greet"):
-                                # Delegate greet pipeline to streaming helpers; offload to thread so WS loop stays snappy
                                 async def _bg():
                                     try:
                                         from app.services.streaming import run_ws_greet
                                         tid = await asyncio.to_thread(run_ws_greet, sid)
-
-                                        # Admin breadcrumb (audio flag is config-based, TTS helper respects feature_audio)
                                         try:
                                             if _admin_emit:
                                                 cfg_now = db.get_config()
@@ -321,8 +313,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             pass
                                 asyncio.create_task(_bg())
 
-                        elif t == "User":
-                            # WS user messages with validation; offload orchestration to a thread
+                        # TEXT turns (support several aliases)
+                        elif t in ("User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage"):  # NEW
                             text = (obj.get("text") or "").strip()
                             if not text:
                                 continue
@@ -330,17 +322,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 await send({"type":"websocket.send",
                                             "text":_dumps(make_error("payload_too_large","user_text"))})
                                 continue
-
                             async def _bg_user():
                                 try:
-                                    from app.services.streaming import run_ws_user_turn
                                     await asyncio.to_thread(run_ws_user_turn, sid, text, obj.get("userMsgId"))
                                 except Exception as e:
-                                    await send({
-                                        "type":"websocket.send",
-                                        "text":_dumps(make_error("user_fail", e.__class__.__name__))
-                                    })
-
+                                    await send({"type":"websocket.send",
+                                                "text":_dumps(make_error("user_fail", e.__class__.__name__))})
                             asyncio.create_task(_bg_user())
 
                         elif t == "CloseStream":
