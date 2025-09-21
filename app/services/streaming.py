@@ -204,6 +204,10 @@ def schedule_tts_audio(session_id: str,
                 _admin_emit('schedule_tts_done', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
             except Exception:
                 pass
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def schedule_frames(session_id: str,
                     frames: List[Dict],
                     delay_ms: int = 0,
@@ -237,3 +241,49 @@ def schedule_frames(session_id: str,
                 pass
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+# ---- WS orchestration helpers (centralize greet/user pipelines) ----
+
+def run_ws_greet(session_id: str) -> str:
+    """
+    Produce assistant text for greet, broadcast frames, schedule TTS audio,
+    and nudge UI with state+suggestions. Returns turn_id.
+    """
+    tid, frames = make_assistant_frames("greet", session_id, meta={"source": "ws_greet"})
+    # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
+    try:
+        text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
+        if text_for_tts:
+            schedule_tts_audio(session_id, text_for_tts, turn_id=tid)
+    except Exception:
+        pass
+    # UI nudges
+    try:
+        bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+        bus.broadcast(session_id, {"type": "suggestions", "turn_id": tid, "items": hygienic_suggestions("")})
+    except Exception:
+        pass
+    return tid
+
+
+def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Optional[str] = None) -> str:
+    """
+    Produce assistant text for a user turn and schedule both text pacing and TTS.
+    Mirrors HTTP /api_v1/chat behavior for consistency.
+    """
+    tid, frames = make_assistant_frames(text, session_id, meta={"source": "user_ws"},
+                                        correlation_user_msg_id=correlation_user_msg_id)
+    # Keep schedule_frames for pacing/end guarantees to mirror HTTP route
+    try:
+        schedule_frames(session_id, frames, correlation_user_msg_id=correlation_user_msg_id)
+    except Exception:
+        pass
+    # TTS for assistant text
+    try:
+        text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
+        if text_for_tts:
+            schedule_tts_audio(session_id, text_for_tts, turn_id=tid, correlation_user_msg_id=correlation_user_msg_id)
+    except Exception:
+        pass
+    return tid
