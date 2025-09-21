@@ -59,9 +59,9 @@ def ensure_schema():
     _connect()
     if _DIALECT == "postgresql":
         ddl = [
-            # JSON profile store
+            # JSON profile store (kept for compatibility; reads will use USERS only)
             "CREATE TABLE IF NOT EXISTS profiles (email TEXT PRIMARY KEY, profile_json TEXT, updated_at DOUBLE PRECISION)",
-            # Minimal flat fields for fast gates and durability
+            # Minimal flat fields for fast gates and durability (source of truth)
             "CREATE TABLE IF NOT EXISTS users (email TEXT PRIMARY KEY, name TEXT, title TEXT, region TEXT)"
         ]
     else:
@@ -125,135 +125,73 @@ def _fetch_one(sql: str, params: list):
 def load_profile(email: str) -> Dict[str, Any]:
     """
     Load a normalized profile dict for the given email.
-    Current contract (kept as-is): try USERS first, then PROFILES.
+    **Users-only**: Always read from the `users` table as the single source of truth.
     Returns keys: email, name, title, region, profile_complete
     """
     ensure_schema()
-    if not email:
+    if not email or not _table_exists("users"):
         return {}
 
-    # --------- A) Try USERS table first (exact, then case-insensitive) ---------
-    if _table_exists("users"):
-        if _DIALECT == "postgresql":
-            role_select = "role" if _column_exists("users", "role") else "NULL"
-            row = _fetch_one(
-                f"""
-                SELECT (json_build_object(
-                  'email',  email,
-                  'name',   COALESCE(name,''),
-                  'title',  COALESCE(title, COALESCE({role_select}, '')),
-                  'region', COALESCE(region,''),
-                  'profile_complete',
-                    (COALESCE(name,'') <> '' AND COALESCE(COALESCE(title, {role_select}), '') <> '')
-                ))::text AS j
-                  FROM users
-                 WHERE email=%s
-                 LIMIT 1
-                """,
-                [email],
-            )
-            if not row:
-                row = _fetch_one(
-                    f"""
-                    SELECT (json_build_object(
-                      'email',  email,
-                      'name',   COALESCE(name,''),
-                      'title',  COALESCE(title, COALESCE({role_select}, '')),
-                      'region', COALESCE(region,''),
-                      'profile_complete',
-                        (COALESCE(name,'') <> '' AND COALESCE(COALESCE(title, {role_select}), '') <> '')
-                    ))::text AS j
-                      FROM users
-                     WHERE lower(email)=lower(%s)
-                     LIMIT 1
-                    """,
-                    [email],
-                )
-            if row:
-                jtxt = row[0]
-                try:
-                    return json.loads(jtxt or "{}")
-                except Exception:
-                    return {}
-        else:
-            # SQLite
-            row = _fetch_one("SELECT email, name, title, region FROM users WHERE email=? LIMIT 1", [email])
-            if not row:
-                row = _fetch_one(
-                    "SELECT email, name, title, region FROM users WHERE lower(email)=lower(?) LIMIT 1", [email]
-                )
-            if row:
-                keys = row.keys() if hasattr(row, "keys") else []
-                rec = {
-                    "email": row["email"],
-                    "name": (row["name"] or "") if "name" in keys else "",
-                    "title": (row["title"] or "") if "title" in keys else "",
-                    "region": (row["region"] or "") if "region" in keys else "",
-                }
-                # If title empty and 'role' column exists, try to lift role
-                if (not rec["title"]) and _column_exists("users", "role"):
-                    r2 = _fetch_one("SELECT role FROM users WHERE lower(email)=lower(?) LIMIT 1", [email])
-                    if r2:
-                        try:
-                            rec["title"] = r2["role"] or ""
-                        except Exception:
-                            pass
-                rec["profile_complete"] = bool((rec.get("name") or "").strip() and (rec.get("title") or "").strip())
-                return rec
-
-    # --------- B) Then try PROFILES table (exact, then case-insensitive) ---------
     if _DIALECT == "postgresql":
-        row = _fetch_one("SELECT profile_json FROM profiles WHERE email=%s", [email])
+        role_select = "role" if _column_exists("users", "role") else "NULL"
+        row = _fetch_one(
+            f"""
+            SELECT (json_build_object(
+              'email',  email,
+              'name',   COALESCE(name,''),
+              'title',  COALESCE(title, COALESCE({role_select}, '')),
+              'region', COALESCE(region,''),
+              'profile_complete',
+                (COALESCE(name,'') <> '' AND COALESCE(COALESCE(title, {role_select}), '') <> '')
+            ))::text AS j
+              FROM users
+             WHERE lower(email)=lower(%s)
+             LIMIT 1
+            """,
+            [email],
+        )
+        if row:
+            try:
+                return json.loads(row[0] or "{}")
+            except Exception:
+                return {}
     else:
-        row = _fetch_one("SELECT profile_json FROM profiles WHERE email=?", [email])
-    if row:
-        pj = row[0] if _DIALECT == "postgresql" else row["profile_json"]
-        try:
-            d = json.loads(pj or "{}")
-            # normalize and compute completion in case json lacks it
-            d = {
-                "email": (d.get("email") or email).strip(),
-                "name": (d.get("name") or "").strip(),
-                "title": (d.get("title") or "").strip(),
-                "region": (d.get("region") or "").strip(),
+        # SQLite
+        row = _fetch_one(
+            "SELECT email, name, title, region FROM users WHERE lower(email)=lower(?) LIMIT 1",
+            [email]
+        )
+        if row:
+            rec = {
+                "email": row["email"],
+                "name": (row["name"] or "").strip(),
+                "title": (row["title"] or "").strip(),
+                "region": (row["region"] or "").strip(),
             }
-            d["profile_complete"] = bool(d["name"] and d["title"])
-            return d
-        except Exception:
-            return {}
+            # If title empty and 'role' column exists, try to lift role
+            if not rec["title"] and _column_exists("users", "role"):
+                r2 = _fetch_one("SELECT role FROM users WHERE lower(email)=lower(?) LIMIT 1", [email])
+                if r2:
+                    try:
+                        rec["title"] = r2["role"] or ""
+                    except Exception:
+                        pass
+            rec["profile_complete"] = bool(rec["name"] and rec["title"])
+            return rec
 
-    if _DIALECT == "postgresql":
-        row = _fetch_one("SELECT profile_json FROM profiles WHERE lower(email)=lower(%s)", [email])
-    else:
-        row = _fetch_one("SELECT profile_json FROM profiles WHERE lower(email)=lower(?)", [email])
-    if row:
-        pj = row[0] if _DIALECT == "postgresql" else row["profile_json"]
-        try:
-            d = json.loads(pj or "{}")
-            d = {
-                "email": (d.get("email") or email).strip(),
-                "name": (d.get("name") or "").strip(),
-                "title": (d.get("title") or "").strip(),
-                "region": (d.get("region") or "").strip(),
-            }
-            d["profile_complete"] = bool(d["name"] and d["title"])
-            return d
-        except Exception:
-            return {}
-
-    # Nothing found
+    # Not found in users
     return {}
 
 
 def save_profile(email: str, prof: Dict[str, Any]):
     """
-    Save profile JSON into profiles, and mirror minimal fields into users
+    Save profile JSON into profiles (compat), and mirror minimal fields into users
     so profile survives reloads/gates consistently.
     """
     ensure_schema()
     now = time.time()
 
-    # Persist JSON profile
+    # Persist JSON profile (kept for compatibility with any callers that expect it)
     if _DIALECT == "postgresql":
         _exec(
             """INSERT INTO profiles (email, profile_json, updated_at)
