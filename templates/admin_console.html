@@ -1,11 +1,12 @@
-<!doctype html>
+<!DOCTYPE html>
+
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <title>Ask Chip — Admin</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <link rel="stylesheet" href="/static/css/app.css"/>
-  <style>
+<meta charset="utf-8"/>
+<title>Ask Chip — Admin</title>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
+<link href="/static/css/app.css" rel="stylesheet"/>
+<style>
     .wrap{max-width:1080px;margin:36px auto;padding:0 16px}
     .tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
     .tabs button{padding:8px 12px;border-radius:10px;border:1px solid #202533;background:#161a22;color:#e6e9ef;cursor:pointer}
@@ -25,152 +26,144 @@
     .back{display:inline-block;margin-bottom:8px;color:#7aa0ff;text-decoration:none}
     .back:hover{text-decoration:underline}
   </style>
-  <!-- Diagnostics-only stylesheet (scoped to #admin-diagnostics, safe to include) -->
-  <link rel="stylesheet" href="/static/css/admin_console.css"/>
+<!-- Diagnostics-only stylesheet (scoped to #admin-diagnostics, safe to include) -->
+<link href="/static/css/admin_console.css" rel="stylesheet"/>
 </head>
 <body>
 <div class="wrap">
-  <a class="back" href="/">← Back</a>
-  <h1>Ask Chip — Admin</h1>
-
-  <div class="tabs" id="tabs">
-    <button data-tab="ux" class="active">User Experience</button>
-    <button data-tab="flow">Conversational Flow</button>
-    <button data-tab="vendor">Vendor — Streaming ASR (Deepgram) / VAD</button>
-    <button data-tab="ptm">PTM / Persona</button>
-    <button data-tab="ops">Ops & WS</button>
-    <button data-tab="diag">Diagnostics</button>
-  </div>
-
-  <!-- UX -->
-  <section class="panel active" id="tab-ux">
-    <h3>User Experience</h3>
-    <div class="grid">
-      <label>Theme
-        <select id="theme">
-          <option>light</option><option>dark</option><option>system</option>
-        </select>
-      </label>
-      <label>Show instruction strip <input type="checkbox" id="show_instruction_strip"/></label>
-      <label>Show state dots <input type="checkbox" id="show_state_dots"/></label>
-
-      <label>Suggestions enabled <input type="checkbox" id="suggestions_enabled"/></label>
-      <label>Suggestions — max items <input id="suggestions_max_items" type="number" min="0" value="4"/></label>
-      <label>Suggestions — max words <input id="suggestions_max_words" type="number" min="1" value="7"/></label>
-
-      <label>Nudge delay (ms) <input id="nudge_delay_ms" type="number" value="4200"/></label>
-      <label>Nudge backoff after ignored <input id="nudge_backoff_after_ignored" type="number" value="2"/></label>
-
-      <label>WS ping interval (ms) <input id="ws_ping_interval_ms" type="number" value="15000"/></label>
-      <label>WS idle timeout (ms) <input id="ws_idle_timeout_ms" type="number" value="60000"/></label>
-    </div>
-    <div class="actions" style="margin-top:10px"><button class="btn primary" id="save-ux">Save</button></div>
-  </section>
-
-  <!-- Flow -->
-  <section class="panel" id="tab-flow">
-    <h3>Conversational Flow</h3>
-    <div class="grid">
-      <label>Teacher move — summarize_next_actions (0..1) <input id="tm_summarize" type="number" step="0.05" min="0" max="1" value="0.6"/></label>
-      <label>Teacher move — check_understanding (0..1) <input id="tm_check" type="number" step="0.05" min="0" max="1" value="0.5"/></label>
-      <label>Teacher move — visualize (0..1) <input id="tm_visualize" type="number" step="0.05" min="0" max="1" value="0.2"/></label>
-    </div>
-    <div class="actions"><button class="btn primary" id="save-flow">Save</button></div>
-  </section>
-
-  <!-- Vendor -->
-  <section class="panel" id="tab-vendor">
-    <h3>Vendor — Streaming ASR / VAD</h3>
-    <div class="grid">
-      <label>Deepgram model <input id="dg_model" value="nova-2-general"/></label>
-      <label>Interim results <input id="dg_partials" type="checkbox" checked/></label>
-      <label>VAD confirm (ms) <input id="vad_confirm_ms" type="number" value="420"/></label>
-      <label>Echo threshold boost <input id="echo_threshold_boost" type="number" value="12"/></label>
-    </div>
-    <div class="actions"><button class="btn primary" id="save-vendor">Save</button></div>
-  </section>
-
-  <!-- PTM -->
-  <section class="panel" id="tab-ptm">
-    <h3>PTM Personality (NLP / NLU / NLG)</h3>
-    <div class="grid">
-      <label>OpenAI model <input id="openai_model" value="gpt-4o-mini"/></label>
-      <label>Temperature <input id="gen_temperature" type="number" step="0.05" min="0" max="2" value="0.3"/></label>
-      <label>Top-p <input id="gen_top_p" type="number" step="0.05" min="0" max="1" value="1.0"/></label>
-      <label>Max sentences <input id="gen_max_sentences" type="number" min="1" value="4"/></label>
-      <label>Target verbosity <select id="gen_target_verbosity">
-        <option>short</option><option selected>medium</option><option>long</option></select>
-      </label>
-
-      <label>Persona intensity (Nebraska %) <input id="nebraska_persona" type="number" step="0.01" min="0" max="1" value="0.13"/></label>
-      <label>Use persona quotes <input id="nebraska_quotes_enabled" type="checkbox" checked/></label>
-
-      <label>NLU: intent classification <input id="nlu_intent" type="checkbox" checked/></label>
-      <label>NLU: sentiment/tone detection <input id="nlu_sentiment" type="checkbox" checked/></label>
-      <label>NLP: context memory blending <input id="nlp_memory_blend" type="checkbox" checked/></label>
-      <label>NLG: summarizer preference <select id="nlg_summary_pref">
-        <option>never</option><option selected>auto</option><option>always</option></select>
-      </label>
-    </div>
-    <div class="actions"><button class="btn primary" id="save-ptm">Save</button></div>
-  </section>
-
-  <!-- Ops -->
-  <section class="panel" id="tab-ops">
-    <h3>Ops & WebSocket</h3>
-    <div class="grid">
-      <label>Ping interval (ms) <input id="ops_ping_interval" type="number" value="15000"/></label>
-      <label>Idle timeout (ms) <input id="ops_idle_timeout" type="number" value="60000"/></label>
-    </div>
-    <div class="actions"><button class="btn primary" id="save-ops">Save</button></div>
-  </section>
-
-  <!-- Diagnostics -->
-  <section class="panel" id="tab-diag">
-    <h3>Diagnostics</h3>
-    <div class="row">
-      <button class="btn primary" id="run-diag">Run quick checks</button>
-      <span id="diag-status" class="muted">idle</span>
-    </div>
-    <div style="margin-top:10px">
-      <table>
-        <thead><tr><th>Check</th><th>OK</th><th>Details</th></tr></thead>
-        <tbody id="diag-body"></tbody>
-      </table>
-    </div>
-
-    <!-- Streaming status (ASR) -->
-    <h3 style="margin-top:18px">Streaming status (ASR)</h3>
-    <div class="row">
-      <button class="btn" id="stream-refresh" type="button">Refresh</button>
-      <span class="muted">Source: /api/v1/admin/diagnostics/streaming_status</span>
-    </div>
-    <div class="grid" style="margin-top:10px">
-      <label>partials <input id="stream-partials" readonly value="0"/></label>
-      <label>finals <input id="stream-finals" readonly value="0"/></label>
-      <label>provider_errors <input id="stream-errors" readonly value="0"/></label>
-      <label>breaker_open <input id="stream-breaker" readonly value="false"/></label>
-    </div>
-
-    <h3 style="margin-top:18px">Full System Test</h3>
-    <div class="row">
-      <button class="btn primary" id="run-diag-full">Run full system test</button>
-      <span id="diag-full-status" class="muted">idle</span>
-    </div>
-    <div style="margin-top:10px">
-      <table>
-        <thead><tr><th>Check</th><th>OK</th><th>Details</th></tr></thead>
-        <tbody id="diag-full-body"></tbody>
-      </table>
-    </div>
-
-    <!-- Diagnostics (script-driven) -->
-    <div id="admin-diagnostics"></div>
-  </section>
+<a class="back" href="/">← Back</a>
+<h1>Ask Chip — Admin</h1>
+<div class="tabs" id="tabs">
+<button class="active" data-tab="ux">User Experience</button>
+<button data-tab="flow">Conversational Flow</button>
+<button data-tab="vendor">Vendor — Streaming ASR (Deepgram) / VAD</button>
+<button data-tab="ptm">PTM / Persona</button>
+<button data-tab="ops">Ops &amp; WS</button>
+<button data-tab="diag">Diagnostics</button>
 </div>
+<!-- UX -->
+<section class="panel active" id="tab-ux">
+<h3>User Experience</h3>
+<div class="grid">
+<label>Theme
+        <select id="theme">
+<option>light</option><option>dark</option><option>system</option>
+</select>
+</label>
+<label>Show instruction strip <input id="show_instruction_strip" type="checkbox"/></label>
+<label>Show state dots <input id="show_state_dots" type="checkbox"/></label>
+<label>Suggestions enabled <input id="suggestions_enabled" type="checkbox"/></label>
+<label>Suggestions — max items <input id="suggestions_max_items" min="0" type="number" value="4"/></label>
+<label>Suggestions — max words <input id="suggestions_max_words" min="1" type="number" value="7"/></label>
+<label>Nudge delay (ms) <input id="nudge_delay_ms" type="number" value="4200"/></label>
+<label>Nudge backoff after ignored <input id="nudge_backoff_after_ignored" type="number" value="2"/></label>
+<label>WS ping interval (ms) <input id="ws_ping_interval_ms" type="number" value="15000"/></label>
+<label>WS idle timeout (ms) <input id="ws_idle_timeout_ms" type="number" value="60000"/></label>
+</div>
+<div class="actions" style="margin-top:10px"><button class="btn primary" id="save-ux">Save</button></div>
+</section>
+<!-- Flow -->
+<section class="panel" id="tab-flow">
+<h3>Conversational Flow</h3>
+<div class="grid">
+<label>Teacher move — summarize_next_actions (0..1) <input id="tm_summarize" max="1" min="0" step="0.05" type="number" value="0.6"/></label>
+<label>Teacher move — check_understanding (0..1) <input id="tm_check" max="1" min="0" step="0.05" type="number" value="0.5"/></label>
+<label>Teacher move — visualize (0..1) <input id="tm_visualize" max="1" min="0" step="0.05" type="number" value="0.2"/></label>
 
+<label>Enable audio (TTS) <input id="feature_audio" type="checkbox"/></label>
+<label>Confirm (ms) <input id="confirm_ms" type="number" value="420"/></label>
+<label>Min speech (ms) <input id="min_speech_ms" type="number" value="220"/></label>
+<label>Max turn seconds <input id="max_turn_seconds" type="number" value="90"/></label>
+<label>TTS voice ID <input id="tts_voice_id" placeholder="ElevenLabs voice id"/></label>
+<label>TTS output format <input id="tts_output_format" placeholder="mp3_44100_128"/></label>
+<label>TTS model id <input id="tts_model_id" placeholder="eleven_multilingual_v2"/></label>
+</div>
+<div class="actions"><button class="btn primary" id="save-flow">Save</button></div>
+</section>
+<!-- Vendor -->
+<section class="panel" id="tab-vendor">
+<h3>Vendor — Streaming ASR / VAD</h3>
+<div class="grid">
+<label>Deepgram model <input id="dg_model" value="nova-2-general"/></label>
+<label>Interim results <input checked="" id="dg_partials" type="checkbox"/></label>
+<label>VAD confirm (ms) <input id="vad_confirm_ms" type="number" value="420"/></label>
+<label>Echo threshold boost <input id="echo_threshold_boost" type="number" value="12"/></label>
+</div>
+<div class="actions"><button class="btn primary" id="save-vendor">Save</button></div>
+</section>
+<!-- PTM -->
+<section class="panel" id="tab-ptm">
+<h3>PTM Personality (NLP / NLU / NLG)</h3>
+<div class="grid">
+<label>OpenAI model <input id="openai_model" value="gpt-4o-mini"/></label>
+<label>Temperature <input id="gen_temperature" max="2" min="0" step="0.05" type="number" value="0.3"/></label>
+<label>Top-p <input id="gen_top_p" max="1" min="0" step="0.05" type="number" value="1.0"/></label>
+<label>Max sentences <input id="gen_max_sentences" min="1" type="number" value="4"/></label>
+<label>Target verbosity <select id="gen_target_verbosity">
+<option>short</option><option selected="">medium</option><option>long</option></select>
+</label>
+<label>Persona intensity (Nebraska %) <input id="nebraska_persona" max="1" min="0" step="0.01" type="number" value="0.13"/></label>
+<label>Use persona quotes <input checked="" id="nebraska_quotes_enabled" type="checkbox"/></label>
+<label>NLU: intent classification <input checked="" id="nlu_intent" type="checkbox"/></label>
+<label>NLU: sentiment/tone detection <input checked="" id="nlu_sentiment" type="checkbox"/></label>
+<label>NLP: context memory blending <input checked="" id="nlp_memory_blend" type="checkbox"/></label>
+<label>NLG: summarizer preference <select id="nlg_summary_pref">
+<option>never</option><option selected="">auto</option><option>always</option></select>
+</label>
+</div>
+<div class="actions"><button class="btn primary" id="save-ptm">Save</button></div>
+</section>
+<!-- Ops -->
+<section class="panel" id="tab-ops">
+<h3>Ops &amp; WebSocket</h3>
+<div class="grid">
+<label>Ping interval (ms) <input id="ops_ping_interval" type="number" value="15000"/></label>
+<label>Idle timeout (ms) <input id="ops_idle_timeout" type="number" value="60000"/></label>
+</div>
+<div class="actions"><button class="btn primary" id="save-ops">Save</button></div>
+</section>
+<!-- Diagnostics -->
+<section class="panel" id="tab-diag">
+<h3>Diagnostics</h3>
+<div class="row">
+<button class="btn primary" id="run-diag">Run quick checks</button>
+<span class="muted" id="diag-status">idle</span>
+</div>
+<div style="margin-top:10px">
+<table>
+<thead><tr><th>Check</th><th>OK</th><th>Details</th></tr></thead>
+<tbody id="diag-body"></tbody>
+</table>
+</div>
+<!-- Streaming status (ASR) -->
+<h3 style="margin-top:18px">Streaming status (ASR)</h3>
+<div class="row">
+<button class="btn" id="stream-refresh" type="button">Refresh</button>
+<span class="muted">Source: /api/v1/admin/diagnostics/streaming_status</span>
+</div>
+<div class="grid" style="margin-top:10px">
+<label>partials <input id="stream-partials" readonly="" value="0"/></label>
+<label>finals <input id="stream-finals" readonly="" value="0"/></label>
+<label>provider_errors <input id="stream-errors" readonly="" value="0"/></label>
+<label>breaker_open <input id="stream-breaker" readonly="" value="false"/></label>
+</div>
+<h3 style="margin-top:18px">Full System Test</h3>
+<div class="row">
+<button class="btn primary" id="run-diag-full">Run full system test</button>
+<span class="muted" id="diag-full-status">idle</span>
+</div>
+<div style="margin-top:10px">
+<table>
+<thead><tr><th>Check</th><th>OK</th><th>Details</th></tr></thead>
+<tbody id="diag-full-body"></tbody>
+</table>
+</div>
+<!-- Diagnostics (script-driven) -->
+<div id="admin-diagnostics"></div>
+</section>
+</div>
 <!-- Diagnostics script (no-ops unless #admin-diagnostics exists) -->
-<script type="module" src="/static/js/admin_console.js"></script>
+<script src="/static/js/admin_console.js" type="module"></script>
 <script>
   // Tabs wiring + deep-link support
   (function(){
@@ -187,7 +180,6 @@
     activate(want);
   })();
 </script>
-
 <!-- Lightweight poller for Streaming status -->
 <script>
   (function(){
@@ -216,6 +208,58 @@
     // first paint
     loadStreamingStatus();
   })();
+</script>
+
+<script>
+(function(){
+  async function loadFlow(){
+    try{
+      const r = await fetch('/api/v1/admin/config', {credentials:'include'});
+      const j = await r.json();
+      const s = j.settings || {};
+      const $ = (id)=>document.getElementById(id);
+
+      if ($('feature_audio')) $('feature_audio').checked = !!s.feature_audio;
+      if ($('confirm_ms')) $('confirm_ms').value = s.confirm_ms ?? 420;
+      if ($('min_speech_ms')) $('min_speech_ms').value = s.min_speech_ms ?? 220;
+      if ($('max_turn_seconds')) $('max_turn_seconds').value = s.max_turn_seconds ?? 90;
+
+      if ($('tts_voice_id')) $('tts_voice_id').value = s.tts_voice_id || '';
+      if ($('tts_output_format')) $('tts_output_format').value = s.tts_output_format || 'mp3_44100_128';
+      if ($('tts_model_id')) $('tts_model_id').value = s.tts_model_id || 'eleven_multilingual_v2';
+    }catch(e){ console.warn('[admin/flow] load error', e); }
+  }
+
+  async function saveFlow(){
+    try{
+      const $ = (id)=>document.getElementById(id);
+      const payload = {
+        feature_audio: !!($('feature_audio') && $('feature_audio').checked),
+        confirm_ms: parseInt($('confirm_ms')?.value||'420',10),
+        min_speech_ms: parseInt($('min_speech_ms')?.value||'220',10),
+        max_turn_seconds: parseInt($('max_turn_seconds')?.value||'90',10),
+        tts_voice_id: $('tts_voice_id')?.value || '',
+        tts_output_format: $('tts_output_format')?.value || 'mp3_44100_128',
+        tts_model_id: $('tts_model_id')?.value || 'eleven_multilingual_v2'
+      };
+      const r = await fetch('/api/v1/admin/config', {
+        method:'POST',
+        credentials:'include',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error('save failed');
+      alert('Saved');
+    }catch(e){ alert('Save failed'); console.warn('[admin/flow] save error', e); }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    loadFlow();
+    const btn = document.getElementById('save-flow');
+    if (btn) btn.addEventListener('click', saveFlow);
+  });
+})();
 </script>
 </body>
 </html>
