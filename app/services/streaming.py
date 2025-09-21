@@ -159,11 +159,14 @@ def schedule_tts_audio(session_id: str,
             if delay_ms and delay_ms > 0:
                 _t.sleep(max(0, delay_ms) / 1000.0)
 
-            # Pick provider (mock in CI if ELEVEN not configured)
+            # Pick provider (prefer canonical providers.tts; keep fallbacks for safety)
             try:
-                from ..services.tts_provider import get_tts_provider  # type: ignore
+                from ..providers.tts import get_tts_provider
             except Exception:
-                from ..tts_provider import get_tts_provider  # fallback path
+                try:
+                    from ..services.tts_provider import get_tts_provider  # type: ignore
+                except Exception:
+                    from ..tts_provider import get_tts_provider  # legacy fallback
             provider = get_tts_provider(cfg or {})
 
             # Synthesize
