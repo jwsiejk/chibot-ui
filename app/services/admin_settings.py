@@ -14,7 +14,7 @@ _settings: Dict[str, Any] = {
     "nudge_backoff_after_ignored": 2,
     "max_turn_seconds": 90,
     # New: Audio feature toggle exposed in Admin UI
-    "feature_audio": os.environ.get("FEATURE_AUDIO", "true").lower() == "true",
+    "feature_audio": (os.environ.get("FEATURE_AUDIO") or "true").lower() == "true",
     # TTS runtime tunables (non-secret) – keys remain in env only
     "tts_voice_id": os.environ.get("ELEVENLABS_VOICE_ID", ""),
     "tts_output_format": os.environ.get("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128"),
