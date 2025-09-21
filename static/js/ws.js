@@ -6,15 +6,13 @@
 //   • Helpers: waitWSOpen(), isOpen(), bufferedAmount(), sendJSON/audio
 //   • DOM events: 'askchip-ws' (messages), 'askchip-ws-close' (terminal close)
 
-import { ChunkedAudioPlayer } from './audio_player.js';
-import { unlockAudio } from './audio.js';
+import { playStream, audioEnd, unlockAudio } from './audio.js';
 import { getSID } from './util/sid.js';
 
 let _ws = null;
 let _onOpen = [];
 let _keepaliveTimer = null;
 let _lastUserSendTs = 0;
-let _player = null;
 let _gotReady = false;
 
 // reconnect state
@@ -142,15 +140,30 @@ export async function openWS(){
         // Re-emit as DOM events so UI can respond
         window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
 
+        // --- Audio routing (WS-only) ---------------------------------------
+        if (t === 'assistant_audio') {
+          // Server provides { mime, audio_chunks:[], is_last }
+          playStream(obj);
+          return;
+        }
+        if (t === 'UtteranceEnd') {
+          // Authoritative end-of-utterance: drain and endOfStream
+          audioEnd();
+          return;
+        }
+
+        // --- Other control/info messages -----------------------------------
         if (t === 'KeepAliveAck'){
           // no-op
         } else if (t === 'Error'){
           console.warn('[ws] server error:', obj.code, obj.message);
+        } else if (t === 'assistant_end'){
+          // Text is done. Do NOT teardown audio here (audio ends on UtteranceEnd).
         } else if (t === 'TTSChunk'){
-          // future streaming TTS
+          // (legacy/future) not used; all audio uses assistant_audio frames now.
         }
       } else {
-        // Binary from server (future TTS)
+        // Binary from server (future path not used in v1 WS-only)
       }
     }catch(err){
       console.warn('[ws] message error', err);
