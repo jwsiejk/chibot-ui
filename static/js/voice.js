@@ -189,7 +189,7 @@ function _startRecorder() {
   };
 
   try {
-    state.rec.start();
+    state.rec.start(250);   // ensures non-empty dataavailable frames
     state.turnOpen = true; // mark an open ASR turn on the server
   } catch (e) {
     console.warn('[voice] recorder start failed', e);
