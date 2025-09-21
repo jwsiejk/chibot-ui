@@ -58,8 +58,9 @@ function wireWSEventsOnce(){
 
     // Try to play audio chunks if present on known keys
     const audioChunks = d.audio_chunks || d.chunks || d.audio || null;
+    const mime = d.mime || 'audio/webm; codecs=opus';
     if (audioChunks && (t === 'assistant_audio' || t === 'AudioChunk' || t === 'TTSChunk' || t === 'audio')) {
-      try { playStream(audioChunks); } catch(e){ console.warn('[bootstrap] audio play error', e); }
+      try { playStream(audioChunks, mime); } catch(e){ console.warn('[bootstrap] audio play error', e); }
     }
 
     if (seen < 5) {

@@ -170,11 +170,11 @@ def vendor_status() -> Dict[str, Any]:
     # Never expose secrets; just indicate presence
     return {
         "llm": "OpenAI",
-        "stt": "Whisper",
+        "stt": "Deepgram",
         "tts": {
             "provider": "ElevenLabs",
             "key_present": bool(os.environ.get("ELEVENLABS_API_KEY")),
             "voice_id_set": bool(os.environ.get("ELEVENLABS_VOICE_ID")),
-            "output_format": os.environ.get("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128"),
+            "output_format": os.environ.get("ELEVEN_OUTPUT_FORMAT", "opus_24000"),
         }
     }

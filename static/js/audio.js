@@ -1,50 +1,56 @@
-// static/js/audio.js — robust MP3 playback + unlockAudio helper
-let _audio = null;
-let _ctx = null;
+// static/js/audio.js — unified playback (MSE chunked by MIME) + unlockAudio
+import { ChunkedAudioPlayer } from './audio_player.js';
+let _player = null;
+let _el = null;
 
 export async function unlockAudio(){
   try{
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
-    _ctx = _ctx || new AC();
-    if (_ctx.state === 'suspended') await _ctx.resume();
-    const o = _ctx.createOscillator();
-    const g = _ctx.createGain();
-    g.gain.value = 0.00001;           // inaudible tick to unlock
-    o.connect(g).connect(_ctx.destination);
+    const ctx = new AC();
+    if (ctx.state === 'suspended') await ctx.resume();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    g.gain.value = 0.00001;
+    o.connect(g).connect(ctx.destination);
     o.start();
-    o.stop(_ctx.currentTime + 0.01);
+    o.stop(ctx.currentTime + 0.01);
   }catch(_){}
 }
 
-// Accepts a Uint8Array or an array of Uint8Array MP3 chunks.
-export function playStream(chunks){
+function ensureEl(){
+  if (_el) return _el;
+  _el = new Audio();
+  _el.autoplay = true;
+  return _el;
+}
+function ensurePlayer(mime){
+  ensureEl();
+  if (!_player) _player = new ChunkedAudioPlayer(_el, mime);
+  _player.setMime(mime);
+  return _player;
+}
+
+// Accepts base64 strings or Uint8Array chunks; requires MIME
+export function playStream(chunks, mime='audio/webm; codecs=opus'){
   try{
     const list = Array.isArray(chunks) ? chunks : [chunks];
     if (!list.length) return;
-    const total = list.reduce((n, c)=> n + (c?.length || 0), 0);
-    if (!total) return;
-
-    const buf = new Uint8Array(total);
-    let off = 0;
+    const p = ensurePlayer(mime);
     for (const c of list){
-      if (!c || !c.length) continue;
-      buf.set(c, off);
-      off += c.length;
+      if (!c) continue;
+      if (typeof c === 'string') p.appendBase64(c);
+      else if (c instanceof Uint8Array) p.appendBytes(c);
+      else if (Array.isArray(c)) p.appendBytes(new Uint8Array(c));
     }
-
-    const blob = new Blob([buf], { type: 'audio/mpeg' });
-    if (_audio){ try{ _audio.pause(); }catch{} }
-    _audio = new Audio(URL.createObjectURL(blob));
-    _audio.addEventListener('ended', ()=>{
-      try { window.dispatchEvent(new CustomEvent('chip:tts-ended')); } catch {}
-    });
-    _audio.play().catch(()=>{});
   }catch(e){
     console.warn('[audio] playStream error', e);
   }
 }
 
-export function stopPlayback(){ try{ _audio?.pause(); }catch{} }
-export function isPlaying(){ return !!(_audio && !_audio.paused); }
-export function setVisemeCallback(_fn){ /* not used in 2D mode */ }
+export function stopPlayback(){
+  try{ _player?.stop(); }catch{}
+}
+
+export function isPlaying(){ try{ return !!(_el && !_el.paused); }catch{return false;} }
+export function setVisemeCallback(_fn){ /* no-op in 2D */ }

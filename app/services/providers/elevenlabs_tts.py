@@ -12,7 +12,7 @@ class ElevenLabsTTS:
             raise RuntimeError("ELEVENLABS_API_KEY missing")
         cfg = db.get_config()
         self.voice_id = cfg.get('tts_voice_id') or os.environ.get('ELEVENLABS_VOICE_ID') or "EXAVITQu4vr4xnSDxMaL"
-        self.output_format = cfg.get('tts_output_format') or os.environ.get('ELEVEN_OUTPUT_FORMAT') or "mp3_44100_128"
+        self.output_format = cfg.get('tts_output_format') or os.environ.get('ELEVEN_OUTPUT_FORMAT') or "opus_24000"
         self.model_id = cfg.get('tts_model_id') or os.environ.get('ELEVEN_MODEL_ID') or "eleven_multilingual_v2"
         self.max_retries = int(os.environ.get("TTS_RETRIES", "2"))
         self.backoff_base = float(os.environ.get("TTS_BACKOFF_BASE", "0.2"))
@@ -52,6 +52,8 @@ class ElevenLabsTTS:
                     if resp.status != 200:
                         body = resp.read().decode("utf-8", "ignore")
                         raise urllib.error.HTTPError(url, resp.status, f"TTS HTTP {resp.status}: {body}", resp.headers, None)
+                    ctype = resp.headers.get('Content-Type', '') or ''
+                    self.last_mime = ctype.strip().lower() or None
                     audio_bytes = resp.read()
                 # Minimal synthetic viseme schedule by duration estimate (assume ~128kbps)
                 bitrate_bps = 128000.0
@@ -82,3 +84,6 @@ class ElevenLabsTTS:
                 last_err = e
             time.sleep(self.backoff_base * (2 ** (attempts - 1)))
         raise RuntimeError(f"TTS synth failed after {self.max_retries} attempts: {last_err}")
+
+    def get_last_mime(self):
+        return getattr(self, 'last_mime', None)

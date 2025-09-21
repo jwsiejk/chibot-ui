@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import List, Dict, Tuple, Optional
 import base64
 import threading, time as _t
+import os
 
 from .llm_provider import get_provider
 from .awareness import annotate
@@ -132,6 +133,7 @@ def make_assistant_frames(seed_text: str,
                 _admin_emit('assistant_end', session_id=session_id, turn_id=str(turn_id))
     except Exception:
         pass
+        pass
 
     return str(turn_id), frames
 
@@ -169,6 +171,23 @@ def schedule_tts_audio(session_id: str,
             # Pick provider (vendor only)
             from app.services.tts_provider import get_tts_provider
             provider = get_tts_provider(cfg or {})
+
+            # Determine desidesired MIME from format
+            fmt = (cfg.get('tts_output_format') or os.environ.get('ELEVEN_OUTPUT_FORMAT') or 'opus_24000').lower()
+            def _guess_mime(fmt: str) -> str:
+                if 'webm' in fmt and 'opus' in fmt:
+                    return 'audio/webm; codecs=opus'
+                if 'opus' in fmt and 'ogg' in fmt:
+                    return 'audio/ogg; codecs=opus'
+                if 'opus' in fmt and 'webm' not in fmt and 'ogg' not in fmt:
+                    # container-agnostic opus — prefer webm
+                    return 'audio/webm; codecs=opus'
+                if 'mp3' in fmt:
+                    return 'audio/mpeg'
+                if 'pcm' in fmt:
+                    return 'audio/L16'
+                return 'application/octet-stream'
+            desired_mime = _guess_mime(fmt)
 
             # Synthesize
             try:
