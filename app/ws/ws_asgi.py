@@ -1,4 +1,4 @@
-# app/ws/ws_asgi.py — Phase 2 (Deepgram wired; WS protocol + delegation)
+# app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
 from __future__ import annotations
 import asyncio, os, contextlib, time
 from typing import Optional, Dict, Any
@@ -278,6 +278,28 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         if t == "KeepAlive":
                             await send({"type": "websocket.send", "text": _dumps(make_keepalive_ack())})
 
+                        # OPTIONAL WS greet alias: allow {type:"greet"} in addition to Configure{greet:true}
+                        elif t == "greet":
+                            async def _bg():
+                                try:
+                                    from app.services.streaming import run_ws_greet
+                                    tid = await asyncio.to_thread(run_ws_greet, sid)
+                                    try:
+                                        if _admin_emit:
+                                            cfg_now = db.get_config()
+                                            audio_on = bool((cfg_now or {}).get("feature_audio", True))
+                                            _admin_emit("greet:resp", label="greet:resp",
+                                                        session_id=sid, turn_id=tid, audio_scheduled=audio_on)
+                                    except Exception:
+                                        pass
+                                except Exception as e:
+                                    try:
+                                        await send({"type":"websocket.send",
+                                                    "text":_dumps(make_error("greet_fail", e.__class__.__name__))})
+                                    except Exception:
+                                        pass
+                            asyncio.create_task(_bg())
+
                         elif t == "Configure":
                             cfg.update(obj or {})
 
@@ -313,8 +335,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             pass
                                 asyncio.create_task(_bg())
 
-                        # TEXT turns (support several aliases)
-                        elif t in ("User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage"):  # NEW
+                        # TEXT turns (support new WS-only + legacy aliases)
+                        elif t in ("user_msg", "User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage"):
                             text = (obj.get("text") or "").strip()
                             if not text:
                                 continue
@@ -322,9 +344,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 await send({"type":"websocket.send",
                                             "text":_dumps(make_error("payload_too_large","user_text"))})
                                 continue
+
+                            # Accept both new and legacy correlation keys
+                            corr = obj.get("correlation_user_msg_id") or obj.get("userMsgId")
+
                             async def _bg_user():
                                 try:
-                                    await asyncio.to_thread(run_ws_user_turn, sid, text, obj.get("userMsgId"))
+                                    await asyncio.to_thread(run_ws_user_turn, sid, text, corr)
                                 except Exception as e:
                                     await send({"type":"websocket.send",
                                                 "text":_dumps(make_error("user_fail", e.__class__.__name__))})
@@ -394,7 +420,7 @@ async def ws_chat(websocket):
         sid = "default"
 
     try:
-        await websocket.send_text(_dumps({"type":"ready","session_id":sid}))
+        await websocket.send_text(_dumps({"type":"ready","session_id":sid})))
     except Exception:
         try:
             await websocket.close(code=1011, reason="initial_ready_failed")
