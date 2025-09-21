@@ -281,11 +281,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     pass
 
                             if obj.get("greet"):
-                                # Delegate greet pipeline to streaming helpers (non-blocking)
+                                # Delegate greet pipeline to streaming helpers; offload to thread so WS loop stays snappy
                                 async def _bg():
                                     try:
                                         from app.services.streaming import run_ws_greet
-                                        tid = run_ws_greet(sid)
+                                        tid = await asyncio.to_thread(run_ws_greet, sid)
 
                                         # Admin breadcrumb (audio flag is config-based, TTS helper respects feature_audio)
                                         try:
@@ -305,7 +305,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 asyncio.create_task(_bg())
 
                         elif t == "User":
-                            # WS user messages with validation & delegation
+                            # WS user messages with validation; offload orchestration to a thread
                             text = (obj.get("text") or "").strip()
                             if not text:
                                 continue
@@ -313,14 +313,18 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 await send({"type":"websocket.send",
                                             "text":_dumps(make_error("payload_too_large","user_text"))})
                                 continue
-                            try:
-                                from app.services.streaming import run_ws_user_turn
-                                _ = run_ws_user_turn(sid, text, correlation_user_msg_id=obj.get("userMsgId"))
-                            except Exception as e:
-                                await send({
-                                    "type":"websocket.send",
-                                    "text":_dumps(make_error("user_fail", e.__class__.__name__))
-                                })
+
+                            async def _bg_user():
+                                try:
+                                    from app.services.streaming import run_ws_user_turn
+                                    await asyncio.to_thread(run_ws_user_turn, sid, text, obj.get("userMsgId"))
+                                except Exception as e:
+                                    await send({
+                                        "type":"websocket.send",
+                                        "text":_dumps(make_error("user_fail", e.__class__.__name__))
+                                    })
+
+                            asyncio.create_task(_bg_user())
 
                         elif t == "CloseStream":
                             turn_id, _pcm = buf.close_turn()
