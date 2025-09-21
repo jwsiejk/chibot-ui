@@ -1,7 +1,7 @@
 import { openWS, waitWSOpen, isOpen, closeWS, configure } from '/static/js/ws.js?v=v20250911b';
 import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
 import { initMic } from '/static/js/voice.js';
-import { unlockAudio, playStream, stopPlayback } from '/static/js/audio.js';
+import { unlockAudio, stopPlayback } from '/static/js/audio.js';
 import { getSID } from '/static/js/util/sid.js';
 import * as App from '/static/js/app.js';
 
@@ -55,13 +55,6 @@ function wireWSEventsOnce(){
   window.addEventListener('askchip-ws', (ev) => {
     const d = ev.detail || {};
     const t = d.type || '';
-
-    // Try to play audio chunks if present on known keys
-    const audioChunks = d.audio_chunks || d.chunks || d.audio || null;
-    const mime = d.mime || 'audio/webm; codecs=opus';
-    if (audioChunks && (t === 'assistant_audio' || t === 'AudioChunk' || t === 'TTSChunk' || t === 'audio')) {
-      try { playStream(audioChunks, mime); } catch(e){ console.warn('[bootstrap] audio play error', e); }
-    }
 
     if (seen < 5) {
       try { console.log('[WS→UI]', JSON.stringify(d)); } catch {}
