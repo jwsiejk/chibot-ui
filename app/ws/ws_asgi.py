@@ -268,9 +268,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         elif t == "Configure":
                             cfg.update(obj or {})
 
-                            # Support WS-only greet: { type:"Configure", greet:true, reset?:1, session_id?:sid }
+                            # Greet handling (unchanged from your last patch)
                             if obj.get("reset"):
-                                # mirror greet reset breadcrumb
                                 try:
                                     db.memory.setdefault("greet_turns", {}).pop(sid, None)
                                 except Exception:
@@ -282,49 +281,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     pass
 
                             if obj.get("greet"):
-                                # Run greet pipeline in background to avoid blocking the WS loop
                                 async def _bg():
                                     try:
                                         from app.services.streaming import make_assistant_frames, schedule_frames
                                         from app.services.suggestions import hygienic_suggestions
                                         from app.ws.bus import bus
-
-                                        # Produce assistant frames (text-first). If provider fails, fall back.
                                         try:
-                                            tid, frames = make_assistant_frames("greet", sid, meta={"source": "ws_greet"})
+                                            tid, frames = make_assistant_frames("greet", sid, meta={"source":"ws_greet"})
                                         except Exception:
                                             fallback_text = "Hello! I'm Chip. How can I help today?"
                                             tid, frames = make_assistant_frames(fallback_text, sid, meta={"source":"ws_greet_fallback"})
-
-                                        # Non-blocking schedule of any remaining frames (ensures assistant_end)
                                         try:
                                             schedule_frames(sid, frames)
                                         except Exception:
                                             pass
-
-                                        # Always nudge UI alive: state+suggestions
                                         try:
-                                            bus.broadcast(sid, {"type": "state", "phase": "ready"})
-                                            bus.broadcast(sid, {"type": "suggestions", "turn_id": tid, "items": hygienic_suggestions("")})
+                                            bus.broadcast(sid, {"type":"state","phase":"ready"})
+                                            bus.broadcast(sid, {"type":"suggestions","turn_id":tid,"items":hygienic_suggestions("")})
                                         except Exception:
                                             pass
-
-                                        # Admin breadcrumb
                                         try:
                                             if _admin_emit:
                                                 cfg_now = db.get_config()
                                                 audio_on = bool((cfg_now or {}).get("feature_audio", True))
-                                                _admin_emit('greet:resp', label='greet:resp', session_id=sid, turn_id=tid, audio_scheduled=audio_on)
+                                                _admin_emit("greet:resp", label="greet:resp", session_id=sid, turn_id=tid, audio_scheduled=audio_on)
                                         except Exception:
                                             pass
                                     except Exception as e:
-                                        # Surface a minimal error frame back to the client bus so UI can warn
                                         try:
                                             await send({"type":"websocket.send","text":_dumps(make_error("greet_fail", e.__class__.__name__))})
                                         except Exception:
                                             pass
-
                                 asyncio.create_task(_bg())
+
+                        elif t == "User":
+                            # New: handle user messages over WS
+                            text = (obj.get("text") or "").strip()
+                            if text:
+                                try:
+                                    from app.services.streaming import make_assistant_frames, schedule_frames
+                                    tid, frames = make_assistant_frames(text, sid, meta={"source": "user_ws"})
+                                    schedule_frames(sid, frames, correlation_user_msg_id=obj.get("userMsgId"))
+                                except Exception as e:
+                                    await send({
+                                        "type":"websocket.send",
+                                        "text":_dumps(make_error("user_fail", e.__class__.__name__))
+                                    })
 
                         elif t == "CloseStream":
                             turn_id, _pcm = buf.close_turn()
@@ -340,16 +342,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             "text": _dumps(make_results(turn_id, transcript="", is_final=True))})
                                 await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))})
                         else:
-                            # Unknown message types are ignored (or log if desired)
                             pass
                     except ValueError as e:
                         await send({"type": "websocket.send", "text": _dumps(make_error("bad_message", str(e)))})
             else:
-                # Ignore other ASGI message types
                 pass
 
     finally:
-        # Cleanup downstream resources first
         try:
             if rx_task:
                 rx_task.cancel()
@@ -371,9 +370,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             ping_task.cancel()
         except Exception:
             pass
-        # Send a proper close frame so the browser does NOT report 1005
         try:
-            await send({"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"})
+            await send({"type":"websocket.close","code":1000,"reason":"normal_shutdown"})
         except Exception:
             pass
 
@@ -393,9 +391,8 @@ async def ws_chat(websocket):
     except Exception:
         sid = "default"
 
-    # NOTE: this wrapper lane is not used by Starlette Mount; left as a test shim.
     try:
-        await websocket.send_text(_dumps({"type": "ready", "session_id": sid}))
+        await websocket.send_text(_dumps({"type":"ready","session_id":sid}))
     except Exception:
         try:
             await websocket.close(code=1011, reason="initial_ready_failed")
