@@ -264,8 +264,68 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         t = obj.get("type")
                         if t == "KeepAlive":
                             await send({"type": "websocket.send", "text": _dumps(make_keepalive_ack())})
+
                         elif t == "Configure":
                             cfg.update(obj or {})
+
+                            # Support WS-only greet: { type:"Configure", greet:true, reset?:1, session_id?:sid }
+                            if obj.get("reset"):
+                                # mirror greet reset breadcrumb
+                                try:
+                                    db.memory.setdefault("greet_turns", {}).pop(sid, None)
+                                except Exception:
+                                    pass
+                                try:
+                                    if _admin_emit:
+                                        _admin_emit("greet:reset", route="/ws/v1/chat", label="greet:reset", session_id=sid)
+                                except Exception:
+                                    pass
+
+                            if obj.get("greet"):
+                                # Run greet pipeline in background to avoid blocking the WS loop
+                                async def _bg():
+                                    try:
+                                        from app.services.streaming import make_assistant_frames, schedule_frames
+                                        from app.services.suggestions import hygienic_suggestions
+                                        from app.ws.bus import bus
+
+                                        # Produce assistant frames (text-first). If provider fails, fall back.
+                                        try:
+                                            tid, frames = make_assistant_frames("greet", sid, meta={"source": "ws_greet"})
+                                        except Exception:
+                                            fallback_text = "Hello! I'm Chip. How can I help today?"
+                                            tid, frames = make_assistant_frames(fallback_text, sid, meta={"source":"ws_greet_fallback"})
+
+                                        # Non-blocking schedule of any remaining frames (ensures assistant_end)
+                                        try:
+                                            schedule_frames(sid, frames)
+                                        except Exception:
+                                            pass
+
+                                        # Always nudge UI alive: state+suggestions
+                                        try:
+                                            bus.broadcast(sid, {"type": "state", "phase": "ready"})
+                                            bus.broadcast(sid, {"type": "suggestions", "turn_id": tid, "items": hygienic_suggestions("")})
+                                        except Exception:
+                                            pass
+
+                                        # Admin breadcrumb
+                                        try:
+                                            if _admin_emit:
+                                                cfg_now = db.get_config()
+                                                audio_on = bool((cfg_now or {}).get("feature_audio", True))
+                                                _admin_emit('greet:resp', label='greet:resp', session_id=sid, turn_id=tid, audio_scheduled=audio_on)
+                                        except Exception:
+                                            pass
+                                    except Exception as e:
+                                        # Surface a minimal error frame back to the client bus so UI can warn
+                                        try:
+                                            await send({"type":"websocket.send","text":_dumps(make_error("greet_fail", e.__class__.__name__))})
+                                        except Exception:
+                                            pass
+
+                                asyncio.create_task(_bg())
+
                         elif t == "CloseStream":
                             turn_id, _pcm = buf.close_turn()
                             turn_id_ref[0] = turn_id
