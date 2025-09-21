@@ -23,13 +23,15 @@ except Exception:
     def _admin_emit(*a, **k):  # no-op if admin channel absent
         pass
 
+
 def _get_persona_for_session(session_id: str) -> Dict:
     try:
         sess = db.memory.get('sessions', {}).get(session_id) or {}
         persona_id = (sess.get('persona_id') or 'chip')
-        return db.memory.get('personas', {}).get(persona_id) or {'id':'chip'}
+        return db.memory.get('personas', {}).get(persona_id) or {'id': 'chip'}
     except Exception:
-        return {'id':'chip'}
+        return {'id': 'chip'}
+
 
 def _build_prompt(seed_text: str, persona: Dict, kb_snippets: List[str], teacher_move: Optional[str]) -> str:
     parts = [build_persona_preamble(persona)]
@@ -39,6 +41,7 @@ def _build_prompt(seed_text: str, persona: Dict, kb_snippets: List[str], teacher
         parts.append(f"Teacher move: {teacher_move}.")
     parts.append(f"User said: {seed_text.strip()}")
     return "\n\n".join(parts)
+
 
 def make_assistant_frames(seed_text: str,
                           session_id: str,
@@ -133,8 +136,7 @@ def make_assistant_frames(seed_text: str,
     return str(turn_id), frames
 
 
-
-# --- NEW: WS TTS scheduling (audio over WS) ----------------------------------
+# --- WS TTS scheduling (audio over WS) ---------------------------------------
 def schedule_tts_audio(session_id: str,
                        text: str,
                        turn_id: str | None = None,
@@ -171,11 +173,11 @@ def schedule_tts_audio(session_id: str,
             # Synthesize
             try:
                 audio_bytes, _vis = provider.synth(text)
-            state['started'] = True
-            try:
-                _admin_emit('tts:start', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
-            except Exception:
-                pass
+                state['started'] = True
+                try:
+                    _admin_emit('tts:start', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
+                except Exception:
+                    pass
             except Exception as e:
                 state['error'] = str(e)
                 try:
@@ -189,6 +191,7 @@ def schedule_tts_audio(session_id: str,
             idx = 0
             max_frames = 256
             sent = 0
+            first_sent = False
             while idx < len(mv):
                 # stop early if canceled
                 try:
@@ -205,6 +208,13 @@ def schedule_tts_audio(session_id: str,
                     if correlation_user_msg_id:
                         fr["correlation_user_msg_id"] = correlation_user_msg_id
                     bus.broadcast(session_id, fr)
+                    if not first_sent:
+                        first_sent = True
+                        state['first_chunk'] = True
+                        try:
+                            _admin_emit('tts:first_chunk', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
+                        except Exception:
+                            pass
                     sent += 1
                     if sent >= max_frames:
                         break
@@ -213,9 +223,9 @@ def schedule_tts_audio(session_id: str,
         finally:
             try:
                 _admin_emit('tts:done', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
-            state['done'] = True
             except Exception:
                 pass
+            state['done'] = True
 
     threading.Thread(target=_run, daemon=True).start()
 
