@@ -1,4 +1,4 @@
-# app/ws/ws_asgi.py — Phase 2 (Deepgram wired; pass-through Results)
+# app/ws/ws_asgi.py — Phase 2 (Deepgram wired; WS protocol + delegation)
 from __future__ import annotations
 import asyncio, os, contextlib, time
 from typing import Optional, Dict, Any
@@ -268,7 +268,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         elif t == "Configure":
                             cfg.update(obj or {})
 
-                            # Greet handling
+                            # Reset greet state if requested
                             if obj.get("reset"):
                                 try:
                                     db.memory.setdefault("greet_turns", {}).pop(sid, None)
@@ -281,50 +281,41 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     pass
 
                             if obj.get("greet"):
+                                # Delegate greet pipeline to streaming helpers (non-blocking)
                                 async def _bg():
                                     try:
-                                        from app.services.streaming import make_assistant_frames
-                                        from app.services.suggestions import hygienic_suggestions
-                                        from app.ws.bus import bus
-                                        try:
-                                            tid, frames = make_assistant_frames("greet", sid, meta={"source":"ws_greet"})
-                                        except Exception:
-                                            fallback_text = "Hello! I'm Chip. How can I help today?"
-                                            tid, frames = make_assistant_frames(fallback_text, sid, meta={"source":"ws_greet_fallback"})
-                                        # NOTE: make_assistant_frames already broadcasts frames; avoid double-send.
-                                        try:
-                                            bus.broadcast(sid, {"type":"state","phase":"ready"})
-                                            bus.broadcast(sid, {"type":"suggestions","turn_id":tid,"items":hygienic_suggestions("")})
-                                        except Exception:
-                                            pass
+                                        from app.services.streaming import run_ws_greet
+                                        tid = run_ws_greet(sid)
+
+                                        # Admin breadcrumb (audio flag is config-based, TTS helper respects feature_audio)
                                         try:
                                             if _admin_emit:
                                                 cfg_now = db.get_config()
                                                 audio_on = bool((cfg_now or {}).get("feature_audio", True))
-                                                _admin_emit("greet:resp", label="greet:resp", session_id=sid, turn_id=tid, audio_scheduled=audio_on)
+                                                _admin_emit("greet:resp", label="greet:resp",
+                                                            session_id=sid, turn_id=tid, audio_scheduled=audio_on)
                                         except Exception:
                                             pass
                                     except Exception as e:
                                         try:
-                                            await send({"type":"websocket.send","text":_dumps(make_error("greet_fail", e.__class__.__name__))})
+                                            await send({"type":"websocket.send",
+                                                        "text":_dumps(make_error("greet_fail", e.__class__.__name__))})
                                         except Exception:
                                             pass
                                 asyncio.create_task(_bg())
 
                         elif t == "User":
-                            # Handle user messages over WS with validation
+                            # WS user messages with validation & delegation
                             text = (obj.get("text") or "").strip()
                             if not text:
-                                # ignore empty user messages
                                 continue
                             if len(text) > 8000:
-                                await send({"type":"websocket.send","text":_dumps(make_error("payload_too_large","user_text"))})
+                                await send({"type":"websocket.send",
+                                            "text":_dumps(make_error("payload_too_large","user_text"))})
                                 continue
                             try:
-                                from app.services.streaming import make_assistant_frames, schedule_frames
-                                tid, frames = make_assistant_frames(text, sid, meta={"source": "user_ws"})
-                                # schedule_frames ensures pacing + assistant_end if provider streaming differs
-                                schedule_frames(sid, frames, correlation_user_msg_id=obj.get("userMsgId"))
+                                from app.services.streaming import run_ws_user_turn
+                                _ = run_ws_user_turn(sid, text, correlation_user_msg_id=obj.get("userMsgId"))
                             except Exception as e:
                                 await send({
                                     "type":"websocket.send",
