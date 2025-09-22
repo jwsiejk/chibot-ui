@@ -37,14 +37,43 @@ function _cleanText(s){ return (s||'').replace(_KB_TAG_RE,' ').trim(); }
 
 /* ---------------- Rendering of assistant frames ---------------- */
 
-// Accept either ASR Results or WS assistant text frames
+// Accept WS assistant text frames
 function _isAssistantTextFrame(d){
   return d && (
-    (d.type === 'Results' && d.nlu === undefined && d.alternatives && d.alternatives[0]?.transcript) ||
     (d.type === 'assistant_chunk' && (d.text || d.delta || d.content)) ||
     (d.type === 'assistant_text' && (d.text || d.delta || d.content)) ||
     (d.type === 'assistant_final' && (d.text || d.delta || d.content))
   );
+}
+
+function _renderUserTranscript(d){
+  try{
+    const transcriptRaw = d?.alternatives?.[0]?.transcript || '';
+    const transcript = _cleanText(transcriptRaw);
+    if (!transcript) return;
+
+    const msgs = $('#chatMessages');
+    if (!msgs) return;
+
+    let bubble = msgs.lastElementChild;
+    const canReuse = (
+      bubble && bubble.dataset && bubble.dataset.role === 'user' && bubble.dataset.asr === '1'
+    );
+    if (!canReuse){
+      bubble = document.createElement('div');
+      bubble.dataset.role = 'user';
+      bubble.dataset.asr = '1';
+      msgs.appendChild(bubble);
+    }
+
+    bubble.textContent = transcript;
+
+    if (d?.is_final || d?.final){
+      try { delete bubble.dataset.asr; } catch {}
+    }
+
+    try { msgs.scrollTop = msgs.scrollHeight; } catch {}
+  }catch{}
 }
 
 function _dedupeAssistant(d){
@@ -54,9 +83,7 @@ function _dedupeAssistant(d){
     if (!msgs) return true;
     const last = msgs.lastElementChild;
 
-    const raw = (d.type === 'assistant_chunk' || d.type === 'assistant_text' || d.type === 'assistant_final')
-      ? (d.text || d.delta || d.content || '')
-      : (d.alternatives?.[0]?.transcript || '');
+    const raw = (d.text || d.delta || d.content || '');
 
     const text = _cleanText(raw);
 
@@ -87,6 +114,11 @@ export function handleAssistantFrame(d){
   if (d.type === 'assistant_audio') setDot('speaking');
   if (d.type === 'UtteranceEnd')    setDot('ready');
 
+  if (d.type === 'Results' && d.nlu === undefined){
+    _renderUserTranscript(d);
+    return;
+  }
+  
   if (_isAssistantTextFrame(d)) {
     if (!_dedupeAssistant(d)) return;
   }
