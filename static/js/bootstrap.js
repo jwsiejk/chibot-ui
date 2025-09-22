@@ -99,7 +99,16 @@ function wireWSEventsOnce(){
   });
 
   window.addEventListener('askchip-ws-close', (ev) => {
-    console.warn('[WS close]', ev.detail);
+    const detail = ev.detail || {};
+    const normal = detail.code === 1000 || detail.code === 1001;
+    const reason = detail.reason || (normal ? 'normal closure' : '');
+    const payload = { ...detail, reason };
+
+    if (normal) {
+      console.info('[WS close]', payload);
+    } else {
+      console.warn('[WS close]', payload);
+    }
     // When WS closes, disable Send/End and re-enable Start
     _disableButtons();
     const sb = $('#startButton');
