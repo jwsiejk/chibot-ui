@@ -76,6 +76,7 @@ async def _pump_bus_to_client(sid: str, send):
     import json as _json
     from queue import Empty
     from app.ws.bus import bus
+    
     q = bus.subscribe(sid)
     try:
         while True:
@@ -91,6 +92,12 @@ async def _pump_bus_to_client(sid: str, send):
                 await asyncio.sleep(0.01)
     except asyncio.CancelledError:
         pass
+    finally:
+        try:
+            if hasattr(bus, "unsubscribe"):
+                bus.unsubscribe(sid, q)
+        except Exception:
+            pass
 
 
 async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen, sid):
@@ -311,6 +318,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     chunk = ev.get("bytes") or b""
                     if chunk:
                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
+                    if buf.is_empty():
+                        # New audio turn; prime turn id + reset final tracking.
+                        turn_id_ref[0] = buf.turn_seq + 1
+                        final_seen[0] = False
                     buf.append(chunk)
                     if _has_deepgram_key():
                         await _ensure_dg_connected()
@@ -422,21 +433,27 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 try:
                                     await asyncio.to_thread(run_ws_user_turn, sid, text, corr)
                                 except Exception as e:
-                                    await send({
-                                        "type": "websocket.send",
-                                        "text": _dumps(make_error("user_fail", e.__class__.__name__)),
-                                    })
+                                    with contextlib.suppress(Exception):
+                                        await send({
+                                            "type": "websocket.send",
+                                            "text": _dumps(make_error("user_fail", e.__class__.__name__)),
+                                        })
                             asyncio.create_task(_bg_user())
 
                         elif t == "CloseStream":
                             _jlog("ws_close_stream", sid=sid)
+                            if buf.is_empty():
+                                # Empty turn closure; synthesize ids + reset final tracking.
+                                turn_id_ref[0] = buf.turn_seq + 1
+                                final_seen[0] = False
                             turn_id, _pcm = buf.close_turn()
                             turn_id_ref[0] = turn_id
+                            seen_final = final_seen[0]
                             if _has_deepgram_key() and dg is not None:
                                 # Ask provider to finish; if no final came, synthesize empty final.
                                 with contextlib.suppress(Exception):
                                     await dg.close(wait_for_final=True)
-                                if not final_seen[0]:
+                                if not seen_final:
                                     await send({
                                         "type": "websocket.send",
                                         "text": _dumps(make_results(turn_id, transcript="", is_final=True)),
@@ -449,6 +466,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     "text": _dumps(make_results(turn_id, transcript="", is_final=True)),
                                 })
                                 await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))})
+                            final_seen[0] = False
                         else:
                             # Unknown type already filtered by schema; no-op to future-proof.
                             pass
@@ -475,10 +493,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             pass
         try:
             bus_task.cancel()
+            with contextlib.suppress(Exception):
+                await bus_task
         except Exception:
             pass
         try:
             ping_task.cancel()
+            with contextlib.suppress(Exception):
+                await ping_task
         except Exception:
             pass
         try:
@@ -496,7 +518,7 @@ except Exception:
 
 async def ws_chat(websocket):
     """Accept, validate, send ready, then pump frames to keep the connection alive."""
-    print(">>> REAL ws_chat from ws_asgi.py invoked <<<")
+    _jlog("ws_chat_compat_invoked")
     await websocket.accept()
     try:
         sid = _get_session_id(websocket.scope)
