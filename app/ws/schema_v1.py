@@ -1,11 +1,14 @@
 # app/ws/schema_v1.py
 """
-Deepgram-aligned WS schema (Phase 1).
+Deepgram-aligned WS schema (Phase 1 → 2).
 
 Client -> Server (text JSON):
  - {"type":"Configure", ...}
  - {"type":"KeepAlive"}
  - {"type":"CloseStream"}
+ - {"type":"greet"}                         # WS-only greet alias
+ - {"type":"user_msg","text":"..."}         # WS-only user text turn
+   # (Also accept legacy aliases: "User","UserText","UserMessage","UserUtterance","UserTextMessage")
 
 Client -> Server (binary):
  - raw Opus frames
@@ -19,10 +22,21 @@ Server -> Client:
 from __future__ import annotations
 from typing import Any, Dict, Optional
 
+# Accepted client text message types (normalized, but case-sensitive when needed for legacy)
+_ALLOWED_TYPES = {
+    "Configure", "KeepAlive", "CloseStream",
+    # WS-only additions
+    "greet", "user_msg",
+    # Legacy aliases we still allow to avoid breaking older clients
+    "User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage",
+}
+
 def parse_client_json(text: str) -> Dict[str, Any]:
-    """Parse and validate a client JSON control message.
+    """Parse and lightly validate a client JSON control/message frame.
 
     Returns a dict with at least 'type'. Unknown types raise ValueError.
+    We purposefully keep validation minimal here; deeper checks (e.g., 'text' length
+    for user_msg) are enforced in the WS handler to avoid regressions.
     """
     import json
     try:
@@ -30,7 +44,7 @@ def parse_client_json(text: str) -> Dict[str, Any]:
     except Exception:
         raise ValueError("bad_json")
     t = (obj.get("type") or "").strip()
-    if t not in {"Configure","KeepAlive","CloseStream"}:
+    if t not in _ALLOWED_TYPES:
         raise ValueError("bad_message_type")
     # Normalize Configure fields
     if t == "Configure":
