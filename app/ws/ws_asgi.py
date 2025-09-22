@@ -448,12 +448,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 final_seen[0] = False
                             turn_id, _pcm = buf.close_turn()
                             turn_id_ref[0] = turn_id
-                            seen_final = final_seen[0]
+                            synthetic_emitted = False
                             if _has_deepgram_key() and dg is not None:
                                 # Ask provider to finish; if no final came, synthesize empty final.
                                 with contextlib.suppress(Exception):
                                     await dg.close(wait_for_final=True)
-                                if not seen_final:
+                                if not final_seen[0]:
+                                    final_seen[0] = True
+                                    synthetic_emitted = True
                                     await send({
                                         "type": "websocket.send",
                                         "text": _dumps(make_results(turn_id, transcript="", is_final=True)),
@@ -461,12 +463,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))})
                             else:
                                 # No provider configured: still emit empty final + end to advance the dialog.
-                                await send({
-                                    "type": "websocket.send",
-                                    "text": _dumps(make_results(turn_id, transcript="", is_final=True)),
-                                })
-                                await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))})
-                            final_seen[0] = False
+                                if not final_seen[0]:
+                                    final_seen[0] = True
+                                    synthetic_emitted = True
+                                    await send({
+                                        "type": "websocket.send",
+                                        "text": _dumps(make_results(turn_id, transcript="", is_final=True)),
+                                    })
+                                    await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))})
+                            if synthetic_emitted:
+                                # Reset so the next turn starts fresh even if no audio chunk arrives.
+                                final_seen[0] = False
                         else:
                             # Unknown type already filtered by schema; no-op to future-proof.
                             pass
@@ -481,7 +488,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         try:
             if rx_task:
                 rx_task.cancel()
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(asyncio.CancelledError, Exception):
                     await rx_task
         except Exception:
             pass
