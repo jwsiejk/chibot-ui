@@ -26,7 +26,7 @@ _ALLOWED_TYPES = {
     "Configure", "KeepAlive", "CloseStream",
     "greet", "user_msg",
     # Legacy aliases
-    "User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage",
+    "User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage", wqwqwqeewq
 }
 
 def parse_client_json(text: str) -> Dict[str, Any]:
