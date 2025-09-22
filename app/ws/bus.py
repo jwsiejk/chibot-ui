@@ -157,6 +157,25 @@ class StreamBus:
             except Exception:
                 pass
 
+    def unsubscribe(self, sid, q):
+        """Remove a subscriber queue when a WS connection terminates."""
+        lock = self._locks.get(sid)
+        if lock is None:
+            return
+
+        with lock:
+            subs = self._subs.get(sid)
+            if not subs:
+                return
+            try:
+                subs.remove(q)
+            except ValueError:
+                return
+            if not subs:
+                self._subs.pop(sid, None)
+                self._pending.pop(sid, None)
+                self._locks.pop(sid, None)
+
     def cancel_turn(self, sid, tid):
         if tid:
             self._canceled.add((sid, tid))
