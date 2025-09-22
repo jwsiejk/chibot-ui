@@ -20,24 +20,16 @@ Server -> Client:
  - {"type":"Error","code":"...","message":"..."}
 """
 from __future__ import annotations
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-# Accepted client text message types (normalized, but case-sensitive when needed for legacy)
 _ALLOWED_TYPES = {
     "Configure", "KeepAlive", "CloseStream",
-    # WS-only additions
     "greet", "user_msg",
-    # Legacy aliases we still allow to avoid breaking older clients
+    # Legacy aliases
     "User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage",
 }
 
 def parse_client_json(text: str) -> Dict[str, Any]:
-    """Parse and lightly validate a client JSON control/message frame.
-
-    Returns a dict with at least 'type'. Unknown types raise ValueError.
-    We purposefully keep validation minimal here; deeper checks (e.g., 'text' length
-    for user_msg) are enforced in the WS handler to avoid regressions.
-    """
     import json
     try:
         obj = json.loads(text or "{}")
@@ -46,10 +38,10 @@ def parse_client_json(text: str) -> Dict[str, Any]:
     t = (obj.get("type") or "").strip()
     if t not in _ALLOWED_TYPES:
         raise ValueError("bad_message_type")
-    # Normalize Configure fields
+
     if t == "Configure":
         enc = (obj.get("encoding") or "").lower()
-        if enc and enc not in {"opus","pcm"}:
+        if enc and enc not in {"opus", "pcm"}:
             raise ValueError("bad_encoding")
         sr = obj.get("sample_rate")
         if sr is not None and (not isinstance(sr, int) or sr <= 0):
@@ -73,7 +65,7 @@ def make_utterance_end(turn_id: int) -> Dict[str, Any]:
     return {"type": "UtteranceEnd", "turn_id": int(turn_id)}
 
 def make_keepalive_ack() -> Dict[str, Any]:
-    return {"type":"KeepAliveAck"}
+    return {"type": "KeepAliveAck"}
 
 def make_error(code: str, message: str) -> Dict[str, Any]:
-    return {"type":"Error","code":str(code),"message":str(message)}
+    return {"type": "Error", "code": str(code), "message": str(message)}
