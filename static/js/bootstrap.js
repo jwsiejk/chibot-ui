@@ -40,6 +40,12 @@ function setDot(state){
   );
 }
 
+function setStatusText(text){
+  const status = $('#statusText');
+  if (!status) return;
+  status.textContent = text;
+}
+
 function showBanner(msg){
   const b = $('#inlineLoginMsg');
   if (!b) { console.warn('[AskChip]', msg); return; }
@@ -114,6 +120,34 @@ function wireWSEventsOnce(){
     const sb = $('#startButton');
     if (sb) sb.disabled = false;
     setDot('ready');
+  });
+}
+
+function wireVoiceEventsOnce(){
+  if (window.__askchip_voice_wired) return;
+  window.__askchip_voice_wired = true;
+
+  window.addEventListener('askchip-voice', (ev) => {
+    const detail = ev?.detail || {};
+    const state = detail.state;
+    const label = detail.statusText ?? detail.label ?? detail.message;
+
+    if (state === 'armed'){
+      setDot('listening');
+      setStatusText(label || 'Listening…');
+      return;
+    }
+
+    if (state === 'recording'){
+      setDot('speaking');
+      setStatusText(label || 'Recording…');
+      return;
+    }
+
+    if (state === 'idle'){
+      setDot('ready');
+      setStatusText(label || 'Ready');
+    }
   });
 }
 
@@ -219,6 +253,8 @@ function wireUI(){
   }
   window.__bootstrapWired = true;
 
+  wireVoiceEventsOnce();
+
   const startBtn = document.getElementById('startButton');
   const endBtn   = document.getElementById('endButton');
   const sendBtnA = document.getElementById('composerSend');
@@ -260,6 +296,7 @@ function wireUI(){
   });
 
   setDot('ready');
+  setStatusText('Ready');
   window.__askchip_bootstrap_loaded = true;
   console.log('[AskChip] bootstrap loaded');
 }
