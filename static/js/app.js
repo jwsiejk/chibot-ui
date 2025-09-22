@@ -48,7 +48,11 @@ function _isAssistantTextFrame(d){
 
 function _renderUserTranscript(d){
   try{
-    const transcriptRaw = d?.alternatives?.[0]?.transcript || '';
+    const transcriptRaw = (
+      d?.channel?.alternatives?.[0]?.transcript ??
+      d?.alternatives?.[0]?.transcript ??
+      ''
+    );
     const transcript = _cleanText(transcriptRaw);
     if (!transcript) return;
 
@@ -71,7 +75,14 @@ function _renderUserTranscript(d){
       
     bubble.textContent = transcript;
 
-    if (d?.is_final || d?.final){
+    const isFinal = (
+      d?.channel?.is_final ??
+      d?.is_final ??
+      d?.final ??
+      false
+    );
+
+    if (isFinal){
       try { delete bubble.dataset.asr; } catch {}
     }
 
