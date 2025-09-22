@@ -1,10 +1,21 @@
-// static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
-// Goals satisfied:
-//  • Echo-aware VAD (threshold boost while TTS is playing)
-//  • One WebM/Opus blob per user turn
-//  • Soft barge-in: pause Chip TTS on committed speech start
-//  • Turn timeout (safety), robust errors, clean session end
-//  • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
+/*
+Citations for context (non-functional):
+:contentReference[oaicite:0]{index=0}
+:contentReference[oaicite:1]{index=1}
+*/
+
+/* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
+   Goals satisfied:
+    • Echo-aware VAD (threshold boost while TTS is playing)
+    • One Opus blob per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
+    • Soft barge-in: pause Chip TTS on committed speech start
+    • Turn timeout (safety), robust errors, clean session end
+    • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
+
+   Notes:
+    • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
+    • CloseStream is emitted AFTER the blob is successfully queued to the socket.
+*/
 
 import { VAD } from './voice/vad.js';
 import { sendAudioChunk, sendCloseStream } from './ws.js';
@@ -20,8 +31,15 @@ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
 
 // ---- Internal state ---------------------------------------------------------
 
-const REC_MIME = 'audio/webm; codecs=opus';
-const DEFAULT_MAX_TURN_MS = 90000; // 90s guardrail
+// Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+const REC_MIME = (typeof MediaRecorder !== 'undefined'
+  && typeof MediaRecorder.isTypeSupported === 'function'
+  && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
+  ? 'audio/ogg; codecs=opus'
+  : 'audio/webm; codecs=opus';
+
+const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+const MIN_VALID_BLOB_BYTES = 256;   // drop clearly-empty/prelude-only blobs
 
 const state = {
   stream: null,
@@ -32,7 +50,7 @@ const state = {
   rec: null,
   recChunks: [],
   turnTimer: null,
-  turnOpen: false,   // NEW: track whether a turn is currently open server-side
+  turnOpen: false,   // track whether a turn is currently open server-side
 };
 
 // ---- Helpers ----------------------------------------------------------------
@@ -127,6 +145,7 @@ async function _arm(stream = null, opts = {}) {
   const vad = new VAD(
     state.analyser,
     {
+      // Tunables (admin-configurable via opts or window.__askchip_config)
       startRms: opts.startRms ?? 0.015,
       stopRms: opts.stopRms ?? 0.010,
       minSpeechMs: opts.minSpeechMs ?? 220,
@@ -156,6 +175,7 @@ async function _arm(stream = null, opts = {}) {
 
 function _startRecorder() {
   if (!state.stream) return;
+  if (state.rec && state.rec.state === 'recording') return; // guard duplicate starts
 
   state.recChunks = [];
   try {
@@ -172,7 +192,8 @@ function _startRecorder() {
     try {
       const blob = new Blob(state.recChunks, { type: REC_MIME });
       state.recChunks = [];
-      if (blob.size > 0) {
+      // Drop obviously-empty/prelude-only blobs (rec preambles can be tiny)
+      if (blob.size >= MIN_VALID_BLOB_BYTES) {
         // One blob per user turn → WS → server STT
         await sendAudioChunk(blob);
       }
@@ -189,7 +210,8 @@ function _startRecorder() {
   };
 
   try {
-    state.rec.start(250);   // ensures non-empty dataavailable frames
+    // Small timeslice ensures non-empty dataavailable frames while still producing a single turn blob.
+    state.rec.start(250);
     state.turnOpen = true; // mark an open ASR turn on the server
   } catch (e) {
     console.warn('[voice] recorder start failed', e);
