@@ -63,9 +63,12 @@ function _renderUserTranscript(d){
       bubble = document.createElement('div');
       bubble.dataset.role = 'user';
       bubble.dataset.asr = '1';
+      bubble.className = 'msg user';
       msgs.appendChild(bubble);
-    }
-
+    } else {
+      bubble.className = 'msg user';
+    )  
+      
     bubble.textContent = transcript;
 
     if (d?.is_final || d?.final){
@@ -88,11 +91,13 @@ function _dedupeAssistant(d){
     const text = _cleanText(raw);
 
     if (last && last.dataset && last.dataset.role === 'assistant'){
+      last.className = 'msg assistant';
       last.textContent = text;
       return false; // swallowed
     }
     const li = document.createElement('div');
     li.dataset.role = 'assistant';
+    li.className = 'msg assistant';
     li.textContent = text;
     msgs.appendChild(li);
     try { msgs.scrollTop = msgs.scrollHeight; } catch {}
@@ -140,6 +145,7 @@ export async function onSend(){
       if (msgs){
         const li = document.createElement('div');
         li.dataset.role = 'user';
+        li.className = 'msg user';
         li.textContent = val;
         msgs.appendChild(li);
         try { msgs.scrollTop = msgs.scrollHeight; } catch {}
