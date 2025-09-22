@@ -77,16 +77,20 @@ async def _pump_bus_to_client(sid: str, send):
     from queue import Empty
     from app.ws.bus import bus
     q = bus.subscribe(sid)
-    while True:
-        try:
-            fr = q.get(timeout=0.05)
-        except Empty:
-            await asyncio.sleep(0.01)
-            continue
-        try:
-            await send({"type": "websocket.send", "text": _json.dumps(fr, separators=(",", ":"), ensure_ascii=False)})
-        except Exception:
-            await asyncio.sleep(0.01)
+    try:
+        while True:
+            try:
+                fr = q.get(timeout=0.05)
+            except Empty:
+                await asyncio.sleep(0.01)
+                continue
+            try:
+                await send({"type": "websocket.send", "text": _json.dumps(fr, separators=(",", ":"), ensure_ascii=False)})
+            except Exception:
+                # If client send fails, yield so cancellation can propagate
+                await asyncio.sleep(0.01)
+    except asyncio.CancelledError:
+        pass
 
 
 async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen, sid):
@@ -268,12 +272,30 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     final_seen = [False]
 
     async def _ensure_dg_connected():
+        """Connect to ASR provider once per session; never tear down the WS on provider failures."""
         nonlocal dg, rx_task
         if dg is None and _has_deepgram_key():
-            dg = DeepgramClient(cfg)
-            await dg.connect()
-            turn_id_ref[0] = buf.turn_seq + 1
-            rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen, sid))
+            try:
+                dg = DeepgramClient(cfg)
+                await dg.connect()
+                turn_id_ref[0] = buf.turn_seq + 1
+                rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen, sid))
+                _jlog("asr_connect_ok", sid=sid)
+            except Exception as e:
+                # Keep the client WS alive; surface an error frame and continue in "no-ASR" mode.
+                dg = None
+                _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
+                try:
+                    await send({
+                        "type": "websocket.send",
+                        "text": _dumps(make_error("asr_connect_fail", type(e).__name__)),
+                    })
+                except Exception:
+                    pass
+                try:
+                    _admin_emit and _admin_emit("asr:error", session_id=sid, error=f"connect:{type(e).__name__}")
+                except Exception:
+                    pass
 
     try:
         while True:
@@ -287,10 +309,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 # Binary/audio lane
                 if ev.get("bytes") is not None:
                     chunk = ev.get("bytes") or b""
+                    if chunk:
+                        _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
                     buf.append(chunk)
                     if _has_deepgram_key():
                         await _ensure_dg_connected()
                         if dg is not None:
+                            # Forward raw bytes to provider
                             await dg.send(chunk)
                     continue
 
@@ -404,10 +429,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             asyncio.create_task(_bg_user())
 
                         elif t == "CloseStream":
+                            _jlog("ws_close_stream", sid=sid)
                             turn_id, _pcm = buf.close_turn()
                             turn_id_ref[0] = turn_id
                             if _has_deepgram_key() and dg is not None:
-                                await dg.close(wait_for_final=True)
+                                # Ask provider to finish; if no final came, synthesize empty final.
+                                with contextlib.suppress(Exception):
+                                    await dg.close(wait_for_final=True)
                                 if not final_seen[0]:
                                     await send({
                                         "type": "websocket.send",
@@ -415,19 +443,23 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     })
                                     await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))})
                             else:
+                                # No provider configured: still emit empty final + end to advance the dialog.
                                 await send({
                                     "type": "websocket.send",
                                     "text": _dumps(make_results(turn_id, transcript="", is_final=True)),
                                 })
                                 await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))})
                         else:
+                            # Unknown type already filtered by schema; no-op to future-proof.
                             pass
                     except ValueError as e:
                         await send({"type": "websocket.send", "text": _dumps(make_error("bad_message", str(e)))})
             else:
+                # Other ASGI events are ignored
                 pass
 
     finally:
+        # Tear down in a safe order; never raise in cleanup
         try:
             if rx_task:
                 rx_task.cancel()
