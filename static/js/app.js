@@ -67,7 +67,7 @@ function _renderUserTranscript(d){
       msgs.appendChild(bubble);
     } else {
       bubble.className = 'msg user';
-    )  
+    }
       
     bubble.textContent = transcript;
 
