@@ -1,0 +1,57 @@
+diff --git a/static/js/ui_menu.js b/static/js/ui_menu.js
+index 5a06f17dfb8a9bd4fab54f297e13b352728d9020..a2d57f631fd73742b04cd7ed5dcc29b8bbe39e56 100644
+--- a/static/js/ui_menu.js
++++ b/static/js/ui_menu.js
+@@ -24,51 +24,51 @@ if (!window.__askchip_menu_wired) {
+     // ---- State helpers ----
+     const openMenu = () => {
+       menu.classList.remove('hidden');
+       btn.setAttribute('aria-expanded', 'true');
+       // focus first visible item for keyboard users
+       const itms = $$('#menuDropdown [role="menuitem"]')
+         .filter(n => n.offsetParent !== null);
+       if (itms.length) itms[0].focus();
+     };
+     const closeMenu = () => {
+       if (menu.classList.contains('hidden')) return;
+       menu.classList.add('hidden');
+       btn.setAttribute('aria-expanded', 'false');
+       // return focus to the button for a11y
+       btn.focus({ preventScroll: true });
+     };
+     const toggleMenu = () => {
+       if (menu.classList.contains('hidden')) openMenu(); else closeMenu();
+     };
+ 
+     // ---- Click binding (idempotent) ----
+     btn.addEventListener('click', (e) => {
+       e.preventDefault();
+       e.stopPropagation();
+       toggleMenu();
+-    }, { passive: true });
++    }, { passive: false });
+ 
+     // Close on outside click
+     document.addEventListener('click', (e) => {
+       if (menu.classList.contains('hidden')) return;
+       const inside = e.target === btn || menu.contains(e.target);
+       if (!inside) closeMenu();
+     });
+ 
+     // Keyboard navigation
+     btn.addEventListener('keydown', (e) => {
+       const k = e.key;
+       if (k === ' ' || k === 'Enter' || k === 'ArrowDown') {
+         e.preventDefault();
+         openMenu();
+       } else if (k === 'Escape') {
+         e.preventDefault();
+         closeMenu();
+       }
+     });
+     menu.addEventListener('keydown', (e) => {
+       const items = $$('#menuDropdown [role="menuitem"]')
+         .filter(n => n.offsetParent !== null);
+       if (!items.length) return;
+       const idx = items.indexOf(document.activeElement);
+       if (e.key === 'Escape') {

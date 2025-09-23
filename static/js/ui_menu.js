@@ -46,7 +46,7 @@ if (!window.__askchip_menu_wired) {
       e.preventDefault();
       e.stopPropagation();
       toggleMenu();
-    }, { passive: true });
+    }, { passive: false });
 
     // Close on outside click
     document.addEventListener('click', (e) => {
