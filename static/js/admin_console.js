@@ -96,6 +96,10 @@ function renderUI(container) {
              <div class="speak-label">Say this phrase</div>
              <div class="speak-text">&ldquo;${SAMPLE_PHRASE}&rdquo;</div>
              <div class="speak-state" id="speak-state">${SPEAK_LABELS.idle}</div>
+             <div class="level">
+               <div class="level-bar" id="mic-level-bar"></div>
+             </div>
+             <div class="level-readout"><span id="mic-level-db">-∞</span> dBFS</div>
            </div>`
         : ''}
     </li>`).join('');
@@ -157,6 +161,7 @@ function bootstrap() {
     asrReject: null,
     responseResolve: null,
     responseReject: null,
+    stopMeter: null,
   };
 
   resetView(state);
@@ -165,6 +170,7 @@ function bootstrap() {
     run: () => runDiagnostic(state),
   };
 }
+
 async function runDiagnostic(state) {
   if (!state.startBtn || state.running) return;
   state.running = true;
@@ -185,6 +191,11 @@ async function runDiagnostic(state) {
       micStream = await initMic();
       disarmVAD();
       setStepStatus(state, 'user', 'pending', 'Microphone granted. Waiting for Chip to greet…');
+
+      // Start live mic meter as soon as we have a stream (no effect on VAD).
+      const barEl = document.getElementById('mic-level-bar');
+      const dbEl  = document.getElementById('mic-level-db');
+      state.stopMeter = startMicMeter(micStream, { barEl, dbEl });
     } catch (err) {
       setSpeakState(state, 'error');
       setStepStatus(state, 'user', 'error', `Microphone access failed: ${err?.message || err}`);
@@ -211,6 +222,10 @@ async function runDiagnostic(state) {
     setStepStatus(state, 'greet', 'done', summarizeAssistantFrame(greetFrame));
     logAdminEvent(state, 'step_greet_ok', { frame_type: greetFrame?.type || greetFrame?.label || 'assistant' });
     window.__askchip_session_started = true;
+
+    // Wait for the greet TTS to finish so echo/NS settles, then arm VAD.
+    try { await waitForUtteranceEndOnce(8000); } catch {}
+    await delay(250);
 
     setStepStatus(state, 'user', 'active', 'Arming VAD. Speak when the card below says recording.');
     setSpeakState(state, 'ready');
@@ -395,14 +410,32 @@ function waitForUserTurn(state, timeoutMs) {
     window.addEventListener('askchip-voice', onVoice);
   });
 }
+
+/** Waits for the next UtteranceEnd once, then resolves. */
+function waitForUtteranceEndOnce(timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const onWS = (ev) => {
+      const fr = ev?.detail || {};
+      if (fr.type === 'UtteranceEnd' || fr.label === 'UtteranceEnd') {
+        cleanup(); resolve();
+      }
+    };
+    const timer = setTimeout(() => { cleanup(); reject(new Error('UtteranceEnd timeout')); }, timeoutMs);
+    function cleanup(){ clearTimeout(timer); window.removeEventListener('askchip-ws', onWS); }
+    window.addEventListener('askchip-ws', onWS);
+  });
+}
+
 function handleWSFrame(state, frame) {
   appendLog(state.wsLogEl, `${timestamp()} ${describeFrame(frame)}`);
 
+  // Greet resolution
   if (state.awaitingGreeting && isAssistantFrame(frame)) {
     state.greetResolve?.(frame);
     return;
   }
 
+  // Assistant response tracking
   if (state.awaitingResponse && isAssistantFrame(frame)) {
     if (!state.responseStarted) {
       state.responseStarted = true;
@@ -430,12 +463,28 @@ function handleWSFrame(state, frame) {
     }
   }
 
+  // Surface ASR errors that arrive as WS Error frames
+  if (frame?.type === 'Error' && /asr/i.test(String(frame?.label || ''))) {
+    const msg = frame?.message || frame?.error || 'ASR connection error';
+    updateASRStatus(state, { status: 'error', message: msg, error: true });
+  }
+
+  // Transcript frames (Deepgram-like or normalized)
   if (isTranscriptFrame(frame)) {
+    const final = isTranscriptFinal(frame);
     const transcript = extractTranscript(frame);
+
     if (transcript) {
-      const final = isTranscriptFinal(frame);
       state.latestTranscript = transcript;
       updateASRStatus(state, { transcript, status: final ? 'done' : 'active' });
+    } else if (final) {
+      // Final with no text: treat as silence so we don’t time out.
+      updateASRStatus(state, { status: 'done', message: 'No speech detected (final).' });
+    }
+
+    if (final) {
+      // Resolve the ASR wait even if SSE didn’t fire an asr_final.
+      state.asrResolve?.({ label: 'asr_final', transcript: transcript || '' });
     }
   }
 }
@@ -452,7 +501,7 @@ function handleAdminEvent(state, evt) {
   if (tag.includes('error')) {
     const message = evt.error ? `ASR error: ${evt.error}` : 'ASR error reported.';
     updateASRStatus(state, { status: 'error', message, error: true });
-    state.asrReject?.(evt.error ? new Error(evt.error) : new Error('ASR error'));
+    // Do not hard-fail; a WS final may still arrive.
     return;
   }
 
@@ -522,6 +571,10 @@ function cleanupRun(state) {
   if (state.sse) {
     try { state.sse.close(); } catch {}
     state.sse = null;
+  }
+  if (state.stopMeter) {
+    try { state.stopMeter(); } catch {}
+    state.stopMeter = null;
   }
   state.awaitingGreeting = false;
   state.awaitingResponse = false;
@@ -680,4 +733,45 @@ function logAdminEvent(state, label, extra = {}) {
       credentials: 'include',
     }).catch(() => {});
   } catch {}
+}
+
+/* ---------- Small helpers ---------- */
+
+function delay(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+/** Basic live input meter — no CSS required. */
+function startMicMeter(stream, { barEl, dbEl }) {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    const src = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    src.connect(analyser);
+    const buf = new Float32Array(analyser.fftSize);
+    let raf = 0;
+
+    function tick() {
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0; for (let i = 0; i < buf.length; i++) { const v = buf[i]; sum += v * v; }
+      const rms = Math.sqrt(sum / buf.length);
+      const db = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+      const pct = Math.max(0, Math.min(1, (db + 60) / 60)); // -60..0 dBFS → 0..100%
+      if (barEl) barEl.style.width = (pct * 100).toFixed(0) + '%';
+      if (dbEl)  dbEl.textContent = Number.isFinite(db) ? db.toFixed(1) : '-∞';
+      raf = requestAnimationFrame(tick);
+    }
+    tick();
+
+    return () => {
+      cancelAnimationFrame(raf);
+      try { src.disconnect(); } catch {}
+      try { analyser.disconnect(); } catch {}
+      try { ctx.close(); } catch {}
+    };
+  } catch {
+    return () => {};
+  }
 }
