@@ -30,22 +30,90 @@ h2,h3{margin:18px 0 8px}
 main,#main,#app,#app-root,.app{max-width:1080px; margin:24px auto; padding:0 16px}
 
 /* ---------------- Top bar / header ---------------- */
-.topbar{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:#0c0e13;border-bottom:1px solid var(--border)}
-/* Hide legacy brand text so only the AskChip menu remains */
-.topbar .brand, header .brand, .brand-askchip, .site-title, .app-brand{display:none !important}
-
-/* ---------------- Zoom-like layout helpers (kept) ---------------- */
-.zoom-grid{display:grid;grid-template-columns:3fr 1fr;gap:16px;padding:16px}
-@media (max-width: 1000px){
-  .zoom-grid{grid-template-columns:1fr}
+.topbar{display:flex;justify-content:flex-start;align-items:center;padding:14px 32px;background:#0c0e13;border-bottom:1px solid var(--border);box-shadow:0 8px 24px rgba(5,8,12,.35)}
+.dropdown{position:relative;display:inline-flex}
+.askchip-menu{z-index:30}
+.askchip-trigger{
+  display:flex;align-items:center;gap:10px;
+  font-weight:700;font-size:20px;letter-spacing:.3px;
+  color:var(--accent);
+  background:rgba(255,138,0,.08);
+  border:1px solid rgba(255,138,0,.35);
+  border-radius:999px;
+  padding:8px 16px;
+  cursor:pointer;
+  box-shadow:0 10px 24px rgba(255,138,0,.12);
+  transition:transform .2s ease, box-shadow .2s ease, background .2s ease;
 }
-.video-pane{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:10px}
-.chip-face{flex:1;display:flex;flex-direction:column}
-.status-row{display:flex;gap:6px;margin-bottom:6px;color:var(--muted)}
-.side-pane{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px;min-height:60vh}
+.askchip-trigger:hover{transform:translateY(-1px);box-shadow:0 16px 36px rgba(255,138,0,.22);background:rgba(255,138,0,.16)}
+.askchip-trigger:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.askchip-logo{width:28px;height:28px;border-radius:50%;box-shadow:0 0 18px rgba(255,138,0,.45)}
+.askchip-text{font-weight:700}
+.askchip-caret{font-size:16px;color:var(--text);margin-left:4px}
+.dropdown-content{
+  position:absolute;
+  top:calc(100% + 10px);
+  right:0;
+  min-width:180px;
+  padding:8px 0;
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:14px;
+  box-shadow:0 20px 48px rgba(8,10,14,.55);
+  z-index:60;
+}
+.dropdown-content a{
+  display:block;
+  padding:10px 18px;
+  font-size:14px;
+  color:var(--text);
+}
+.dropdown-content a:hover{background:rgba(122,160,255,.12)}
+
+/* ---------------- Zoom-inspired meeting layout ---------------- */
+main.meeting-layout{
+  max-width:1180px;
+  margin:32px auto 48px;
+  padding:0 24px 32px;
+  display:flex;
+  flex-direction:column;
+  gap:28px;
+}
+.meeting-grid{
+  display:grid;
+  grid-template-columns:minmax(260px, 320px) 1fr minmax(220px, 260px);
+  gap:24px;
+  align-items:stretch;
+}
+.chat-pane,.visualizer-pane,.suggestions-pane{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:18px;
+  padding:20px;
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+  box-shadow:0 18px 40px rgba(3,6,12,.32);
+}
+.chat-pane{order:1}
+.visualizer-pane{order:2;position:relative;overflow:hidden}
+.suggestions-pane{order:3}
+.pane-header h2{margin:0;font-size:18px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
+.status-row{display:flex;justify-content:center;gap:8px;margin-bottom:18px;color:var(--muted);font-size:15px}
+.status-row #statusText{color:var(--text);font-weight:600}
+.chat-window,.chat{
+  flex:1;
+  overflow:auto;
+  background:#0c1017;
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:14px;
+  box-shadow:inset 0 0 0 1px rgba(8,10,14,.3);
+}
+.suggestions-pane h4{margin-top:0;margin-bottom:12px;font-size:16px}
+.suggestions-pane ul{margin:0;padding-left:20px;line-height:1.6}
 
 /* ---------------- Chat area ---------------- */
-.chat{flex:1;overflow:auto;background:#0c1017;border:1px solid var(--border);border-radius:10px;padding:10px}
 .msg{padding:8px 10px;margin:6px;border-radius:10px;background:#11151c}
 .msg.user{background:#1d2330}
 .msg.assistant{background:#151c26}
@@ -53,7 +121,7 @@ main,#main,#app,#app-root,.app{max-width:1080px; margin:24px auto; padding:0 16p
 .dot-ready{background:var(--muted)} .dot-listening{background:#39c07f} .dot-thinking{background:#f0ad4e} .dot-speaking{background:#7aa0ff}
 
 /* Composer stays inline */
-.composer{display:flex;gap:8px;align-items:center}
+.composer{display:flex;gap:10px;align-items:center;margin-top:16px}
 .composer input,
 input[type="text"][placeholder^="Type a message"],
 #chatInput, #composer, .chat-input{
@@ -63,6 +131,17 @@ input[type="text"][placeholder^="Type a message"],
   background:#0c1017; color:var(--text);
   border:1px solid var(--border); border-radius:8px; padding:8px; margin:0 8px 0 0;
 }
+.meeting-layout .composer input,
+.meeting-layout #composer{
+  flex:1;
+  width:auto !important;
+  max-width:none;
+  margin:0;
+  border-radius:12px;
+  padding:12px 14px;
+}
+.meeting-layout .composer button{border-radius:12px;padding:12px 20px;font-weight:600}
+.meeting-layout #composerSend{background:var(--accent);border-color:var(--accent);color:#0b0d11;font-weight:700}
 
 /* Buttons */
 button,.btn,input[type="button"],input[type="submit"]{
@@ -74,6 +153,10 @@ button.primary{background:#253149;border-color:#334260}
 button:disabled{opacity:.6;cursor:not-allowed}
 button:hover,.btn:hover,input[type="button"]:hover,input[type="submit"]:hover{border-color:var(--link)}
 button:focus-visible,.btn:focus-visible,input[type="button"]:focus-visible,input[type="submit"]:focus-visible{outline:2px solid var(--link); outline-offset:2px}
+.toolbar-buttons button{min-width:110px;font-size:15px}
+.toolbar-buttons #startButton.primary{background:var(--accent);border-color:var(--accent);color:#0b0d11;font-weight:700}
+.toolbar-buttons #endButton{background:#2f1c1c;border-color:#5a2b2b;color:#ffb5b5;font-weight:600}
+.toolbar-buttons #endButton:disabled{opacity:.5;color:var(--muted)}
 
 /* ---------------- Main screen forms (Sign in / Profile) ----------------
    Force tidy stacking by default; upgrade to 2 cols on desktop if forms exist. */
@@ -115,6 +198,70 @@ form .row, .form .row{display:flex; flex-wrap:wrap; gap:12px 16px}
 
 /* Suggestions list spacing if present */
 #suggestions{margin:0; padding-left:18px}
+
+/* ---------------- Visualizer ---------------- */
+.visualizer-shell{flex:1;display:flex;align-items:center;justify-content:center;min-height:320px}
+.visualizer-backdrop{
+  width:100%;
+  max-width:460px;
+  aspect-ratio:1;
+  border-radius:40px;
+  background:radial-gradient(circle at 20% 20%, rgba(122,160,255,.35), rgba(15,20,32,0.9) 68%),
+             linear-gradient(145deg, rgba(36,52,82,.9), rgba(12,18,32,.9));
+  padding:70px;
+  display:flex;
+  align-items:flex-end;
+  justify-content:center;
+  box-shadow:inset 0 0 40px rgba(122,160,255,.22), 0 40px 80px rgba(2,6,16,.55);
+}
+.visualizer-bars{width:100%;height:100%;display:flex;align-items:flex-end;justify-content:space-between;gap:14px}
+.visualizer-bars span{
+  flex:1;
+  max-width:28px;
+  height:78%;
+  border-radius:18px 18px 10px 10px;
+  background:linear-gradient(180deg, rgba(122,160,255,.95) 0%, rgba(44,120,255,.75) 60%, rgba(10,30,62,.95) 100%);
+  box-shadow:0 8px 20px rgba(5,12,28,.55);
+  animation:visualizerPulse 1.25s ease-in-out infinite;
+  animation-delay:calc(var(--i) * -0.12s);
+  animation-duration:calc(1.1s + (var(--i) * 0.05s));
+  transform-origin:bottom center;
+  opacity:.9;
+}
+@keyframes visualizerPulse{
+  0%{transform:scaleY(.25)}
+  50%{transform:scaleY(1)}
+  100%{transform:scaleY(.25)}
+}
+
+/* ---------------- Meeting toolbar ---------------- */
+.meeting-toolbar{display:flex;justify-content:center}
+.toolbar-buttons{
+  display:flex;
+  align-items:center;
+  gap:18px;
+  background:rgba(9,12,18,.85);
+  border:1px solid var(--border);
+  border-radius:999px;
+  padding:14px 32px;
+  box-shadow:0 28px 60px rgba(2,6,16,.5);
+}
+.toolbar-buttons .dot{width:14px;height:14px;margin:0}
+
+/* ---------------- Responsive tweaks ---------------- */
+@media (max-width:1200px){
+  .meeting-grid{grid-template-columns:minmax(260px, 300px) 1fr}
+  .suggestions-pane{grid-column:1 / -1;min-height:auto}
+}
+@media (max-width:900px){
+  .topbar{padding:12px 20px}
+  main.meeting-layout{padding:0 16px 24px;margin:24px auto 40px}
+  .meeting-grid{grid-template-columns:1fr}
+  .chat-pane,.visualizer-pane,.suggestions-pane{order:unset}
+  .visualizer-shell{min-height:260px}
+  .visualizer-backdrop{padding:48px}
+  .toolbar-buttons{width:100%;justify-content:center}
+}
 
 /* ---------------- Generic helpers you already used ---------------- */
 .wrap{max-width:1080px;margin:36px auto;padding:0 16px}

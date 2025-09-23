@@ -9,50 +9,75 @@
 </head>
 <body class="zoom">
   <header class="topbar">
-    <div class="brand">AskChip</div>
-    <div class="menu-wrap">
-      <button id="startButton" class="primary">Start</button>
-      <button id="endButton" disabled>End</button>
-      <span id="stateDot" class="dot dot-ready" title="Ready"></span>
-
-      <!-- AskChip menu (IDs + structure expected by ui_menu.js) -->
-      <div class="dropdown">
-        <button
-          id="menuAskChip"
-          class="ghost"
-          aria-haspopup="true"
-          aria-expanded="false"
-          aria-controls="menuDropdown"
-        >
-          AskChip ▾
-        </button>
-        <div id="menuDropdown" class="dropdown-content hidden" role="menu" aria-labelledby="menuAskChip">
-          <a id="menuAdmin"   role="menuitem" href="/admin">Admin</a>
-          <a id="menuProfile" role="menuitem" href="#">Profile</a>
-          <a id="menuLogout"  role="menuitem" href="#">Logout</a>
-        </div>
+    <div class="dropdown askchip-menu">
+      <button
+        id="menuAskChip"
+        class="askchip-trigger"
+        aria-haspopup="true"
+        aria-expanded="false"
+        aria-controls="menuDropdown"
+      >
+        <img src="/static/chip/img/chip.png" alt="" class="askchip-logo" />
+        <span class="askchip-text">AskChip</span>
+        <span class="askchip-caret" aria-hidden="true">▾</span>
+      </button>
+      <div id="menuDropdown" class="dropdown-content hidden" role="menu" aria-labelledby="menuAskChip">
+        <a id="menuAdmin"   role="menuitem" href="/admin">Admin</a>
+        <a id="menuProfile" role="menuitem" href="#">Profile</a>
+        <a id="menuLogout"  role="menuitem" href="#">Logout</a>
       </div>
     </div>
   </header>
 
-  <main class="zoom-grid">
-    <section class="video-pane">
-      <div class="chip-face">
+  <main class="meeting-layout">
+    <div class="meeting-grid">
+      <aside class="chat-pane">
+        <div class="pane-header">
+          <h2>Chat</h2>
+        </div>
+        <div id="chatMessages" class="chat-window"></div>
+        <div class="composer">
+          <input id="composer" placeholder="Type a message…" />
+          <button id="composerSend">Send</button>
+        </div>
+      </aside>
+
+      <section class="visualizer-pane">
         <div class="status-row">
           <span class="status-label">Status:</span>
           <span id="statusText">Ready</span>
         </div>
-        <div id="chatMessages" class="chat"></div>
+        <div class="visualizer-shell" role="img" aria-label="Audio visualizer">
+          <div class="visualizer-backdrop">
+            <div class="visualizer-bars">
+              <span style="--i:1"></span>
+              <span style="--i:2"></span>
+              <span style="--i:3"></span>
+              <span style="--i:4"></span>
+              <span style="--i:5"></span>
+              <span style="--i:6"></span>
+              <span style="--i:7"></span>
+              <span style="--i:8"></span>
+              <span style="--i:9"></span>
+              <span style="--i:10"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="suggestions-pane">
+        <h4>Suggestions</h4>
+        <ul id="suggestions"></ul>
+      </aside>
+    </div>
+
+    <div class="meeting-toolbar">
+      <div class="toolbar-buttons">
+        <button id="startButton" class="primary">Start</button>
+        <button id="endButton" disabled>End</button>
+        <span id="stateDot" class="dot dot-ready" title="Ready"></span>
       </div>
-      <div class="composer">
-        <input id="composer" placeholder="Type a message…" />
-        <button id="composerSend">Send</button>
-      </div>
-    </section>
-    <aside class="side-pane">
-      <h4>Suggestions</h4>
-      <ul id="suggestions"></ul>
-    </aside>
+    </div>
   </main>
 
   <!-- Login / Profile Modals -->
