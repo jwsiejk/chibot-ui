@@ -22,7 +22,7 @@ import { sendAudioChunk, sendCloseStream } from './ws.js';
 import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
 
 // Public API (matches prior usage)
-export async function initMic() { return await _ensureMic(); }
+export async function initMic(stream = null) { return await _ensureMic(stream); }
 export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
 export function disarmVAD() { _disarm(); }
 export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
@@ -61,19 +61,28 @@ function _emitVoiceState(state, detail = {}) {
   } catch {}
 }
 
-async function _ensureMic() {
+async function _ensureMic(externalStream = null) {
   if (state.stream && state.stream.active) return state.stream;
 
-  // Request a clean mono stream with echo/noise controls
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      sampleRate: 48000,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: false
-    }
-  });
+  if (state.stream && !state.stream.active) {
+    _teardownAudioGraph();
+    state.stream = null;
+  }
+
+  let stream = externalStream;
+
+  if (!stream || !stream.active) {
+    // Request a clean mono stream with echo/noise controls
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        sampleRate: 48000,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: false
+      }
+    });
+  }
 
   // Build WebAudio chain
   const AC = window.AudioContext || window.webkitAudioContext;

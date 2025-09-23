@@ -5,6 +5,7 @@ import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
 import { unlockAudio, stopPlayback } from '/static/js/audio.js';
 import { getSID } from '/static/js/util/sid.js';
 import * as App from '/static/js/app.js';
+import * as Visualizer from '/static/js/visualizer.js';
 
 // /static/js/bootstrap.js — single owner of Start/End/Send + audio unlock + WS→UI wiring
 
@@ -197,11 +198,19 @@ async function startOnce(){
     wireWSEventsOnce();
 
     // 4) Mic permission + arm echo-aware VAD (voice-first path)
+    let visualizerStream = null;
     try {
-      const stream = await initMic();
+      visualizerStream = await Visualizer.start();
+    } catch (e) {
+      console.warn('[bootstrap] visualizer init failed', e);
+    }
+
+    try {
+      const stream = await initMic(visualizerStream ?? undefined);
       await armVAD(stream);         // begins voice turns (one blob per user turn)
     } catch (e) {
       console.warn('[bootstrap] mic/VAD init failed', e);
+      try { Visualizer.stop({ reset: true }); } catch {}
     }
 
     // 5) WS-only greet using the SAME session id as WS
@@ -240,6 +249,7 @@ async function startOnce(){
     if (startBtn) startBtn.disabled = false;
     _disableButtons();
     setDot('ready');
+    try { Visualizer.stop({ reset: true }); } catch {}
   } finally {
     startInFlight = false;
   }
@@ -263,7 +273,11 @@ function wireUI(){
   const composer = document.getElementById('composer');
 
   if (startBtn) startBtn.addEventListener('click', startOnce);
-  if (endBtn)   endBtn.addEventListener('click', () => { try { disarmVAD(); } catch {} App.onEnd(); });
+  if (endBtn)   endBtn.addEventListener('click', () => {
+    try { disarmVAD(); } catch {}
+    try { Visualizer.stop({ reset: true }); } catch {}
+    App.onEnd();
+  });
 
   // Stop TTS as soon as user interacts to send or type (soft barge-in polish)
   const stopAudio = () => { try { stopPlayback(); } catch {} };
@@ -288,6 +302,7 @@ function wireUI(){
   // Reset bootstrap state when session ends so Start can be used again
   window.addEventListener('askchip-session-ended', () => {
     try { disarmVAD(); } catch {}
+    try { Visualizer.stop({ reset: true }); } catch {}
     started = false;
     const sb = $('#startButton');
     if (sb) sb.disabled = false;
