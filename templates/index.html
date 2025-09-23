@@ -9,22 +9,24 @@
 </head>
 <body class="zoom">
   <header class="topbar">
-    <div class="dropdown askchip-menu">
-      <button
-        id="menuAskChip"
-        class="askchip-trigger"
-        aria-haspopup="true"
-        aria-expanded="false"
-        aria-controls="menuDropdown"
-      >
-        <img src="/static/chip/img/chip.png" alt="" class="askchip-logo" />
-        <span class="askchip-text">AskChip</span>
-        <span class="askchip-caret" aria-hidden="true">▾</span>
-      </button>
-      <div id="menuDropdown" class="dropdown-content hidden" role="menu" aria-labelledby="menuAskChip">
-        <a id="menuAdmin"   role="menuitem" href="/admin">Admin</a>
-        <a id="menuProfile" role="menuitem" href="#">Profile</a>
-        <a id="menuLogout"  role="menuitem" href="#">Logout</a>
+    <div class="topbar-inner">
+      <div class="dropdown askchip-menu">
+        <button
+          id="menuAskChip"
+          class="askchip-trigger"
+          aria-haspopup="true"
+          aria-expanded="false"
+          aria-controls="menuDropdown"
+        >
+          <img src="/static/chip/img/chip.png" alt="" class="askchip-logo" />
+          <span class="askchip-text">AskChip</span>
+          <span class="askchip-caret" aria-hidden="true">▾</span>
+        </button>
+        <div id="menuDropdown" class="dropdown-content hidden" role="menu" aria-labelledby="menuAskChip">
+          <a id="menuAdmin"   role="menuitem" href="/admin">Admin</a>
+          <a id="menuProfile" role="menuitem" href="#">Profile</a>
+          <a id="menuLogout"  role="menuitem" href="#">Logout</a>
+        </div>
       </div>
     </div>
   </header>
