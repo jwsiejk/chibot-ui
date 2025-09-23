@@ -88,6 +88,27 @@ def logs_sse():
 
     return Response(stream(), mimetype="text/event-stream")
 
+
+@bp.post("/log")
+def logs_append():
+    """Append a custom admin log event from the UI diagnostic tools."""
+    _require_admin()
+    payload = request.get_json(silent=True) or {}
+
+    kind = (payload.get("kind") or "admin_diag").strip() if isinstance(payload.get("kind"), str) else "admin_diag"
+    label = payload.get("label") if isinstance(payload.get("label"), str) else None
+    route = payload.get("route") if isinstance(payload.get("route"), str) else None
+
+    extra = {k: v for k, v in payload.items() if k not in {"kind", "label", "route"}}
+
+    ok = False
+    try:
+        ok = _emit(kind, label=label, route=route, **extra)
+    except Exception:
+        ok = False
+
+    return jsonify({"ok": bool(ok), "kind": kind, "label": label}), 200 if ok else 202
+
 # ----------------- Runtime snapshot -----------------
 
 @bp.get("/runtime")
