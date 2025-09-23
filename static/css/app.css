@@ -114,7 +114,7 @@ form .row, .form .row{display:flex; flex-wrap:wrap; gap:12px 16px}
 }
 
 /* Suggestions list spacing if present */
-#sugg{margin:0; padding-left:18px}
+#suggestions{margin:0; padding-left:18px}
 
 /* ---------------- Generic helpers you already used ---------------- */
 .wrap{max-width:1080px;margin:36px auto;padding:0 16px}
