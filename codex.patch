@@ -1,48 +1,1014 @@
-diff --git a/static/js/suggestions.js b/static/js/suggestions.js
-index 75b4660babb2b8382b2f38211407c8937eeca1ee..23244b2433954b4e0d3aa4d91e4650e38d095b57 100644
---- a/static/js/suggestions.js
-+++ b/static/js/suggestions.js
-@@ -1,21 +1,42 @@
- const MAX_CHIPS = 4;
- const MAX_WORDS = 7;
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index 2190dbb75d7c1e54205d9efb349d3695a3779f53..fb46cf1414cdb8286795485db6d35c0475fe0815 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -1,60 +1,74 @@
+ from __future__ import annotations
  
-+function normalizeSuggestion(item){
-+  if (typeof item === "string") {
-+    return item;
-+  }
-+
-+  if (item && typeof item === "object") {
-+    if (typeof item.label === "string") {
-+      return item.label;
-+    }
-+
-+    for (const value of Object.values(item)) {
-+      if (typeof value === "string") {
-+        return value;
-+      }
-+    }
-+  }
-+
-+  return String(item ?? "");
-+}
-+
- export function renderSuggestions(suggestions = [], onClick){
-   const wrap = document.getElementById("suggestions");
-   if (!wrap) return;
-   wrap.innerHTML = "";
-   const trimmed = suggestions
-     .slice(0, MAX_CHIPS)
--    .map(s => s.toString().trim())
-+    .map(normalizeSuggestion)
-+    .map(s => s.trim())
-     .map(s => s.split(/\s+/).slice(0, MAX_WORDS).join(" "));
+ import asyncio
+ import json
++import logging
+ import os
+ import time
+ from typing import AsyncGenerator, Optional, Any
  
-   for (const s of trimmed){
-     const chip = document.createElement("button");
-     chip.className = "chip";
-     chip.type = "button";
-     chip.textContent = s;
-     chip.addEventListener("click", () => onClick?.(s));
-     wrap.appendChild(chip);
+ import websockets  # provided by uvicorn[standard]
+ 
+ 
+ 
+ # Test-mode and last-observed info for CI assertions
+ DG_TEST_MODE = os.getenv("DG_TEST_MODE", "").strip() == "1"
+ DG_LAST_URL: str | None = None
+ DG_LAST_CONFIG: dict | None = None
+ 
+ 
++logger = logging.getLogger(__name__)
++
++
+ class _FakeWSForTests:
+     def __init__(self):
+         self.open = True
+         self.sent = []
+     async def send(self, data):
+         self.sent.append(data)
+     async def close(self):
+         self.open = False
+     def __aiter__(self):
+         # No incoming provider frames in test mode
+         async def _gen():
+             if False:
+                 yield None
+         return _gen()
+ 
+ # ------------------------- URL & Config Helpers -------------------------------
+ 
++
++def _clip_text(txt: str, limit: int = 120) -> str:
++    try:
++        txt = txt or ""
++        if len(txt) <= limit:
++            return txt
++        return txt[:limit] + "…"
++    except Exception:
++        return ""
++
+ def _dg_url(overrides: Optional[dict] = None) -> str:
+     """Return the Deepgram listen URL with safe defaults."""
+     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
+     # Append defaults if not present (helps when proxies ignore Configure frame)
+     if "encoding=" not in base:
+         sep = "&" if "?" in base else "?"
+         base = (
+             base
+             + sep
+             + "encoding=opus&sample_rate=48000&channels=1&interim_results=true&vad_events=true&smart_format=true&punctuate=true&utterance_end_ms=1200"
+         )
+     # Apply overrides into query string if present
+     try:
+         if overrides:
+             import urllib.parse as _p
+             parts = _p.urlsplit(base)
+             q = _p.parse_qsl(parts.query, keep_blank_values=True)
+             qd = {k: v for k, v in q}
+             def _fmt(v):
+                 if isinstance(v, bool): return "true" if v else "false"
+                 return str(int(v)) if isinstance(v, (int,)) else str(v)
+             for k in ("encoding","sample_rate","channels","interim_results","smart_format","punctuate","vad_events","utterance_end_ms","model"):
+                 if k in overrides and overrides[k] is not None:
+                     qd[k] = _fmt(overrides[k])
+             query = _p.urlencode(qd)
+@@ -104,238 +118,297 @@ class DeepgramClient:
+       • Drops the tiny first chunk (<64B) before sending (common capture preamble).
+       • Sends {"type": "CloseStream"} and lingers briefly before closing.
+       • Waits for a final transcript (bounded) so Deepgram doesn’t record 00:00:00.
+     """
+ 
+     def __init__(self, _cfg: Optional[dict] = None) -> None:
+         self._cfg = _cfg or {}
+         self._ws = None  # type: ignore
+         self._rx_task: Optional[asyncio.Task] = None
+         self._ev_queue: asyncio.Queue = asyncio.Queue()
+         self._closed = False
+ 
+         # New: graceful shutdown coordination
+         self._final_event: asyncio.Event = asyncio.Event()
+         self._any_result: bool = False
+ 
+         # New: first-chunk guard & timing
+         self._first_real_sent: bool = False
+         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
+         self._last_chunk_ts: float = 0.0
+ 
+         # Tunables (env overrides allowed)
+         self._linger_ms: int = int(os.getenv("DG_LINGER_MS", "600"))          # after last chunk
+         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "8"))  # wait for final
+ 
++    # -- helpers ---------------------------------------------------------------
++
++    def _sid_for_log(self) -> str:
++        try:
++            for key in ("session_id", "sid"):
++                if key in self._cfg and self._cfg[key]:
++                    return str(self._cfg[key])
++        except Exception:
++            pass
++        return "?"
++
+     # -- lifecycle -------------------------------------------------------------
+ 
+     async def connect(self) -> None:
+         global DG_LAST_URL, DG_LAST_CONFIG
+         if self._ws:
+             return
+         url = _dg_url(self._cfg)
++        sid = self._sid_for_log()
++        logger.info("Deepgram connect start sid=%s url=%s", sid, url)
+         if DG_TEST_MODE:
+             # No network — use a fake socket and record URL/config for tests
+             self._ws = _FakeWSForTests()
+             DG_LAST_URL = url
+             DG_LAST_CONFIG = _initial_config(self._cfg)
+             await self._ev_queue.put({"type":"asr_open"})
++            logger.info("Deepgram test-mode connect sid=%s", sid)
+             return
+         # Real network path
+         headers = [("Authorization", _auth_header())]
+         try:
+             self._ws = await websockets.connect(
+                 url,
+                 additional_headers=headers,
+                 max_size=None,
+             )
+         except TypeError:
+             self._ws = await websockets.connect(
+                 url,
+                 extra_headers=headers,
+                 max_size=None,
+             )
+         # Send initial configuration to enable partials / VAD / formatting.
+         DG_LAST_URL = url
+         DG_LAST_CONFIG = _initial_config(self._cfg)
+         await self._ws.send(json.dumps(DG_LAST_CONFIG))
+         # Start receiver
+         self._rx_task = asyncio.create_task(self._rx_loop())
+         await self._ev_queue.put({"type": "asr_open"})
++        logger.info("Deepgram connect ok sid=%s", sid)
+ 
+ 
+     async def close(
+         self,
+         wait_for_final: bool = True,
+         timeout: Optional[float] = None,
+         linger_ms: Optional[int] = None,
+     ) -> None:
+         """Gracefully close the stream.
+ 
+         Steps:
+           1) Optional linger after last chunk (default 600 ms).
+           2) Send {"type":"CloseStream"}.
+           3) Optionally wait for final (default 8 s).
+           4) Close the websocket and cancel the rx loop.
+         """
+         if self._closed:
+             return
+         self._closed = True
++        sid = self._sid_for_log()
++        logger.info(
++            "Deepgram close start sid=%s wait_for_final=%s linger_ms=%s",
++            sid,
++            wait_for_final,
++            linger_ms,
++        )
+ 
+         # 1) Linger a bit so VAD/segmentation can finalize
+         if linger_ms is None:
+             linger_ms = self._linger_ms
+         if self._last_chunk_ts > 0 and linger_ms > 0:
+             elapsed_ms = int((time.time() - self._last_chunk_ts) * 1000)
+             delay_ms = max(0, linger_ms - elapsed_ms)
+             if delay_ms > 0:
+                 try:
+                     await asyncio.sleep(delay_ms / 1000.0)
+                 except asyncio.CancelledError:
+                     pass
+ 
+         # 2) Explicit end-of-stream sentinel
+         try:
+             if self._ws and getattr(self._ws, "open", False):
+                 await self._ws.send(json.dumps({"type": "CloseStream"}))
+         except Exception:
+             # Non-fatal; proceed with close
+             pass
+ 
+         # 3) Wait for a final (bounded)
+         if wait_for_final:
+             if timeout is None:
+                 timeout = self._final_wait_s
+             try:
+                 await asyncio.wait_for(self._final_event.wait(), timeout=timeout)
+             except asyncio.TimeoutError:
+                 # Surface for higher-level diagnostics if someone is listening
+                 try:
+                     await self._ev_queue.put(
+                         {"type": "asr_error", "error": f"final_timeout:{timeout}s"}
+                     )
+                 except Exception:
+                     pass
+ 
+         # 4) Close websocket and stop rx loop
+         try:
+             if self._ws and getattr(self._ws, "open", True):
+                 await self._ws.close()
+         finally:
+             self._ws = None
+             if self._rx_task:
+                 try:
+                     self._rx_task.cancel()
+                 finally:
+                     self._rx_task = None
++        logger.info("Deepgram close complete sid=%s", sid)
+ 
+     # -- sending ---------------------------------------------------------------
+ 
+     async def send(self, chunk: bytes) -> None:
+         """Send a binary audio frame to Deepgram (Opus/PCM)."""
+         if not self._ws or not getattr(self._ws, "open", False):
++            logger.warning("Deepgram send called without active socket sid=%s", self._sid_for_log())
+             raise RuntimeError("deepgram_not_connected")
+         if not isinstance(chunk, (bytes, bytearray)):
+             raise TypeError("chunk must be bytes")
+         if not chunk:
+             return
+ 
+         # Drop the tiny preamble as first "frame" (common with some recorders)
++        sid = self._sid_for_log()
+         if not self._first_real_sent and len(chunk) < self._min_valid_bytes:
+             # belt-and-suspenders: do not forward this
++            logger.debug(
++                "Deepgram drop small chunk sid=%s bytes=%s min_bytes=%s",
++                sid,
++                len(chunk),
++                self._min_valid_bytes,
++            )
+             return
+ 
+         self._first_real_sent = True
+         await self._ws.send(chunk)
+         self._last_chunk_ts = time.time()
++        logger.debug("Deepgram sent chunk sid=%s bytes=%s", sid, len(chunk))
+ 
+     # -- events API ------------------------------------------------------------
+ 
+     async def events(self) -> AsyncGenerator[dict, None]:
+         """Yield ASR events: asr_open, user_partial, user_final, asr_error, ..."""
+         while True:
+             ev = await self._ev_queue.get()
+             yield ev
+ 
+     # -- receiver --------------------------------------------------------------
+ 
+     async def _rx_loop(self) -> None:
+         """Consume Deepgram messages and push partial/final transcripts to the queue."""
++        sid = self._sid_for_log()
+         try:
+             async for raw in self._ws:  # type: ignore
+                 # Expect JSON text frames; ignore non-JSON control frames.
+                 try:
+                     msg = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
+                 except Exception:
+                     continue
+ 
+                 evt_type = (msg.get("type") or "").lower()
+ 
+                 # Typical Deepgram schema: {"type":"Results","channel":{"alternatives":[...],"is_final":bool}}
+                 if evt_type in ("results", "transcript", "partialtranscript", "speech.update"):
+                     text = ""
+                     is_final = False
+ 
+                     channel = msg.get("channel") or {}
+                     alts = channel.get("alternatives")
+                     if isinstance(alts, list) and alts:
+                         text = (alts[0].get("transcript") or "").strip()
+ 
+                     # Prefer channel.is_final; fall back to top-level speech_final
+                     is_final = bool(channel.get("is_final")) or bool(msg.get("is_final"))
+ 
+                     if "transcript" in msg and not text:
+                         text = (msg.get("transcript") or "").strip()
+ 
+                     # Some accounts emit explicit flags:
+                     if msg.get("speech_final") is True:
+                         is_final = True
+                     if evt_type == "utteranceend":
+                         is_final = True
+ 
+                     if not text:
+                         # Nothing meaningful; keep listening
+                         continue
+ 
++                    logger.debug(
++                        "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
++                        sid,
++                        is_final,
++                        len(text),
++                        _clip_text(text),
++                    )
+                     try:
+                         await self._ev_queue.put(
+                             {"type": "user_final" if is_final else "user_partial", "text": text}
+                         )
+                     except Exception:
+                         pass
+ 
+                     if is_final:
+                         self._any_result = True
+                         self._final_event.set()
+                         # Do not break; allow more finals if multiple utterances are expected
+                         continue
+ 
+                 elif evt_type in ("metadata", "listening", "connected", "ready"):
+                     # Informational; ignore.
+                     continue
+ 
+                 elif evt_type in ("error", "close"):
++                    logger.warning(
++                        "Deepgram error event sid=%s evt_type=%s detail=%s",
++                        sid,
++                        evt_type,
++                        _clip_text(str(msg), 200),
++                    )
+                     try:
+                         await self._ev_queue.put({"type": "asr_error", "error": msg.get("error") or evt_type})
+                     except Exception:
+                         pass
+ 
+                 else:
+                     # Unknown / unhandled event
++                    logger.debug(
++                        "Deepgram unhandled event sid=%s evt_type=%s",
++                        sid,
++                        evt_type or "unknown",
++                    )
+                     continue
+ 
+         except asyncio.CancelledError:
+             return
+         except websockets.ConnectionClosed as e:
+             # If we already had a result, this can be normal; otherwise surface it.
++            logger.warning(
++                "Deepgram websocket closed sid=%s code=%s reason=%s had_result=%s",
++                sid,
++                getattr(e, "code", None),
++                getattr(e, "reason", ""),
++                self._any_result,
++            )
+             if not self._any_result:
+                 try:
+                     await self._ev_queue.put(
+                         {"type": "asr_error", "error": f"recv_closed:{getattr(e, 'code', '')}:{getattr(e, 'reason', '')}"}
+                     )
+                 except Exception:
+                     pass
+         except Exception as e:
++            logger.exception("Deepgram rx loop error sid=%s", sid)
+             try:
+                 await self._ev_queue.put({"type": "asr_error", "error": f"rx:{e.__class__.__name__}"})
+             except Exception:
+                 pass
+diff --git a/app/services/streaming_asr/stream_manager.py b/app/services/streaming_asr/stream_manager.py
+index e6780451a8cce32178c9e0b6fe5385b1afe53961..b88da3ebb187851511e0ff3a11fd752bd2555b69 100644
+--- a/app/services/streaming_asr/stream_manager.py
++++ b/app/services/streaming_asr/stream_manager.py
+@@ -155,116 +155,137 @@ class DeepgramStreamManager:
+         self.api_key = api_key
+         self.session_id = session_id
+         self.emit = _mk_emit(emit)
+ 
+         self.min_valid_bytes = int(min_valid_bytes)
+         self.linger_ms = int(linger_after_last_chunk_ms)
+         self.final_wait_s = float(final_wait_s)
+         self.connect_timeout_s = float(connect_timeout_s)
+         self.recv_max_wait_s = float(recv_max_wait_s)
+ 
+         self.ws: Optional[websockets.WebSocketClientProtocol] = None
+         self._opened = False
+         self._closing = False
+         self._first_real_chunk_sent = False
+         self._last_chunk_ts = 0.0
+ 
+         self._recv_task: Optional[asyncio.Task] = None
+         self._final_event = asyncio.Event()
+         self._any_result = False
+ 
+     # -- lifecycle -------------------------------------------------------------
+ 
+     async def open(self):
+         if self._opened:
+             return
++        logger.info("DeepgramStreamManager open session_id=%s", self.session_id)
+         headers = [("Authorization", f"Token {self.api_key}")]
+         self.emit(
+             "asr",
+             "provider_open",
+             {"provider": "deepgram", "session_id": self.session_id, "url": self.DG_URL},
+         )
+         try:
+             try:
+                 # websockets ≥ 11
+                 self.ws = await asyncio.wait_for(
+                     websockets.connect(
+                         self.DG_URL, additional_headers=headers, max_size=None
+                     ),
+                     timeout=self.connect_timeout_s,
+                 )
+             except TypeError:
+                 # older versions use extra_headers
+                 self.ws = await asyncio.wait_for(
+                     websockets.connect(
+                         self.DG_URL, extra_headers=headers, max_size=None
+                     ),
+                     timeout=self.connect_timeout_s,
+                 )
+             self._opened = True
+             self.emit("asr", "asr_open", {"session_id": self.session_id})
+             # Start receiver
+             self._recv_task = asyncio.create_task(
+                 self._recv_loop(), name=f"dg-recv-{self.session_id}"
+             )
++            logger.info("DeepgramStreamManager open ok session_id=%s", self.session_id)
+         except Exception as e:
+             self.emit(
+                 "asr",
+                 "asr_error",
+                 {"session_id": self.session_id, "error": f"open_failed:{type(e).__name__}:{e}"},
+             )
++            logger.exception(
++                "DeepgramStreamManager open failed session_id=%s",
++                self.session_id,
++            )
+             raise
+ 
+     async def send_chunk(self, data: bytes, seq: Optional[int] = None):
+         """
+         Forward one mic frame to Deepgram. Drops a tiny preamble first chunk.
+         Emits voice:chunk for Admin SSE.
+         """
+         if not data:
+             return
+ 
+         if not self._first_real_chunk_sent and len(data) < self.min_valid_bytes:
++            logger.debug(
++                "DeepgramStreamManager drop small chunk session_id=%s bytes=%s",
++                self.session_id,
++                len(data),
++            )
+             self.emit(
+                 "asr",
+                 "drop_small_first_chunk",
+                 {"session_id": self.session_id, "bytes": len(data)},
+             )
+             return
+ 
+         self._first_real_chunk_sent = True
+ 
+         if self.ws is None or not self._opened:
++            logger.warning(
++                "DeepgramStreamManager send before open session_id=%s",
++                self.session_id,
++            )
+             self.emit(
+                 "asr",
+                 "asr_error",
+                 {"session_id": self.session_id, "error": "send_before_open"},
+             )
+             return
+ 
+         try:
+             await self.ws.send(data)
+             self._last_chunk_ts = time.time()
++            logger.debug(
++                "DeepgramStreamManager sent chunk session_id=%s bytes=%s seq=%s",
++                self.session_id,
++                len(data),
++                seq,
++            )
+             self.emit(
+                 "voice:chunk",
+                 "voice:chunk",
+                 {
+                     "session_id": self.session_id,
+                     "seq": (int(seq) if seq is not None else -1),
+                     "bytes": len(data),
+                 },
+             )
+         except Exception as e:
+             self.emit(
+                 "asr",
+                 "asr_error",
+                 {"session_id": self.session_id, "error": f"send_failed:{type(e).__name__}:{e}"},
+             )
+             raise
+ 
+     async def _recv_loop(self):
+         """Read Deepgram frames; detect partial/final and notify Admin SSE."""
+         try:
+             self._any_result = False
+             while self.ws and not self._closing:
+                 try:
+                     msg = await asyncio.wait_for(self.ws.recv(), timeout=self.recv_max_wait_s)
+                 except asyncio.TimeoutError:
+@@ -275,102 +296,125 @@ class DeepgramStreamManager:
+                         try:
+                             msg = msg.decode("utf-8", "ignore")
+                         except Exception:
+                             continue
+                     j = json.loads(msg)
+                 except Exception:
+                     continue
+ 
+                 # Heuristic: mark partial/final based on DG schema
+                 is_final = False
+                 try:
+                     if isinstance(j, dict):
+                         if j.get("type") in ("Results", "results", "transcript"):
+                             ch = j.get("channel") or {}
+                             if isinstance(ch, dict):
+                                 is_final = bool(ch.get("is_final"))
+                             elif "is_final" in j:
+                                 is_final = bool(j.get("is_final"))
+                         elif j.get("is_final") is True:
+                             is_final = True
+                 except Exception:
+                     is_final = False
+ 
+                 if is_final:
+                     self._any_result = True
++                    logger.info(
++                        "DeepgramStreamManager final session_id=%s",
++                        self.session_id,
++                    )
+                     self.emit("asr", "asr_final", {"session_id": self.session_id})
+                     self._final_event.set()
+                 else:
+                     self._any_result = True
++                    logger.debug(
++                        "DeepgramStreamManager partial session_id=%s",
++                        self.session_id,
++                    )
+                     self.emit("asr", "asr_partial", {"session_id": self.session_id})
+ 
+         except Exception as e:
++            logger.exception(
++                "DeepgramStreamManager recv loop error session_id=%s",
++                self.session_id,
++            )
+             self.emit(
+                 "asr",
+                 "asr_error",
+                 {"session_id": self.session_id, "error": f"recv_loop_error:{type(e).__name__}:{e}"},
+             )
+ 
+     async def end(self, wait_for_final: bool = True):
+         """
+         Graceful shutdown:
+           1) Linger briefly after the last chunk (some providers need a beat).
+           2) Send {"type":"CloseStream"}.
+           3) Optionally wait for a final result (bounded by final_wait_s).
+         """
+         if self._closing:
+             return
+         self._closing = True
++        logger.info(
++            "DeepgramStreamManager end session_id=%s wait_for_final=%s",
++            self.session_id,
++            wait_for_final,
++        )
+         try:
+             # Linger
+             await asyncio.sleep(self.linger_ms / 1000.0)
+ 
+             # Close message (per DG examples)
+             try:
+                 if self.ws:
+                     await self.ws.send(json.dumps({"type": "CloseStream"}))
+             except Exception:
+                 pass
+ 
+             # Bounded wait for a final
+             if wait_for_final:
+                 try:
+                     await asyncio.wait_for(self._final_event.wait(), timeout=self.final_wait_s)
+                 except asyncio.TimeoutError:
+                     if not self._any_result:
++                        logger.warning(
++                            "DeepgramStreamManager final timeout session_id=%s timeout=%s",
++                            self.session_id,
++                            self.final_wait_s,
++                        )
+                         self.emit(
+                             "asr",
+                             "asr_error",
+                             {"session_id": self.session_id, "error": f"final_timeout:{self.final_wait_s:.1f}s"},
+                         )
+         finally:
+             try:
+                 if self.ws:
+                     await self.ws.close()
+             except Exception:
+                 pass
+             self._opened = False
++            logger.info("DeepgramStreamManager closed session_id=%s", self.session_id)
+ 
+     # -------------------------------------------------------------------------
+ 
+ 
+ def _get(
+     *, api_key: str, session_id: str, emit: Optional[Callable[..., None]] = None
+ ) -> "DeepgramStreamManager":
+     with _streams_lock:
+         mgr = _streams.get(session_id)
+         if mgr is None:
+             mgr = DeepgramStreamManager(api_key=api_key, session_id=session_id, emit=emit)
+             _streams[session_id] = mgr
+         return mgr
+ 
+ 
+ # Public async helpers used by the compat manager
+ async def asr_open(session_id: str, api_key: str, emit: Optional[Callable[..., None]] = None):
+     mgr = _get(api_key=api_key, session_id=session_id, emit=emit)
+     await mgr.open()
+ 
+ 
+ async def asr_send_chunk(session_id: str, data: bytes, seq: Optional[int] = None):
+     with _streams_lock:
+         mgr = _streams.get(session_id)
+     if mgr is None:
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 97287d2c3dd7b0745e34a16c9ac22dd904f94cbd..32658d1f112907e2a41108de9d24a0f41c204597 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -25,50 +25,60 @@ def _client_ip_from_scope(scope) -> str:
+         if isinstance(c, (list, tuple)) and c:
+             return str(c[0])
+     except Exception:
+         pass
+     try:
+         hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
+         xff = hdrs.get("x-forwarded-for", "").split(",")[0].strip()
+         if xff:
+             return xff
+     except Exception:
+         pass
+     return "unknown"
+ 
+ 
+ def _jlog(event: str, **fields):
+     """Lightweight JSON log (stdout). Keep dependency-free inside WS path."""
+     try:
+         import time as _t, json as _json
+         fields.setdefault("event", event)
+         fields.setdefault("ts", _t.time())
+         print(_json.dumps(fields, separators=(",", ":"), ensure_ascii=False))
+     except Exception:
+         pass
+ 
+ 
++def _clip_text(txt: str, limit: int = 120) -> str:
++    try:
++        txt = txt or ""
++        if len(txt) <= limit:
++            return txt
++        return txt[:limit] + "…"
++    except Exception:
++        return ""
++
++
+ def _dumps(obj) -> str:
+     import json as _json
+     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+ 
+ 
+ def _get_session_id(scope) -> str:
+     try:
+         raw = (scope.get("query_string") or b"").decode("utf-8", "ignore")
+         if raw:
+             for pair in raw.split("&"):
+                 if not pair or "=" not in pair:
+                     continue
+                 k, v = pair.split("=", 1)
+                 if k == "session_id":
+                     return v or "default"
+     except Exception:
+         pass
+     return "default"
+ 
+ 
+ def _has_deepgram_key() -> bool:
+     return bool((os.getenv("DEEPGRAM_API_KEY") or "").strip())
+ 
+ 
+ async def _pump_bus_to_client(sid: str, send):
+@@ -84,97 +94,112 @@ async def _pump_bus_to_client(sid: str, send):
+                 fr = q.get(timeout=0.05)
+             except Empty:
+                 await asyncio.sleep(0.01)
+                 continue
+             try:
+                 await send({"type": "websocket.send", "text": _json.dumps(fr, separators=(",", ":"), ensure_ascii=False)})
+             except Exception:
+                 # If client send fails, yield so cancellation can propagate
+                 await asyncio.sleep(0.01)
+     except asyncio.CancelledError:
+         pass
+     finally:
+         try:
+             if hasattr(bus, "unsubscribe"):
+                 bus.unsubscribe(sid, q)
+         except Exception:
+             pass
+ 
+ 
+ async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen, sid):
+     """Relay Deepgram events to client and, on final, kick LLM turn."""
+     try:
+         async for ev in dg.events():
+             et = (ev.get("type") or "").lower()
+             if et == "asr_open":
++                _jlog("dg_asr_open", sid=sid)
+                 try:
+                     _admin_emit and _admin_emit("asr:start", session_id=sid)
+                 except Exception:
+                     pass
+                 continue
+ 
+             if et in ("user_partial", "user_final"):
+                 is_final = (et == "user_final")
+                 text = (ev.get("text") or "").strip()
++                _jlog(
++                    "dg_transcript",
++                    sid=sid,
++                    turn_id=turn_id_ref[0],
++                    is_final=is_final,
++                    chars=len(text),
++                    preview=_clip_text(text),
++                )
+                 try:
+                     if et == "user_partial":
+                         _admin_emit and _admin_emit("asr:first_partial", session_id=sid)
+                 except Exception:
+                     pass
+ 
+                 # Stream ASR result to client (optional UI)
+                 await send({
+                     "type": "websocket.send",
+                     "text": _dumps(make_results(turn_id_ref[0], transcript=text, confidence=0.0, is_final=is_final)),
+                 })
+ 
+                 if is_final:
+                     final_seen[0] = True
+                     # Let client know the utterance is closed
+                     await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id_ref[0]))})
+                     try:
+                         _admin_emit and _admin_emit("asr:final", session_id=sid)
+                     except Exception:
+                         pass
+ 
+                     # NEW: Kick the LLM/Chip turn on final transcript
+                     if text:
+                         async def _bg_turn():
+                             try:
+                                 # Offload to thread (streaming pipeline is sync)
+                                 await asyncio.to_thread(run_ws_user_turn, sid, text, None)
+                             except Exception as e:
+                                 try:
+                                     await send({
+                                         "type": "websocket.send",
+                                         "text": _dumps(make_error("llm_turn_fail", e.__class__.__name__)),
+                                     })
+                                 except Exception:
+                                     pass
+                         asyncio.create_task(_bg_turn())
+ 
+             elif et == "asr_error":
++                _jlog(
++                    "dg_asr_error",
++                    sid=sid,
++                    turn_id=turn_id_ref[0],
++                    error=_clip_text(str(ev.get("error") or "unknown"), 160),
++                )
+                 try:
+                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=str(ev.get("error") or "unknown"))
+                 except Exception:
+                     pass
+                 await send({
+                     "type": "websocket.send",
+                     "text": _dumps(make_error("asr_error", str(ev.get("error") or "unknown"))),
+                 })
+     except asyncio.CancelledError:
+         return
+     except Exception as e:
+         try:
+             await send({"type": "websocket.send", "text": _dumps(make_error("relay_fail", e.__class__.__name__))})
+         except Exception:
+             pass
+ 
+ 
+ async def _ws_chat_asgi_impl(scope, receive, send):
+     try:
+         _admin_emit and _admin_emit(
+             "ws_handshake_enter",
+             path=scope.get("path"),
+             raw_query=(scope.get("query_string") or b"").decode("utf-8", "ignore"),
+         )
+     except Exception:
+@@ -306,50 +331,55 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+ 
+     try:
+         while True:
+             ev = await receive()
+             et = ev.get("type")
+ 
+             if et == "websocket.disconnect":
+                 break
+ 
+             if et == "websocket.receive":
+                 # Binary/audio lane
+                 if ev.get("bytes") is not None:
+                     chunk = ev.get("bytes") or b""
+                     if chunk:
+                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
+                     if buf.is_empty():
+                         # New audio turn; prime turn id + reset final tracking.
+                         turn_id_ref[0] = buf.turn_seq + 1
+                         final_seen[0] = False
+                     buf.append(chunk)
+                     if _has_deepgram_key():
+                         await _ensure_dg_connected()
+                         if dg is not None:
+                             # Forward raw bytes to provider
+                             await dg.send(chunk)
++                            _jlog("ws_audio_forward", sid=sid, bytes=len(chunk))
++                        else:
++                            _jlog("ws_audio_no_provider", sid=sid, bytes=len(chunk))
++                    else:
++                        _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
+                     continue
+ 
+                 # Text/control lane
+                 if ev.get("text") is not None:
+                     try:
+                         obj = parse_client_json(ev.get("text") or "")
+                         t = obj.get("type")
+ 
+                         if t == "KeepAlive":
+                             await send({"type": "websocket.send", "text": _dumps(make_keepalive_ack())})
+ 
+                         # OPTIONAL WS greet alias: allow {type:"greet"} in addition to Configure{greet:true}
+                         elif t == "greet":
+                             _jlog("ws_greet_recv", sid=sid)
+                             async def _bg():
+                                 try:
+                                     from app.services.streaming import run_ws_greet
+                                     tid = await asyncio.to_thread(run_ws_greet, sid)
+                                     try:
+                                         if _admin_emit:
+                                             cfg_now = db.get_config()
+                                             audio_on = bool((cfg_now or {}).get("feature_audio", True))
+                                             _admin_emit(
+                                                 "greet:resp",
+                                                 label="greet:resp",
+diff --git a/static/js/voice.js b/static/js/voice.js
+index fe473654b9a9af2ebc6385c2cbbdbc75d0212ae6..84d7e73001b0e4a7940cc29d596770a4267fc7fb 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -197,74 +197,80 @@ function _startRecorder() {
+   state.recChunks = [];
+   let recorder;
+   try {
+     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
+   } catch (primaryErr) {
+     try {
+       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
+     } catch (fallbackErr) {
+       console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
+       state.rec = null;
+       return false;
+     }
    }
+ 
+   state.rec = recorder;
+    
+   state.rec.ondataavailable = (e) => {
+     if (e.data && e.data.size > 0) state.recChunks.push(e.data);
+   };
+ 
+   state.rec.onstop = async () => {
+     let finalDetail;
+     try {
+       const blob = new Blob(state.recChunks, { type: REC_MIME });
+       state.recChunks = [];
++      try {
++        console.debug('[voice] recorder stopped', { bytes: blob.size, mime: blob.type });
++      } catch {}
+       // Drop obviously-empty/prelude-only blobs (rec preambles can be tiny)
+       if (blob.size >= MIN_VALID_BLOB_BYTES) {
+         // One blob per user turn → WS → server STT
+         await sendAudioChunk(blob);
+       } else {
+         console.warn('[voice] recorded blob too small', blob.size);
+         finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
+       }
+     } catch (e) {
+       console.warn('[voice] send audio failed', e);
+     } finally {
+       // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
+       if (state.turnOpen) {
+         try { sendCloseStream(); } catch {}
+         state.turnOpen = false;
+       }
+       _emitVoiceState('armed', finalDetail);
+     }
+   };
+ 
+   try {
+     // Small timeslice ensures non-empty dataavailable frames while still producing a single turn blob.
+     state.rec.start(250);
+     state.turnOpen = true; // mark an open ASR turn on the server
++    try {
++      console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice: 250 });
++    } catch {}
+   } catch (e) {
+     console.warn('[voice] recorder start failed', e);
+     state.rec = null;
+     state.turnOpen = false;
+     return false;
+   }
+ 
+   // Safety timeout to prevent runaway recordings
+   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
+   _safeClearTurnTimer();
+   state.turnTimer = setTimeout(() => {
+     try { _onSpeechEndCommitted(); } catch {}
+   }, limitMs);
+    
+   return true;
+ }
+ 
+ function _onSpeechStartCommitted() {
+   // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
+   _bargeIn();
+ 
+   const started = _startRecorder();
+   if (started) {
+     _emitVoiceState('recording');
+     return;
+diff --git a/static/js/ws.js b/static/js/ws.js
+index 0928a4661639cf3a32aade2af4742879486ea0a2..b23d71c287f15e87bfc7432341a0329dc138bb58 100644
+--- a/static/js/ws.js
++++ b/static/js/ws.js
+@@ -203,42 +203,45 @@ export function closeWS(code = 1000, reason = ''){
+     if (_ws) _ws.close(code, reason || undefined);
+   } catch {}
+   _ws = null;
+ }
+ 
+ export function sendJSON(obj){
+   if (!_ws || _ws.readyState !== WebSocket.OPEN) return false;
+   try {
+     const s = JSON.stringify(obj);
+     if (bufferedAmount() > 5_000_000) { // ~5MB buffer guardrail
+       console.warn('[ws] bufferedAmount high; sending anyway', bufferedAmount());
+     }
+     _ws.send(s);
+     _lastUserSendTs = Date.now();
+     return true;
+   } catch(e){
+     console.warn('[ws] sendJSON error', e);
+     return false;
+   }
+ }
+ 
+ export async function sendAudioChunk(blob){
+   if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
+   try{
+     const buf = await blob.arrayBuffer();
++    try {
++      console.debug('[ws] sending audio chunk', { bytes: buf.byteLength, mime: blob.type });
++    } catch {}
+     _ws.send(buf);
+     _lastUserSendTs = Date.now();
+   }catch(e){
+     console.warn('[ws] sendAudioChunk error', e);
+   }
+ }
+ 
+ export function sendCloseStream(){
+   sendJSON({ type: "CloseStream" });
+ }
+ 
+ export function configure(opts = {}){
+   // ensure session id is included if caller forgot
+   const sid = getSID();
+   const payload = { type: "Configure", session_id: sid, ...opts };
+   sendJSON(payload);
  }

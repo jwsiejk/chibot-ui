@@ -219,6 +219,9 @@ function _startRecorder() {
     try {
       const blob = new Blob(state.recChunks, { type: REC_MIME });
       state.recChunks = [];
+      try {
+        console.debug('[voice] recorder stopped', { bytes: blob.size, mime: blob.type });
+      } catch {}
       // Drop obviously-empty/prelude-only blobs (rec preambles can be tiny)
       if (blob.size >= MIN_VALID_BLOB_BYTES) {
         // One blob per user turn → WS → server STT
@@ -243,6 +246,9 @@ function _startRecorder() {
     // Small timeslice ensures non-empty dataavailable frames while still producing a single turn blob.
     state.rec.start(250);
     state.turnOpen = true; // mark an open ASR turn on the server
+    try {
+      console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice: 250 });
+    } catch {}
   } catch (e) {
     console.warn('[voice] recorder start failed', e);
     state.rec = null;

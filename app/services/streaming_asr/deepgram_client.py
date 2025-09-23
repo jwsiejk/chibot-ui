@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from typing import AsyncGenerator, Optional, Any
@@ -14,6 +15,9 @@ import websockets  # provided by uvicorn[standard]
 DG_TEST_MODE = os.getenv("DG_TEST_MODE", "").strip() == "1"
 DG_LAST_URL: str | None = None
 DG_LAST_CONFIG: dict | None = None
+
+
+logger = logging.getLogger(__name__)
 
 
 class _FakeWSForTests:
@@ -32,6 +36,16 @@ class _FakeWSForTests:
         return _gen()
 
 # ------------------------- URL & Config Helpers -------------------------------
+
+
+def _clip_text(txt: str, limit: int = 120) -> str:
+    try:
+        txt = txt or ""
+        if len(txt) <= limit:
+            return txt
+        return txt[:limit] + "…"
+    except Exception:
+        return ""
 
 def _dg_url(overrides: Optional[dict] = None) -> str:
     """Return the Deepgram listen URL with safe defaults."""
@@ -126,6 +140,17 @@ class DeepgramClient:
         self._linger_ms: int = int(os.getenv("DG_LINGER_MS", "600"))          # after last chunk
         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "8"))  # wait for final
 
+    # -- helpers ---------------------------------------------------------------
+
+    def _sid_for_log(self) -> str:
+        try:
+            for key in ("session_id", "sid"):
+                if key in self._cfg and self._cfg[key]:
+                    return str(self._cfg[key])
+        except Exception:
+            pass
+        return "?"
+
     # -- lifecycle -------------------------------------------------------------
 
     async def connect(self) -> None:
@@ -133,12 +158,15 @@ class DeepgramClient:
         if self._ws:
             return
         url = _dg_url(self._cfg)
+        sid = self._sid_for_log()
+        logger.info("Deepgram connect start sid=%s url=%s", sid, url)
         if DG_TEST_MODE:
             # No network — use a fake socket and record URL/config for tests
             self._ws = _FakeWSForTests()
             DG_LAST_URL = url
             DG_LAST_CONFIG = _initial_config(self._cfg)
             await self._ev_queue.put({"type":"asr_open"})
+            logger.info("Deepgram test-mode connect sid=%s", sid)
             return
         # Real network path
         headers = [("Authorization", _auth_header())]
@@ -161,6 +189,7 @@ class DeepgramClient:
         # Start receiver
         self._rx_task = asyncio.create_task(self._rx_loop())
         await self._ev_queue.put({"type": "asr_open"})
+        logger.info("Deepgram connect ok sid=%s", sid)
 
 
     async def close(
@@ -180,6 +209,13 @@ class DeepgramClient:
         if self._closed:
             return
         self._closed = True
+        sid = self._sid_for_log()
+        logger.info(
+            "Deepgram close start sid=%s wait_for_final=%s linger_ms=%s",
+            sid,
+            wait_for_final,
+            linger_ms,
+        )
 
         # 1) Linger a bit so VAD/segmentation can finalize
         if linger_ms is None:
@@ -227,12 +263,14 @@ class DeepgramClient:
                     self._rx_task.cancel()
                 finally:
                     self._rx_task = None
+        logger.info("Deepgram close complete sid=%s", sid)
 
     # -- sending ---------------------------------------------------------------
 
     async def send(self, chunk: bytes) -> None:
         """Send a binary audio frame to Deepgram (Opus/PCM)."""
         if not self._ws or not getattr(self._ws, "open", False):
+            logger.warning("Deepgram send called without active socket sid=%s", self._sid_for_log())
             raise RuntimeError("deepgram_not_connected")
         if not isinstance(chunk, (bytes, bytearray)):
             raise TypeError("chunk must be bytes")
@@ -240,13 +278,21 @@ class DeepgramClient:
             return
 
         # Drop the tiny preamble as first "frame" (common with some recorders)
+        sid = self._sid_for_log()
         if not self._first_real_sent and len(chunk) < self._min_valid_bytes:
             # belt-and-suspenders: do not forward this
+            logger.debug(
+                "Deepgram drop small chunk sid=%s bytes=%s min_bytes=%s",
+                sid,
+                len(chunk),
+                self._min_valid_bytes,
+            )
             return
 
         self._first_real_sent = True
         await self._ws.send(chunk)
         self._last_chunk_ts = time.time()
+        logger.debug("Deepgram sent chunk sid=%s bytes=%s", sid, len(chunk))
 
     # -- events API ------------------------------------------------------------
 
@@ -260,6 +306,7 @@ class DeepgramClient:
 
     async def _rx_loop(self) -> None:
         """Consume Deepgram messages and push partial/final transcripts to the queue."""
+        sid = self._sid_for_log()
         try:
             async for raw in self._ws:  # type: ignore
                 # Expect JSON text frames; ignore non-JSON control frames.
@@ -296,6 +343,13 @@ class DeepgramClient:
                         # Nothing meaningful; keep listening
                         continue
 
+                    logger.debug(
+                        "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
+                        sid,
+                        is_final,
+                        len(text),
+                        _clip_text(text),
+                    )
                     try:
                         await self._ev_queue.put(
                             {"type": "user_final" if is_final else "user_partial", "text": text}
@@ -314,6 +368,12 @@ class DeepgramClient:
                     continue
 
                 elif evt_type in ("error", "close"):
+                    logger.warning(
+                        "Deepgram error event sid=%s evt_type=%s detail=%s",
+                        sid,
+                        evt_type,
+                        _clip_text(str(msg), 200),
+                    )
                     try:
                         await self._ev_queue.put({"type": "asr_error", "error": msg.get("error") or evt_type})
                     except Exception:
@@ -321,12 +381,24 @@ class DeepgramClient:
 
                 else:
                     # Unknown / unhandled event
+                    logger.debug(
+                        "Deepgram unhandled event sid=%s evt_type=%s",
+                        sid,
+                        evt_type or "unknown",
+                    )
                     continue
 
         except asyncio.CancelledError:
             return
         except websockets.ConnectionClosed as e:
             # If we already had a result, this can be normal; otherwise surface it.
+            logger.warning(
+                "Deepgram websocket closed sid=%s code=%s reason=%s had_result=%s",
+                sid,
+                getattr(e, "code", None),
+                getattr(e, "reason", ""),
+                self._any_result,
+            )
             if not self._any_result:
                 try:
                     await self._ev_queue.put(
@@ -335,6 +407,7 @@ class DeepgramClient:
                 except Exception:
                     pass
         except Exception as e:
+            logger.exception("Deepgram rx loop error sid=%s", sid)
             try:
                 await self._ev_queue.put({"type": "asr_error", "error": f"rx:{e.__class__.__name__}"})
             except Exception:

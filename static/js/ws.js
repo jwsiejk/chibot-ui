@@ -225,6 +225,9 @@ export async function sendAudioChunk(blob){
   if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
   try{
     const buf = await blob.arrayBuffer();
+    try {
+      console.debug('[ws] sending audio chunk', { bytes: buf.byteLength, mime: blob.type });
+    } catch {}
     _ws.send(buf);
     _lastUserSendTs = Date.now();
   }catch(e){

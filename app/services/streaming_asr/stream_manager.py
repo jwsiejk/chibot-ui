@@ -177,6 +177,7 @@ class DeepgramStreamManager:
     async def open(self):
         if self._opened:
             return
+        logger.info("DeepgramStreamManager open session_id=%s", self.session_id)
         headers = [("Authorization", f"Token {self.api_key}")]
         self.emit(
             "asr",
@@ -206,11 +207,16 @@ class DeepgramStreamManager:
             self._recv_task = asyncio.create_task(
                 self._recv_loop(), name=f"dg-recv-{self.session_id}"
             )
+            logger.info("DeepgramStreamManager open ok session_id=%s", self.session_id)
         except Exception as e:
             self.emit(
                 "asr",
                 "asr_error",
                 {"session_id": self.session_id, "error": f"open_failed:{type(e).__name__}:{e}"},
+            )
+            logger.exception(
+                "DeepgramStreamManager open failed session_id=%s",
+                self.session_id,
             )
             raise
 
@@ -223,6 +229,11 @@ class DeepgramStreamManager:
             return
 
         if not self._first_real_chunk_sent and len(data) < self.min_valid_bytes:
+            logger.debug(
+                "DeepgramStreamManager drop small chunk session_id=%s bytes=%s",
+                self.session_id,
+                len(data),
+            )
             self.emit(
                 "asr",
                 "drop_small_first_chunk",
@@ -233,6 +244,10 @@ class DeepgramStreamManager:
         self._first_real_chunk_sent = True
 
         if self.ws is None or not self._opened:
+            logger.warning(
+                "DeepgramStreamManager send before open session_id=%s",
+                self.session_id,
+            )
             self.emit(
                 "asr",
                 "asr_error",
@@ -243,6 +258,12 @@ class DeepgramStreamManager:
         try:
             await self.ws.send(data)
             self._last_chunk_ts = time.time()
+            logger.debug(
+                "DeepgramStreamManager sent chunk session_id=%s bytes=%s seq=%s",
+                self.session_id,
+                len(data),
+                seq,
+            )
             self.emit(
                 "voice:chunk",
                 "voice:chunk",
@@ -297,13 +318,25 @@ class DeepgramStreamManager:
 
                 if is_final:
                     self._any_result = True
+                    logger.info(
+                        "DeepgramStreamManager final session_id=%s",
+                        self.session_id,
+                    )
                     self.emit("asr", "asr_final", {"session_id": self.session_id})
                     self._final_event.set()
                 else:
                     self._any_result = True
+                    logger.debug(
+                        "DeepgramStreamManager partial session_id=%s",
+                        self.session_id,
+                    )
                     self.emit("asr", "asr_partial", {"session_id": self.session_id})
 
         except Exception as e:
+            logger.exception(
+                "DeepgramStreamManager recv loop error session_id=%s",
+                self.session_id,
+            )
             self.emit(
                 "asr",
                 "asr_error",
@@ -320,6 +353,11 @@ class DeepgramStreamManager:
         if self._closing:
             return
         self._closing = True
+        logger.info(
+            "DeepgramStreamManager end session_id=%s wait_for_final=%s",
+            self.session_id,
+            wait_for_final,
+        )
         try:
             # Linger
             await asyncio.sleep(self.linger_ms / 1000.0)
@@ -337,6 +375,11 @@ class DeepgramStreamManager:
                     await asyncio.wait_for(self._final_event.wait(), timeout=self.final_wait_s)
                 except asyncio.TimeoutError:
                     if not self._any_result:
+                        logger.warning(
+                            "DeepgramStreamManager final timeout session_id=%s timeout=%s",
+                            self.session_id,
+                            self.final_wait_s,
+                        )
                         self.emit(
                             "asr",
                             "asr_error",
@@ -349,6 +392,7 @@ class DeepgramStreamManager:
             except Exception:
                 pass
             self._opened = False
+            logger.info("DeepgramStreamManager closed session_id=%s", self.session_id)
 
     # -------------------------------------------------------------------------
 

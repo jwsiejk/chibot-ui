@@ -47,6 +47,16 @@ def _jlog(event: str, **fields):
         pass
 
 
+def _clip_text(txt: str, limit: int = 120) -> str:
+    try:
+        txt = txt or ""
+        if len(txt) <= limit:
+            return txt
+        return txt[:limit] + "…"
+    except Exception:
+        return ""
+
+
 def _dumps(obj) -> str:
     import json as _json
     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
@@ -106,6 +116,7 @@ async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen, 
         async for ev in dg.events():
             et = (ev.get("type") or "").lower()
             if et == "asr_open":
+                _jlog("dg_asr_open", sid=sid)
                 try:
                     _admin_emit and _admin_emit("asr:start", session_id=sid)
                 except Exception:
@@ -115,6 +126,14 @@ async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen, 
             if et in ("user_partial", "user_final"):
                 is_final = (et == "user_final")
                 text = (ev.get("text") or "").strip()
+                _jlog(
+                    "dg_transcript",
+                    sid=sid,
+                    turn_id=turn_id_ref[0],
+                    is_final=is_final,
+                    chars=len(text),
+                    preview=_clip_text(text),
+                )
                 try:
                     if et == "user_partial":
                         _admin_emit and _admin_emit("asr:first_partial", session_id=sid)
@@ -153,6 +172,12 @@ async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen, 
                         asyncio.create_task(_bg_turn())
 
             elif et == "asr_error":
+                _jlog(
+                    "dg_asr_error",
+                    sid=sid,
+                    turn_id=turn_id_ref[0],
+                    error=_clip_text(str(ev.get("error") or "unknown"), 160),
+                )
                 try:
                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=str(ev.get("error") or "unknown"))
                 except Exception:
@@ -328,6 +353,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         if dg is not None:
                             # Forward raw bytes to provider
                             await dg.send(chunk)
+                            _jlog("ws_audio_forward", sid=sid, bytes=len(chunk))
+                        else:
+                            _jlog("ws_audio_no_provider", sid=sid, bytes=len(chunk))
+                    else:
+                        _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
                     continue
 
                 # Text/control lane
