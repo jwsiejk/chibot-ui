@@ -55,8 +55,10 @@ const state = {
 
 // ---- Helpers ----------------------------------------------------------------
 
-function _emitVoiceState(s) {
-  try { window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state: s }})); } catch {}
+function _emitVoiceState(state, detail = {}) {
+  try {
+    window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
+  } catch {}
 }
 
 async function _ensureMic() {
@@ -174,16 +176,31 @@ async function _arm(stream = null, opts = {}) {
 // ---- Recorder lifecycle -----------------------------------------------------
 
 function _startRecorder() {
-  if (!state.stream) return;
-  if (state.rec && state.rec.state === 'recording') return; // guard duplicate starts
+  if (!state.stream) return false;
+  if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
 
-  state.recChunks = [];
-  try {
-    state.rec = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
-  } catch {
-    state.rec = new MediaRecorder(state.stream); // fallback, browser picks best
+  if (typeof MediaRecorder === 'undefined') {
+    console.warn('[voice] MediaRecorder not supported in this browser');
+    state.rec = null;
+    return false;
   }
 
+  state.recChunks = [];
+  let recorder;
+  try {
+    recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
+  } catch (primaryErr) {
+    try {
+      recorder = new MediaRecorder(state.stream); // fallback, browser picks best
+    } catch (fallbackErr) {
+      console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
+      state.rec = null;
+      return false;
+    }
+  }
+
+  state.rec = recorder;
+   
   state.rec.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) state.recChunks.push(e.data);
   };
@@ -217,7 +234,7 @@ function _startRecorder() {
     console.warn('[voice] recorder start failed', e);
     state.rec = null;
     state.turnOpen = false;
-    return;
+    return false;
   }
 
   // Safety timeout to prevent runaway recordings
@@ -226,14 +243,22 @@ function _startRecorder() {
   state.turnTimer = setTimeout(() => {
     try { _onSpeechEndCommitted(); } catch {}
   }, limitMs);
+   
+  return true;
 }
 
 function _onSpeechStartCommitted() {
   // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
   _bargeIn();
 
-  _emitVoiceState('recording');
-  _startRecorder();
+  const started = _startRecorder();
+  if (started) {
+    _emitVoiceState('recording');
+    return;
+  }
+
+  console.warn('[voice] recorder unavailable — reverting to typing');
+  _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
 }
 
 function _onSpeechEndCommitted() {
