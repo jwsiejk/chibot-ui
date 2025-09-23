@@ -26,10 +26,9 @@
   </header>
 
   <main>
-    <!-- Diagnostics tab content (JS renders controls/results here) -->
+    <!-- Diagnostics tab content (script renders the conversational flow here) -->
     <section id="admin-diagnostics" aria-label="Diagnostics">
       <h2>Diagnostics</h2>
-      <!-- admin_console.js will inject the controls & results table here -->
     </section>
 
     <!-- Phase 14 — Config Audio Tab (required elements for checks) -->
@@ -122,7 +121,7 @@
     </section>
   </main>
 
-  <!-- Diagnostics script (no-ops unless #admin-diagnostics exists) -->
-  <script src="/static/js/admin_console.js" defer></script>
+  <!-- Diagnostics script (module so we can reuse production helpers) -->
+  <script type="module" src="/static/js/admin_console.js"></script>
 </body>
 </html>
