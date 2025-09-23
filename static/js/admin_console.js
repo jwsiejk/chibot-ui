@@ -53,6 +53,7 @@ const SPEAK_LABELS = {
 };
 
 const SAMPLE_PHRASE = 'Chip, run the admin voice diagnostic.';
+const GREET_TIMEOUT_MS = 20000;
 
 const root = document.querySelector('#admin-diagnostics');
 if (!root) {
@@ -206,7 +207,7 @@ async function runDiagnostic(state) {
     setStepStatus(state, 'greet', 'active', 'Configure greet sent. Waiting for Chip to answer…');
     logAdminEvent(state, 'step_greet_sent');
 
-    const greetFrame = await waitForGreeting(state, 8000);
+    const greetFrame = await waitForGreeting(state, GREET_TIMEOUT_MS);
     setStepStatus(state, 'greet', 'done', summarizeAssistantFrame(greetFrame));
     logAdminEvent(state, 'step_greet_ok', { frame_type: greetFrame?.type || greetFrame?.label || 'assistant' });
     window.__askchip_session_started = true;
@@ -440,15 +441,34 @@ function handleWSFrame(state, frame) {
 }
 
 function handleAdminEvent(state, evt) {
-  if (!evt || (evt.kind && evt.kind !== 'asr')) return;
-  if (evt.label === 'asr_partial') {
-    updateASRStatus(state, { status: 'active', partialsDelta: 1 });
-  } else if (evt.label === 'asr_final') {
+  if (!evt) return;
+
+  const rawKind = (evt.kind || '').toString();
+  const rawLabel = (evt.label || '').toString();
+  const tag = (rawLabel || rawKind || '').toLowerCase();
+
+  if (!tag.startsWith('asr')) return;
+
+  if (tag.includes('error')) {
+    const message = evt.error ? `ASR error: ${evt.error}` : 'ASR error reported.';
+    updateASRStatus(state, { status: 'error', message, error: true });
+    state.asrReject?.(evt.error ? new Error(evt.error) : new Error('ASR error'));
+    return;
+  }
+
+  if (tag.includes('final')) {
     updateASRStatus(state, { status: 'done', final: true });
     state.asrResolve?.(evt);
-  } else if (evt.label === 'asr_error') {
-    updateASRStatus(state, { status: 'error', message: evt.error ? `ASR error: ${evt.error}` : 'ASR error reported.', error: true });
-    state.asrReject?.(evt.error ? new Error(evt.error) : new Error('ASR error'));
+    return;
+  }
+
+  if (tag.includes('partial')) {
+    updateASRStatus(state, { status: 'active', partialsDelta: 1 });
+    return;
+  }
+
+  if (tag.includes('start')) {
+    updateASRStatus(state, { status: 'active', message: 'ASR stream started.' });
   }
 }
 
@@ -542,6 +562,7 @@ function appendLog(el, line) {
     el.textContent = el.textContent.slice(-14000);
   }
   el.scrollTop = el.scrollHeight;
+  try { console.info('[admin-diagnostics]', line); } catch {}
 }
 
 function timestamp() {

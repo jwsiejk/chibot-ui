@@ -1,57 +1,247 @@
-diff --git a/static/js/ui_menu.js b/static/js/ui_menu.js
-index 5a06f17dfb8a9bd4fab54f297e13b352728d9020..a2d57f631fd73742b04cd7ed5dcc29b8bbe39e56 100644
---- a/static/js/ui_menu.js
-+++ b/static/js/ui_menu.js
-@@ -24,51 +24,51 @@ if (!window.__askchip_menu_wired) {
-     // ---- State helpers ----
-     const openMenu = () => {
-       menu.classList.remove('hidden');
-       btn.setAttribute('aria-expanded', 'true');
-       // focus first visible item for keyboard users
-       const itms = $$('#menuDropdown [role="menuitem"]')
-         .filter(n => n.offsetParent !== null);
-       if (itms.length) itms[0].focus();
-     };
-     const closeMenu = () => {
-       if (menu.classList.contains('hidden')) return;
-       menu.classList.add('hidden');
-       btn.setAttribute('aria-expanded', 'false');
-       // return focus to the button for a11y
-       btn.focus({ preventScroll: true });
-     };
-     const toggleMenu = () => {
-       if (menu.classList.contains('hidden')) openMenu(); else closeMenu();
-     };
+diff --git a/static/js/admin_console.js b/static/js/admin_console.js
+index 1dfc7fd3e527d29e0ac5d8fe921a44a80a2f648f..d653b97b428fa408a98237db28fbe8bb3a9b01c9 100644
+--- a/static/js/admin_console.js
++++ b/static/js/admin_console.js
+@@ -31,50 +31,51 @@ const STEP_DEFS = [
+   {
+     id: 'assistant',
+     title: 'Chip responds over WS/TTS',
+     role: 'system',
+     description: 'Confirm we receive assistant audio/text frames back (just like production chat playback).',
+   },
+ ];
  
-     // ---- Click binding (idempotent) ----
-     btn.addEventListener('click', (e) => {
-       e.preventDefault();
-       e.stopPropagation();
-       toggleMenu();
--    }, { passive: true });
-+    }, { passive: false });
+ const STATUS_LABELS = {
+   pending: 'Pending',
+   active: 'In progress',
+   waiting: 'Listening',
+   done: 'Passed',
+   error: 'Needs attention',
+ };
  
-     // Close on outside click
-     document.addEventListener('click', (e) => {
-       if (menu.classList.contains('hidden')) return;
-       const inside = e.target === btn || menu.contains(e.target);
-       if (!inside) closeMenu();
-     });
+ const SPEAK_LABELS = {
+   idle: 'Mic not armed yet.',
+   ready: 'Listening. Speak the diagnostic phrase when you are ready.',
+   recording: 'Recording… speak clearly into the mic.',
+   complete: 'Captured. Waiting for transcription results…',
+   error: 'Microphone error — check permissions or console logs.',
+ };
  
-     // Keyboard navigation
-     btn.addEventListener('keydown', (e) => {
-       const k = e.key;
-       if (k === ' ' || k === 'Enter' || k === 'ArrowDown') {
-         e.preventDefault();
-         openMenu();
-       } else if (k === 'Escape') {
-         e.preventDefault();
-         closeMenu();
+ const SAMPLE_PHRASE = 'Chip, run the admin voice diagnostic.';
++const GREET_TIMEOUT_MS = 20000;
+ 
+ const root = document.querySelector('#admin-diagnostics');
+ if (!root) {
+   console.warn('[admin-diagnostics] root element not found');
+ } else {
+   renderUI(root);
+   bootstrap();
+ }
+ 
+ function renderUI(container) {
+   const header = `
+     <div class="diag-head">
+       <p>
+         This diagnostic mirrors the production conversational pipeline end-to-end: WebSocket auth, Configure greet,
+         voice capture with VAD, Admin SSE monitoring, and Chip’s TTS reply. Follow the steps below — we will log
+         every transition to the Admin log so you can trace failures down to the frame.
+       </p>
+       <div class="actions">
+         <button id="diag-start">Run conversational diagnostic</button>
+         <div class="run-meta" id="diag-run-meta"></div>
+       </div>
+     </div>`;
+ 
+   const steps = STEP_DEFS.map((step, idx) => `
+     <li class="diag-step" data-step="${step.id}" data-status="pending">
+@@ -184,51 +185,51 @@ async function runDiagnostic(state) {
+       micStream = await initMic();
+       disarmVAD();
+       setStepStatus(state, 'user', 'pending', 'Microphone granted. Waiting for Chip to greet…');
+     } catch (err) {
+       setSpeakState(state, 'error');
+       setStepStatus(state, 'user', 'error', `Microphone access failed: ${err?.message || err}`);
+       throw new Error('Microphone permission denied');
+     }
+ 
+     setStepStatus(state, 'ws', 'active', 'Opening WebSocket channel to /ws/v1/chat…');
+     const ws = await ensureWsOpen();
+     state.ws = ws;
+     setStepStatus(state, 'ws', 'done', 'WebSocket connected.');
+     logAdminEvent(state, 'step_ws_ok');
+ 
+     state.wsListener = (ev) => handleWSFrame(state, ev?.detail || {});
+     window.addEventListener('askchip-ws', state.wsListener);
+ 
+     state.sse = startAdminSSE(state, (evt) => handleAdminEvent(state, evt));
+     updateASRStatus(state, { status: 'pending', message: 'Waiting for speech activity…' });
+ 
+     configure({ greet: true, reset: 1, session_id: state.sid, metadata: { origin: 'admin_voice_diagnostic' } });
+     setStepStatus(state, 'greet', 'active', 'Configure greet sent. Waiting for Chip to answer…');
+     logAdminEvent(state, 'step_greet_sent');
+ 
+-    const greetFrame = await waitForGreeting(state, 8000);
++    const greetFrame = await waitForGreeting(state, GREET_TIMEOUT_MS);
+     setStepStatus(state, 'greet', 'done', summarizeAssistantFrame(greetFrame));
+     logAdminEvent(state, 'step_greet_ok', { frame_type: greetFrame?.type || greetFrame?.label || 'assistant' });
+     window.__askchip_session_started = true;
+ 
+     setStepStatus(state, 'user', 'active', 'Arming VAD. Speak when the card below says recording.');
+     setSpeakState(state, 'ready');
+     try {
+       if (micStream) await armVAD(micStream);
+       else await armVAD();
+     } catch (err) {
+       setSpeakState(state, 'error');
+       setStepStatus(state, 'user', 'error', `Failed to arm microphone: ${err?.message || err}`);
+       throw new Error('Failed to arm microphone');
+     }
+ 
+     const turnResult = await waitForUserTurn(state, 15000);
+     setStepStatus(state, 'user', 'done', 'Audio captured and queued to Chip.');
+     logAdminEvent(state, 'step_user_ok', { duration_ms: turnResult?.duration || 0 });
+ 
+     const finalEvent = await waitForASRFinal(state, 12000);
+     updateASRStatus(state, { status: 'done' });
+     logAdminEvent(state, 'step_asr_ok', {
+       partials: state.asr.partials,
+       finals: state.asr.finals || 1,
+       transcript: state.latestTranscript || '',
+@@ -418,59 +419,78 @@ function handleWSFrame(state, frame) {
        }
-     });
-     menu.addEventListener('keydown', (e) => {
-       const items = $$('#menuDropdown [role="menuitem"]')
-         .filter(n => n.offsetParent !== null);
-       if (!items.length) return;
-       const idx = items.indexOf(document.activeElement);
-       if (e.key === 'Escape') {
+     } else if (frame.type === 'assistant_end' || frame.type === 'UtteranceEnd') {
+       const summary = frame.type === 'assistant_end'
+         ? 'Assistant finished streaming.'
+         : 'UtteranceEnd received (TTS playback complete).';
+       setStepStatus(state, 'assistant', 'done', summary);
+       state.responseResolve?.({ summary, type: frame.type });
+     } else {
+       const text = extractAssistantText(frame);
+       const summary = text ? `Assistant text: “${text}”` : `Assistant frame: ${frame.type || frame.label}`;
+       setStepStatus(state, 'assistant', 'active', summary);
+     }
+   }
+ 
+   if (isTranscriptFrame(frame)) {
+     const transcript = extractTranscript(frame);
+     if (transcript) {
+       const final = isTranscriptFinal(frame);
+       state.latestTranscript = transcript;
+       updateASRStatus(state, { transcript, status: final ? 'done' : 'active' });
+     }
+   }
+ }
+ 
+ function handleAdminEvent(state, evt) {
+-  if (!evt || (evt.kind && evt.kind !== 'asr')) return;
+-  if (evt.label === 'asr_partial') {
+-    updateASRStatus(state, { status: 'active', partialsDelta: 1 });
+-  } else if (evt.label === 'asr_final') {
++  if (!evt) return;
++
++  const rawKind = (evt.kind || '').toString();
++  const rawLabel = (evt.label || '').toString();
++  const tag = (rawLabel || rawKind || '').toLowerCase();
++
++  if (!tag.startsWith('asr')) return;
++
++  if (tag.includes('error')) {
++    const message = evt.error ? `ASR error: ${evt.error}` : 'ASR error reported.';
++    updateASRStatus(state, { status: 'error', message, error: true });
++    state.asrReject?.(evt.error ? new Error(evt.error) : new Error('ASR error'));
++    return;
++  }
++
++  if (tag.includes('final')) {
+     updateASRStatus(state, { status: 'done', final: true });
+     state.asrResolve?.(evt);
+-  } else if (evt.label === 'asr_error') {
+-    updateASRStatus(state, { status: 'error', message: evt.error ? `ASR error: ${evt.error}` : 'ASR error reported.', error: true });
+-    state.asrReject?.(evt.error ? new Error(evt.error) : new Error('ASR error'));
++    return;
++  }
++
++  if (tag.includes('partial')) {
++    updateASRStatus(state, { status: 'active', partialsDelta: 1 });
++    return;
++  }
++
++  if (tag.includes('start')) {
++    updateASRStatus(state, { status: 'active', message: 'ASR stream started.' });
+   }
+ }
+ 
+ function startAdminSSE(state, onMatch) {
+   try {
+     const es = new EventSource('/api/v1/admin/logs?live=1', { withCredentials: true });
+     es.onmessage = (ev) => {
+       if (!ev.data) return;
+       appendLog(state.adminLogEl, `${timestamp()} ${ev.data}`);
+       try {
+         const parsed = JSON.parse(ev.data);
+         const evSid = String(parsed?.session_id || parsed?.sid || '');
+         if (state.sid && evSid && evSid !== state.sid) return;
+         onMatch?.(parsed);
+       } catch {}
+     };
+     es.onerror = () => {
+       appendLog(state.adminLogEl, `${timestamp()} [error] SSE connection problem (check network/auth).`);
+     };
+     return es;
+   } catch (err) {
+     appendLog(state.adminLogEl, `${timestamp()} [error] Failed to open SSE: ${err?.message || err}`);
+     return null;
+   }
+ }
+@@ -520,50 +540,51 @@ function cleanupRun(state) {
+ function setStepStatus(state, stepId, status, detail) {
+   const entry = state.stepMap.get(stepId);
+   if (!entry) return;
+   if (status) {
+     entry.el.dataset.status = status;
+     if (entry.statusEl) entry.statusEl.textContent = STATUS_LABELS[status] || status;
+   }
+   if (detail !== undefined && entry.liveEl) {
+     entry.liveEl.textContent = detail;
+   }
+ }
+ 
+ function setSpeakState(state, mode) {
+   if (!state.speakCard || !state.speakStateEl) return;
+   state.speakCard.dataset.mode = mode;
+   state.speakStateEl.textContent = SPEAK_LABELS[mode] || SPEAK_LABELS.idle;
+ }
+ 
+ function appendLog(el, line) {
+   if (!el || !line) return;
+   el.textContent = el.textContent ? `${el.textContent}\n${line}` : line;
+   if (el.textContent.length > 14000) {
+     el.textContent = el.textContent.slice(-14000);
+   }
+   el.scrollTop = el.scrollHeight;
++  try { console.info('[admin-diagnostics]', line); } catch {}
+ }
+ 
+ function timestamp() {
+   const t = new Date().toISOString();
+   return t.split('T')[1].replace('Z', '').slice(0, 8);
+ }
+ 
+ function describeFrame(frame) {
+   const type = frame?.type || frame?.label || 'unknown';
+   if (type === 'assistant_audio') {
+     const chunks = Array.isArray(frame.audio_chunks) ? frame.audio_chunks.length : 0;
+     return `${type} chunks=${chunks}${frame.is_last ? ' (last)' : ''}`;
+   }
+   if (type === 'Results' || type === 'results' || type === 'transcript') {
+     const text = extractTranscript(frame);
+     const final = isTranscriptFinal(frame) ? ' final' : '';
+     return `${type}${final}${text ? ` text="${text}"` : ''}`;
+   }
+   if (type === 'assistant_chunk' || type === 'assistant_text' || type === 'assistant_final') {
+     const text = extractAssistantText(frame);
+     return text ? `${type}: ${text}` : type;
+   }
+   if (type === 'Error') {
+     return `Error ${frame.code || ''} ${frame.message || ''}`.trim();
+   }
