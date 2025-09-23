@@ -206,6 +206,7 @@ function _startRecorder() {
   };
 
   state.rec.onstop = async () => {
+    let finalDetail;
     try {
       const blob = new Blob(state.recChunks, { type: REC_MIME });
       state.recChunks = [];
@@ -213,6 +214,9 @@ function _startRecorder() {
       if (blob.size >= MIN_VALID_BLOB_BYTES) {
         // One blob per user turn → WS → server STT
         await sendAudioChunk(blob);
+      } else {
+        console.warn('[voice] recorded blob too small', blob.size);
+        finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
       }
     } catch (e) {
       console.warn('[voice] send audio failed', e);
@@ -222,7 +226,7 @@ function _startRecorder() {
         try { sendCloseStream(); } catch {}
         state.turnOpen = false;
       }
-      _emitVoiceState('armed');
+      _emitVoiceState('armed', finalDetail);
     }
   };
 
