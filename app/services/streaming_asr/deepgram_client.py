@@ -141,16 +141,17 @@ class DeepgramClient:
             await self._ev_queue.put({"type":"asr_open"})
             return
         # Real network path
+        headers = [("Authorization", _auth_header())]
         try:
             self._ws = await websockets.connect(
                 url,
-                extra_headers=[("Authorization", _auth_header())],
+                additional_headers=headers,
                 max_size=None,
             )
         except TypeError:
             self._ws = await websockets.connect(
                 url,
-                extra_headers={"Authorization": _auth_header()},
+                extra_headers=headers,
                 max_size=None,
             )
         # Send initial configuration to enable partials / VAD / formatting.
