@@ -265,7 +265,7 @@ class DeepgramStreamManager:
                 seq,
             )
             self.emit(
-                "voice:chunk",
+                "voice",
                 "voice:chunk",
                 {
                     "session_id": self.session_id,
