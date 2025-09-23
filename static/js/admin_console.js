@@ -1,394 +1,662 @@
-// static/js/admin_console.js
-//
-// Diagnostics tab (Admin > Diagnostics). Strict checks enabled.
-// No-ops unless #admin-diagnostics exists.
+import { openWS, waitWSOpen, closeWS, configure } from './ws.js';
+import { initMic, armVAD, disarmVAD } from './voice.js';
+import { unlockAudio } from './audio.js';
+import { getSID } from './util/sid.js';
 
-(function(){
-  function rootEl(){ return document.querySelector('#admin-diagnostics'); }
-  if (!rootEl()) return;
+const STEP_DEFS = [
+  {
+    id: 'ws',
+    title: 'Establish production connection',
+    role: 'system',
+    description: 'Open a live /ws/v1/chat socket with the same bearer subprotocol and CSRF protections the main app uses.',
+  },
+  {
+    id: 'greet',
+    title: 'Chip handshake',
+    role: 'system',
+    description: 'Send a Configure greet frame and wait for Chip to answer so we know the routing path is alive.',
+  },
+  {
+    id: 'user',
+    title: 'Your turn: capture voice sample',
+    role: 'you',
+    description: 'Run the full production microphone + VAD pipeline. When the card lights up, say the diagnostic phrase exactly as written.',
+  },
+  {
+    id: 'asr',
+    title: 'Speech-to-text + Admin log trace',
+    role: 'system',
+    description: 'Verify Admin SSE reports partial/final ASR events and that the WebSocket delivers the same transcript frames.',
+  },
+  {
+    id: 'assistant',
+    title: 'Chip responds over WS/TTS',
+    role: 'system',
+    description: 'Confirm we receive assistant audio/text frames back (just like production chat playback).',
+  },
+];
 
-  // ---------- tiny DOM helpers ----------
-  function $(sel, scope){ return (scope||document).querySelector(sel); }
-  function create(tag, attrs){ const el=document.createElement(tag); if(attrs) Object.assign(el, attrs); return el; }
-  const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
+const STATUS_LABELS = {
+  pending: 'Pending',
+  active: 'In progress',
+  waiting: 'Listening',
+  done: 'Passed',
+  error: 'Needs attention',
+};
 
-  
-  // ---------- mic prompt helpers ----------
-  function showMicPromptUI({title="Press Continue to record audio", state="idle"}={}){
-    const root = rootEl();
-    let wrap = document.querySelector('#mic-prompt-overlay');
-    if(!wrap){
-      wrap = document.createElement('div');
-      wrap.id = 'mic-prompt-overlay';
-      wrap.style.position='fixed';
-      wrap.style.inset='0';
-      wrap.style.background='rgba(0,0,0,.55)';
-      wrap.style.zIndex='2000';
-      wrap.style.display='flex';
-      wrap.style.alignItems='center';
-      wrap.style.justifyContent='center';
-      const card = document.createElement('div');
-      card.className='sheet';
-      card.style.background='#141824';
-      card.style.border='1px solid #202533';
-      card.style.borderRadius='12px';
-      card.style.padding='16px';
-      card.style.minWidth='360px';
-      card.style.textAlign='center';
-      card.innerHTML = `
-        <div id="mic-prompt-title" style="font-weight:600;margin-bottom:8px;">${title}</div>
-        <div id="mic-prompt-status" style="opacity:.9;margin-bottom:12px;">${state==='idle'?'Ready':''}</div>
-        <div style="display:flex;gap:8px;justify-content:center;">
-          <button id="mic-prompt-continue">Continue</button>
-          <button id="mic-prompt-cancel">Cancel</button>
-        </div>`;
-      wrap.appendChild(card);
-      root.appendChild(wrap);
-    }else{
-      const t = wrap.querySelector('#mic-prompt-title'); if(t) t.textContent = title;
-      const st = wrap.querySelector('#mic-prompt-status'); if(st) st.textContent = (state==='idle'?'Ready':state);
-      wrap.style.display='flex';
-    }
-    return wrap;
-  }
-  function hideMicPromptUI(){
-    const wrap = document.querySelector('#mic-prompt-overlay');
-    if(wrap){ wrap.style.display='none'; }
-  }
-  async function promptForRecording({onStart, onStop}={}){
-    const ui = showMicPromptUI({title:'Press Continue to record audio', state:'idle'});
-    const btnGo = ui.querySelector('#mic-prompt-continue');
-    const btnCancel = ui.querySelector('#mic-prompt-cancel');
-    return new Promise((resolve)=>{
-      function cleanup(){ try{btnGo.onclick=null; btnCancel.onclick=null;}catch(_){ } }
-      btnCancel.onclick = ()=>{ cleanup(); hideMicPromptUI(); resolve({proceed:false}); };
-      btnGo.onclick = async ()=>{
-        cleanup();
-        const status = ui.querySelector('#mic-prompt-status');
-        if(status) status.textContent = 'Recording…';
-        try{ onStart && await onStart(); }catch(_){}
-        await new Promise(r=>setTimeout(r, 5000)); // 5s window
-        try{ onStop && await onStop(); }catch(_){}
-        if(status) status.textContent = 'Audio captured (sending)…';
-        setTimeout(()=>{ hideMicPromptUI(); resolve({proceed:true}); }, 400);
-      };
-    });
-  }
+const SPEAK_LABELS = {
+  idle: 'Mic not armed yet.',
+  ready: 'Listening. Speak the diagnostic phrase when you are ready.',
+  recording: 'Recording… speak clearly into the mic.',
+  complete: 'Captured. Waiting for transcription results…',
+  error: 'Microphone error — check permissions or console logs.',
+};
 
-  
-  // ---------- admin fetch helpers ----------
-  async function _fetchJSON(url){
-    const r = await fetch(url, { credentials: 'include' });
-    if(!r.ok){ if(r.status===404||r.status===405) return null; throw new Error('HTTP '+r.status);}
-    try{ return await r.json(); }catch(_){ return {}; }
-  }
-  async function getVendorStatus(){
-    const cand = ['/api/v1/admin/vendor_status', '/api/v1/admin/diagnostics/vendor_status', '/admin/diagnostics/vendor_status'];
-    for(const u of cand){
-      try{ const j = await _fetchJSON(u); if(j) return j; }catch(_){}
-    }
-    return {};
-  }
-  async function getRateLimits(){
-    const cand = ['/api/v1/admin/rate_limits', '/api/v1/admin/limits', '/api/v1/admin/config/rate_limits'];
-    for(const u of cand){
-      try{ const j = await _fetchJSON(u); if(j && (j.chat || j.rate_limits || j.limits)) return j; }catch(_){}
-    }
-    return {};
-  }
-// ---------- controls/table ----------
-  function ensureControls(){
-    const root = rootEl();
-    let bar = $('#admin-diagnostics-controls', root);
-    if(!bar){
-      bar = create('div', { id: 'admin-diagnostics-controls' });
-      bar.style.display = 'flex';
-      bar.style.alignItems = 'center';
-      bar.style.gap = '12px';
-      bar.style.margin = '10px 0';
-      root.appendChild(bar);
-    }
-    let btn = $('#btn-full-system-test', bar);
-    if(!btn){
-      btn = create('button', { id: 'btn-full-system-test', textContent: 'Run full system test' });
-      bar.appendChild(btn);
-    }
-    let micWrap = $('#diag-mic-wrap', bar);
-    if(!micWrap){
-      micWrap = create('label', { id: 'diag-mic-wrap', title: 'Enable microphone for ASR partial/final checks' });
-      micWrap.style.display = 'inline-flex';
-      micWrap.style.alignItems = 'center';
-      micWrap.style.gap = '6px';
-      micWrap.innerHTML = `<input type="checkbox" id="diag-mic-mode" /> <span>Mic Mode (send ~2s of 96ms slices)</span>`;
-      bar.appendChild(micWrap);
-    }
-    return btn;
-  }
+const SAMPLE_PHRASE = 'Chip, run the admin voice diagnostic.';
 
-  function ensureTable(){
-    const root = rootEl();
-    let table = $('#full-system-results', root);
-    if(!table){
-      table = create('table', { id: 'full-system-results' });
-      table.innerHTML = `
-        <thead><tr><th>Check</th><th>OK</th><th>Details</th></tr></thead>
-        <tbody></tbody>
-      `;
-      root.appendChild(table);
-    }
-    return table;
-  }
-
-  function tbodyOf(table){ return table.tBodies[0] || table.createTBody(); }
-  function setRow(table, key, ok, details){
-    const tb = tbodyOf(table);
-    const id = `diag-${key}`;
-    let tr = tb.querySelector(`tr[data-key="${id}"]`);
-    if(!tr){
-      tr = create('tr'); tr.dataset.key = id;
-      tr.innerHTML = `<td></td><td></td><td></td>`;
-      tb.appendChild(tr);
-    }
-    const [c0,c1,c2] = tr.children;
-    c0.textContent = key;
-    c1.textContent = ok ? '✔' : '✖';
-    c1.style.color = ok ? '#44d07b' : '#ff5a63';
-    c2.textContent = (details==null ? '' : String(details));
-  }
-
-  // ---------- HTTP/WS utilities ----------
-  async function getCSRF(){
-    try{ const r=await fetch('/api/v1/csrf',{credentials:'include'}); const t=r.headers.get('X-CSRF-Token')||r.headers.get('X-CSRFToken'); if(t) return t; }catch(_){}
-    try{ const r=await fetch('/api/v1/health',{credentials:'include'}); const t=r.headers.get('X-CSRF-Token')||r.headers.get('X-CSRFToken'); if(t) return t; }catch(_){}
-    const m=document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/); return m?decodeURIComponent(m[1]):'';
-  }
-  function b64OfBytes(n){ const a=new Uint8Array(n); let s=''; for(let i=0;i<n;i++) s+=String.fromCharCode(a[i]); return btoa(s); }
-  
-async function postChunk({sid, csrf, userMsgId, seq, blob}){
-  const fd = new FormData();
-  fd.append('chunk', blob, 'mic.webm');
-  const r = await fetch(`/ws/v1/chat?session_id=${encodeURIComponent(sid)}`, {
-    method: 'POST', credentials: 'include',
-    headers: { 'X-CSRF-Token': csrf, 'X-User-Msg-Id': userMsgId || 'diag-mic', 'X-Seq': String(seq||0) },
-    body: fd
-  });
-  return r;
+const root = document.querySelector('#admin-diagnostics');
+if (!root) {
+  console.warn('[admin-diagnostics] root element not found');
+} else {
+  renderUI(root);
+  bootstrap();
 }
 
-  function openWS(sessionId, onFrame){
-    return new Promise((resolve,reject)=>{
-      try{
-        const proto = location.protocol==='https:'?'wss://':'ws://';
-        const url = new URL(proto+location.host+'/ws/v1/chat');
-        url.searchParams.set('session_id', sessionId);
-        const ws = new WebSocket(url.toString());
-        ws.onopen = ()=> resolve(ws);
-        ws.onmessage = ev => { try{ const fr=JSON.parse(ev.data); onFrame && onFrame(fr); }catch(_){ } };
-        ws.onerror = e => reject(e);
-      }catch(e){ reject(e); }
+function renderUI(container) {
+  const header = `
+    <div class="diag-head">
+      <p>
+        This diagnostic mirrors the production conversational pipeline end-to-end: WebSocket auth, Configure greet,
+        voice capture with VAD, Admin SSE monitoring, and Chip’s TTS reply. Follow the steps below — we will log
+        every transition to the Admin log so you can trace failures down to the frame.
+      </p>
+      <div class="actions">
+        <button id="diag-start">Run conversational diagnostic</button>
+        <div class="run-meta" id="diag-run-meta"></div>
+      </div>
+    </div>`;
+
+  const steps = STEP_DEFS.map((step, idx) => `
+    <li class="diag-step" data-step="${step.id}" data-status="pending">
+      <div class="step-head">
+        <div>
+          <div class="step-index">Step ${idx + 1}</div>
+          <div class="step-title">${step.title}</div>
+        </div>
+        <div class="step-badges">
+          <span class="step-role ${step.role === 'you' ? 'role-you' : 'role-system'}">${step.role === 'you' ? 'You' : 'System'}</span>
+          <span class="step-status">Pending</span>
+        </div>
+      </div>
+      <div class="step-desc">${step.description}</div>
+      <div class="step-live" id="step-live-${step.id}"></div>
+      ${step.id === 'user'
+        ? `<div class="speak-card" id="speak-card" data-mode="idle">
+             <div class="speak-label">Say this phrase</div>
+             <div class="speak-text">&ldquo;${SAMPLE_PHRASE}&rdquo;</div>
+             <div class="speak-state" id="speak-state">${SPEAK_LABELS.idle}</div>
+           </div>`
+        : ''}
+    </li>`).join('');
+
+  const logs = `
+    <section class="diag-logs">
+      <div class="diag-log">
+        <h3>Admin log trace (/api/v1/admin/logs)</h3>
+        <pre id="diag-admin-log" class="log-window"></pre>
+      </div>
+      <div class="diag-log">
+        <h3>WebSocket frames (WS→UI)</h3>
+        <pre id="diag-ws-log" class="log-window"></pre>
+      </div>
+    </section>`;
+
+  container.innerHTML = header + `<ol class="diag-steps">${steps}</ol>` + logs;
+}
+
+function bootstrap() {
+  const startBtn = root.querySelector('#diag-start');
+  const runMetaEl = root.querySelector('#diag-run-meta');
+  const adminLogEl = root.querySelector('#diag-admin-log');
+  const wsLogEl = root.querySelector('#diag-ws-log');
+  const speakCard = root.querySelector('#speak-card');
+  const speakStateEl = root.querySelector('#speak-state');
+
+  const stepMap = new Map();
+  for (const step of STEP_DEFS) {
+    const el = root.querySelector(`[data-step="${step.id}"]`);
+    if (!el) continue;
+    stepMap.set(step.id, {
+      el,
+      statusEl: el.querySelector('.step-status'),
+      liveEl: el.querySelector(`#step-live-${step.id}`),
     });
   }
-  function attachWSListener(ws, fn){
-    function onmsg(ev){ try{ fn(JSON.parse(ev.data)); }catch(_){ } }
-    ws.addEventListener('message', onmsg);
-    return ()=>{ try{ ws.removeEventListener('message', onmsg);}catch(_){} };
-  }
 
-  // Admin SSE watch: counts partial/final/error for a specific session
-  async function adminSSEWatch(sessionId){
-    const counts = { partials:0, finals:0, asr_error:false, last_error:'' };
-    return new Promise((resolve)=>{
-      try{
-        const es = new EventSource('/api/v1/admin/logs');
-        const onmsg = (ev)=>{
-          try{
-            const j = JSON.parse(ev.data || '{}');
-            if(j && j.session_id === sessionId){
-              if(j.label === 'asr_partial') counts.partials++;
-              else if(j.label === 'asr_final') counts.finals++;
-              else if(j.label === 'asr_error'){ counts.asr_error = true; counts.last_error = String(j.error||''); }
-            }
-          }catch(_){}
-        };
-        es.addEventListener('message', onmsg);
-        resolve({ counts, detach: ()=>{ try{ es.removeEventListener('message', onmsg); es.close(); }catch(_){} } });
-      }catch(_){ resolve({ counts, detach: ()=>{} }); }
-    });
-  }
+  const state = {
+    running: false,
+    sid: null,
+    startBtn,
+    runMetaEl,
+    adminLogEl,
+    wsLogEl,
+    speakCard,
+    speakStateEl,
+    stepMap,
+    wsListener: null,
+    sse: null,
+    asr: { partials: 0, finals: 0, errors: 0 },
+    latestTranscript: '',
+    awaitingGreeting: false,
+    awaitingResponse: false,
+    responseStarted: false,
+    greetResolve: null,
+    greetReject: null,
+    asrResolve: null,
+    asrReject: null,
+    responseResolve: null,
+    responseReject: null,
+  };
 
-  function attachWSWatch(ws, label){
-    const counts = { partials:0, finals:0, asr_error:false, last_error:'' };
-    function onmsg(ev){
-      try{
-        const fr = JSON.parse(ev.data);
-        // Normalize a few shapes: either server 'asr_*' frames or assistant/metadata with ASR hints
-        if(fr && (fr.type==='asr_partial' || fr.label==='asr_partial')) counts.partials++;
-        if(fr && (fr.type==='asr_final'   || fr.label==='asr_final'))   counts.finals++;
-        if(fr && fr.label==='asr_error'){ counts.asr_error=true; counts.last_error=String(fr.error||''); }
-      }catch(_){}
+  resetView(state);
+  if (startBtn) startBtn.addEventListener('click', () => runDiagnostic(state));
+  window.AdminDiagnostics = {
+    run: () => runDiagnostic(state),
+  };
+}
+async function runDiagnostic(state) {
+  if (!state.startBtn || state.running) return;
+  state.running = true;
+  state.startBtn.disabled = true;
+  resetView(state);
+
+  state.sid = getSID();
+  if (state.runMetaEl) state.runMetaEl.textContent = `Session: ${state.sid}`;
+  appendLog(state.adminLogEl, `${timestamp()} starting diagnostic for session=${state.sid}`);
+  logAdminEvent(state, 'diagnostic_start');
+
+  try {
+    try { await unlockAudio(); } catch {}
+
+    setStepStatus(state, 'user', 'pending', 'Requesting microphone permission…');
+    let micStream = null;
+    try {
+      micStream = await initMic();
+      disarmVAD();
+      setStepStatus(state, 'user', 'pending', 'Microphone granted. Waiting for Chip to greet…');
+    } catch (err) {
+      setSpeakState(state, 'error');
+      setStepStatus(state, 'user', 'error', `Microphone access failed: ${err?.message || err}`);
+      throw new Error('Microphone permission denied');
     }
-    ws.addEventListener('message', onmsg);
-    return { counts, detach: ()=>{ try{ ws.removeEventListener('message', onmsg);}catch(_){}} };
+
+    setStepStatus(state, 'ws', 'active', 'Opening WebSocket channel to /ws/v1/chat…');
+    const ws = await ensureWsOpen();
+    state.ws = ws;
+    setStepStatus(state, 'ws', 'done', 'WebSocket connected.');
+    logAdminEvent(state, 'step_ws_ok');
+
+    state.wsListener = (ev) => handleWSFrame(state, ev?.detail || {});
+    window.addEventListener('askchip-ws', state.wsListener);
+
+    state.sse = startAdminSSE(state, (evt) => handleAdminEvent(state, evt));
+    updateASRStatus(state, { status: 'pending', message: 'Waiting for speech activity…' });
+
+    configure({ greet: true, reset: 1, session_id: state.sid, metadata: { origin: 'admin_voice_diagnostic' } });
+    setStepStatus(state, 'greet', 'active', 'Configure greet sent. Waiting for Chip to answer…');
+    logAdminEvent(state, 'step_greet_sent');
+
+    const greetFrame = await waitForGreeting(state, 8000);
+    setStepStatus(state, 'greet', 'done', summarizeAssistantFrame(greetFrame));
+    logAdminEvent(state, 'step_greet_ok', { frame_type: greetFrame?.type || greetFrame?.label || 'assistant' });
+    window.__askchip_session_started = true;
+
+    setStepStatus(state, 'user', 'active', 'Arming VAD. Speak when the card below says recording.');
+    setSpeakState(state, 'ready');
+    try {
+      if (micStream) await armVAD(micStream);
+      else await armVAD();
+    } catch (err) {
+      setSpeakState(state, 'error');
+      setStepStatus(state, 'user', 'error', `Failed to arm microphone: ${err?.message || err}`);
+      throw new Error('Failed to arm microphone');
+    }
+
+    const turnResult = await waitForUserTurn(state, 15000);
+    setStepStatus(state, 'user', 'done', 'Audio captured and queued to Chip.');
+    logAdminEvent(state, 'step_user_ok', { duration_ms: turnResult?.duration || 0 });
+
+    const finalEvent = await waitForASRFinal(state, 12000);
+    updateASRStatus(state, { status: 'done' });
+    logAdminEvent(state, 'step_asr_ok', {
+      partials: state.asr.partials,
+      finals: state.asr.finals || 1,
+      transcript: state.latestTranscript || '',
+      via: finalEvent?.label || 'asr_final',
+    });
+
+    state.awaitingResponse = true;
+    const assistantResult = await waitForAssistantResponse(state, 12000);
+    setStepStatus(state, 'assistant', 'done', assistantResult.summary);
+    logAdminEvent(state, 'step_assistant_ok', { frame_type: assistantResult.type, summary: assistantResult.summary });
+
+    appendLog(state.wsLogEl, `${timestamp()} diagnostic complete.`);
+    logAdminEvent(state, 'diagnostic_complete');
+  } catch (err) {
+    const msg = err?.message || String(err) || 'Unknown diagnostic error';
+    appendLog(state.wsLogEl, `${timestamp()} [error] ${msg}`);
+    const failing = findFirstIncompleteStep(state);
+    setStepStatus(state, failing, 'error', msg);
+    logAdminEvent(state, 'diagnostic_error', { error: msg });
+  } finally {
+    cleanupRun(state);
+    state.startBtn.disabled = false;
+    state.running = false;
   }
+}
 
+function resetView(state) {
+  for (const step of STEP_DEFS) {
+    setStepStatus(state, step.id, 'pending', '');
+  }
+  setStepStatus(state, 'asr', 'pending', 'Waiting for speech activity…');
+  setStepStatus(state, 'assistant', 'pending', 'No assistant response yet.');
+  setSpeakState(state, 'idle');
+  state.asr = { partials: 0, finals: 0, errors: 0 };
+  state.latestTranscript = '';
+  state.awaitingGreeting = false;
+  state.awaitingResponse = false;
+  state.responseStarted = false;
+  if (state.adminLogEl) state.adminLogEl.textContent = '';
+  if (state.wsLogEl) state.wsLogEl.textContent = '';
+  if (state.runMetaEl) state.runMetaEl.textContent = '';
+}
 
-  // Mic slice sender (96ms cadence)
-  
+async function ensureWsOpen(timeoutMs = 8000) {
+  const ws = await openWS();
+  await Promise.race([
+    waitWSOpen(),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('WebSocket open timed out')), timeoutMs)),
+  ]);
+  return ws;
+}
 
-function makeMicStreamer({sid, csrf, userMsgId}){
-  let stream=null, rec=null, seq=0, stopped=false;
-
-  async function start(){
-    try{
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio:{
-          echoCancellation:true,
-          noiseSuppression:true,
-          channelCount:1,
-          sampleRate:48000
-        }
-      });
-    }catch(_){ throw new Error('mic denied'); }
-    rec = new MediaRecorder(stream, { mimeType:'audio/webm;codecs=opus', audioBitsPerSecond:128000 });
-    rec.ondataavailable = async (ev)=>{
-      if(stopped) return;
-      if(ev.data && ev.data.size>0){
-        // Send EACH chunk unmodified so the first one includes the WebM/Opus header.
-        await postChunk({sid, csrf, userMsgId, seq: ++seq, blob: ev.data});
-      }
+function waitForGreeting(state, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    state.awaitingGreeting = true;
+    const timer = setTimeout(() => {
+      state.awaitingGreeting = false;
+      state.greetResolve = null;
+      state.greetReject = null;
+      reject(new Error('Chip did not greet within the expected window.'));
+    }, timeoutMs);
+    state.greetResolve = (frame) => {
+      clearTimeout(timer);
+      state.awaitingGreeting = false;
+      state.greetResolve = null;
+      state.greetReject = null;
+      resolve(frame);
     };
-    rec.start(96); // ~96ms cadence
-  }
-  function stop(){
-    try{ stopped=true; rec && rec.stop(); }catch(_){}
-    try{ stream && stream.getTracks().forEach(t=>t.stop()); }catch(_){}
-  }
-  return { start, stop };
+    state.greetReject = (err) => {
+      clearTimeout(timer);
+      state.awaitingGreeting = false;
+      state.greetResolve = null;
+      state.greetReject = null;
+      reject(err instanceof Error ? err : new Error(String(err || 'greet rejected')));
+    };
+  });
 }
 
+function waitForASRFinal(state, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      state.asrResolve = null;
+      state.asrReject = null;
+      reject(new Error('Timed out waiting for ASR final.'));
+    }, timeoutMs);
+    state.asrResolve = (evt) => {
+      clearTimeout(timer);
+      state.asrResolve = null;
+      state.asrReject = null;
+      resolve(evt);
+    };
+    state.asrReject = (err) => {
+      clearTimeout(timer);
+      state.asrResolve = null;
+      state.asrReject = null;
+      reject(err instanceof Error ? err : new Error(String(err || 'asr error')));
+    };
+  });
+}
 
-  // ---------- main runner ----------
-  async function runFullSystemTest(){
-    const root = rootEl();
-    const table = ensureTable();
-    const btn = ensureControls();
-    const set = (k, ok, d)=> setRow(table, k, ok, d);
+function waitForAssistantResponse(state, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      state.responseResolve = null;
+      state.responseReject = null;
+      state.awaitingResponse = false;
+      reject(new Error('Timed out waiting for Chip to respond.'));
+    }, timeoutMs);
+    state.responseResolve = (info) => {
+      clearTimeout(timer);
+      state.responseResolve = null;
+      state.responseReject = null;
+      state.awaitingResponse = false;
+      resolve(info);
+    };
+    state.responseReject = (err) => {
+      clearTimeout(timer);
+      state.responseResolve = null;
+      state.responseReject = null;
+      state.awaitingResponse = false;
+      reject(err instanceof Error ? err : new Error(String(err || 'assistant error')));
+    };
+  });
+}
 
-    if(btn){
-      btn.disabled=true; const orig=btn.textContent; btn.textContent='Running…';
-      setTimeout(()=>{ btn.disabled=false; btn.textContent=orig; }, 5000);
+function waitForUserTurn(state, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    let recorded = false;
+    const timer = setTimeout(() => {
+      window.removeEventListener('askchip-voice', onVoice);
+      setSpeakState(state, 'error');
+      reject(new Error('No speech detected — timed out waiting for microphone activity.'));
+    }, timeoutMs);
+
+    function cleanup() {
+      clearTimeout(timer);
+      window.removeEventListener('askchip-voice', onVoice);
     }
 
-    const micMode = !!$('#diag-mic-mode', root)?.checked;
-    const sid = `diag-${Math.random().toString(36).slice(2,10)}`;
-    const csrf = await getCSRF();
-
-    // WS + ASR watch
-    let ws=null;
-    let watch;
-    try{
-      ws = await openWS(sid);
-      set('bus_subscribe', true, `session=${sid}`);
-      watch = await adminSSEWatch(sid);
-    }catch(_){ set('bus_subscribe', false, 'ws failed'); return; }
-
-    // Strict server facts
-    const vendors = await getVendorStatus().catch(()=> ({}));
-    const limits  = await getRateLimits().catch(()=> ({}));
-    const deepOK = vendors && vendors.deepgram_enabled === true;
-    const elevOK = vendors && vendors.elevenlabs_enabled === true;
-    const vendorKnown = vendors && (typeof vendors.deepgram_enabled === 'boolean' || typeof vendors.elevenlabs_enabled === 'boolean');
-    if(vendorKnown){
-      set('vendor_keys_ok', (deepOK && elevOK), `deepgram=${String(!!vendors.deepgram_enabled)}, elevenlabs=${String(!!vendors.elevenlabs_enabled)}`);
-    }else{
-      set('vendor_keys_ok', true, 'unknown (no server value)');
-    }
-
-    const chatMax = (limits && limits.chat && typeof limits.chat.max_per_window === 'number')
-      ? limits.chat.max_per_window
-      : null;
-
-    // Functional checks
-    try{ const r=await greetIdempotent(sid); set('greet_idempotent', r.ok, r.d); }catch(_){ set('greet_idempotent', false, 'error'); }
-    try{ const r=await chatIdempotent(sid); set('chat_idempotent', r.ok, r.d); }catch(_){ set('chat_idempotent', false, 'error'); }
-
-    // Strict rate-limit
-    if (chatMax == null){
-      set('rate_limit_ok', true, 'unknown (no server value)');
-    }else{
-      try{ const r=await rateLimitCheckStrict(chatMax); set('rate_limit_ok', r.ok, r.d); }
-      catch(_){ set('rate_limit_ok', false, 'error'); }
-    }
-
-    // 413 guard
-    try{ const r=await guard413(sid); set('413_guard', r.ok, r.d); }catch(_){ set('413_guard', false, 'error'); }
-
-    // POST chunks
-    let postOk=false;
-    if(!micMode){
-      try{ const r=await (async ()=>{const __buf=new Uint8Array(atob(b64OfBytes(256)).split('').map(c=>c.charCodeAt(0))); await postChunk({sid, csrf, userMsgId:'diag-1', seq:1,  blob:new Blob([__buf],{type:'application/octet-stream'})});})(); postOk=r.ok; set('chunk_post', r.ok, r.ok?'ok':`HTTP ${r.status}`); }
-      catch(_){ set('chunk_post', false, 'exception'); }
-    }else{
-      const streamer = makeMicStreamer({sid, csrf, userMsgId:'diag-mic'});
-      let micOk=false;
-      try{
-        const res = await promptForRecording({
-          onStart: async () => { await streamer.start(); },
-          onStop:  async () => { streamer.stop(); }
-        });
-        if(res && res.proceed){
-          const _csrf2 = await getCSRF();
-          await fetch(`/ws/v1/chat?session_id=${encodeURIComponent(sid)}`, {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'X-CSRF-Token': _csrf2 }
-          });
-          micOk=true; set('chunk_post', true, 'mic slices sent');
-        }else{
-          set('chunk_post', false, 'cancelled');
+    function onVoice(ev) {
+      const detail = ev?.detail || {};
+      if (detail.state === 'recording') {
+        recorded = true;
+        setSpeakState(state, 'recording');
+        setStepStatus(state, 'user', 'active', 'Recording… speak the diagnostic phrase now.');
+      } else if (detail.state === 'armed') {
+        if (!recorded) {
+          setSpeakState(state, 'ready');
+          setStepStatus(state, 'user', 'active', 'Listening. Speak when ready.');
+        } else {
+          cleanup();
+          setSpeakState(state, 'complete');
+          resolve({ duration: Date.now() - start });
         }
-      }catch(_){
-        try{
-          streamer.stop();
-          const _csrf = await getCSRF();
-          await fetch(`/ws/v1/chat?session_id=${encodeURIComponent(sid)}`, { method:'POST', credentials:'include', headers:{'X-CSRF-Token':_csrf} });
-        }catch(_){ }
-        set('chunk_post', false, 'mic error');
+      } else if (detail.state === 'idle' && !recorded) {
+        cleanup();
+        setSpeakState(state, 'error');
+        reject(new Error('Microphone disarmed before any audio was captured.'));
       }
-      postOk = micOk;
-    }
-set('enqueue_ok', postOk, postOk?'ok':'failed');
-
-    // Observe ASR
-    await sleep(micMode?2000:600);
-    const { partials, finals, asr_error } = (watch && watch.counts) || {partials:0,finals:0,asr_error:false};
-
-    if(!micMode){
-      // ⬇️ changed: show green “skipped (silent mode)” for both rows
-      set('asr_path_ok', true, 'skipped (silent mode)');
-      set('partials_seen', true, 'skipped (silent mode)');
-      set('final_seen', true, 'skipped (silent mode)');
-    }else{
-      const ok = (partials>0 || finals>0 || asr_error);
-      const last_err = (watch && watch.counts && watch.counts.last_error) || '';
-      set('asr_path_ok', ok, `partials=${partials}, finals=${finals}, asr_error=${asr_error}${last_err?`, err=${last_err}`:''}`);
-      set('partials_seen', partials>0, String(partials));
-      set('final_seen', finals>0, finals>0?'ok':'no final in window');
     }
 
-    // Admin SSE & TTS cancel smoke
-    try{ const r=await adminSSE(); set('admin_sse_ok', r.ok, r.d); }catch(_){ set('admin_sse_ok', false, 'error'); }
-    try{ const r=await ttsCancelSmoke({ws, sid, csrf, micMode}); set('tts_cancel_ok', r.ok, r.d); }catch(_){ set('tts_cancel_ok', true, 'skipped'); }
+    window.addEventListener('askchip-voice', onVoice);
+  });
+}
+function handleWSFrame(state, frame) {
+  appendLog(state.wsLogEl, `${timestamp()} ${describeFrame(frame)}`);
 
-    try{ watch && watch.detach(); ws && ws.close(); }catch(_){}
+  if (state.awaitingGreeting && isAssistantFrame(frame)) {
+    state.greetResolve?.(frame);
+    return;
   }
 
-  // init
-  function init(){
-    const root = rootEl(); if(!root) return;
-    const btn = ensureControls(); ensureTable();
-    if(btn) btn.addEventListener('click', runFullSystemTest);
-    window.AdminDiagnostics = { runFullSystemTest };
+  if (state.awaitingResponse && isAssistantFrame(frame)) {
+    if (!state.responseStarted) {
+      state.responseStarted = true;
+      setStepStatus(state, 'assistant', 'active', 'Chip is responding…');
+    }
+    if (frame.type === 'assistant_audio') {
+      const chunks = Array.isArray(frame.audio_chunks) ? frame.audio_chunks.length : 0;
+      const summary = frame.is_last
+        ? `Assistant audio completed (${chunks} chunk${chunks === 1 ? '' : 's'}).`
+        : `Assistant audio chunk received (${chunks} chunk${chunks === 1 ? '' : 's'}).`;
+      setStepStatus(state, 'assistant', frame.is_last ? 'done' : 'active', summary);
+      if (frame.is_last) {
+        state.responseResolve?.({ summary, type: frame.type });
+      }
+    } else if (frame.type === 'assistant_end' || frame.type === 'UtteranceEnd') {
+      const summary = frame.type === 'assistant_end'
+        ? 'Assistant finished streaming.'
+        : 'UtteranceEnd received (TTS playback complete).';
+      setStepStatus(state, 'assistant', 'done', summary);
+      state.responseResolve?.({ summary, type: frame.type });
+    } else {
+      const text = extractAssistantText(frame);
+      const summary = text ? `Assistant text: “${text}”` : `Assistant frame: ${frame.type || frame.label}`;
+      setStepStatus(state, 'assistant', 'active', summary);
+    }
   }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', init); else init();
-})();
+
+  if (isTranscriptFrame(frame)) {
+    const transcript = extractTranscript(frame);
+    if (transcript) {
+      const final = isTranscriptFinal(frame);
+      state.latestTranscript = transcript;
+      updateASRStatus(state, { transcript, status: final ? 'done' : 'active' });
+    }
+  }
+}
+
+function handleAdminEvent(state, evt) {
+  if (!evt || (evt.kind && evt.kind !== 'asr')) return;
+  if (evt.label === 'asr_partial') {
+    updateASRStatus(state, { status: 'active', partialsDelta: 1 });
+  } else if (evt.label === 'asr_final') {
+    updateASRStatus(state, { status: 'done', final: true });
+    state.asrResolve?.(evt);
+  } else if (evt.label === 'asr_error') {
+    updateASRStatus(state, { status: 'error', message: evt.error ? `ASR error: ${evt.error}` : 'ASR error reported.', error: true });
+    state.asrReject?.(evt.error ? new Error(evt.error) : new Error('ASR error'));
+  }
+}
+
+function startAdminSSE(state, onMatch) {
+  try {
+    const es = new EventSource('/api/v1/admin/logs?live=1', { withCredentials: true });
+    es.onmessage = (ev) => {
+      if (!ev.data) return;
+      appendLog(state.adminLogEl, `${timestamp()} ${ev.data}`);
+      try {
+        const parsed = JSON.parse(ev.data);
+        const evSid = String(parsed?.session_id || parsed?.sid || '');
+        if (state.sid && evSid && evSid !== state.sid) return;
+        onMatch?.(parsed);
+      } catch {}
+    };
+    es.onerror = () => {
+      appendLog(state.adminLogEl, `${timestamp()} [error] SSE connection problem (check network/auth).`);
+    };
+    return es;
+  } catch (err) {
+    appendLog(state.adminLogEl, `${timestamp()} [error] Failed to open SSE: ${err?.message || err}`);
+    return null;
+  }
+}
+
+function updateASRStatus(state, { status, partialsDelta = 0, final = false, transcript, message, error = false } = {}) {
+  if (!state.asr) state.asr = { partials: 0, finals: 0, errors: 0 };
+  if (partialsDelta) state.asr.partials += partialsDelta;
+  if (final) state.asr.finals += 1;
+  if (error) state.asr.errors += 1;
+  if (transcript) state.latestTranscript = transcript;
+
+  const parts = [];
+  if (state.asr.partials) parts.push(`${state.asr.partials} partial${state.asr.partials === 1 ? '' : 's'}`);
+  if (state.asr.finals) parts.push(`${state.asr.finals} final${state.asr.finals === 1 ? '' : 's'}`);
+  if (state.latestTranscript && (final || state.asr.finals)) parts.push(`Transcript: “${state.latestTranscript}”`);
+
+  const detail = parts.length ? parts.join(' • ') : (message || 'Waiting for ASR activity…');
+  const resolvedStatus = status || (error ? 'error' : (state.asr.finals ? 'done' : (state.asr.partials ? 'active' : 'pending')));
+  setStepStatus(state, 'asr', resolvedStatus, detail);
+}
+
+function cleanupRun(state) {
+  try { disarmVAD(); } catch {}
+  try { closeWS(1000, 'admin_diag_end'); } catch {}
+  if (state.wsListener) {
+    window.removeEventListener('askchip-ws', state.wsListener);
+    state.wsListener = null;
+  }
+  if (state.sse) {
+    try { state.sse.close(); } catch {}
+    state.sse = null;
+  }
+  state.awaitingGreeting = false;
+  state.awaitingResponse = false;
+  state.responseStarted = false;
+  if (state.greetReject) state.greetReject(new Error('Diagnostic cancelled'));
+  if (state.asrReject) state.asrReject(new Error('Diagnostic cancelled'));
+  if (state.responseReject) state.responseReject(new Error('Diagnostic cancelled'));
+  state.greetResolve = null;
+  state.greetReject = null;
+  state.asrResolve = null;
+  state.asrReject = null;
+  state.responseResolve = null;
+  state.responseReject = null;
+}
+
+function setStepStatus(state, stepId, status, detail) {
+  const entry = state.stepMap.get(stepId);
+  if (!entry) return;
+  if (status) {
+    entry.el.dataset.status = status;
+    if (entry.statusEl) entry.statusEl.textContent = STATUS_LABELS[status] || status;
+  }
+  if (detail !== undefined && entry.liveEl) {
+    entry.liveEl.textContent = detail;
+  }
+}
+
+function setSpeakState(state, mode) {
+  if (!state.speakCard || !state.speakStateEl) return;
+  state.speakCard.dataset.mode = mode;
+  state.speakStateEl.textContent = SPEAK_LABELS[mode] || SPEAK_LABELS.idle;
+}
+
+function appendLog(el, line) {
+  if (!el || !line) return;
+  el.textContent = el.textContent ? `${el.textContent}\n${line}` : line;
+  if (el.textContent.length > 14000) {
+    el.textContent = el.textContent.slice(-14000);
+  }
+  el.scrollTop = el.scrollHeight;
+}
+
+function timestamp() {
+  const t = new Date().toISOString();
+  return t.split('T')[1].replace('Z', '').slice(0, 8);
+}
+
+function describeFrame(frame) {
+  const type = frame?.type || frame?.label || 'unknown';
+  if (type === 'assistant_audio') {
+    const chunks = Array.isArray(frame.audio_chunks) ? frame.audio_chunks.length : 0;
+    return `${type} chunks=${chunks}${frame.is_last ? ' (last)' : ''}`;
+  }
+  if (type === 'Results' || type === 'results' || type === 'transcript') {
+    const text = extractTranscript(frame);
+    const final = isTranscriptFinal(frame) ? ' final' : '';
+    return `${type}${final}${text ? ` text="${text}"` : ''}`;
+  }
+  if (type === 'assistant_chunk' || type === 'assistant_text' || type === 'assistant_final') {
+    const text = extractAssistantText(frame);
+    return text ? `${type}: ${text}` : type;
+  }
+  if (type === 'Error') {
+    return `Error ${frame.code || ''} ${frame.message || ''}`.trim();
+  }
+  return type;
+}
+
+function isAssistantFrame(frame) {
+  const type = frame?.type || frame?.label || '';
+  if (!type) return false;
+  if (type.startsWith('assistant')) return true;
+  if (frame?.role === 'assistant') return true;
+  return false;
+}
+
+function isTranscriptFrame(frame) {
+  const type = frame?.type || frame?.label || '';
+  return type === 'Results' || type === 'results' || type === 'transcript';
+}
+
+function extractTranscript(frame) {
+  try {
+    return (
+      frame?.channel?.alternatives?.[0]?.transcript ||
+      frame?.alternatives?.[0]?.transcript ||
+      frame?.transcript ||
+      ''
+    ).trim();
+  } catch {
+    return '';
+  }
+}
+
+function isTranscriptFinal(frame) {
+  try {
+    return Boolean(
+      frame?.channel?.is_final ||
+      frame?.is_final ||
+      frame?.final
+    );
+  } catch {
+    return false;
+  }
+}
+
+function extractAssistantText(frame) {
+  try {
+    return (
+      frame?.text ||
+      frame?.delta ||
+      frame?.content ||
+      ''
+    ).toString().trim();
+  } catch {
+    return '';
+  }
+}
+
+function summarizeAssistantFrame(frame) {
+  if (!frame) return 'Assistant responded.';
+  const type = frame.type || frame.label || 'assistant';
+  if (type === 'assistant_audio') {
+    const chunks = Array.isArray(frame.audio_chunks) ? frame.audio_chunks.length : 0;
+    return `Assistant audio started (${chunks} chunk${chunks === 1 ? '' : 's'} in first frame).`;
+  }
+  const text = extractAssistantText(frame);
+  return text ? `Assistant text: “${text}”` : `Assistant frame: ${type}`;
+}
+
+function findFirstIncompleteStep(state) {
+  for (const step of STEP_DEFS) {
+    const entry = state.stepMap.get(step.id);
+    if (!entry) continue;
+    if (entry.el.dataset.status !== 'done') return step.id;
+  }
+  return STEP_DEFS[STEP_DEFS.length - 1].id;
+}
+
+function logAdminEvent(state, label, extra = {}) {
+  const payload = {
+    kind: 'admin_diag',
+    label,
+    session_id: state.sid,
+    ...extra,
+  };
+  try {
+    fetch('/api/v1/admin/log', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': window.csrfToken || '',
+      },
+      body: JSON.stringify(payload),
+      credentials: 'include',
+    }).catch(() => {});
+  } catch {}
+}
