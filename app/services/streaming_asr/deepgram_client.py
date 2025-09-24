@@ -188,7 +188,7 @@ class DeepgramClient:
 
         # Tunables
         self._linger_ms: int = int(os.getenv("DG_LINGER_MS", "600"))
-        self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "8"))
+        self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "12"))
 
         # Open gate
         self._open_evt: asyncio.Event = asyncio.Event()
