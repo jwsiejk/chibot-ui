@@ -341,7 +341,7 @@ class DeepgramClient:
     # -- sending ---------------------------------------------------------------
 
     async def send(self, chunk: bytes) -> None:
-        """Send a binary audio frame to Deepgram (Opus/PCM), no early-ack gate."""
+        """Send a binary audio frame to Deepgram (Opus/PCM), gated on open acknowledgements."""
         if not isinstance(chunk, (bytes, bytearray)):
             raise TypeError("chunk must be bytes")
         if not chunk:
@@ -349,8 +349,20 @@ class DeepgramClient:
 
         sid = self._sid_for_log()
 
-        # Do NOT wait for early ack here. Some models only ack after audio.
-        # We still ensure the socket is open.
+        # Wait briefly for Deepgram to report ready/open before sending audio.
+        if not self._open_evt.is_set():
+            try:
+                await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
+            except asyncio.TimeoutError:
+                if not self._open_gate_warned:
+                    logger.warning(
+                        "Deepgram send gated but no open within timeout sid=%s", sid
+                    )
+                    self._open_gate_warned = True
+                if not self._open_evt.is_set():
+                    self._open_evt.set()
+
+        # We still ensure the socket is open before sending any data.
         if not self._ws or not getattr(self._ws, "open", False):
             logger.warning("Deepgram send called without active socket sid=%s", sid)
             raise RuntimeError("deepgram_not_connected")
