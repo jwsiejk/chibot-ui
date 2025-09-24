@@ -101,6 +101,10 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         if _env_lang and "language" not in qd:
             qd["language"] = _env_lang
 
+        # Ensure some model is present; default to nova-2 if none provided
+        if "model" not in qd:
+            qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
+
         query = _p.urlencode(qd)
         base = _p.urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
     except Exception:
@@ -122,8 +126,7 @@ def _initial_config(overrides: Optional[dict] = None) -> dict:
         "smart_format": True,
         "punctuate": True,
         "vad_events": True,
-        # Note: utterance_end_ms is typically a URL/query setting; avoid here to
-        # keep Configure schema compliant ("features" or "processors" only).
+        # Keep URL-only keys (like utterance_end_ms) out of Configure
     }
 
     # Allow simple boolean overrides at top-level OR nested under "features"
@@ -184,7 +187,7 @@ class DeepgramClient:
         self._linger_ms: int = int(os.getenv("DG_LINGER_MS", "600"))          # after last chunk
         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "8"))  # wait for final
 
-        # New: open gate (avoid race: don't send until DG is ready)
+        # Open gate (we set it immediately after Configure to avoid deadlock)
         self._open_evt: asyncio.Event = asyncio.Event()
         self._asr_open_emitted: bool = False
         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
@@ -220,7 +223,12 @@ class DeepgramClient:
             DG_LAST_CONFIG = _initial_config(self._cfg)
             # Mark as open immediately in tests
             self._open_evt.set()
-            await self._ev_queue.put({"type": "asr_open"})
+            if not self._asr_open_emitted:
+                try:
+                    await self._ev_queue.put({"type": "asr_open"})
+                except Exception:
+                    pass
+                self._asr_open_emitted = True
             logger.info("Deepgram test-mode connect sid=%s", sid)
             return
 
@@ -243,15 +251,17 @@ class DeepgramClient:
         DG_LAST_CONFIG = _initial_config(self._cfg)
         await self._ws.send(json.dumps(DG_LAST_CONFIG))
 
-        # Optimistically mark the socket as open so send() doesn't block when the
-        # websocket reports ready immediately. We still rely on provider events
-        # in _rx_loop to emit the diagnostic asr_open event once Deepgram
-        # confirms it is listening.
-        if self._ws and getattr(self._ws, "open", False) and not self._open_evt.is_set():
-            logger.info("Deepgram open gate (optimistic) sid=%s", sid)
+        # Treat stream as open immediately to avoid early-ack deadlocks.
+        if not self._open_evt.is_set():
             self._open_evt.set()
+        if not self._asr_open_emitted:
+            try:
+                await self._ev_queue.put({"type": "asr_open"})
+            except Exception:
+                pass
+            self._asr_open_emitted = True
 
-        # Start receiver (will set the open gate on first listening/metadata)
+        # Start receiver
         self._rx_task = asyncio.create_task(self._rx_loop())
         logger.info("Deepgram connect ok sid=%s", sid)
 
@@ -331,7 +341,7 @@ class DeepgramClient:
     # -- sending ---------------------------------------------------------------
 
     async def send(self, chunk: bytes) -> None:
-        """Send a binary audio frame to Deepgram (Opus/PCM), gated on open."""
+        """Send a binary audio frame to Deepgram (Opus/PCM), no early-ack gate."""
         if not isinstance(chunk, (bytes, bytearray)):
             raise TypeError("chunk must be bytes")
         if not chunk:
@@ -339,19 +349,8 @@ class DeepgramClient:
 
         sid = self._sid_for_log()
 
-        # Wait (briefly) for DG to report "open" (listening/metadata)
-        if not self._open_evt.is_set():
-            try:
-                await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
-            except asyncio.TimeoutError:
-                if not self._open_gate_warned:
-                    logger.warning(
-                        "Deepgram send gated but no open within timeout sid=%s", sid
-                    )
-                    self._open_gate_warned = True
-                if not self._open_evt.is_set():
-                    self._open_evt.set()
-
+        # Do NOT wait for early ack here. Some models only ack after audio.
+        # We still ensure the socket is open.
         if not self._ws or not getattr(self._ws, "open", False):
             logger.warning("Deepgram send called without active socket sid=%s", sid)
             raise RuntimeError("deepgram_not_connected")
@@ -394,7 +393,7 @@ class DeepgramClient:
 
                 evt_type = (msg.get("type") or "").lower()
 
-                # Mark open on initial provider acknowledgements
+                # Mark open on initial provider acknowledgements (redundant but safe)
                 if evt_type in ("metadata", "listening", "connected", "ready"):
                     if not self._open_evt.is_set():
                         self._open_evt.set()
@@ -404,7 +403,6 @@ class DeepgramClient:
                         except Exception:
                             pass
                         self._asr_open_emitted = True
-                    # Nothing else to emit for these
                     continue
 
                 # Typical Deepgram schema: {"type":"Results","channel":{"alternatives":[...],"is_final":bool}}
