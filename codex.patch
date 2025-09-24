@@ -1,120 +1,63 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 32658d1f112907e2a41108de9d24a0f41c204597..f2e9a40a5291525b0eac4097366047767bb4d722 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -284,50 +284,57 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                     break
-         except asyncio.CancelledError:
-             pass
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index 50f8ad31a1e6b210018f7e7b8c4a5ca0c110fec5..849e95b745083a64ad20a789a31cde37cf68b66a 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -220,50 +220,58 @@ class DeepgramClient:
+             # Mark as open immediately in tests
+             self._open_evt.set()
+             await self._ev_queue.put({"type": "asr_open"})
+             logger.info("Deepgram test-mode connect sid=%s", sid)
+             return
  
-     ping_task = asyncio.create_task(_ping_loop())
- 
-     try:
-         await send({"type": "websocket.send", "text": _dumps({"type": "ready", "session_id": sid})})
-     except Exception:
+         headers = [("Authorization", _auth_header())]
          try:
-             await send({"type": "websocket.close", "code": 1011, "reason": "initial_ready_failed"})
-         except Exception:
-             pass
-         return
+             self._ws = await websockets.connect(
+                 url,
+                 additional_headers=headers,
+                 max_size=None,
+             )
+         except TypeError:
+             self._ws = await websockets.connect(
+                 url,
+                 extra_headers=headers,
+                 max_size=None,
+             )
  
-     cfg: Dict[str, Any] = {}
-     buf = TurnBuffer()
-     dg: Optional[DeepgramClient] = None
-     rx_task: Optional[asyncio.Task] = None
-     turn_id_ref = [0]
-     final_seen = [False]
+         # Send initial configuration with FEATURES ONLY
+         DG_LAST_URL = url
+         DG_LAST_CONFIG = _initial_config(self._cfg)
+         await self._ws.send(json.dumps(DG_LAST_CONFIG))
  
-     async def _ensure_dg_connected():
-         """Connect to ASR provider once per session; never tear down the WS on provider failures."""
-         nonlocal dg, rx_task
-+        if dg is None and rx_task is not None:
-+            # A prior stream closed the client; ensure the relay task is cleared.
-+            if not rx_task.done():
-+                rx_task.cancel()
-+                with contextlib.suppress(asyncio.CancelledError, Exception):
-+                    await rx_task
-+            rx_task = None
-         if dg is None and _has_deepgram_key():
-             try:
-                 dg = DeepgramClient(cfg)
-                 await dg.connect()
-                 turn_id_ref[0] = buf.turn_seq + 1
-                 rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen, sid))
-                 _jlog("asr_connect_ok", sid=sid)
-             except Exception as e:
-                 # Keep the client WS alive; surface an error frame and continue in "no-ASR" mode.
-                 dg = None
-                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
-                 try:
-                     await send({
-                         "type": "websocket.send",
-                         "text": _dumps(make_error("asr_connect_fail", type(e).__name__)),
-                     })
-                 except Exception:
-                     pass
-                 try:
-                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=f"connect:{type(e).__name__}")
-                 except Exception:
-                     pass
++        # Optimistically mark the socket as open so send() doesn't block when the
++        # websocket reports ready immediately. We still rely on provider events
++        # in _rx_loop to emit the diagnostic asr_open event once Deepgram
++        # confirms it is listening.
++        if self._ws and getattr(self._ws, "open", False) and not self._open_evt.is_set():
++            logger.info("Deepgram open gate (optimistic) sid=%s", sid)
++            self._open_evt.set()
++
+         # Start receiver (will set the open gate on first listening/metadata)
+         self._rx_task = asyncio.create_task(self._rx_loop())
+         logger.info("Deepgram connect ok sid=%s", sid)
  
-     try:
-         while True:
-@@ -461,50 +468,57 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+     async def close(
+         self,
+         wait_for_final: bool = True,
+         timeout: Optional[float] = None,
+         linger_ms: Optional[int] = None,
+     ) -> None:
+         """Gracefully close the stream.
  
-                             async def _bg_user():
-                                 try:
-                                     await asyncio.to_thread(run_ws_user_turn, sid, text, corr)
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-                                         await send({
-                                             "type": "websocket.send",
-                                             "text": _dumps(make_error("user_fail", e.__class__.__name__)),
-                                         })
-                             asyncio.create_task(_bg_user())
- 
-                         elif t == "CloseStream":
-                             _jlog("ws_close_stream", sid=sid)
-                             if buf.is_empty():
-                                 # Empty turn closure; synthesize ids + reset final tracking.
-                                 turn_id_ref[0] = buf.turn_seq + 1
-                                 final_seen[0] = False
-                             turn_id, _pcm = buf.close_turn()
-                             turn_id_ref[0] = turn_id
-                             synthetic_emitted = False
-                             if _has_deepgram_key() and dg is not None:
-                                 # Ask provider to finish; if no final came, synthesize empty final.
-                                 with contextlib.suppress(Exception):
-                                     await dg.close(wait_for_final=True)
-+                                _relay_task = rx_task
-+                                rx_task = None
-+                                if _relay_task:
-+                                    _relay_task.cancel()
-+                                    with contextlib.suppress(asyncio.CancelledError, Exception):
-+                                        await _relay_task
-+                                dg = None
-                                 if not final_seen[0]:
-                                     final_seen[0] = True
-                                     synthetic_emitted = True
-                                     await send({
-                                         "type": "websocket.send",
-                                         "text": _dumps(make_results(turn_id, transcript="", is_final=True)),
-                                     })
-                                     await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))})
-                             else:
-                                 # No provider configured: still emit empty final + end to advance the dialog.
-                                 if not final_seen[0]:
-                                     final_seen[0] = True
-                                     synthetic_emitted = True
-                                     await send({
-                                         "type": "websocket.send",
-                                         "text": _dumps(make_results(turn_id, transcript="", is_final=True)),
-                                     })
-                                     await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))})
-                             if synthetic_emitted:
-                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
-                                 final_seen[0] = False
-                         else:
-                             # Unknown type already filtered by schema; no-op to future-proof.
-                             pass
-                     except ValueError as e:
+         Steps:
+           1) Optional linger after last chunk (default 600 ms).
+           2) Send {"type":"CloseStream"}.
+           3) Optionally wait for final (default 8 s).
+           4) Close the websocket and cancel the rx loop.
+         """
+         if self._closed:
+             return
+         self._closed = True
+         sid = self._sid_for_log()
+         logger.info(
+             "Deepgram close start sid=%s wait_for_final=%s linger_ms=%s",
+             sid,

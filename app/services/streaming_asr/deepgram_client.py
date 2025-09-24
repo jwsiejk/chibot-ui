@@ -242,6 +242,14 @@ class DeepgramClient:
         DG_LAST_CONFIG = _initial_config(self._cfg)
         await self._ws.send(json.dumps(DG_LAST_CONFIG))
 
+        # Optimistically mark the socket as open so send() doesn't block when the
+        # websocket reports ready immediately. We still rely on provider events
+        # in _rx_loop to emit the diagnostic asr_open event once Deepgram
+        # confirms it is listening.
+        if self._ws and getattr(self._ws, "open", False) and not self._open_evt.is_set():
+            logger.info("Deepgram open gate (optimistic) sid=%s", sid)
+            self._open_evt.set()
+
         # Start receiver (will set the open gate on first listening/metadata)
         self._rx_task = asyncio.create_task(self._rx_loop())
         logger.info("Deepgram connect ok sid=%s", sid)
