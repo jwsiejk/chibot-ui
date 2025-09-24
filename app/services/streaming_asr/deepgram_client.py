@@ -221,6 +221,17 @@ class DeepgramClient:
             pass
         return "?"
 
+    async def wait_socket_open(self, timeout: float = 1.5) -> bool:
+        """Micro-wait until the underlying websocket's .open flag is True."""
+        if self._ws and getattr(self._ws, "open", False):
+            return True
+        end = time.time() + timeout
+        while time.time() < end:
+            if self._ws and getattr(self._ws, "open", False):
+                return True
+            await asyncio.sleep(0.01)
+        return False
+
     # -- lifecycle -------------------------------------------------------------
 
     async def connect(self) -> None:
@@ -254,6 +265,9 @@ class DeepgramClient:
                 extra_headers=headers,
                 max_size=None,
             )
+
+        # Micro-wait to ensure the underlying socket is actually open
+        await self.wait_socket_open(timeout=0.25)
 
         DG_LAST_URL = url
         DG_LAST_CONFIG = _initial_config(self._cfg)
@@ -348,6 +362,9 @@ class DeepgramClient:
                     logger.warning("Deepgram send gated but no open within timeout sid=%s", sid)
                     self._open_gate_warned = True
                 await self._signal_ready()
+
+        # Gate on actual websocket open with a brief micro-wait
+        await self.wait_socket_open(timeout=0.25)
 
         if not self._ws or not getattr(self._ws, "open", False):
             logger.warning("Deepgram send called without active socket sid=%s", sid)
