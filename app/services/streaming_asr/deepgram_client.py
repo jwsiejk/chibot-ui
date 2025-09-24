@@ -188,6 +188,7 @@ class DeepgramClient:
         self._open_evt: asyncio.Event = asyncio.Event()
         self._asr_open_emitted: bool = False
         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
+        self._open_gate_warned: bool = False
 
     # -- helpers ---------------------------------------------------------------
 
@@ -343,8 +344,13 @@ class DeepgramClient:
             try:
                 await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
             except asyncio.TimeoutError:
-                logger.warning("Deepgram send gated but no open within timeout sid=%s", sid)
-                raise RuntimeError("deepgram_not_connected")
+                if not self._open_gate_warned:
+                    logger.warning(
+                        "Deepgram send gated but no open within timeout sid=%s", sid
+                    )
+                    self._open_gate_warned = True
+                if not self._open_evt.is_set():
+                    self._open_evt.set()
 
         if not self._ws or not getattr(self._ws, "open", False):
             logger.warning("Deepgram send called without active socket sid=%s", sid)

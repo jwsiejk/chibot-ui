@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import pytest
 
 from app.services.streaming_asr import deepgram_client as dg_mod
@@ -17,10 +18,9 @@ class DummyWS:
         self.open = False
 
     def __aiter__(self):
-        async def _empty():
-            if False:
-                yield None
-        return _empty()
+        async def _gen():
+            yield json.dumps({"type": "Metadata"})
+        return _gen()
 
 
 def test_connect_prefers_additional_headers(monkeypatch):
@@ -86,3 +86,27 @@ def test_connect_falls_back_to_extra_headers(monkeypatch):
         await client.close(wait_for_final=False)
 
     asyncio.run(run())
+
+
+def test_send_warns_but_continues_after_open_timeout(monkeypatch, caplog):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+
+    caplog.set_level(logging.WARNING)
+
+    async def run():
+        client = dg_mod.DeepgramClient()
+        client._ws = DummyWS()
+        client._open_wait_s = 0.0
+        client._min_valid_bytes = 1
+
+        await client.send(b"a" * 4)
+        await client.send(b"b" * 4)
+        return client
+
+    client = asyncio.run(run())
+
+    assert client._ws.sent == [b"a" * 4, b"b" * 4]
+    assert client._open_evt.is_set()
+    assert client._open_gate_warned is True
+    assert caplog.text.count("Deepgram send gated but no open within timeout") == 1
