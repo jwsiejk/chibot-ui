@@ -320,14 +320,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     async def _ensure_dg_connected():
         """Connect to ASR provider once per session; never tear down the WS on provider failures."""
         nonlocal dg, rx_task
-        if dg is None and rx_task is not None:
+        if (dg is None or (dg is not None and hasattr(dg, 'is_open') and not dg.is_open())) and rx_task is not None:
             # A prior stream closed the client; ensure the relay task is cleared.
             if not rx_task.done():
                 rx_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await rx_task
             rx_task = None
-        if dg is None and _has_deepgram_key():
+        if (dg is None or (dg is not None and hasattr(dg, 'is_open') and not dg.is_open())) and _has_deepgram_key():
             try:
                 # Clear readiness; a new connection will signal asr_open via pump task
                 try:
@@ -543,6 +543,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     with contextlib.suppress(asyncio.CancelledError, Exception):
                                         await _relay_task
                                 dg = None
+                                try:
+                                    if asr_ready_evt and asr_ready_evt.is_set():
+                                        asr_ready_evt.clear()
+                                except Exception:
+                                    pass
+
                                 if not final_seen[0]:
                                     final_seen[0] = True
                                     synthetic_emitted = True
@@ -635,9 +641,26 @@ async def ws_chat(websocket):
         await _pump_bus_to_client(sid, lambda msg: websocket.send_text(msg.get("text") or ""))
     except Exception:
         pass
+    
     finally:
+        # Clean shutdown: close ASR provider and background tasks, then close the websocket.
+        try:
+            if rx_task:
+                rx_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await rx_task
+        except Exception:
+            pass
+        try:
+            if dg is not None:
+                with contextlib.suppress(Exception):
+                    await dg.close(wait_for_final=False)
+            dg = None
+        except Exception:
+            pass
         try:
             await websocket.close(code=1000, reason="normal_shutdown")
             await asyncio.sleep(0.05)
         except Exception:
             pass
+

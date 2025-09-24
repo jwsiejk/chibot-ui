@@ -200,7 +200,14 @@ class DeepgramClient:
         self._keepalive_task: Optional[asyncio.Task] = None
         self._keepalive_interval: float = float(os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0"))
 
-    # -- helpers ---------------------------------------------------------------
+    
+    def is_open(self) -> bool:
+        """Return True if the underlying websocket appears open."""
+        try:
+            return bool(self._ws) and bool(getattr(self._ws, "open", False))
+        except Exception:
+            return False
+# -- helpers ---------------------------------------------------------------
 
     async def _signal_ready(self) -> None:
         if not self._open_evt.is_set():
