@@ -10,12 +10,10 @@ from typing import AsyncGenerator, Optional, Any
 import websockets  # provided by uvicorn[standard]
 
 
-
 # Test-mode and last-observed info for CI assertions
 DG_TEST_MODE = os.getenv("DG_TEST_MODE", "").strip() == "1"
 DG_LAST_URL: str | None = None
 DG_LAST_CONFIG: dict | None = None
-
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +35,6 @@ class _FakeWSForTests:
 
 # ------------------------- URL & Config Helpers -------------------------------
 
-
 def _clip_text(txt: str, limit: int = 120) -> str:
     try:
         txt = txt or ""
@@ -48,66 +45,112 @@ def _clip_text(txt: str, limit: int = 120) -> str:
         return ""
 
 def _dg_url(overrides: Optional[dict] = None) -> str:
-    """Return the Deepgram listen URL with safe defaults."""
+    """Return the Deepgram listen URL with safe defaults.
+
+    Audio transport parameters must be in the URL query for Deepgram's v1/listen.
+    """
     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
+
     # Append defaults if not present (helps when proxies ignore Configure frame)
     if "encoding=" not in base:
         sep = "&" if "?" in base else "?"
         base = (
             base
             + sep
-            + "encoding=opus&sample_rate=48000&channels=1&interim_results=true&vad_events=true&smart_format=true&punctuate=true&utterance_end_ms=1200"
+            + "encoding=opus&sample_rate=48000&channels=1"
+            + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true&utterance_end_ms=1200"
         )
-    # Apply overrides into query string if present
+
+    # Apply overrides into query string if present, and ensure model from env if set
     try:
+        import urllib.parse as _p
+        parts = _p.urlsplit(base)
+        q = _p.parse_qsl(parts.query, keep_blank_values=True)
+        qd = {k: v for k, v in q}
+
+        def _fmt(v):
+            if isinstance(v, bool):
+                return "true" if v else "false"
+            if isinstance(v, int):
+                return str(int(v))
+            return str(v)
+
         if overrides:
-            import urllib.parse as _p
-            parts = _p.urlsplit(base)
-            q = _p.parse_qsl(parts.query, keep_blank_values=True)
-            qd = {k: v for k, v in q}
-            def _fmt(v):
-                if isinstance(v, bool): return "true" if v else "false"
-                return str(int(v)) if isinstance(v, (int,)) else str(v)
-            for k in ("encoding","sample_rate","channels","interim_results","smart_format","punctuate","vad_events","utterance_end_ms","model"):
+            for k in (
+                "encoding",
+                "sample_rate",
+                "channels",
+                "interim_results",
+                "smart_format",
+                "punctuate",
+                "vad_events",
+                "utterance_end_ms",
+                "model",
+                "language",
+            ):
                 if k in overrides and overrides[k] is not None:
                     qd[k] = _fmt(overrides[k])
-            query = _p.urlencode(qd)
-            base = _p.urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+
+        # If DG_MODEL env is set and no model present yet, add it
+        _env_model = os.getenv("DG_MODEL")
+        if _env_model and "model" not in qd:
+            qd["model"] = _env_model
+
+        # If a language env is provided (optional), prefer it if not set
+        _env_lang = os.getenv("DEEPGRAM_LANG")
+        if _env_lang and "language" not in qd:
+            qd["language"] = _env_lang
+
+        query = _p.urlencode(qd)
+        base = _p.urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
     except Exception:
         pass
+
     return base
+
 def _auth_header() -> str:
     key = os.getenv("DEEPGRAM_API_KEY", "").strip()
     if not key:
         raise RuntimeError("DEEPGRAM_API_KEY is not set")
     return f"Token {key}"
 
-
 def _initial_config(overrides: Optional[dict] = None) -> dict:
-    model = os.getenv("DG_MODEL")
+    """Build Configure payload with FEATURES ONLY (no audio/transport keys)."""
     interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
-    cfg = {
-        "type": "Configure",
-        "encoding": "opus",
-        "sample_rate": 48000,
+    features = {
         "interim_results": interim,
         "smart_format": True,
         "punctuate": True,
         "vad_events": True,
-        "utterance_end_ms": 1200,
+        # Note: utterance_end_ms is typically a URL/query setting; avoid here to
+        # keep Configure schema compliant ("features" or "processors" only).
     }
-    if model:
-        cfg["model"] = model
-    # Apply overrides
+
+    # Allow simple boolean overrides at top-level OR nested under "features"
     try:
         if overrides:
-            for k in ("encoding","sample_rate","channels","interim_results","smart_format","punctuate","vad_events","utterance_end_ms","model"):
+            # Merge nested features if provided
+            if isinstance(overrides.get("features"), dict):
+                for k, v in overrides["features"].items():
+                    features[k] = v
+
+            # Support legacy boolean overrides at top level
+            for k in ("interim_results", "smart_format", "punctuate", "vad_events"):
                 if k in overrides and overrides[k] is not None:
-                    cfg[k] = overrides[k]
+                    features[k] = bool(overrides[k])
     except Exception:
         pass
-    return cfg
 
+    cfg: dict[str, Any] = {"type": "Configure", "features": features}
+
+    # Pass-through processors if supplied
+    try:
+        if overrides and isinstance(overrides.get("processors"), dict):
+            cfg["processors"] = overrides["processors"]
+    except Exception:
+        pass
+
+    return cfg
 
 # ------------------------------ Client ---------------------------------------
 
@@ -118,6 +161,7 @@ class DeepgramClient:
       • Drops the tiny first chunk (<64B) before sending (common capture preamble).
       • Sends {"type": "CloseStream"} and lingers briefly before closing.
       • Waits for a final transcript (bounded) so Deepgram doesn’t record 00:00:00.
+      • Gates sending until Deepgram signals it's ready (listening/connected/etc).
     """
 
     def __init__(self, _cfg: Optional[dict] = None) -> None:
@@ -140,6 +184,11 @@ class DeepgramClient:
         self._linger_ms: int = int(os.getenv("DG_LINGER_MS", "600"))          # after last chunk
         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "8"))  # wait for final
 
+        # New: open gate (avoid race: don't send until DG is ready)
+        self._open_evt: asyncio.Event = asyncio.Event()
+        self._asr_open_emitted: bool = False
+        self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
+
     # -- helpers ---------------------------------------------------------------
 
     def _sid_for_log(self) -> str:
@@ -154,21 +203,26 @@ class DeepgramClient:
     # -- lifecycle -------------------------------------------------------------
 
     async def connect(self) -> None:
+        """Open DG WS and send a Configure(features=...) frame."""
         global DG_LAST_URL, DG_LAST_CONFIG
         if self._ws:
             return
+
         url = _dg_url(self._cfg)
         sid = self._sid_for_log()
         logger.info("Deepgram connect start sid=%s url=%s", sid, url)
+
         if DG_TEST_MODE:
             # No network — use a fake socket and record URL/config for tests
             self._ws = _FakeWSForTests()
             DG_LAST_URL = url
             DG_LAST_CONFIG = _initial_config(self._cfg)
-            await self._ev_queue.put({"type":"asr_open"})
+            # Mark as open immediately in tests
+            self._open_evt.set()
+            await self._ev_queue.put({"type": "asr_open"})
             logger.info("Deepgram test-mode connect sid=%s", sid)
             return
-        # Real network path
+
         headers = [("Authorization", _auth_header())]
         try:
             self._ws = await websockets.connect(
@@ -182,15 +236,15 @@ class DeepgramClient:
                 extra_headers=headers,
                 max_size=None,
             )
-        # Send initial configuration to enable partials / VAD / formatting.
+
+        # Send initial configuration with FEATURES ONLY
         DG_LAST_URL = url
         DG_LAST_CONFIG = _initial_config(self._cfg)
         await self._ws.send(json.dumps(DG_LAST_CONFIG))
-        # Start receiver
-        self._rx_task = asyncio.create_task(self._rx_loop())
-        await self._ev_queue.put({"type": "asr_open"})
-        logger.info("Deepgram connect ok sid=%s", sid)
 
+        # Start receiver (will set the open gate on first listening/metadata)
+        self._rx_task = asyncio.create_task(self._rx_loop())
+        logger.info("Deepgram connect ok sid=%s", sid)
 
     async def close(
         self,
@@ -268,19 +322,28 @@ class DeepgramClient:
     # -- sending ---------------------------------------------------------------
 
     async def send(self, chunk: bytes) -> None:
-        """Send a binary audio frame to Deepgram (Opus/PCM)."""
-        if not self._ws or not getattr(self._ws, "open", False):
-            logger.warning("Deepgram send called without active socket sid=%s", self._sid_for_log())
-            raise RuntimeError("deepgram_not_connected")
+        """Send a binary audio frame to Deepgram (Opus/PCM), gated on open."""
         if not isinstance(chunk, (bytes, bytearray)):
             raise TypeError("chunk must be bytes")
         if not chunk:
             return
 
-        # Drop the tiny preamble as first "frame" (common with some recorders)
         sid = self._sid_for_log()
+
+        # Wait (briefly) for DG to report "open" (listening/metadata)
+        if not self._open_evt.is_set():
+            try:
+                await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
+            except asyncio.TimeoutError:
+                logger.warning("Deepgram send gated but no open within timeout sid=%s", sid)
+                raise RuntimeError("deepgram_not_connected")
+
+        if not self._ws or not getattr(self._ws, "open", False):
+            logger.warning("Deepgram send called without active socket sid=%s", sid)
+            raise RuntimeError("deepgram_not_connected")
+
+        # Drop the tiny preamble as first "frame" (common with some recorders)
         if not self._first_real_sent and len(chunk) < self._min_valid_bytes:
-            # belt-and-suspenders: do not forward this
             logger.debug(
                 "Deepgram drop small chunk sid=%s bytes=%s min_bytes=%s",
                 sid,
@@ -317,6 +380,19 @@ class DeepgramClient:
 
                 evt_type = (msg.get("type") or "").lower()
 
+                # Mark open on initial provider acknowledgements
+                if evt_type in ("metadata", "listening", "connected", "ready"):
+                    if not self._open_evt.is_set():
+                        self._open_evt.set()
+                    if not self._asr_open_emitted:
+                        try:
+                            await self._ev_queue.put({"type": "asr_open"})
+                        except Exception:
+                            pass
+                        self._asr_open_emitted = True
+                    # Nothing else to emit for these
+                    continue
+
                 # Typical Deepgram schema: {"type":"Results","channel":{"alternatives":[...],"is_final":bool}}
                 if evt_type in ("results", "transcript", "partialtranscript", "speech.update"):
                     text = ""
@@ -343,6 +419,16 @@ class DeepgramClient:
                         # Nothing meaningful; keep listening
                         continue
 
+                    # Seeing a result also implies socket is functioning
+                    if not self._open_evt.is_set():
+                        self._open_evt.set()
+                    if not self._asr_open_emitted:
+                        try:
+                            await self._ev_queue.put({"type": "asr_open"})
+                        except Exception:
+                            pass
+                        self._asr_open_emitted = True
+
                     logger.debug(
                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
                         sid,
@@ -362,10 +448,6 @@ class DeepgramClient:
                         self._final_event.set()
                         # Do not break; allow more finals if multiple utterances are expected
                         continue
-
-                elif evt_type in ("metadata", "listening", "connected", "ready"):
-                    # Informational; ignore.
-                    continue
 
                 elif evt_type in ("error", "close"):
                     logger.warning(
