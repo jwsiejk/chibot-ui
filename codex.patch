@@ -1,57 +1,120 @@
-diff --git a/app/services/streaming_asr/stream_manager.py b/app/services/streaming_asr/stream_manager.py
-index b88da3ebb187851511e0ff3a11fd752bd2555b69..d61c4a52828f3ed227db3fb058c1088d434b7a40 100644
---- a/app/services/streaming_asr/stream_manager.py
-+++ b/app/services/streaming_asr/stream_manager.py
-@@ -243,51 +243,51 @@ class DeepgramStreamManager:
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 32658d1f112907e2a41108de9d24a0f41c204597..f2e9a40a5291525b0eac4097366047767bb4d722 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -284,50 +284,57 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                     break
+         except asyncio.CancelledError:
+             pass
  
-         self._first_real_chunk_sent = True
+     ping_task = asyncio.create_task(_ping_loop())
  
-         if self.ws is None or not self._opened:
-             logger.warning(
-                 "DeepgramStreamManager send before open session_id=%s",
-                 self.session_id,
-             )
-             self.emit(
-                 "asr",
-                 "asr_error",
-                 {"session_id": self.session_id, "error": "send_before_open"},
-             )
-             return
- 
+     try:
+         await send({"type": "websocket.send", "text": _dumps({"type": "ready", "session_id": sid})})
+     except Exception:
          try:
-             await self.ws.send(data)
-             self._last_chunk_ts = time.time()
-             logger.debug(
-                 "DeepgramStreamManager sent chunk session_id=%s bytes=%s seq=%s",
-                 self.session_id,
-                 len(data),
-                 seq,
-             )
-             self.emit(
--                "voice:chunk",
-+                "voice",
-                 "voice:chunk",
-                 {
-                     "session_id": self.session_id,
-                     "seq": (int(seq) if seq is not None else -1),
-                     "bytes": len(data),
-                 },
-             )
-         except Exception as e:
-             self.emit(
-                 "asr",
-                 "asr_error",
-                 {"session_id": self.session_id, "error": f"send_failed:{type(e).__name__}:{e}"},
-             )
-             raise
+             await send({"type": "websocket.close", "code": 1011, "reason": "initial_ready_failed"})
+         except Exception:
+             pass
+         return
  
-     async def _recv_loop(self):
-         """Read Deepgram frames; detect partial/final and notify Admin SSE."""
-         try:
-             self._any_result = False
-             while self.ws and not self._closing:
+     cfg: Dict[str, Any] = {}
+     buf = TurnBuffer()
+     dg: Optional[DeepgramClient] = None
+     rx_task: Optional[asyncio.Task] = None
+     turn_id_ref = [0]
+     final_seen = [False]
+ 
+     async def _ensure_dg_connected():
+         """Connect to ASR provider once per session; never tear down the WS on provider failures."""
+         nonlocal dg, rx_task
++        if dg is None and rx_task is not None:
++            # A prior stream closed the client; ensure the relay task is cleared.
++            if not rx_task.done():
++                rx_task.cancel()
++                with contextlib.suppress(asyncio.CancelledError, Exception):
++                    await rx_task
++            rx_task = None
+         if dg is None and _has_deepgram_key():
+             try:
+                 dg = DeepgramClient(cfg)
+                 await dg.connect()
+                 turn_id_ref[0] = buf.turn_seq + 1
+                 rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen, sid))
+                 _jlog("asr_connect_ok", sid=sid)
+             except Exception as e:
+                 # Keep the client WS alive; surface an error frame and continue in "no-ASR" mode.
+                 dg = None
+                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
                  try:
-                     msg = await asyncio.wait_for(self.ws.recv(), timeout=self.recv_max_wait_s)
-                 except asyncio.TimeoutError:
-                     continue
+                     await send({
+                         "type": "websocket.send",
+                         "text": _dumps(make_error("asr_connect_fail", type(e).__name__)),
+                     })
+                 except Exception:
+                     pass
+                 try:
+                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=f"connect:{type(e).__name__}")
+                 except Exception:
+                     pass
  
+     try:
+         while True:
+@@ -461,50 +468,57 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+ 
+                             async def _bg_user():
+                                 try:
+                                     await asyncio.to_thread(run_ws_user_turn, sid, text, corr)
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+                                         await send({
+                                             "type": "websocket.send",
+                                             "text": _dumps(make_error("user_fail", e.__class__.__name__)),
+                                         })
+                             asyncio.create_task(_bg_user())
+ 
+                         elif t == "CloseStream":
+                             _jlog("ws_close_stream", sid=sid)
+                             if buf.is_empty():
+                                 # Empty turn closure; synthesize ids + reset final tracking.
+                                 turn_id_ref[0] = buf.turn_seq + 1
+                                 final_seen[0] = False
+                             turn_id, _pcm = buf.close_turn()
+                             turn_id_ref[0] = turn_id
+                             synthetic_emitted = False
+                             if _has_deepgram_key() and dg is not None:
+                                 # Ask provider to finish; if no final came, synthesize empty final.
+                                 with contextlib.suppress(Exception):
+                                     await dg.close(wait_for_final=True)
++                                _relay_task = rx_task
++                                rx_task = None
++                                if _relay_task:
++                                    _relay_task.cancel()
++                                    with contextlib.suppress(asyncio.CancelledError, Exception):
++                                        await _relay_task
++                                dg = None
+                                 if not final_seen[0]:
+                                     final_seen[0] = True
+                                     synthetic_emitted = True
+                                     await send({
+                                         "type": "websocket.send",
+                                         "text": _dumps(make_results(turn_id, transcript="", is_final=True)),
+                                     })
+                                     await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))})
+                             else:
+                                 # No provider configured: still emit empty final + end to advance the dialog.
+                                 if not final_seen[0]:
+                                     final_seen[0] = True
+                                     synthetic_emitted = True
+                                     await send({
+                                         "type": "websocket.send",
+                                         "text": _dumps(make_results(turn_id, transcript="", is_final=True)),
+                                     })
+                                     await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))})
+                             if synthetic_emitted:
+                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
+                                 final_seen[0] = False
+                         else:
+                             # Unknown type already filtered by schema; no-op to future-proof.
+                             pass
+                     except ValueError as e:

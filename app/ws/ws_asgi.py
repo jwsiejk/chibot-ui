@@ -306,6 +306,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     async def _ensure_dg_connected():
         """Connect to ASR provider once per session; never tear down the WS on provider failures."""
         nonlocal dg, rx_task
+        if dg is None and rx_task is not None:
+            # A prior stream closed the client; ensure the relay task is cleared.
+            if not rx_task.done():
+                rx_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await rx_task
+            rx_task = None
         if dg is None and _has_deepgram_key():
             try:
                 dg = DeepgramClient(cfg)
@@ -483,6 +490,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 # Ask provider to finish; if no final came, synthesize empty final.
                                 with contextlib.suppress(Exception):
                                     await dg.close(wait_for_final=True)
+                                _relay_task = rx_task
+                                rx_task = None
+                                if _relay_task:
+                                    _relay_task.cancel()
+                                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                                        await _relay_task
+                                dg = None
                                 if not final_seen[0]:
                                     final_seen[0] = True
                                     synthetic_emitted = True
