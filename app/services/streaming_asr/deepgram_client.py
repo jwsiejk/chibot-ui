@@ -255,12 +255,12 @@ class DeepgramClient:
         # Send initial configuration with FEATURES ONLY
         DG_LAST_URL = url
         DG_LAST_CONFIG = _initial_config(self._cfg)
-+        await self._ws.send(json.dumps(DG_LAST_CONFIG))
-+
-+        # Match test behavior to avoid first-turn deadlock:
-+        await self._signal_ready()
-+
-+        # Start receiver
+        await self._ws.send(json.dumps(DG_LAST_CONFIG))
+
+        # Match test behavior to avoid first-turn deadlock:
+        await self._signal_ready()
+
+        # Start receiver
         self._rx_task = asyncio.create_task(self._rx_loop())
         logger.info("Deepgram connect ok sid=%s", sid)
 
