@@ -193,6 +193,10 @@ class DeepgramClient:
         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
         self._open_gate_warned: bool = False
 
+        # KeepAlive loop (helps avoid Deepgram NET-0001 idle closes)
+        self._keepalive_task: Optional[asyncio.Task] = None
+        self._keepalive_interval: float = float(os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0"))
+
     # -- helpers ---------------------------------------------------------------
 
     async def _signal_ready(self) -> None:
@@ -257,11 +261,16 @@ class DeepgramClient:
         DG_LAST_CONFIG = _initial_config(self._cfg)
         await self._ws.send(json.dumps(DG_LAST_CONFIG))
 
-        # Match test behavior to avoid first-turn deadlock:
+        # Maintain legacy behavior: immediately mark as ready so upstream callers
+        # can begin streaming audio without waiting for provider metadata.
         await self._signal_ready()
 
         # Start receiver
         self._rx_task = asyncio.create_task(self._rx_loop())
+
+        # Kick off keepalive loop (disabled if interval <= 0)
+        if self._keepalive_interval > 0:
+            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         logger.info("Deepgram connect ok sid=%s", sid)
 
     async def close(
@@ -288,6 +297,9 @@ class DeepgramClient:
             wait_for_final,
             linger_ms,
         )
+
+        # Stop keepalive loop early so we don't race sends during close
+        await self._stop_keepalive()
 
         # 1) Linger a bit so VAD/segmentation can finalize
         if linger_ms is None:
@@ -330,11 +342,13 @@ class DeepgramClient:
                 await self._ws.close()
         finally:
             self._ws = None
-            if self._rx_task:
+            task = self._rx_task
+            self._rx_task = None
+            if task:
                 try:
-                    self._rx_task.cancel()
-                finally:
-                    self._rx_task = None
+                    task.cancel()
+                except Exception:
+                    pass
         logger.info("Deepgram close complete sid=%s", sid)
 
     # -- sending ---------------------------------------------------------------
@@ -502,3 +516,44 @@ class DeepgramClient:
                 await self._ev_queue.put({"type": "asr_error", "error": f"rx:{e.__class__.__name__}"})
             except Exception:
                 pass
+
+    async def _keepalive_loop(self) -> None:
+        """Periodically send KeepAlive frames to avoid upstream idle disconnects."""
+        sid = self._sid_for_log()
+        try:
+            while not self._closed:
+                try:
+                    await asyncio.sleep(self._keepalive_interval)
+                except asyncio.CancelledError:
+                    return
+
+                if self._closed:
+                    break
+
+                ws = self._ws
+                if not ws or not getattr(ws, "open", False):
+                    break
+
+                try:
+                    await ws.send(json.dumps({"type": "KeepAlive"}))
+                    logger.debug(
+                        "Deepgram keepalive sid=%s interval=%s", sid, self._keepalive_interval
+                    )
+                except Exception as exc:
+                    logger.warning("Deepgram keepalive failed sid=%s err=%s", sid, exc)
+                    break
+        finally:
+            self._keepalive_task = None
+
+    async def _stop_keepalive(self) -> None:
+        task = self._keepalive_task
+        if not task:
+            return
+        self._keepalive_task = None
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass

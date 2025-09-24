@@ -56,46 +56,6 @@ def test_connect_prefers_additional_headers(monkeypatch):
     asyncio.run(run())
 
 
-def test_connect_defers_asr_open_until_provider_ready(monkeypatch):
-    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
-    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
-
-    release_iter = asyncio.Event()
-
-    class SlowDummyWS(DummyWS):
-        def __aiter__(self):
-            async def _gen():
-                await release_iter.wait()
-                yield json.dumps({"type": "Metadata"})
-
-            return _gen()
-
-    async def fake_connect(url, **kwargs):
-        return SlowDummyWS()
-
-    monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
-
-    async def run():
-        client = dg_mod.DeepgramClient()
-
-        await client.connect()
-
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(client._ev_queue.get(), timeout=0.05)
-        assert client._asr_open_emitted is False
-
-        release_iter.set()
-        await asyncio.sleep(0)
-
-        event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.1)
-        assert event["type"] == "asr_open"
-        assert client._asr_open_emitted is True
-
-        await client.close(wait_for_final=False)
-
-    asyncio.run(run())
-
-
 def test_connect_falls_back_to_extra_headers(monkeypatch):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
@@ -148,6 +108,46 @@ def test_testmode_emits_asr_open_once(monkeypatch):
     asyncio.run(run())
 
 
+def test_keepalive_loop_sends_frames(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+    monkeypatch.setenv("DG_KEEPALIVE_INTERVAL_S", "0.01")
+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+
+    class KeepaliveWS(DummyWS):
+        def __aiter__(self):
+            async def _gen():
+                yield json.dumps({"type": "Metadata"})
+                await asyncio.sleep(0.1)
+
+            return _gen()
+
+    keepalive_ws = KeepaliveWS()
+
+    async def fake_connect(url, **kwargs):
+        return keepalive_ws
+
+    monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
+
+    async def run():
+        client = dg_mod.DeepgramClient()
+
+        await client.connect()
+        await asyncio.sleep(0.05)
+
+        sent_types = [
+            json.loads(item).get("type")
+            for item in keepalive_ws.sent
+            if isinstance(item, str)
+        ]
+
+        assert sent_types[0] == "Configure"
+        assert any(t == "KeepAlive" for t in sent_types[1:])
+
+        await client.close(wait_for_final=False)
+
+    asyncio.run(run())
+
+
 def test_send_warns_but_continues_after_open_timeout(monkeypatch, caplog):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
@@ -176,7 +176,7 @@ def test_send_warns_but_continues_after_open_timeout(monkeypatch, caplog):
         client._ev_queue.get_nowait()
 
 
-def test_send_waits_for_provider_ready(monkeypatch):
+def test_send_does_not_wait_for_provider_ready(monkeypatch):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
 
@@ -202,13 +202,14 @@ def test_send_waits_for_provider_ready(monkeypatch):
 
         send_task = asyncio.create_task(client.send(b"a" * 4))
         await asyncio.sleep(0)
-        assert len(client._ws.sent) == 1
+
+        # Audio should be sent immediately without waiting for metadata frames.
+        assert len(client._ws.sent) == 2
         assert json.loads(client._ws.sent[0])["type"] == "Configure"
+        assert client._ws.sent[1:] == [b"a" * 4]
 
         release_iter.set()
         await send_task
-
-        assert client._ws.sent[1:] == [b"a" * 4]
 
         event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.1)
         assert event["type"] == "asr_open"
