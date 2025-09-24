@@ -376,6 +376,31 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if dg is None:
             return False
         try:
+            wait_socket_open = getattr(dg, "wait_socket_open", None)
+            if callable(wait_socket_open):
+                try:
+                    await wait_socket_open(timeout=0.25)
+                except Exception:
+                    pass
+
+            is_open = True
+            is_open_fn = getattr(dg, "is_open", None)
+            if callable(is_open_fn):
+                try:
+                    is_open = bool(is_open_fn())
+                except Exception:
+                    is_open = True
+            elif hasattr(dg, "_ws"):
+                try:
+                    ws = getattr(dg, "_ws", None)
+                    if ws is not None:
+                        is_open = bool(getattr(ws, "open", False))
+                except Exception:
+                    pass
+
+            if not is_open:
+                raise RuntimeError("deepgram_not_connected")
+
             await dg.send(data)
             sent_any_audio[0] = True
             _jlog(
