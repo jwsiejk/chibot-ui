@@ -44,6 +44,7 @@ def _clip_text(txt: str, limit: int = 120) -> str:
     except Exception:
         return ""
 
+
 def _dg_url(overrides: Optional[dict] = None) -> str:
     """Return the Deepgram listen URL with safe defaults.
 
@@ -112,11 +113,13 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
 
     return base
 
+
 def _auth_header() -> str:
     key = os.getenv("DEEPGRAM_API_KEY", "").strip()
     if not key:
         raise RuntimeError("DEEPGRAM_API_KEY is not set")
     return f"Token {key}"
+
 
 def _initial_config(overrides: Optional[dict] = None) -> dict:
     """Build Configure payload with FEATURES ONLY (no audio/transport keys)."""
@@ -174,33 +177,32 @@ class DeepgramClient:
         self._ev_queue: asyncio.Queue = asyncio.Queue()
         self._closed = False
 
-        # New: graceful shutdown coordination
+        # Graceful shutdown coordination
         self._final_event: asyncio.Event = asyncio.Event()
         self._any_result: bool = False
 
-        # New: first-chunk guard & timing
+        # First-chunk guard & timing
         self._first_real_sent: bool = False
         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
         self._last_chunk_ts: float = 0.0
 
-        # Tunables (env overrides allowed)
-        self._linger_ms: int = int(os.getenv("DG_LINGER_MS", "600"))          # after last chunk
-        self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "8"))  # wait for final
+        # Tunables
+        self._linger_ms: int = int(os.getenv("DG_LINGER_MS", "600"))
+        self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "8"))
 
-        # Open gate (we set it immediately after Configure to avoid deadlock)
+        # Open gate
         self._open_evt: asyncio.Event = asyncio.Event()
         self._asr_open_emitted: bool = False
         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
         self._open_gate_warned: bool = False
 
-        # KeepAlive loop (helps avoid Deepgram NET-0001 idle closes)
+        # Keepalive
         self._keepalive_task: Optional[asyncio.Task] = None
         self._keepalive_interval: float = float(os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0"))
 
     # -- helpers ---------------------------------------------------------------
 
     async def _signal_ready(self) -> None:
-        """Mark the upstream stream as ready and emit the open event once."""
         if not self._open_evt.is_set():
             self._open_evt.set()
         if not self._asr_open_emitted:
@@ -222,7 +224,6 @@ class DeepgramClient:
     # -- lifecycle -------------------------------------------------------------
 
     async def connect(self) -> None:
-        """Open DG WS and send a Configure(features=...) frame."""
         global DG_LAST_URL, DG_LAST_CONFIG
         if self._ws:
             return
@@ -232,11 +233,9 @@ class DeepgramClient:
         logger.info("Deepgram connect start sid=%s url=%s", sid, url)
 
         if DG_TEST_MODE:
-            # No network — use a fake socket and record URL/config for tests
             self._ws = _FakeWSForTests()
             DG_LAST_URL = url
             DG_LAST_CONFIG = _initial_config(self._cfg)
-            # Mark as open immediately in tests
             self._open_evt.set()
             await self._signal_ready()
             logger.info("Deepgram test-mode connect sid=%s", sid)
@@ -256,21 +255,16 @@ class DeepgramClient:
                 max_size=None,
             )
 
-        # Send initial configuration with FEATURES ONLY
         DG_LAST_URL = url
         DG_LAST_CONFIG = _initial_config(self._cfg)
         await self._ws.send(json.dumps(DG_LAST_CONFIG))
 
-        # Maintain legacy behavior: immediately mark as ready so upstream callers
-        # can begin streaming audio without waiting for provider metadata.
         await self._signal_ready()
-
-        # Start receiver
         self._rx_task = asyncio.create_task(self._rx_loop())
 
-        # Kick off keepalive loop (disabled if interval <= 0)
         if self._keepalive_interval > 0:
             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+
         logger.info("Deepgram connect ok sid=%s", sid)
 
     async def close(
@@ -279,14 +273,6 @@ class DeepgramClient:
         timeout: Optional[float] = None,
         linger_ms: Optional[int] = None,
     ) -> None:
-        """Gracefully close the stream.
-
-        Steps:
-          1) Optional linger after last chunk (default 600 ms).
-          2) Send {"type":"CloseStream"}.
-          3) Optionally wait for final (default 8 s).
-          4) Close the websocket and cancel the rx loop.
-        """
         if self._closed:
             return
         self._closed = True
@@ -298,10 +284,8 @@ class DeepgramClient:
             linger_ms,
         )
 
-        # Stop keepalive loop early so we don't race sends during close
         await self._stop_keepalive()
 
-        # 1) Linger a bit so VAD/segmentation can finalize
         if linger_ms is None:
             linger_ms = self._linger_ms
         if self._last_chunk_ts > 0 and linger_ms > 0:
@@ -313,22 +297,18 @@ class DeepgramClient:
                 except asyncio.CancelledError:
                     pass
 
-        # 2) Explicit end-of-stream sentinel
         try:
             if self._ws and getattr(self._ws, "open", False):
                 await self._ws.send(json.dumps({"type": "CloseStream"}))
         except Exception:
-            # Non-fatal; proceed with close
             pass
 
-        # 3) Wait for a final (bounded)
         if wait_for_final:
             if timeout is None:
                 timeout = self._final_wait_s
             try:
                 await asyncio.wait_for(self._final_event.wait(), timeout=timeout)
             except asyncio.TimeoutError:
-                # Surface for higher-level diagnostics if someone is listening
                 try:
                     await self._ev_queue.put(
                         {"type": "asr_error", "error": f"final_timeout:{timeout}s"}
@@ -336,7 +316,6 @@ class DeepgramClient:
                 except Exception:
                     pass
 
-        # 4) Close websocket and stop rx loop
         try:
             if self._ws and getattr(self._ws, "open", True):
                 await self._ws.close()
@@ -354,7 +333,6 @@ class DeepgramClient:
     # -- sending ---------------------------------------------------------------
 
     async def send(self, chunk: bytes) -> None:
-        """Send a binary audio frame to Deepgram (Opus/PCM), gated on open acknowledgements."""
         if not isinstance(chunk, (bytes, bytearray)):
             raise TypeError("chunk must be bytes")
         if not chunk:
@@ -362,24 +340,19 @@ class DeepgramClient:
 
         sid = self._sid_for_log()
 
-        # Wait briefly for Deepgram to report ready/open before sending audio.
         if not self._open_evt.is_set():
             try:
                 await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
             except asyncio.TimeoutError:
                 if not self._open_gate_warned:
-                    logger.warning(
-                        "Deepgram send gated but no open within timeout sid=%s", sid
-                    )
+                    logger.warning("Deepgram send gated but no open within timeout sid=%s", sid)
                     self._open_gate_warned = True
                 await self._signal_ready()
 
-        # We still ensure the socket is open before sending any data.
         if not self._ws or not getattr(self._ws, "open", False):
             logger.warning("Deepgram send called without active socket sid=%s", sid)
             raise RuntimeError("deepgram_not_connected")
 
-        # Drop the tiny preamble as first "frame" (common with some recorders)
         if not self._first_real_sent and len(chunk) < self._min_valid_bytes:
             logger.debug(
                 "Deepgram drop small chunk sid=%s bytes=%s min_bytes=%s",
@@ -397,7 +370,6 @@ class DeepgramClient:
     # -- events API ------------------------------------------------------------
 
     async def events(self) -> AsyncGenerator[dict, None]:
-        """Yield ASR events: asr_open, user_partial, user_final, asr_error, ..."""
         while True:
             ev = await self._ev_queue.get()
             yield ev
@@ -405,11 +377,9 @@ class DeepgramClient:
     # -- receiver --------------------------------------------------------------
 
     async def _rx_loop(self) -> None:
-        """Consume Deepgram messages and push partial/final transcripts to the queue."""
         sid = self._sid_for_log()
         try:
             async for raw in self._ws:  # type: ignore
-                # Expect JSON text frames; ignore non-JSON control frames.
                 try:
                     msg = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
                 except Exception:
@@ -417,12 +387,10 @@ class DeepgramClient:
 
                 evt_type = (msg.get("type") or "").lower()
 
-                # Mark open on initial provider acknowledgements (redundant but safe)
                 if evt_type in ("metadata", "listening", "connected", "ready"):
                     await self._signal_ready()
                     continue
 
-                # Typical Deepgram schema: {"type":"Results","channel":{"alternatives":[...],"is_final":bool}}
                 if evt_type in ("results", "transcript", "partialtranscript", "speech.update"):
                     text = ""
                     is_final = False
@@ -432,23 +400,19 @@ class DeepgramClient:
                     if isinstance(alts, list) and alts:
                         text = (alts[0].get("transcript") or "").strip()
 
-                    # Prefer channel.is_final; fall back to top-level speech_final
                     is_final = bool(channel.get("is_final")) or bool(msg.get("is_final"))
 
                     if "transcript" in msg and not text:
                         text = (msg.get("transcript") or "").strip()
 
-                    # Some accounts emit explicit flags:
                     if msg.get("speech_final") is True:
                         is_final = True
                     if evt_type == "utteranceend":
                         is_final = True
 
                     if not text:
-                        # Nothing meaningful; keep listening
                         continue
 
-                    # Seeing a result also implies socket is functioning
                     await self._signal_ready()
 
                     logger.debug(
@@ -468,7 +432,6 @@ class DeepgramClient:
                     if is_final:
                         self._any_result = True
                         self._final_event.set()
-                        # Do not break; allow more finals if multiple utterances are expected
                         continue
 
                 elif evt_type in ("error", "close"):
@@ -479,23 +442,19 @@ class DeepgramClient:
                         _clip_text(str(msg), 200),
                     )
                     try:
-                        await self._ev_queue.put({"type": "asr_error", "error": msg.get("error") or evt_type})
+                        await self._ev_queue.put(
+                            {"type": "asr_error", "error": msg.get("error") or evt_type}
+                        )
                     except Exception:
                         pass
 
                 else:
-                    # Unknown / unhandled event
-                    logger.debug(
-                        "Deepgram unhandled event sid=%s evt_type=%s",
-                        sid,
-                        evt_type or "unknown",
-                    )
+                    logger.debug("Deepgram unhandled event sid=%s evt_type=%s", sid, evt_type or "unknown")
                     continue
 
         except asyncio.CancelledError:
             return
         except websockets.ConnectionClosed as e:
-            # If we already had a result, this can be normal; otherwise surface it.
             logger.warning(
                 "Deepgram websocket closed sid=%s code=%s reason=%s had_result=%s",
                 sid,
@@ -517,31 +476,28 @@ class DeepgramClient:
             except Exception:
                 pass
 
+    # -- keepalive -------------------------------------------------------------
+
     async def _keepalive_loop(self) -> None:
-        """Periodically send KeepAlive frames to avoid upstream idle disconnects."""
+        """Send KeepAlive frames immediately and then periodically."""
         sid = self._sid_for_log()
         try:
             while not self._closed:
-                try:
-                    await asyncio.sleep(self._keepalive_interval)
-                except asyncio.CancelledError:
-                    return
-
-                if self._closed:
-                    break
-
                 ws = self._ws
                 if not ws or not getattr(ws, "open", False):
                     break
 
                 try:
                     await ws.send(json.dumps({"type": "KeepAlive"}))
-                    logger.debug(
-                        "Deepgram keepalive sid=%s interval=%s", sid, self._keepalive_interval
-                    )
+                    logger.debug("Deepgram keepalive sid=%s interval=%s", sid, self._keepalive_interval)
                 except Exception as exc:
                     logger.warning("Deepgram keepalive failed sid=%s err=%s", sid, exc)
                     break
+
+                try:
+                    await asyncio.sleep(self._keepalive_interval)
+                except asyncio.CancelledError:
+                    return
         finally:
             self._keepalive_task = None
 
