@@ -408,6 +408,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                         elif t == "Configure":
                             cfg.update(obj or {})
+                            if _has_deepgram_key():
++                               await _ensure_dg_connected()  # warm up ASR early
 
                             if obj.get("reset"):
                                 try:
