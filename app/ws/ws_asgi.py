@@ -453,7 +453,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 except asyncio.TimeoutError:
                                     _jlog("asr_not_ready_timeout", sid=sid)
 
-                           await _flush_buffered_chunks()
+                            await _flush_buffered_chunks()
                         else:
                             _jlog("ws_audio_no_provider", sid=sid, bytes=len(chunk))
                             buffered_chunks.clear()
