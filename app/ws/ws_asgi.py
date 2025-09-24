@@ -86,7 +86,7 @@ async def _pump_bus_to_client(sid: str, send):
     import json as _json
     from queue import Empty
     from app.ws.bus import bus
-    
+
     q = bus.subscribe(sid)
     try:
         while True:
@@ -110,13 +110,25 @@ async def _pump_bus_to_client(sid: str, send):
             pass
 
 
-async def _pump_dg_to_client(dg: DeepgramClient, send, turn_id_ref, final_seen, sid):
+async def _pump_dg_to_client(
+    dg: DeepgramClient,
+    send,
+    turn_id_ref,
+    final_seen,
+    sid: str,
+    asr_ready_evt: Optional[asyncio.Event] = None,
+):
     """Relay Deepgram events to client and, on final, kick LLM turn."""
     try:
         async for ev in dg.events():
             et = (ev.get("type") or "").lower()
             if et == "asr_open":
                 _jlog("dg_asr_open", sid=sid)
+                try:
+                    if asr_ready_evt and not asr_ready_evt.is_set():
+                        asr_ready_evt.set()
+                except Exception:
+                    pass
                 try:
                     _admin_emit and _admin_emit("asr:start", session_id=sid)
                 except Exception:
@@ -302,6 +314,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     rx_task: Optional[asyncio.Task] = None
     turn_id_ref = [0]
     final_seen = [False]
+    asr_ready_evt: asyncio.Event = asyncio.Event()
+    asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "1.5"))
 
     async def _ensure_dg_connected():
         """Connect to ASR provider once per session; never tear down the WS on provider failures."""
@@ -315,10 +329,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             rx_task = None
         if dg is None and _has_deepgram_key():
             try:
+                # Clear readiness; a new connection will signal asr_open via pump task
+                try:
+                    if asr_ready_evt.is_set():
+                        asr_ready_evt.clear()
+                except Exception:
+                    pass
                 dg = DeepgramClient(cfg)
                 await dg.connect()
                 turn_id_ref[0] = buf.turn_seq + 1
-                rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen, sid))
+                rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen, sid, asr_ready_evt))
                 _jlog("asr_connect_ok", sid=sid)
             except Exception as e:
                 # Keep the client WS alive; surface an error frame and continue in "no-ASR" mode.
@@ -356,11 +376,37 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         final_seen[0] = False
                     buf.append(chunk)
                     if _has_deepgram_key():
+                        # Ensure provider is connected (await, not background)
                         await _ensure_dg_connected()
+
                         if dg is not None:
-                            # Forward raw bytes to provider
-                            await dg.send(chunk)
-                            _jlog("ws_audio_forward", sid=sid, bytes=len(chunk))
+                            # If provider hasn't signaled open yet, wait briefly (first-chunk race guard)
+                            if not asr_ready_evt.is_set():
+                                try:
+                                    await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
+                                except asyncio.TimeoutError:
+                                    _jlog("asr_not_ready_timeout", sid=sid)
+
+                            # Forward raw bytes to provider with one-shot retry on early-race failure
+                            try:
+                                await dg.send(chunk)
+                                _jlog("ws_audio_forward", sid=sid, bytes=len(chunk))
+                            except RuntimeError as e:
+                                if "deepgram_not_connected" in str(e):
+                                    _jlog("asr_send_retry", sid=sid)
+                                    # Re-ensure + short wait for open, then single retry
+                                    await _ensure_dg_connected()
+                                    if not asr_ready_evt.is_set():
+                                        with contextlib.suppress(asyncio.TimeoutError):
+                                            await asyncio.wait_for(asr_ready_evt.wait(), timeout=0.25)
+                                    try:
+                                        await dg.send(chunk)
+                                        _jlog("asr_send_retry_ok", sid=sid)
+                                    except Exception:
+                                        _jlog("asr_send_retry_fail", sid=sid)
+                                else:
+                                    # Surface unexpected send errors but keep WS alive
+                                    _jlog("asr_send_error", sid=sid, err=type(e).__name__)
                         else:
                             _jlog("ws_audio_no_provider", sid=sid, bytes=len(chunk))
                     else:
@@ -408,7 +454,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                         elif t == "Configure":
                             cfg.update(obj or {})
-                            
+
                             if obj.get("reset"):
                                 try:
                                     db.memory.setdefault("greet_turns", {}).pop(sid, None)
