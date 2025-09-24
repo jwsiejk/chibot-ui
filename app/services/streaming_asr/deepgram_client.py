@@ -195,6 +195,17 @@ class DeepgramClient:
 
     # -- helpers ---------------------------------------------------------------
 
+    async def _signal_ready(self) -> None:
+        """Mark the upstream stream as ready and emit the open event once."""
+        if not self._open_evt.is_set():
+            self._open_evt.set()
+        if not self._asr_open_emitted:
+            self._asr_open_emitted = True
+            try:
+                await self._ev_queue.put({"type": "asr_open"})
+            except Exception:
+                pass
+
     def _sid_for_log(self) -> str:
         try:
             for key in ("session_id", "sid"):
@@ -223,12 +234,7 @@ class DeepgramClient:
             DG_LAST_CONFIG = _initial_config(self._cfg)
             # Mark as open immediately in tests
             self._open_evt.set()
-            if not self._asr_open_emitted:
-                try:
-                    await self._ev_queue.put({"type": "asr_open"})
-                except Exception:
-                    pass
-                self._asr_open_emitted = True
+            await self._signal_ready()
             logger.info("Deepgram test-mode connect sid=%s", sid)
             return
 
@@ -250,16 +256,6 @@ class DeepgramClient:
         DG_LAST_URL = url
         DG_LAST_CONFIG = _initial_config(self._cfg)
         await self._ws.send(json.dumps(DG_LAST_CONFIG))
-
-        # Treat stream as open immediately to avoid early-ack deadlocks.
-        if not self._open_evt.is_set():
-            self._open_evt.set()
-        if not self._asr_open_emitted:
-            try:
-                await self._ev_queue.put({"type": "asr_open"})
-            except Exception:
-                pass
-            self._asr_open_emitted = True
 
         # Start receiver
         self._rx_task = asyncio.create_task(self._rx_loop())
@@ -359,8 +355,7 @@ class DeepgramClient:
                         "Deepgram send gated but no open within timeout sid=%s", sid
                     )
                     self._open_gate_warned = True
-                if not self._open_evt.is_set():
-                    self._open_evt.set()
+                await self._signal_ready()
 
         # We still ensure the socket is open before sending any data.
         if not self._ws or not getattr(self._ws, "open", False):
@@ -407,14 +402,7 @@ class DeepgramClient:
 
                 # Mark open on initial provider acknowledgements (redundant but safe)
                 if evt_type in ("metadata", "listening", "connected", "ready"):
-                    if not self._open_evt.is_set():
-                        self._open_evt.set()
-                    if not self._asr_open_emitted:
-                        try:
-                            await self._ev_queue.put({"type": "asr_open"})
-                        except Exception:
-                            pass
-                        self._asr_open_emitted = True
+                    await self._signal_ready()
                     continue
 
                 # Typical Deepgram schema: {"type":"Results","channel":{"alternatives":[...],"is_final":bool}}
@@ -444,14 +432,7 @@ class DeepgramClient:
                         continue
 
                     # Seeing a result also implies socket is functioning
-                    if not self._open_evt.is_set():
-                        self._open_evt.set()
-                    if not self._asr_open_emitted:
-                        try:
-                            await self._ev_queue.put({"type": "asr_open"})
-                        except Exception:
-                            pass
-                        self._asr_open_emitted = True
+                    await self._signal_ready()
 
                     logger.debug(
                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",

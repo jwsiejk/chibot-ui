@@ -1,26 +1,137 @@
 diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index bf2d898a71270249d493dcf4ed2a257972eb06a6..69414bf6c474f23f3d2c6a41d731b90341940a38 100644
+index 69414bf6c474f23f3d2c6a41d731b90341940a38..d1c46f1b030d54bf6e239b4e65bd81d9b1d55386 100644
 --- a/app/services/streaming_asr/deepgram_client.py
 +++ b/app/services/streaming_asr/deepgram_client.py
-@@ -319,60 +319,72 @@ class DeepgramClient:
-             except asyncio.TimeoutError:
-                 # Surface for higher-level diagnostics if someone is listening
-                 try:
-                     await self._ev_queue.put(
-                         {"type": "asr_error", "error": f"final_timeout:{timeout}s"}
-                     )
-                 except Exception:
-                     pass
+@@ -173,116 +173,112 @@ class DeepgramClient:
+         self._rx_task: Optional[asyncio.Task] = None
+         self._ev_queue: asyncio.Queue = asyncio.Queue()
+         self._closed = False
  
-         # 4) Close websocket and stop rx loop
+         # New: graceful shutdown coordination
+         self._final_event: asyncio.Event = asyncio.Event()
+         self._any_result: bool = False
+ 
+         # New: first-chunk guard & timing
+         self._first_real_sent: bool = False
+         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
+         self._last_chunk_ts: float = 0.0
+ 
+         # Tunables (env overrides allowed)
+         self._linger_ms: int = int(os.getenv("DG_LINGER_MS", "600"))          # after last chunk
+         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "8"))  # wait for final
+ 
+         # Open gate (we set it immediately after Configure to avoid deadlock)
+         self._open_evt: asyncio.Event = asyncio.Event()
+         self._asr_open_emitted: bool = False
+         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
+         self._open_gate_warned: bool = False
+ 
+     # -- helpers ---------------------------------------------------------------
+ 
++    async def _signal_ready(self) -> None:
++        """Mark the upstream stream as ready and emit the open event once."""
++        if not self._open_evt.is_set():
++            self._open_evt.set()
++        if not self._asr_open_emitted:
++            self._asr_open_emitted = True
++            try:
++                await self._ev_queue.put({"type": "asr_open"})
++            except Exception:
++                pass
++
+     def _sid_for_log(self) -> str:
          try:
-             if self._ws and getattr(self._ws, "open", True):
-                 await self._ws.close()
-         finally:
-             self._ws = None
-             if self._rx_task:
-                 try:
-                     self._rx_task.cancel()
+             for key in ("session_id", "sid"):
+                 if key in self._cfg and self._cfg[key]:
+                     return str(self._cfg[key])
+         except Exception:
+             pass
+         return "?"
+ 
+     # -- lifecycle -------------------------------------------------------------
+ 
+     async def connect(self) -> None:
+         """Open DG WS and send a Configure(features=...) frame."""
+         global DG_LAST_URL, DG_LAST_CONFIG
+         if self._ws:
+             return
+ 
+         url = _dg_url(self._cfg)
+         sid = self._sid_for_log()
+         logger.info("Deepgram connect start sid=%s url=%s", sid, url)
+ 
+         if DG_TEST_MODE:
+             # No network — use a fake socket and record URL/config for tests
+             self._ws = _FakeWSForTests()
+             DG_LAST_URL = url
+             DG_LAST_CONFIG = _initial_config(self._cfg)
+             # Mark as open immediately in tests
+             self._open_evt.set()
+-            if not self._asr_open_emitted:
+-                try:
+-                    await self._ev_queue.put({"type": "asr_open"})
+-                except Exception:
+-                    pass
+-                self._asr_open_emitted = True
++            await self._signal_ready()
+             logger.info("Deepgram test-mode connect sid=%s", sid)
+             return
+ 
+         headers = [("Authorization", _auth_header())]
+         try:
+             self._ws = await websockets.connect(
+                 url,
+                 additional_headers=headers,
+                 max_size=None,
+             )
+         except TypeError:
+             self._ws = await websockets.connect(
+                 url,
+                 extra_headers=headers,
+                 max_size=None,
+             )
+ 
+         # Send initial configuration with FEATURES ONLY
+         DG_LAST_URL = url
+         DG_LAST_CONFIG = _initial_config(self._cfg)
+         await self._ws.send(json.dumps(DG_LAST_CONFIG))
+ 
+-        # Treat stream as open immediately to avoid early-ack deadlocks.
+-        if not self._open_evt.is_set():
+-            self._open_evt.set()
+-        if not self._asr_open_emitted:
+-            try:
+-                await self._ev_queue.put({"type": "asr_open"})
+-            except Exception:
+-                pass
+-            self._asr_open_emitted = True
+-
+         # Start receiver
+         self._rx_task = asyncio.create_task(self._rx_loop())
+         logger.info("Deepgram connect ok sid=%s", sid)
+ 
+     async def close(
+         self,
+         wait_for_final: bool = True,
+         timeout: Optional[float] = None,
+         linger_ms: Optional[int] = None,
+     ) -> None:
+         """Gracefully close the stream.
+ 
+         Steps:
+           1) Optional linger after last chunk (default 600 ms).
+           2) Send {"type":"CloseStream"}.
+           3) Optionally wait for final (default 8 s).
+           4) Close the websocket and cancel the rx loop.
+         """
+         if self._closed:
+             return
+         self._closed = True
+         sid = self._sid_for_log()
+         logger.info(
+             "Deepgram close start sid=%s wait_for_final=%s linger_ms=%s",
+             sid,
+@@ -337,143 +333,128 @@ class DeepgramClient:
                  finally:
                      self._rx_task = None
          logger.info("Deepgram close complete sid=%s", sid)
@@ -28,8 +139,7 @@ index bf2d898a71270249d493dcf4ed2a257972eb06a6..69414bf6c474f23f3d2c6a41d731b903
      # -- sending ---------------------------------------------------------------
  
      async def send(self, chunk: bytes) -> None:
--        """Send a binary audio frame to Deepgram (Opus/PCM), no early-ack gate."""
-+        """Send a binary audio frame to Deepgram (Opus/PCM), gated on open acknowledgements."""
+         """Send a binary audio frame to Deepgram (Opus/PCM), gated on open acknowledgements."""
          if not isinstance(chunk, (bytes, bytearray)):
              raise TypeError("chunk must be bytes")
          if not chunk:
@@ -37,22 +147,21 @@ index bf2d898a71270249d493dcf4ed2a257972eb06a6..69414bf6c474f23f3d2c6a41d731b903
  
          sid = self._sid_for_log()
  
--        # Do NOT wait for early ack here. Some models only ack after audio.
--        # We still ensure the socket is open.
-+        # Wait briefly for Deepgram to report ready/open before sending audio.
-+        if not self._open_evt.is_set():
-+            try:
-+                await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
-+            except asyncio.TimeoutError:
-+                if not self._open_gate_warned:
-+                    logger.warning(
-+                        "Deepgram send gated but no open within timeout sid=%s", sid
-+                    )
-+                    self._open_gate_warned = True
-+                if not self._open_evt.is_set():
-+                    self._open_evt.set()
-+
-+        # We still ensure the socket is open before sending any data.
+         # Wait briefly for Deepgram to report ready/open before sending audio.
+         if not self._open_evt.is_set():
+             try:
+                 await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
+             except asyncio.TimeoutError:
+                 if not self._open_gate_warned:
+                     logger.warning(
+                         "Deepgram send gated but no open within timeout sid=%s", sid
+                     )
+                     self._open_gate_warned = True
+-                if not self._open_evt.is_set():
+-                    self._open_evt.set()
++                await self._signal_ready()
+ 
+         # We still ensure the socket is open before sending any data.
          if not self._ws or not getattr(self._ws, "open", False):
              logger.warning("Deepgram send called without active socket sid=%s", sid)
              raise RuntimeError("deepgram_not_connected")
@@ -78,11 +187,110 @@ index bf2d898a71270249d493dcf4ed2a257972eb06a6..69414bf6c474f23f3d2c6a41d731b903
          """Yield ASR events: asr_open, user_partial, user_final, asr_error, ..."""
          while True:
              ev = await self._ev_queue.get()
+             yield ev
+ 
+     # -- receiver --------------------------------------------------------------
+ 
+     async def _rx_loop(self) -> None:
+         """Consume Deepgram messages and push partial/final transcripts to the queue."""
+         sid = self._sid_for_log()
+         try:
+             async for raw in self._ws:  # type: ignore
+                 # Expect JSON text frames; ignore non-JSON control frames.
+                 try:
+                     msg = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
+                 except Exception:
+                     continue
+ 
+                 evt_type = (msg.get("type") or "").lower()
+ 
+                 # Mark open on initial provider acknowledgements (redundant but safe)
+                 if evt_type in ("metadata", "listening", "connected", "ready"):
+-                    if not self._open_evt.is_set():
+-                        self._open_evt.set()
+-                    if not self._asr_open_emitted:
+-                        try:
+-                            await self._ev_queue.put({"type": "asr_open"})
+-                        except Exception:
+-                            pass
+-                        self._asr_open_emitted = True
++                    await self._signal_ready()
+                     continue
+ 
+                 # Typical Deepgram schema: {"type":"Results","channel":{"alternatives":[...],"is_final":bool}}
+                 if evt_type in ("results", "transcript", "partialtranscript", "speech.update"):
+                     text = ""
+                     is_final = False
+ 
+                     channel = msg.get("channel") or {}
+                     alts = channel.get("alternatives")
+                     if isinstance(alts, list) and alts:
+                         text = (alts[0].get("transcript") or "").strip()
+ 
+                     # Prefer channel.is_final; fall back to top-level speech_final
+                     is_final = bool(channel.get("is_final")) or bool(msg.get("is_final"))
+ 
+                     if "transcript" in msg and not text:
+                         text = (msg.get("transcript") or "").strip()
+ 
+                     # Some accounts emit explicit flags:
+                     if msg.get("speech_final") is True:
+                         is_final = True
+                     if evt_type == "utteranceend":
+                         is_final = True
+ 
+                     if not text:
+                         # Nothing meaningful; keep listening
+                         continue
+ 
+                     # Seeing a result also implies socket is functioning
+-                    if not self._open_evt.is_set():
+-                        self._open_evt.set()
+-                    if not self._asr_open_emitted:
+-                        try:
+-                            await self._ev_queue.put({"type": "asr_open"})
+-                        except Exception:
+-                            pass
+-                        self._asr_open_emitted = True
++                    await self._signal_ready()
+ 
+                     logger.debug(
+                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
+                         sid,
+                         is_final,
+                         len(text),
+                         _clip_text(text),
+                     )
+                     try:
+                         await self._ev_queue.put(
+                             {"type": "user_final" if is_final else "user_partial", "text": text}
+                         )
+                     except Exception:
+                         pass
+ 
+                     if is_final:
+                         self._any_result = True
+                         self._final_event.set()
+                         # Do not break; allow more finals if multiple utterances are expected
+                         continue
+ 
+                 elif evt_type in ("error", "close"):
+                     logger.warning(
+                         "Deepgram error event sid=%s evt_type=%s detail=%s",
+                         sid,
 diff --git a/tests/test_deepgram_client_connect.py b/tests/test_deepgram_client_connect.py
-index 5cc160e4d5d91243204a5c607d739b66f3c8edb2..b6dae50f400240df7a30ecfa254bb19502077e40 100644
+index b6dae50f400240df7a30ecfa254bb19502077e40..072d74c5a9f0f86ae5bcae793aa7b27077acea6e 100644
 --- a/tests/test_deepgram_client_connect.py
 +++ b/tests/test_deepgram_client_connect.py
-@@ -34,79 +34,138 @@ def test_connect_prefers_additional_headers(monkeypatch):
+@@ -26,91 +26,92 @@ class DummyWS:
+ def test_connect_prefers_additional_headers(monkeypatch):
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+ 
+     record = {}
+ 
+     async def fake_connect(url, **kwargs):
+         record["url"] = url
          record["kwargs"] = kwargs
          return DummyWS()
  
@@ -100,7 +308,8 @@ index 5cc160e4d5d91243204a5c607d739b66f3c8edb2..b6dae50f400240df7a30ecfa254bb195
  
          assert json.loads(client._ws.sent[0])["type"] == "Configure"
  
-         event = await client._ev_queue.get()
+-        event = await client._ev_queue.get()
++        event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.1)
          assert event["type"] == "asr_open"
  
          await client.close(wait_for_final=False)
@@ -108,45 +317,52 @@ index 5cc160e4d5d91243204a5c607d739b66f3c8edb2..b6dae50f400240df7a30ecfa254bb195
      asyncio.run(run())
  
  
-+def test_connect_emits_asr_open_immediately(monkeypatch):
-+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
-+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
-+
-+    release_iter = asyncio.Event()
-+
-+    class SlowDummyWS(DummyWS):
-+        def __aiter__(self):
-+            async def _gen():
-+                await release_iter.wait()
-+                yield json.dumps({"type": "Metadata"})
-+
-+            return _gen()
-+
-+    async def fake_connect(url, **kwargs):
-+        return SlowDummyWS()
-+
-+    monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
-+
-+    async def run():
-+        client = dg_mod.DeepgramClient()
-+
-+        await client.connect()
-+
-+        event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.05)
+-def test_connect_emits_asr_open_immediately(monkeypatch):
++def test_connect_defers_asr_open_until_provider_ready(monkeypatch):
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+ 
+     release_iter = asyncio.Event()
+ 
+     class SlowDummyWS(DummyWS):
+         def __aiter__(self):
+             async def _gen():
+                 await release_iter.wait()
+                 yield json.dumps({"type": "Metadata"})
+ 
+             return _gen()
+ 
+     async def fake_connect(url, **kwargs):
+         return SlowDummyWS()
+ 
+     monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
+ 
+     async def run():
+         client = dg_mod.DeepgramClient()
+ 
+         await client.connect()
+ 
+-        event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.05)
+-        assert event["type"] == "asr_open"
+-        assert client._asr_open_emitted is True
++        with pytest.raises(asyncio.TimeoutError):
++            await asyncio.wait_for(client._ev_queue.get(), timeout=0.05)
++        assert client._asr_open_emitted is False
+ 
+         release_iter.set()
+         await asyncio.sleep(0)
+ 
+-        with pytest.raises(asyncio.TimeoutError):
+-            await asyncio.wait_for(client._ev_queue.get(), timeout=0.02)
++        event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.1)
 +        assert event["type"] == "asr_open"
 +        assert client._asr_open_emitted is True
-+
-+        release_iter.set()
-+        await asyncio.sleep(0)
-+
-+        with pytest.raises(asyncio.TimeoutError):
-+            await asyncio.wait_for(client._ev_queue.get(), timeout=0.02)
-+
-+        await client.close(wait_for_final=False)
-+
-+    asyncio.run(run())
-+
-+
+ 
+         await client.close(wait_for_final=False)
+ 
+     asyncio.run(run())
+ 
+ 
  def test_connect_falls_back_to_extra_headers(monkeypatch):
      monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
      monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
@@ -166,39 +382,10 @@ index 5cc160e4d5d91243204a5c607d739b66f3c8edb2..b6dae50f400240df7a30ecfa254bb195
      async def run():
          client = dg_mod.DeepgramClient()
  
-         await client.connect()
- 
-         assert len(calls) == 2
-         assert calls[0]["additional_headers"] == [("Authorization", "Token abc123")]
-         assert calls[1]["extra_headers"] == [("Authorization", "Token abc123")]
-         assert calls[1]["max_size"] is None
-         assert json.loads(client._ws.sent[0])["type"] == "Configure"
- 
-         await client.close(wait_for_final=False)
- 
+@@ -147,25 +148,71 @@ def test_testmode_emits_asr_open_once(monkeypatch):
      asyncio.run(run())
  
  
-+def test_testmode_emits_asr_open_once(monkeypatch):
-+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", True)
-+
-+    async def run():
-+        client = dg_mod.DeepgramClient()
-+
-+        await client.connect()
-+
-+        event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.05)
-+        assert event["type"] == "asr_open"
-+        assert client._asr_open_emitted is True
-+
-+        with pytest.raises(asyncio.TimeoutError):
-+            await asyncio.wait_for(client._ev_queue.get(), timeout=0.02)
-+
-+        await client.close(wait_for_final=False)
-+
-+    asyncio.run(run())
-+
-+
  def test_send_warns_but_continues_after_open_timeout(monkeypatch, caplog):
      monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
      monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
@@ -221,3 +408,49 @@ index 5cc160e4d5d91243204a5c607d739b66f3c8edb2..b6dae50f400240df7a30ecfa254bb195
      assert client._open_evt.is_set()
      assert client._open_gate_warned is True
      assert caplog.text.count("Deepgram send gated but no open within timeout") == 1
++    event = client._ev_queue.get_nowait()
++    assert event["type"] == "asr_open"
++    with pytest.raises(asyncio.QueueEmpty):
++        client._ev_queue.get_nowait()
++
++
++def test_send_waits_for_provider_ready(monkeypatch):
++    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
++    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
++
++    release_iter = asyncio.Event()
++
++    class SlowDummyWS(DummyWS):
++        def __aiter__(self):
++            async def _gen():
++                await release_iter.wait()
++                yield json.dumps({"type": "Metadata"})
++
++            return _gen()
++
++    async def fake_connect(url, **kwargs):
++        return SlowDummyWS()
++
++    monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
++
++    async def run():
++        client = dg_mod.DeepgramClient()
++        await client.connect()
++        client._min_valid_bytes = 1
++
++        send_task = asyncio.create_task(client.send(b"a" * 4))
++        await asyncio.sleep(0)
++        assert len(client._ws.sent) == 1
++        assert json.loads(client._ws.sent[0])["type"] == "Configure"
++
++        release_iter.set()
++        await send_task
++
++        assert client._ws.sent[1:] == [b"a" * 4]
++
++        event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.1)
++        assert event["type"] == "asr_open"
++
++        await client.close(wait_for_final=False)
++
++    asyncio.run(run())

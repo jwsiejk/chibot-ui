@@ -48,7 +48,7 @@ def test_connect_prefers_additional_headers(monkeypatch):
 
         assert json.loads(client._ws.sent[0])["type"] == "Configure"
 
-        event = await client._ev_queue.get()
+        event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.1)
         assert event["type"] == "asr_open"
 
         await client.close(wait_for_final=False)
@@ -56,7 +56,7 @@ def test_connect_prefers_additional_headers(monkeypatch):
     asyncio.run(run())
 
 
-def test_connect_emits_asr_open_immediately(monkeypatch):
+def test_connect_defers_asr_open_until_provider_ready(monkeypatch):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
 
@@ -80,15 +80,16 @@ def test_connect_emits_asr_open_immediately(monkeypatch):
 
         await client.connect()
 
-        event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.05)
-        assert event["type"] == "asr_open"
-        assert client._asr_open_emitted is True
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(client._ev_queue.get(), timeout=0.05)
+        assert client._asr_open_emitted is False
 
         release_iter.set()
         await asyncio.sleep(0)
 
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(client._ev_queue.get(), timeout=0.02)
+        event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.1)
+        assert event["type"] == "asr_open"
+        assert client._asr_open_emitted is True
 
         await client.close(wait_for_final=False)
 
@@ -169,3 +170,49 @@ def test_send_warns_but_continues_after_open_timeout(monkeypatch, caplog):
     assert client._open_evt.is_set()
     assert client._open_gate_warned is True
     assert caplog.text.count("Deepgram send gated but no open within timeout") == 1
+    event = client._ev_queue.get_nowait()
+    assert event["type"] == "asr_open"
+    with pytest.raises(asyncio.QueueEmpty):
+        client._ev_queue.get_nowait()
+
+
+def test_send_waits_for_provider_ready(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+
+    release_iter = asyncio.Event()
+
+    class SlowDummyWS(DummyWS):
+        def __aiter__(self):
+            async def _gen():
+                await release_iter.wait()
+                yield json.dumps({"type": "Metadata"})
+
+            return _gen()
+
+    async def fake_connect(url, **kwargs):
+        return SlowDummyWS()
+
+    monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
+
+    async def run():
+        client = dg_mod.DeepgramClient()
+        await client.connect()
+        client._min_valid_bytes = 1
+
+        send_task = asyncio.create_task(client.send(b"a" * 4))
+        await asyncio.sleep(0)
+        assert len(client._ws.sent) == 1
+        assert json.loads(client._ws.sent[0])["type"] == "Configure"
+
+        release_iter.set()
+        await send_task
+
+        assert client._ws.sent[1:] == [b"a" * 4]
+
+        event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.1)
+        assert event["type"] == "asr_open"
+
+        await client.close(wait_for_final=False)
+
+    asyncio.run(run())
