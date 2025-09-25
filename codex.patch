@@ -1,80 +1,566 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 81987bccd4225fc1cd289cad024b149337df9bb7..c431060ff0362972f9e6c9d4e883d3afa4e09f92 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -354,50 +354,75 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 turn_id_ref[0] = buf.turn_seq + 1
-                 rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen, sid, asr_ready_evt))
-                 _jlog("asr_connect_ok", sid=sid)
-             except Exception as e:
-                 # Keep the client WS alive; surface an error frame and continue in "no-ASR" mode.
-                 dg = None
-                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
-                 try:
-                     await send({
-                         "type": "websocket.send",
-                         "text": _dumps(make_error("asr_connect_fail", type(e).__name__)),
-                     })
-                 except Exception:
-                     pass
-                 try:
-                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=f"connect:{type(e).__name__}")
-                 except Exception:
-                     pass
+diff --git a/static/css/app.css b/static/css/app.css
+index 0d3c08f4f0d88d90971f8854d85e45ddd84a40bf..3e158d7fccb020061be048eb5faee7d3bc806d66 100644
+--- a/static/css/app.css
++++ b/static/css/app.css
+@@ -181,103 +181,117 @@ label{display:block; font-size:13px; color:var(--muted); margin:6px 0 4px}
+ /* Make ad-hoc rows wrap */
+ form .row, .form .row{display:flex; flex-wrap:wrap; gap:12px 16px}
  
-     async def _send_chunk(data: bytes, *, from_buffer: bool = False, retry: bool = True) -> bool:
-         """Send audio to Deepgram, retrying once on connection race."""
-         nonlocal dg
-         if dg is None:
-             return False
-         try:
-+            wait_socket_open = getattr(dg, "wait_socket_open", None)
-+            if callable(wait_socket_open):
-+                try:
-+                    await wait_socket_open(timeout=0.25)
-+                except Exception:
-+                    pass
-+
-+            is_open = True
-+            is_open_fn = getattr(dg, "is_open", None)
-+            if callable(is_open_fn):
-+                try:
-+                    is_open = bool(is_open_fn())
-+                except Exception:
-+                    is_open = True
-+            elif hasattr(dg, "_ws"):
-+                try:
-+                    ws = getattr(dg, "_ws", None)
-+                    if ws is not None:
-+                        is_open = bool(getattr(ws, "open", False))
-+                except Exception:
-+                    pass
-+
-+            if not is_open:
-+                raise RuntimeError("deepgram_not_connected")
-+
-             await dg.send(data)
-             sent_any_audio[0] = True
-             _jlog(
-                 "ws_audio_forward",
-                 sid=sid,
-                 bytes=len(data),
-                 buffered=from_buffer,
-             )
-             return True
-         except RuntimeError as e:
-             if "deepgram_not_connected" in str(e).lower() and retry:
-                 _jlog("asr_send_retry", sid=sid)
-                 await _ensure_dg_connected()
-                 if not asr_ready_evt.is_set():
-                     with contextlib.suppress(asyncio.TimeoutError):
-                         await asyncio.wait_for(asr_ready_evt.wait(), timeout=0.25)
-                 return await _send_chunk(data, from_buffer=from_buffer, retry=False)
-             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
-         except Exception as e:
-             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
-         return False
+ /* Responsive 2-column grid if these forms exist */
+ #profileForm, #signinForm{max-width:1080px}
+ @media (min-width: 900px){
+   #profileForm, #signinForm{
+     display:grid; grid-template-columns: repeat(2, minmax(300px, 1fr)); gap:14px 24px;
+   }
+   #profileForm > label, #signinForm > label{margin-top:10px}
+   #profileForm > label + input,
+   #profileForm > label + select,
+   #profileForm > label + textarea,
+   #signinForm > label + input,
+   #signinForm > label + select,
+   #signinForm > label + textarea{width:100%}
+   #profileForm .actions, #signinForm .actions{grid-column:1 / -1}
+ }
  
-     async def _flush_buffered_chunks() -> None:
-         """Flush buffered audio once Deepgram is ready."""
-         nonlocal dg
+ /* Suggestions list spacing if present */
+ #suggestions{margin:0; padding-left:18px}
+ 
+ /* ---------------- Visualizer ---------------- */
+ .visualizer-shell{flex:1;display:flex;align-items:center;justify-content:center;min-height:320px}
+ .visualizer-backdrop{
++  position:relative;
+   width:100%;
+-  max-width:460px;
+-  aspect-ratio:1;
+-  border-radius:40px;
+-  background:radial-gradient(circle at 20% 20%, rgba(122,160,255,.35), rgba(15,20,32,0.9) 68%),
+-             linear-gradient(145deg, rgba(36,52,82,.9), rgba(12,18,32,.9));
+-  padding:70px;
++  max-width:520px;
++  aspect-ratio:4 / 3;
++  border-radius:36px;
++  padding:54px;
++  background:
++    radial-gradient(120% 120% at 18% 18%, rgba(146,176,255,.32), rgba(10,14,26,.92) 70%),
++    linear-gradient(155deg, rgba(34,48,84,.88), rgba(12,16,28,.92));
++  box-shadow:inset 0 0 48px rgba(120,156,255,.18), 0 40px 80px rgba(2,6,16,.55);
++  overflow:hidden;
+   display:flex;
+-  align-items:flex-end;
++  align-items:center;
+   justify-content:center;
+-  box-shadow:inset 0 0 40px rgba(122,160,255,.22), 0 40px 80px rgba(2,6,16,.55);
+ }
+-.visualizer-bars{width:100%;height:100%;display:flex;align-items:flex-end;justify-content:space-between;gap:14px}
+-.visualizer-bars span{
+-  flex:1;
+-  max-width:28px;
+-  height:78%;
+-  border-radius:18px 18px 10px 10px;
+-  background:linear-gradient(180deg, rgba(122,160,255,.95) 0%, rgba(44,120,255,.75) 60%, rgba(10,30,62,.95) 100%);
+-  box-shadow:0 8px 20px rgba(5,12,28,.55);
+-  transform-origin:bottom center;
+-  transform:scaleY(.2);
++.visualizer-backdrop::before{
++  content:"";
++  position:absolute;
++  inset:18%;
++  border-radius:28px;
++  background:linear-gradient(140deg, rgba(138,168,255,.22), rgba(32,44,78,0));
++  opacity:.85;
++  pointer-events:none;
++}
++.visualizer-backdrop::after{
++  content:"";
++  position:absolute;
++  inset:0;
++  background-image:radial-gradient(rgba(150,180,255,.12) 1px, transparent 0);
++  background-size:22px 22px;
+   opacity:.35;
+-  transition:transform .12s ease-out, opacity .18s ease-out;
+-  will-change:transform, opacity;
++  mix-blend-mode:soft-light;
++  pointer-events:none;
++}
++.visualizer-waveform{
++  position:relative;
++  width:100%;
++  height:100%;
++  display:block;
+ }
+ 
+ /* ---------------- Meeting toolbar ---------------- */
+ .meeting-toolbar{display:flex;justify-content:center}
+ .toolbar-buttons{
+   display:flex;
+   align-items:center;
+   gap:18px;
+   background:rgba(9,12,18,.85);
+   border:1px solid var(--border);
+   border-radius:999px;
+   padding:14px 32px;
+   box-shadow:0 28px 60px rgba(2,6,16,.5);
+ }
+ .toolbar-buttons .dot{width:14px;height:14px;margin:0}
+ 
+ /* ---------------- Responsive tweaks ---------------- */
+ @media (max-width:1200px){
+   .meeting-grid{grid-template-columns:minmax(260px, 300px) 1fr}
+   .suggestions-pane{grid-column:1 / -1;min-height:auto}
+ }
+ @media (max-width:900px){
+   .topbar{padding:12px 20px}
+   main.meeting-layout{padding:0 16px 24px;margin:24px auto 40px}
+   .meeting-grid{grid-template-columns:1fr}
+   .chat-pane,.visualizer-pane,.suggestions-pane{order:unset}
+   .visualizer-shell{min-height:260px}
+-  .visualizer-backdrop{padding:48px}
++  .visualizer-backdrop{padding:38px}
+   .toolbar-buttons{width:100%;justify-content:center}
+ }
+ 
+ /* ---------------- Generic helpers you already used ---------------- */
+ .wrap{max-width:1080px;margin:36px auto;padding:0 16px}
+ .grid{display:grid;grid-template-columns:repeat(2,minmax(180px,1fr));gap:10px}
+ @media (max-width: 820px){ .grid{grid-template-columns:1fr} }
+ .card{padding:12px; background:var(--panel); border:1px solid var(--border); border-radius:12px; color:var(--text)}
+ 
+ /* Tables (Admin Diagnostics or any) */
+ table{width:100%;border-collapse:collapse}
+ th,td{font-size:13px;border-bottom:1px solid var(--border);padding:8px}
+ 
+ /* ---------------- Unify Diagnostics under Admin ---------------- */
+ /* Hide any legacy Diagnostics menu entry, regardless of variant */
+ nav .menu a[href="/diagnostics"],
+ nav .menu a[href="/diagnostics/"],
+ nav .menu a[href$="/diagnostics"],
+ nav .menu a[href*="/diagnostics"],
+ nav .menu a[href*="diagnostics.html"],
+ nav .menu a[href*="diagnostics/index"],
+ nav .menu a[href*="?view=diagnostics"],
+ nav .menu [data-route="diagnostics"],
+ nav .menu [data-link="diagnostics"],
+ /* fallbacks if your menu isn’t inside nav.menu */
+diff --git a/static/js/visualizer.js b/static/js/visualizer.js
+index 36de7d9c0d7273dbddad45e84595c9b1b95a22e2..c07055c942f4a2c559938b5c7587551994b6ae71 100644
+--- a/static/js/visualizer.js
++++ b/static/js/visualizer.js
+@@ -1,144 +1,294 @@
+ const MIC_CONSTRAINTS = {
+   audio: {
+     channelCount: 1,
+     sampleRate: 48000,
+     echoCancellation: true,
+     noiseSuppression: true,
+     autoGainControl: false,
+   },
+ };
+ 
+-let bars = null;
++let canvas = null;
++let ctx = null;
+ let audioCtx = null;
+ let analyser = null;
+ let source = null;
++let stream = null;
+ let dataArray = null;
+ let rafId = null;
+-let stream = null;
++let resizeObserver = null;
++let resizeListener = null;
++let canvasWidth = 0;
++let canvasHeight = 0;
++let strokeGradient = null;
++let fillGradient = null;
+ 
+-const MIN_SCALE = 0.2;
+-const MAX_SCALE = 1.8;
++function clearCanvas() {
++  if (!ctx || !canvasWidth || !canvasHeight) return;
++  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
++}
+ 
+-function ensureBars() {
+-  if (!bars || bars.length === 0) {
+-    bars = Array.from(document.querySelectorAll('.visualizer-bars span'));
++function traceWave(points) {
++  if (!ctx || points.length < 2) return;
++  ctx.moveTo(points[0].x, points[0].y);
++
++  for (let i = 1; i < points.length; i++) {
++    const prev = points[i - 1];
++    const curr = points[i];
++    const xc = (prev.x + curr.x) / 2;
++    const yc = (prev.y + curr.y) / 2;
++    ctx.quadraticCurveTo(prev.x, prev.y, xc, yc);
+   }
+-  return bars.length > 0;
++
++  const last = points[points.length - 1];
++  ctx.lineTo(last.x, last.y);
+ }
+ 
+-function cleanupGraph() {
+-  if (source) {
+-    try { source.disconnect(); } catch (_) {}
++function drawIdleWave() {
++  if (!ctx || !canvasWidth || !canvasHeight) return;
++  clearCanvas();
++  const midY = canvasHeight / 2;
++  ctx.beginPath();
++  ctx.moveTo(0, midY);
++  ctx.lineTo(canvasWidth, midY);
++  ctx.strokeStyle = 'rgba(120, 150, 220, 0.28)';
++  ctx.lineWidth = 1.2;
++  ctx.stroke();
++}
++
++function drawWaveform(values) {
++  if (!ctx || !values || values.length === 0 || !canvasWidth || !canvasHeight) {
++    return;
+   }
+-  if (analyser) {
+-    try { analyser.disconnect(); } catch (_) {}
++
++  clearCanvas();
++
++  const midY = canvasHeight / 2;
++  const amplitude = canvasHeight * 0.42;
++  const sampleCount = Math.max(2, Math.min(220, values.length));
++  const step = (values.length - 1) / (sampleCount - 1);
++  const slice = canvasWidth / (sampleCount - 1);
++  const smoothing = 0.45;
++  const points = new Array(sampleCount);
++
++  let lastY = midY;
++  for (let i = 0; i < sampleCount; i++) {
++    const dataIndex = Math.round(i * step);
++    const value = (values[dataIndex] - 128) / 128;
++    const targetY = midY + value * amplitude;
++    const y = lastY + (targetY - lastY) * smoothing;
++    const x = slice * i;
++    points[i] = { x, y };
++    lastY = y;
+   }
+-  source = null;
+-  analyser = null;
+-  dataArray = null;
++
++  ctx.beginPath();
++  traceWave(points);
++  ctx.lineTo(canvasWidth, midY);
++  ctx.lineTo(0, midY);
++  ctx.closePath();
++
++  if (fillGradient) {
++    ctx.fillStyle = fillGradient;
++    ctx.fill();
++  }
++
++  ctx.beginPath();
++  traceWave(points);
++  ctx.strokeStyle = strokeGradient || 'rgba(148, 200, 255, 0.92)';
++  ctx.lineWidth = 2.6;
++  ctx.lineJoin = 'round';
++  ctx.lineCap = 'round';
++  ctx.shadowColor = 'rgba(116, 160, 255, 0.32)';
++  ctx.shadowBlur = 18;
++  ctx.stroke();
++  ctx.shadowBlur = 0;
++
++  ctx.beginPath();
++  ctx.moveTo(0, midY);
++  ctx.lineTo(canvasWidth, midY);
++  ctx.strokeStyle = 'rgba(120, 150, 220, 0.18)';
++  ctx.lineWidth = 1;
++  ctx.stroke();
+ }
+ 
+-function scaleForLevel(level) {
+-  const clamped = Math.min(1, Math.max(0, level));
+-  return MIN_SCALE + clamped * (MAX_SCALE - MIN_SCALE);
++function updateGradients() {
++  if (!ctx || !canvasWidth || !canvasHeight) return;
++  strokeGradient = ctx.createLinearGradient(0, canvasHeight, canvasWidth, 0);
++  strokeGradient.addColorStop(0, 'rgba(148, 215, 255, 0.95)');
++  strokeGradient.addColorStop(0.55, 'rgba(124, 110, 255, 0.95)');
++  strokeGradient.addColorStop(1, 'rgba(255, 143, 184, 0.95)');
++
++  fillGradient = ctx.createLinearGradient(canvasWidth / 2, 0, canvasWidth / 2, canvasHeight);
++  fillGradient.addColorStop(0, 'rgba(126, 118, 255, 0.32)');
++  fillGradient.addColorStop(1, 'rgba(18, 22, 42, 0)');
+ }
+ 
+-function opacityForLevel(level) {
+-  const clamped = Math.min(1, Math.max(0, level));
+-  return 0.35 + clamped * 0.55;
++function resizeCanvas() {
++  if (!canvas || !ctx) return;
++
++  const rect = canvas.getBoundingClientRect();
++  const dpr = window.devicePixelRatio || 1;
++  const displayWidth = Math.max(1, Math.round(rect.width * dpr));
++  const displayHeight = Math.max(1, Math.round(rect.height * dpr));
++
++  if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
++    canvas.width = displayWidth;
++    canvas.height = displayHeight;
++  }
++
++  ctx.setTransform(1, 0, 0, 1, 0, 0);
++  ctx.scale(dpr, dpr);
++
++  canvasWidth = rect.width;
++  canvasHeight = rect.height;
++
++  updateGradients();
++  drawIdleWave();
+ }
+ 
+-function renderFrame() {
+-  if (!analyser || !bars || bars.length === 0) {
+-    rafId = null;
+-    return;
++function setupResizeHandling() {
++  if (!canvas || typeof window === 'undefined') return;
++
++  resizeCanvas();
++
++  if ('ResizeObserver' in window) {
++    resizeObserver = new ResizeObserver(() => resizeCanvas());
++    resizeObserver.observe(canvas);
++  } else {
++    resizeListener = () => resizeCanvas();
++    window.addEventListener('resize', resizeListener, { passive: true });
+   }
++}
+ 
+-  analyser.getByteFrequencyData(dataArray);
++function teardownResizeHandling() {
++  if (resizeObserver) {
++    resizeObserver.disconnect();
++    resizeObserver = null;
++  }
+ 
+-  const barCount = bars.length;
+-  const binSize = Math.max(1, Math.floor(dataArray.length / barCount));
++  if (resizeListener && typeof window !== 'undefined') {
++    window.removeEventListener('resize', resizeListener);
++    resizeListener = null;
++  }
++}
+ 
+-  for (let i = 0; i < barCount; i++) {
+-    const start = i * binSize;
+-    let sum = 0;
+-    let count = 0;
++function ensureCanvas() {
++  if (canvas && ctx) return true;
+ 
+-    for (let j = 0; j < binSize && start + j < dataArray.length; j++) {
+-      sum += dataArray[start + j];
+-      count++;
+-    }
++  canvas = document.querySelector('.visualizer-waveform');
++  if (!canvas) return false;
+ 
+-    const avg = count ? sum / (count * 255) : 0;
+-    const scale = scaleForLevel(avg);
+-    const opacity = opacityForLevel(avg);
+-    const bar = bars[i];
++  ctx = canvas.getContext('2d');
++  if (!ctx) {
++    canvas = null;
++    return false;
++  }
+ 
+-    if (bar) {
+-      bar.style.transform = `scaleY(${scale})`;
+-      bar.style.opacity = opacity.toString();
+-    }
++  setupResizeHandling();
++  return true;
++}
++
++function cleanupGraph() {
++  if (source) {
++    try { source.disconnect(); } catch (_) {}
++  }
++  if (analyser) {
++    try { analyser.disconnect(); } catch (_) {}
++  }
++
++  source = null;
++  analyser = null;
++  dataArray = null;
++}
++
++function renderFrame() {
++  if (!analyser || !ctx) {
++    rafId = null;
++    return;
+   }
+ 
++  analyser.getByteTimeDomainData(dataArray);
++  drawWaveform(dataArray);
+   rafId = window.requestAnimationFrame(renderFrame);
+ }
+ 
+ export async function start() {
+   if (rafId) return stream;
+-  if (!ensureBars()) return null;
++  if (!ensureCanvas()) return null;
+ 
+   if (!stream || !stream.active) {
+     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+       throw new Error('getUserMedia is not supported in this browser');
+     }
+     stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+   }
+ 
+   if (!audioCtx) {
+     const AC = window.AudioContext || window.webkitAudioContext;
+     if (!AC) {
+       throw new Error('Web Audio API not supported');
+     }
+     audioCtx = new AC({ sampleRate: 48000 });
+   }
+ 
+   if (audioCtx.state === 'suspended') {
+     try { await audioCtx.resume(); } catch (_) {}
+   }
+ 
+   cleanupGraph();
+ 
+   source = audioCtx.createMediaStreamSource(stream);
+   analyser = audioCtx.createAnalyser();
+-  analyser.fftSize = 1024;
+-  analyser.smoothingTimeConstant = 0.6;
++  analyser.fftSize = 2048;
++  analyser.smoothingTimeConstant = 0.7;
+   analyser.minDecibels = -90;
+   analyser.maxDecibels = -10;
+   source.connect(analyser);
+-  dataArray = new Uint8Array(analyser.frequencyBinCount);
+ 
++  dataArray = new Uint8Array(analyser.fftSize);
++  resizeCanvas();
+   renderFrame();
+   return stream;
+ }
+ 
+ export function stop({ reset = true } = {}) {
+   if (rafId) {
+     window.cancelAnimationFrame(rafId);
+     rafId = null;
+   }
+ 
+-  if (reset && bars) {
+-    for (const bar of bars) {
+-      bar.style.transform = `scaleY(${MIN_SCALE})`;
+-      bar.style.opacity = '0.35';
+-    }
+-  }
+-
+   cleanupGraph();
+ 
++  if (reset) {
++    drawIdleWave();
++  }
++
+   if (audioCtx && typeof audioCtx.suspend === 'function' && audioCtx.state === 'running') {
+     audioCtx.suspend().catch(() => {});
+   }
+ 
+   return stream;
+ }
++
++export function destroy() {
++  stop({ reset: false });
++
++  if (stream) {
++    for (const track of stream.getTracks()) {
++      track.stop();
++    }
++  }
++
++  teardownResizeHandling();
++  clearCanvas();
++
++  canvas = null;
++  ctx = null;
++  audioCtx = null;
++  stream = null;
++  canvasWidth = 0;
++  canvasHeight = 0;
++  strokeGradient = null;
++  fillGradient = null;
++}
+diff --git a/templates/index.html b/templates/index.html
+index 3e378f15f796070545a4f9b67102dd6e956149e1..58769ebfe98cd2c1861b1e515e64d62dd1c4a2d1 100644
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -29,62 +29,51 @@
+         </div>
+       </div>
+     </div>
+   </header>
+ 
+   <main class="meeting-layout">
+     <div class="meeting-grid">
+       <aside class="chat-pane">
+         <div class="pane-header">
+           <h2>Chat</h2>
+         </div>
+         <div id="chatMessages" class="chat-window"></div>
+         <div class="composer">
+           <input id="composer" placeholder="Type a message…" />
+           <button id="composerSend">Send</button>
+         </div>
+       </aside>
+ 
+       <section class="visualizer-pane">
+         <div class="status-row">
+           <span class="status-label">Status:</span>
+           <span id="statusText">Ready</span>
+         </div>
+         <div class="visualizer-shell" role="img" aria-label="Audio visualizer">
+           <div class="visualizer-backdrop">
+-            <div class="visualizer-bars">
+-              <span style="--i:1"></span>
+-              <span style="--i:2"></span>
+-              <span style="--i:3"></span>
+-              <span style="--i:4"></span>
+-              <span style="--i:5"></span>
+-              <span style="--i:6"></span>
+-              <span style="--i:7"></span>
+-              <span style="--i:8"></span>
+-              <span style="--i:9"></span>
+-              <span style="--i:10"></span>
+-            </div>
++            <canvas class="visualizer-waveform" role="presentation"></canvas>
+           </div>
+         </div>
+       </section>
+ 
+       <aside class="suggestions-pane">
+         <h4>Suggestions</h4>
+         <ul id="suggestions"></ul>
+       </aside>
+     </div>
+ 
+     <div class="meeting-toolbar">
+       <div class="toolbar-buttons">
+         <button id="startButton" class="primary">Start</button>
+         <button id="endButton" disabled>End</button>
+         <span id="stateDot" class="dot dot-ready" title="Ready"></span>
+       </div>
+     </div>
+   </main>
+ 
+   <!-- Login / Profile Modals -->
+   <div id="loginModal" class="modal hidden">
+     <div class="sheet">
+       <h3>Sign in</h3>
+       <p>Login with your Trace3 or Pure email.</p>
+       <form id="inlineLoginForm">
