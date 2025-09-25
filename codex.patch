@@ -1,11 +1,8 @@
 diff --git a/static/js/ws.js b/static/js/ws.js
-index 808fb03ecdd8eb1e54a0a578f9159d9fcd31f09f..d311fcc4c04ca47ae90a4523e7e56dd6d78c6135 100644
+index d311fcc4c04ca47ae90a4523e7e56dd6d78c6135..d83a4f4b28c4349c48a6045e1b8bc579d2733ac3 100644
 --- a/static/js/ws.js
 +++ b/static/js/ws.js
-@@ -1,73 +1,222 @@
- // static/js/ws.js — Phase 4/5 hardened: single socket + reconnection + helpers
- // Responsibilities:
- //   • Own a single WebSocket connection per tab to /ws/v1/chat
+@@ -4,174 +4,191 @@
  //   • Subprotocol auth (bearer + bearer.<token>)
  //   • Auto-reconnect with bounded backoff (only if session is active)
  //   • Helpers: waitWSOpen(), isOpen(), bufferedAmount(), sendJSON/audio, configure()
@@ -16,36 +13,39 @@ index 808fb03ecdd8eb1e54a0a578f9159d9fcd31f09f..d311fcc4c04ca47ae90a4523e7e56dd6
  
  let _ws = null;
  let _onOpen = [];
--let _keepaliveTimer = null;
-+const _KEEPALIVE_POLL_MS = 1000;
-+const _KEEPALIVE_IDLE_THRESHOLD_MS = 3500;
-+const _KEEPALIVE_RESUME_AFTER_UPLOAD_MS = 750;
-+const _KEEPALIVE_PROVIDER_FALLBACK_MS = 10000;
-+
-+const _KEEPALIVE_REASON_PROVIDER = 'provider_wait';
-+const _KEEPALIVE_REASON_UPLOAD = 'audio_upload';
-+
-+const _keepaliveState = {
-+  timer: null,
-+  lastSentTs: 0,
-+  providerReady: false,
-+  pauseReasons: new Set(),
-+  resumeTimers: new Map(),
-+  providerGateTimer: null,
-+};
-+
-+function _scheduleProviderFallback(){
-+  if (_keepaliveState.providerGateTimer){
-+    clearTimeout(_keepaliveState.providerGateTimer);
+ const _KEEPALIVE_POLL_MS = 1000;
+ const _KEEPALIVE_IDLE_THRESHOLD_MS = 3500;
+ const _KEEPALIVE_RESUME_AFTER_UPLOAD_MS = 750;
+ const _KEEPALIVE_PROVIDER_FALLBACK_MS = 10000;
+ 
+ const _KEEPALIVE_REASON_PROVIDER = 'provider_wait';
+ const _KEEPALIVE_REASON_UPLOAD = 'audio_upload';
+ 
+ const _keepaliveState = {
+   timer: null,
+   lastSentTs: 0,
+   providerReady: false,
+   pauseReasons: new Set(),
+   resumeTimers: new Map(),
+   providerGateTimer: null,
++  sawFirstDeepgram: false,
+ };
+ 
+ function _scheduleProviderFallback(){
+   if (_keepaliveState.providerGateTimer){
+     clearTimeout(_keepaliveState.providerGateTimer);
+   }
++  if (!_keepaliveState.pauseReasons.has(_KEEPALIVE_REASON_PROVIDER)){
++    _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
 +  }
-+  _keepaliveState.providerGateTimer = setTimeout(()=>{
-+    _keepaliveState.providerGateTimer = null;
-+    if (!_keepaliveState.providerReady){
-+      _keepaliveState.providerReady = true;
-+    }
-+    _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
-+  }, _KEEPALIVE_PROVIDER_FALLBACK_MS);
-+}
+   _keepaliveState.providerGateTimer = setTimeout(()=>{
+     _keepaliveState.providerGateTimer = null;
+     if (!_keepaliveState.providerReady){
+       _keepaliveState.providerReady = true;
+     }
+     _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
+   }, _KEEPALIVE_PROVIDER_FALLBACK_MS);
+ }
  let _lastUserSendTs = 0;
  let _gotReady = false;
  let _openPromise = null;
@@ -69,170 +69,133 @@ index 808fb03ecdd8eb1e54a0a578f9159d9fcd31f09f..d311fcc4c04ca47ae90a4523e7e56dd6
  
  export function bufferedAmount(){ return _ws ? _ws.bufferedAmount : 0; }
  
-+function _clearKeepaliveTimer(){
-+  if (_keepaliveState.timer){
-+    clearInterval(_keepaliveState.timer);
-+    _keepaliveState.timer = null;
-+  }
-+}
-+
-+function _resetKeepaliveState(scheduleFallback = false){
-+  _keepaliveState.lastSentTs = 0;
-+  _keepaliveState.providerReady = false;
-+  for (const t of _keepaliveState.resumeTimers.values()){
-+    clearTimeout(t);
-+  }
-+  _keepaliveState.resumeTimers.clear();
-+  if (_keepaliveState.providerGateTimer){
-+    clearTimeout(_keepaliveState.providerGateTimer);
-+    _keepaliveState.providerGateTimer = null;
-+  }
-+  _keepaliveState.pauseReasons.clear();
-+  if (scheduleFallback){
-+    _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
-+    _scheduleProviderFallback();
-+  }
-+}
-+
-+function _pauseKeepalive(reason){
-+  if (!reason) return;
-+  const timer = _keepaliveState.resumeTimers.get(reason);
-+  if (timer){
-+    clearTimeout(timer);
-+    _keepaliveState.resumeTimers.delete(reason);
-+  }
-+  _keepaliveState.pauseReasons.add(reason);
-+}
-+
-+function _resumeKeepalive(reason){
-+  if (!reason) return;
-+  const timer = _keepaliveState.resumeTimers.get(reason);
-+  if (timer){
-+    clearTimeout(timer);
-+    _keepaliveState.resumeTimers.delete(reason);
-+  }
-+  _keepaliveState.pauseReasons.delete(reason);
-+}
-+
-+function _scheduleKeepaliveResume(reason, delayMs){
-+  if (!reason) return;
-+  const ms = typeof delayMs === 'number' && delayMs >= 0 ? delayMs : _KEEPALIVE_RESUME_AFTER_UPLOAD_MS;
-+  const timer = setTimeout(()=>{
-+    _keepaliveState.resumeTimers.delete(reason);
-+    _keepaliveState.pauseReasons.delete(reason);
-+  }, ms);
-+  const prev = _keepaliveState.resumeTimers.get(reason);
-+  if (prev){
-+    clearTimeout(prev);
-+  }
-+  _keepaliveState.resumeTimers.set(reason, timer);
-+}
-+
+ function _clearKeepaliveTimer(){
+   if (_keepaliveState.timer){
+     clearInterval(_keepaliveState.timer);
+     _keepaliveState.timer = null;
+   }
+ }
+ 
+ function _resetKeepaliveState(scheduleFallback = false){
+   _keepaliveState.lastSentTs = 0;
+   _keepaliveState.providerReady = false;
++  _keepaliveState.sawFirstDeepgram = false;
+   for (const t of _keepaliveState.resumeTimers.values()){
+     clearTimeout(t);
+   }
+   _keepaliveState.resumeTimers.clear();
+   if (_keepaliveState.providerGateTimer){
+     clearTimeout(_keepaliveState.providerGateTimer);
+     _keepaliveState.providerGateTimer = null;
+   }
+   _keepaliveState.pauseReasons.clear();
+   if (scheduleFallback){
+     _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
+     _scheduleProviderFallback();
+   }
+ }
+ 
+ function _pauseKeepalive(reason){
+   if (!reason) return;
+   const timer = _keepaliveState.resumeTimers.get(reason);
+   if (timer){
+     clearTimeout(timer);
+     _keepaliveState.resumeTimers.delete(reason);
+   }
+   _keepaliveState.pauseReasons.add(reason);
+ }
+ 
+ function _resumeKeepalive(reason){
+   if (!reason) return;
+   const timer = _keepaliveState.resumeTimers.get(reason);
+   if (timer){
+     clearTimeout(timer);
+     _keepaliveState.resumeTimers.delete(reason);
+   }
+   _keepaliveState.pauseReasons.delete(reason);
+ }
+ 
+ function _scheduleKeepaliveResume(reason, delayMs){
+   if (!reason) return;
+   const ms = typeof delayMs === 'number' && delayMs >= 0 ? delayMs : _KEEPALIVE_RESUME_AFTER_UPLOAD_MS;
+   const timer = setTimeout(()=>{
+     _keepaliveState.resumeTimers.delete(reason);
+     _keepaliveState.pauseReasons.delete(reason);
+   }, ms);
+   const prev = _keepaliveState.resumeTimers.get(reason);
+   if (prev){
+     clearTimeout(prev);
+   }
+   _keepaliveState.resumeTimers.set(reason, timer);
+ }
+ 
  function _startKeepAlive(){
--  _stopKeepAlive();
--  _keepaliveTimer = setInterval(()=>{
-+  _clearKeepaliveTimer();
-+  _keepaliveState.timer = setInterval(()=>{
+-  _clearKeepaliveTimer();
++  if (_keepaliveState.timer) return;
+   _keepaliveState.timer = setInterval(()=>{
      if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
-+    if (_keepaliveState.pauseReasons.size) return;
-+    if (!_keepaliveState.providerReady) return;
+     if (_keepaliveState.pauseReasons.size) return;
+     if (!_keepaliveState.providerReady) return;
      const now = Date.now();
--    if (now - _lastUserSendTs > 3500){
--      try{ _ws.send(JSON.stringify({type:"KeepAlive"})); }catch{}
-+    if (now - _lastUserSendTs < _KEEPALIVE_IDLE_THRESHOLD_MS) return;
-+    if (now - _keepaliveState.lastSentTs < _KEEPALIVE_IDLE_THRESHOLD_MS) return;
-+    try {
-+      _ws.send(JSON.stringify({type:"KeepAlive"}));
-+      _keepaliveState.lastSentTs = now;
-+    } catch {}
-+  }, _KEEPALIVE_POLL_MS);
-+}
+     if (now - _lastUserSendTs < _KEEPALIVE_IDLE_THRESHOLD_MS) return;
+     if (now - _keepaliveState.lastSentTs < _KEEPALIVE_IDLE_THRESHOLD_MS) return;
+     try {
+       _ws.send(JSON.stringify({type:"KeepAlive"}));
+       _keepaliveState.lastSentTs = now;
+     } catch {}
+   }, _KEEPALIVE_POLL_MS);
+ }
+ 
+ function _stopKeepAlive(){
+   _clearKeepaliveTimer();
+   _resetKeepaliveState(false);
+ }
+ 
+ function _handleProviderSignal(obj){
+   const type = (obj && obj.type ? String(obj.type) : '').toLowerCase();
+   const provider = (obj && (obj.provider || obj.service || obj.source || obj.name) ? String(obj.provider || obj.service || obj.source || obj.name) : '').toLowerCase();
+   const state = (obj && (obj.state || obj.status || obj.phase)) ? String(obj.state || obj.status || obj.phase).toLowerCase() : '';
+   const compactType = type.replace(/[^a-z]/g, '');
+   const compactProvider = provider.replace(/[^a-z]/g, '');
+   const typeAsProvider = compactType.replace(/(?:provider)?(?:state|status)$/, '');
++  const vendor = (obj && obj.vendor ? String(obj.vendor) : '').toLowerCase();
++  const compactVendor = vendor.replace(/[^a-z]/g, '');
 +
-+function _stopKeepAlive(){
-+  _clearKeepaliveTimer();
-+  _resetKeepaliveState(false);
-+}
-+
-+function _handleProviderSignal(obj){
-+  const type = (obj && obj.type ? String(obj.type) : '').toLowerCase();
-+  const provider = (obj && (obj.provider || obj.service || obj.source || obj.name) ? String(obj.provider || obj.service || obj.source || obj.name) : '').toLowerCase();
-+  const state = (obj && (obj.state || obj.status || obj.phase)) ? String(obj.state || obj.status || obj.phase).toLowerCase() : '';
-+  const compactType = type.replace(/[^a-z]/g, '');
-+  const compactProvider = provider.replace(/[^a-z]/g, '');
-+  const typeAsProvider = compactType.replace(/(?:provider)?(?:state|status)$/, '');
-+
-+  const markReady = () => {
-+    if (!_keepaliveState.providerReady){
-+      _keepaliveState.providerReady = true;
-     }
--  }, 4000);
-+    if (_keepaliveState.providerGateTimer){
-+      clearTimeout(_keepaliveState.providerGateTimer);
-+      _keepaliveState.providerGateTimer = null;
-+    }
-+    _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
-+  };
-+  const markNotReady = () => {
-+    if (_keepaliveState.providerReady){
-+      _keepaliveState.providerReady = false;
-+    }
-+    _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
-+    _scheduleProviderFallback();
-+  };
-+
-+  if (!type) return;
-+
-+  if (compactType === 'asropen' || compactType === 'deepgramopen' || compactType === 'deepgramready'){ markReady(); return; }
-+  if (compactType === 'asrclose' || compactType === 'asrclosed' || compactType === 'deepgramclosed' || compactType === 'asrerror'){ markNotReady(); return; }
-+
-+  const providerTargets = ['deepgram', 'asr', 'stt'];
-+  const applies = compactProvider ? providerTargets.includes(compactProvider) : false;
-+  if (compactType === 'providerstate' || compactType === 'asrproviderstate' || applies || providerTargets.includes(typeAsProvider)){
-+    if (applies || providerTargets.includes(typeAsProvider)){
-+      if (state){
-+        if (['ready','open','connected','online','live'].includes(state)){
-+          markReady();
-+          return;
-+        }
-+        if (['closing','closed','error','offline','disconnected','failed'].includes(state)){
-+          markNotReady();
-+          return;
-+        }
-+        if (['connecting','opening','starting','init','pending'].includes(state)){
-+          markNotReady();
-+          return;
-+        }
-+      }
-+    }
++  const looksDeepgram =
++    compactType.includes('deepgram') ||
++    compactProvider === 'deepgram' ||
++    typeAsProvider === 'deepgram' ||
++    compactVendor === 'deepgram';
++  if (looksDeepgram && !_keepaliveState.sawFirstDeepgram){
++    _keepaliveState.sawFirstDeepgram = true;
++    _startKeepAlive();
 +  }
- }
--function _stopKeepAlive(){ if (_keepaliveTimer){ clearInterval(_keepaliveTimer); _keepaliveTimer = null; }}
  
- // --- Auth helper: short-lived WS token ---
- async function _getWSToken(sid){
-   const r = await fetch(`/api/v1/auth/ws-token?session_id=${encodeURIComponent(sid)}`, { credentials: 'include' });
-   if (!r.ok) throw new Error(`ws-token HTTP ${r.status}`);
-   const j = await r.json();
-   if (!j || !j.token) throw new Error('ws-token missing');
-   return j.token;
- }
+   const markReady = () => {
+     if (!_keepaliveState.providerReady){
+       _keepaliveState.providerReady = true;
+     }
+     if (_keepaliveState.providerGateTimer){
+       clearTimeout(_keepaliveState.providerGateTimer);
+       _keepaliveState.providerGateTimer = null;
+     }
+     _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
+   };
+   const markNotReady = () => {
+     if (_keepaliveState.providerReady){
+       _keepaliveState.providerReady = false;
+     }
+     _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
+     _scheduleProviderFallback();
+   };
  
- // schedule reconnect if a session is active and we are not already reconnecting
- function _scheduleReconnect(){
-   // pages set this after greet: window.__askchip_session_started = true
-   if (!window.__askchip_session_started) return;
-   if (_reconnecting) return;
+   if (!type) return;
  
-   _reconnecting = true;
-   clearTimeout(_reconnectTimer);
+   if (compactType === 'asropen' || compactType === 'deepgramopen' || compactType === 'deepgramready'){ markReady(); return; }
+   if (compactType === 'asrclose' || compactType === 'asrclosed' || compactType === 'deepgramclosed' || compactType === 'asrerror'){ markNotReady(); return; }
  
-   // light jitter to avoid thundering herd
-   const jitter = 0.85 + Math.random() * 0.3; // 0.85x–1.15x
-   const delay = Math.min(_backoff * jitter, _BACKOFF_MAX);
- 
-   _reconnectTimer = setTimeout(async ()=>{
-     _reconnecting = false;
-@@ -100,80 +249,83 @@ export function openWS(){
+   const providerTargets = ['deepgram', 'asr', 'stt'];
+@@ -249,52 +266,52 @@ export function openWS(){
    }
  
    if (_openPromise){
@@ -258,8 +221,9 @@ index 808fb03ecdd8eb1e54a0a578f9159d9fcd31f09f..d311fcc4c04ca47ae90a4523e7e56dd6
  
      ws.onopen = () => {
        _notifyOpen();
-+      _resetKeepaliveState(true);
-       _startKeepAlive();
++      _clearKeepaliveTimer();
+       _resetKeepaliveState(true);
+-      _startKeepAlive();
        _reconnecting = false;
        _backoff = 500; // successful open → reset backoff
        try { window.dispatchEvent(new CustomEvent('askchip-ws-open')); } catch {}
@@ -285,85 +249,3 @@ index 808fb03ecdd8eb1e54a0a578f9159d9fcd31f09f..d311fcc4c04ca47ae90a4523e7e56dd6
  
      ws.onmessage = (ev) => {
        try{
-         if (typeof ev.data === 'string'){
-           const obj = JSON.parse(ev.data);
-           const t = obj && obj.type;
- 
-+          _handleProviderSignal(obj);
-+
-           if (t === 'ready') {
-             _gotReady = true;
-             // small audio unlock nudge on first ready (harmless if already unlocked)
-             try { unlockAudio().catch(()=>{}); } catch {}
-           }
- 
-           // Re-emit as DOM events so UI can respond
-           window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
- 
-           // --- Audio routing (WS-only) ---------------------------------------
-           if (t === 'assistant_audio') {
-             // Server provides { mime, audio_chunks:[], is_last }
-             playStream(obj);
-             return;
-           }
-           if (t === 'UtteranceEnd') {
-             // Authoritative end-of-utterance: drain and endOfStream
-             audioEnd();
-             return;
-           }
- 
-           // --- Other control/info messages -----------------------------------
-           if (t === 'KeepAliveAck'){
-             // no-op
-           } else if (t === 'Error'){
-@@ -217,47 +369,50 @@ export function closeWS(code = 1000, reason = ''){
-   _reconnecting = false;
-   try {
-     if (_ws) _ws.close(code, reason || undefined);
-   } catch {}
-   _ws = null;
- }
- 
- export function sendJSON(obj){
-   if (!_ws || _ws.readyState !== WebSocket.OPEN) return false;
-   try {
-     const s = JSON.stringify(obj);
-     if (bufferedAmount() > 5_000_000) { // ~5MB buffer guardrail
-       console.warn('[ws] bufferedAmount high; sending anyway', bufferedAmount());
-     }
-     _ws.send(s);
-     _lastUserSendTs = Date.now();
-     return true;
-   } catch(e){
-     console.warn('[ws] sendJSON error', e);
-     return false;
-   }
- }
- 
- export async function sendAudioChunk(blob){
-   if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
-+  _pauseKeepalive(_KEEPALIVE_REASON_UPLOAD);
-   try{
-     const buf = await blob.arrayBuffer();
-     try {
-       console.debug('[ws] sending audio chunk', { bytes: buf.byteLength, mime: blob.type });
-     } catch {}
-     _ws.send(buf);
-     _lastUserSendTs = Date.now();
-   }catch(e){
-     console.warn('[ws] sendAudioChunk error', e);
-+  } finally {
-+    _scheduleKeepaliveResume(_KEEPALIVE_REASON_UPLOAD, _KEEPALIVE_RESUME_AFTER_UPLOAD_MS);
-   }
- }
- 
- export function sendCloseStream(){
-   sendJSON({ type: "CloseStream" });
- }
- 
- export function configure(opts = {}){
-   // ensure session id is included if caller forgot
-   const sid = getSID();
-   const payload = { type: "Configure", session_id: sid, ...opts };
-   sendJSON(payload);
- }

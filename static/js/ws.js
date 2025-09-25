@@ -26,11 +26,15 @@ const _keepaliveState = {
   pauseReasons: new Set(),
   resumeTimers: new Map(),
   providerGateTimer: null,
+  sawFirstDeepgram: false,
 };
 
 function _scheduleProviderFallback(){
   if (_keepaliveState.providerGateTimer){
     clearTimeout(_keepaliveState.providerGateTimer);
+  }
+  if (!_keepaliveState.pauseReasons.has(_KEEPALIVE_REASON_PROVIDER)){
+    _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
   }
   _keepaliveState.providerGateTimer = setTimeout(()=>{
     _keepaliveState.providerGateTimer = null;
@@ -73,6 +77,7 @@ function _clearKeepaliveTimer(){
 function _resetKeepaliveState(scheduleFallback = false){
   _keepaliveState.lastSentTs = 0;
   _keepaliveState.providerReady = false;
+  _keepaliveState.sawFirstDeepgram = false;
   for (const t of _keepaliveState.resumeTimers.values()){
     clearTimeout(t);
   }
@@ -123,7 +128,7 @@ function _scheduleKeepaliveResume(reason, delayMs){
 }
 
 function _startKeepAlive(){
-  _clearKeepaliveTimer();
+  if (_keepaliveState.timer) return;
   _keepaliveState.timer = setInterval(()=>{
     if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
     if (_keepaliveState.pauseReasons.size) return;
@@ -150,6 +155,18 @@ function _handleProviderSignal(obj){
   const compactType = type.replace(/[^a-z]/g, '');
   const compactProvider = provider.replace(/[^a-z]/g, '');
   const typeAsProvider = compactType.replace(/(?:provider)?(?:state|status)$/, '');
+  const vendor = (obj && obj.vendor ? String(obj.vendor) : '').toLowerCase();
+  const compactVendor = vendor.replace(/[^a-z]/g, '');
+
+  const looksDeepgram =
+    compactType.includes('deepgram') ||
+    compactProvider === 'deepgram' ||
+    typeAsProvider === 'deepgram' ||
+    compactVendor === 'deepgram';
+  if (looksDeepgram && !_keepaliveState.sawFirstDeepgram){
+    _keepaliveState.sawFirstDeepgram = true;
+    _startKeepAlive();
+  }
 
   const markReady = () => {
     if (!_keepaliveState.providerReady){
@@ -271,8 +288,8 @@ export function openWS(){
 
     ws.onopen = () => {
       _notifyOpen();
+      _clearKeepaliveTimer();
       _resetKeepaliveState(true);
-      _startKeepAlive();
       _reconnecting = false;
       _backoff = 500; // successful open → reset backoff
       try { window.dispatchEvent(new CustomEvent('askchip-ws-open')); } catch {}
