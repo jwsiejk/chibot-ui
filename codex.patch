@@ -1,138 +1,482 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index b444e6b259a2be53494ae83bd60536582c93afda..6cf565f2a69b2d9f12c2f58a885a36a0875bd400 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -393,101 +393,84 @@ class DeepgramClient:
+diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
+index de0cacb46ca00aa0561ef6ec74351f4aafe9ee90..7c20c127ad8290515b2ca606366d7cc217fc5ab0 100644
+--- a/static/js/bootstrap.js
++++ b/static/js/bootstrap.js
+@@ -132,51 +132,56 @@ function wireVoiceEventsOnce(){
+     const detail = ev?.detail || {};
+     const state = detail.state;
+     const label = detail.statusText ?? detail.label ?? detail.message;
  
-     # -- events API ------------------------------------------------------------
+     if (state === 'armed'){
+       setDot('listening');
+       setStatusText(label || 'Listening…');
+       return;
+     }
  
-     async def events(self) -> AsyncGenerator[dict, None]:
-         while True:
-             ev = await self._ev_queue.get()
-             yield ev
+     if (state === 'recording'){
+       setDot('speaking');
+       setStatusText(label || 'Recording…');
+       return;
+     }
  
-     # -- receiver --------------------------------------------------------------
+     if (state === 'idle'){
+       setDot('ready');
+       setStatusText(label || 'Ready');
+     }
+   });
+ }
  
-     async def _rx_loop(self) -> None:
-         sid = self._sid_for_log()
-         try:
-             async for raw in self._ws:  # type: ignore
-                 try:
-                     msg = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
-                 except Exception:
-                     continue
+ async function ensureWsOpenOrFail(timeoutMs = 5000){
+   if (isOpen()) return true;
+-  openWS();
++  try {
++    await openWS();
++  } catch (err) {
++    console.warn('[bootstrap] openWS failed', err);
++    return false;
++  }
+   try {
+     await Promise.race([
+       waitWSOpen(),
+       new Promise((_, rej) => setTimeout(() => rej(new Error('WS timeout')), timeoutMs))
+     ]);
+   } catch {
+     return false;
+   }
+   return isOpen();
+ }
  
-                 evt_type = (msg.get("type") or "").lower()
+ async function startOnce(){
+   if (started || startInFlight) return;
+   startInFlight = true;
+   setDot('thinking');
  
-                 if evt_type in ("metadata", "listening", "connected", "ready"):
-                     await self._signal_ready()
-                     continue
+   const startBtn = $('#startButton');
+   const endBtn   = $('#endButton');
  
--if evt_type in ("results", "transcript", "partialtranscript", "speech.update"):
--    text = ""
--    is_final = False
--
--    # Prefer channel.* first (typical DG shape)
--    channel = msg.get("channel") or {}
--    alts = channel.get("alternatives")
--    if isinstance(alts, list) and alts:
--        text = (alts[0].get("transcript") or "").strip()
--
--    # Fallback: top-level alternatives (some messages)
--    if not text:
--        top_alts = msg.get("alternatives")
--        if isinstance(top_alts, list) and top_alts:
--            text = (top_alts[0].get("transcript") or "").strip()
--
--    # Fallback: top-level transcript (some messages)
--    if not text and isinstance(msg.get("transcript"), str):
--        text = (msg.get("transcript") or "").strip()
--
--    # Finalness can be on channel or top-level, or implied by event type
--    is_final = (
--        bool(channel.get("is_final"))
--        or bool(msg.get("is_final"))
--        or bool(msg.get("speech_final"))
--        or (evt_type in ("utteranceend", "UtteranceEnd"))
--    )
--
--    # No usable text in this message; keep listening
--    if not text:
--        continue
--
--    # Seeing a result also implies the upstream is functioning
--    await self._signal_ready()
--
--    logger.debug(
--        "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
--        sid, is_final, len(text), _clip_text(text),
--    )
--
--    try:
--        await self._ev_queue.put({"type": "user_final" if is_final else "user_partial", "text": text})
--    except Exception:
--        pass
-+                if evt_type in ("results", "transcript", "partialtranscript", "speech.update"):
-+                    text = ""
-+                    is_final = False
+   try{
+     if (startBtn) startBtn.disabled = true;
+ 
+     // 0) Audio unlock so TTS is permitted by browser autoplay policies
+     try { await unlockAudio(); } catch {}
+ 
+diff --git a/static/js/diagnostics.js b/static/js/diagnostics.js
+index b381368eaa6b5606a745a447053f02dfc68eaee9..e5a1c810a3f1a65f00863c3f93901149cfdc464c 100644
+--- a/static/js/diagnostics.js
++++ b/static/js/diagnostics.js
+@@ -39,51 +39,52 @@ async function watchAdminSSE(onEvent){
+   }
+ }
+ 
+ async function recordFiveSeconds(){
+   const btnRec = $('#btn-record');
+   const btnStop = $('#btn-stop');
+   const status = $('#status');
+   setKPI('kpi-partials','0'); setKPI('kpi-finals','0');
+   setKPI('kpi-pipe','—');
+ 
+   let partials = 0, finals = 0, sawOpen = false;
+   const watcher = await watchAdminSSE((ev)=>{
+     try{
+       const k = String(ev.kind||''); const lbl = String(ev.label||'');
+       const evSid = String(ev.session_id || ev.sid || '');
+       if (evSid && evSid !== sid) return; // filter to our session only
+       if (k === 'asr' && lbl === 'asr_open'){ sawOpen = true; setKPI('kpi-pipe','open','ok'); }
+       if (k === 'asr' && lbl === 'asr_partial'){ partials++; setKPI('kpi-partials', String(partials)); }
+       if (k === 'asr' && lbl === 'asr_final'){ finals++; setKPI('kpi-finals', String(finals)); }
+       if (k === 'asr' && lbl === 'asr_error'){ setKPI('kpi-pipe','error','fail'); }
+     }catch(_){}
+   });
+ 
+   try{
+     status.textContent = 'Opening WebSocket…';
+-    openWS(); await waitWSOpen();
++    await openWS();
++    await waitWSOpen();
+     status.textContent = 'Requesting microphone…';
+     const stream = await initMic();
+     status.textContent = 'Recording…';
+     btnRec.disabled = true; btnStop.disabled = false;
+ 
+     await armVAD(stream);
+     // stop after 5 seconds or when Stop clicked
+     const stopPromise = new Promise((resolve)=>{
+       btnStop.onclick = ()=> resolve('manual');
+       setTimeout(()=> resolve('timer'), 5000);
+     });
+     const reason = await stopPromise;
+     btnStop.disabled = true;
+ 
+     status.textContent = 'Stopping…';
+     disarmVAD();
+     try{ sendCloseStream(); }catch(_){}
+     status.textContent = 'Audio captured (sending)…';
+ 
+     // wait briefly for finals to land
+     await new Promise(r=> setTimeout(r, 1200));
+     if (sawOpen && (partials+finals)>=1){
+       setKPI('kpi-pipe','ok','ok');
+     }else{
+       setKPI('kpi-pipe', sawOpen ? 'no results' : 'no open', 'warn');
+diff --git a/static/js/ws.js b/static/js/ws.js
+index b23d71c287f15e87bfc7432341a0329dc138bb58..0a2506320c627c6154411b605f49f56b9abf9059 100644
+--- a/static/js/ws.js
++++ b/static/js/ws.js
+@@ -1,49 +1,108 @@
+ // static/js/ws.js — Phase 4/5 hardened: single socket + reconnection + helpers
+ // Responsibilities:
+ //   • Own a single WebSocket connection per tab to /ws/v1/chat
+ //   • Subprotocol auth (bearer + bearer.<token>)
+ //   • Auto-reconnect with bounded backoff (only if session is active)
+ //   • Helpers: waitWSOpen(), isOpen(), bufferedAmount(), sendJSON/audio, configure()
+ //   • DOM events: 'askchip-ws' (messages), 'askchip-ws-close' (terminal close)
+ 
+ import { playStream, audioEnd, unlockAudio } from './audio.js';
+ import { getSID } from './util/sid.js';
+ 
+ let _ws = null;
+ let _onOpen = [];
+ let _keepaliveTimer = null;
+ let _lastUserSendTs = 0;
+ let _gotReady = false;
++let _openPromise = null;
+ 
+ // reconnect state
+ let _reconnecting = false;
+ let _reconnectTimer = null;
+ let _backoff = 500;            // start 0.5s
+ const _BACKOFF_MAX = 8000;     // cap 8s
+ const _BACKOFF_RESET_MS = 30000;
+ 
++function _validateBoolean(raw){
++  const val = String(raw || '').trim().toLowerCase();
++  if (val === '1' || val === 'true') return 'true';
++  if (val === '0' || val === 'false') return 'false';
++  return null;
++}
 +
-+                    # Prefer channel.* first (typical DG shape)
-+                    channel = msg.get("channel") or {}
-+                    alts = channel.get("alternatives")
-+                    if isinstance(alts, list) and alts:
-+                        text = (alts[0].get("transcript") or "").strip()
++function _sanitizeToken(raw, maxLen = 64){
++  const txt = String(raw || '').trim();
++  if (!txt) return null;
++  const cleaned = txt.replace(/[^a-z0-9_\-\.]/gi, '');
++  if (!cleaned) return null;
++  return cleaned.slice(0, maxLen);
++}
 +
-+                    # Fallback: top-level alternatives (some messages)
-+                    if not text:
-+                        top_alts = msg.get("alternatives")
-+                        if isinstance(top_alts, list) and top_alts:
-+                            text = (top_alts[0].get("transcript") or "").strip()
++const _CONNECTION_QUERY_ALLOWLIST = {
++  encoding: (raw) => {
++    const val = String(raw || '').trim().toLowerCase();
++    return val && (val === 'opus' || val === 'pcm') ? val : null;
++  },
++  sample_rate: (raw) => {
++    const num = Number.parseInt(String(raw || '').trim(), 10);
++    return Number.isFinite(num) && num > 0 ? String(num) : null;
++  },
++  channels: (raw) => {
++    const num = Number.parseInt(String(raw || '').trim(), 10);
++    return Number.isFinite(num) && num > 0 ? String(num) : null;
++  },
++  interim_results: _validateBoolean,
++  smart_format: _validateBoolean,
++  punctuate: _validateBoolean,
++  vad_events: _validateBoolean,
++  utterance_end_ms: (raw) => {
++    const num = Number.parseInt(String(raw || '').trim(), 10);
++    return Number.isFinite(num) && num >= 0 ? String(num) : null;
++  },
++  model: (raw) => _sanitizeToken(raw, 96),
++  language: (raw) => _sanitizeToken(raw, 32),
++};
 +
-+                    # Fallback: top-level transcript (some messages)
-+                    if not text and isinstance(msg.get("transcript"), str):
-+                        text = (msg.get("transcript") or "").strip()
++function _applyConnectionQueryParams(url){
++  try {
++    if (!location || !location.search) return;
++    const params = new URLSearchParams(location.search);
++    for (const [key, validator] of Object.entries(_CONNECTION_QUERY_ALLOWLIST)) {
++      if (!params.has(key)) continue;
++      const validated = validator(params.get(key));
++      if (validated === null || validated === undefined || validated === '') {
++        console.warn('[ws] ignoring invalid connection query option', key, params.get(key));
++        continue;
++      }
++      url.searchParams.set(key, validated);
++    }
++  } catch (err) {
++    console.warn('[ws] failed to apply connection query params', err);
++  }
++}
 +
-+                    # Finalness can be on channel or top-level, or implied by event type
-+                    is_final = (
-+                        bool(channel.get("is_final"))
-+                        or bool(msg.get("is_final"))
-+                        or bool(msg.get("speech_final"))
-+                        or (evt_type in ("utteranceend", "UtteranceEnd"))
-+                    )
+ export function isOpen(){ return !!(_ws && _ws.readyState === WebSocket.OPEN); }
+ export function isConnecting(){ return !!(_ws && _ws.readyState === WebSocket.CONNECTING); }
+ export function waitWSOpen(){
+   return new Promise(res => {
+     if (isOpen()) return res();
+     _onOpen.push(res);
+   });
+ }
+ function _notifyOpen(){ for (const fn of _onOpen.splice(0)) { try{ fn(); }catch{} } }
  
--    if is_final:
--        self._any_result = True
--        self._final_event.set()
--        # do not break; allow multiple finals if the provider chunks utterances
--        continue
-+                    # No usable text in this message; keep listening
-+                    if not text:
-+                        continue
+ export function bufferedAmount(){ return _ws ? _ws.bufferedAmount : 0; }
  
-+                    # Seeing a result also implies the upstream is functioning
-+                    await self._signal_ready()
+ function _startKeepAlive(){
+   _stopKeepAlive();
+   _keepaliveTimer = setInterval(()=>{
+     if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
+     const now = Date.now();
+     if (now - _lastUserSendTs > 3500){
+       try{ _ws.send(JSON.stringify({type:"KeepAlive"})); }catch{}
+     }
+   }, 4000);
+ }
+ function _stopKeepAlive(){ if (_keepaliveTimer){ clearInterval(_keepaliveTimer); _keepaliveTimer = null; }}
  
-                     logger.debug(
-                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
-                         sid,
-                         is_final,
-                         len(text),
-                         _clip_text(text),
-                     )
-                     try:
-                         await self._ev_queue.put(
-                             {"type": "user_final" if is_final else "user_partial", "text": text}
-                         )
-                     except Exception:
-                         pass
+ // --- Auth helper: short-lived WS token ---
+@@ -71,149 +130,166 @@ function _scheduleReconnect(){
+   _reconnectTimer = setTimeout(async ()=>{
+     _reconnecting = false;
+     try {
+       await openWS();         // will reuse if already connecting/open
+       // exponential backoff on next failure
+       _backoff = Math.min(_backoff * 2, _BACKOFF_MAX);
+     } catch {
+       // if openWS threw synchronously (unlikely), reschedule
+       _scheduleReconnect();
+     }
+   }, delay);
  
-                     if is_final:
-                         self._any_result = True
-                         self._final_event.set()
-                         continue
+   // shrink backoff if we remain healthy for a while
+   setTimeout(()=>{ _backoff = 500; }, _BACKOFF_RESET_MS);
+ }
  
-                 elif evt_type in ("error", "close"):
-                     logger.warning(
-                         "Deepgram error event sid=%s evt_type=%s detail=%s",
-                         sid,
-                         evt_type,
+ // Proactively try to reconnect when network returns
+ window.addEventListener('online', () => {
+   if (window.__askchip_session_started && (!isOpen() && !isConnecting())) {
+     _scheduleReconnect();
+   }
+ });
+ 
+ // --- Open WS using subprotocol auth (no token in URL, no headers) ---
+ // Idempotent: if OPEN/CONNECTING, returns that socket.
+-export async function openWS(){
+-  const sid = getSID();
+-
+-  // Reuse socket if already open/connecting
++export function openWS(){
+   if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)){
+-    return _ws;
++    return Promise.resolve(_ws);
+   }
+ 
+-  // If there's a closing/closed socket, let GC take it and create a new one
+-  _gotReady = false;
+-
+-  const base = location.origin.replace(/^http/, 'ws');
+-  const url = new URL(base + '/ws/v1/chat');
+-  url.searchParams.set('session_id', sid);
+-
+-  const token = await _getWSToken(sid);
+-  const subprotocols = ['bearer', `bearer.${token.replace(/=+$/,'')}`]; // padding-less safe
+-
+-  const ws = new WebSocket(url.toString(), subprotocols);
+-  ws.binaryType = 'arraybuffer';
+-  _ws = ws; // assign immediately so helpers see it
++  if (_openPromise){
++    return _openPromise;
++  }
+ 
+-  ws.onopen = () => {
+-    _notifyOpen();
+-    _startKeepAlive();
+-    _reconnecting = false;
+-    _backoff = 500; // successful open → reset backoff
+-    try { window.dispatchEvent(new CustomEvent('askchip-ws-open')); } catch {}
+-  };
++  _openPromise = (async () => {
++    const sid = getSID();
+ 
+-  ws.onclose = (e) => {
+-    _stopKeepAlive();
++    // If there's a closing/closed socket, let GC take it and create a new one
++    _gotReady = false;
+ 
+-    // If we closed before receiving server "ready", a transient connect race happened.
+-    if (!_gotReady){
+-      _scheduleReconnect();
+-    } else {
+-      // If already "ready", only reconnect if session is active
+-      _scheduleReconnect();
+-    }
++    const base = location.origin.replace(/^http/, 'ws');
++    const url = new URL(base + '/ws/v1/chat');
++    url.searchParams.set('session_id', sid);
+ 
+-    try {
+-      window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }}));
+-    } catch {}
+-  };
++    _applyConnectionQueryParams(url);
+ 
+-  ws.onerror = (e) => console.warn('[ws] error', e);
++    const token = await _getWSToken(sid);
++    const subprotocols = ['bearer', `bearer.${token.replace(/=+$/,'')}`]; // padding-less safe
+ 
+-  ws.onmessage = (ev) => {
+-    try{
+-      if (typeof ev.data === 'string'){
+-        const obj = JSON.parse(ev.data);
+-        const t = obj && obj.type;
++    const ws = new WebSocket(url.toString(), subprotocols);
++    ws.binaryType = 'arraybuffer';
++    _ws = ws; // assign immediately so helpers see it
+ 
+-        if (t === 'ready') {
+-          _gotReady = true;
+-          // small audio unlock nudge on first ready (harmless if already unlocked)
+-          try { unlockAudio().catch(()=>{}); } catch {}
+-        }
++    ws.onopen = () => {
++      _notifyOpen();
++      _startKeepAlive();
++      _reconnecting = false;
++      _backoff = 500; // successful open → reset backoff
++      try { window.dispatchEvent(new CustomEvent('askchip-ws-open')); } catch {}
++    };
+ 
+-        // Re-emit as DOM events so UI can respond
+-        window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
++    ws.onclose = (e) => {
++      _stopKeepAlive();
+ 
+-        // --- Audio routing (WS-only) ---------------------------------------
+-        if (t === 'assistant_audio') {
+-          // Server provides { mime, audio_chunks:[], is_last }
+-          playStream(obj);
+-          return;
+-        }
+-        if (t === 'UtteranceEnd') {
+-          // Authoritative end-of-utterance: drain and endOfStream
+-          audioEnd();
+-          return;
+-        }
++      // If we closed before receiving server "ready", a transient connect race happened.
++      if (!_gotReady){
++        _scheduleReconnect();
++      } else {
++        // If already "ready", only reconnect if session is active
++        _scheduleReconnect();
++      }
+ 
+-        // --- Other control/info messages -----------------------------------
+-        if (t === 'KeepAliveAck'){
+-          // no-op
+-        } else if (t === 'Error'){
+-          console.warn('[ws] server error:', obj.code, obj.message);
+-        } else if (t === 'assistant_end'){
+-          // Text is done. Do NOT teardown audio here (audio ends on UtteranceEnd).
+-        } else if (t === 'TTSChunk'){
+-          // (legacy/future) not used; all audio uses assistant_audio frames now.
++      try {
++        window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }}));
++      } catch {}
++    };
++
++    ws.onerror = (e) => console.warn('[ws] error', e);
++
++    ws.onmessage = (ev) => {
++      try{
++        if (typeof ev.data === 'string'){
++          const obj = JSON.parse(ev.data);
++          const t = obj && obj.type;
++
++          if (t === 'ready') {
++            _gotReady = true;
++            // small audio unlock nudge on first ready (harmless if already unlocked)
++            try { unlockAudio().catch(()=>{}); } catch {}
++          }
++
++          // Re-emit as DOM events so UI can respond
++          window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
++
++          // --- Audio routing (WS-only) ---------------------------------------
++          if (t === 'assistant_audio') {
++            // Server provides { mime, audio_chunks:[], is_last }
++            playStream(obj);
++            return;
++          }
++          if (t === 'UtteranceEnd') {
++            // Authoritative end-of-utterance: drain and endOfStream
++            audioEnd();
++            return;
++          }
++
++          // --- Other control/info messages -----------------------------------
++          if (t === 'KeepAliveAck'){
++            // no-op
++          } else if (t === 'Error'){
++            console.warn('[ws] server error:', obj.code, obj.message);
++          } else if (t === 'assistant_end'){
++            // Text is done. Do NOT teardown audio here (audio ends on UtteranceEnd).
++          } else if (t === 'TTSChunk'){
++            // (legacy/future) not used; all audio uses assistant_audio frames now.
++          }
++        } else {
++          // Binary from server (future path not used in v1 WS-only)
+         }
+-      } else {
+-        // Binary from server (future path not used in v1 WS-only)
++      }catch(err){
++        console.warn('[ws] message error', err);
+       }
+-    }catch(err){
+-      console.warn('[ws] message error', err);
++    };
++
++    // be a good citizen on unload — send a normal "going away" close
++    window.addEventListener('beforeunload', () => {
++      try { ws.close(1001, 'page_unload'); } catch {}
++    }, { once:true });
++
++    return ws;
++  })().catch((err) => {
++    if (_ws && _ws.readyState !== WebSocket.OPEN && _ws.readyState !== WebSocket.CONNECTING){
++      try { _ws.close(1000, 'open_failed'); } catch {}
++      _ws = null;
+     }
+-  };
+-
+-  // be a good citizen on unload — send a normal "going away" close
+-  window.addEventListener('beforeunload', () => {
+-    try { ws.close(1001, 'page_unload'); } catch {}
+-  }, { once:true });
++    throw err;
++  }).finally(() => {
++    _openPromise = null;
++  });
+ 
+-  return ws;
++  return _openPromise;
+ }
+ 
+ // NOTE: updated to accept a code + reason so we emit a clean close (avoids 1005).
+ export function closeWS(code = 1000, reason = ''){
+   _stopKeepAlive();
+   clearTimeout(_reconnectTimer);
+   _reconnecting = false;
+   try {
+     if (_ws) _ws.close(code, reason || undefined);
+   } catch {}
+   _ws = null;
+ }
+ 
+ export function sendJSON(obj){
+   if (!_ws || _ws.readyState !== WebSocket.OPEN) return false;
+   try {
+     const s = JSON.stringify(obj);
+     if (bufferedAmount() > 5_000_000) { // ~5MB buffer guardrail
+       console.warn('[ws] bufferedAmount high; sending anyway', bufferedAmount());
+     }
+     _ws.send(s);
+     _lastUserSendTs = Date.now();
+     return true;
+   } catch(e){
+     console.warn('[ws] sendJSON error', e);

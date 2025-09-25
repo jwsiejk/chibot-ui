@@ -14,6 +14,7 @@ let _onOpen = [];
 let _keepaliveTimer = null;
 let _lastUserSendTs = 0;
 let _gotReady = false;
+let _openPromise = null;
 
 // reconnect state
 let _reconnecting = false;
@@ -93,105 +94,120 @@ window.addEventListener('online', () => {
 
 // --- Open WS using subprotocol auth (no token in URL, no headers) ---
 // Idempotent: if OPEN/CONNECTING, returns that socket.
-export async function openWS(){
-  const sid = getSID();
-
-  // Reuse socket if already open/connecting
+export function openWS(){
   if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)){
-    return _ws;
+    return Promise.resolve(_ws);
   }
 
-  // If there's a closing/closed socket, let GC take it and create a new one
-  _gotReady = false;
+  if (_openPromise){
+    return _openPromise;
+  }
 
-  const base = location.origin.replace(/^http/, 'ws');
-  const url = new URL(base + '/ws/v1/chat');
-  url.searchParams.set('session_id', sid);
+  _openPromise = (async () => {
+    const sid = getSID();
 
-  const token = await _getWSToken(sid);
-  const subprotocols = ['bearer', `bearer.${token.replace(/=+$/,'')}`]; // padding-less safe
+    // If there's a closing/closed socket, let GC take it and create a new one
+    _gotReady = false;
 
-  const ws = new WebSocket(url.toString(), subprotocols);
-  ws.binaryType = 'arraybuffer';
-  _ws = ws; // assign immediately so helpers see it
+    const base = location.origin.replace(/^http/, 'ws');
+    const url = new URL(base + '/ws/v1/chat');
+    url.searchParams.set('session_id', sid);
 
-  ws.onopen = () => {
-    _notifyOpen();
-    _startKeepAlive();
-    _reconnecting = false;
-    _backoff = 500; // successful open → reset backoff
-    try { window.dispatchEvent(new CustomEvent('askchip-ws-open')); } catch {}
-  };
+    const token = await _getWSToken(sid);
+    const subprotocols = ['bearer', `bearer.${token.replace(/=+$/,'')}`]; // padding-less safe
 
-  ws.onclose = (e) => {
-    _stopKeepAlive();
+    const ws = new WebSocket(url.toString(), subprotocols);
+    ws.binaryType = 'arraybuffer';
+    _ws = ws; // assign immediately so helpers see it
 
-    // If we closed before receiving server "ready", a transient connect race happened.
-    if (!_gotReady){
-      _scheduleReconnect();
-    } else {
-      // If already "ready", only reconnect if session is active
-      _scheduleReconnect();
-    }
+    ws.onopen = () => {
+      _notifyOpen();
+      _startKeepAlive();
+      _reconnecting = false;
+      _backoff = 500; // successful open → reset backoff
+      try { window.dispatchEvent(new CustomEvent('askchip-ws-open')); } catch {}
+    };
 
-    try {
-      window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }}));
-    } catch {}
-  };
+    ws.onclose = (e) => {
+      _stopKeepAlive();
 
-  ws.onerror = (e) => console.warn('[ws] error', e);
-
-  ws.onmessage = (ev) => {
-    try{
-      if (typeof ev.data === 'string'){
-        const obj = JSON.parse(ev.data);
-        const t = obj && obj.type;
-
-        if (t === 'ready') {
-          _gotReady = true;
-          // small audio unlock nudge on first ready (harmless if already unlocked)
-          try { unlockAudio().catch(()=>{}); } catch {}
-        }
-
-        // Re-emit as DOM events so UI can respond
-        window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
-
-        // --- Audio routing (WS-only) ---------------------------------------
-        if (t === 'assistant_audio') {
-          // Server provides { mime, audio_chunks:[], is_last }
-          playStream(obj);
-          return;
-        }
-        if (t === 'UtteranceEnd') {
-          // Authoritative end-of-utterance: drain and endOfStream
-          audioEnd();
-          return;
-        }
-
-        // --- Other control/info messages -----------------------------------
-        if (t === 'KeepAliveAck'){
-          // no-op
-        } else if (t === 'Error'){
-          console.warn('[ws] server error:', obj.code, obj.message);
-        } else if (t === 'assistant_end'){
-          // Text is done. Do NOT teardown audio here (audio ends on UtteranceEnd).
-        } else if (t === 'TTSChunk'){
-          // (legacy/future) not used; all audio uses assistant_audio frames now.
-        }
+      // If we closed before receiving server "ready", a transient connect race happened.
+      if (!_gotReady){
+        _scheduleReconnect();
       } else {
-        // Binary from server (future path not used in v1 WS-only)
+        // If already "ready", only reconnect if session is active
+        _scheduleReconnect();
       }
-    }catch(err){
-      console.warn('[ws] message error', err);
+
+      try {
+        window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }}));
+      } catch {}
+    };
+
+    ws.onerror = (e) => console.warn('[ws] error', e);
+
+    ws.onmessage = (ev) => {
+      try{
+        if (typeof ev.data === 'string'){
+          const obj = JSON.parse(ev.data);
+          const t = obj && obj.type;
+
+          if (t === 'ready') {
+            _gotReady = true;
+            // small audio unlock nudge on first ready (harmless if already unlocked)
+            try { unlockAudio().catch(()=>{}); } catch {}
+          }
+
+          // Re-emit as DOM events so UI can respond
+          window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
+
+          // --- Audio routing (WS-only) ---------------------------------------
+          if (t === 'assistant_audio') {
+            // Server provides { mime, audio_chunks:[], is_last }
+            playStream(obj);
+            return;
+          }
+          if (t === 'UtteranceEnd') {
+            // Authoritative end-of-utterance: drain and endOfStream
+            audioEnd();
+            return;
+          }
+
+          // --- Other control/info messages -----------------------------------
+          if (t === 'KeepAliveAck'){
+            // no-op
+          } else if (t === 'Error'){
+            console.warn('[ws] server error:', obj.code, obj.message);
+          } else if (t === 'assistant_end'){
+            // Text is done. Do NOT teardown audio here (audio ends on UtteranceEnd).
+          } else if (t === 'TTSChunk'){
+            // (legacy/future) not used; all audio uses assistant_audio frames now.
+          }
+        } else {
+          // Binary from server (future path not used in v1 WS-only)
+        }
+      }catch(err){
+        console.warn('[ws] message error', err);
+      }
+    };
+
+    // be a good citizen on unload — send a normal "going away" close
+    window.addEventListener('beforeunload', () => {
+      try { ws.close(1001, 'page_unload'); } catch {}
+    }, { once:true });
+
+    return ws;
+  })().catch((err) => {
+    if (_ws && _ws.readyState !== WebSocket.OPEN && _ws.readyState !== WebSocket.CONNECTING){
+      try { _ws.close(1000, 'open_failed'); } catch {}
+      _ws = null;
     }
-  };
+    throw err;
+  }).finally(() => {
+    _openPromise = null;
+  });
 
-  // be a good citizen on unload — send a normal "going away" close
-  window.addEventListener('beforeunload', () => {
-    try { ws.close(1001, 'page_unload'); } catch {}
-  }, { once:true });
-
-  return ws;
+  return _openPromise;
 }
 
 // NOTE: updated to accept a code + reason so we emit a clean close (avoids 1005).
