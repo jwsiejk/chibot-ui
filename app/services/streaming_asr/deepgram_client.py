@@ -274,7 +274,7 @@ class DeepgramClient:
             )
 
         # Micro-wait to ensure the underlying socket is actually open
-        await self.wait_socket_open(timeout=0.25)
+        await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S','0.75')))
 
         DG_LAST_URL = url
         DG_LAST_CONFIG = _initial_config(self._cfg)
@@ -371,7 +371,7 @@ class DeepgramClient:
                 await self._signal_ready()
 
         # Gate on actual websocket open with a brief micro-wait
-        await self.wait_socket_open(timeout=0.25)
+        await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S','0.75')))
 
         if not self._ws or not getattr(self._ws, "open", False):
             logger.warning("Deepgram send called without active socket sid=%s", sid)
@@ -419,24 +419,35 @@ class DeepgramClient:
                     text = ""
                     is_final = False
 
+                    # Prefer channel.* first (typical DG shape)
                     channel = msg.get("channel") or {}
                     alts = channel.get("alternatives")
                     if isinstance(alts, list) and alts:
                         text = (alts[0].get("transcript") or "").strip()
 
-                    is_final = bool(channel.get("is_final")) or bool(msg.get("is_final"))
+                    # Fallback: top-level alternatives (some messages)
+                    if not text:
+                        top_alts = msg.get("alternatives")
+                        if isinstance(top_alts, list) and top_alts:
+                            text = (top_alts[0].get("transcript") or "").strip()
 
-                    if "transcript" in msg and not text:
+                    # Fallback: top-level transcript (some messages)
+                    if not text and isinstance(msg.get("transcript"), str):
                         text = (msg.get("transcript") or "").strip()
 
-                    if msg.get("speech_final") is True:
-                        is_final = True
-                    if evt_type == "utteranceend":
-                        is_final = True
+                    # Finalness can be on channel or top-level, or implied by event type
+                    is_final = (
+                        bool(channel.get("is_final"))
+                        or bool(msg.get("is_final"))
+                        or bool(msg.get("speech_final"))
+                        or (evt_type in ("utteranceend", "UtteranceEnd"))
+                    )
 
+                    # No usable text in this message; keep listening
                     if not text:
                         continue
 
+                    # Seeing a result also implies the upstream is functioning
                     await self._signal_ready()
 
                     logger.debug(

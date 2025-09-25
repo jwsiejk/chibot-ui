@@ -3,8 +3,8 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class Detection:
-    container: str          # 'webm' or 'ogg'
-    codec: str              # 'opus'
+    container: str
+    codec: str
     containerized: bool = True
 
 class AudioContainerSniffer:
@@ -23,10 +23,9 @@ class AudioContainerSniffer:
     def feed(self, chunk: bytes) -> Optional[Detection]:
         if self._detected or not chunk:
             return self._detected
-        remaining = self.MAX_WINDOW - len(self._buf)
-        if remaining > 0:
-            self._buf += chunk[:remaining]
-
+        remain = self.MAX_WINDOW - len(self._buf)
+        if remain > 0:
+            self._buf += chunk[:remain]
         if self.EBML_MAGIC in self._buf:
             self._detected = Detection(container="webm", codec="opus", containerized=True)
         elif self.OGG_MAGIC in self._buf:
