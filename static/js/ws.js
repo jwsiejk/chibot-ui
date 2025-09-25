@@ -11,42 +11,9 @@ import { getSID } from './util/sid.js';
 
 let _ws = null;
 let _onOpen = [];
-const _KEEPALIVE_POLL_MS = 1000;
-const _KEEPALIVE_IDLE_THRESHOLD_MS = 3500;
-const _KEEPALIVE_RESUME_AFTER_UPLOAD_MS = 750;
-const _KEEPALIVE_PROVIDER_FALLBACK_MS = 10000;
-
-const _KEEPALIVE_REASON_PROVIDER = 'provider_wait';
-const _KEEPALIVE_REASON_UPLOAD = 'audio_upload';
-
-const _keepaliveState = {
-  timer: null,
-  lastSentTs: 0,
-  providerReady: false,
-  pauseReasons: new Set(),
-  resumeTimers: new Map(),
-  providerGateTimer: null,
-  sawFirstDeepgram: false,
-};
-
-function _scheduleProviderFallback(){
-  if (_keepaliveState.providerGateTimer){
-    clearTimeout(_keepaliveState.providerGateTimer);
-  }
-  if (!_keepaliveState.pauseReasons.has(_KEEPALIVE_REASON_PROVIDER)){
-    _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
-  }
-  _keepaliveState.providerGateTimer = setTimeout(()=>{
-    _keepaliveState.providerGateTimer = null;
-    if (!_keepaliveState.providerReady){
-      _keepaliveState.providerReady = true;
-    }
-    _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
-  }, _KEEPALIVE_PROVIDER_FALLBACK_MS);
-}
+let _keepaliveTimer = null;
 let _lastUserSendTs = 0;
 let _gotReady = false;
-let _openPromise = null;
 
 // reconnect state
 let _reconnecting = false;
@@ -67,151 +34,17 @@ function _notifyOpen(){ for (const fn of _onOpen.splice(0)) { try{ fn(); }catch{
 
 export function bufferedAmount(){ return _ws ? _ws.bufferedAmount : 0; }
 
-function _clearKeepaliveTimer(){
-  if (_keepaliveState.timer){
-    clearInterval(_keepaliveState.timer);
-    _keepaliveState.timer = null;
-  }
-}
-
-function _resetKeepaliveState(scheduleFallback = false){
-  _keepaliveState.lastSentTs = 0;
-  _keepaliveState.providerReady = false;
-  _keepaliveState.sawFirstDeepgram = false;
-  for (const t of _keepaliveState.resumeTimers.values()){
-    clearTimeout(t);
-  }
-  _keepaliveState.resumeTimers.clear();
-  if (_keepaliveState.providerGateTimer){
-    clearTimeout(_keepaliveState.providerGateTimer);
-    _keepaliveState.providerGateTimer = null;
-  }
-  _keepaliveState.pauseReasons.clear();
-  if (scheduleFallback){
-    _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
-    _scheduleProviderFallback();
-  }
-}
-
-function _pauseKeepalive(reason){
-  if (!reason) return;
-  const timer = _keepaliveState.resumeTimers.get(reason);
-  if (timer){
-    clearTimeout(timer);
-    _keepaliveState.resumeTimers.delete(reason);
-  }
-  _keepaliveState.pauseReasons.add(reason);
-}
-
-function _resumeKeepalive(reason){
-  if (!reason) return;
-  const timer = _keepaliveState.resumeTimers.get(reason);
-  if (timer){
-    clearTimeout(timer);
-    _keepaliveState.resumeTimers.delete(reason);
-  }
-  _keepaliveState.pauseReasons.delete(reason);
-}
-
-function _scheduleKeepaliveResume(reason, delayMs){
-  if (!reason) return;
-  const ms = typeof delayMs === 'number' && delayMs >= 0 ? delayMs : _KEEPALIVE_RESUME_AFTER_UPLOAD_MS;
-  const timer = setTimeout(()=>{
-    _keepaliveState.resumeTimers.delete(reason);
-    _keepaliveState.pauseReasons.delete(reason);
-  }, ms);
-  const prev = _keepaliveState.resumeTimers.get(reason);
-  if (prev){
-    clearTimeout(prev);
-  }
-  _keepaliveState.resumeTimers.set(reason, timer);
-}
-
 function _startKeepAlive(){
-  if (_keepaliveState.timer) return;
-  _keepaliveState.timer = setInterval(()=>{
+  _stopKeepAlive();
+  _keepaliveTimer = setInterval(()=>{
     if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
-    if (_keepaliveState.pauseReasons.size) return;
-    if (!_keepaliveState.providerReady) return;
     const now = Date.now();
-    if (now - _lastUserSendTs < _KEEPALIVE_IDLE_THRESHOLD_MS) return;
-    if (now - _keepaliveState.lastSentTs < _KEEPALIVE_IDLE_THRESHOLD_MS) return;
-    try {
-      _ws.send(JSON.stringify({type:"KeepAlive"}));
-      _keepaliveState.lastSentTs = now;
-    } catch {}
-  }, _KEEPALIVE_POLL_MS);
+    if (now - _lastUserSendTs > 3500){
+      try{ _ws.send(JSON.stringify({type:"KeepAlive"})); }catch{}
+    }
+  }, 4000);
 }
-
-function _stopKeepAlive(){
-  _clearKeepaliveTimer();
-  _resetKeepaliveState(false);
-}
-
-function _handleProviderSignal(obj){
-  const type = (obj && obj.type ? String(obj.type) : '').toLowerCase();
-  const provider = (obj && (obj.provider || obj.service || obj.source || obj.name) ? String(obj.provider || obj.service || obj.source || obj.name) : '').toLowerCase();
-  const state = (obj && (obj.state || obj.status || obj.phase)) ? String(obj.state || obj.status || obj.phase).toLowerCase() : '';
-  const compactType = type.replace(/[^a-z]/g, '');
-  const compactProvider = provider.replace(/[^a-z]/g, '');
-  const typeAsProvider = compactType.replace(/(?:provider)?(?:state|status)$/, '');
-  const vendor = (obj && obj.vendor ? String(obj.vendor) : '').toLowerCase();
-  const compactVendor = vendor.replace(/[^a-z]/g, '');
-
-  const looksDeepgram =
-    compactType.includes('deepgram') ||
-    compactProvider === 'deepgram' ||
-    typeAsProvider === 'deepgram' ||
-    compactVendor === 'deepgram';
-  if (looksDeepgram && !_keepaliveState.sawFirstDeepgram){
-    _keepaliveState.sawFirstDeepgram = true;
-    _startKeepAlive();
-  }
-
-  const markReady = () => {
-    if (!_keepaliveState.providerReady){
-      _keepaliveState.providerReady = true;
-    }
-    if (_keepaliveState.providerGateTimer){
-      clearTimeout(_keepaliveState.providerGateTimer);
-      _keepaliveState.providerGateTimer = null;
-    }
-    _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
-  };
-  const markNotReady = () => {
-    if (_keepaliveState.providerReady){
-      _keepaliveState.providerReady = false;
-    }
-    _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
-    _scheduleProviderFallback();
-  };
-
-  if (!type) return;
-
-  if (compactType === 'asropen' || compactType === 'deepgramopen' || compactType === 'deepgramready'){ markReady(); return; }
-  if (compactType === 'asrclose' || compactType === 'asrclosed' || compactType === 'deepgramclosed' || compactType === 'asrerror'){ markNotReady(); return; }
-
-  const providerTargets = ['deepgram', 'asr', 'stt'];
-  const applies = compactProvider ? providerTargets.includes(compactProvider) : false;
-  if (compactType === 'providerstate' || compactType === 'asrproviderstate' || applies || providerTargets.includes(typeAsProvider)){
-    if (applies || providerTargets.includes(typeAsProvider)){
-      if (state){
-        if (['ready','open','connected','online','live'].includes(state)){
-          markReady();
-          return;
-        }
-        if (['closing','closed','error','offline','disconnected','failed'].includes(state)){
-          markNotReady();
-          return;
-        }
-        if (['connecting','opening','starting','init','pending'].includes(state)){
-          markNotReady();
-          return;
-        }
-      }
-    }
-  }
-}
+function _stopKeepAlive(){ if (_keepaliveTimer){ clearInterval(_keepaliveTimer); _keepaliveTimer = null; }}
 
 // --- Auth helper: short-lived WS token ---
 async function _getWSToken(sid){
@@ -260,123 +93,105 @@ window.addEventListener('online', () => {
 
 // --- Open WS using subprotocol auth (no token in URL, no headers) ---
 // Idempotent: if OPEN/CONNECTING, returns that socket.
-export function openWS(){
+export async function openWS(){
+  const sid = getSID();
+
+  // Reuse socket if already open/connecting
   if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)){
-    return Promise.resolve(_ws);
+    return _ws;
   }
 
-  if (_openPromise){
-    return _openPromise;
-  }
+  // If there's a closing/closed socket, let GC take it and create a new one
+  _gotReady = false;
 
-  _openPromise = (async () => {
-    const sid = getSID();
+  const base = location.origin.replace(/^http/, 'ws');
+  const url = new URL(base + '/ws/v1/chat');
+  url.searchParams.set('session_id', sid);
 
-    // If there's a closing/closed socket, let GC take it and create a new one
-    _gotReady = false;
+  const token = await _getWSToken(sid);
+  const subprotocols = ['bearer', `bearer.${token.replace(/=+$/,'')}`]; // padding-less safe
 
-    const base = location.origin.replace(/^http/, 'ws');
-    const url = new URL(base + '/ws/v1/chat');
-    url.searchParams.set('session_id', sid);
+  const ws = new WebSocket(url.toString(), subprotocols);
+  ws.binaryType = 'arraybuffer';
+  _ws = ws; // assign immediately so helpers see it
 
-    const token = await _getWSToken(sid);
-    const subprotocols = ['bearer', `bearer.${token.replace(/=+$/,'')}`]; // padding-less safe
+  ws.onopen = () => {
+    _notifyOpen();
+    _startKeepAlive();
+    _reconnecting = false;
+    _backoff = 500; // successful open → reset backoff
+    try { window.dispatchEvent(new CustomEvent('askchip-ws-open')); } catch {}
+  };
 
-    const ws = new WebSocket(url.toString(), subprotocols);
-    ws.binaryType = 'arraybuffer';
-    _ws = ws; // assign immediately so helpers see it
+  ws.onclose = (e) => {
+    _stopKeepAlive();
 
-    ws.onopen = () => {
-      _notifyOpen();
-      _clearKeepaliveTimer();
-      _resetKeepaliveState(true);
-      _reconnecting = false;
-      _backoff = 500; // successful open → reset backoff
-      try { window.dispatchEvent(new CustomEvent('askchip-ws-open')); } catch {}
-    };
-
-    ws.onclose = (e) => {
-      _stopKeepAlive();
-
-      // If we closed before receiving server "ready", a transient connect race happened.
-      if (!_gotReady){
-        _scheduleReconnect();
-      } else {
-        // If already "ready", only reconnect if session is active
-        _scheduleReconnect();
-      }
-
-      try {
-        window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }}));
-      } catch {}
-    };
-
-    ws.onerror = (e) => console.warn('[ws] error', e);
-
-    ws.onmessage = (ev) => {
-      try{
-        if (typeof ev.data === 'string'){
-          const obj = JSON.parse(ev.data);
-          const t = obj && obj.type;
-
-          _handleProviderSignal(obj);
-
-          if (t === 'ready') {
-            _gotReady = true;
-            // small audio unlock nudge on first ready (harmless if already unlocked)
-            try { unlockAudio().catch(()=>{}); } catch {}
-          }
-
-          // Re-emit as DOM events so UI can respond
-          window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
-
-          // --- Audio routing (WS-only) ---------------------------------------
-          if (t === 'assistant_audio') {
-            // Server provides { mime, audio_chunks:[], is_last }
-            playStream(obj);
-            return;
-          }
-          if (t === 'UtteranceEnd') {
-            // Authoritative end-of-utterance: drain and endOfStream
-            audioEnd();
-            return;
-          }
-
-          // --- Other control/info messages -----------------------------------
-          if (t === 'KeepAliveAck'){
-            // no-op
-          } else if (t === 'Error'){
-            console.warn('[ws] server error:', obj.code, obj.message);
-          } else if (t === 'assistant_end'){
-            // Text is done. Do NOT teardown audio here (audio ends on UtteranceEnd).
-          } else if (t === 'TTSChunk'){
-            // (legacy/future) not used; all audio uses assistant_audio frames now.
-          }
-        } else {
-          // Binary from server (future path not used in v1 WS-only)
-        }
-      }catch(err){
-        console.warn('[ws] message error', err);
-      }
-    };
-
-    // be a good citizen on unload — send a normal "going away" close
-    window.addEventListener('beforeunload', () => {
-      try { ws.close(1001, 'page_unload'); } catch {}
-    }, { once:true });
-
-    return ws;
-  })().catch((err) => {
-    if (_ws && _ws.readyState !== WebSocket.OPEN && _ws.readyState !== WebSocket.CONNECTING){
-      try { _ws.close(1000, 'open_failed'); } catch {}
-      _ws = null;
+    // If we closed before receiving server "ready", a transient connect race happened.
+    if (!_gotReady){
+      _scheduleReconnect();
+    } else {
+      // If already "ready", only reconnect if session is active
+      _scheduleReconnect();
     }
-    throw err;
-  }).finally(() => {
-    _openPromise = null;
-  });
 
-  return _openPromise;
+    try {
+      window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }}));
+    } catch {}
+  };
+
+  ws.onerror = (e) => console.warn('[ws] error', e);
+
+  ws.onmessage = (ev) => {
+    try{
+      if (typeof ev.data === 'string'){
+        const obj = JSON.parse(ev.data);
+        const t = obj && obj.type;
+
+        if (t === 'ready') {
+          _gotReady = true;
+          // small audio unlock nudge on first ready (harmless if already unlocked)
+          try { unlockAudio().catch(()=>{}); } catch {}
+        }
+
+        // Re-emit as DOM events so UI can respond
+        window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
+
+        // --- Audio routing (WS-only) ---------------------------------------
+        if (t === 'assistant_audio') {
+          // Server provides { mime, audio_chunks:[], is_last }
+          playStream(obj);
+          return;
+        }
+        if (t === 'UtteranceEnd') {
+          // Authoritative end-of-utterance: drain and endOfStream
+          audioEnd();
+          return;
+        }
+
+        // --- Other control/info messages -----------------------------------
+        if (t === 'KeepAliveAck'){
+          // no-op
+        } else if (t === 'Error'){
+          console.warn('[ws] server error:', obj.code, obj.message);
+        } else if (t === 'assistant_end'){
+          // Text is done. Do NOT teardown audio here (audio ends on UtteranceEnd).
+        } else if (t === 'TTSChunk'){
+          // (legacy/future) not used; all audio uses assistant_audio frames now.
+        }
+      } else {
+        // Binary from server (future path not used in v1 WS-only)
+      }
+    }catch(err){
+      console.warn('[ws] message error', err);
+    }
+  };
+
+  // be a good citizen on unload — send a normal "going away" close
+  window.addEventListener('beforeunload', () => {
+    try { ws.close(1001, 'page_unload'); } catch {}
+  }, { once:true });
+
+  return ws;
 }
 
 // NOTE: updated to accept a code + reason so we emit a clean close (avoids 1005).
@@ -408,7 +223,6 @@ export function sendJSON(obj){
 
 export async function sendAudioChunk(blob){
   if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
-  _pauseKeepalive(_KEEPALIVE_REASON_UPLOAD);
   try{
     const buf = await blob.arrayBuffer();
     try {
@@ -418,8 +232,6 @@ export async function sendAudioChunk(blob){
     _lastUserSendTs = Date.now();
   }catch(e){
     console.warn('[ws] sendAudioChunk error', e);
-  } finally {
-    _scheduleKeepaliveResume(_KEEPALIVE_REASON_UPLOAD, _KEEPALIVE_RESUME_AFTER_UPLOAD_MS);
   }
 }
 

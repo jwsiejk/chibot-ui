@@ -154,12 +154,7 @@ function wireVoiceEventsOnce(){
 
 async function ensureWsOpenOrFail(timeoutMs = 5000){
   if (isOpen()) return true;
-  try {
-    await openWS();
-  } catch (err) {
-    console.warn('[bootstrap] openWS failed', err);
-    return false;
-  }
+  openWS();
   try {
     await Promise.race([
       waitWSOpen(),

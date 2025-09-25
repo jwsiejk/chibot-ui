@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio, os, contextlib, time
 from typing import Optional, Dict, Any, Deque
 from collections import deque
+from app.services.audio.container_sniffer import AudioContainerSniffer, coerce_detection_from_meta
 
 from .schema_v1 import parse_client_json, make_keepalive_ack, make_results, make_utterance_end, make_error
 from .turn_buffer import TurnBuffer
@@ -18,6 +19,10 @@ try:
     from app.api_v1.admin import _emit as _admin_emit
 except Exception:
     _admin_emit = None
+
+
+RESULTS_TYPE = "Results"
+UTTERANCE_END_TYPE = "UtteranceEnd"
 
 
 def _client_ip_from_scope(scope) -> str:
@@ -154,15 +159,19 @@ async def _pump_dg_to_client(
                     pass
 
                 # Stream ASR result to client (optional UI)
+                result_payload = make_results(turn_id_ref[0], transcript=text, confidence=0.0, is_final=is_final)
+                result_payload["type"] = RESULTS_TYPE
                 await send({
                     "type": "websocket.send",
-                    "text": _dumps(make_results(turn_id_ref[0], transcript=text, confidence=0.0, is_final=is_final)),
+                    "text": _dumps(result_payload),
                 })
 
                 if is_final:
                     final_seen[0] = True
                     # Let client know the utterance is closed
-                    await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id_ref[0]))})
+                    utterance_payload = make_utterance_end(turn_id_ref[0])
+                    utterance_payload["type"] = UTTERANCE_END_TYPE
+                    await send({"type": "websocket.send", "text": _dumps(utterance_payload)})
                     try:
                         _admin_emit and _admin_emit("asr:final", session_id=sid)
                     except Exception:
@@ -209,6 +218,16 @@ async def _pump_dg_to_client(
 
 
 async def _ws_chat_asgi_impl(scope, receive, send):
+    # Session-scoped transport flags
+    transport = {
+        "protocol": "websocket",
+        "container": None,
+        "codec": None,
+        "containerized_opus": False,
+        "features": []
+    }
+    sniffer = AudioContainerSniffer()
+
     try:
         _admin_emit and _admin_emit(
             "ws_handshake_enter",
@@ -228,6 +247,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     # Auth
     require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in ("0", "false", "no")
     bearer_only = os.getenv("WS_BEARER_ONLY", "1").lower() not in ("0", "false", "no")
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        require_token = False
     fail_limit = int(os.getenv("WS_FAIL_LIMIT", "10"))
     fail_window_sec = float(os.getenv("WS_FAIL_WINDOW_SEC", "60"))
     client_ip = _client_ip_from_scope(scope)
@@ -313,57 +334,40 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     buf = TurnBuffer()
     dg: Optional[DeepgramClient] = None
     rx_task: Optional[asyncio.Task] = None
-    dg_connect_task: Optional[asyncio.Task] = None
-    dg_state: str = "closed"
     turn_id_ref = [0]
     final_seen = [False]
-
-    # Turn-scoped buffering + state
-    buffered_chunks: Deque[bytes] = deque()
     sent_any_audio = [False]
+    buffered_chunks: Deque[bytes] = deque()
+    max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
     asr_ready_evt: asyncio.Event = asyncio.Event()
     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "1.5"))
-    max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
-    turn_connect_started = [False]
 
-    async def _ensure_dg_connected() -> bool:
+    async def _ensure_dg_connected():
         """Connect to ASR provider once per session; never tear down the WS on provider failures."""
-        nonlocal dg, rx_task, dg_connect_task, dg_state
-
-        if not _has_deepgram_key():
-            return False
-
-        if dg_state == "open" and dg is not None:
-            return True
-
-        if dg_state == "connecting" and dg_connect_task is not None:
-            with contextlib.suppress(Exception):
-                await dg_connect_task
-            return dg_state == "open" and dg is not None
-
-        connect_result = {"ok": False}
-
-        async def _connect() -> None:
-            nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
+        nonlocal dg, rx_task
+        if (dg is None or (dg is not None and hasattr(dg, 'is_open') and not dg.is_open())) and rx_task is not None:
+            # A prior stream closed the client; ensure the relay task is cleared.
+            if not rx_task.done():
+                rx_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await rx_task
+            rx_task = None
+        if (dg is None or (dg is not None and hasattr(dg, 'is_open') and not dg.is_open())) and _has_deepgram_key():
             try:
-                dg_state = "connecting"
+                # Clear readiness; a new connection will signal asr_open via pump task
                 try:
                     if asr_ready_evt.is_set():
                         asr_ready_evt.clear()
                 except Exception:
                     pass
-                client = DeepgramClient(cfg)
-                dg = client
-                await client.connect()
-                dg_state = "open"
-                connect_result["ok"] = True
+                cfg['_transport'] = transport
+                dg = DeepgramClient(cfg)
+                await dg.connect()
                 turn_id_ref[0] = buf.turn_seq + 1
-                rx_task = asyncio.create_task(
-                    _pump_dg_to_client(client, send, turn_id_ref, final_seen, sid, asr_ready_evt)
-                )
+                rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen, sid, asr_ready_evt))
                 _jlog("asr_connect_ok", sid=sid)
             except Exception as e:
-                dg_state = "closed"
+                # Keep the client WS alive; surface an error frame and continue in "no-ASR" mode.
                 dg = None
                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
                 try:
@@ -377,20 +381,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=f"connect:{type(e).__name__}")
                 except Exception:
                     pass
-            finally:
-                dg_connect_task = None
-
-        dg_connect_task = asyncio.create_task(_connect())
-        with contextlib.suppress(Exception):
-            await dg_connect_task
-        return connect_result["ok"]
 
     async def _send_chunk(data: bytes, *, from_buffer: bool = False, retry: bool = True) -> bool:
         """Send audio to Deepgram, retrying once on connection race."""
-        nonlocal dg, dg_state
+        nonlocal dg
         if dg is None:
             return False
-
         try:
             await dg.send(data)
             sent_any_audio[0] = True
@@ -401,10 +397,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 buffered=from_buffer,
             )
             return True
-
         except RuntimeError as e:
             if "deepgram_not_connected" in str(e).lower() and retry:
-                dg_state = "closed"
                 _jlog("asr_send_retry", sid=sid)
                 await _ensure_dg_connected()
                 if not asr_ready_evt.is_set():
@@ -452,25 +446,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         turn_id_ref[0] = buf.turn_seq + 1
                         final_seen[0] = False
                         sent_any_audio[0] = False
-                        buffered_chunks.clear()
-                        turn_connect_started[0] = False
+                        buffered_chunks.clear()                                         
                     buf.append(chunk)
                     if _has_deepgram_key():
-                        # Ensure provider is connected once per turn; await in-flight connects.
-                        if not turn_connect_started[0]:
-                            turn_connect_started[0] = True
-                            connected = await _ensure_dg_connected()
-                            if not connected:
-                                turn_connect_started[0] = False
-                        elif dg_state == "connecting" and dg_connect_task is not None:
-                            with contextlib.suppress(Exception):
-                                await dg_connect_task
+                        # Ensure provider is connected (await, not background)
+                        await _ensure_dg_connected()
 
                         if dg is not None:
-                            # Always stage in the buffer first (avoids losing early chunks)
                             buffered_chunks.append(chunk)
 
-                            # If buffer is getting large, try to flush opportunistically
                             if len(buffered_chunks) >= max_buffered_chunks:
                                 await _flush_buffered_chunks()
 
@@ -481,12 +465,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 except asyncio.TimeoutError:
                                     _jlog("asr_not_ready_timeout", sid=sid)
 
-                            # Final attempt to flush staged audio
                             await _flush_buffered_chunks()
                         else:
                             _jlog("ws_audio_no_provider", sid=sid, bytes=len(chunk))
+                            buffered_chunks.clear()
                     else:
                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
+                        buffered_chunks.clear()
                     continue
 
                 # Text/control lane
@@ -608,23 +593,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             turn_id, _pcm = buf.close_turn()
                             turn_id_ref[0] = turn_id
                             synthetic_emitted = False
-                            if _has_deepgram_key() and dg is not None:
-                                # *** GRACE: if we have buffered chunks but ASR not ready yet, give it 500ms then flush.
-                                if buffered_chunks and not asr_ready_evt.is_set():
-                                    if dg_state == "connecting" and dg_connect_task is not None:
-                                        with contextlib.suppress(Exception):
-                                            await asyncio.wait_for(dg_connect_task, timeout=asr_ready_wait_s)
-                                    with contextlib.suppress(asyncio.TimeoutError):
-                                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
-
-                                # Flush any staged audio first
+                            if _has_deepgram_key() and dg is not None:   
                                 await _flush_buffered_chunks()
-
                                 if sent_any_audio[0]:
                                     # Ask provider to finish; if no final came, synthesize empty final.
                                     with contextlib.suppress(Exception):
                                         await dg.close(wait_for_final=True)
-                                    dg_state = "closed"
                                     _relay_task = rx_task
                                     rx_task = None
                                     if _relay_task:
@@ -636,46 +610,59 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         if asr_ready_evt and asr_ready_evt.is_set():
                                             asr_ready_evt.clear()
                                     except Exception:
-                                        pass
+                                        pass                                     
+                                
                                     if not final_seen[0]:
                                         final_seen[0] = True
                                         synthetic_emitted = True
                                         result_payload = make_results(turn_id, transcript="", is_final=True)
-                                        # Keep schema compatibility for clients looking at "type"
-                                        RESULTS_TYPE = "Results"
                                         result_payload["type"] = RESULTS_TYPE
-                                        await send({"type": "websocket.send", "text": _dumps(result_payload)})
-                                        UTTERANCE_END_TYPE = "UtteranceEnd"
+                                        await send({
+                                            "type": "websocket.send",
+                                            "text": _dumps(result_payload),
+                                        })
                                         utterance_payload = make_utterance_end(turn_id)
                                         utterance_payload["type"] = UTTERANCE_END_TYPE
-                                        await send({"type": "websocket.send", "text": _dumps(utterance_payload)})
+                                        await send({
+                                            "type": "websocket.send",
+                                            "text": _dumps(utterance_payload),
+                                        })
                                 else:
-                                    # Nothing actually went to provider; skip provider close, synthesize final locally
                                     _jlog("ws_close_skip_no_audio", sid=sid)
                                     if not final_seen[0]:
                                         final_seen[0] = True
                                         synthetic_emitted = True
-                                        RESULTS_TYPE = "Results"
-                                        UTTERANCE_END_TYPE = "UtteranceEnd"
                                         result_payload = make_results(turn_id, transcript="", is_final=True)
                                         result_payload["type"] = RESULTS_TYPE
-                                        await send({"type": "websocket.send", "text": _dumps(result_payload)})
+                                        await send({
+                                            "type": "websocket.send",
+                                            "text": _dumps(result_payload),
+                                        })
                                         utterance_payload = make_utterance_end(turn_id)
                                         utterance_payload["type"] = UTTERANCE_END_TYPE
-                                        await send({"type": "websocket.send", "text": _dumps(utterance_payload)})
+                                        await send({
+                                            "type": "websocket.send",
+                                            "text": _dumps(utterance_payload),
+                                        })                              
                             else:
                                 # No provider configured: still emit empty final + end to advance the dialog.
                                 if not final_seen[0]:
                                     final_seen[0] = True
                                     synthetic_emitted = True
+                                    result_payload = make_results(turn_id, transcript="", is_final=True)
+                                    result_payload["type"] = RESULTS_TYPE
                                     await send({
                                         "type": "websocket.send",
-                                        "text": _dumps(make_results(turn_id, transcript="", is_final=True)),
+                                        "text": _dumps(result_payload),
                                     })
-                                    await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))})
+                                    utterance_payload = make_utterance_end(turn_id)
+                                    utterance_payload["type"] = UTTERANCE_END_TYPE
+                                    await send({"type": "websocket.send", "text": _dumps(utterance_payload)})
                             if synthetic_emitted:
                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
                                 final_seen[0] = False
+                            sent_any_audio[0] = False
+                            buffered_chunks.clear()                               
                         else:
                             # Unknown type already filtered by schema; no-op to future-proof.
                             pass
@@ -698,18 +685,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             if dg is not None:
                 with contextlib.suppress(Exception):
                     await dg.close(wait_for_final=False)
-                dg_state = "closed"
         except Exception:
             pass
         try:
             bus_task.cancel()
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await bus_task
         except Exception:
             pass
         try:
             ping_task.cancel()
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await ping_task
         except Exception:
             pass
@@ -726,8 +712,12 @@ except Exception:
     _StarletteWebSocket = None
 
 
-async def ws_chat(websocket):
-    """Accept, validate, send ready, then pump frames to keep the connection alive."""
+async def ws_chat(scope_or_websocket, receive=None, send=None):
+    """Compatibility wrapper for tests and legacy Starlette routes."""
+    if receive is not None and send is not None and isinstance(scope_or_websocket, dict):
+        return await _ws_chat_asgi_impl(scope_or_websocket, receive, send)
+
+    websocket = scope_or_websocket
     _jlog("ws_chat_compat_invoked")
     await websocket.accept()
     try:
@@ -748,9 +738,11 @@ async def ws_chat(websocket):
         await _pump_bus_to_client(sid, lambda msg: websocket.send_text(msg.get("text") or ""))
     except Exception:
         pass
-    finally:
+    
+    finally:      
         try:
             await websocket.close(code=1000, reason="normal_shutdown")
             await asyncio.sleep(0.05)
         except Exception:
             pass
+

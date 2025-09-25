@@ -203,45 +203,31 @@ form .row, .form .row{display:flex; flex-wrap:wrap; gap:12px 16px}
 /* ---------------- Visualizer ---------------- */
 .visualizer-shell{flex:1;display:flex;align-items:center;justify-content:center;min-height:320px}
 .visualizer-backdrop{
-  position:relative;
   width:100%;
-  max-width:520px;
-  aspect-ratio:4 / 3;
-  border-radius:36px;
-  padding:54px;
-  background:
-    radial-gradient(120% 120% at 18% 18%, rgba(146,176,255,.32), rgba(10,14,26,.92) 70%),
-    linear-gradient(155deg, rgba(34,48,84,.88), rgba(12,16,28,.92));
-  box-shadow:inset 0 0 48px rgba(120,156,255,.18), 0 40px 80px rgba(2,6,16,.55);
-  overflow:hidden;
+  max-width:460px;
+  aspect-ratio:1;
+  border-radius:40px;
+  background:radial-gradient(circle at 20% 20%, rgba(122,160,255,.35), rgba(15,20,32,0.9) 68%),
+             linear-gradient(145deg, rgba(36,52,82,.9), rgba(12,18,32,.9));
+  padding:70px;
   display:flex;
-  align-items:center;
+  align-items:flex-end;
   justify-content:center;
+  box-shadow:inset 0 0 40px rgba(122,160,255,.22), 0 40px 80px rgba(2,6,16,.55);
 }
-.visualizer-backdrop::before{
-  content:"";
-  position:absolute;
-  inset:18%;
-  border-radius:28px;
-  background:linear-gradient(140deg, rgba(138,168,255,.22), rgba(32,44,78,0));
-  opacity:.85;
-  pointer-events:none;
-}
-.visualizer-backdrop::after{
-  content:"";
-  position:absolute;
-  inset:0;
-  background-image:radial-gradient(rgba(150,180,255,.12) 1px, transparent 0);
-  background-size:22px 22px;
+.visualizer-bars{width:100%;height:100%;display:flex;align-items:flex-end;justify-content:space-between;gap:14px}
+.visualizer-bars span{
+  flex:1;
+  max-width:28px;
+  height:78%;
+  border-radius:18px 18px 10px 10px;
+  background:linear-gradient(180deg, rgba(122,160,255,.95) 0%, rgba(44,120,255,.75) 60%, rgba(10,30,62,.95) 100%);
+  box-shadow:0 8px 20px rgba(5,12,28,.55);
+  transform-origin:bottom center;
+  transform:scaleY(.2);
   opacity:.35;
-  mix-blend-mode:soft-light;
-  pointer-events:none;
-}
-.visualizer-waveform{
-  position:relative;
-  width:100%;
-  height:100%;
-  display:block;
+  transition:transform .12s ease-out, opacity .18s ease-out;
+  will-change:transform, opacity;
 }
 
 /* ---------------- Meeting toolbar ---------------- */
@@ -269,7 +255,7 @@ form .row, .form .row{display:flex; flex-wrap:wrap; gap:12px 16px}
   .meeting-grid{grid-template-columns:1fr}
   .chat-pane,.visualizer-pane,.suggestions-pane{order:unset}
   .visualizer-shell{min-height:260px}
-  .visualizer-backdrop{padding:38px}
+  .visualizer-backdrop{padding:48px}
   .toolbar-buttons{width:100%;justify-content:center}
 }
 

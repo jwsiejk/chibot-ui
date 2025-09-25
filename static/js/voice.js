@@ -39,7 +39,7 @@ const REC_MIME = (typeof MediaRecorder !== 'undefined'
   : 'audio/webm; codecs=opus';
 
 const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
-const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+const MIN_VALID_BLOB_BYTES = 256;   // drop clearly-empty/prelude-only blobs
 
 const state = {
   stream: null,
@@ -244,11 +244,10 @@ function _startRecorder() {
 
   try {
     // Small timeslice ensures non-empty dataavailable frames while still producing a single turn blob.
-    const timeslice = 150; // 150 ms sits comfortably within the 100–200 ms target window
-    state.rec.start(timeslice);
+    state.rec.start(250);
     state.turnOpen = true; // mark an open ASR turn on the server
     try {
-      console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice });
+      console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice: 250 });
     } catch {}
   } catch (e) {
     console.warn('[voice] recorder start failed', e);
