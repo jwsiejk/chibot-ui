@@ -1,251 +1,347 @@
-diff --git a/static/js/ws.js b/static/js/ws.js
-index d311fcc4c04ca47ae90a4523e7e56dd6d78c6135..d83a4f4b28c4349c48a6045e1b8bc579d2733ac3 100644
---- a/static/js/ws.js
-+++ b/static/js/ws.js
-@@ -4,174 +4,191 @@
- //   • Subprotocol auth (bearer + bearer.<token>)
- //   • Auto-reconnect with bounded backoff (only if session is active)
- //   • Helpers: waitWSOpen(), isOpen(), bufferedAmount(), sendJSON/audio, configure()
- //   • DOM events: 'askchip-ws' (messages), 'askchip-ws-close' (terminal close)
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 99d8c85e2d5576c3b00a6bc0ff4a8229e0a16c42..e6b3a4c4e7e85c98545806b6c83c14cbbfe03a83 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -291,188 +291,202 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 try:
+                     await send({
+                         "type": "websocket.send",
+                         "text": _dumps({"type": "keepalive", "ts": int(time.time() * 1000)}),
+                     })
+                 except Exception:
+                     break
+         except asyncio.CancelledError:
+             pass
  
- import { playStream, audioEnd, unlockAudio } from './audio.js';
- import { getSID } from './util/sid.js';
+     ping_task = asyncio.create_task(_ping_loop())
  
- let _ws = null;
- let _onOpen = [];
- const _KEEPALIVE_POLL_MS = 1000;
- const _KEEPALIVE_IDLE_THRESHOLD_MS = 3500;
- const _KEEPALIVE_RESUME_AFTER_UPLOAD_MS = 750;
- const _KEEPALIVE_PROVIDER_FALLBACK_MS = 10000;
+     try:
+         await send({"type": "websocket.send", "text": _dumps({"type": "ready", "session_id": sid})})
+     except Exception:
+         try:
+             await send({"type": "websocket.close", "code": 1011, "reason": "initial_ready_failed"})
+         except Exception:
+             pass
+         return
  
- const _KEEPALIVE_REASON_PROVIDER = 'provider_wait';
- const _KEEPALIVE_REASON_UPLOAD = 'audio_upload';
+     cfg: Dict[str, Any] = {}
+     buf = TurnBuffer()
+     dg: Optional[DeepgramClient] = None
+     rx_task: Optional[asyncio.Task] = None
++    dg_connect_task: Optional[asyncio.Task] = None
++    dg_state: str = "closed"
+     turn_id_ref = [0]
+     final_seen = [False]
  
- const _keepaliveState = {
-   timer: null,
-   lastSentTs: 0,
-   providerReady: false,
-   pauseReasons: new Set(),
-   resumeTimers: new Map(),
-   providerGateTimer: null,
-+  sawFirstDeepgram: false,
- };
+     # Turn-scoped buffering + state
+     buffered_chunks: Deque[bytes] = deque()
+     sent_any_audio = [False]
+     asr_ready_evt: asyncio.Event = asyncio.Event()
+     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "1.5"))
+     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
++    turn_connect_started = [False]
  
- function _scheduleProviderFallback(){
-   if (_keepaliveState.providerGateTimer){
-     clearTimeout(_keepaliveState.providerGateTimer);
-   }
-+  if (!_keepaliveState.pauseReasons.has(_KEEPALIVE_REASON_PROVIDER)){
-+    _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
-+  }
-   _keepaliveState.providerGateTimer = setTimeout(()=>{
-     _keepaliveState.providerGateTimer = null;
-     if (!_keepaliveState.providerReady){
-       _keepaliveState.providerReady = true;
-     }
-     _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
-   }, _KEEPALIVE_PROVIDER_FALLBACK_MS);
- }
- let _lastUserSendTs = 0;
- let _gotReady = false;
- let _openPromise = null;
- 
- // reconnect state
- let _reconnecting = false;
- let _reconnectTimer = null;
- let _backoff = 500;            // start 0.5s
- const _BACKOFF_MAX = 8000;     // cap 8s
- const _BACKOFF_RESET_MS = 30000;
- 
- export function isOpen(){ return !!(_ws && _ws.readyState === WebSocket.OPEN); }
- export function isConnecting(){ return !!(_ws && _ws.readyState === WebSocket.CONNECTING); }
- export function waitWSOpen(){
-   return new Promise(res => {
-     if (isOpen()) return res();
-     _onOpen.push(res);
-   });
- }
- function _notifyOpen(){ for (const fn of _onOpen.splice(0)) { try{ fn(); }catch{} } }
- 
- export function bufferedAmount(){ return _ws ? _ws.bufferedAmount : 0; }
- 
- function _clearKeepaliveTimer(){
-   if (_keepaliveState.timer){
-     clearInterval(_keepaliveState.timer);
-     _keepaliveState.timer = null;
-   }
- }
- 
- function _resetKeepaliveState(scheduleFallback = false){
-   _keepaliveState.lastSentTs = 0;
-   _keepaliveState.providerReady = false;
-+  _keepaliveState.sawFirstDeepgram = false;
-   for (const t of _keepaliveState.resumeTimers.values()){
-     clearTimeout(t);
-   }
-   _keepaliveState.resumeTimers.clear();
-   if (_keepaliveState.providerGateTimer){
-     clearTimeout(_keepaliveState.providerGateTimer);
-     _keepaliveState.providerGateTimer = null;
-   }
-   _keepaliveState.pauseReasons.clear();
-   if (scheduleFallback){
-     _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
-     _scheduleProviderFallback();
-   }
- }
- 
- function _pauseKeepalive(reason){
-   if (!reason) return;
-   const timer = _keepaliveState.resumeTimers.get(reason);
-   if (timer){
-     clearTimeout(timer);
-     _keepaliveState.resumeTimers.delete(reason);
-   }
-   _keepaliveState.pauseReasons.add(reason);
- }
- 
- function _resumeKeepalive(reason){
-   if (!reason) return;
-   const timer = _keepaliveState.resumeTimers.get(reason);
-   if (timer){
-     clearTimeout(timer);
-     _keepaliveState.resumeTimers.delete(reason);
-   }
-   _keepaliveState.pauseReasons.delete(reason);
- }
- 
- function _scheduleKeepaliveResume(reason, delayMs){
-   if (!reason) return;
-   const ms = typeof delayMs === 'number' && delayMs >= 0 ? delayMs : _KEEPALIVE_RESUME_AFTER_UPLOAD_MS;
-   const timer = setTimeout(()=>{
-     _keepaliveState.resumeTimers.delete(reason);
-     _keepaliveState.pauseReasons.delete(reason);
-   }, ms);
-   const prev = _keepaliveState.resumeTimers.get(reason);
-   if (prev){
-     clearTimeout(prev);
-   }
-   _keepaliveState.resumeTimers.set(reason, timer);
- }
- 
- function _startKeepAlive(){
--  _clearKeepaliveTimer();
-+  if (_keepaliveState.timer) return;
-   _keepaliveState.timer = setInterval(()=>{
-     if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
-     if (_keepaliveState.pauseReasons.size) return;
-     if (!_keepaliveState.providerReady) return;
-     const now = Date.now();
-     if (now - _lastUserSendTs < _KEEPALIVE_IDLE_THRESHOLD_MS) return;
-     if (now - _keepaliveState.lastSentTs < _KEEPALIVE_IDLE_THRESHOLD_MS) return;
-     try {
-       _ws.send(JSON.stringify({type:"KeepAlive"}));
-       _keepaliveState.lastSentTs = now;
-     } catch {}
-   }, _KEEPALIVE_POLL_MS);
- }
- 
- function _stopKeepAlive(){
-   _clearKeepaliveTimer();
-   _resetKeepaliveState(false);
- }
- 
- function _handleProviderSignal(obj){
-   const type = (obj && obj.type ? String(obj.type) : '').toLowerCase();
-   const provider = (obj && (obj.provider || obj.service || obj.source || obj.name) ? String(obj.provider || obj.service || obj.source || obj.name) : '').toLowerCase();
-   const state = (obj && (obj.state || obj.status || obj.phase)) ? String(obj.state || obj.status || obj.phase).toLowerCase() : '';
-   const compactType = type.replace(/[^a-z]/g, '');
-   const compactProvider = provider.replace(/[^a-z]/g, '');
-   const typeAsProvider = compactType.replace(/(?:provider)?(?:state|status)$/, '');
-+  const vendor = (obj && obj.vendor ? String(obj.vendor) : '').toLowerCase();
-+  const compactVendor = vendor.replace(/[^a-z]/g, '');
+-    async def _ensure_dg_connected():
++    async def _ensure_dg_connected() -> bool:
+         """Connect to ASR provider once per session; never tear down the WS on provider failures."""
+-        nonlocal dg, rx_task
+-        # If previous rx_task exists for a closed client, clear it
+-        if (dg is None or (dg is not None and hasattr(dg, 'is_open') and not dg.is_open())) and rx_task is not None:
+-            if not rx_task.done():
+-                rx_task.cancel()
+-                with contextlib.suppress(asyncio.CancelledError, Exception):
+-                    await rx_task
+-            rx_task = None
+-        if (dg is None or (dg is not None and hasattr(dg, 'is_open') and not dg.is_open())) and _has_deepgram_key():
++        nonlocal dg, rx_task, dg_connect_task, dg_state
 +
-+  const looksDeepgram =
-+    compactType.includes('deepgram') ||
-+    compactProvider === 'deepgram' ||
-+    typeAsProvider === 'deepgram' ||
-+    compactVendor === 'deepgram';
-+  if (looksDeepgram && !_keepaliveState.sawFirstDeepgram){
-+    _keepaliveState.sawFirstDeepgram = true;
-+    _startKeepAlive();
-+  }
++        if not _has_deepgram_key():
++            return False
++
++        if dg_state == "open" and dg is not None:
++            return True
++
++        if dg_state == "connecting" and dg_connect_task is not None:
++            with contextlib.suppress(Exception):
++                await dg_connect_task
++            return dg_state == "open" and dg is not None
++
++        connect_result = {"ok": False}
++
++        async def _connect() -> None:
++            nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
+             try:
+-                # Clear readiness; a new connection will signal asr_open via pump task
++                dg_state = "connecting"
+                 try:
+                     if asr_ready_evt.is_set():
+                         asr_ready_evt.clear()
+                 except Exception:
+                     pass
+-                dg = DeepgramClient(cfg)
+-                await dg.connect()
++                client = DeepgramClient(cfg)
++                dg = client
++                await client.connect()
++                dg_state = "open"
++                connect_result["ok"] = True
+                 turn_id_ref[0] = buf.turn_seq + 1
+-                rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen, sid, asr_ready_evt))
++                rx_task = asyncio.create_task(
++                    _pump_dg_to_client(client, send, turn_id_ref, final_seen, sid, asr_ready_evt)
++                )
+                 _jlog("asr_connect_ok", sid=sid)
+             except Exception as e:
+-                # Keep the client WS alive; surface an error frame and continue in "no-ASR" mode.
++                dg_state = "closed"
+                 dg = None
+                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
+                 try:
+                     await send({
+                         "type": "websocket.send",
+                         "text": _dumps(make_error("asr_connect_fail", type(e).__name__)),
+                     })
+                 except Exception:
+                     pass
+                 try:
+                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=f"connect:{type(e).__name__}")
+                 except Exception:
+                     pass
++            finally:
++                dg_connect_task = None
++
++        dg_connect_task = asyncio.create_task(_connect())
++        with contextlib.suppress(Exception):
++            await dg_connect_task
++        return connect_result["ok"]
  
-   const markReady = () => {
-     if (!_keepaliveState.providerReady){
-       _keepaliveState.providerReady = true;
-     }
-     if (_keepaliveState.providerGateTimer){
-       clearTimeout(_keepaliveState.providerGateTimer);
-       _keepaliveState.providerGateTimer = null;
-     }
-     _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
-   };
-   const markNotReady = () => {
-     if (_keepaliveState.providerReady){
-       _keepaliveState.providerReady = false;
-     }
-     _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
-     _scheduleProviderFallback();
-   };
+     async def _send_chunk(data: bytes, *, from_buffer: bool = False, retry: bool = True) -> bool:
+         """Send audio to Deepgram, retrying once on connection race."""
+-        nonlocal dg
++        nonlocal dg, dg_state
+         if dg is None:
+             return False
  
-   if (!type) return;
+         try:
+-            # micro-gate on underlying socket being truly open (bridges the last-subsecond seam)
+-            wait_socket_open = getattr(dg, "wait_socket_open", None)
+-            if callable(wait_socket_open):
+-                with contextlib.suppress(Exception):
+-                    await wait_socket_open(timeout=0.5)
+-
+-            # optional is_open probe (defensive)
+-            try:
+-                is_open_fn = getattr(dg, "is_open", None)
+-                if callable(is_open_fn) and not bool(is_open_fn()):
+-                    _jlog("asr_socket_not_open", sid=sid)
+-                    raise RuntimeError("deepgram_not_connected")
+-            except RuntimeError:
+-                raise
+-            except Exception:
+-                # ignore probe errors; let send() decide
+-                pass
+-
+             await dg.send(data)
+             sent_any_audio[0] = True
+             _jlog(
+                 "ws_audio_forward",
+                 sid=sid,
+                 bytes=len(data),
+                 buffered=from_buffer,
+             )
+             return True
  
-   if (compactType === 'asropen' || compactType === 'deepgramopen' || compactType === 'deepgramready'){ markReady(); return; }
-   if (compactType === 'asrclose' || compactType === 'asrclosed' || compactType === 'deepgramclosed' || compactType === 'asrerror'){ markNotReady(); return; }
+         except RuntimeError as e:
+             if "deepgram_not_connected" in str(e).lower() and retry:
++                dg_state = "closed"
+                 _jlog("asr_send_retry", sid=sid)
+                 await _ensure_dg_connected()
+                 if not asr_ready_evt.is_set():
+                     with contextlib.suppress(asyncio.TimeoutError):
+                         await asyncio.wait_for(asr_ready_evt.wait(), timeout=0.25)
+                 return await _send_chunk(data, from_buffer=from_buffer, retry=False)
+             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
+         except Exception as e:
+             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
+         return False
  
-   const providerTargets = ['deepgram', 'asr', 'stt'];
-@@ -249,52 +266,52 @@ export function openWS(){
-   }
+     async def _flush_buffered_chunks() -> None:
+         """Flush buffered audio once Deepgram is ready."""
+         nonlocal dg
+         if not buffered_chunks:
+             return
+         if not _has_deepgram_key() or dg is None:
+             buffered_chunks.clear()
+             return
  
-   if (_openPromise){
-     return _openPromise;
-   }
+         while buffered_chunks:
+             chunk = buffered_chunks[0]
+             ok = await _send_chunk(chunk, from_buffer=True)
+             if ok:
+                 buffered_chunks.popleft()
+                 continue
+             break
  
-   _openPromise = (async () => {
-     const sid = getSID();
+     try:
+         while True:
+             ev = await receive()
+             et = ev.get("type")
  
-     // If there's a closing/closed socket, let GC take it and create a new one
-     _gotReady = false;
+             if et == "websocket.disconnect":
+                 break
  
-     const base = location.origin.replace(/^http/, 'ws');
-     const url = new URL(base + '/ws/v1/chat');
-     url.searchParams.set('session_id', sid);
+             if et == "websocket.receive":
+                 # Binary/audio lane
+                 if ev.get("bytes") is not None:
+                     chunk = ev.get("bytes") or b""
+                     if chunk:
+                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
+                     if buf.is_empty():
+                         # New audio turn; prime turn id + reset final tracking.
+                         turn_id_ref[0] = buf.turn_seq + 1
+                         final_seen[0] = False
+                         sent_any_audio[0] = False
+                         buffered_chunks.clear()
++                        turn_connect_started[0] = False
+                     buf.append(chunk)
+                     if _has_deepgram_key():
+-                        # Ensure provider is connected (await, not background)
+-                        await _ensure_dg_connected()
++                        # Ensure provider is connected once per turn; await in-flight connects.
++                        if not turn_connect_started[0]:
++                            turn_connect_started[0] = True
++                            connected = await _ensure_dg_connected()
++                            if not connected:
++                                turn_connect_started[0] = False
++                        elif dg_state == "connecting" and dg_connect_task is not None:
++                            with contextlib.suppress(Exception):
++                                await dg_connect_task
  
-     const token = await _getWSToken(sid);
-     const subprotocols = ['bearer', `bearer.${token.replace(/=+$/,'')}`]; // padding-less safe
+                         if dg is not None:
+                             # Always stage in the buffer first (avoids losing early chunks)
+                             buffered_chunks.append(chunk)
  
-     const ws = new WebSocket(url.toString(), subprotocols);
-     ws.binaryType = 'arraybuffer';
-     _ws = ws; // assign immediately so helpers see it
+                             # If buffer is getting large, try to flush opportunistically
+                             if len(buffered_chunks) >= max_buffered_chunks:
+                                 await _flush_buffered_chunks()
  
-     ws.onopen = () => {
-       _notifyOpen();
-+      _clearKeepaliveTimer();
-       _resetKeepaliveState(true);
--      _startKeepAlive();
-       _reconnecting = false;
-       _backoff = 500; // successful open → reset backoff
-       try { window.dispatchEvent(new CustomEvent('askchip-ws-open')); } catch {}
-     };
+                             # If provider hasn't signaled open yet, wait briefly (first-chunk race guard)
+                             if not asr_ready_evt.is_set():
+                                 try:
+                                     await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
+                                 except asyncio.TimeoutError:
+                                     _jlog("asr_not_ready_timeout", sid=sid)
  
-     ws.onclose = (e) => {
-       _stopKeepAlive();
+                             # Final attempt to flush staged audio
+                             await _flush_buffered_chunks()
+                         else:
+                             _jlog("ws_audio_no_provider", sid=sid, bytes=len(chunk))
+                     else:
+                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
+                     continue
  
-       // If we closed before receiving server "ready", a transient connect race happened.
-       if (!_gotReady){
-         _scheduleReconnect();
-       } else {
-         // If already "ready", only reconnect if session is active
-         _scheduleReconnect();
-       }
+                 # Text/control lane
+@@ -585,50 +599,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                         })
+                             asyncio.create_task(_bg_user())
  
-       try {
-         window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }}));
-       } catch {}
-     };
+                         elif t == "CloseStream":
+                             _jlog("ws_close_stream", sid=sid)
+                             if buf.is_empty():
+                                 # Empty turn closure; synthesize ids + reset final tracking.
+                                 turn_id_ref[0] = buf.turn_seq + 1
+                                 final_seen[0] = False
+                             turn_id, _pcm = buf.close_turn()
+                             turn_id_ref[0] = turn_id
+                             synthetic_emitted = False
+                             if _has_deepgram_key() and dg is not None:
+                                 # *** GRACE: if we have buffered chunks but ASR not ready yet, give it 500ms then flush.
+                                 if buffered_chunks and not asr_ready_evt.is_set():
+                                     with contextlib.suppress(asyncio.TimeoutError):
+                                         await asyncio.wait_for(asr_ready_evt.wait(), timeout=0.5)
  
-     ws.onerror = (e) => console.warn('[ws] error', e);
+                                 # Flush any staged audio first
+                                 await _flush_buffered_chunks()
  
-     ws.onmessage = (ev) => {
-       try{
+                                 if sent_any_audio[0]:
+                                     # Ask provider to finish; if no final came, synthesize empty final.
+                                     with contextlib.suppress(Exception):
+                                         await dg.close(wait_for_final=True)
++                                    dg_state = "closed"
+                                     _relay_task = rx_task
+                                     rx_task = None
+                                     if _relay_task:
+                                         _relay_task.cancel()
+                                         with contextlib.suppress(asyncio.CancelledError, Exception):
+                                             await _relay_task
+                                     dg = None
+                                     try:
+                                         if asr_ready_evt and asr_ready_evt.is_set():
+                                             asr_ready_evt.clear()
+                                     except Exception:
+                                         pass
+                                     if not final_seen[0]:
+                                         final_seen[0] = True
+                                         synthetic_emitted = True
+                                         result_payload = make_results(turn_id, transcript="", is_final=True)
+                                         # Keep schema compatibility for clients looking at "type"
+                                         RESULTS_TYPE = "Results"
+                                         result_payload["type"] = RESULTS_TYPE
+                                         await send({"type": "websocket.send", "text": _dumps(result_payload)})
+                                         UTTERANCE_END_TYPE = "UtteranceEnd"
+                                         utterance_payload = make_utterance_end(turn_id)
+                                         utterance_payload["type"] = UTTERANCE_END_TYPE
+                                         await send({"type": "websocket.send", "text": _dumps(utterance_payload)})
+                                 else:
+@@ -658,50 +673,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                             if synthetic_emitted:
+                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
+                                 final_seen[0] = False
+                         else:
+                             # Unknown type already filtered by schema; no-op to future-proof.
+                             pass
+                     except ValueError as e:
+                         await send({"type": "websocket.send", "text": _dumps(make_error("bad_message", str(e)))})
+             else:
+                 # Other ASGI events are ignored
+                 pass
+ 
+     finally:
+         # Tear down in a safe order; never raise in cleanup
+         try:
+             if rx_task:
+                 rx_task.cancel()
+                 with contextlib.suppress(asyncio.CancelledError, Exception):
+                     await rx_task
+         except Exception:
+             pass
+         try:
+             if dg is not None:
+                 with contextlib.suppress(Exception):
+                     await dg.close(wait_for_final=False)
++                dg_state = "closed"
+         except Exception:
+             pass
+         try:
+             bus_task.cancel()
+             with contextlib.suppress(Exception):
+                 await bus_task
+         except Exception:
+             pass
+         try:
+             ping_task.cancel()
+             with contextlib.suppress(Exception):
+                 await ping_task
+         except Exception:
+             pass
+         try:
+             await send({"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"})
+         except Exception:
+             pass
+ 
+ 
+ # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
+ try:
+     from starlette.websockets import WebSocket as _StarletteWebSocket  # noqa
+ except Exception:
+     _StarletteWebSocket = None

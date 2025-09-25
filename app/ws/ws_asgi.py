@@ -313,6 +313,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     buf = TurnBuffer()
     dg: Optional[DeepgramClient] = None
     rx_task: Optional[asyncio.Task] = None
+    dg_connect_task: Optional[asyncio.Task] = None
+    dg_state: str = "closed"
     turn_id_ref = [0]
     final_seen = [False]
 
@@ -322,32 +324,46 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     asr_ready_evt: asyncio.Event = asyncio.Event()
     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "1.5"))
     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
+    turn_connect_started = [False]
 
-    async def _ensure_dg_connected():
+    async def _ensure_dg_connected() -> bool:
         """Connect to ASR provider once per session; never tear down the WS on provider failures."""
-        nonlocal dg, rx_task
-        # If previous rx_task exists for a closed client, clear it
-        if (dg is None or (dg is not None and hasattr(dg, 'is_open') and not dg.is_open())) and rx_task is not None:
-            if not rx_task.done():
-                rx_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await rx_task
-            rx_task = None
-        if (dg is None or (dg is not None and hasattr(dg, 'is_open') and not dg.is_open())) and _has_deepgram_key():
+        nonlocal dg, rx_task, dg_connect_task, dg_state
+
+        if not _has_deepgram_key():
+            return False
+
+        if dg_state == "open" and dg is not None:
+            return True
+
+        if dg_state == "connecting" and dg_connect_task is not None:
+            with contextlib.suppress(Exception):
+                await dg_connect_task
+            return dg_state == "open" and dg is not None
+
+        connect_result = {"ok": False}
+
+        async def _connect() -> None:
+            nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
             try:
-                # Clear readiness; a new connection will signal asr_open via pump task
+                dg_state = "connecting"
                 try:
                     if asr_ready_evt.is_set():
                         asr_ready_evt.clear()
                 except Exception:
                     pass
-                dg = DeepgramClient(cfg)
-                await dg.connect()
+                client = DeepgramClient(cfg)
+                dg = client
+                await client.connect()
+                dg_state = "open"
+                connect_result["ok"] = True
                 turn_id_ref[0] = buf.turn_seq + 1
-                rx_task = asyncio.create_task(_pump_dg_to_client(dg, send, turn_id_ref, final_seen, sid, asr_ready_evt))
+                rx_task = asyncio.create_task(
+                    _pump_dg_to_client(client, send, turn_id_ref, final_seen, sid, asr_ready_evt)
+                )
                 _jlog("asr_connect_ok", sid=sid)
             except Exception as e:
-                # Keep the client WS alive; surface an error frame and continue in "no-ASR" mode.
+                dg_state = "closed"
                 dg = None
                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
                 try:
@@ -361,32 +377,21 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=f"connect:{type(e).__name__}")
                 except Exception:
                     pass
+            finally:
+                dg_connect_task = None
+
+        dg_connect_task = asyncio.create_task(_connect())
+        with contextlib.suppress(Exception):
+            await dg_connect_task
+        return connect_result["ok"]
 
     async def _send_chunk(data: bytes, *, from_buffer: bool = False, retry: bool = True) -> bool:
         """Send audio to Deepgram, retrying once on connection race."""
-        nonlocal dg
+        nonlocal dg, dg_state
         if dg is None:
             return False
 
         try:
-            # micro-gate on underlying socket being truly open (bridges the last-subsecond seam)
-            wait_socket_open = getattr(dg, "wait_socket_open", None)
-            if callable(wait_socket_open):
-                with contextlib.suppress(Exception):
-                    await wait_socket_open(timeout=0.5)
-
-            # optional is_open probe (defensive)
-            try:
-                is_open_fn = getattr(dg, "is_open", None)
-                if callable(is_open_fn) and not bool(is_open_fn()):
-                    _jlog("asr_socket_not_open", sid=sid)
-                    raise RuntimeError("deepgram_not_connected")
-            except RuntimeError:
-                raise
-            except Exception:
-                # ignore probe errors; let send() decide
-                pass
-
             await dg.send(data)
             sent_any_audio[0] = True
             _jlog(
@@ -399,6 +404,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
         except RuntimeError as e:
             if "deepgram_not_connected" in str(e).lower() and retry:
+                dg_state = "closed"
                 _jlog("asr_send_retry", sid=sid)
                 await _ensure_dg_connected()
                 if not asr_ready_evt.is_set():
@@ -447,10 +453,18 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         final_seen[0] = False
                         sent_any_audio[0] = False
                         buffered_chunks.clear()
+                        turn_connect_started[0] = False
                     buf.append(chunk)
                     if _has_deepgram_key():
-                        # Ensure provider is connected (await, not background)
-                        await _ensure_dg_connected()
+                        # Ensure provider is connected once per turn; await in-flight connects.
+                        if not turn_connect_started[0]:
+                            turn_connect_started[0] = True
+                            connected = await _ensure_dg_connected()
+                            if not connected:
+                                turn_connect_started[0] = False
+                        elif dg_state == "connecting" and dg_connect_task is not None:
+                            with contextlib.suppress(Exception):
+                                await dg_connect_task
 
                         if dg is not None:
                             # Always stage in the buffer first (avoids losing early chunks)
@@ -607,6 +621,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     # Ask provider to finish; if no final came, synthesize empty final.
                                     with contextlib.suppress(Exception):
                                         await dg.close(wait_for_final=True)
+                                    dg_state = "closed"
                                     _relay_task = rx_task
                                     rx_task = None
                                     if _relay_task:
@@ -680,6 +695,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             if dg is not None:
                 with contextlib.suppress(Exception):
                     await dg.close(wait_for_final=False)
+                dg_state = "closed"
         except Exception:
             pass
         try:
