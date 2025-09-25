@@ -368,26 +368,25 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if dg is None:
             return False
 
-        # micro-gate on underlying socket being truly open (bridges the last-subsecond seam)
-        wait_socket_open = getattr(dg, "wait_socket_open", None)
-        if callable(wait_socket_open):
-            with contextlib.suppress(Exception):
-                await wait_socket_open(timeout=0.5)
-
-        # optional is_open probe (defensive)
         try:
-            is_open_fn = getattr(dg, "is_open", None)
-            if callable(is_open_fn):
-                if not bool(is_open_fn()):
+            # micro-gate on underlying socket being truly open (bridges the last-subsecond seam)
+            wait_socket_open = getattr(dg, "wait_socket_open", None)
+            if callable(wait_socket_open):
+                with contextlib.suppress(Exception):
+                    await wait_socket_open(timeout=0.5)
+
+            # optional is_open probe (defensive)
+            try:
+                is_open_fn = getattr(dg, "is_open", None)
+                if callable(is_open_fn) and not bool(is_open_fn()):
                     _jlog("asr_socket_not_open", sid=sid)
                     raise RuntimeError("deepgram_not_connected")
-        except RuntimeError:
-            raise
-        except Exception:
-            # ignore probe errors; let send() decide
-            pass
+            except RuntimeError:
+                raise
+            except Exception:
+                # ignore probe errors; let send() decide
+                pass
 
-        try:
             await dg.send(data)
             sent_any_audio[0] = True
             _jlog(
@@ -397,6 +396,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 buffered=from_buffer,
             )
             return True
+
         except RuntimeError as e:
             if "deepgram_not_connected" in str(e).lower() and retry:
                 _jlog("asr_send_retry", sid=sid)
