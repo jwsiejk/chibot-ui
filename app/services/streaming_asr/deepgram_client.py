@@ -274,7 +274,7 @@ class DeepgramClient:
             )
 
         # Micro-wait to ensure the underlying socket is actually open
-        await self.wait_socket_open(timeout=0.25)
+        await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S','0.75')))
 
         DG_LAST_URL = url
         DG_LAST_CONFIG = _initial_config(self._cfg)
@@ -371,7 +371,7 @@ class DeepgramClient:
                 await self._signal_ready()
 
         # Gate on actual websocket open with a brief micro-wait
-        await self.wait_socket_open(timeout=0.25)
+        await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S','0.75')))
 
         if not self._ws or not getattr(self._ws, "open", False):
             logger.warning("Deepgram send called without active socket sid=%s", sid)

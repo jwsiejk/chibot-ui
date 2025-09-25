@@ -611,8 +611,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             if _has_deepgram_key() and dg is not None:
                                 # *** GRACE: if we have buffered chunks but ASR not ready yet, give it 500ms then flush.
                                 if buffered_chunks and not asr_ready_evt.is_set():
+                                    if dg_state == "connecting" and dg_connect_task is not None:
+                                        with contextlib.suppress(Exception):
+                                            await asyncio.wait_for(dg_connect_task, timeout=asr_ready_wait_s)
                                     with contextlib.suppress(asyncio.TimeoutError):
-                                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=0.5)
+                                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
 
                                 # Flush any staged audio first
                                 await _flush_buffered_chunks()
