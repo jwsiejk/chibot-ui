@@ -415,57 +415,40 @@ class DeepgramClient:
                     await self._signal_ready()
                     continue
 
-if evt_type in ("results", "transcript", "partialtranscript", "speech.update"):
-    text = ""
-    is_final = False
+                if evt_type in ("results", "transcript", "partialtranscript", "speech.update"):
+                    text = ""
+                    is_final = False
 
-    # Prefer channel.* first (typical DG shape)
-    channel = msg.get("channel") or {}
-    alts = channel.get("alternatives")
-    if isinstance(alts, list) and alts:
-        text = (alts[0].get("transcript") or "").strip()
+                    # Prefer channel.* first (typical DG shape)
+                    channel = msg.get("channel") or {}
+                    alts = channel.get("alternatives")
+                    if isinstance(alts, list) and alts:
+                        text = (alts[0].get("transcript") or "").strip()
 
-    # Fallback: top-level alternatives (some messages)
-    if not text:
-        top_alts = msg.get("alternatives")
-        if isinstance(top_alts, list) and top_alts:
-            text = (top_alts[0].get("transcript") or "").strip()
+                    # Fallback: top-level alternatives (some messages)
+                    if not text:
+                        top_alts = msg.get("alternatives")
+                        if isinstance(top_alts, list) and top_alts:
+                            text = (top_alts[0].get("transcript") or "").strip()
 
-    # Fallback: top-level transcript (some messages)
-    if not text and isinstance(msg.get("transcript"), str):
-        text = (msg.get("transcript") or "").strip()
+                    # Fallback: top-level transcript (some messages)
+                    if not text and isinstance(msg.get("transcript"), str):
+                        text = (msg.get("transcript") or "").strip()
 
-    # Finalness can be on channel or top-level, or implied by event type
-    is_final = (
-        bool(channel.get("is_final"))
-        or bool(msg.get("is_final"))
-        or bool(msg.get("speech_final"))
-        or (evt_type in ("utteranceend", "UtteranceEnd"))
-    )
+                    # Finalness can be on channel or top-level, or implied by event type
+                    is_final = (
+                        bool(channel.get("is_final"))
+                        or bool(msg.get("is_final"))
+                        or bool(msg.get("speech_final"))
+                        or (evt_type in ("utteranceend", "UtteranceEnd"))
+                    )
 
-    # No usable text in this message; keep listening
-    if not text:
-        continue
+                    # No usable text in this message; keep listening
+                    if not text:
+                        continue
 
-    # Seeing a result also implies the upstream is functioning
-    await self._signal_ready()
-
-    logger.debug(
-        "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
-        sid, is_final, len(text), _clip_text(text),
-    )
-
-    try:
-        await self._ev_queue.put({"type": "user_final" if is_final else "user_partial", "text": text})
-    except Exception:
-        pass
-
-    if is_final:
-        self._any_result = True
-        self._final_event.set()
-        # do not break; allow multiple finals if the provider chunks utterances
-        continue
-
+                    # Seeing a result also implies the upstream is functioning
+                    await self._signal_ready()
 
                     logger.debug(
                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",

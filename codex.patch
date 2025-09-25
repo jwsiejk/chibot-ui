@@ -1,132 +1,138 @@
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 84d7e73001b0e4a7940cc29d596770a4267fc7fb..6275b09b6b7497369c9dd3e51f78574ebb7a6de8 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -17,51 +17,51 @@ Citations for context (non-functional):
-     • CloseStream is emitted AFTER the blob is successfully queued to the socket.
- */
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index b444e6b259a2be53494ae83bd60536582c93afda..6cf565f2a69b2d9f12c2f58a885a36a0875bd400 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -393,101 +393,84 @@ class DeepgramClient:
  
- import { VAD } from './voice/vad.js';
- import { sendAudioChunk, sendCloseStream } from './ws.js';
- import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
+     # -- events API ------------------------------------------------------------
  
- // Public API (matches prior usage)
- export async function initMic(stream = null) { return await _ensureMic(stream); }
- export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
- export function disarmVAD() { _disarm(); }
- export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
- export function bargeIn() { _bargeIn(); }         // keeps API parity
- export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+     async def events(self) -> AsyncGenerator[dict, None]:
+         while True:
+             ev = await self._ev_queue.get()
+             yield ev
  
- // ---- Internal state ---------------------------------------------------------
+     # -- receiver --------------------------------------------------------------
  
- // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
- const REC_MIME = (typeof MediaRecorder !== 'undefined'
-   && typeof MediaRecorder.isTypeSupported === 'function'
-   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
-   ? 'audio/ogg; codecs=opus'
-   : 'audio/webm; codecs=opus';
+     async def _rx_loop(self) -> None:
+         sid = self._sid_for_log()
+         try:
+             async for raw in self._ws:  # type: ignore
+                 try:
+                     msg = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
+                 except Exception:
+                     continue
  
- const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
--const MIN_VALID_BLOB_BYTES = 256;   // drop clearly-empty/prelude-only blobs
-+const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+                 evt_type = (msg.get("type") or "").lower()
  
- const state = {
-   stream: null,
-   ctx: null,
-   source: null,
-   analyser: null,
-   vad: null,
-   rec: null,
-   recChunks: [],
-   turnTimer: null,
-   turnOpen: false,   // track whether a turn is currently open server-side
- };
+                 if evt_type in ("metadata", "listening", "connected", "ready"):
+                     await self._signal_ready()
+                     continue
  
- // ---- Helpers ----------------------------------------------------------------
+-if evt_type in ("results", "transcript", "partialtranscript", "speech.update"):
+-    text = ""
+-    is_final = False
+-
+-    # Prefer channel.* first (typical DG shape)
+-    channel = msg.get("channel") or {}
+-    alts = channel.get("alternatives")
+-    if isinstance(alts, list) and alts:
+-        text = (alts[0].get("transcript") or "").strip()
+-
+-    # Fallback: top-level alternatives (some messages)
+-    if not text:
+-        top_alts = msg.get("alternatives")
+-        if isinstance(top_alts, list) and top_alts:
+-            text = (top_alts[0].get("transcript") or "").strip()
+-
+-    # Fallback: top-level transcript (some messages)
+-    if not text and isinstance(msg.get("transcript"), str):
+-        text = (msg.get("transcript") or "").strip()
+-
+-    # Finalness can be on channel or top-level, or implied by event type
+-    is_final = (
+-        bool(channel.get("is_final"))
+-        or bool(msg.get("is_final"))
+-        or bool(msg.get("speech_final"))
+-        or (evt_type in ("utteranceend", "UtteranceEnd"))
+-    )
+-
+-    # No usable text in this message; keep listening
+-    if not text:
+-        continue
+-
+-    # Seeing a result also implies the upstream is functioning
+-    await self._signal_ready()
+-
+-    logger.debug(
+-        "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
+-        sid, is_final, len(text), _clip_text(text),
+-    )
+-
+-    try:
+-        await self._ev_queue.put({"type": "user_final" if is_final else "user_partial", "text": text})
+-    except Exception:
+-        pass
++                if evt_type in ("results", "transcript", "partialtranscript", "speech.update"):
++                    text = ""
++                    is_final = False
++
++                    # Prefer channel.* first (typical DG shape)
++                    channel = msg.get("channel") or {}
++                    alts = channel.get("alternatives")
++                    if isinstance(alts, list) and alts:
++                        text = (alts[0].get("transcript") or "").strip()
++
++                    # Fallback: top-level alternatives (some messages)
++                    if not text:
++                        top_alts = msg.get("alternatives")
++                        if isinstance(top_alts, list) and top_alts:
++                            text = (top_alts[0].get("transcript") or "").strip()
++
++                    # Fallback: top-level transcript (some messages)
++                    if not text and isinstance(msg.get("transcript"), str):
++                        text = (msg.get("transcript") or "").strip()
++
++                    # Finalness can be on channel or top-level, or implied by event type
++                    is_final = (
++                        bool(channel.get("is_final"))
++                        or bool(msg.get("is_final"))
++                        or bool(msg.get("speech_final"))
++                        or (evt_type in ("utteranceend", "UtteranceEnd"))
++                    )
  
- function _emitVoiceState(state, detail = {}) {
-   try {
-     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
-   } catch {}
- }
+-    if is_final:
+-        self._any_result = True
+-        self._final_event.set()
+-        # do not break; allow multiple finals if the provider chunks utterances
+-        continue
++                    # No usable text in this message; keep listening
++                    if not text:
++                        continue
  
- async function _ensureMic(externalStream = null) {
-   if (state.stream && state.stream.active) return state.stream;
++                    # Seeing a result also implies the upstream is functioning
++                    await self._signal_ready()
  
-   if (state.stream && !state.stream.active) {
-@@ -222,54 +222,55 @@ function _startRecorder() {
-       try {
-         console.debug('[voice] recorder stopped', { bytes: blob.size, mime: blob.type });
-       } catch {}
-       // Drop obviously-empty/prelude-only blobs (rec preambles can be tiny)
-       if (blob.size >= MIN_VALID_BLOB_BYTES) {
-         // One blob per user turn → WS → server STT
-         await sendAudioChunk(blob);
-       } else {
-         console.warn('[voice] recorded blob too small', blob.size);
-         finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
-       }
-     } catch (e) {
-       console.warn('[voice] send audio failed', e);
-     } finally {
-       // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
-       if (state.turnOpen) {
-         try { sendCloseStream(); } catch {}
-         state.turnOpen = false;
-       }
-       _emitVoiceState('armed', finalDetail);
-     }
-   };
+                     logger.debug(
+                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
+                         sid,
+                         is_final,
+                         len(text),
+                         _clip_text(text),
+                     )
+                     try:
+                         await self._ev_queue.put(
+                             {"type": "user_final" if is_final else "user_partial", "text": text}
+                         )
+                     except Exception:
+                         pass
  
-   try {
-     // Small timeslice ensures non-empty dataavailable frames while still producing a single turn blob.
--    state.rec.start(250);
-+    const timeslice = 150; // 150 ms sits comfortably within the 100–200 ms target window
-+    state.rec.start(timeslice);
-     state.turnOpen = true; // mark an open ASR turn on the server
-     try {
--      console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice: 250 });
-+      console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice });
-     } catch {}
-   } catch (e) {
-     console.warn('[voice] recorder start failed', e);
-     state.rec = null;
-     state.turnOpen = false;
-     return false;
-   }
+                     if is_final:
+                         self._any_result = True
+                         self._final_event.set()
+                         continue
  
-   // Safety timeout to prevent runaway recordings
-   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
-   _safeClearTurnTimer();
-   state.turnTimer = setTimeout(() => {
-     try { _onSpeechEndCommitted(); } catch {}
-   }, limitMs);
-    
-   return true;
- }
- 
- function _onSpeechStartCommitted() {
-   // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
-   _bargeIn();
- 
-   const started = _startRecorder();
-   if (started) {
-     _emitVoiceState('recording');
-diff --git a/tests_phase3_5/test_voice_timeslice_window.py b/tests_phase3_5/test_voice_timeslice_window.py
-index 35c20790e7ff972768e259bba52c45e36e49e477..6e1c82956d9168816933a6c078c13e2ca5d805fc 100644
---- a/tests_phase3_5/test_voice_timeslice_window.py
-+++ b/tests_phase3_5/test_voice_timeslice_window.py
-@@ -1,8 +1,9 @@
- 
- from pathlib import Path
- import re
- code = Path("static/js/voice.js").read_text(encoding="utf-8")
--m = re.search(r"rec\.start\((\d+)\)", code)
--assert m, "MediaRecorder.start must be called"
-+m = re.search(r"const\s+timeslice\s*=\s*(\d+);", code)
-+assert m, "timeslice constant must be defined"
- val = int(m.group(1))
--assert 64 <= val <= 128, f"timeslice must be 64–128 ms, got {val}"
-+assert 100 <= val <= 200, f"timeslice must be 100–200 ms, got {val}"
-+assert "state.rec.start(timeslice)" in code, "MediaRecorder.start must use the timeslice constant"
+                 elif evt_type in ("error", "close"):
+                     logger.warning(
+                         "Deepgram error event sid=%s evt_type=%s detail=%s",
+                         sid,
+                         evt_type,
