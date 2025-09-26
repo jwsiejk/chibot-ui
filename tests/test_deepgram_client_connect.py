@@ -169,6 +169,65 @@ def test_keepalive_loop_sends_frames(monkeypatch):
     asyncio.run(run())
 
 
+def test_close_waits_for_final_keepalive(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+    monkeypatch.setenv("DG_KEEPALIVE_INTERVAL_S", "0.01")
+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+
+    class CloseWaitWS(DummyWS):
+        def __aiter__(self):
+            async def _gen():
+                yield json.dumps({"type": "Metadata"})
+                await asyncio.sleep(1)
+
+            return _gen()
+
+    keepalive_ws = CloseWaitWS()
+
+    async def fake_connect(url, **kwargs):
+        return keepalive_ws
+
+    monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
+
+    def count_keepalives() -> int:
+        return sum(
+            1
+            for item in keepalive_ws.sent
+            if isinstance(item, str) and json.loads(item).get("type") == "KeepAlive"
+        )
+
+    async def run():
+        client = dg_mod.DeepgramClient()
+
+        await client.connect()
+        client._linger_ms = 0
+
+        await asyncio.sleep(0.05)
+        pre_close_keepalives = count_keepalives()
+
+        close_task = asyncio.create_task(client.close(wait_for_final=True, timeout=0.2))
+
+        await asyncio.sleep(0.05)
+        assert not close_task.done()
+
+        mid_close_keepalives = count_keepalives()
+        assert mid_close_keepalives > pre_close_keepalives
+
+        client._final_event.set()
+
+        await close_task
+
+        post_close_keepalives = count_keepalives()
+
+        await asyncio.sleep(0.05)
+
+        assert count_keepalives() == post_close_keepalives
+        assert keepalive_ws.open is False
+        assert client._keepalive_task is None
+
+    asyncio.run(run())
+
+
 def test_send_warns_but_continues_after_open_timeout(monkeypatch, caplog):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
@@ -183,6 +242,7 @@ def test_send_warns_but_continues_after_open_timeout(monkeypatch, caplog):
 
         await client.send(b"a" * 4)
         await client.send(b"b" * 4)
+        await asyncio.sleep(0.06)
         return client
 
     client = asyncio.run(run())
@@ -225,9 +285,26 @@ def test_send_does_not_wait_for_provider_ready(monkeypatch):
         await asyncio.sleep(0)
 
         # Audio should be sent immediately without waiting for metadata frames.
-        assert len(client._ws.sent) == 2
         assert json.loads(client._ws.sent[0])["type"] == "Configure"
-        assert client._ws.sent[1:] == [b"a" * 4]
+        async def _wait_for_audio() -> list:
+            deadline = asyncio.get_running_loop().time() + 0.3
+            while True:
+                non_keepalive = [
+                    item
+                    for item in client._ws.sent[1:]
+                    if not (
+                        isinstance(item, str)
+                        and json.loads(item).get("type") == "KeepAlive"
+                    )
+                ]
+                if non_keepalive:
+                    return non_keepalive
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError("audio chunk not sent before metadata")
+                await asyncio.sleep(0.01)
+
+        non_keepalive = await _wait_for_audio()
+        assert non_keepalive[0] == b"a" * 4
 
         release_iter.set()
         await send_task

@@ -207,6 +207,7 @@ class DeepgramClient:
         self._rx_task: Optional[asyncio.Task] = None
         self._ev_queue: asyncio.Queue = asyncio.Queue()
         self._closed = False
+        self._closing = False
 
         # TX queue + flushing
         self._tx_queue: Deque[bytes] = deque()
@@ -454,9 +455,9 @@ class DeepgramClient:
         timeout: Optional[float] = None,
         linger_ms: Optional[int] = None,
     ) -> None:
-        if self._closed:
+        if self._closed or self._closing:
             return
-        self._closed = True
+        self._closing = True
         sid = self._sid_for_log()
         logger.info(
             "Deepgram close start sid=%s wait_for_final=%s linger_ms=%s",
@@ -464,8 +465,6 @@ class DeepgramClient:
             wait_for_final,
             linger_ms,
         )
-
-        await self._stop_keepalive()
 
         if linger_ms is None:
             linger_ms = self._linger_ms
@@ -504,10 +503,13 @@ class DeepgramClient:
                     pass
 
         try:
-            if self._ws and getattr(self._ws, "open", True):
-                await self._ws.close()
+            ws = self._ws
+            if ws and getattr(ws, "open", True):
+                await ws.close()
         finally:
             self._ws = None
+
+        try:
             task = self._rx_task
             self._rx_task = None
             if task:
@@ -515,6 +517,11 @@ class DeepgramClient:
                     task.cancel()
                 except Exception:
                     pass
+        finally:
+            self._closed = True
+            self._closing = False
+            await self._stop_keepalive()
+
         logger.info("Deepgram close complete sid=%s", sid)
 
     # -- sending ---------------------------------------------------------------
@@ -670,9 +677,15 @@ class DeepgramClient:
         """Send KeepAlive frames immediately and then periodically."""
         sid = self._sid_for_log()
         try:
-            while not self._closed:
+            while True:
+                if self._closed:
+                    break
                 ws = self._ws
-                if not ws or not getattr(ws, "open", False):
+                if not ws:
+                    break
+                if getattr(ws, "closed", False) or getattr(ws, "closing", False):
+                    break
+                if not getattr(ws, "open", False):
                     break
 
                 try:
