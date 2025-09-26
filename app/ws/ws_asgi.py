@@ -119,6 +119,7 @@ async def _pump_dg_to_client(
     final_seen,
     sid: str,
     asr_ready_evt: Optional[asyncio.Event] = None,
+    on_asr_open_flush: Optional[asyncio.coroutine] = None,
 ):
     """Relay Deepgram events to client and, on final, kick LLM turn."""
     try:
@@ -133,6 +134,13 @@ async def _pump_dg_to_client(
                     pass
                 try:
                     _admin_emit and _admin_emit("asr:start", session_id=sid)
+                except Exception:
+                    pass
+                # NEW: flush queued audio immediately after DG opens (with a tiny grace)
+                try:
+                    if on_asr_open_flush:
+                        await asyncio.sleep(0.05)
+                        await on_asr_open_flush()
                 except Exception:
                     pass
                 continue
@@ -358,14 +366,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 except Exception:
                     pass
                 cfg['_transport'] = transport
-                client = DeepgramClient(cfg)
-                dg = client
-                await client.connect()
+cfg['_jlog'] = _jlog
+_jlog("asr_connect_begin", sid=sid, transport=transport)
+client = DeepgramClient(cfg)
+dg = client
+await client.connect()
                 dg_state = "open"
                 connect_result["ok"] = True
                 turn_id_ref[0] = buf.turn_seq + 1
                 rx_task = asyncio.create_task(
-                    _pump_dg_to_client(client, send, turn_id_ref, final_seen, sid, asr_ready_evt)
+                    _pump_dg_to_client(client, send, turn_id_ref, final_seen, sid, asr_ready_evt, _flush_buffered_chunks)
                 )
                 _jlog("asr_connect_ok", sid=sid)
             except Exception as e:
@@ -410,12 +420,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
         except RuntimeError as e:
             if "deepgram_not_connected" in str(e).lower() and retry:
-                dg_state = "closed"
+                # likely configure vs first-send race; keep socket, give it a beat
                 _jlog("asr_send_retry", sid=sid)
-                await _ensure_dg_connected()
                 if not asr_ready_evt.is_set():
                     with contextlib.suppress(asyncio.TimeoutError):
-                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=1.0)  # was 0.25s
+                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=1.0)
+                else:
+                    await asyncio.sleep(0.05)
                 return await _send_chunk(data, from_buffer=from_buffer, retry=False)
             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
         except Exception as e:
@@ -471,6 +482,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 transport["container"] = meta["container"]      # "webm" / "ogg"
                                 transport["codec"] = meta.get("codec")          # "opus" / etc.
                                 transport["containerized_opus"] = (meta.get("codec") == "opus")
+                                _jlog("sniffer_detect", sid=sid, container=transport.get("container"), codec=transport.get("codec"), containerized_opus=transport.get("containerized_opus"))
                     except Exception:
                         pass
 
