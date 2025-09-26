@@ -703,42 +703,46 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 # Flush any staged audio first
                                 await _flush_buffered_chunks()
 
-                                if sent_any_audio[0]
-                                    # Ask provider to finish; if no final came, synthesize empty final.
-                                    with contextlib.suppress(Exception):
-                                        await asyncio.sleep(float(os.getenv("ASR_FINAL_GRACE_S", "0.30")))  # 300 ms grace
-                                        await dg.close(wait_for_final=True)
-                                    dg_state = "closed"
-                                    _relay_task = rx_task
-                                    rx_task = None
-                                    if _relay_task:
-                                        _relay_task.cancel()
-                                        with contextlib.suppress(asyncio.CancelledError, Exception):
-                                            await _relay_task
-                                    dg = None
-                                    with contextlib.suppress(Exception):
-                                        asr_ready_evt.clear()
-                                    if not final_seen[0]:
-                                        final_seen[0] = True
-                                        synthetic_emitted = True
-                                        result_payload = make_results(turn_id, transcript="", is_final=True)
-                                        result_payload["type"] = "Results"
-                                        await _ws_send_json(send, result_payload)
-                                        utterance_payload = make_utterance_end(turn_id)
-                                        utterance_payload["type"] = "UtteranceEnd"
-                                        await _ws_send_json(send, utterance_payload)
-                                else:
-                                    # Nothing actually went to provider; synthesize final locally
-                                    _jlog("ws_close_skip_no_audio", sid=sid)
-                                    if not final_seen[0]:
-                                        final_seen[0] = True
-                                        synthetic_emitted = True
-                                        result_payload = make_results(turn_id, transcript="", is_final=True)
-                                        result_payload["type"] = "Results"
-                                        await _ws_send_json(send, result_payload)
-                                        utterance_payload = make_utterance_end(turn_id)
-                                        utterance_payload["type"] = "UtteranceEnd"
-                                        await _ws_send_json(send, utterance_payload)
+                            # Flush any staged audio first
+                            await _flush_buffered_chunks()
+
+                            if sent_any_audio[0]:
+                                # Ask provider to finish; if no final came, synthesize empty final.
+                                with contextlib.suppress(Exception):
+                                    await asyncio.sleep(float(os.getenv("ASR_FINAL_GRACE_S", "0.30")))  # 300 ms grace
+                                    await dg.close(wait_for_final=True)
+                                dg_state = "closed"
+                                _relay_task = rx_task
+                                rx_task = None
+                                if _relay_task:
+                                    _relay_task.cancel()
+                                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                                        await _relay_task
+                                dg = None
+                                with contextlib.suppress(Exception):
+                                    asr_ready_evt.clear()
+                                if not final_seen[0]:
+                                    final_seen[0] = True
+                                    synthetic_emitted = True
+                                    result_payload = make_results(turn_id, transcript="", is_final=True)
+                                    result_payload["type"] = "Results"
+                                    await _ws_send_json(send, result_payload)
+                                    utterance_payload = make_utterance_end(turn_id)
+                                    utterance_payload["type"] = "UtteranceEnd"
+                                    await _ws_send_json(send, utterance_payload)
+                            else:
+                                # Nothing actually went to provider; synthesize final locally
+                                _jlog("ws_close_skip_no_audio", sid=sid)
+                                if not final_seen[0]:
+                                    final_seen[0] = True
+                                    synthetic_emitted = True
+                                    result_payload = make_results(turn_id, transcript="", is_final=True)
+                                    result_payload["type"] = "Results"
+                                    await _ws_send_json(send, result_payload)
+                                    utterance_payload = make_utterance_end(turn_id)
+                                    utterance_payload["type"] = "UtteranceEnd"
+                                    await _ws_send_json(send, utterance_payload)
+
                             else:
                                 # No provider configured: still emit empty final + end to advance the dialog.
                                 if not final_seen[0]:
