@@ -702,18 +702,20 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 final_seen[0] = False
 
                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
+
+                            _jlog("mic_capture_block_enter", sid=sid, turn_id=turn_id, mic_chunks=len(mic_chunks))
                             if MIC_CAPTURE:
                                 try:
                                     raw = b"".join(mic_chunks)
                                     _jlog(
                                         "mic_capture_summary",
-                                        sid=sid,
-                                        turn_id=turn_id,
-                                        bytes=len(raw),
-                                        chunks=len(mic_chunks),
-                                        container=transport.get("container"),
-                                        codec=transport.get("codec"),
-                                        containerized_opus=transport.get("containerized_opus"),
+                                         sid=sid,
+                                         turn_id=turn_id,
+                                         bytes=len(raw),
+                                         chunks=len(mic_chunks),
+                                         container=transport.get("container"),
+                                         codec=transport.get("codec"),
+                                         containerized_opus=transport.get("containerized_opus"),
                                     )
 
                                     if raw:
