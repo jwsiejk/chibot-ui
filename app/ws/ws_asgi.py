@@ -1,7 +1,7 @@
 # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
 from __future__ import annotations
 import asyncio, os, contextlib, time
-from typing import Optional, Dict, Any, Deque
+from typing import Optional, Dict, Any, Deque, Callable, Awaitable
 from collections import deque
 from app.services.audio.container_sniffer import AudioContainerSniffer, coerce_detection_from_meta
 
@@ -119,7 +119,7 @@ async def _pump_dg_to_client(
     final_seen,
     sid: str,
     asr_ready_evt: Optional[asyncio.Event] = None,
-    on_asr_open_flush: Optional[asyncio.coroutine] = None,
+    on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
 ):
     """Relay Deepgram events to client and, on final, kick LLM turn."""
     try:
@@ -366,11 +366,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 except Exception:
                     pass
                 cfg['_transport'] = transport
-cfg['_jlog'] = _jlog
-_jlog("asr_connect_begin", sid=sid, transport=transport)
-client = DeepgramClient(cfg)
-dg = client
-await client.connect()
+                cfg['_jlog'] = _jlog
+                _jlog("asr_connect_begin", sid=sid, transport=transport)
+                client = DeepgramClient(cfg)
+                dg = client
+                await client.connect()
                 dg_state = "open"
                 connect_result["ok"] = True
                 turn_id_ref[0] = buf.turn_seq + 1
@@ -482,7 +482,13 @@ await client.connect()
                                 transport["container"] = meta["container"]      # "webm" / "ogg"
                                 transport["codec"] = meta.get("codec")          # "opus" / etc.
                                 transport["containerized_opus"] = (meta.get("codec") == "opus")
-                                _jlog("sniffer_detect", sid=sid, container=transport.get("container"), codec=transport.get("codec"), containerized_opus=transport.get("containerized_opus"))
+                                _jlog(
+                                    "sniffer_detect",
+                                    sid=sid,
+                                    container=transport.get("container"),
+                                    codec=transport.get("codec"),
+                                    containerized_opus=transport.get("containerized_opus"),
+                                )
                     except Exception:
                         pass
 
