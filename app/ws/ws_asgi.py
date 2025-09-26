@@ -20,6 +20,11 @@ try:
 except Exception:
     _admin_emit = None
 
+WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
+try:
+    _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
+except Exception:
+    pass
 
 # ------------------------------ small helpers ------------------------------
 
@@ -501,6 +506,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     if MIC_CAPTURE:
                         mic_chunks.append(chunk)
                         mic_last_ts[0] = now
+                    _jlog("mic_capture_append", sid=sid, turn_id=turn_id_ref[0], chunks=len(mic_chunks), last_bytes=len(chunk))
+
 
                     # Detect container early
                     try:
@@ -632,6 +639,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                         elif t == "CloseStream":
                             _jlog("ws_close_stream", sid=sid)
+                            _jlog("after_ws_close_stream", sid=sid, turn_id=turn_id_ref[0], mic_chunks=len(mic_chunks))
                             if buf.is_empty():
                                 # Empty turn closure; synthesize ids + reset final tracking.
                                 turn_id_ref[0] = buf.turn_seq + 1
