@@ -126,10 +126,10 @@ def make_assistant_frames(seed_text: str,
         except Exception:
             _is_greet = (str(seed_text).strip().lower() == "greet")
         if _is_greet:
-            # Cap to <= 8 words, keep it friendly.
+            # Cap to <= 5 words, keep it friendly.
             _words = (safe_reply or "Hi there!").strip().split()
-            if len(_words) > 8:
-                safe_reply = " ".join(_words[:8]).rstrip(",.;:!")
+            if len(_words) > 5:
+                safe_reply = " ".join(_words[:5]).rstrip(",.;:!")
     except Exception:
         pass
 # --- Build frames --------------------------------------------------------
