@@ -415,7 +415,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 await _ensure_dg_connected()
                 if not asr_ready_evt.is_set():
                     with contextlib.suppress(asyncio.TimeoutError):
-                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=0.25)
+                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s))
                 return await _send_chunk(data, from_buffer=from_buffer, retry=False)
             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
         except Exception as e:
