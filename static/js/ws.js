@@ -46,6 +46,7 @@ function _scheduleProviderFallback(){
     _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
   }, _KEEPALIVE_PROVIDER_FALLBACK_MS);
 }
+
 let _lastUserSendTs = 0;
 let _gotReady = false;
 let _openPromise = null;
@@ -227,7 +228,7 @@ async function _getWSToken(sid){
 // schedule reconnect if a session is active and we are not already reconnecting
 function _scheduleReconnect(){
   if (!__WS_RECONNECT_ENABLED) return;
-// pages set this after greet: window.__askchip_session_started = true
+  // pages set this after greet: window.__askchip_session_started = true
   if (!window.__askchip_session_started) return;
   if (_reconnecting) return;
 
@@ -264,8 +265,13 @@ window.addEventListener('online', () => {
 // --- Open WS using subprotocol auth (no token in URL, no headers) ---
 // Idempotent: if OPEN/CONNECTING, returns that socket.
 export function openWS(options = {}){
-  try { if (options && Object.prototype.hasOwnProperty.call(options, 'reconnect')) { __WS_RECONNECT_ENABLED = !!options.reconnect; } } catch(_) {}
-if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)){
+  try {
+    if (options && Object.prototype.hasOwnProperty.call(options, 'reconnect')) {
+      __WS_RECONNECT_ENABLED = !!options.reconnect;
+    }
+  } catch(_) {}
+
+  if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)){
     return Promise.resolve(_ws);
   }
 
@@ -300,8 +306,11 @@ if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CO
     };
 
     ws.onclose = (e) => {
-      if (!__WS_RECONNECT_ENABLED) { try { window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }})); } catch {} return; }
-_stopKeepAlive();
+      if (!__WS_RECONNECT_ENABLED) {
+        try { window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }})); } catch {}
+        return;
+      }
+      _stopKeepAlive();
 
       // If we closed before receiving server "ready", a transient connect race happened.
       if (!_gotReady){
