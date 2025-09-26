@@ -703,9 +703,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 # Flush any staged audio first
                                 await _flush_buffered_chunks()
 
-                                if sent_any_audio[0]:
+                                if sent_any_audio[0]
                                     # Ask provider to finish; if no final came, synthesize empty final.
                                     with contextlib.suppress(Exception):
+                                        await asyncio.sleep(float(os.getenv("ASR_FINAL_GRACE_S", "0.30")))  # 300 ms grace
                                         await dg.close(wait_for_final=True)
                                     dg_state = "closed"
                                     _relay_task = rx_task
