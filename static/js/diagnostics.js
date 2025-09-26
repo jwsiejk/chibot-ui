@@ -72,18 +72,17 @@ async function recordFiveSeconds(){
     // stop after 5 seconds or when Stop clicked
     const stopPromise = new Promise((resolve)=>{
       btnStop.onclick = ()=> resolve('manual');
-      setTimeout(()=> resolve('timer'), 5000);
+      setTimeout(()=> resolve('timer'), 8000);
     });
     const reason = await stopPromise;
     btnStop.disabled = true;
 
     status.textContent = 'Stopping…';
     disarmVAD();
-    try{ sendCloseStream(); }catch(_){}
-    status.textContent = 'Audio captured (sending)…';
+status.textContent = 'Audio captured (sending)…';
 
     // wait briefly for finals to land
-    await new Promise(r=> setTimeout(r, 1200));
+    await new Promise(r=> setTimeout(r, 2000));
     if (sawOpen && (partials+finals)>=1){
       setKPI('kpi-pipe','ok','ok');
     }else{
