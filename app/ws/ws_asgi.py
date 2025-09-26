@@ -218,6 +218,11 @@ async def _pump_dg_to_client(
             if et in ("user_partial", "user_final"):
                 is_final = (et == "user_final")
                 text = (ev.get("text") or "").strip()
+                if not is_final:
+                    try:
+                        asr_seen_partial[0] = True
+                    except Exception:
+                        pass
                 _jlog("dg_transcript", sid=sid, turn_id=turn_id_ref[0], is_final=is_final, chars=len(text), preview=_clip_text(text))
                 try:
                     if et == "user_partial":
@@ -366,6 +371,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     dg_state: str = "closed"
     turn_id_ref = [0]
     final_seen = [False]
+    asr_seen_partial = [False]
 
     # Turn-scoped buffering + state
     buffered_chunks: Deque[bytes] = deque()
@@ -710,6 +716,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                                 # Flush any staged audio first
                                 await _flush_buffered_chunks()
+                                with contextlib.suppress(asyncio.TimeoutError, Exception):
+                                    if not final_seen[0] and not asr_seen_partial[0]:
+                                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=0.0)
+                                        await asyncio.sleep(float(os.getenv("ASR_POST_FLUSH_WAIT_S", "0.35"))) 
 
                                 if sent_any_audio[0]:
                                     # Ask provider to finish; if no final came, synthesize empty final.
