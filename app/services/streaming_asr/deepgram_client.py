@@ -68,9 +68,7 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         base = (
             base
             + sep
-            # NOTE: We keep 'opus' here to avoid regressions in existing raw paths that were
-            # already sending 'encoding=opus'. If you truly stream raw PCM, override via env:
-            # DEEPGRAM_LISTEN_URL or DG_RAW_* envs below in _initial URL build.
+            # RAW defaults; safe for legacy raw paths. If truly containerized, these will be stripped below.
             + "encoding=opus&sample_rate=48000&channels=1"
             + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true&utterance_end_ms=1200"
         )
@@ -196,7 +194,7 @@ class DeepgramClient:
 
     Improvements:
       • Suppresses raw audio params for containerized Opus (WebM/OGG).
-      • Logs a 'dg_ws_connect' record with URL and whether raw params were sent.
+      • Logs a concise 'asr_url' diagnostic with omitted/raw params for verification.
       • Maintains an internal TX queue — early chunks are queued and flushed on open.
       • Drops tiny preamble chunk (<DG_MIN_VALID_BYTES) once, to avoid bogus data.
       • Sends {"type": "CloseStream"} and lingers briefly before close.
@@ -236,6 +234,9 @@ class DeepgramClient:
         # Keepalive
         self._keepalive_task: Optional[asyncio.Task] = None
         self._keepalive_interval: float = float(os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0"))
+
+        # Optional JSON logger injected by WS layer (ws_asgi)
+        self._jlog = self._cfg.get("_jlog")
 
     def is_open(self) -> bool:
         """Return True if the underlying websocket appears open."""
@@ -342,15 +343,55 @@ class DeepgramClient:
         url = _dg_url(self._cfg)
         sid = self._sid_for_log()
 
-        # Visibility: what params are we actually sending?
+        # Diagnostic: parse params and emit compact JSON log that shows
+        # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
         try:
             import urllib.parse as _p
             q = dict(_p.parse_qsl(_p.urlsplit(url).query, keep_blank_values=True))
+            transport = (self._cfg or {}).get("_transport", {}) or {}
+            containerized = bool(transport.get("containerized_opus"))
+            url_meta = {
+                "container": transport.get("container"),
+                "codec": transport.get("codec"),
+                "containerized_opus": containerized,
+                "omitted_params": None,
+                "raw_params": None,
+            }
+            if containerized:
+                # These should be absent in containerized mode
+                omitted = []
+                for k in ("encoding", "sample_rate", "channels"):
+                    if k not in q:
+                        omitted.append(k)
+                url_meta["omitted_params"] = omitted
+            else:
+                url_meta["raw_params"] = {
+                    "encoding": q.get("encoding"),
+                    "sample_rate": q.get("sample_rate"),
+                    "channels": q.get("channels"),
+                }
+
+            # Structured JSON log if _jlog is available (preferred for your admin viewer)
+            if callable(self._jlog):
+                try:
+                    self._jlog(
+                        "asr_url",
+                        url=url,
+                        container=url_meta.get("container"),
+                        codec=url_meta.get("codec"),
+                        containerized_opus=bool(url_meta.get("containerized_opus")),
+                        omitted_params=url_meta.get("omitted_params"),
+                        raw_params=url_meta.get("raw_params"),
+                    )
+                except Exception:
+                    pass
+
+            # Keep existing human-readable info log
             logger.info(
                 "dg_ws_connect sid=%s url=%s containerized_opus=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
                 sid,
                 url,
-                bool((self._cfg or {}).get("_transport", {}).get("containerized_opus")),
+                containerized,
                 q.get("encoding"),
                 q.get("sample_rate"),
                 q.get("channels"),
