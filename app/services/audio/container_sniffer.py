@@ -15,6 +15,8 @@ class AudioContainerSniffer:
     def __init__(self) -> None:
         self._buf = bytearray()
         self._detected: Optional[Detection] = None
+        # optional MIME hint
+        self._mime: Optional[str] = None
 
     @property
     def detected(self) -> Optional[Detection]:
@@ -31,6 +33,17 @@ class AudioContainerSniffer:
         elif self.OGG_MAGIC in self._buf:
             self._detected = Detection(container="ogg", codec="opus", containerized=True)
         return self._detected
+
+    # Optional MIME hint storage (e.g., from client headers); used by ws layer for logging.
+    def set_meta(self, mime: Optional[str]) -> None:
+        try:
+            self._mime = (mime or "").strip() or None
+        except Exception:
+            self._mime = None
+
+    def meta(self) -> Optional[str]:
+        # Return last seen MIME hint, if any. Container detection is based on bytes in feed().
+        return getattr(self, "_mime", None)
 
 def coerce_detection_from_meta(mime: Optional[str]) -> Optional[Detection]:
     if not mime:
