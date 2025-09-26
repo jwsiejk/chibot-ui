@@ -265,6 +265,8 @@ async function runDiagnostic(state) {
     setStepStatus(state, failing, 'error', msg);
     logAdminEvent(state, 'diagnostic_error', { error: msg });
   } finally {
+    try { closeWS(); } catch(_) {}
+
     cleanupRun(state);
     state.startBtn.disabled = false;
     state.running = false;

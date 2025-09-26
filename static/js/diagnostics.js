@@ -61,7 +61,7 @@ async function recordFiveSeconds(){
 
   try{
     status.textContent = 'Opening WebSocket…';
-    await openWS();
+    await openWS({ reconnect: false });
     await waitWSOpen();
     status.textContent = 'Requesting microphone…';
     const stream = await initMic();

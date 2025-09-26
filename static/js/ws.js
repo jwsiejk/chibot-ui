@@ -1,5 +1,7 @@
 // static/js/ws.js — Phase 4/5 hardened: single socket + reconnection + helpers
 // Responsibilities:
+//   (Patched) Optional reconnect control for diagnostics
+let __WS_RECONNECT_ENABLED = true;
 //   • Own a single WebSocket connection per tab to /ws/v1/chat
 //   • Subprotocol auth (bearer + bearer.<token>)
 //   • Auto-reconnect with bounded backoff (only if session is active)
