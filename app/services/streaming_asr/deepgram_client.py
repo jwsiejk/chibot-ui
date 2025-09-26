@@ -309,11 +309,22 @@ class DeepgramClient:
             except asyncio.TimeoutError:
                 pass
 
+        transport_cfg = {}
+        try:
+            transport_cfg = (self._cfg or {}).get("_transport") or {}
+        except Exception:
+            transport_cfg = {}
+        containerized = bool(transport_cfg.get("containerized_opus"))
+
         sid = self._sid_for_log()
         while self._tx_queue and self._ws and getattr(self._ws, "open", False):
             data = self._tx_queue[0]
             # Drop tiny preamble once
-            if (not self._first_real_sent) and len(data) < self._min_valid_bytes:
+            if (
+                not containerized
+                and (not self._first_real_sent)
+                and len(data) < self._min_valid_bytes
+            ):
                 logger.debug(
                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
                     sid, len(data), self._min_valid_bytes

@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+from collections import deque
+
 import pytest
 
 from app.services.streaming_asr import deepgram_client as dg_mod
@@ -52,6 +54,25 @@ def test_connect_prefers_additional_headers(monkeypatch):
         assert event["type"] == "asr_open"
 
         await client.close(wait_for_final=False)
+
+    asyncio.run(run())
+
+
+def test_flush_keeps_small_chunk_for_containerized_transport(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+
+    async def run():
+        client = dg_mod.DeepgramClient({"_transport": {"containerized_opus": True}})
+        dummy_ws = DummyWS()
+        client._ws = dummy_ws
+        client._open_evt.set()
+        client._tx_queue.append(b"x" * 32)
+
+        await client._flush_tx()
+
+        assert dummy_ws.sent == [b"x" * 32]
+        assert client._tx_queue == deque()
 
     asyncio.run(run())
 
