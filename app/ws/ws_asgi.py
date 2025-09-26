@@ -742,18 +742,18 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     utterance_payload = make_utterance_end(turn_id)
                                     utterance_payload["type"] = "UtteranceEnd"
                                     await _ws_send_json(send, utterance_payload)
+                        else:
+                            # No provider configured: still emit empty final + end to advance the dialog.
+                            if not final_seen[0]:
+                                final_seen[0] = True
+                                synthetic_emitted = True
+                                await _ws_send_json(send, make_results(turn_id, transcript="", is_final=True))
+                                await _ws_send_json(send, make_utterance_end(turn_id))
 
-                            else:
-                                # No provider configured: still emit empty final + end to advance the dialog.
-                                if not final_seen[0]:
-                                    final_seen[0] = True
-                                    synthetic_emitted = True
-                                    await _ws_send_json(send, make_results(turn_id, transcript="", is_final=True))
-                                    await _ws_send_json(send, make_utterance_end(turn_id))
+                        if synthetic_emitted:
+                            # Reset so the next turn starts fresh even if no audio chunk arrives.
+                            final_seen[0] = False
 
-                            if synthetic_emitted:
-                                # Reset so the next turn starts fresh even if no audio chunk arrives.
-                                final_seen[0] = False
 
                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
 
