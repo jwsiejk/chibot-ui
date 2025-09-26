@@ -5,7 +5,8 @@ import json
 import logging
 import os
 import time
-from typing import AsyncGenerator, Optional, Any
+from typing import AsyncGenerator, Optional, Any, Deque
+from collections import deque
 
 import websockets  # provided by uvicorn[standard]
 
@@ -45,7 +46,6 @@ def _clip_text(txt: str, limit: int = 120) -> str:
         return ""
 
 
-
 def _dg_url(overrides: Optional[dict] = None) -> str:
     """Return the Deepgram listen URL with safe defaults.
 
@@ -68,6 +68,9 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         base = (
             base
             + sep
+            # NOTE: We keep 'opus' here to avoid regressions in existing raw paths that were
+            # already sending 'encoding=opus'. If you truly stream raw PCM, override via env:
+            # DEEPGRAM_LISTEN_URL or DG_RAW_* envs below in _initial URL build.
             + "encoding=opus&sample_rate=48000&channels=1"
             + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true&utterance_end_ms=1200"
         )
@@ -86,8 +89,7 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
                 return str(int(v))
             return str(v)
 
-        # For non-containerized, allow transport-related overrides in query
-        # For containerized, we will explicitly drop them below.
+        # Allow top-level overrides (model, language, etc.)
         if overrides:
             for k in (
                 "encoding",
@@ -109,8 +111,19 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             for k in ("encoding", "sample_rate", "channels"):
                 if k in qd:
                     qd.pop(k, None)
+        else:
+            # Non-containerized path: allow env overrides for raw parameters (no behavior change if unset)
+            enc = os.getenv("DG_RAW_ENCODING")
+            sr = os.getenv("DG_RAW_SAMPLE_RATE")
+            ch = os.getenv("DG_RAW_CHANNELS")
+            if enc:
+                qd["encoding"] = enc
+            if sr:
+                qd["sample_rate"] = sr
+            if ch:
+                qd["channels"] = ch
 
-        # If DG_MODEL env is set and no model present yet, add it
+        # If DG_MODEL env is set and no model present yet, add it (back-compat)
         _env_model = os.getenv("DG_MODEL")
         if _env_model and "model" not in qd:
             qd["model"] = _env_model
@@ -179,13 +192,15 @@ def _initial_config(overrides: Optional[dict] = None) -> dict:
 # ------------------------------ Client ---------------------------------------
 
 class DeepgramClient:
-    """Minimal async wrapper for Deepgram streaming WS, with graceful end.
+    """Async wrapper for Deepgram streaming WS with internal send queue.
 
-    Additions:
-      • Drops the tiny first chunk (<64B) before sending (common capture preamble).
-      • Sends {"type": "CloseStream"} and lingers briefly before closing.
+    Improvements:
+      • Suppresses raw audio params for containerized Opus (WebM/OGG).
+      • Logs a 'dg_ws_connect' record with URL and whether raw params were sent.
+      • Maintains an internal TX queue — early chunks are queued and flushed on open.
+      • Drops tiny preamble chunk (<DG_MIN_VALID_BYTES) once, to avoid bogus data.
+      • Sends {"type": "CloseStream"} and lingers briefly before close.
       • Waits for a final transcript (bounded) so Deepgram doesn’t record 00:00:00.
-      • Gates sending until Deepgram signals it's ready (listening/connected/etc).
     """
 
     def __init__(self, _cfg: Optional[dict] = None) -> None:
@@ -194,6 +209,10 @@ class DeepgramClient:
         self._rx_task: Optional[asyncio.Task] = None
         self._ev_queue: asyncio.Queue = asyncio.Queue()
         self._closed = False
+
+        # TX queue + flushing
+        self._tx_queue: Deque[bytes] = deque()
+        self._flush_task: Optional[asyncio.Task] = None
 
         # Graceful shutdown coordination
         self._final_event: asyncio.Event = asyncio.Event()
@@ -218,14 +237,14 @@ class DeepgramClient:
         self._keepalive_task: Optional[asyncio.Task] = None
         self._keepalive_interval: float = float(os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0"))
 
-    
     def is_open(self) -> bool:
         """Return True if the underlying websocket appears open."""
         try:
             return bool(self._ws) and bool(getattr(self._ws, "open", False))
         except Exception:
             return False
-# -- helpers ---------------------------------------------------------------
+
+    # -- helpers ---------------------------------------------------------------
 
     async def _signal_ready(self) -> None:
         if not self._open_evt.is_set():
@@ -236,6 +255,8 @@ class DeepgramClient:
                 await self._ev_queue.put({"type": "asr_open"})
             except Exception:
                 pass
+        # schedule a flush shortly after ASR open (lets DG finish configure)
+        self._schedule_flush(delay=0.05)
 
     def _sid_for_log(self) -> str:
         try:
@@ -257,6 +278,60 @@ class DeepgramClient:
             await asyncio.sleep(0.01)
         return False
 
+    def _schedule_flush(self, delay: float = 0.0) -> None:
+        if self._flush_task and not self._flush_task.done():
+            return
+        async def _runner():
+            if delay > 0:
+                try:
+                    await asyncio.sleep(delay)
+                except asyncio.CancelledError:
+                    return
+            try:
+                await self._flush_tx()
+            except Exception:
+                logger.debug("Deepgram flush_tx raised; will retry on next trigger", exc_info=True)
+        self._flush_task = asyncio.create_task(_runner())
+
+    async def _flush_tx(self) -> None:
+        """Drain queued audio if the socket is open and we've signaled ready."""
+        if not self._tx_queue:
+            return
+        # Wait until socket open — don't raise; just give it a short chance
+        await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S', '0.75')))
+        if not self._ws or not getattr(self._ws, "open", False):
+            return
+        # Ensure we've passed the ready/open gate
+        if not self._open_evt.is_set():
+            try:
+                await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
+            except asyncio.TimeoutError:
+                pass
+
+        sid = self._sid_for_log()
+        while self._tx_queue and self._ws and getattr(self._ws, "open", False):
+            data = self._tx_queue[0]
+            # Drop tiny preamble once
+            if (not self._first_real_sent) and len(data) < self._min_valid_bytes:
+                logger.debug(
+                    "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
+                    sid, len(data), self._min_valid_bytes
+                )
+                self._tx_queue.popleft()
+                continue
+            try:
+                await self._ws.send(data)
+                self._first_real_sent = True
+                self._last_chunk_ts = time.time()
+                self._tx_queue.popleft()
+                logger.debug("Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
+                             sid, len(data), len(self._tx_queue))
+            except Exception as e:
+                # Transient send issue; stop and retry on next trigger
+                logger.debug("Deepgram deferred send sid=%s err=%s queued=%s",
+                             sid, type(e).__name__, len(self._tx_queue))
+                break
+
     # -- lifecycle -------------------------------------------------------------
 
     async def connect(self) -> None:
@@ -266,7 +341,22 @@ class DeepgramClient:
 
         url = _dg_url(self._cfg)
         sid = self._sid_for_log()
-        logger.info("Deepgram connect start sid=%s url=%s", sid, url)
+
+        # Visibility: what params are we actually sending?
+        try:
+            import urllib.parse as _p
+            q = dict(_p.parse_qsl(_p.urlsplit(url).query, keep_blank_values=True))
+            logger.info(
+                "dg_ws_connect sid=%s url=%s containerized_opus=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
+                sid,
+                url,
+                bool((self._cfg or {}).get("_transport", {}).get("containerized_opus")),
+                q.get("encoding"),
+                q.get("sample_rate"),
+                q.get("channels"),
+            )
+        except Exception:
+            logger.info("Deepgram connect start sid=%s url=%s", sid, url)
 
         if DG_TEST_MODE:
             self._ws = _FakeWSForTests()
@@ -336,6 +426,12 @@ class DeepgramClient:
                 except asyncio.CancelledError:
                     pass
 
+        # Ensure any queued audio is flushed before CloseStream
+        try:
+            await self._flush_tx()
+        except Exception:
+            pass
+
         try:
             if self._ws and getattr(self._ws, "open", False):
                 await self._ws.send(json.dumps({"type": "CloseStream"}))
@@ -377,8 +473,12 @@ class DeepgramClient:
         if not chunk:
             return
 
+        # Always enqueue first to avoid races; we'll send directly if possible.
+        self._tx_queue.append(bytes(chunk))
+
         sid = self._sid_for_log()
 
+        # If not yet "ready", schedule a flush once we are
         if not self._open_evt.is_set():
             try:
                 await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
@@ -386,28 +486,11 @@ class DeepgramClient:
                 if not self._open_gate_warned:
                     logger.warning("Deepgram send gated but no open within timeout sid=%s", sid)
                     self._open_gate_warned = True
+                # Even if timed out, treat as ready to avoid deadlock; flush will re-check.
                 await self._signal_ready()
 
-        # Gate on actual websocket open with a brief micro-wait
-        await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S','0.75')))
-
-        if not self._ws or not getattr(self._ws, "open", False):
-            logger.warning("Deepgram send called without active socket sid=%s", sid)
-            raise RuntimeError("deepgram_not_connected")
-
-        if not self._first_real_sent and len(chunk) < self._min_valid_bytes:
-            logger.debug(
-                "Deepgram drop small chunk sid=%s bytes=%s min_bytes=%s",
-                sid,
-                len(chunk),
-                self._min_valid_bytes,
-            )
-            return
-
-        self._first_real_sent = True
-        await self._ws.send(chunk)
-        self._last_chunk_ts = time.time()
-        logger.debug("Deepgram sent chunk sid=%s bytes=%s", sid, len(chunk))
+        # Opportunistic flush now (won't throw if socket not open yet)
+        self._schedule_flush()
 
     # -- events API ------------------------------------------------------------
 
