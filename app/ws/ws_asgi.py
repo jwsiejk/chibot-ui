@@ -637,77 +637,116 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         await _ws_send_json(send, make_error("user_fail", e.__class__.__name__))
                             asyncio.create_task(_bg_user())
 
-                        elif t == "CloseStream":
-                            _jlog("ws_close_stream", sid=sid)
-                            _jlog("after_ws_close_stream", sid=sid, turn_id=turn_id_ref[0], mic_chunks=len(mic_chunks))
-                            if buf.is_empty():
-                                # Empty turn closure; synthesize ids + reset final tracking.
-                                turn_id_ref[0] = buf.turn_seq + 1
-                                final_seen[0] = False
+                       elif t == "CloseStream":
+    _jlog("ws_close_stream", sid=sid)
+    if buf.is_empty():
+        # Empty turn closure; synthesize ids + reset final tracking.
+        turn_id_ref[0] = buf.turn_seq + 1
+        final_seen[0] = False
 
-                            turn_id, _pcm = buf.close_turn()
-                            turn_id_ref[0] = turn_id
-                            synthetic_emitted = False
+    # --- Get a turn_id (with guard logs) ---
+    _jlog("before_close_turn", sid=sid, next_turn_id=buf.turn_seq + 1)
+    try:
+        turn_id, _pcm = buf.close_turn()
+    except Exception as e:
+        _jlog("close_turn_fail", sid=sid, err=type(e).__name__)
+        turn_id = turn_id_ref[0] or (buf.turn_seq + 1)
+        _pcm = None
+    _jlog("after_close_turn", sid=sid, turn_id=turn_id)
+    turn_id_ref[0] = turn_id
 
-                            # ---- Flush any staged audio and finish ASR turn (unchanged behavior) ----
-                            if _has_deepgram_key() and dg is not None:
-                                # If we have buffered chunks but ASR not ready yet, give it a moment then flush.
-                                if buffered_chunks and not asr_ready_evt.is_set():
-                                    if dg_state == "connecting" and dg_connect_task is not None:
-                                        with contextlib.suppress(Exception):
-                                            await asyncio.wait_for(dg_connect_task, timeout=asr_ready_wait_s)
-                                    with contextlib.suppress(asyncio.TimeoutError):
-                                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
+    # ---- CAPTURE FIRST: summarize, save /tmp (or $TMPDIR), and optional WS echo ----
+    _jlog("mic_capture_block_enter", sid=sid, turn_id=turn_id, mic_chunks=len(mic_chunks))
+    if MIC_CAPTURE:
+        try:
+            raw = b"".join(mic_chunks)
+            _jlog(
+                "mic_capture_summary",
+                sid=sid, turn_id=turn_id, bytes=len(raw), chunks=len(mic_chunks),
+                container=transport.get("container"), codec=transport.get("codec"),
+                containerized_opus=transport.get("containerized_opus"),
+            )
+            if raw:
+                base_dir = os.getenv("TMPDIR") or "/tmp"
+                if transport.get("containerized_opus"):
+                    out_path = os.path.join(base_dir, f"mic_{sid}_{turn_id}.webm")
+                    mime = "audio/webm"
+                    with open(out_path, "wb") as f: f.write(raw)
+                    data_to_echo = raw
+                else:
+                    rate = int(os.getenv("DG_RAW_SAMPLE_RATE", "48000"))
+                    ch = int(os.getenv("DG_RAW_CHANNELS", "1"))
+                    wav = _wav_with_header(raw, sample_rate=rate, channels=ch, bits_per_sample=16)
+                    out_path = os.path.join(base_dir, f"mic_{sid}_{turn_id}.wav")
+                    mime = "audio/wav"
+                    with open(out_path, "wb") as f: f.write(wav)
+                    data_to_echo = wav
+                _jlog("mic_capture_saved", sid=sid, turn_id=turn_id, path=out_path, bytes=len(raw), mime=mime)
+                if MIC_ECHO_WS:
+                    await _ws_send_diagnostic_audio(send, turn_id, mime, data_to_echo)
+        except Exception as e:
+            _jlog("mic_capture_fail", sid=sid, err=type(e).__name__)
 
-                                # Flush any staged audio first
-                                await _flush_buffered_chunks()
+    # ---- THEN finish the ASR turn (unchanged logic) ----
+    synthetic_emitted = False
+    if _has_deepgram_key() and dg is not None:
+        # If we have buffered chunks but ASR not ready yet, give it a moment then flush.
+        if buffered_chunks and not asr_ready_evt.is_set():
+            if dg_state == "connecting" and dg_connect_task is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(dg_connect_task, timeout=asr_ready_wait_s)
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
 
-                                if sent_any_audio[0]:
-                                    # Ask provider to finish; if no final came, synthesize empty final.
-                                    with contextlib.suppress(Exception):
-                                        await dg.close(wait_for_final=True)
-                                    dg_state = "closed"
-                                    _relay_task = rx_task
-                                    rx_task = None
-                                    if _relay_task:
-                                        _relay_task.cancel()
-                                        with contextlib.suppress(asyncio.CancelledError, Exception):
-                                            await _relay_task
-                                    dg = None
-                                    with contextlib.suppress(Exception):
-                                        asr_ready_evt.clear()
-                                    if not final_seen[0]:
-                                        final_seen[0] = True
-                                        synthetic_emitted = True
-                                        result_payload = make_results(turn_id, transcript="", is_final=True)
-                                        result_payload["type"] = "Results"
-                                        await _ws_send_json(send, result_payload)
-                                        utterance_payload = make_utterance_end(turn_id)
-                                        utterance_payload["type"] = "UtteranceEnd"
-                                        await _ws_send_json(send, utterance_payload)
-                                else:
-                                    # Nothing actually went to provider; synthesize final locally
-                                    _jlog("ws_close_skip_no_audio", sid=sid)
-                                    if not final_seen[0]:
-                                        final_seen[0] = True
-                                        synthetic_emitted = True
-                                        result_payload = make_results(turn_id, transcript="", is_final=True)
-                                        result_payload["type"] = "Results"
-                                        await _ws_send_json(send, result_payload)
-                                        utterance_payload = make_utterance_end(turn_id)
-                                        utterance_payload["type"] = "UtteranceEnd"
-                                        await _ws_send_json(send, utterance_payload)
-                            else:
-                                # No provider configured: still emit empty final + end to advance the dialog.
-                                if not final_seen[0]:
-                                    final_seen[0] = True
-                                    synthetic_emitted = True
-                                    await _ws_send_json(send, make_results(turn_id, transcript="", is_final=True))
-                                    await _ws_send_json(send, make_utterance_end(turn_id))
+        # Flush any staged audio first
+        await _flush_buffered_chunks()
 
-                            if synthetic_emitted:
-                                # Reset so the next turn starts fresh even if no audio chunk arrives.
-                                final_seen[0] = False
+        if sent_any_audio[0]:
+            # Ask provider to finish; if no final came, synthesize empty final.
+            with contextlib.suppress(Exception):
+                await dg.close(wait_for_final=True)
+            dg_state = "closed"
+            _relay_task = rx_task
+            rx_task = None
+            if _relay_task:
+                _relay_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await _relay_task
+            dg = None
+            with contextlib.suppress(Exception):
+                asr_ready_evt.clear()
+            if not final_seen[0]:
+                final_seen[0] = True
+                synthetic_emitted = True
+                result_payload = make_results(turn_id, transcript="", is_final=True)
+                result_payload["type"] = "Results"
+                await _ws_send_json(send, result_payload)
+                utterance_payload = make_utterance_end(turn_id)
+                utterance_payload["type"] = "UtteranceEnd"
+                await _ws_send_json(send, utterance_payload)
+        else:
+            # Nothing actually went to provider; synthesize final locally
+            _jlog("ws_close_skip_no_audio", sid=sid)
+            if not final_seen[0]:
+                final_seen[0] = True
+                synthetic_emitted = True
+                result_payload = make_results(turn_id, transcript="", is_final=True)
+                result_payload["type"] = "Results"
+                await _ws_send_json(send, result_payload)
+                utterance_payload = make_utterance_end(turn_id)
+                utterance_payload["type"] = "UtteranceEnd"
+                await _ws_send_json(send, utterance_payload)
+    else:
+        # No provider configured: still emit empty final + end to advance the dialog.
+        if not final_seen[0]:
+            final_seen[0] = True
+            synthetic_emitted = True
+            await _ws_send_json(send, make_results(turn_id, transcript="", is_final=True))
+            await _ws_send_json(send, make_utterance_end(turn_id))
+
+    if synthetic_emitted:
+        # Reset so the next turn starts fresh even if no audio chunk arrives.
+        final_seen[0] = False
 
                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
 
