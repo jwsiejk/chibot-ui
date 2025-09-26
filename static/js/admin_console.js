@@ -289,7 +289,7 @@ function resetView(state) {
 }
 
 async function ensureWsOpen(timeoutMs = 8000) {
-  const ws = await openWS();
+  const ws = await openWS({ reconnect: false });
   await Promise.race([
     waitWSOpen(),
     new Promise((_, rej) => setTimeout(() => rej(new Error('WebSocket open timed out')), timeoutMs)),
