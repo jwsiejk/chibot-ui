@@ -45,15 +45,25 @@ def _clip_text(txt: str, limit: int = 120) -> str:
         return ""
 
 
+
 def _dg_url(overrides: Optional[dict] = None) -> str:
     """Return the Deepgram listen URL with safe defaults.
 
     Audio transport parameters must be in the URL query for Deepgram's v1/listen.
+    For **containerized Opus** (OGG/WebM), we must NOT send encoding, sample_rate, or channels.
     """
     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
 
-    # Append defaults if not present (helps when proxies ignore Configure frame)
-    if "encoding=" not in base:
+    # Detect containerized Opus from overrides (nested under _transport)
+    containerized = False
+    try:
+        if overrides and isinstance(overrides.get("_transport"), dict):
+            containerized = bool(overrides["_transport"].get("containerized_opus"))
+    except Exception:
+        containerized = False
+
+    # Append conservative defaults ONLY when not containerized
+    if (not containerized) and ("encoding=" not in base):
         sep = "&" if "?" in base else "?"
         base = (
             base
@@ -62,7 +72,7 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true&utterance_end_ms=1200"
         )
 
-    # Apply overrides into query string if present, and ensure model from env if set
+    # Apply overrides into query string and clean up for containerized
     try:
         import urllib.parse as _p
         parts = _p.urlsplit(base)
@@ -76,6 +86,8 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
                 return str(int(v))
             return str(v)
 
+        # For non-containerized, allow transport-related overrides in query
+        # For containerized, we will explicitly drop them below.
         if overrides:
             for k in (
                 "encoding",
@@ -91,6 +103,12 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             ):
                 if k in overrides and overrides[k] is not None:
                     qd[k] = _fmt(overrides[k])
+
+        # If containerized, remove transport params regardless of how they got here
+        if containerized:
+            for k in ("encoding", "sample_rate", "channels"):
+                if k in qd:
+                    qd.pop(k, None)
 
         # If DG_MODEL env is set and no model present yet, add it
         _env_model = os.getenv("DG_MODEL")
