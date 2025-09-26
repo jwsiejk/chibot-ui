@@ -327,7 +327,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     buffered_chunks: Deque[bytes] = deque()
     sent_any_audio = [False]
     asr_ready_evt: asyncio.Event = asyncio.Event()
-    asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "1.5"))
+    asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))  # bumped default from 1.5 → 3.0
     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
     turn_connect_started = [False]
 
@@ -415,7 +415,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 await _ensure_dg_connected()
                 if not asr_ready_evt.is_set():
                     with contextlib.suppress(asyncio.TimeoutError):
-                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=0.25)
+                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=1.0)  # was 0.25s
                 return await _send_chunk(data, from_buffer=from_buffer, retry=False)
             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
         except Exception as e:
@@ -428,7 +428,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if not buffered_chunks:
             return
         if not _has_deepgram_key() or dg is None:
-            buffered_chunks.clear()
+            # Keep queue for when DG opens later; do not drop here
             return
 
         while buffered_chunks:
@@ -461,38 +461,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         buffered_chunks.clear()
                         turn_connect_started[0] = False
                     buf.append(chunk)
-                    if _has_deepgram_key():
-                        # Ensure provider is connected once per turn; await in-flight connects.
-                        if not turn_connect_started[0]:
-                            turn_connect_started[0] = True
-                            connected = await _ensure_dg_connected()
-                            if not connected:
-                                turn_connect_started[0] = False
-                        elif dg_state == "connecting" and dg_connect_task is not None:
-                            with contextlib.suppress(Exception):
-                                await dg_connect_task
 
-                        if dg is not None:
-                            # Always stage in the buffer first (avoids losing early chunks)
-                            buffered_chunks.append(chunk)
+                    # Feed the container sniffer early so transport hints are accurate
+                    try:
+                        if transport.get("container") is None and chunk:
+                            sniffer.feed(chunk)
+                            meta = coerce_detection_from_meta(sniffer.meta())
+                            if meta and meta.get("container"):
+                                transport["container"] = meta["container"]      # "webm" / "ogg"
+                                transport["codec"] = meta.get("codec")          # "opus" / etc.
+                                transport["containerized_opus"] = (meta.get("codec") == "opus")
+                    except Exception:
+                        pass
 
-                            # If buffer is getting large, try to flush opportunistically
-                            if len(buffered_chunks) >= max_buffered_chunks:
-                                await _flush_buffered_chunks()
-
-                            # If provider hasn't signaled open yet, wait briefly (first-chunk race guard)
-                            if not asr_ready_evt.is_set():
-                                try:
-                                    await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
-                                except asyncio.TimeoutError:
-                                    _jlog("asr_not_ready_timeout", sid=sid)
-
-                            # Final attempt to flush staged audio
-                            await _flush_buffered_chunks()
-                        else:
-                            _jlog("ws_audio_no_provider", sid=sid, bytes=len(chunk))
-                    else:
+                    if not _has_deepgram_key():
                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
+                        continue
+
+                    # *** Always stage audio FIRST to avoid losing early frames ***
+                    if chunk:
+                        buffered_chunks.append(chunk)
+
+                    # Ensure provider is connecting/connected for this turn; allow in-flight connect.
+                    if not turn_connect_started[0]:
+                        turn_connect_started[0] = True
+                        connected = await _ensure_dg_connected()
+                        if not connected:
+                            turn_connect_started[0] = False
+                    elif dg_state == "connecting" and dg_connect_task is not None:
+                        with contextlib.suppress(Exception):
+                            await dg_connect_task
+
+                    # If provider hasn't signaled open yet, give it a moment, then flush.
+                    if dg is not None:
+                        if not asr_ready_evt.is_set():
+                            try:
+                                await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
+                            except asyncio.TimeoutError:
+                                _jlog("asr_not_ready_timeout", sid=sid)
+
+                        # Opportunistic flush (also when buffer grows large)
+                        if len(buffered_chunks) >= max_buffered_chunks:
+                            await _flush_buffered_chunks()
+                        await _flush_buffered_chunks()
+                    else:
+                        _jlog("ws_audio_provider_connecting", sid=sid, queued=len(buffered_chunks))
                     continue
 
                 # Text/control lane
@@ -615,7 +628,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             turn_id_ref[0] = turn_id
                             synthetic_emitted = False
                             if _has_deepgram_key() and dg is not None:
-                                # *** GRACE: if we have buffered chunks but ASR not ready yet, give it 500ms then flush.
+                                # *** GRACE: if we have buffered chunks but ASR not ready yet, give it a moment then flush.
                                 if buffered_chunks and not asr_ready_evt.is_set():
                                     if dg_state == "connecting" and dg_connect_task is not None:
                                         with contextlib.suppress(Exception):
