@@ -267,7 +267,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     _jlog("mic_capture_cfg", sid="pending", enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
 
-
     try:
         _admin_emit and _admin_emit(
             "ws_handshake_enter",
@@ -283,9 +282,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return
 
     sid = _get_session_id(scope)
-
     _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
-
 
     # Auth
     require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in ("0", "false", "no")
@@ -746,6 +743,38 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             await _ws_send_diagnostic_audio(send, turn_id, mime, data_to_echo)
                                 except Exception as e:
                                     _jlog("mic_capture_fail", sid=sid, err=type(e).__name__)
+
+                        else:
+                            # Unknown type already filtered by schema; no-op to future-proof.
+                            pass
+
+                    except ValueError as e:
+                        await _ws_send_json(send, make_error("bad_message", str(e)))
+                else:
+                    # websocket.receive without text/bytes
+                    pass
+            else:
+                # Other ASGI events are ignored
+                pass
+
+    finally:
+        # Clean up safely; never raise in cleanup
+        with contextlib.suppress(Exception):
+            if rx_task:
+                rx_task.cancel()
+                await rx_task
+        with contextlib.suppress(Exception):
+            if dg is not None:
+                await dg.close(wait_for_final=False)
+        with contextlib.suppress(Exception):
+            bus_task.cancel()
+            await bus_task
+        with contextlib.suppress(Exception):
+            ping_task.cancel()
+            await ping_task
+        with contextlib.suppress(Exception):
+            await send({"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"})
+
 
 # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
 try:
