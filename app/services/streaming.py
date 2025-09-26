@@ -117,7 +117,22 @@ def make_assistant_frames(seed_text: str,
     # Scrub any legacy stamps like "[KB:0]" so UI/TTS never surface them
     safe_reply = _scrub_debug_stamps(reply)
 
-    # --- Build frames --------------------------------------------------------
+    
+    # Enforce short greeting when this is the greet path
+    try:
+        _is_greet = False
+        try:
+            _is_greet = (str(seed_text).strip().lower() == "greet") or (str((meta or {}).get("source","")).strip().lower() == "greet")
+        except Exception:
+            _is_greet = (str(seed_text).strip().lower() == "greet")
+        if _is_greet:
+            # Cap to <= 8 words, keep it friendly.
+            _words = (safe_reply or "Hi there!").strip().split()
+            if len(_words) > 8:
+                safe_reply = " ".join(_words[:8]).rstrip(",.;:!")
+    except Exception:
+        pass
+# --- Build frames --------------------------------------------------------
     turn_id = db.memory.setdefault('turn_seq', 0) + 1
     db.memory['turn_seq'] = turn_id  # simple monotonic id; greet may override externally
 
