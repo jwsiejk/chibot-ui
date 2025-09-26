@@ -265,6 +265,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     MIC_CAPTURE = _env_truth("MIC_CAPTURE", False)
     MIC_ECHO_WS = _env_truth("MIC_ECHO_WS", False)
 
+    _jlog("mic_capture_cfg", sid="pending", enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
+
+
     try:
         _admin_emit and _admin_emit(
             "ws_handshake_enter",
@@ -280,6 +283,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return
 
     sid = _get_session_id(scope)
+
+    _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
+
 
     # Auth
     require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in ("0", "false", "no")
@@ -630,23 +636,29 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         elif t == "CloseStream":
                             _jlog("ws_close_stream", sid=sid)
                             if buf.is_empty():
+                                # Empty turn closure; synthesize ids + reset final tracking.
                                 turn_id_ref[0] = buf.turn_seq + 1
                                 final_seen[0] = False
+
                             turn_id, _pcm = buf.close_turn()
                             turn_id_ref[0] = turn_id
                             synthetic_emitted = False
 
-                            # Flush any staged audio first if ASR is up
+                            # ---- Flush any staged audio and finish ASR turn (unchanged behavior) ----
                             if _has_deepgram_key() and dg is not None:
+                                # If we have buffered chunks but ASR not ready yet, give it a moment then flush.
                                 if buffered_chunks and not asr_ready_evt.is_set():
                                     if dg_state == "connecting" and dg_connect_task is not None:
                                         with contextlib.suppress(Exception):
                                             await asyncio.wait_for(dg_connect_task, timeout=asr_ready_wait_s)
                                     with contextlib.suppress(asyncio.TimeoutError):
                                         await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
+
+                                # Flush any staged audio first
                                 await _flush_buffered_chunks()
 
                                 if sent_any_audio[0]:
+                                    # Ask provider to finish; if no final came, synthesize empty final.
                                     with contextlib.suppress(Exception):
                                         await dg.close(wait_for_final=True)
                                     dg_state = "closed"
@@ -669,6 +681,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         utterance_payload["type"] = "UtteranceEnd"
                                         await _ws_send_json(send, utterance_payload)
                                 else:
+                                    # Nothing actually went to provider; synthesize final locally
                                     _jlog("ws_close_skip_no_audio", sid=sid)
                                     if not final_seen[0]:
                                         final_seen[0] = True
@@ -680,67 +693,59 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         utterance_payload["type"] = "UtteranceEnd"
                                         await _ws_send_json(send, utterance_payload)
                             else:
+                                # No provider configured: still emit empty final + end to advance the dialog.
                                 if not final_seen[0]:
                                     final_seen[0] = True
                                     synthetic_emitted = True
                                     await _ws_send_json(send, make_results(turn_id, transcript="", is_final=True))
                                     await _ws_send_json(send, make_utterance_end(turn_id))
+
                             if synthetic_emitted:
+                                # Reset so the next turn starts fresh even if no audio chunk arrives.
                                 final_seen[0] = False
 
-                            # ---- NEW: save & optionally echo diagnostic audio ----
-                            if MIC_CAPTURE and mic_chunks:
-                                wall_ms = int((mic_last_ts[0] - mic_first_ts[0]) * 1000) if mic_last_ts[0] >= mic_first_ts[0] else 0
-                                raw = b"".join(mic_chunks)
+                            # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
+                            if MIC_CAPTURE:
                                 try:
-                                    if transport.get("containerized_opus"):
-                                        # save webm as-is
-                                        path = f"/tmp/mic_{sid}_{turn_id}.webm"
-                                        mime = "audio/webm"
-                                        with open(path, "wb") as f:
-                                            f.write(raw)
-                                    else:
-                                        # raw PCM → wrap in WAV so you can play it
-                                        rate = int(os.getenv("DG_RAW_SAMPLE_RATE", "48000"))
-                                        ch = int(os.getenv("DG_RAW_CHANNELS", "1"))
-                                        wav = _wav_with_header(raw, sample_rate=rate, channels=ch, bits_per_sample=16)
-                                        path = f"/tmp/mic_{sid}_{turn_id}.wav"
-                                        mime = "audio/wav"
-                                        with open(path, "wb") as f:
-                                            f.write(wav)
-                                    _jlog("mic_capture_saved", sid=sid, turn_id=turn_id, path=path, bytes=len(raw), wall_ms=wall_ms,
-                                          container=transport.get("container"), codec=transport.get("codec"),
-                                          containerized_opus=transport.get("containerized_opus"))
-                                    if MIC_ECHO_WS:
-                                        # echo back exactly what you sent (webm) or the wav-wrapped raw
-                                        data = raw if mime == "audio/webm" else wav
-                                        await _ws_send_diagnostic_audio(send, turn_id, mime, data)
+                                    raw = b"".join(mic_chunks)
+                                    _jlog(
+                                        "mic_capture_summary",
+                                        sid=sid,
+                                        turn_id=turn_id,
+                                        bytes=len(raw),
+                                        chunks=len(mic_chunks),
+                                        container=transport.get("container"),
+                                        codec=transport.get("codec"),
+                                        containerized_opus=transport.get("containerized_opus"),
+                                    )
+
+                                    if raw:
+                                        base_dir = os.getenv("TMPDIR") or "/tmp"
+                                        if transport.get("containerized_opus"):
+                                            # Containerized Opus → save WebM bytes as-is
+                                            out_path = os.path.join(base_dir, f"mic_{sid}_{turn_id}.webm")
+                                            mime = "audio/webm"
+                                            with open(out_path, "wb") as f:
+                                                f.write(raw)
+                                            data_to_echo = raw
+                                        else:
+                                            # Raw PCM → wrap in a WAV header for easy playback
+                                            rate = int(os.getenv("DG_RAW_SAMPLE_RATE", "48000"))
+                                            ch = int(os.getenv("DG_RAW_CHANNELS", "1"))
+                                            wav = _wav_with_header(raw, sample_rate=rate, channels=ch, bits_per_sample=16)
+                                            out_path = os.path.join(base_dir, f"mic_{sid}_{turn_id}.wav")
+                                            mime = "audio/wav"
+                                            with open(out_path, "wb") as f:
+                                                f.write(wav)
+                                            data_to_echo = wav
+
+                                        _jlog("mic_capture_saved", sid=sid, turn_id=turn_id, path=out_path, bytes=len(raw), mime=mime)
+
+                                        if MIC_ECHO_WS:
+                                            # Send the audio back over WS so the client can play it
+                                            await _ws_send_diagnostic_audio(send, turn_id, mime, data_to_echo)
                                 except Exception as e:
                                     _jlog("mic_capture_fail", sid=sid, err=type(e).__name__)
-                        else:
-                            pass
-                    except ValueError as e:
-                        await _ws_send_json(send, make_error("bad_message", str(e)))
-            else:
-                pass
-
-    finally:
-        with contextlib.suppress(Exception):
-            if rx_task:
-                rx_task.cancel()
-                await rx_task
-        with contextlib.suppress(Exception):
-            if dg is not None:
-                await dg.close(wait_for_final=False)
-        with contextlib.suppress(Exception):
-            bus_task.cancel()
-            await bus_task
-        with contextlib.suppress(Exception):
-            ping_task.cancel()
-            await ping_task
-        with contextlib.suppress(Exception):
-            await send({"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"})
-
 
 # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
 try:
