@@ -1,7 +1,7 @@
 # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
 from __future__ import annotations
-import asyncio, os, contextlib, time
-from typing import Optional, Dict, Any, Deque, Callable, Awaitable
+import asyncio, os, contextlib, time, io, struct, base64
+from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple
 from collections import deque
 from app.services.audio.container_sniffer import AudioContainerSniffer, coerce_detection_from_meta
 
@@ -20,6 +20,8 @@ try:
 except Exception:
     _admin_emit = None
 
+
+# ------------------------------ small helpers ------------------------------
 
 def _client_ip_from_scope(scope) -> str:
     try:
@@ -83,6 +85,71 @@ def _has_deepgram_key() -> bool:
     return bool((os.getenv("DEEPGRAM_API_KEY") or "").strip())
 
 
+def _env_truth(name: str, default: bool = False) -> bool:
+    v = (os.getenv(name) or "").strip().lower()
+    if not v:
+        return default
+    return v in ("1", "true", "yes", "on")
+
+
+def _wav_with_header(pcm: bytes, sample_rate: int, channels: int, bits_per_sample: int = 16) -> bytes:
+    """Wrap raw PCM in a minimal RIFF/WAVE header for easy playback."""
+    byte_rate = sample_rate * channels * (bits_per_sample // 8)
+    block_align = channels * (bits_per_sample // 8)
+    datasz = len(pcm)
+    riffsz = 36 + datasz
+    buf = io.BytesIO()
+    buf.write(b"RIFF")
+    buf.write(struct.pack("<I", riffsz))
+    buf.write(b"WAVE")
+    buf.write(b"fmt ")
+    buf.write(struct.pack("<IHHIIHH", 16, 1, channels, sample_rate, byte_rate, block_align, bits_per_sample))
+    buf.write(b"data")
+    buf.write(struct.pack("<I", datasz))
+    buf.write(pcm)
+    return buf.getvalue()
+
+
+async def _ws_send_json(send, obj: dict) -> None:
+    await send({"type": "websocket.send", "text": _dumps(obj)})
+
+
+async def _ws_send_diagnostic_audio(send, turn_id: int, mime: str, data: bytes) -> None:
+    """
+    Send the captured mic audio back to the client so you can play it.
+    Uses chunked base64 to avoid giant WS frames.
+    """
+    CHUNK = 64 * 1024  # 64 KiB raw → ~85 KiB b64
+    total = len(data)
+    off = 0
+    part = 0
+    # announce
+    await _ws_send_json(send, {
+        "type": "diagnostic_audio",
+        "turn_id": str(turn_id),
+        "mime": mime,
+        "total_bytes": total,
+        "part": part,
+        "is_last": (total == 0),
+        "b64": ""  # header-only announcement
+    })
+    while off < total:
+        chunk = data[off: off + CHUNK]
+        off += len(chunk)
+        part += 1
+        await _ws_send_json(send, {
+            "type": "diagnostic_audio",
+            "turn_id": str(turn_id),
+            "mime": mime,
+            "total_bytes": total,
+            "part": part,
+            "is_last": (off >= total),
+            "b64": base64.b64encode(chunk).decode("ascii")
+        })
+
+
+# ------------------------------ bus pumpers ------------------------------
+
 async def _pump_bus_to_client(sid: str, send):
     """Forward frames from StreamBus to the WS client as JSON."""
     import json as _json
@@ -100,7 +167,6 @@ async def _pump_bus_to_client(sid: str, send):
             try:
                 await send({"type": "websocket.send", "text": _json.dumps(fr, separators=(",", ":"), ensure_ascii=False)})
             except Exception:
-                # If client send fails, yield so cancellation can propagate
                 await asyncio.sleep(0.01)
     except asyncio.CancelledError:
         pass
@@ -136,7 +202,6 @@ async def _pump_dg_to_client(
                     _admin_emit and _admin_emit("asr:start", session_id=sid)
                 except Exception:
                     pass
-                # NEW: flush queued audio immediately after DG opens (with a tiny grace)
                 try:
                     if on_asr_open_flush:
                         await asyncio.sleep(0.05)
@@ -148,80 +213,57 @@ async def _pump_dg_to_client(
             if et in ("user_partial", "user_final"):
                 is_final = (et == "user_final")
                 text = (ev.get("text") or "").strip()
-                _jlog(
-                    "dg_transcript",
-                    sid=sid,
-                    turn_id=turn_id_ref[0],
-                    is_final=is_final,
-                    chars=len(text),
-                    preview=_clip_text(text),
-                )
+                _jlog("dg_transcript", sid=sid, turn_id=turn_id_ref[0], is_final=is_final, chars=len(text), preview=_clip_text(text))
                 try:
                     if et == "user_partial":
                         _admin_emit and _admin_emit("asr:first_partial", session_id=sid)
                 except Exception:
                     pass
 
-                # Stream ASR result to client (optional UI)
-                await send({
-                    "type": "websocket.send",
-                    "text": _dumps(make_results(turn_id_ref[0], transcript=text, confidence=0.0, is_final=is_final)),
-                })
+                await _ws_send_json(send, make_results(turn_id_ref[0], transcript=text, confidence=0.0, is_final=is_final))
 
                 if is_final:
                     final_seen[0] = True
-                    # Let client know the utterance is closed
-                    await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id_ref[0]))})
+                    await _ws_send_json(send, make_utterance_end(turn_id_ref[0]))
                     try:
                         _admin_emit and _admin_emit("asr:final", session_id=sid)
                     except Exception:
                         pass
 
-                    # NEW: Kick the LLM/Chip turn on final transcript
                     if text:
                         async def _bg_turn():
                             try:
-                                # Offload to thread (streaming pipeline is sync)
                                 await asyncio.to_thread(run_ws_user_turn, sid, text, None)
                             except Exception as e:
-                                try:
-                                    await send({
-                                        "type": "websocket.send",
-                                        "text": _dumps(make_error("llm_turn_fail", e.__class__.__name__)),
-                                    })
-                                except Exception:
-                                    pass
+                                with contextlib.suppress(Exception):
+                                    await _ws_send_json(send, make_error("llm_turn_fail", e.__class__.__name__))
                         asyncio.create_task(_bg_turn())
 
             elif et == "asr_error":
-                _jlog(
-                    "dg_asr_error",
-                    sid=sid,
-                    turn_id=turn_id_ref[0],
-                    error=_clip_text(str(ev.get("error") or "unknown"), 160),
-                )
+                err = _clip_text(str(ev.get("error") or "unknown"), 160)
+                _jlog("dg_asr_error", sid=sid, turn_id=turn_id_ref[0], error=err)
                 try:
-                    _admin_emit and _admin_emit("asr:error", session_id=sid, error=str(ev.get("error") or "unknown"))
+                    _admin_emit and _admin_emit("asr:error", session_id=sid, error=err)
                 except Exception:
                     pass
-                await send({
-                    "type": "websocket.send",
-                    "text": _dumps(make_error("asr_error", str(ev.get("error") or "unknown"))),
-                })
+                await _ws_send_json(send, make_error("asr_error", err))
     except asyncio.CancelledError:
         return
     except Exception as e:
-        try:
-            await send({"type": "websocket.send", "text": _dumps(make_error("relay_fail", e.__class__.__name__))})
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            await _ws_send_json(send, make_error("relay_fail", e.__class__.__name__))
 
+
+# ------------------------------ main WS impl ------------------------------
 
 async def _ws_chat_asgi_impl(scope, receive, send):
     # Session-scoped transport flags for ASR
     transport = {"protocol":"websocket","container":None,"codec":None,"containerized_opus":False,"features":[]}
     sniffer = AudioContainerSniffer()
-    audio_sig_logged = False  # NEW: ensure we only hexdump once
+    audio_sig_logged = False
+
+    MIC_CAPTURE = _env_truth("MIC_CAPTURE", False)
+    MIC_ECHO_WS = _env_truth("MIC_ECHO_WS", False)
 
     try:
         _admin_emit and _admin_emit(
@@ -263,13 +305,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             pass
     if (not bearer_only) and (not token) and scope.get("query_string"):
         try:
-            q = dict(
-                [
-                    tuple(p.split("=", 1))
-                    for p in scope.get("query_string").decode().split("&")
-                    if "=" in p
-                ]
-            )
+            q = dict([tuple(p.split("=", 1)) for p in scope.get("query_string").decode().split("&") if "=" in p])
             token = q.get("ws_token") or token
         except Exception:
             pass
@@ -283,18 +319,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 _admin_emit and _admin_emit("ws_auth_fail", sid=sid, ip=client_ip, over_limit=over)
             except Exception:
                 pass
-            try:
+            with contextlib.suppress(Exception):
                 await send({"type": "websocket.close", "code": 4401})
-            except Exception:
-                pass
             return
 
     await send({"type": "websocket.accept", "subprotocol": "bearer"})
 
-    try:
+    with contextlib.suppress(Exception):
         db.memory.setdefault("greet_turns", {}).pop(sid, None)
-    except Exception:
-        pass
 
     bus_task = asyncio.create_task(_pump_bus_to_client(sid, send))
 
@@ -303,10 +335,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             while True:
                 await asyncio.sleep(20)
                 try:
-                    await send({
-                        "type": "websocket.send",
-                        "text": _dumps({"type": "keepalive", "ts": int(time.time() * 1000)}),
-                    })
+                    await _ws_send_json(send, {"type": "keepalive", "ts": int(time.time() * 1000)})
                 except Exception:
                     break
         except asyncio.CancelledError:
@@ -315,12 +344,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     ping_task = asyncio.create_task(_ping_loop())
 
     try:
-        await send({"type": "websocket.send", "text": _dumps({"type": "ready", "session_id": sid})})
+        await _ws_send_json(send, {"type": "ready", "session_id": sid})
     except Exception:
-        try:
+        with contextlib.suppress(Exception):
             await send({"type": "websocket.close", "code": 1011, "reason": "initial_ready_failed"})
-        except Exception:
-            pass
         return
 
     cfg: Dict[str, Any] = {}
@@ -336,12 +363,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     buffered_chunks: Deque[bytes] = deque()
     sent_any_audio = [False]
     asr_ready_evt: asyncio.Event = asyncio.Event()
-    asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))  # bumped default from 1.5 → 3.0
+    asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
     turn_connect_started = [False]
 
+    # NEW: per-turn mic capture state
+    mic_chunks: List[bytes] = []
+    mic_first_ts = [0.0]
+    mic_last_ts = [0.0]
+
     async def _ensure_dg_connected() -> bool:
-        """Connect to ASR provider once per session; never tear down the WS on provider failures."""
         nonlocal dg, rx_task, dg_connect_task, dg_state
 
         if not _has_deepgram_key():
@@ -361,11 +392,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
             try:
                 dg_state = "connecting"
-                try:
-                    if asr_ready_evt.is_set():
-                        asr_ready_evt.clear()
-                except Exception:
-                    pass
+                with contextlib.suppress(Exception):
+                    asr_ready_evt.clear()
                 cfg['_transport'] = transport
                 cfg['_jlog'] = _jlog
                 _jlog("asr_connect_begin", sid=sid, transport=transport)
@@ -383,17 +411,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 dg_state = "closed"
                 dg = None
                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
-                try:
-                    await send({
-                        "type": "websocket.send",
-                        "text": _dumps(make_error("asr_connect_fail", type(e).__name__)),
-                    })
-                except Exception:
-                    pass
-                try:
+                with contextlib.suppress(Exception):
+                    await _ws_send_json(send, make_error("asr_connect_fail", type(e).__name__))
+                with contextlib.suppress(Exception):
                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=f"connect:{type(e).__name__}")
-                except Exception:
-                    pass
             finally:
                 dg_connect_task = None
 
@@ -403,25 +424,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return connect_result["ok"]
 
     async def _send_chunk(data: bytes, *, from_buffer: bool = False, retry: bool = True) -> bool:
-        """Send audio to Deepgram, retrying once on connection race."""
         nonlocal dg, dg_state
         if dg is None:
             return False
-
         try:
             await dg.send(data)
             sent_any_audio[0] = True
-            _jlog(
-                "ws_audio_forward",
-                sid=sid,
-                bytes=len(data),
-                buffered=from_buffer,
-            )
+            _jlog("ws_audio_forward", sid=sid, bytes=len(data), buffered=from_buffer)
             return True
-
         except RuntimeError as e:
             if "deepgram_not_connected" in str(e).lower() and retry:
-                # likely configure vs first-send race; keep socket, give it a beat
                 _jlog("asr_send_retry", sid=sid)
                 if not asr_ready_evt.is_set():
                     with contextlib.suppress(asyncio.TimeoutError):
@@ -435,14 +447,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return False
 
     async def _flush_buffered_chunks() -> None:
-        """Flush buffered audio once Deepgram is ready."""
         nonlocal dg
         if not buffered_chunks:
             return
         if not _has_deepgram_key() or dg is None:
-            # Keep queue for when DG opens later; do not drop here
             return
-
         while buffered_chunks:
             chunk = buffered_chunks[0]
             ok = await _send_chunk(chunk, from_buffer=True)
@@ -460,60 +469,60 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 break
 
             if et == "websocket.receive":
-                # Binary/audio lane
+                # -------------------- Binary / audio lane --------------------
                 if ev.get("bytes") is not None:
+                    now = time.time()
                     chunk = ev.get("bytes") or b""
                     if chunk:
                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
-
-                        # NEW: one-shot hexdump of first 8 bytes for quick signature checks
                         if not audio_sig_logged:
-                            try:
+                            with contextlib.suppress(Exception):
                                 _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
-                            except Exception:
-                                pass
                             audio_sig_logged = True
 
                     if buf.is_empty():
-                        # New audio turn; prime turn id + reset final tracking.
+                        # New audio turn
                         turn_id_ref[0] = buf.turn_seq + 1
                         final_seen[0] = False
                         sent_any_audio[0] = False
                         buffered_chunks.clear()
                         turn_connect_started[0] = False
+                        # reset mic capture
+                        mic_chunks.clear()
+                        mic_first_ts[0] = now
+                        mic_last_ts[0] = now
+
                     buf.append(chunk)
 
-                    # Feed the container sniffer early so transport hints are accurate
+                    # capture bytes for diagnostic playback
+                    if MIC_CAPTURE:
+                        mic_chunks.append(chunk)
+                        mic_last_ts[0] = now
+
+                    # Detect container early
                     try:
                         if transport.get("container") is None and chunk:
-                            # Use the sniffer's detection result directly (not just meta)
                             det = sniffer.feed(chunk)
                             if det:
                                 transport["container"] = getattr(det, "container", None)
                                 transport["codec"] = getattr(det, "codec", None)
-                                # containerized_opus = True when codec == "opus"
                                 transport["containerized_opus"] = bool(getattr(det, "codec", "") == "opus")
-                                _jlog(
-                                    "sniffer_detect",
-                                    sid=sid,
-                                    container=transport.get("container"),
-                                    codec=transport.get("codec"),
-                                    containerized_opus=transport.get("containerized_opus"),
-                                )
+                                _jlog("sniffer_detect",
+                                      sid=sid,
+                                      container=transport.get("container"),
+                                      codec=transport.get("codec"),
+                                      containerized_opus=transport.get("containerized_opus"))
                             else:
-                                # Fallback: MIME/coercion (meta hint path)
                                 meta = coerce_detection_from_meta(getattr(sniffer, "meta", lambda: None)())
                                 if meta and meta.get("container"):
-                                    transport["container"] = meta["container"]      # "webm" / "ogg"
-                                    transport["codec"] = meta.get("codec")          # "opus" / etc.
+                                    transport["container"] = meta["container"]
+                                    transport["codec"] = meta.get("codec")
                                     transport["containerized_opus"] = (meta.get("codec") == "opus")
-                                    _jlog(
-                                        "sniffer_detect",
-                                        sid=sid,
-                                        container=transport.get("container"),
-                                        codec=transport.get("codec"),
-                                        containerized_opus=transport.get("containerized_opus"),
-                                    )
+                                    _jlog("sniffer_detect",
+                                          sid=sid,
+                                          container=transport.get("container"),
+                                          codec=transport.get("codec"),
+                                          containerized_opus=transport.get("containerized_opus"))
                     except Exception:
                         pass
 
@@ -521,11 +530,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
                         continue
 
-                    # *** Always stage audio FIRST to avoid losing early frames ***
+                    # Stage early frames
                     if chunk:
                         buffered_chunks.append(chunk)
 
-                    # Ensure provider is connecting/connected for this turn; allow in-flight connect.
+                    # Ensure provider connection
                     if not turn_connect_started[0]:
                         turn_connect_started[0] = True
                         connected = await _ensure_dg_connected()
@@ -535,15 +544,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         with contextlib.suppress(Exception):
                             await dg_connect_task
 
-                    # If provider hasn't signaled open yet, give it a moment, then flush.
+                    # Flush when ready
                     if dg is not None:
                         if not asr_ready_evt.is_set():
                             try:
                                 await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
                             except asyncio.TimeoutError:
                                 _jlog("asr_not_ready_timeout", sid=sid)
-
-                        # Opportunistic flush (also when buffer grows large)
                         if len(buffered_chunks) >= max_buffered_chunks:
                             await _flush_buffered_chunks()
                         await _flush_buffered_chunks()
@@ -551,102 +558,64 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         _jlog("ws_audio_provider_connecting", sid=sid, queued=len(buffered_chunks))
                     continue
 
-                # Text/control lane
+                # -------------------- Text / control lane --------------------
                 if ev.get("text") is not None:
                     try:
                         obj = parse_client_json(ev.get("text") or "")
                         t = obj.get("type")
 
                         if t == "KeepAlive":
-                            await send({"type": "websocket.send", "text": _dumps(make_keepalive_ack())})
+                            await _ws_send_json(send, make_keepalive_ack())
 
-                        # OPTIONAL WS greet alias: allow {type:"greet"} in addition to Configure{greet:true}
                         elif t == "greet":
                             _jlog("ws_greet_recv", sid=sid)
                             async def _bg():
                                 try:
                                     from app.services.streaming import run_ws_greet
                                     tid = await asyncio.to_thread(run_ws_greet, sid)
-                                    try:
+                                    with contextlib.suppress(Exception):
                                         if _admin_emit:
                                             cfg_now = db.get_config()
                                             audio_on = bool((cfg_now or {}).get("feature_audio", True))
-                                            _admin_emit(
-                                                "greet:resp",
-                                                label="greet:resp",
-                                                session_id=sid,
-                                                turn_id=tid,
-                                                audio_scheduled=audio_on,
-                                            )
-                                    except Exception:
-                                        pass
+                                            _admin_emit("greet:resp", label="greet:resp",
+                                                        session_id=sid, turn_id=tid, audio_scheduled=audio_on)
                                 except Exception as e:
-                                    try:
-                                        await send({
-                                            "type": "websocket.send",
-                                            "text": _dumps(make_error("greet_fail", e.__class__.__name__)),
-                                        })
-                                    except Exception:
-                                        pass
+                                    with contextlib.suppress(Exception):
+                                        await _ws_send_json(send, make_error("greet_fail", e.__class__.__name__))
                             asyncio.create_task(_bg())
 
                         elif t == "Configure":
                             cfg.update(obj or {})
-
                             if obj.get("reset"):
-                                try:
+                                with contextlib.suppress(Exception):
                                     db.memory.setdefault("greet_turns", {}).pop(sid, None)
-                                except Exception:
-                                    pass
-                                try:
-                                    _admin_emit and _admin_emit(
-                                        "greet:reset", route="/ws/v1/chat", label="greet:reset", session_id=sid
-                                    )
-                                except Exception:
-                                    pass
-
+                                with contextlib.suppress(Exception):
+                                    _admin_emit and _admin_emit("greet:reset", route="/ws/v1/chat",
+                                                                label="greet:reset", session_id=sid)
                             if obj.get("greet"):
                                 _jlog("ws_greet_recv", sid=sid, via="Configure")
-                                async def _bg():
+                                async def _bg2():
                                     try:
                                         from app.services.streaming import run_ws_greet
                                         tid = await asyncio.to_thread(run_ws_greet, sid)
-                                        try:
+                                        with contextlib.suppress(Exception):
                                             if _admin_emit:
                                                 cfg_now = db.get_config()
                                                 audio_on = bool((cfg_now or {}).get("feature_audio", True))
-                                                _admin_emit(
-                                                    "greet:resp",
-                                                    label="greet:resp",
-                                                    session_id=sid,
-                                                    turn_id=tid,
-                                                    audio_scheduled=audio_on,
-                                                )
-                                        except Exception:
-                                            pass
+                                                _admin_emit("greet:resp", label="greet:resp",
+                                                            session_id=sid, turn_id=tid, audio_scheduled=audio_on)
                                     except Exception as e:
-                                        try:
-                                            await send({
-                                                "type": "websocket.send",
-                                                "text": _dumps(make_error("greet_fail", e.__class__.__name__)),
-                                            })
-                                        except Exception:
-                                            pass
-                                asyncio.create_task(_bg())
+                                        with contextlib.suppress(Exception):
+                                            await _ws_send_json(send, make_error("greet_fail", e.__class__.__name__))
+                                asyncio.create_task(_bg2())
 
-                        # TEXT turns (support new WS-only + legacy aliases)
                         elif t in ("user_msg", "User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage"):
                             text = (obj.get("text") or "").strip()
                             if not text:
                                 continue
                             if len(text) > 8000:
-                                await send({
-                                    "type": "websocket.send",
-                                    "text": _dumps(make_error("payload_too_large", "user_text")),
-                                })
+                                await _ws_send_json(send, make_error("payload_too_large", "user_text"))
                                 continue
-
-                            # Accept both new and legacy correlation keys
                             corr = obj.get("correlation_user_msg_id") or obj.get("userMsgId")
                             _jlog("ws_user_msg_recv", sid=sid, text_len=len(text), corr=bool(corr))
 
@@ -655,35 +624,29 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     await asyncio.to_thread(run_ws_user_turn, sid, text, corr)
                                 except Exception as e:
                                     with contextlib.suppress(Exception):
-                                        await send({
-                                            "type": "websocket.send",
-                                            "text": _dumps(make_error("user_fail", e.__class__.__name__)),
-                                        })
+                                        await _ws_send_json(send, make_error("user_fail", e.__class__.__name__))
                             asyncio.create_task(_bg_user())
 
                         elif t == "CloseStream":
                             _jlog("ws_close_stream", sid=sid)
                             if buf.is_empty():
-                                # Empty turn closure; synthesize ids + reset final tracking.
                                 turn_id_ref[0] = buf.turn_seq + 1
                                 final_seen[0] = False
                             turn_id, _pcm = buf.close_turn()
                             turn_id_ref[0] = turn_id
                             synthetic_emitted = False
+
+                            # Flush any staged audio first if ASR is up
                             if _has_deepgram_key() and dg is not None:
-                                # *** GRACE: if we have buffered chunks but ASR not ready yet, give it a moment then flush.
                                 if buffered_chunks and not asr_ready_evt.is_set():
                                     if dg_state == "connecting" and dg_connect_task is not None:
                                         with contextlib.suppress(Exception):
                                             await asyncio.wait_for(dg_connect_task, timeout=asr_ready_wait_s)
                                     with contextlib.suppress(asyncio.TimeoutError):
                                         await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
-
-                                # Flush any staged audio first
                                 await _flush_buffered_chunks()
 
                                 if sent_any_audio[0]:
-                                    # Ask provider to finish; if no final came, synthesize empty final.
                                     with contextlib.suppress(Exception):
                                         await dg.close(wait_for_final=True)
                                     dg_state = "closed"
@@ -694,91 +657,89 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         with contextlib.suppress(asyncio.CancelledError, Exception):
                                             await _relay_task
                                     dg = None
-                                    try:
-                                        if asr_ready_evt and asr_ready_evt.is_set():
-                                            asr_ready_evt.clear()
-                                    except Exception:
-                                        pass
+                                    with contextlib.suppress(Exception):
+                                        asr_ready_evt.clear()
                                     if not final_seen[0]:
                                         final_seen[0] = True
                                         synthetic_emitted = True
                                         result_payload = make_results(turn_id, transcript="", is_final=True)
-                                        # Keep schema compatibility for clients looking at "type"
-                                        RESULTS_TYPE = "Results"
-                                        result_payload["type"] = RESULTS_TYPE
-                                        await send({"type": "websocket.send", "text": _dumps(result_payload)})
-                                        UTTERANCE_END_TYPE = "UtteranceEnd"
+                                        result_payload["type"] = "Results"
+                                        await _ws_send_json(send, result_payload)
                                         utterance_payload = make_utterance_end(turn_id)
-                                        utterance_payload["type"] = UTTERANCE_END_TYPE
-                                        await send({"type": "websocket.send", "text": _dumps(utterance_payload)})
+                                        utterance_payload["type"] = "UtteranceEnd"
+                                        await _ws_send_json(send, utterance_payload)
                                 else:
-                                    # Nothing actually went to provider; skip provider close, synthesize final locally
                                     _jlog("ws_close_skip_no_audio", sid=sid)
                                     if not final_seen[0]:
                                         final_seen[0] = True
                                         synthetic_emitted = True
-                                        RESULTS_TYPE = "Results"
-                                        UTTERANCE_END_TYPE = "UtteranceEnd"
                                         result_payload = make_results(turn_id, transcript="", is_final=True)
-                                        result_payload["type"] = RESULTS_TYPE
-                                        await send({"type": "websocket.send", "text": _dumps(result_payload)})
+                                        result_payload["type"] = "Results"
+                                        await _ws_send_json(send, result_payload)
                                         utterance_payload = make_utterance_end(turn_id)
-                                        utterance_payload["type"] = UTTERANCE_END_TYPE
-                                        await send({"type": "websocket.send", "text": _dumps(utterance_payload)})
+                                        utterance_payload["type"] = "UtteranceEnd"
+                                        await _ws_send_json(send, utterance_payload)
                             else:
-                                # No provider configured: still emit empty final + end to advance the dialog.
                                 if not final_seen[0]:
                                     final_seen[0] = True
                                     synthetic_emitted = True
-                                    await send({
-                                        "type": "websocket.send",
-                                        "text": _dumps(make_results(turn_id, transcript="", is_final=True)),
-                                    })
-                                    await send({"type": "websocket.send", "text": _dumps(make_utterance_end(turn_id))})
+                                    await _ws_send_json(send, make_results(turn_id, transcript="", is_final=True))
+                                    await _ws_send_json(send, make_utterance_end(turn_id))
                             if synthetic_emitted:
-                                # Reset so the next turn starts fresh even if no audio chunk arrives.
                                 final_seen[0] = False
+
+                            # ---- NEW: save & optionally echo diagnostic audio ----
+                            if MIC_CAPTURE and mic_chunks:
+                                wall_ms = int((mic_last_ts[0] - mic_first_ts[0]) * 1000) if mic_last_ts[0] >= mic_first_ts[0] else 0
+                                raw = b"".join(mic_chunks)
+                                try:
+                                    if transport.get("containerized_opus"):
+                                        # save webm as-is
+                                        path = f"/tmp/mic_{sid}_{turn_id}.webm"
+                                        mime = "audio/webm"
+                                        with open(path, "wb") as f:
+                                            f.write(raw)
+                                    else:
+                                        # raw PCM → wrap in WAV so you can play it
+                                        rate = int(os.getenv("DG_RAW_SAMPLE_RATE", "48000"))
+                                        ch = int(os.getenv("DG_RAW_CHANNELS", "1"))
+                                        wav = _wav_with_header(raw, sample_rate=rate, channels=ch, bits_per_sample=16)
+                                        path = f"/tmp/mic_{sid}_{turn_id}.wav"
+                                        mime = "audio/wav"
+                                        with open(path, "wb") as f:
+                                            f.write(wav)
+                                    _jlog("mic_capture_saved", sid=sid, turn_id=turn_id, path=path, bytes=len(raw), wall_ms=wall_ms,
+                                          container=transport.get("container"), codec=transport.get("codec"),
+                                          containerized_opus=transport.get("containerized_opus"))
+                                    if MIC_ECHO_WS:
+                                        # echo back exactly what you sent (webm) or the wav-wrapped raw
+                                        data = raw if mime == "audio/webm" else wav
+                                        await _ws_send_diagnostic_audio(send, turn_id, mime, data)
+                                except Exception as e:
+                                    _jlog("mic_capture_fail", sid=sid, err=type(e).__name__)
                         else:
-                            # Unknown type already filtered by schema; no-op to future-proof.
                             pass
                     except ValueError as e:
-                        await send({"type": "websocket.send", "text": _dumps(make_error("bad_message", str(e)))})
+                        await _ws_send_json(send, make_error("bad_message", str(e)))
             else:
-                # Other ASGI events are ignored
                 pass
 
     finally:
-        # Tear down in a safe order; never raise in cleanup
-        try:
+        with contextlib.suppress(Exception):
             if rx_task:
                 rx_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await rx_task
-        except Exception:
-            pass
-        try:
+                await rx_task
+        with contextlib.suppress(Exception):
             if dg is not None:
-                with contextlib.suppress(Exception):
-                    await dg.close(wait_for_final=False)
-                dg_state = "closed"
-        except Exception:
-            pass
-        try:
+                await dg.close(wait_for_final=False)
+        with contextlib.suppress(Exception):
             bus_task.cancel()
-            with contextlib.suppress(Exception):
-                await bus_task
-        except Exception:
-            pass
-        try:
+            await bus_task
+        with contextlib.suppress(Exception):
             ping_task.cancel()
-            with contextlib.suppress(Exception):
-                await ping_task
-        except Exception:
-            pass
-        try:
+            await ping_task
+        with contextlib.suppress(Exception):
             await send({"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"})
-        except Exception:
-            pass
 
 
 # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
@@ -800,19 +761,16 @@ async def ws_chat(websocket):
     try:
         await websocket.send_text(_dumps({"type": "ready", "session_id": sid}))
     except Exception:
-        try:
+        with contextlib.suppress(Exception):
             await websocket.close(code=1011, reason="initial_ready_failed")
             await asyncio.sleep(0.05)
-        finally:
-            return
+        return
 
     try:
         await _pump_bus_to_client(sid, lambda msg: websocket.send_text(msg.get("text") or ""))
     except Exception:
         pass
     finally:
-        try:
+        with contextlib.suppress(Exception):
             await websocket.close(code=1000, reason="normal_shutdown")
             await asyncio.sleep(0.05)
-        except Exception:
-            pass
