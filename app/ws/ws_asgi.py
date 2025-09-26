@@ -221,6 +221,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     # Session-scoped transport flags for ASR
     transport = {"protocol":"websocket","container":None,"codec":None,"containerized_opus":False,"features":[]}
     sniffer = AudioContainerSniffer()
+    audio_sig_logged = False  # NEW: ensure we only hexdump once
 
     try:
         _admin_emit and _admin_emit(
@@ -464,6 +465,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     chunk = ev.get("bytes") or b""
                     if chunk:
                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
+
+                        # NEW: one-shot hexdump of first 8 bytes for quick signature checks
+                        if not audio_sig_logged:
+                            try:
+                                _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
+                            except Exception:
+                                pass
+                            audio_sig_logged = True
+
                     if buf.is_empty():
                         # New audio turn; prime turn id + reset final tracking.
                         turn_id_ref[0] = buf.turn_seq + 1
@@ -476,12 +486,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     # Feed the container sniffer early so transport hints are accurate
                     try:
                         if transport.get("container") is None and chunk:
-                            sniffer.feed(chunk)
-                            meta = coerce_detection_from_meta(sniffer.meta())
-                            if meta and meta.get("container"):
-                                transport["container"] = meta["container"]      # "webm" / "ogg"
-                                transport["codec"] = meta.get("codec")          # "opus" / etc.
-                                transport["containerized_opus"] = (meta.get("codec") == "opus")
+                            # Use the sniffer's detection result directly (not just meta)
+                            det = sniffer.feed(chunk)
+                            if det:
+                                transport["container"] = getattr(det, "container", None)
+                                transport["codec"] = getattr(det, "codec", None)
+                                # containerized_opus = True when codec == "opus"
+                                transport["containerized_opus"] = bool(getattr(det, "codec", "") == "opus")
                                 _jlog(
                                     "sniffer_detect",
                                     sid=sid,
@@ -489,6 +500,20 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     codec=transport.get("codec"),
                                     containerized_opus=transport.get("containerized_opus"),
                                 )
+                            else:
+                                # Fallback: MIME/coercion (meta hint path)
+                                meta = coerce_detection_from_meta(getattr(sniffer, "meta", lambda: None)())
+                                if meta and meta.get("container"):
+                                    transport["container"] = meta["container"]      # "webm" / "ogg"
+                                    transport["codec"] = meta.get("codec")          # "opus" / etc.
+                                    transport["containerized_opus"] = (meta.get("codec") == "opus")
+                                    _jlog(
+                                        "sniffer_detect",
+                                        sid=sid,
+                                        container=transport.get("container"),
+                                        codec=transport.get("codec"),
+                                        containerized_opus=transport.get("containerized_opus"),
+                                    )
                     except Exception:
                         pass
 
