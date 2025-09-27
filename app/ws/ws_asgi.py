@@ -7,7 +7,7 @@ from app.services.audio.container_sniffer import AudioContainerSniffer, coerce_d
 
 from .schema_v1 import parse_client_json, make_keepalive_ack, make_results, make_utterance_end, make_error
 from .turn_buffer import TurnBuffer
-from app.services.streaming_asr.deepgram_client import DeepgramClient
+from app.services.streaming_asr.deepgram_client import DeepgramClient, DeepgramDrainTimeoutError
 from app.security.ws_token import verify as verify_ws_token
 from app.db import db
 from app.metrics import ws_metrics
@@ -851,9 +851,21 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         provider_can_close = True
                                 if provider_can_close:
                                     # Ask provider to finish; if no final came, we'll synthesize after
-                                    with contextlib.suppress(Exception):
+                                    drain_timeout_exc: Optional[DeepgramDrainTimeoutError] = None
+                                    try:
                                         await asyncio.sleep(float(os.getenv("ASR_FINAL_GRACE_S", "0.30")))  # ~300 ms grace
                                         await dg.close(wait_for_final=True)
+                                    except DeepgramDrainTimeoutError as exc:
+                                        drain_timeout_exc = exc
+                                        _jlog(
+                                            "ws_close_dg_drain_timeout",
+                                            sid=sid,
+                                            queued_chunks=getattr(exc, "queued_chunks", None),
+                                            queued_bytes=getattr(exc, "queued_bytes", None),
+                                            wait_timeout=getattr(exc, "wait_timeout", None),
+                                        )
+                                    except Exception as exc:
+                                        _jlog("ws_close_dg_close_error", sid=sid, err=type(exc).__name__)
                                     dg_state = "closed"
                                     _relay_task = rx_task
                                     rx_task = None
@@ -873,6 +885,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         utterance_payload = make_utterance_end(turn_id)
                                         utterance_payload["type"] = "UtteranceEnd"
                                         await _ws_send_json(send, utterance_payload)
+                                    if drain_timeout_exc is not None:
+                                        _jlog(
+                                            "ws_close_dg_drain_timeout_fallback",
+                                            sid=sid,
+                                            queued_chunks=getattr(drain_timeout_exc, "queued_chunks", None),
+                                            queued_bytes=getattr(drain_timeout_exc, "queued_bytes", None),
+                                        )
                                 else:
                                     if fallback_reason == "dg_not_ready":
                                         _jlog("ws_close_fallback_not_ready", sid=sid)

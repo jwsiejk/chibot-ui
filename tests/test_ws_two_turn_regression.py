@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections import deque
 
+import app.services.streaming_asr.deepgram_client as dg_mod
 from app.ws import ws_asgi
 
 
@@ -155,3 +156,87 @@ def test_audio_chunk_retries_until_asr_open(monkeypatch):
 
     instance = _RetryDeepgram.instances[0]
     assert instance.received == [b"\x00\x01"]
+
+
+def test_close_after_first_chunk_does_not_mark_transport_failure(monkeypatch):
+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
+    monkeypatch.setenv("DG_LINGER_MS", "0")
+    monkeypatch.setenv("DG_OPEN_WAIT_S", "0.02")
+    monkeypatch.setenv("DG_CLOSE_DRAIN_TIMEOUT_S", "0.3")
+    monkeypatch.setenv("DG_CLOSE_FLUSH_BUDGET_S", "0.5")
+    monkeypatch.setenv("ASR_FINAL_GRACE_S", "0.05")
+    monkeypatch.setenv("DG_FINAL_WAIT_S", "0.1")
+
+    logs = []
+
+    def capture(event, **fields):
+        logs.append((event, fields))
+
+    monkeypatch.setattr(ws_asgi, "_jlog", capture)
+
+    class _DelayedOpenWS:
+        def __init__(self):
+            self.open = False
+            self.closed = False
+            self.closing = False
+            self.sent = []
+
+        async def send(self, data):
+            self.sent.append(data)
+
+        async def close(self):
+            self.open = False
+            self.closing = True
+            self.closed = True
+
+    class _DelayedDrainDeepgram(dg_mod.DeepgramClient):
+        instances = []
+
+        def __init__(self, cfg=None):
+            super().__init__(cfg)
+            self.__class__.instances.append(self)
+            self._ws = _DelayedOpenWS()
+
+        async def connect(self):
+            ws = self._ws
+
+            async def _delayed_ready():
+                await asyncio.sleep(0.05)
+                ws.open = True
+                await self._signal_ready()
+
+            asyncio.create_task(_delayed_ready())
+
+        async def _stop_keepalive(self):
+            # Override to avoid awaiting non-started keepalive in tests.
+            self._keepalive_task = None
+
+    monkeypatch.setattr(ws_asgi, "DeepgramClient", _DelayedDrainDeepgram)
+
+    events = deque(
+        [
+            {"type": "websocket.receive", "bytes": b"\xAA" * 96},
+            {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
+            {"type": "websocket.disconnect"},
+        ]
+    )
+
+    sent = _run_ws_session(events)
+
+    payloads = [
+        json.loads(msg["text"])
+        for msg in sent
+        if msg.get("type") == "websocket.send" and msg.get("text")
+    ]
+
+    errors = [p for p in payloads if p.get("type") == "Error" and p.get("code") == "asr_error"]
+    finals = [p for p in payloads if p.get("type") == "Results" and p.get("channel", {}).get("is_final")]
+    utterance = [p for p in payloads if p.get("type") == "UtteranceEnd"]
+
+    assert not errors, f"unexpected asr_error payloads: {errors}"
+    assert finals, "expected synthetic final result when close races drain"
+    assert utterance, "expected UtteranceEnd payload when close races drain"
+
+    log_events = [evt for evt, _ in logs]
+    assert "dg_writer_drop" not in log_events
