@@ -393,13 +393,82 @@ class DeepgramClient:
 
     async def _flush_tx(self) -> Tuple[int, Optional[str]]:
         """Drain queued audio if the socket is open and we've signaled ready."""
+        sid = self._sid_for_log()
+        queued_at_start = len(self._tx_queue)
+        ws_open_flag = bool(self._ws) and bool(getattr(self._ws, "open", False))
+        open_evt_set = self._open_evt.is_set()
+
+        logger.debug(
+            "Deepgram flush enter sid=%s queued=%s ws_open=%s open_evt=%s",
+            sid,
+            queued_at_start,
+            ws_open_flag,
+            open_evt_set,
+        )
+        if callable(self._jlog):
+            try:
+                self._jlog(
+                    "dg_flush_enter",
+                    sid=sid,
+                    tag=self._url_tag,
+                    queued=queued_at_start,
+                    ws_open=ws_open_flag,
+                    open_evt=open_evt_set,
+                )
+            except Exception:
+                pass
+
         if not self._tx_queue:
             if not self._drain_event.is_set():
                 self._drain_event.set()
+            ws_open_after = bool(self._ws) and bool(getattr(self._ws, "open", False))
+            if callable(self._jlog):
+                try:
+                    self._jlog(
+                        "dg_flush_exit",
+                        sid=sid,
+                        tag=self._url_tag,
+                        queued=len(self._tx_queue),
+                        sent_bytes=0,
+                        sent_chunks=0,
+                        ws_open=ws_open_after,
+                        open_evt=self._open_evt.is_set(),
+                        first8_hex=None,
+                    )
+                except Exception:
+                    pass
+            logger.debug(
+                "Deepgram flush exit sid=%s queued=%s sent_bytes=%s",
+                sid,
+                len(self._tx_queue),
+                0,
+            )
             return 0, None
         # Wait until socket open — don't raise; just give it a short chance
         await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S', '0.75')))
         if not self._ws or not getattr(self._ws, "open", False):
+            if callable(self._jlog):
+                try:
+                    self._jlog(
+                        "dg_flush_exit",
+                        sid=sid,
+                        tag=self._url_tag,
+                        queued=len(self._tx_queue),
+                        sent_bytes=0,
+                        sent_chunks=0,
+                        ws_open=False,
+                        open_evt=self._open_evt.is_set(),
+                        first8_hex=None,
+                    )
+                except Exception:
+                    pass
+            logger.debug(
+                "Deepgram flush exit sid=%s queued=%s sent_bytes=%s ws_open=%s",
+                sid,
+                len(self._tx_queue),
+                0,
+                False,
+            )
             return 0, None
         # Ensure we've passed the ready/open gate
         if not self._open_evt.is_set():
@@ -417,6 +486,7 @@ class DeepgramClient:
 
         sid = self._sid_for_log()
         total_sent = 0
+        sent_chunks = 0
         first_chunk: Optional[bytes] = None
         while self._tx_queue and self._ws and getattr(self._ws, "open", False):
             data = self._tx_queue[0]
@@ -439,6 +509,7 @@ class DeepgramClient:
                 self._last_chunk_ts = time.time()
                 self._tx_queue.popleft()
                 total_sent += len(data)
+                sent_chunks += 1
                 if first_chunk is None:
                     first_chunk = data
                 logger.debug("Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
@@ -467,17 +538,56 @@ class DeepgramClient:
                 first8_hex = first_chunk[:8].hex()
             except Exception:
                 first8_hex = None
+        ws_open_after = bool(self._ws) and bool(getattr(self._ws, "open", False))
+        open_evt_after = self._open_evt.is_set()
+        if callable(self._jlog):
+            try:
+                self._jlog(
+                    "dg_flush_exit",
+                    sid=sid,
+                    tag=self._url_tag,
+                    queued=len(self._tx_queue),
+                    sent_bytes=total_sent,
+                    sent_chunks=sent_chunks,
+                    ws_open=ws_open_after,
+                    open_evt=open_evt_after,
+                    first8_hex=first8_hex,
+                )
+            except Exception:
+                pass
+        logger.debug(
+            "Deepgram flush exit sid=%s queued=%s sent_bytes=%s sent_chunks=%s ws_open=%s open_evt=%s",
+            sid,
+            len(self._tx_queue),
+            total_sent,
+            sent_chunks,
+            ws_open_after,
+            open_evt_after,
+        )
         return total_sent, first8_hex
 
     # -- lifecycle -------------------------------------------------------------
 
     async def connect(self) -> None:
         global DG_LAST_URL, DG_LAST_CONFIG
+        sid = self._sid_for_log()
+        if callable(self._jlog):
+            try:
+                self._jlog(
+                    "dg_connect_begin",
+                    sid=sid,
+                    tag=self._url_tag,
+                    already_open=bool(self._ws),
+                    closing=self._closing,
+                    closed=self._closed,
+                )
+            except Exception:
+                pass
         if self._ws:
+            logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
             return
 
         url = _dg_url(self._cfg)
-        sid = self._sid_for_log()
 
         containerized = False
 

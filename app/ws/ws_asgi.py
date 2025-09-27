@@ -195,13 +195,31 @@ async def _pump_dg_to_client(
     sid: str,
     asr_ready_evt: Optional[asyncio.Event] = None,
     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
+    turn_timing: Optional[Dict[str, List[float]]] = None,
+    on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
 ):
     """Relay Deepgram events to client and, on final, kick LLM turn."""
     try:
         async for ev in dg.events():
             et = (ev.get("type") or "").lower()
             if et == "asr_open":
-                _jlog("dg_asr_open", sid=sid)
+                delta_ms = None
+                now_ts = time.time()
+                if turn_timing is not None:
+                    try:
+                        holder = turn_timing.setdefault("dg_open", [0.0])
+                        holder[0] = now_ts
+                        start_ts = turn_timing.get("start", [0.0])[0]
+                        if start_ts:
+                            delta_ms = int((now_ts - start_ts) * 1000)
+                    except Exception:
+                        pass
+                _jlog(
+                    "dg_asr_open",
+                    sid=sid,
+                    turn_id=turn_id_ref[0],
+                    delta_from_turn_ms=delta_ms,
+                )
                 try:
                     if asr_ready_evt and not asr_ready_evt.is_set():
                         asr_ready_evt.set()
@@ -228,6 +246,13 @@ async def _pump_dg_to_client(
                         asr_seen_partial[0] = True
                     except Exception:
                         pass
+                    if turn_timing is not None:
+                        try:
+                            first_holder = turn_timing.setdefault("first_partial", [0.0])
+                            if not first_holder[0]:
+                                first_holder[0] = time.time()
+                        except Exception:
+                            pass
                 _jlog("dg_transcript", sid=sid, turn_id=turn_id_ref[0], is_final=is_final, chars=len(text), preview=_clip_text(text))
                 try:
                     if et == "user_partial":
@@ -239,6 +264,18 @@ async def _pump_dg_to_client(
 
                 if is_final:
                     final_seen[0] = True
+                    if turn_timing is not None and text:
+                        try:
+                            first_holder = turn_timing.setdefault("first_partial", [0.0])
+                            if not first_holder[0]:
+                                first_holder[0] = time.time()
+                        except Exception:
+                            pass
+                    if on_turn_finish:
+                        try:
+                            on_turn_finish(turn_id_ref[0], "provider_final", False, len(text))
+                        except Exception:
+                            pass
                     await _ws_send_json(send, make_utterance_end(turn_id_ref[0]))
                     try:
                         _admin_emit and _admin_emit("asr:final", session_id=sid)
@@ -452,6 +489,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     turn_id_ref = [0]
     final_seen = [False]
     asr_seen_partial = [False]
+    turn_timing: Dict[str, List[float]] = {
+        "start": [0.0],
+        "dg_open": [0.0],
+        "first_partial": [0.0],
+        "final": [0.0],
+    }
+    turn_finish_logged = [False]
 
     # Turn-scoped buffering + state
     buffered_chunks: Deque[bytes] = deque()
@@ -465,6 +509,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     mic_chunks: List[bytes] = []
     mic_first_ts = [0.0]
     mic_last_ts = [0.0]
+
+    def _reset_turn_metrics(start_ts: float) -> None:
+        turn_timing["start"][0] = start_ts
+        turn_timing["dg_open"][0] = 0.0
+        turn_timing["first_partial"][0] = 0.0
+        turn_timing["final"][0] = 0.0
+        turn_finish_logged[0] = False
+
+    def _log_turn_finish(turn_id: int, reason: str, synthetic: bool, transcript_chars: int) -> None:
+        if turn_finish_logged[0]:
+            return
+        turn_finish_logged[0] = True
+        now_ts = time.time()
+        turn_timing["final"][0] = now_ts
+        start_ts = turn_timing.get("start", [0.0])[0]
+        dg_open_ts = turn_timing.get("dg_open", [0.0])[0]
+        first_partial_ts = turn_timing.get("first_partial", [0.0])[0]
+        delta_start = int((now_ts - start_ts) * 1000) if start_ts else None
+        delta_open = int((now_ts - dg_open_ts) * 1000) if dg_open_ts else None
+        delta_partial = int((now_ts - first_partial_ts) * 1000) if first_partial_ts else None
+        with contextlib.suppress(Exception):
+            _jlog(
+                "turn_finish",
+                sid=sid,
+                turn_id=turn_id,
+                reason=reason,
+                synthetic=bool(synthetic),
+                delta_start_ms=delta_start,
+                delta_asr_open_ms=delta_open,
+                delta_first_partial_ms=delta_partial,
+                transcript_chars=int(transcript_chars),
+            )
+
+    async def _emit_synthetic_final(turn_id: int, reason: str, transcript: str = "") -> bool:
+        if final_seen[0]:
+            return False
+        final_seen[0] = True
+        payload = make_results(turn_id, transcript=transcript, is_final=True)
+        payload["type"] = "Results"
+        await _ws_send_json(send, payload)
+        utterance_payload = make_utterance_end(turn_id)
+        utterance_payload["type"] = "UtteranceEnd"
+        await _ws_send_json(send, utterance_payload)
+        with contextlib.suppress(Exception):
+            _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
+        _log_turn_finish(turn_id, reason=reason, synthetic=True, transcript_chars=len(transcript or ""))
+        return True
 
     async def _ensure_dg_connected() -> bool:
         nonlocal dg, rx_task, dg_connect_task, dg_state
@@ -500,7 +591,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 connect_result["ok"] = True
                 turn_id_ref[0] = buf.turn_seq + 1
                 rx_task = asyncio.create_task(
-                    _pump_dg_to_client(client, send, turn_id_ref, final_seen, sid, asr_ready_evt, _flush_buffered_chunks)
+                    _pump_dg_to_client(
+                        client,
+                        send,
+                        turn_id_ref,
+                        final_seen,
+                        sid,
+                        asr_ready_evt,
+                        _flush_buffered_chunks,
+                        turn_timing,
+                        _log_turn_finish,
+                    )
                 )
                 _jlog("asr_connect_ok", sid=sid)
             except Exception as e:
@@ -623,6 +724,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         # New audio turn
                         turn_id_ref[0] = buf.turn_seq + 1
                         final_seen[0] = False
+                        asr_seen_partial[0] = False
                         sent_any_audio[0] = False
                         buffered_chunks.clear()
                         turn_connect_started[0] = False
@@ -630,6 +732,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         mic_chunks.clear()
                         mic_first_ts[0] = now
                         mic_last_ts[0] = now
+                        _reset_turn_metrics(now)
+                        with contextlib.suppress(Exception):
+                            _jlog(
+                                "turn_start",
+                                sid=sid,
+                                turn_id=turn_id_ref[0],
+                                first_bytes=len(chunk),
+                            )
 
                     buf.append(chunk)
 
@@ -776,6 +886,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 # Empty turn closure; synthesize ids + reset final tracking.
                                 turn_id_ref[0] = buf.turn_seq + 1
                                 final_seen[0] = False
+                                _reset_turn_metrics(time.time())
+                                with contextlib.suppress(Exception):
+                                    _jlog(
+                                        "turn_start",
+                                        sid=sid,
+                                        turn_id=turn_id_ref[0],
+                                        first_bytes=0,
+                                        empty_turn=True,
+                                    )
 
                             # --- Get a turn_id (with guard logs) ---
                             _jlog("before_close_turn", sid=sid, next_turn_id=buf.turn_seq + 1)
@@ -877,14 +996,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     with contextlib.suppress(Exception):
                                         asr_ready_evt.clear()
                                     if not final_seen[0]:
-                                        final_seen[0] = True
-                                        synthetic_emitted = True
-                                        result_payload = make_results(turn_id, transcript="", is_final=True)
-                                        result_payload["type"] = "Results"
-                                        await _ws_send_json(send, result_payload)
-                                        utterance_payload = make_utterance_end(turn_id)
-                                        utterance_payload["type"] = "UtteranceEnd"
-                                        await _ws_send_json(send, utterance_payload)
+                                        synth_reason = "dg_close_no_final"
+                                        if drain_timeout_exc is not None:
+                                            synth_reason = "dg_drain_timeout"
+                                        if await _emit_synthetic_final(turn_id, synth_reason):
+                                            synthetic_emitted = True
                                     if drain_timeout_exc is not None:
                                         _jlog(
                                             "ws_close_dg_drain_timeout_fallback",
@@ -898,21 +1014,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     else:
                                         _jlog("ws_close_skip_no_audio", sid=sid)
                                     if not final_seen[0]:
-                                        final_seen[0] = True
-                                        synthetic_emitted = True
-                                        result_payload = make_results(turn_id, transcript="", is_final=True)
-                                        result_payload["type"] = "Results"
-                                        await _ws_send_json(send, result_payload)
-                                        utterance_payload = make_utterance_end(turn_id)
-                                        utterance_payload["type"] = "UtteranceEnd"
-                                        await _ws_send_json(send, utterance_payload)
+                                        reason = "fallback_dg_not_ready" if fallback_reason == "dg_not_ready" else "fallback_no_audio"
+                                        if await _emit_synthetic_final(turn_id, reason):
+                                            synthetic_emitted = True
                             else:
                                 # No provider configured: still emit empty final + end to advance the dialog.
                                 if not final_seen[0]:
-                                    final_seen[0] = True
-                                    synthetic_emitted = True
-                                    await _ws_send_json(send, make_results(turn_id, transcript="", is_final=True))
-                                    await _ws_send_json(send, make_utterance_end(turn_id))
+                                    if await _emit_synthetic_final(turn_id, "no_provider"):
+                                        synthetic_emitted = True
 
                             if synthetic_emitted:
                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
