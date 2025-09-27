@@ -667,13 +667,35 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             return
         if not _has_deepgram_key() or dg is None:
             return
+        initial_queued = len(buffered_chunks)
+        flushed_chunks = 0
+        flushed_bytes = 0
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ws_flush_request",
+                sid=sid,
+                queued=initial_queued,
+                dg_ready=_dg_client_ready(dg),
+            )
         while buffered_chunks:
             chunk = buffered_chunks[0]
+            chunk_len = len(chunk) if isinstance(chunk, (bytes, bytearray)) else 0
             ok = await _send_chunk(chunk, from_buffer=True)
             if ok:
                 buffered_chunks.popleft()
+                flushed_chunks += 1
+                flushed_bytes += chunk_len
                 continue
             break
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ws_flush_done",
+                sid=sid,
+                queued=initial_queued,
+                flushed_chunks=flushed_chunks,
+                flushed_bytes=flushed_bytes,
+                remaining=len(buffered_chunks),
+            )
 
     try:
         while True:

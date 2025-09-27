@@ -289,6 +289,7 @@ class DeepgramClient:
         self._closed = False
         self._closing = False
         self._url_tag: Optional[str] = None
+        self._dg_id: int = id(self)
 
         # TX queue + flushing
         self._tx_queue: Deque[bytes] = deque()
@@ -410,6 +411,7 @@ class DeepgramClient:
                 self._jlog(
                     "dg_flush_enter",
                     sid=sid,
+                    dg_id=self._dg_id,
                     tag=self._url_tag,
                     queued=queued_at_start,
                     ws_open=ws_open_flag,
@@ -427,6 +429,7 @@ class DeepgramClient:
                     self._jlog(
                         "dg_flush_exit",
                         sid=sid,
+                        dg_id=self._dg_id,
                         tag=self._url_tag,
                         queued=len(self._tx_queue),
                         sent_bytes=0,
@@ -452,6 +455,7 @@ class DeepgramClient:
                     self._jlog(
                         "dg_flush_exit",
                         sid=sid,
+                        dg_id=self._dg_id,
                         tag=self._url_tag,
                         queued=len(self._tx_queue),
                         sent_bytes=0,
@@ -519,9 +523,11 @@ class DeepgramClient:
                         self._jlog(
                             "dg_forward",
                             sid=sid,
+                            dg_id=self._dg_id,
                             tag=self._url_tag,
                             bytes=len(data),
                             queued=len(self._tx_queue),
+                            total_sent=total_sent,
                         )
                     except Exception:
                         pass
@@ -545,6 +551,7 @@ class DeepgramClient:
                 self._jlog(
                     "dg_flush_exit",
                     sid=sid,
+                    dg_id=self._dg_id,
                     tag=self._url_tag,
                     queued=len(self._tx_queue),
                     sent_bytes=total_sent,
@@ -576,6 +583,7 @@ class DeepgramClient:
                 self._jlog(
                     "dg_connect_begin",
                     sid=sid,
+                    dg_id=self._dg_id,
                     tag=self._url_tag,
                     already_open=bool(self._ws),
                     closing=self._closing,
@@ -625,6 +633,7 @@ class DeepgramClient:
                 try:
                     self._jlog(
                         "asr_url",
+                        dg_id=self._dg_id,
                         url=url,
                         container=url_meta.get("container"),
                         codec=url_meta.get("codec"),
@@ -658,7 +667,14 @@ class DeepgramClient:
             logger.info("Deepgram test-mode connect sid=%s", sid)
             if callable(self._jlog):
                 try:
-                    self._jlog("dg_open", sid=sid, url=url, tag=self._url_tag, test_mode=True)
+                    self._jlog(
+                        "dg_open",
+                        sid=sid,
+                        dg_id=self._dg_id,
+                        url=url,
+                        tag=self._url_tag,
+                        test_mode=True,
+                    )
                 except Exception:
                     pass
             return
@@ -685,6 +701,17 @@ class DeepgramClient:
         DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
         async with self._send_lock:
             await self._ws.send(json.dumps(cfg_payload))
+        if callable(self._jlog):
+            try:
+                self._jlog(
+                    "dg_config_sent",
+                    sid=sid,
+                    dg_id=self._dg_id,
+                    tag=self._url_tag,
+                    keys=sorted(cfg_payload.keys()),
+                )
+            except Exception:
+                pass
 
         await self._signal_ready()
         # Proactively schedule a flush in case audio was queued before/while connecting
@@ -701,6 +728,7 @@ class DeepgramClient:
                 self._jlog(
                     "dg_open",
                     sid=sid,
+                    dg_id=self._dg_id,
                     url=url,
                     tag=self._url_tag,
                     containerized=containerized,
@@ -758,6 +786,21 @@ class DeepgramClient:
         dropped_bytes = 0
         drain_wait_timeout = False
         drain_failed = False
+
+        if callable(self._jlog):
+            try:
+                self._jlog(
+                    "dg_close_drain_begin",
+                    sid=sid,
+                    dg_id=self._dg_id,
+                    tag=self._url_tag,
+                    queued=len(self._tx_queue),
+                    linger_ms=linger_ms,
+                    wait_for_final=wait_for_final,
+                    drain_timeout_s=self._drain_timeout_s,
+                )
+            except Exception:
+                pass
 
         def _record_flush(bytes_sent: int, first_hex: Optional[str]) -> None:
             nonlocal flush_bytes, flush_first8
@@ -832,6 +875,7 @@ class DeepgramClient:
                     self._jlog(
                         "dg_writer_timeout",
                         sid=sid,
+                        dg_id=self._dg_id,
                         tag=self._url_tag,
                         queued_chunks=dropped_chunks,
                         queued_bytes=dropped_bytes,
@@ -853,6 +897,7 @@ class DeepgramClient:
                 self._jlog(
                     "dg_writer_drained",
                     sid=sid,
+                    dg_id=self._dg_id,
                     tag=self._url_tag,
                     bytes=flush_bytes,
                     first8_hex=flush_first8,
@@ -867,6 +912,17 @@ class DeepgramClient:
         try:
             if self._ws and getattr(self._ws, "open", False):
                 async with self._send_lock:
+                    if callable(self._jlog):
+                        try:
+                            self._jlog(
+                                "dg_send_close_stream",
+                                sid=sid,
+                                dg_id=self._dg_id,
+                                tag=self._url_tag,
+                                queued=len(self._tx_queue),
+                            )
+                        except Exception:
+                            pass
                     await self._ws.send(json.dumps({"type": "CloseStream"}))
         except Exception:
             pass
@@ -910,6 +966,7 @@ class DeepgramClient:
                 self._jlog(
                     "dg_close",
                     sid=sid,
+                    dg_id=self._dg_id,
                     tag=self._url_tag,
                     wait_for_final=wait_for_final,
                     linger_ms=linger_ms,
@@ -935,19 +992,43 @@ class DeepgramClient:
         if not chunk:
             return
 
+        sid = self._sid_for_log()
         payload = bytes(chunk)
         self._tx_queue.append(payload)
         if self._drain_event.is_set():
             self._drain_event.clear()
-
-        # Lazy preconnect: if socket isn't open yet, kick off connect in the background.
-        if not self.is_open() and not self._closing:
+        if callable(self._jlog):
             try:
-                asyncio.create_task(self.connect())
+                self._jlog(
+                    "dg_tx_enqueue",
+                    sid=sid,
+                    dg_id=self._dg_id,
+                    tag=self._url_tag,
+                    bytes=len(payload),
+                    queued=len(self._tx_queue),
+                )
             except Exception:
                 pass
 
-        sid = self._sid_for_log()
+        # Lazy preconnect: if socket isn't open yet, kick off connect in the background.
+        if not self.is_open() and not self._closing:
+            lazy_started = False
+            try:
+                asyncio.create_task(self.connect())
+                lazy_started = True
+            except Exception:
+                pass
+            if lazy_started and callable(self._jlog):
+                try:
+                    self._jlog(
+                        "dg_lazy_connect",
+                        sid=sid,
+                        dg_id=self._dg_id,
+                        tag=self._url_tag,
+                        queued=len(self._tx_queue),
+                    )
+                except Exception:
+                    pass
 
         if not self._open_evt.is_set():
             try:
