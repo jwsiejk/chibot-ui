@@ -787,7 +787,13 @@ class DeepgramClient:
 
         payload = bytes(chunk)
         self._tx_queue.append(payload)
-
+    if not self.is_open() and not self._closing:
+        try:
+            # fire-and-forget; _flush_tx will wait for open gate
+            asyncio.create_task(self.connect())
+        except Exception:
+            pass     
+        
         sid = self._sid_for_log()
 
         if not self._open_evt.is_set():
