@@ -116,6 +116,7 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
                 "punctuate",
                 "vad_events",
                 "utterance_end_ms",
+                "endpointing",
                 "model",
                 "language",
             ):
@@ -175,6 +176,10 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         # Ensure some model is present; default to nova-2 if none provided
         if "model" not in qd:
             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
+
+        # Request 200 ms of silence for endpointing unless explicitly overridden
+        if "endpointing" not in qd:
+            qd["endpointing"] = "200"
 
         query = _p.urlencode(qd)
         base = _p.urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
