@@ -519,6 +519,24 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             await dg_connect_task
         return connect_result["ok"]
 
+    def _dg_client_ready(client: Optional[DeepgramClient]) -> bool:
+        """Return True if the Deepgram client reports an open websocket."""
+        if client is None:
+            return False
+        try:
+            is_open = getattr(client, "is_open", None)
+            if callable(is_open) and is_open():
+                return True
+        except Exception:
+            pass
+        evt = getattr(client, "_open_evt", None)
+        if isinstance(evt, asyncio.Event):
+            try:
+                return evt.is_set()
+            except Exception:
+                return False
+        return False
+
     async def _send_chunk(data: bytes, *, from_buffer: bool = False, retry: bool = True) -> bool:
         nonlocal dg, dg_state
         if dg is None:
@@ -801,7 +819,37 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     with contextlib.suppress(Exception):
                                         await asyncio.sleep(float(os.getenv("ASR_POST_FLUSH_WAIT_S", "0.35")))
 
-                                if sent_any_audio[0] and dg is not None:
+                                provider_can_close = False
+                                fallback_reason = "no_audio"
+                                if dg is not None and sent_any_audio[0]:
+                                    fallback_reason = None
+                                    readiness_timeout = False
+                                    if dg_connect_task is not None and not dg_connect_task.done():
+                                        try:
+                                            await asyncio.wait_for(dg_connect_task, timeout=asr_ready_wait_s)
+                                        except asyncio.TimeoutError:
+                                            readiness_timeout = True
+                                            _jlog("ws_close_dg_connect_timeout", sid=sid)
+                                        except Exception as exc:
+                                            _jlog("ws_close_dg_connect_error", sid=sid, err=type(exc).__name__)
+                                    if asr_ready_evt is not None and not asr_ready_evt.is_set():
+                                        try:
+                                            await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
+                                        except asyncio.TimeoutError:
+                                            readiness_timeout = True
+                                            _jlog("ws_close_dg_ready_timeout", sid=sid)
+                                    provider_open = _dg_client_ready(dg)
+                                    if not provider_open:
+                                        _jlog("ws_close_dg_not_open", sid=sid)
+                                    sent_any_audio[0] = sent_any_audio[0] and provider_open and not readiness_timeout
+                                    if not sent_any_audio[0]:
+                                        if readiness_timeout or not provider_open:
+                                            fallback_reason = "dg_not_ready"
+                                        else:
+                                            fallback_reason = "no_audio"
+                                    else:
+                                        provider_can_close = True
+                                if provider_can_close:
                                     # Ask provider to finish; if no final came, we'll synthesize after
                                     with contextlib.suppress(Exception):
                                         await asyncio.sleep(float(os.getenv("ASR_FINAL_GRACE_S", "0.30")))  # ~300 ms grace
@@ -826,8 +874,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         utterance_payload["type"] = "UtteranceEnd"
                                         await _ws_send_json(send, utterance_payload)
                                 else:
-                                    # Nothing actually went to provider; synthesize final locally
-                                    _jlog("ws_close_skip_no_audio", sid=sid)
+                                    if fallback_reason == "dg_not_ready":
+                                        _jlog("ws_close_fallback_not_ready", sid=sid)
+                                    else:
+                                        _jlog("ws_close_skip_no_audio", sid=sid)
                                     if not final_seen[0]:
                                         final_seen[0] = True
                                         synthetic_emitted = True
