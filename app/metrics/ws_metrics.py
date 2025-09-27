@@ -2,6 +2,33 @@ from __future__ import annotations
 import time
 from typing import Dict, List
 
+
+def summarize_active_ws() -> dict:
+    """Best-effort snapshot of active websocket connections."""
+    try:
+        from app.ws import ws_asgi
+    except Exception as exc:
+        return {"ok": False, "error": f"import_{exc.__class__.__name__}"}
+
+    registry = getattr(ws_asgi, "ACTIVE_WS", None)
+    if registry is None:
+        return {"ok": False, "error": "registry_unavailable"}
+
+    try:
+        entries = list(registry.items())
+    except RuntimeError:
+        # If the registry is being mutated concurrently, retry once.
+        entries = list(registry.items())
+
+    return {
+        "ok": True,
+        "active": len(registry),
+        "connections": [
+            {"conn_id": conn_id, **meta} for conn_id, meta in entries
+        ],
+        "generated_ts": time.time(),
+    }
+
 FAILED_HANDSHAKES: Dict[str, List[float]] = {}
 TOTAL_FAILS: int = 0
 OVERLIMIT_FAILS: int = 0

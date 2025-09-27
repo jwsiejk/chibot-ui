@@ -1,12 +1,72 @@
+diff --git a/app/metrics/ws_metrics.py b/app/metrics/ws_metrics.py
+index 7ade40ae44e9f957632ff26c0ac45b0371e1090b..6aaa2be7f07d67e0a70120c9947e674b8d2f68cb 100644
+--- a/app/metrics/ws_metrics.py
++++ b/app/metrics/ws_metrics.py
+@@ -1,29 +1,56 @@
+ from __future__ import annotations
+ import time
+ from typing import Dict, List
+ 
++
++def summarize_active_ws() -> dict:
++    """Best-effort snapshot of active websocket connections."""
++    try:
++        from app.ws import ws_asgi
++    except Exception as exc:
++        return {"ok": False, "error": f"import_{exc.__class__.__name__}"}
++
++    registry = getattr(ws_asgi, "ACTIVE_WS", None)
++    if registry is None:
++        return {"ok": False, "error": "registry_unavailable"}
++
++    try:
++        entries = list(registry.items())
++    except RuntimeError:
++        # If the registry is being mutated concurrently, retry once.
++        entries = list(registry.items())
++
++    return {
++        "ok": True,
++        "active": len(registry),
++        "connections": [
++            {"conn_id": conn_id, **meta} for conn_id, meta in entries
++        ],
++        "generated_ts": time.time(),
++    }
++
+ FAILED_HANDSHAKES: Dict[str, List[float]] = {}
+ TOTAL_FAILS: int = 0
+ OVERLIMIT_FAILS: int = 0
+ PROCESS_START_TS = time.time()
+ 
+ def _purge(q: List[float], now: float, window_sec: float) -> None:
+     cutoff = now - window_sec
+     i = 0
+     for t in q:
+         if t >= cutoff:
+             break
+         i += 1
+     if i:
+         del q[:i]
+ 
+ def record_fail(ip: str, limit: int, window_sec: float) -> bool:
+     global TOTAL_FAILS, OVERLIMIT_FAILS
+     TOTAL_FAILS += 1
+     q = FAILED_HANDSHAKES.setdefault(ip, [])
+     now = time.time()
+     _purge(q, now, window_sec)
+     q.append(now)
+     over = len(q) > limit
+     if over:
+         OVERLIMIT_FAILS += 1
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 62e1c2b4ce3d8d208e1cb78c1ebcd1e7dacf2a71..c337eeec0e8bbda1446f95443e25f9a643c18d43 100644
+index c337eeec0e8bbda1446f95443e25f9a643c18d43..b6d0922df0f050b87ebd2dab6513abe98fe9c0ef 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -1,28 +1,28 @@
+@@ -1,47 +1,51 @@
  # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
  from __future__ import annotations
--import asyncio, os, contextlib, time, io, struct, base64
-+import asyncio, os, contextlib, time, io, struct, base64, uuid
+ import asyncio, os, contextlib, time, io, struct, base64, uuid
  from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple
  from collections import deque
  from app.services.audio.container_sniffer import AudioContainerSniffer, coerce_detection_from_meta
@@ -26,46 +86,47 @@ index 62e1c2b4ce3d8d208e1cb78c1ebcd1e7dacf2a71..c337eeec0e8bbda1446f95443e25f9a6
  except Exception:
      _admin_emit = None
  
++
++ACTIVE_WS: dict[str, dict[str, Any]] = {}
++ACTIVE_WS_LOCK = asyncio.Lock()
++
  WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
  try:
      _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
  except Exception:
      pass
  
-@@ -255,111 +255,137 @@ async def _pump_dg_to_client(
-                 try:
-                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=err)
-                 except Exception:
-                     pass
-                 await _ws_send_json(send, make_error("asr_error", err))
-     except asyncio.CancelledError:
-         return
-     except Exception as e:
-         with contextlib.suppress(Exception):
-             await _ws_send_json(send, make_error("relay_fail", e.__class__.__name__))
+ # ------------------------------ small helpers ------------------------------
+ 
+ def _client_ip_from_scope(scope) -> str:
+     try:
+         c = scope.get("client") or ()
+         if isinstance(c, (list, tuple)) and c:
+             return str(c[0])
+     except Exception:
+         pass
+     try:
+         hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
+         xff = hdrs.get("x-forwarded-for", "").split(",")[0].strip()
+         if xff:
+             return xff
+     except Exception:
+         pass
+     return "unknown"
  
  
- # ------------------------------ main WS impl ------------------------------
- 
- async def _ws_chat_asgi_impl(scope, receive, send):
-     # Session-scoped transport flags for ASR
-     transport = {"protocol":"websocket","container":None,"codec":None,"containerized_opus":False,"features":[]}
-     sniffer = AudioContainerSniffer()
-     audio_sig_logged = False
- 
-     MIC_CAPTURE = _env_truth("MIC_CAPTURE", False)
+@@ -276,115 +280,164 @@ async def _ws_chat_asgi_impl(scope, receive, send):
      MIC_ECHO_WS = _env_truth("MIC_ECHO_WS", False)
  
      _jlog("mic_capture_cfg", sid="pending", enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
  
-+    raw_query = (scope.get("query_string") or b"").decode("utf-8", "ignore")
-+
+     raw_query = (scope.get("query_string") or b"").decode("utf-8", "ignore")
+ 
      try:
          _admin_emit and _admin_emit(
              "ws_handshake_enter",
              path=scope.get("path"),
--            raw_query=(scope.get("query_string") or b"").decode("utf-8", "ignore"),
-+            raw_query=raw_query,
+             raw_query=raw_query,
          )
      except Exception:
          pass
@@ -76,10 +137,12 @@ index 62e1c2b4ce3d8d208e1cb78c1ebcd1e7dacf2a71..c337eeec0e8bbda1446f95443e25f9a6
          return
  
      sid = _get_session_id(scope)
-+    conn_id = uuid.uuid4().hex
-+    start_ts = time.time()
-+    last_msg_ts = start_ts
-+    had_disconnect = False
+     conn_id = uuid.uuid4().hex
+     start_ts = time.time()
+     last_msg_ts = start_ts
+     had_disconnect = False
++    active_ws_registered = False
++    active_ws_closed = False
      _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
  
      # Auth
@@ -124,28 +187,75 @@ index 62e1c2b4ce3d8d208e1cb78c1ebcd1e7dacf2a71..c337eeec0e8bbda1446f95443e25f9a6
                  await send({"type": "websocket.close", "code": 4401})
              return
  
++    async def _register_active_ws_entry() -> Optional[int]:
++        nonlocal active_ws_registered
++        try:
++            async with ACTIVE_WS_LOCK:
++                ACTIVE_WS[conn_id] = {
++                    "sid": sid,
++                    "client_ip": client_ip,
++                    "start_ts": start_ts,
++                }
++                active_count = len(ACTIVE_WS)
++            active_ws_registered = True
++            return active_count
++        except Exception:
++            return None
++
++    async def _remove_active_ws_entry(source: str) -> None:
++        nonlocal active_ws_closed
++        if active_ws_closed:
++            return
++        active_ws_closed = True
++        if not active_ws_registered:
++            return
++        entry = None
++        active_count = None
++        try:
++            async with ACTIVE_WS_LOCK:
++                entry = ACTIVE_WS.pop(conn_id, None)
++                active_count = len(ACTIVE_WS)
++        except Exception:
++            entry = None
++            active_count = None
++        if entry is None:
++            with contextlib.suppress(Exception):
++                _jlog("ws_conn_missing", conn_id=conn_id, sid=sid, source=source)
++            return
++        with contextlib.suppress(Exception):
++            _jlog("ws_conn_close", conn_id=conn_id, sid=sid, active=active_count, source=source)
++        with contextlib.suppress(Exception):
++            if _admin_emit:
++                _admin_emit("ws_conn_close", conn_id=conn_id, active=active_count)
++
      await send({"type": "websocket.accept", "subprotocol": "bearer"})
  
-+    with contextlib.suppress(Exception):
-+        _jlog(
-+            "ws_conn_open",
-+            sid=sid,
-+            conn_id=conn_id,
-+            client_ip=client_ip,
-+            path=scope.get("path"),
-+            query_string=raw_query,
-+        )
-+    with contextlib.suppress(Exception):
-+        if _admin_emit:
-+            _admin_emit(
-+                "ws_conn_open",
-+                sid=sid,
-+                conn_id=conn_id,
-+                client_ip=client_ip,
-+                path=scope.get("path"),
-+                query_string=raw_query,
-+            )
-+
+     with contextlib.suppress(Exception):
+         _jlog(
+             "ws_conn_open",
+             sid=sid,
+             conn_id=conn_id,
+             client_ip=client_ip,
+             path=scope.get("path"),
+             query_string=raw_query,
+         )
++    active_count = await _register_active_ws_entry()
++    if active_count is not None:
++        with contextlib.suppress(Exception):
++            _jlog("ws_conn_active", conn_id=conn_id, sid=sid, active=active_count)
+     with contextlib.suppress(Exception):
+         if _admin_emit:
+             _admin_emit(
+                 "ws_conn_open",
+                 sid=sid,
+                 conn_id=conn_id,
+                 client_ip=client_ip,
+                 path=scope.get("path"),
+                 query_string=raw_query,
+             )
++            if active_count is not None:
++                _admin_emit("ws_conn_active", conn_id=conn_id, active=active_count)
+ 
      with contextlib.suppress(Exception):
          db.memory.setdefault("greet_turns", {}).pop(sid, None)
  
@@ -170,60 +280,38 @@ index 62e1c2b4ce3d8d208e1cb78c1ebcd1e7dacf2a71..c337eeec0e8bbda1446f95443e25f9a6
          with contextlib.suppress(Exception):
              await send({"type": "websocket.close", "code": 1011, "reason": "initial_ready_failed"})
          return
- 
-@@ -458,53 +484,77 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
-         except Exception as e:
-             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
-         return False
- 
-     async def _flush_buffered_chunks() -> None:
-         nonlocal dg
-         if not buffered_chunks:
-             return
-         if not _has_deepgram_key() or dg is None:
-             return
-         while buffered_chunks:
-             chunk = buffered_chunks[0]
-             ok = await _send_chunk(chunk, from_buffer=True)
-             if ok:
-                 buffered_chunks.popleft()
-                 continue
-             break
- 
-     try:
-         while True:
-             ev = await receive()
+@@ -506,50 +559,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
              et = ev.get("type")
  
              if et == "websocket.disconnect":
-+                had_disconnect = True
-+                now = time.time()
-+                idle_s = max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
-+                with contextlib.suppress(Exception):
-+                    _jlog(
-+                        "ws_conn_disconnect",
-+                        conn_id=conn_id,
-+                        sid=sid,
-+                        code=ev.get("code"),
-+                        reason=ev.get("reason"),
-+                        idle_s=idle_s,
-+                    )
-+                with contextlib.suppress(Exception):
-+                    if _admin_emit:
-+                        _admin_emit(
-+                            "ws_conn_disconnect",
-+                            conn_id=conn_id,
-+                            sid=sid,
-+                            code=ev.get("code"),
-+                            reason=ev.get("reason"),
-+                            idle_s=idle_s,
-+                        )
-+                last_msg_ts = now
+                 had_disconnect = True
+                 now = time.time()
+                 idle_s = max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
+                 with contextlib.suppress(Exception):
+                     _jlog(
+                         "ws_conn_disconnect",
+                         conn_id=conn_id,
+                         sid=sid,
+                         code=ev.get("code"),
+                         reason=ev.get("reason"),
+                         idle_s=idle_s,
+                     )
+                 with contextlib.suppress(Exception):
+                     if _admin_emit:
+                         _admin_emit(
+                             "ws_conn_disconnect",
+                             conn_id=conn_id,
+                             sid=sid,
+                             code=ev.get("code"),
+                             reason=ev.get("reason"),
+                             idle_s=idle_s,
+                         )
++                await _remove_active_ws_entry("disconnect")
+                 last_msg_ts = now
                  break
  
              if et == "websocket.receive":
-+                last_msg_ts = time.time()
+                 last_msg_ts = time.time()
                  # -------------------- Binary / audio lane --------------------
                  if ev.get("bytes") is not None:
                      now = time.time()
@@ -244,12 +332,7 @@ index 62e1c2b4ce3d8d208e1cb78c1ebcd1e7dacf2a71..c337eeec0e8bbda1446f95443e25f9a6
                          turn_connect_started[0] = False
                          # reset mic capture
                          mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
- 
-                     buf.append(chunk)
- 
-@@ -808,50 +858,68 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+@@ -858,50 +912,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                  f.write(wav)
                                              data_to_echo = wav
  
@@ -275,24 +358,25 @@ index 62e1c2b4ce3d8d208e1cb78c1ebcd1e7dacf2a71..c337eeec0e8bbda1446f95443e25f9a6
                  pass
  
      finally:
-+        duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
-+        with contextlib.suppress(Exception):
-+            _jlog(
-+                "ws_conn_cleanup",
-+                conn_id=conn_id,
-+                sid=sid,
-+                duration=duration,
-+                had_disconnect=had_disconnect,
-+            )
-+        with contextlib.suppress(Exception):
-+            if _admin_emit:
-+                _admin_emit(
-+                    "ws_conn_cleanup",
-+                    conn_id=conn_id,
-+                    sid=sid,
-+                    duration=duration,
-+                    had_disconnect=had_disconnect,
-+                )
++        await _remove_active_ws_entry("cleanup")
+         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "ws_conn_cleanup",
+                 conn_id=conn_id,
+                 sid=sid,
+                 duration=duration,
+                 had_disconnect=had_disconnect,
+             )
+         with contextlib.suppress(Exception):
+             if _admin_emit:
+                 _admin_emit(
+                     "ws_conn_cleanup",
+                     conn_id=conn_id,
+                     sid=sid,
+                     duration=duration,
+                     had_disconnect=had_disconnect,
+                 )
          # Clean up safely; never raise in cleanup
          with contextlib.suppress(Exception):
              if rx_task:
@@ -300,21 +384,3 @@ index 62e1c2b4ce3d8d208e1cb78c1ebcd1e7dacf2a71..c337eeec0e8bbda1446f95443e25f9a6
                  await rx_task
          with contextlib.suppress(Exception):
              if dg is not None:
-                 await dg.close(wait_for_final=False)
-         with contextlib.suppress(Exception):
-             bus_task.cancel()
-             await bus_task
-         with contextlib.suppress(Exception):
-             ping_task.cancel()
-             await ping_task
-         with contextlib.suppress(Exception):
-             await send({"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"})
- 
- 
- # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
- try:
-     from starlette.websockets import WebSocket as _StarletteWebSocket  # noqa
- except Exception:
-     _StarletteWebSocket = None
- 
- 

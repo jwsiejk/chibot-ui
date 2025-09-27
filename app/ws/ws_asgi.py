@@ -20,6 +20,10 @@ try:
 except Exception:
     _admin_emit = None
 
+
+ACTIVE_WS: dict[str, dict[str, Any]] = {}
+ACTIVE_WS_LOCK = asyncio.Lock()
+
 WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
 try:
     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
@@ -298,6 +302,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     start_ts = time.time()
     last_msg_ts = start_ts
     had_disconnect = False
+    active_ws_registered = False
+    active_ws_closed = False
     _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
 
     # Auth
@@ -342,6 +348,47 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 await send({"type": "websocket.close", "code": 4401})
             return
 
+    async def _register_active_ws_entry() -> Optional[int]:
+        nonlocal active_ws_registered
+        try:
+            async with ACTIVE_WS_LOCK:
+                ACTIVE_WS[conn_id] = {
+                    "sid": sid,
+                    "client_ip": client_ip,
+                    "start_ts": start_ts,
+                }
+                active_count = len(ACTIVE_WS)
+            active_ws_registered = True
+            return active_count
+        except Exception:
+            return None
+
+    async def _remove_active_ws_entry(source: str) -> None:
+        nonlocal active_ws_closed
+        if active_ws_closed:
+            return
+        active_ws_closed = True
+        if not active_ws_registered:
+            return
+        entry = None
+        active_count = None
+        try:
+            async with ACTIVE_WS_LOCK:
+                entry = ACTIVE_WS.pop(conn_id, None)
+                active_count = len(ACTIVE_WS)
+        except Exception:
+            entry = None
+            active_count = None
+        if entry is None:
+            with contextlib.suppress(Exception):
+                _jlog("ws_conn_missing", conn_id=conn_id, sid=sid, source=source)
+            return
+        with contextlib.suppress(Exception):
+            _jlog("ws_conn_close", conn_id=conn_id, sid=sid, active=active_count, source=source)
+        with contextlib.suppress(Exception):
+            if _admin_emit:
+                _admin_emit("ws_conn_close", conn_id=conn_id, active=active_count)
+
     await send({"type": "websocket.accept", "subprotocol": "bearer"})
 
     with contextlib.suppress(Exception):
@@ -353,6 +400,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             path=scope.get("path"),
             query_string=raw_query,
         )
+    active_count = await _register_active_ws_entry()
+    if active_count is not None:
+        with contextlib.suppress(Exception):
+            _jlog("ws_conn_active", conn_id=conn_id, sid=sid, active=active_count)
     with contextlib.suppress(Exception):
         if _admin_emit:
             _admin_emit(
@@ -363,6 +414,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 path=scope.get("path"),
                 query_string=raw_query,
             )
+            if active_count is not None:
+                _admin_emit("ws_conn_active", conn_id=conn_id, active=active_count)
 
     with contextlib.suppress(Exception):
         db.memory.setdefault("greet_turns", {}).pop(sid, None)
@@ -528,6 +581,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             reason=ev.get("reason"),
                             idle_s=idle_s,
                         )
+                await _remove_active_ws_entry("disconnect")
                 last_msg_ts = now
                 break
 
@@ -880,6 +934,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 pass
 
     finally:
+        await _remove_active_ws_entry("cleanup")
         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
         with contextlib.suppress(Exception):
             _jlog(
