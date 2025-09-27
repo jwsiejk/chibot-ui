@@ -690,21 +690,32 @@ class DeepgramClient:
         if not chunk:
             return
 
-        # Always enqueue first to avoid races; we'll send directly if possible.
-        self._tx_queue.append(bytes(chunk))
+        payload = bytes(chunk)
+        self._tx_queue.append(payload)
 
         sid = self._sid_for_log()
 
-        # If not yet "ready", schedule a flush once we are
         if not self._open_evt.is_set():
             try:
                 await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
             except asyncio.TimeoutError:
+                try:
+                    for idx, item in enumerate(self._tx_queue):
+                        if item is payload:
+                            del self._tx_queue[idx]
+                            break
+                except Exception:
+                    pass
+
                 if not self._open_gate_warned:
-                    logger.warning("Deepgram send gated but no open within timeout sid=%s", sid)
+                    logger.warning(
+                        "Deepgram send gated but no open within timeout sid=%s queued=%s",
+                        sid,
+                        len(self._tx_queue),
+                    )
                     self._open_gate_warned = True
-                # Even if timed out, treat as ready to avoid deadlock; flush will re-check.
-                await self._signal_ready()
+
+                raise RuntimeError("deepgram_not_connected")
 
         # Opportunistic flush now (won't throw if socket not open yet)
         self._schedule_flush()

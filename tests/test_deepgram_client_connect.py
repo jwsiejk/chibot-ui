@@ -354,7 +354,7 @@ def test_keepalive_waits_for_flush_and_close(monkeypatch):
     asyncio.run(run())
 
 
-def test_send_warns_but_continues_after_open_timeout(monkeypatch, caplog):
+def test_send_times_out_and_raises_runtime_error(monkeypatch, caplog):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
 
@@ -366,24 +366,28 @@ def test_send_warns_but_continues_after_open_timeout(monkeypatch, caplog):
         client._open_wait_s = 0.0
         client._min_valid_bytes = 1
 
-        await client.send(b"a" * 4)
-        await client.send(b"b" * 4)
-        await asyncio.sleep(0.06)
+        with pytest.raises(RuntimeError) as exc1:
+            await client.send(b"a" * 4)
+        assert "deepgram_not_connected" in str(exc1.value)
+
+        with pytest.raises(RuntimeError) as exc2:
+            await client.send(b"b" * 4)
+        assert "deepgram_not_connected" in str(exc2.value)
+
+        # Ensure no queue residue from failed attempts.
+        assert list(client._tx_queue) == []
+        assert not client._open_evt.is_set()
+
         return client
 
     client = asyncio.run(run())
 
-    assert client._ws.sent == [b"a" * 4, b"b" * 4]
-    assert client._open_evt.is_set()
+    assert client._ws.sent == []
     assert client._open_gate_warned is True
     assert caplog.text.count("Deepgram send gated but no open within timeout") == 1
-    event = client._ev_queue.get_nowait()
-    assert event["type"] == "asr_open"
-    with pytest.raises(asyncio.QueueEmpty):
-        client._ev_queue.get_nowait()
 
 
-def test_send_does_not_wait_for_provider_ready(monkeypatch):
+def test_send_waits_for_provider_ready(monkeypatch):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
 
@@ -410,9 +414,17 @@ def test_send_does_not_wait_for_provider_ready(monkeypatch):
         send_task = asyncio.create_task(client.send(b"a" * 4))
         await asyncio.sleep(0)
 
-        # Audio should be sent immediately without waiting for metadata frames.
         assert json.loads(client._ws.sent[0])["type"] == "Configure"
-        async def _wait_for_audio() -> list:
+
+        # Audio should not be forwarded before the provider signals ready.
+        assert all(
+            not isinstance(item, (bytes, bytearray))
+            for item in client._ws.sent[1:]
+        )
+
+        release_iter.set()
+
+        async def _wait_for_audio_after_ready() -> list:
             deadline = asyncio.get_running_loop().time() + 0.3
             while True:
                 non_keepalive = [
@@ -426,13 +438,11 @@ def test_send_does_not_wait_for_provider_ready(monkeypatch):
                 if non_keepalive:
                     return non_keepalive
                 if asyncio.get_running_loop().time() >= deadline:
-                    raise AssertionError("audio chunk not sent before metadata")
+                    raise AssertionError("audio chunk not sent after provider ready")
                 await asyncio.sleep(0.01)
 
-        non_keepalive = await _wait_for_audio()
+        non_keepalive = await _wait_for_audio_after_ready()
         assert non_keepalive[0] == b"a" * 4
-
-        release_iter.set()
         await send_task
 
         event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.1)
@@ -441,6 +451,31 @@ def test_send_does_not_wait_for_provider_ready(monkeypatch):
         await client.close(wait_for_final=False)
 
     asyncio.run(run())
+
+
+def test_close_after_send_timeout_logs_queue_drained(monkeypatch, caplog):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+
+    caplog.set_level(logging.INFO)
+
+    async def run():
+        client = dg_mod.DeepgramClient()
+        client._ws = DummyWS()
+        client._open_wait_s = 0.0
+        client._min_valid_bytes = 1
+
+        with pytest.raises(RuntimeError):
+            await client.send(b"hello")
+
+        assert list(client._tx_queue) == []
+
+        await client.close(wait_for_final=False)
+
+    asyncio.run(run())
+
+    assert "dg_writer_drained" in caplog.text
+    assert "queued=0" in caplog.text
 
 
 def test_dg_url_tag_includes_session(monkeypatch):
