@@ -25,6 +25,46 @@ class DummyWS:
         return _gen()
 
 
+class ConcurrentGuardWS(DummyWS):
+    """Websocket double that raises when concurrent sends overlap."""
+
+    def __init__(self):
+        super().__init__()
+        self._inflight = False
+        self._blocked_sends: asyncio.Queue = asyncio.Queue()
+        self._auto_release = True
+
+    def hold_next_send(self) -> None:
+        """Ensure the next send blocks until released via `wait_for_blocked_send`."""
+
+        self._auto_release = False
+
+    async def wait_for_blocked_send(self):
+        """Return (payload, event) for the next blocked send."""
+
+        payload, event = await self._blocked_sends.get()
+        return payload, event
+
+    async def send(self, data):
+        if self._inflight:
+            raise RuntimeError("cannot call send while another coroutine is already waiting")
+
+        self._inflight = True
+        try:
+            if self._auto_release:
+                await asyncio.sleep(0)
+                self.sent.append(data)
+                return
+
+            self._auto_release = True
+            release = asyncio.Event()
+            await self._blocked_sends.put((data, release))
+            await release.wait()
+            self.sent.append(data)
+        finally:
+            self._inflight = False
+
+
 def test_connect_prefers_additional_headers(monkeypatch):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
@@ -223,6 +263,91 @@ def test_close_waits_for_final_keepalive(monkeypatch):
 
         assert count_keepalives() == post_close_keepalives
         assert keepalive_ws.open is False
+        assert client._keepalive_task is None
+
+    asyncio.run(run())
+
+
+def _count_keepalives(ws: DummyWS) -> int:
+    return sum(
+        1
+        for item in ws.sent
+        if isinstance(item, str) and json.loads(item).get("type") == "KeepAlive"
+    )
+
+
+def test_keepalive_waits_for_flush_and_close(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+    monkeypatch.setenv("DG_KEEPALIVE_INTERVAL_S", "0.01")
+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+
+    guard_ws = ConcurrentGuardWS()
+
+    async def fake_connect(url, **kwargs):
+        return guard_ws
+
+    monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
+
+    async def run():
+        client = dg_mod.DeepgramClient()
+        await client.connect()
+        client._min_valid_bytes = 1
+
+        assert client._keepalive_task and not client._keepalive_task.done()
+
+        async def wait_for_keepalives(target: int) -> int:
+            deadline = asyncio.get_running_loop().time() + 0.5
+            while _count_keepalives(guard_ws) < target:
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError("expected keepalive count to reach target")
+                await asyncio.sleep(0.01)
+            return _count_keepalives(guard_ws)
+
+        baseline_keepalives = await wait_for_keepalives(1)
+
+        guard_ws.hold_next_send()
+        send_task = asyncio.create_task(client.send(b"a" * 4))
+
+        while True:
+            payload, release = await asyncio.wait_for(guard_ws.wait_for_blocked_send(), timeout=0.2)
+            if payload == b"a" * 4:
+                break
+            release.set()
+            guard_ws.hold_next_send()
+
+        await asyncio.sleep(0.05)
+        assert client._keepalive_task and not client._keepalive_task.done()
+
+        release.set()
+        await asyncio.wait_for(send_task, timeout=0.2)
+
+        post_flush_keepalives = await wait_for_keepalives(baseline_keepalives + 1)
+
+        guard_ws.hold_next_send()
+        close_task = asyncio.create_task(client.close(wait_for_final=True, timeout=0.5))
+
+        while True:
+            payload, release = await asyncio.wait_for(guard_ws.wait_for_blocked_send(), timeout=0.2)
+            if isinstance(payload, str) and json.loads(payload).get("type") == "CloseStream":
+                break
+            release.set()
+            guard_ws.hold_next_send()
+
+        await asyncio.sleep(0.05)
+        assert client._keepalive_task and not client._keepalive_task.done()
+
+        mid_close_keepalives = await wait_for_keepalives(post_flush_keepalives + 1)
+
+        release.set()
+
+        await asyncio.sleep(0.05)
+        assert client._keepalive_task and not client._keepalive_task.done()
+
+        client._final_event.set()
+        await asyncio.wait_for(close_task, timeout=0.5)
+
+        await asyncio.sleep(0.05)
+        assert guard_ws.open is False
         assert client._keepalive_task is None
 
     asyncio.run(run())

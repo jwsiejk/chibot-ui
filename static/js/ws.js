@@ -8,6 +8,13 @@ let __WS_RECONNECT_ENABLED = true;
 //   • Helpers: waitWSOpen(), isOpen(), bufferedAmount(), sendJSON/audio, configure()
 //   • DOM events: 'askchip-ws' (messages), 'askchip-ws-close' (terminal close)
 
+// ----- Build/diag stamps (for runtime verification) -----
+const __WS_BUILD_ID__ = "ws:2025-09-27T02:05:00Z"; // update when shipping
+if (typeof window !== "undefined" && window.__ASKCHIP_DIAG_LOCK == null) {
+  // When true, blocks *any* implicit openWS unless explicitly allowed.
+  window.__ASKCHIP_DIAG_LOCK = false;
+}
+
 import { playStream, audioEnd, unlockAudio } from './audio.js';
 import { getSID } from './util/sid.js';
 
@@ -265,11 +272,23 @@ window.addEventListener('online', () => {
 // --- Open WS using subprotocol auth (no token in URL, no headers) ---
 // Idempotent: if OPEN/CONNECTING, returns that socket.
 export function openWS(options = {}){
+  // Hard diag lock: block opens unless explicitly allowed
+  if (typeof window !== "undefined" && window.__ASKCHIP_DIAG_LOCK && !(options && options.reconnect === true)) {
+    const hasExplicit = options && Object.prototype.hasOwnProperty.call(options, 'reconnect');
+    if (!hasExplicit) {
+      console.warn("[ws] blocked openWS by diag lock (implicit call)");
+      return _ws || undefined;
+   }
+ }
+
   try {
     if (options && Object.prototype.hasOwnProperty.call(options, 'reconnect')) {
       __WS_RECONNECT_ENABLED = !!options.reconnect;
     }
   } catch(_) {}
+
+  // Debug stamp: prove which build and flag are in effect
+  try { console.info("[ws] build=", __WS_BUILD_ID__, "openWS options=", options, "reconnect=", __WS_RECONNECT_ENABLED); } catch {}
 
   if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)){
     return Promise.resolve(_ws);
@@ -307,6 +326,7 @@ export function openWS(options = {}){
 
     ws.onclose = (e) => {
       if (!__WS_RECONNECT_ENABLED) {
+        try { _stopKeepAlive(); } catch {}
         try { window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }})); } catch {}
         return;
       }
@@ -415,35 +435,4 @@ export function sendJSON(obj){
     _lastUserSendTs = Date.now();
     return true;
   } catch(e){
-    console.warn('[ws] sendJSON error', e);
-    return false;
-  }
-}
-
-export async function sendAudioChunk(blob){
-  if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
-  _pauseKeepalive(_KEEPALIVE_REASON_UPLOAD);
-  try{
-    const buf = await blob.arrayBuffer();
-    try {
-      console.debug('[ws] sending audio chunk', { bytes: buf.byteLength, mime: blob.type });
-    } catch {}
-    _ws.send(buf);
-    _lastUserSendTs = Date.now();
-  }catch(e){
-    console.warn('[ws] sendAudioChunk error', e);
-  } finally {
-    _scheduleKeepaliveResume(_KEEPALIVE_REASON_UPLOAD, _KEEPALIVE_RESUME_AFTER_UPLOAD_MS);
-  }
-}
-
-export function sendCloseStream(){
-  sendJSON({ type: "CloseStream" });
-}
-
-export function configure(opts = {}){
-  // ensure session id is included if caller forgot
-  const sid = getSID();
-  const payload = { type: "Configure", session_id: sid, ...opts };
-  sendJSON(payload);
-}
+    console.warn('[ws

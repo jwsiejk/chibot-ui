@@ -239,6 +239,9 @@ class DeepgramClient:
         # Optional JSON logger injected by WS layer (ws_asgi)
         self._jlog = self._cfg.get("_jlog")
 
+        # Serialize outbound websocket sends to avoid concurrent writer errors
+        self._send_lock = asyncio.Lock()
+
     def is_open(self) -> bool:
         """Return True if the underlying websocket appears open."""
         try:
@@ -333,7 +336,8 @@ class DeepgramClient:
                 self._tx_queue.popleft()
                 continue
             try:
-                await self._ws.send(data)
+                async with self._send_lock:
+                    await self._ws.send(data)
                 self._first_real_sent = True
                 self._last_chunk_ts = time.time()
                 self._tx_queue.popleft()
@@ -439,7 +443,8 @@ class DeepgramClient:
 
         DG_LAST_URL = url
         DG_LAST_CONFIG = _initial_config(self._cfg)
-        await self._ws.send(json.dumps(DG_LAST_CONFIG))
+        async with self._send_lock:
+            await self._ws.send(json.dumps(DG_LAST_CONFIG))
 
         await self._signal_ready()
         self._rx_task = asyncio.create_task(self._rx_loop())
@@ -485,7 +490,8 @@ class DeepgramClient:
 
         try:
             if self._ws and getattr(self._ws, "open", False):
-                await self._ws.send(json.dumps({"type": "CloseStream"}))
+                async with self._send_lock:
+                    await self._ws.send(json.dumps({"type": "CloseStream"}))
         except Exception:
             pass
 
@@ -689,11 +695,19 @@ class DeepgramClient:
                     break
 
                 try:
-                    await ws.send(json.dumps({"type": "KeepAlive"}))
+                    async with self._send_lock:
+                        await ws.send(json.dumps({"type": "KeepAlive"}))
                     logger.debug("Deepgram keepalive sid=%s interval=%s", sid, self._keepalive_interval)
+                except websockets.ConnectionClosed as exc:
+                    logger.warning("Deepgram keepalive closed sid=%s err=%s", sid, exc)
+                    break
                 except Exception as exc:
                     logger.warning("Deepgram keepalive failed sid=%s err=%s", sid, exc)
-                    break
+                    try:
+                        await asyncio.sleep(self._keepalive_interval)
+                    except asyncio.CancelledError:
+                        return
+                    continue
 
                 try:
                     await asyncio.sleep(self._keepalive_interval)
