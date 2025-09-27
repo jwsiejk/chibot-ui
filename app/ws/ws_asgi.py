@@ -659,13 +659,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     # Ensure provider connection
                     if not turn_connect_started[0]:
                         turn_connect_started[0] = True
-                        connected = await _ensure_dg_connected()
-                        if not connected:
-                            turn_connect_started[0] = False
+                        dg_connect_task = asyncio.create_task(_ensure_dg_connected())
+                        connected = await _ensure_dg_connected()                        
                     elif dg_state == "connecting" and dg_connect_task is not None:
-                        with contextlib.suppress(Exception):
-                            await dg_connect_task
-
+                        pass
+                        
                     # Flush when ready
                     if dg is not None:
                         if not asr_ready_evt.is_set():
@@ -770,46 +768,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 _pcm = None
                             _jlog("after_close_turn", sid=sid, turn_id=turn_id)
                             turn_id_ref[0] = turn_id
-
-                            # ---- CAPTURE FIRST: summarize, save to /tmp (or $TMPDIR/MIC_CAPTURE_DIR), and optional WS echo ----
-                            _jlog("mic_capture_block_enter", sid=sid, turn_id=turn_id, mic_chunks=len(mic_chunks))
-                            if MIC_CAPTURE:
-                                try:
-                                    raw = b"".join(mic_chunks)
-                                    _jlog(
-                                        "mic_capture_summary",
-                                        sid=sid, turn_id=turn_id, bytes=len(raw), chunks=len(mic_chunks),
-                                        container=transport.get("container"), codec=transport.get("codec"),
-                                        containerized_opus=transport.get("containerized_opus"),
-                                    )
-                                    if raw:
-                                        base_dir = (
-                                            os.getenv("MIC_CAPTURE_DIR")
-                                            or os.getenv("TMPDIR")
-                                            or (os.name == "nt" and os.getenv("TMP"))
-                                            or "/tmp"
-                                        )
-                                        if transport.get("containerized_opus"):
-                                            out_path = os.path.join(base_dir, f"mic_{sid}_{turn_id}.webm")
-                                            mime = "audio/webm"
-                                            with open(out_path, "wb") as f:
-                                                f.write(raw)
-                                            data_to_echo = raw
-                                        else:
-                                            rate = int(os.getenv("DG_RAW_SAMPLE_RATE", "48000"))
-                                            ch = int(os.getenv("DG_RAW_CHANNELS", "1"))
-                                            wav = _wav_with_header(raw, sample_rate=rate, channels=ch, bits_per_sample=16)
-                                            out_path = os.path.join(base_dir, f"mic_{sid}_{turn_id}.wav")
-                                            mime = "audio/wav"
-                                            with open(out_path, "wb") as f:
-                                                f.write(wav)
-                                            data_to_echo = wav
-                                        _jlog("mic_capture_saved", sid=sid, turn_id=turn_id, path=out_path, bytes=len(raw), mime=mime)
-                                        if MIC_ECHO_WS:
-                                            await _ws_send_diagnostic_audio(send, turn_id, mime, data_to_echo)
-                                except Exception as e:
-                                    _jlog("mic_capture_fail", sid=sid, err=type(e).__name__)
-
+                         
                             # ---- THEN finish the ASR turn (unchanged logic) ----
                             if _has_deepgram_key() and dg is not None:
                                 # If we have buffered chunks but ASR not ready yet, give it a moment then flush.
