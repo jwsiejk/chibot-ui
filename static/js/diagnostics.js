@@ -39,7 +39,7 @@ async function watchAdminSSE(onEvent){
   }
 }
 
-async function recordFiveSeconds(){
+async function recordUntilSilence(){
   const btnRec = $('#btn-record');
   const btnStop = $('#btn-stop');
   const status = $('#status');
@@ -65,21 +65,52 @@ async function recordFiveSeconds(){
     await waitWSOpen();
     status.textContent = 'Requesting microphone…';
     const stream = await initMic();
-    status.textContent = 'Recording…';
+    status.textContent = 'Listening… (auto-stop on silence).';
     btnRec.disabled = true; btnStop.disabled = false;
 
     await armVAD(stream);
-    // stop after 5 seconds or when Stop clicked
-    const stopPromise = new Promise((resolve)=>{
-      btnStop.onclick = ()=> resolve('manual');
-      setTimeout(()=> resolve('timer'), 8000);
-    });
-    const reason = await stopPromise;
+    let recordedSpeech = false;
+    const reason = await new Promise((resolve)=>{
+      const timer = setTimeout(()=>{ cleanup(); resolve('timeout'); }, 12000);
+      const onVoice = (ev)=>{
+        const detail = ev?.detail || {};
+        if (detail.state === 'recording'){
+          recordedSpeech = true;
+          status.textContent = 'Recording… speak now (auto-stop on silence).';
+        }else if (detail.state === 'armed'){
+          if (!recordedSpeech){
+            status.textContent = 'Listening… (auto-stop on silence).';
+          }else{
+            status.textContent = 'Silence detected. Stopping…';
+            cleanup();
+            resolve('silence');
+          }
+        }else if (detail.state === 'idle' && !recordedSpeech){
+          cleanup();
+          resolve('disarmed');
+        }
+      };
+      const cleanup = ()=>{
+        clearTimeout(timer);
+        window.removeEventListener('askchip-voice', onVoice);
+        btnStop.onclick = null;
+      };
+      window.addEventListener('askchip-voice', onVoice);
+      btnStop.onclick = ()=>{ status.textContent = 'Manual stop requested. Stopping…'; cleanup(); resolve('manual'); };
+    });    
     btnStop.disabled = true;
-
-    status.textContent = 'Stopping…';
+    
+     if (reason === 'timeout'){
+      status.textContent = 'Timed out waiting for speech. Stopping…';
+    }else if (reason === 'disarmed'){
+      status.textContent = 'Microphone disarmed. Stopping…';
+    } 
     disarmVAD();
-status.textContent = 'Audio captured (sending)…';
+    if ((reason === 'silence' || reason === 'manual') && recordedSpeech){
+      status.textContent = 'Audio captured (sending)…';
+    }else{
+      status.textContent = 'Finalizing…';
+    }
 
     // wait briefly for finals to land
     await new Promise(r=> setTimeout(r, 2000));
@@ -102,7 +133,7 @@ status.textContent = 'Audio captured (sending)…';
 function init(){
   const btnRec = $('#btn-record');
   const btnStop = $('#btn-stop');
-  if (btnRec) btnRec.addEventListener('click', recordFiveSeconds);
+  if (btnRec) btnRec.addEventListener('click', recordUntilSilence);
   if (btnStop) btnStop.disabled = true;
   log('Session: '+sid);
 }

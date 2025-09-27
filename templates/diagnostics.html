@@ -24,7 +24,7 @@
 
   <section class="card">
     <h3>WebSocket Pipe Test</h3>
-    <p>This test uses the <span class="mono">/ws/v1/chat</span> lane only. It records your mic for <b>5 seconds</b>, sends audio as binary WebM/Opus, and watches Admin SSE for ASR events tied to your session.</p>
+    <p>This test uses the <span class="mono">/ws/v1/chat</span> lane only. It records your mic until it hears <b>silence</b> (with a short safety timeout), sends audio as binary WebM/Opus, and watches Admin SSE for ASR events tied to your session.</p>
     <div class="grid">
       <div class="kpi"><div class="label">Pipe alive</div><div id="kpi-pipe" class="value">—</div></div>
       <div class="kpi"><div class="label">ASR partials</div><div id="kpi-partials" class="value">0</div></div>
@@ -32,7 +32,7 @@
     </div>
     <div id="status" style="margin-top:8px;opacity:.85">Idle.</div>
     <div class="actions">
-      <button id="btn-record" class="primary">Record 5 s</button>
+      <button id="btn-record" class="primary">Record (auto-stop on silence)</button>
       <button id="btn-stop" disabled>Stop</button>
     </div>
   </section>
