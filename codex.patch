@@ -1,172 +1,244 @@
 diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 5c8ffa4029bedcade3a87f730e76b8b4608a61ec..8e68e2297fe5b31595967d81427e4a5247d97aa3 100644
+index 8e68e2297fe5b31595967d81427e4a5247d97aa3..0c1ebdcf48ebcb4d0f493d8bf46acb8cf6733ddc 100644
 --- a/app/services/streaming_asr/deepgram_client.py
 +++ b/app/services/streaming_asr/deepgram_client.py
-@@ -64,81 +64,80 @@ def _clip_text(txt: str, limit: int = 120) -> str:
+@@ -1,34 +1,34 @@
+ from __future__ import annotations
  
- def _dg_url(overrides: Optional[dict] = None) -> str:
-     """Return the Deepgram listen URL with safe defaults.
+ import asyncio
+ import json
+ import logging
+ import os
+ import re
+ import time
+-from typing import AsyncGenerator, Optional, Any, Deque
++from typing import AsyncGenerator, Optional, Any, Deque, Tuple
+ from collections import deque
  
-     Audio transport parameters must be in the URL query for Deepgram's v1/listen.
-     For **containerized Opus** (OGG/WebM), we must NOT send encoding, sample_rate, or channels.
-     """
-     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
+ import websockets  # provided by uvicorn[standard]
  
-     # Detect containerized Opus from overrides (nested under _transport)
-     containerized = False
+ 
+ # Test-mode and last-observed info for CI assertions
+ DG_TEST_MODE = os.getenv("DG_TEST_MODE", "").strip() == "1"
+ DG_LAST_URL: str | None = None
+ DG_LAST_CONFIG: dict | None = None
+ 
+ _TAG_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.:-]")
+ 
+ 
+ def _sanitize_tag(val: Optional[str], *, limit: int = 64) -> Optional[str]:
+     if not val:
+         return None
      try:
-         if overrides and isinstance(overrides.get("_transport"), dict):
-             containerized = bool(overrides["_transport"].get("containerized_opus"))
+         txt = str(val)
      except Exception:
+         return None
+     txt = _TAG_SANITIZE_RE.sub("_", txt)
+     if not txt:
+         return None
+     return txt[:limit]
+ 
+@@ -353,111 +353,120 @@ class DeepgramClient:
+         """Micro-wait until the underlying websocket's .open flag is True."""
+         if self._ws and getattr(self._ws, "open", False):
+             return True
+         end = time.time() + timeout
+         while time.time() < end:
+             if self._ws and getattr(self._ws, "open", False):
+                 return True
+             await asyncio.sleep(0.01)
+         return False
+ 
+     def _schedule_flush(self, delay: float = 0.0) -> None:
+         if self._flush_task and not self._flush_task.done():
+             return
+         async def _runner():
+             if delay > 0:
+                 try:
+                     await asyncio.sleep(delay)
+                 except asyncio.CancelledError:
+                     return
+             try:
+                 await self._flush_tx()
+             except Exception:
+                 logger.debug("Deepgram flush_tx raised; will retry on next trigger", exc_info=True)
+         self._flush_task = asyncio.create_task(_runner())
+ 
+-    async def _flush_tx(self) -> None:
++    async def _flush_tx(self) -> Tuple[int, Optional[str]]:
+         """Drain queued audio if the socket is open and we've signaled ready."""
+         if not self._tx_queue:
+-            return
++            return 0, None
+         # Wait until socket open — don't raise; just give it a short chance
+         await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S', '0.75')))
+         if not self._ws or not getattr(self._ws, "open", False):
+-            return
++            return 0, None
+         # Ensure we've passed the ready/open gate
+         if not self._open_evt.is_set():
+             try:
+                 await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
+             except asyncio.TimeoutError:
+                 pass
+ 
+         transport_cfg = {}
+         try:
+             transport_cfg = (self._cfg or {}).get("_transport") or {}
+         except Exception:
+             transport_cfg = {}
+         containerized = bool(transport_cfg.get("containerized_opus"))
+ 
+         sid = self._sid_for_log()
++        total_sent = 0
++        first_chunk: Optional[bytes] = None
+         while self._tx_queue and self._ws and getattr(self._ws, "open", False):
+             data = self._tx_queue[0]
+             # Drop tiny preamble once
+             if (
+                 not containerized
+                 and (not self._first_real_sent)
+                 and len(data) < self._min_valid_bytes
+             ):
+                 logger.debug(
+                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
+                     sid, len(data), self._min_valid_bytes
+                 )
+                 self._tx_queue.popleft()
+                 continue
+             try:
+                 async with self._send_lock:
+                     await self._ws.send(data)
+                 self._first_real_sent = True
+                 self._last_chunk_ts = time.time()
+                 self._tx_queue.popleft()
++                total_sent += len(data)
++                if first_chunk is None:
++                    first_chunk = data
+                 logger.debug("Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
+                              sid, len(data), len(self._tx_queue))
+                 if callable(self._jlog):
+                     try:
+                         self._jlog(
+                             "dg_forward",
+                             sid=sid,
+                             tag=self._url_tag,
+                             bytes=len(data),
+                             queued=len(self._tx_queue),
+                         )
+                     except Exception:
+                         pass
+             except Exception as e:
+                 # Transient send issue; stop and retry on next trigger
+                 logger.debug("Deepgram deferred send sid=%s err=%s queued=%s",
+                              sid, type(e).__name__, len(self._tx_queue))
+                 break
++        first8_hex: Optional[str] = None
++        if first_chunk:
++            first8_hex = first_chunk[:8].hex()
++        return total_sent, first8_hex
+ 
+     # -- lifecycle -------------------------------------------------------------
+ 
+     async def connect(self) -> None:
+         global DG_LAST_URL, DG_LAST_CONFIG
+         if self._ws:
+             return
+ 
+         url = _dg_url(self._cfg)
+         sid = self._sid_for_log()
+ 
          containerized = False
  
-     # Append conservative defaults ONLY when not containerized
-     if (not containerized) and ("encoding=" not in base):
-         sep = "&" if "?" in base else "?"
-         base = (
-             base
-             + sep
-             # RAW defaults; safe for legacy raw paths. If truly containerized, these will be stripped below.
-             + "encoding=opus&sample_rate=48000&channels=1"
--            + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true&utterance_end_ms=1200"
-+            + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true"
+         # Diagnostic: parse params and emit compact JSON log that shows
+         # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
+         try:
+             import urllib.parse as _p
+             q = dict(_p.parse_qsl(_p.urlsplit(url).query, keep_blank_values=True))
+             self._url_tag = q.get("tag") or None
+             transport = (self._cfg or {}).get("_transport", {}) or {}
+             containerized = bool(transport.get("containerized_opus"))
+             url_meta = {
+                 "container": transport.get("container"),
+                 "codec": transport.get("codec"),
+                 "containerized_opus": containerized,
+@@ -569,56 +578,78 @@ class DeepgramClient:
+         timeout: Optional[float] = None,
+         linger_ms: Optional[int] = None,
+     ) -> None:
+         if self._closed or self._closing:
+             return
+         self._closing = True
+         sid = self._sid_for_log()
+         logger.info(
+             "Deepgram close start sid=%s wait_for_final=%s linger_ms=%s",
+             sid,
+             wait_for_final,
+             linger_ms,
          )
  
-     # Apply overrides into query string and clean up for containerized
-     try:
-         import urllib.parse as _p
-         parts = _p.urlsplit(base)
-         q = _p.parse_qsl(parts.query, keep_blank_values=True)
-         qd = {k: v for k, v in q}
- 
-         def _fmt(v):
-             if isinstance(v, bool):
-                 return "true" if v else "false"
-             if isinstance(v, int):
-                 return str(int(v))
-             return str(v)
- 
-         tag_source: Optional[str] = None
- 
-         # Allow top-level overrides (model, language, etc.)
-         if overrides:
-             for k in (
-                 "encoding",
-                 "sample_rate",
-                 "channels",
-                 "interim_results",
-                 "smart_format",
-                 "punctuate",
-                 "vad_events",
-                 "utterance_end_ms",
--                "endpointing",
-                 "model",
-                 "language",
-             ):
-                 if k in overrides and overrides[k] is not None:
-                     qd[k] = _fmt(overrides[k])
- 
-             for key in ("_url_tag", "dg_url_tag", "url_tag"):
+         if linger_ms is None:
+             linger_ms = self._linger_ms
+         if self._last_chunk_ts > 0 and linger_ms > 0:
+             elapsed_ms = int((time.time() - self._last_chunk_ts) * 1000)
+             delay_ms = max(0, linger_ms - elapsed_ms)
+             if delay_ms > 0:
                  try:
-                     if overrides.get(key):
-                         tag_source = str(overrides[key])
-                         break
-                 except Exception:
-                     continue
-             if not tag_source:
+                     await asyncio.sleep(delay_ms / 1000.0)
+                 except asyncio.CancelledError:
+                     pass
+ 
++        flush_bytes = 0
++        flush_first8 = None
+         # Ensure any queued audio is flushed before CloseStream
+         try:
+-            await self._flush_tx()
++            flush_bytes, flush_first8 = await self._flush_tx()
+         except Exception:
+             pass
+ 
++        logger.info(
++            "dg_writer_drained sid=%s bytes=%s first8_hex=%s queued=%s",
++            sid,
++            flush_bytes,
++            flush_first8,
++            len(self._tx_queue),
++        )
++        if callable(self._jlog):
++            try:
++                self._jlog(
++                    "dg_writer_drained",
++                    sid=sid,
++                    tag=self._url_tag,
++                    bytes=flush_bytes,
++                    first8_hex=flush_first8,
++                    queued=len(self._tx_queue),
++                )
++            except Exception:
++                pass
++
+         try:
+             if self._ws and getattr(self._ws, "open", False):
+                 async with self._send_lock:
+                     await self._ws.send(json.dumps({"type": "CloseStream"}))
+         except Exception:
+             pass
+ 
+         if wait_for_final:
+             if timeout is None:
+                 timeout = self._final_wait_s
+             try:
+                 await asyncio.wait_for(self._final_event.wait(), timeout=timeout)
+             except asyncio.TimeoutError:
                  try:
-                     sid_val = overrides.get("session_id") or overrides.get("sid")
-                     if sid_val:
-                         tag_source = f"sid:{sid_val}"
+                     await self._ev_queue.put(
+                         {"type": "asr_error", "error": f"final_timeout:{timeout}s"}
+                     )
                  except Exception:
                      pass
  
-         env_tag = os.getenv("DG_URL_TAG", "").strip() or None
-         tag = tag_source or env_tag
-         if tag_source and env_tag:
-             tag = f"{env_tag}:{tag_source}"
-@@ -155,53 +154,52 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
-             # Non-containerized path: allow env overrides for raw parameters (no behavior change if unset)
-             enc = os.getenv("DG_RAW_ENCODING")
-             sr = os.getenv("DG_RAW_SAMPLE_RATE")
-             ch = os.getenv("DG_RAW_CHANNELS")
-             if enc:
-                 qd["encoding"] = enc
-             if sr:
-                 qd["sample_rate"] = sr
-             if ch:
-                 qd["channels"] = ch
- 
-         # If DG_MODEL env is set and no model present yet, add it (back-compat)
-         _env_model = os.getenv("DG_MODEL")
-         if _env_model and "model" not in qd:
-             qd["model"] = _env_model
- 
-         # If a language env is provided (optional), prefer it if not set
-         _env_lang = os.getenv("DEEPGRAM_LANG")
-         if _env_lang and "language" not in qd:
-             qd["language"] = _env_lang
- 
-         # Ensure some model is present; default to nova-2 if none provided
-         if "model" not in qd:
-             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
- 
--        # Request 200 ms of silence for endpointing unless explicitly overridden
--        if "endpointing" not in qd:
--            qd["endpointing"] = "200"
-+        # Provide a sensible default for utterance_end_ms (2s) unless explicitly overridden
-+        qd.setdefault("utterance_end_ms", "2000")
- 
-         query = _p.urlencode(qd)
-         base = _p.urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
-     except Exception:
-         pass
- 
-     return base
- 
- 
- def _auth_header() -> str:
-     key = os.getenv("DEEPGRAM_API_KEY", "").strip()
-     if not key:
-         raise RuntimeError("DEEPGRAM_API_KEY is not set")
-     return f"Token {key}"
- 
- 
- def _initial_config(overrides: Optional[dict] = None) -> dict:
-     """Build Configure payload with FEATURES ONLY (no audio/transport keys)."""
-     interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
-     features = {
-         "interim_results": interim,
-         "smart_format": True,
-         "punctuate": True,
-         "vad_events": True,
-         # Keep URL-only keys (like utterance_end_ms) out of Configure
-diff --git a/tests_phase3_5/test_containerized_opus_url.py b/tests_phase3_5/test_containerized_opus_url.py
-index cd76a943adc9d70b050c8a5635454f248904e349..d5741a112c2da5cb61989c07f86d77c99fe000e1 100644
---- a/tests_phase3_5/test_containerized_opus_url.py
-+++ b/tests_phase3_5/test_containerized_opus_url.py
-@@ -1,20 +1,24 @@
- import os
- from app.services.streaming_asr.deepgram_client import DG_TEST_MODE
- from app.services.streaming_asr.deepgram_client import _dg_url  # if exported
- import pytest
- 
- def test_containerized_omits_sr_channels(monkeypatch):
-     monkeypatch.setenv("DG_TEST_MODE", "1")
-     # Build overrides with containerized flag in _transport
-     overrides = {"_transport": {"containerized_opus": True}}
-     url = _dg_url(overrides)
-     assert "sample_rate=" not in url
-     assert "channels=" not in url
-     assert "encoding=" not in url
-+    assert "endpointing=" not in url
-+    assert "utterance_end_ms=2000" in url
- 
- def test_non_containerized_includes_sr_channels(monkeypatch):
-     monkeypatch.setenv("DG_TEST_MODE", "1")
-     overrides = {"_transport": {"containerized_opus": False}}
-     url = _dg_url(overrides)
-     assert "sample_rate=48000" in url
-     assert "channels=1" in url
-+    assert "endpointing=" not in url
-+    assert "utterance_end_ms=2000" in url
+         try:
+             ws = self._ws
+             if ws and getattr(ws, "open", True):
+                 await ws.close()
+         finally:

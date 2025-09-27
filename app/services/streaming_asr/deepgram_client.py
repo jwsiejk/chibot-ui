@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import time
-from typing import AsyncGenerator, Optional, Any, Deque
+from typing import AsyncGenerator, Optional, Any, Deque, Tuple
 from collections import deque
 
 import websockets  # provided by uvicorn[standard]
@@ -375,14 +375,14 @@ class DeepgramClient:
                 logger.debug("Deepgram flush_tx raised; will retry on next trigger", exc_info=True)
         self._flush_task = asyncio.create_task(_runner())
 
-    async def _flush_tx(self) -> None:
+    async def _flush_tx(self) -> Tuple[int, Optional[str]]:
         """Drain queued audio if the socket is open and we've signaled ready."""
         if not self._tx_queue:
-            return
+            return 0, None
         # Wait until socket open — don't raise; just give it a short chance
         await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S', '0.75')))
         if not self._ws or not getattr(self._ws, "open", False):
-            return
+            return 0, None
         # Ensure we've passed the ready/open gate
         if not self._open_evt.is_set():
             try:
@@ -398,6 +398,8 @@ class DeepgramClient:
         containerized = bool(transport_cfg.get("containerized_opus"))
 
         sid = self._sid_for_log()
+        total_sent = 0
+        first_chunk: Optional[bytes] = None
         while self._tx_queue and self._ws and getattr(self._ws, "open", False):
             data = self._tx_queue[0]
             # Drop tiny preamble once
@@ -418,6 +420,9 @@ class DeepgramClient:
                 self._first_real_sent = True
                 self._last_chunk_ts = time.time()
                 self._tx_queue.popleft()
+                total_sent += len(data)
+                if first_chunk is None:
+                    first_chunk = data
                 logger.debug("Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
                              sid, len(data), len(self._tx_queue))
                 if callable(self._jlog):
@@ -436,6 +441,10 @@ class DeepgramClient:
                 logger.debug("Deepgram deferred send sid=%s err=%s queued=%s",
                              sid, type(e).__name__, len(self._tx_queue))
                 break
+        first8_hex: Optional[str] = None
+        if first_chunk:
+            first8_hex = first_chunk[:8].hex()
+        return total_sent, first8_hex
 
     # -- lifecycle -------------------------------------------------------------
 
@@ -591,11 +600,33 @@ class DeepgramClient:
                 except asyncio.CancelledError:
                     pass
 
+        flush_bytes = 0
+        flush_first8 = None
         # Ensure any queued audio is flushed before CloseStream
         try:
-            await self._flush_tx()
+            flush_bytes, flush_first8 = await self._flush_tx()
         except Exception:
             pass
+
+        logger.info(
+            "dg_writer_drained sid=%s bytes=%s first8_hex=%s queued=%s",
+            sid,
+            flush_bytes,
+            flush_first8,
+            len(self._tx_queue),
+        )
+        if callable(self._jlog):
+            try:
+                self._jlog(
+                    "dg_writer_drained",
+                    sid=sid,
+                    tag=self._url_tag,
+                    bytes=flush_bytes,
+                    first8_hex=flush_first8,
+                    queued=len(self._tx_queue),
+                )
+            except Exception:
+                pass
 
         try:
             if self._ws and getattr(self._ws, "open", False):
