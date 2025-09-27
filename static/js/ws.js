@@ -274,9 +274,12 @@ window.addEventListener('online', () => {
 export function openWS(options = {}){
   // Hard diag lock: block opens unless explicitly allowed
   if (typeof window !== "undefined" && window.__ASKCHIP_DIAG_LOCK && !(options && options.reconnect === true)) {
-    console.warn("[ws] blocked openWS by diag lock");
-    return _ws || undefined;
-  }
+    const hasExplicit = options && Object.prototype.hasOwnProperty.call(options, 'reconnect');
+    if (!hasExplicit) {
+      console.warn("[ws] blocked openWS by diag lock (implicit call)");
+      return _ws || undefined;
+   }
+ }
 
   try {
     if (options && Object.prototype.hasOwnProperty.call(options, 'reconnect')) {
