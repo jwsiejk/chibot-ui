@@ -11,6 +11,14 @@ from collections import deque
 
 import websockets  # provided by uvicorn[standard]
 
+try:  # pragma: no cover - exercised indirectly
+    _WEBSOCKETS_PROTOCOL = websockets.protocol  # type: ignore[attr-defined]
+except AttributeError:  # pragma: no cover - older packaging style
+    try:
+        from websockets import protocol as _WEBSOCKETS_PROTOCOL  # type: ignore
+    except Exception:  # pragma: no cover - highly defensive
+        _WEBSOCKETS_PROTOCOL = None  # type: ignore
+
 
 # Test-mode and last-observed info for CI assertions
 DG_TEST_MODE = os.getenv("DG_TEST_MODE", "").strip() == "1"
@@ -327,10 +335,56 @@ class DeepgramClient:
         # Serialize outbound websocket sends to avoid concurrent writer errors
         self._send_lock = asyncio.Lock()
 
+    def _ws_is_open(self, ws: Optional[Any] = None) -> bool:
+        """Best-effort detection for whether the websocket is open."""
+
+        target = ws if ws is not None else self._ws
+        if not target:
+            return False
+
+        try:
+            open_attr = getattr(target, "open", None)
+            if open_attr:
+                return True
+        except Exception:
+            pass
+
+        proto_mod = _WEBSOCKETS_PROTOCOL
+        state = None
+        if proto_mod is not None:
+            try:
+                state = getattr(target, "state", None)
+            except Exception:
+                state = None
+            if state is not None:
+                try:
+                    open_state = getattr(proto_mod, "OPEN", None)
+                    if open_state is not None and state == open_state:
+                        return True
+                except Exception:
+                    pass
+                try:
+                    state_cls = getattr(proto_mod, "State", None)
+                    open_member = getattr(state_cls, "OPEN", None) if state_cls else None
+                    if open_member is not None and state == open_member:
+                        return True
+                except Exception:
+                    pass
+
+        if state is None:
+            try:
+                closed_attr = getattr(target, "closed", None)
+                if isinstance(closed_attr, bool):
+                    return not closed_attr
+            except Exception:
+                pass
+
+        return False
+
     def is_open(self) -> bool:
         """Return True if the underlying websocket appears open."""
         try:
-            return bool(self._ws) and bool(getattr(self._ws, "open", False))
+            return self._ws_is_open()
         except Exception:
             return False
 
@@ -368,11 +422,11 @@ class DeepgramClient:
 
     async def wait_socket_open(self, timeout: float = 1.5) -> bool:
         """Micro-wait until the underlying websocket's .open flag is True."""
-        if self._ws and getattr(self._ws, "open", False):
+        if self._ws_is_open():
             return True
         end = time.time() + timeout
         while time.time() < end:
-            if self._ws and getattr(self._ws, "open", False):
+            if self._ws_is_open():
                 return True
             await asyncio.sleep(0.01)
         return False
@@ -396,7 +450,7 @@ class DeepgramClient:
         """Drain queued audio if the socket is open and we've signaled ready."""
         sid = self._sid_for_log()
         queued_at_start = len(self._tx_queue)
-        ws_open_flag = bool(self._ws) and bool(getattr(self._ws, "open", False))
+        ws_open_flag = self._ws_is_open()
         open_evt_set = self._open_evt.is_set()
 
         logger.debug(
@@ -423,7 +477,7 @@ class DeepgramClient:
         if not self._tx_queue:
             if not self._drain_event.is_set():
                 self._drain_event.set()
-            ws_open_after = bool(self._ws) and bool(getattr(self._ws, "open", False))
+            ws_open_after = self._ws_is_open()
             if callable(self._jlog):
                 try:
                     self._jlog(
@@ -449,7 +503,7 @@ class DeepgramClient:
             return 0, None
         # Wait until socket open — don't raise; just give it a short chance
         await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S', '0.75')))
-        if not self._ws or not getattr(self._ws, "open", False):
+        if not self._ws_is_open():
             if callable(self._jlog):
                 try:
                     self._jlog(
@@ -492,7 +546,10 @@ class DeepgramClient:
         total_sent = 0
         sent_chunks = 0
         first_chunk: Optional[bytes] = None
-        while self._tx_queue and self._ws and getattr(self._ws, "open", False):
+        while self._tx_queue and self._ws_is_open():
+            ws = self._ws
+            if ws is None:
+                break
             data = self._tx_queue[0]
             # Drop tiny preamble once (RAW only)
             if (
@@ -508,7 +565,7 @@ class DeepgramClient:
                 continue
             try:
                 async with self._send_lock:
-                    await self._ws.send(data)
+                    await ws.send(data)
                 self._first_real_sent = True
                 self._last_chunk_ts = time.time()
                 self._tx_queue.popleft()
@@ -544,7 +601,7 @@ class DeepgramClient:
                 first8_hex = first_chunk[:8].hex()
             except Exception:
                 first8_hex = None
-        ws_open_after = bool(self._ws) and bool(getattr(self._ws, "open", False))
+        ws_open_after = self._ws_is_open()
         open_evt_after = self._open_evt.is_set()
         if callable(self._jlog):
             try:
@@ -910,7 +967,8 @@ class DeepgramClient:
 
         # Now send CloseStream after we've flushed all audio
         try:
-            if self._ws and getattr(self._ws, "open", False):
+            ws = self._ws
+            if self._ws_is_open(ws):
                 async with self._send_lock:
                     if callable(self._jlog):
                         try:
@@ -923,7 +981,7 @@ class DeepgramClient:
                             )
                         except Exception:
                             pass
-                    await self._ws.send(json.dumps({"type": "CloseStream"}))
+                    await ws.send(json.dumps({"type": "CloseStream"}))
         except Exception:
             pass
 
@@ -942,7 +1000,7 @@ class DeepgramClient:
 
         try:
             ws = self._ws
-            if ws and getattr(ws, "open", True):
+            if ws and (self._ws_is_open(ws) or not hasattr(ws, "open")):
                 await ws.close()
         finally:
             self._ws = None
@@ -1188,7 +1246,7 @@ class DeepgramClient:
                     break
                 if getattr(ws, "closed", False) or getattr(ws, "closing", False):
                     break
-                if not getattr(ws, "open", False):
+                if not self._ws_is_open(ws):
                     break
 
                 try:

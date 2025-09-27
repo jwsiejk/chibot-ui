@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from collections import deque
+from websockets import protocol as ws_protocol
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -64,6 +65,32 @@ class ConcurrentGuardWS(DummyWS):
             self.sent.append(data)
         finally:
             self._inflight = False
+
+
+class AsyncioClientWS:
+    """Minimal stub that mimics asyncio-style websockets.client connection."""
+
+    def __init__(self):
+        self.state = ws_protocol.State.CONNECTING
+        self.sent = []
+        self.close_called = False
+
+    @property
+    def closed(self) -> bool:
+        return self.state in (ws_protocol.State.CLOSING, ws_protocol.State.CLOSED)
+
+    async def send(self, data):
+        self.sent.append(data)
+
+    async def close(self):
+        self.state = ws_protocol.State.CLOSED
+        self.close_called = True
+
+    def __aiter__(self):
+        async def _gen():
+            yield json.dumps({"type": "Metadata"})
+
+        return _gen()
 
 
 def test_connect_prefers_additional_headers(monkeypatch):
@@ -157,6 +184,57 @@ def test_close_retries_flush_until_socket_open(monkeypatch):
             for event, payload in events
         )
         assert client._tx_queue == deque()
+
+    asyncio.run(run())
+
+
+def test_asyncio_client_connection_flushes_and_closes(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+
+    async def run():
+        client = dg_mod.DeepgramClient()
+        ws = AsyncioClientWS()
+        client._ws = ws
+        client._open_evt.set()
+        client._min_valid_bytes = 1
+
+        client._tx_queue.append(b"a" * 4)
+        if client._drain_event.is_set():
+            client._drain_event.clear()
+
+        flush_task = asyncio.create_task(client._flush_tx())
+        await asyncio.sleep(0.02)
+        assert not flush_task.done()
+
+        ws.state = ws_protocol.State.OPEN
+        bytes_sent, _ = await asyncio.wait_for(flush_task, timeout=0.5)
+
+        assert bytes_sent == 4
+        assert ws.sent == [b"a" * 4]
+        assert client._tx_queue == deque()
+        assert client._drain_event.is_set()
+
+        client._tx_queue.extend([b"b" * 4, b"c" * 4])
+        if client._drain_event.is_set():
+            client._drain_event.clear()
+
+        ws.state = ws_protocol.State.CONNECTING
+        close_task = asyncio.create_task(client.close(wait_for_final=False))
+        await asyncio.sleep(0.02)
+        assert not close_task.done()
+
+        ws.state = ws_protocol.State.OPEN
+        await asyncio.wait_for(close_task, timeout=0.5)
+
+        assert ws.close_called is True
+        assert client._tx_queue == deque()
+        payload_types = [
+            json.loads(item).get("type")
+            for item in ws.sent
+            if isinstance(item, str)
+        ]
+        assert "CloseStream" in payload_types
 
     asyncio.run(run())
 

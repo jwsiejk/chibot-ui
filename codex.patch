@@ -1,46 +1,55 @@
 diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227fdba97af 100644
+index 6021561451886052aa068037b460b227fdba97af..4bdea0ed506fa893254908650c9e57080df60eb4 100644
 --- a/app/services/streaming_asr/deepgram_client.py
 +++ b/app/services/streaming_asr/deepgram_client.py
-@@ -267,50 +267,51 @@ def _diagnostic_config(payload: dict, overrides: Optional[dict] = None) -> dict:
-         pass
-     return diag
+@@ -1,38 +1,46 @@
+ from __future__ import annotations
  
- # ------------------------------ Client ---------------------------------------
+ import asyncio
+ import json
+ import logging
+ import os
+ import re
+ import time
+ from typing import AsyncGenerator, Optional, Any, Deque, Tuple
+ from collections import deque
  
- class DeepgramClient:
-     """Async wrapper for Deepgram streaming WS with internal send queue.
+ import websockets  # provided by uvicorn[standard]
  
-     Improvements:
-       • Suppresses raw audio params for containerized Opus (WebM/OGG).
-       • Logs a concise 'asr_url' diagnostic with omitted/raw params for verification.
-       • Maintains an internal TX queue — early chunks are queued and flushed on open.
-       • Drops tiny preamble chunk (<DG_MIN_VALID_BYTES) once, to avoid bogus data (raw only).
-       • **Flushes all queued audio before CloseStream; close waits for drain.**
-       • Sends {"type": "CloseStream"} and (optionally) waits briefly for final.
-     """
++try:  # pragma: no cover - exercised indirectly
++    _WEBSOCKETS_PROTOCOL = websockets.protocol  # type: ignore[attr-defined]
++except AttributeError:  # pragma: no cover - older packaging style
++    try:
++        from websockets import protocol as _WEBSOCKETS_PROTOCOL  # type: ignore
++    except Exception:  # pragma: no cover - highly defensive
++        _WEBSOCKETS_PROTOCOL = None  # type: ignore
++
  
-     def __init__(self, _cfg: Optional[dict] = None) -> None:
-         self._cfg = _cfg or {}
-         self._ws = None  # type: ignore
-         self._rx_task: Optional[asyncio.Task] = None
-         self._ev_queue: asyncio.Queue = asyncio.Queue()
-         self._closed = False
-         self._closing = False
-         self._url_tag: Optional[str] = None
-+        self._dg_id: int = id(self)
+ # Test-mode and last-observed info for CI assertions
+ DG_TEST_MODE = os.getenv("DG_TEST_MODE", "").strip() == "1"
+ DG_LAST_URL: str | None = None
+ DG_LAST_CONFIG: dict | None = None
  
-         # TX queue + flushing
-         self._tx_queue: Deque[bytes] = deque()
-         self._flush_task: Optional[asyncio.Task] = None
+ _TAG_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.:-]")
  
-         # Graceful shutdown coordination
-         self._final_event: asyncio.Event = asyncio.Event()
-         self._any_result: bool = False
-         self._drain_event: asyncio.Event = asyncio.Event()
-         self._drain_event.set()
-         self._drain_timeout_s: float = float(os.getenv("DG_CLOSE_DRAIN_TIMEOUT_S", "1.5"))
  
+ def _sanitize_tag(val: Optional[str], *, limit: int = 64) -> Optional[str]:
+     if not val:
+         return None
+     try:
+         txt = str(val)
+     except Exception:
+         return None
+     txt = _TAG_SANITIZE_RE.sub("_", txt)
+     if not txt:
+         return None
+     return txt[:limit]
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
+ class DeepgramDrainTimeoutError(RuntimeError):
+@@ -305,268 +313,317 @@ class DeepgramClient:
          # First-chunk guard & timing
          self._first_real_sent: bool = False
          self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
@@ -54,7 +63,126 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
          self._open_evt: asyncio.Event = asyncio.Event()
          self._asr_open_emitted: bool = False
          self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
-@@ -388,92 +389,95 @@ class DeepgramClient:
+         self._open_gate_warned: bool = False
+ 
+         # Keepalive
+         self._keepalive_task: Optional[asyncio.Task] = None
+         self._keepalive_interval: float = float(os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0"))
+ 
+         # Optional JSON logger injected by WS layer (ws_asgi)
+         self._jlog = self._cfg.get("_jlog")
+ 
+         # Serialize outbound websocket sends to avoid concurrent writer errors
+         self._send_lock = asyncio.Lock()
+ 
++    def _ws_is_open(self, ws: Optional[Any] = None) -> bool:
++        """Best-effort detection for whether the websocket is open."""
++
++        target = ws if ws is not None else self._ws
++        if not target:
++            return False
++
++        try:
++            open_attr = getattr(target, "open", None)
++            if open_attr:
++                return True
++        except Exception:
++            pass
++
++        proto_mod = _WEBSOCKETS_PROTOCOL
++        state = None
++        if proto_mod is not None:
++            try:
++                state = getattr(target, "state", None)
++            except Exception:
++                state = None
++            if state is not None:
++                try:
++                    open_state = getattr(proto_mod, "OPEN", None)
++                    if open_state is not None and state == open_state:
++                        return True
++                except Exception:
++                    pass
++                try:
++                    state_cls = getattr(proto_mod, "State", None)
++                    open_member = getattr(state_cls, "OPEN", None) if state_cls else None
++                    if open_member is not None and state == open_member:
++                        return True
++                except Exception:
++                    pass
++
++        if state is None:
++            try:
++                closed_attr = getattr(target, "closed", None)
++                if isinstance(closed_attr, bool):
++                    return not closed_attr
++            except Exception:
++                pass
++
++        return False
++
+     def is_open(self) -> bool:
+         """Return True if the underlying websocket appears open."""
+         try:
+-            return bool(self._ws) and bool(getattr(self._ws, "open", False))
++            return self._ws_is_open()
+         except Exception:
+             return False
+ 
+     def _had_result(self) -> bool:
+         """True if any final result has been observed (event-aware)."""
+         if self._any_result:
+             return True
+         if self._final_event.is_set():
+             self._any_result = True
+             return True
+         return False
+ 
+     # -- helpers ---------------------------------------------------------------
+ 
+     async def _signal_ready(self) -> None:
+         if not self._open_evt.is_set():
+             self._open_evt.set()
+         if not self._asr_open_emitted:
+             self._asr_open_emitted = True
+             try:
+                 await self._ev_queue.put({"type": "asr_open"})
+             except Exception:
+                 pass
+         # schedule a flush shortly after ASR open (lets DG finish configure)
+         self._schedule_flush(delay=0.05)
+ 
+     def _sid_for_log(self) -> str:
+         try:
+             for key in ("session_id", "sid"):
+                 if key in self._cfg and self._cfg[key]:
+                     return str(self._cfg[key])
+         except Exception:
+             pass
+         return "?"
+ 
+     async def wait_socket_open(self, timeout: float = 1.5) -> bool:
+         """Micro-wait until the underlying websocket's .open flag is True."""
+-        if self._ws and getattr(self._ws, "open", False):
++        if self._ws_is_open():
+             return True
+         end = time.time() + timeout
+         while time.time() < end:
+-            if self._ws and getattr(self._ws, "open", False):
++            if self._ws_is_open():
+                 return True
+             await asyncio.sleep(0.01)
+         return False
+ 
+     def _schedule_flush(self, delay: float = 0.0) -> None:
+         if self._flush_task and not self._flush_task.done():
+             return
+         async def _runner():
+             if delay > 0:
+                 try:
+                     await asyncio.sleep(delay)
+                 except asyncio.CancelledError:
+                     return
              try:
                  await self._flush_tx()
              except Exception:
@@ -65,7 +193,8 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
          """Drain queued audio if the socket is open and we've signaled ready."""
          sid = self._sid_for_log()
          queued_at_start = len(self._tx_queue)
-         ws_open_flag = bool(self._ws) and bool(getattr(self._ws, "open", False))
+-        ws_open_flag = bool(self._ws) and bool(getattr(self._ws, "open", False))
++        ws_open_flag = self._ws_is_open()
          open_evt_set = self._open_evt.is_set()
  
          logger.debug(
@@ -80,7 +209,7 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
                  self._jlog(
                      "dg_flush_enter",
                      sid=sid,
-+                    dg_id=self._dg_id,
+                     dg_id=self._dg_id,
                      tag=self._url_tag,
                      queued=queued_at_start,
                      ws_open=ws_open_flag,
@@ -92,13 +221,14 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
          if not self._tx_queue:
              if not self._drain_event.is_set():
                  self._drain_event.set()
-             ws_open_after = bool(self._ws) and bool(getattr(self._ws, "open", False))
+-            ws_open_after = bool(self._ws) and bool(getattr(self._ws, "open", False))
++            ws_open_after = self._ws_is_open()
              if callable(self._jlog):
                  try:
                      self._jlog(
                          "dg_flush_exit",
                          sid=sid,
-+                        dg_id=self._dg_id,
+                         dg_id=self._dg_id,
                          tag=self._url_tag,
                          queued=len(self._tx_queue),
                          sent_bytes=0,
@@ -118,13 +248,14 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
              return 0, None
          # Wait until socket open — don't raise; just give it a short chance
          await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S', '0.75')))
-         if not self._ws or not getattr(self._ws, "open", False):
+-        if not self._ws or not getattr(self._ws, "open", False):
++        if not self._ws_is_open():
              if callable(self._jlog):
                  try:
                      self._jlog(
                          "dg_flush_exit",
                          sid=sid,
-+                        dg_id=self._dg_id,
+                         dg_id=self._dg_id,
                          tag=self._url_tag,
                          queued=len(self._tx_queue),
                          sent_bytes=0,
@@ -150,7 +281,27 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
              except asyncio.TimeoutError:
                  pass
  
-@@ -497,232 +501,256 @@ class DeepgramClient:
+         transport_cfg = {}
+         try:
+             transport_cfg = (self._cfg or {}).get("_transport") or {}
+         except Exception:
+             transport_cfg = {}
+         containerized = bool(transport_cfg.get("containerized_opus"))
+ 
+         sid = self._sid_for_log()
+         total_sent = 0
+         sent_chunks = 0
+         first_chunk: Optional[bytes] = None
+-        while self._tx_queue and self._ws and getattr(self._ws, "open", False):
++        while self._tx_queue and self._ws_is_open():
++            ws = self._ws
++            if ws is None:
++                break
+             data = self._tx_queue[0]
+             # Drop tiny preamble once (RAW only)
+             if (
+                 not containerized
+                 and (not self._first_real_sent)
                  and len(data) < self._min_valid_bytes
              ):
                  logger.debug(
@@ -161,7 +312,8 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
                  continue
              try:
                  async with self._send_lock:
-                     await self._ws.send(data)
+-                    await self._ws.send(data)
++                    await ws.send(data)
                  self._first_real_sent = True
                  self._last_chunk_ts = time.time()
                  self._tx_queue.popleft()
@@ -176,11 +328,11 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
                          self._jlog(
                              "dg_forward",
                              sid=sid,
-+                            dg_id=self._dg_id,
+                             dg_id=self._dg_id,
                              tag=self._url_tag,
                              bytes=len(data),
                              queued=len(self._tx_queue),
-+                            total_sent=total_sent,
+                             total_sent=total_sent,
                          )
                      except Exception:
                          pass
@@ -197,14 +349,15 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
                  first8_hex = first_chunk[:8].hex()
              except Exception:
                  first8_hex = None
-         ws_open_after = bool(self._ws) and bool(getattr(self._ws, "open", False))
+-        ws_open_after = bool(self._ws) and bool(getattr(self._ws, "open", False))
++        ws_open_after = self._ws_is_open()
          open_evt_after = self._open_evt.is_set()
          if callable(self._jlog):
              try:
                  self._jlog(
                      "dg_flush_exit",
                      sid=sid,
-+                    dg_id=self._dg_id,
+                     dg_id=self._dg_id,
                      tag=self._url_tag,
                      queued=len(self._tx_queue),
                      sent_bytes=total_sent,
@@ -223,293 +376,7 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
              sent_chunks,
              ws_open_after,
              open_evt_after,
-         )
-         return total_sent, first8_hex
- 
-     # -- lifecycle -------------------------------------------------------------
- 
-     async def connect(self) -> None:
-         global DG_LAST_URL, DG_LAST_CONFIG
-         sid = self._sid_for_log()
-         if callable(self._jlog):
-             try:
-                 self._jlog(
-                     "dg_connect_begin",
-                     sid=sid,
-+                    dg_id=self._dg_id,
-                     tag=self._url_tag,
-                     already_open=bool(self._ws),
-                     closing=self._closing,
-                     closed=self._closed,
-                 )
-             except Exception:
-                 pass
-         if self._ws:
-             logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
-             return
- 
-         url = _dg_url(self._cfg)
- 
-         containerized = False
- 
-         # Diagnostic: parse params and emit compact JSON log that shows
-         # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
-         try:
-             import urllib.parse as _p
-             q = dict(_p.parse_qsl(_p.urlsplit(url).query, keep_blank_values=True))
-             self._url_tag = q.get("tag") or None
-             transport = (self._cfg or {}).get("_transport", {}) or {}
-             containerized = bool(transport.get("containerized_opus"))
-             url_meta = {
-                 "container": transport.get("container"),
-                 "codec": transport.get("codec"),
-                 "containerized_opus": containerized,
-                 "omitted_params": None,
-                 "raw_params": None,
-             }
-             if containerized:
-                 # These should be absent in containerized mode
-                 omitted = []
-                 for k in ("encoding", "sample_rate", "channels"):
-                     if k not in q:
-                         omitted.append(k)
-                 url_meta["omitted_params"] = omitted
-             else:
-                 url_meta["raw_params"] = {
-                     "encoding": q.get("encoding"),
-                     "sample_rate": q.get("sample_rate"),
-                     "channels": q.get("channels"),
-                 }
- 
-             # Structured JSON log if _jlog is available (preferred for your admin viewer)
-             if callable(self._jlog):
-                 try:
-                     self._jlog(
-                         "asr_url",
-+                        dg_id=self._dg_id,
-                         url=url,
-                         container=url_meta.get("container"),
-                         codec=url_meta.get("codec"),
-                         containerized_opus=bool(url_meta.get("containerized_opus")),
-                         omitted_params=url_meta.get("omitted_params"),
-                         raw_params=url_meta.get("raw_params"),
-                     )
-                 except Exception:
-                     pass
- 
-             # Keep existing human-readable info log
-             logger.info(
-                 "dg_ws_connect sid=%s url=%s containerized_opus=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
-                 sid,
-                 url,
-                 containerized,
-                 q.get("encoding"),
-                 q.get("sample_rate"),
-                 q.get("channels"),
-             )
-         except Exception:
-             logger.info("Deepgram connect start sid=%s url=%s", sid, url)
- 
-         if DG_TEST_MODE:
-             self._ws = _FakeWSForTests()
-             DG_LAST_URL = url
-             cfg_payload = _initial_config(self._cfg)
-             DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
-             self._open_evt.set()
-             await self._signal_ready()
-             logger.info("Deepgram test-mode connect sid=%s", sid)
-             if callable(self._jlog):
-                 try:
--                    self._jlog("dg_open", sid=sid, url=url, tag=self._url_tag, test_mode=True)
-+                    self._jlog(
-+                        "dg_open",
-+                        sid=sid,
-+                        dg_id=self._dg_id,
-+                        url=url,
-+                        tag=self._url_tag,
-+                        test_mode=True,
-+                    )
-                 except Exception:
-                     pass
-             return
- 
-         headers = [("Authorization", _auth_header())]
-         try:
-             self._ws = await websockets.connect(
-                 url,
-                 additional_headers=headers,
-                 max_size=None,
-             )
-         except TypeError:
-             self._ws = await websockets.connect(
-                 url,
-                 extra_headers=headers,
-                 max_size=None,
-             )
- 
-         # Micro-wait to ensure the underlying socket is actually open
-         await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S','0.75')))
- 
-         cfg_payload = _initial_config(self._cfg)
-         DG_LAST_URL = url
-         DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
-         async with self._send_lock:
-             await self._ws.send(json.dumps(cfg_payload))
-+        if callable(self._jlog):
-+            try:
-+                self._jlog(
-+                    "dg_config_sent",
-+                    sid=sid,
-+                    dg_id=self._dg_id,
-+                    tag=self._url_tag,
-+                    keys=sorted(cfg_payload.keys()),
-+                )
-+            except Exception:
-+                pass
- 
-         await self._signal_ready()
-         # Proactively schedule a flush in case audio was queued before/while connecting
-         self._schedule_flush(delay=0.0)
- 
-         self._rx_task = asyncio.create_task(self._rx_loop())
- 
-         if self._keepalive_interval > 0:
-             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
- 
-         logger.info("Deepgram connect ok sid=%s", sid)
-         if callable(self._jlog):
-             try:
-                 self._jlog(
-                     "dg_open",
-                     sid=sid,
-+                    dg_id=self._dg_id,
-                     url=url,
-                     tag=self._url_tag,
-                     containerized=containerized,
-                 )
-             except Exception:
-                 pass
- 
-     async def close(
-         self,
-         wait_for_final: bool = True,
-         timeout: Optional[float] = None,
-         linger_ms: Optional[int] = None,
-     ) -> None:
-         """Graceful shutdown:
-         1) Drain queued audio (budget-based retry) BEFORE CloseStream
-         2) Send CloseStream
-         3) Optionally wait for final
-         4) Close socket
-         """
-         if self._closed or self._closing:
-             return
-         self._closing = True
-         sid = self._sid_for_log()
-         logger.info(
-             "Deepgram close start sid=%s wait_for_final=%s linger_ms=%s",
-@@ -737,50 +765,65 @@ class DeepgramClient:
-         # If we've never sent a chunk but have queued bytes, add a tiny settle delay
-         # so the configure→ready gate can complete before our first flush attempt.
-         if self._last_chunk_ts == 0 and self._tx_queue and linger_ms > 0:
-             try:
-                 await asyncio.sleep(min(0.12, linger_ms / 1000.0))
-             except asyncio.CancelledError:
-                 pass
- 
-         # Optional linger relative to the last successfully sent chunk
-         if self._last_chunk_ts > 0 and linger_ms > 0:
-             elapsed_ms = int((time.time() - self._last_chunk_ts) * 1000)
-             delay_ms = max(0, linger_ms - elapsed_ms)
-             if delay_ms > 0:
-                 try:
-                     await asyncio.sleep(delay_ms / 1000.0)
-                 except asyncio.CancelledError:
-                     pass
- 
-         flush_bytes = 0
-         flush_first8: Optional[str] = None
-         dropped_chunks = 0
-         dropped_bytes = 0
-         drain_wait_timeout = False
-         drain_failed = False
- 
-+        if callable(self._jlog):
-+            try:
-+                self._jlog(
-+                    "dg_close_drain_begin",
-+                    sid=sid,
-+                    dg_id=self._dg_id,
-+                    tag=self._url_tag,
-+                    queued=len(self._tx_queue),
-+                    linger_ms=linger_ms,
-+                    wait_for_final=wait_for_final,
-+                    drain_timeout_s=self._drain_timeout_s,
-+                )
-+            except Exception:
-+                pass
-+
-         def _record_flush(bytes_sent: int, first_hex: Optional[str]) -> None:
-             nonlocal flush_bytes, flush_first8
-             if bytes_sent:
-                 flush_bytes += bytes_sent
-             if first_hex and flush_first8 is None:
-                 flush_first8 = first_hex
- 
-         # Always attempt an initial flush
-         try:
-             bytes_sent, first_hex = await self._flush_tx()
-             _record_flush(bytes_sent, first_hex)
-         except Exception:
-             pass
- 
-         # Wait briefly for drain acknowledgement before the retry loop
-         if self._tx_queue and self._drain_timeout_s > 0:
-             try:
-                 await asyncio.wait_for(self._drain_event.wait(), timeout=self._drain_timeout_s)
-             except asyncio.TimeoutError:
-                 drain_wait_timeout = True
- 
-         # Budget-based retry loop to ensure first-chunk drain under load
-         budget_s = float(os.getenv("DG_CLOSE_FLUSH_BUDGET_S", "3.0"))
-         recheck_s = float(os.getenv("DG_CLOSE_FLUSH_RECHECK_S", "0.15"))
-         deadline = time.time() + budget_s
-@@ -810,166 +853,204 @@ class DeepgramClient:
-             if self._tx_queue:
-                 try:
-                     await asyncio.sleep(min(recheck_s, max(0.05, deadline - time.time())))
-                 except asyncio.CancelledError:
-                     break
- 
-         if self._tx_queue:
-             dropped_chunks = len(self._tx_queue)
-             try:
-                 dropped_bytes = sum(len(chunk) for chunk in self._tx_queue)
-             except Exception:
-                 dropped_bytes = 0
-             drain_failed = True
-             logger.warning(
-                 "Deepgram close drain timeout sid=%s queued_chunks=%s queued_bytes=%s wait_timeout=%s",
-                 sid,
-                 dropped_chunks,
-                 dropped_bytes,
-                 drain_wait_timeout,
-             )
-             if callable(self._jlog):
-                 try:
-                     self._jlog(
-                         "dg_writer_timeout",
-                         sid=sid,
-+                        dg_id=self._dg_id,
-                         tag=self._url_tag,
-                         queued_chunks=dropped_chunks,
-                         queued_bytes=dropped_bytes,
-                         wait_timeout=drain_wait_timeout,
-                         attempts="budget",
-                     )
-                 except Exception:
-                     pass
- 
+@@ -888,83 +945,84 @@ class DeepgramClient:
          logger.info(
              "dg_writer_drained sid=%s bytes=%s first8_hex=%s queued=%s",
              sid,
@@ -522,7 +389,7 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
                  self._jlog(
                      "dg_writer_drained",
                      sid=sid,
-+                    dg_id=self._dg_id,
+                     dg_id=self._dg_id,
                      tag=self._url_tag,
                      bytes=flush_bytes,
                      first8_hex=flush_first8,
@@ -535,20 +402,23 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
  
          # Now send CloseStream after we've flushed all audio
          try:
-             if self._ws and getattr(self._ws, "open", False):
+-            if self._ws and getattr(self._ws, "open", False):
++            ws = self._ws
++            if self._ws_is_open(ws):
                  async with self._send_lock:
-+                    if callable(self._jlog):
-+                        try:
-+                            self._jlog(
-+                                "dg_send_close_stream",
-+                                sid=sid,
-+                                dg_id=self._dg_id,
-+                                tag=self._url_tag,
-+                                queued=len(self._tx_queue),
-+                            )
-+                        except Exception:
-+                            pass
-                     await self._ws.send(json.dumps({"type": "CloseStream"}))
+                     if callable(self._jlog):
+                         try:
+                             self._jlog(
+                                 "dg_send_close_stream",
+                                 sid=sid,
+                                 dg_id=self._dg_id,
+                                 tag=self._url_tag,
+                                 queued=len(self._tx_queue),
+                             )
+                         except Exception:
+                             pass
+-                    await self._ws.send(json.dumps({"type": "CloseStream"}))
++                    await ws.send(json.dumps({"type": "CloseStream"}))
          except Exception:
              pass
  
@@ -567,7 +437,8 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
  
          try:
              ws = self._ws
-             if ws and getattr(ws, "open", True):
+-            if ws and getattr(ws, "open", True):
++            if ws and (self._ws_is_open(ws) or not hasattr(ws, "open")):
                  await ws.close()
          finally:
              self._ws = None
@@ -591,177 +462,272 @@ index 85ad4a9e4d0ffd85fe454d507bc8825a15292dd8..6021561451886052aa068037b460b227
                  self._jlog(
                      "dg_close",
                      sid=sid,
-+                    dg_id=self._dg_id,
+                     dg_id=self._dg_id,
                      tag=self._url_tag,
-                     wait_for_final=wait_for_final,
-                     linger_ms=linger_ms,
-                     had_result=self._had_result(),
-                     drain_failed=drain_failed,
-                 )
-             except Exception:
-                 pass
- 
-         if drain_failed:
-             raise DeepgramDrainTimeoutError(
-                 sid,
-                 queued_chunks=dropped_chunks,
-                 queued_bytes=dropped_bytes,
-                 wait_timeout=drain_wait_timeout,
-             )
- 
-         # -- sending ---------------------------------------------------------------
- 
-     async def send(self, chunk: bytes) -> None:
-         if not isinstance(chunk, (bytes, bytearray)):
-             raise TypeError("chunk must be bytes")
-         if not chunk:
-             return
- 
-+        sid = self._sid_for_log()
-         payload = bytes(chunk)
-         self._tx_queue.append(payload)
-         if self._drain_event.is_set():
-             self._drain_event.clear()
-+        if callable(self._jlog):
-+            try:
-+                self._jlog(
-+                    "dg_tx_enqueue",
-+                    sid=sid,
-+                    dg_id=self._dg_id,
-+                    tag=self._url_tag,
-+                    bytes=len(payload),
-+                    queued=len(self._tx_queue),
-+                )
-+            except Exception:
-+                pass
- 
-         # Lazy preconnect: if socket isn't open yet, kick off connect in the background.
-         if not self.is_open() and not self._closing:
-+            lazy_started = False
-             try:
-                 asyncio.create_task(self.connect())
-+                lazy_started = True
-             except Exception:
-                 pass
--
--        sid = self._sid_for_log()
-+            if lazy_started and callable(self._jlog):
-+                try:
-+                    self._jlog(
-+                        "dg_lazy_connect",
-+                        sid=sid,
-+                        dg_id=self._dg_id,
-+                        tag=self._url_tag,
-+                        queued=len(self._tx_queue),
-+                    )
-+                except Exception:
-+                    pass
- 
-         if not self._open_evt.is_set():
-             try:
-                 await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
-             except asyncio.TimeoutError:
-                 # Treat a gated send as a transport failure when the open event never arrived.
-                 if not self._open_gate_warned:
-                     logger.warning(
-                         "Deepgram send gated but no open within timeout sid=%s queued=%s",
-                         sid,
-                         len(self._tx_queue),
+@@ -1166,51 +1224,51 @@ class DeepgramClient:
+                         {"type": "asr_error", "error": f"recv_closed:{getattr(e, 'code', '')}:{getattr(e, 'reason', '')}"}
                      )
-                     self._open_gate_warned = True
-                 if self._tx_queue:
-                     try:
-                         self._tx_queue.pop()
-                     except Exception:
-                         self._tx_queue.clear()
-                 if not self._tx_queue and not self._drain_event.is_set():
-                     self._drain_event.set()
-                 raise RuntimeError("deepgram_not_connected:open_gate_timeout")
- 
-         # Opportunistic flush now (won't raise if socket not open yet)
-         self._schedule_flush()
-         
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index f8d7ef5c226ebf3e769dd6988deab83f76e2e918..0b483373432253c6061076fae442a5e854805952 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -645,57 +645,79 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         try:
-             await dg.send(data)
-             sent_any_audio[0] = True
-             _jlog("ws_audio_forward", sid=sid, bytes=len(data), buffered=from_buffer)
-             return True
-         except RuntimeError as e:
-             if "deepgram_not_connected" in str(e).lower() and retry:
-                 _jlog("asr_send_retry", sid=sid)
-                 if not asr_ready_evt.is_set():
-                     with contextlib.suppress(asyncio.TimeoutError):
-                         await asyncio.wait_for(asr_ready_evt.wait(), timeout=1.0)
-                 else:
-                     await asyncio.sleep(0.05)
-                 return await _send_chunk(data, from_buffer=from_buffer, retry=False)
-             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
+                 except Exception:
+                     pass
          except Exception as e:
-             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
-         return False
+             logger.exception("Deepgram rx loop error sid=%s", sid)
+             try:
+                 await self._ev_queue.put({"type": "asr_error", "error": f"rx:{e.__class__.__name__}"})
+             except Exception:
+                 pass
  
-     async def _flush_buffered_chunks() -> None:
-         nonlocal dg
-         if not buffered_chunks:
-             return
-         if not _has_deepgram_key() or dg is None:
-             return
-+        initial_queued = len(buffered_chunks)
-+        flushed_chunks = 0
-+        flushed_bytes = 0
-+        with contextlib.suppress(Exception):
-+            _jlog(
-+                "ws_flush_request",
-+                sid=sid,
-+                queued=initial_queued,
-+                dg_ready=_dg_client_ready(dg),
-+            )
-         while buffered_chunks:
-             chunk = buffered_chunks[0]
-+            chunk_len = len(chunk) if isinstance(chunk, (bytes, bytearray)) else 0
-             ok = await _send_chunk(chunk, from_buffer=True)
-             if ok:
-                 buffered_chunks.popleft()
-+                flushed_chunks += 1
-+                flushed_bytes += chunk_len
-                 continue
-             break
-+        with contextlib.suppress(Exception):
-+            _jlog(
-+                "ws_flush_done",
-+                sid=sid,
-+                queued=initial_queued,
-+                flushed_chunks=flushed_chunks,
-+                flushed_bytes=flushed_bytes,
-+                remaining=len(buffered_chunks),
-+            )
+     # -- keepalive -------------------------------------------------------------
  
-     try:
-         while True:
-             ev = await receive()
-             et = ev.get("type")
+     async def _keepalive_loop(self) -> None:
+         """Send KeepAlive frames immediately and then periodically."""
+         sid = self._sid_for_log()
+         try:
+             while True:
+                 if self._closed:
+                     break
+                 ws = self._ws
+                 if not ws:
+                     break
+                 if getattr(ws, "closed", False) or getattr(ws, "closing", False):
+                     break
+-                if not getattr(ws, "open", False):
++                if not self._ws_is_open(ws):
+                     break
  
-             if et == "websocket.disconnect":
-                 had_disconnect = True
-                 now = time.time()
-                 idle_s = max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
-                 with contextlib.suppress(Exception):
-                     _jlog(
-                         "ws_conn_disconnect",
-                         conn_id=conn_id,
-                         sid=sid,
-                         code=ev.get("code"),
-                         reason=ev.get("reason"),
-                         idle_s=idle_s,
-                     )
-                 with contextlib.suppress(Exception):
-                     if _admin_emit:
-                         _admin_emit(
-                             "ws_conn_disconnect",
-                             conn_id=conn_id,
-                             sid=sid,
+                 try:
+                     async with self._send_lock:
+                         await ws.send(json.dumps({"type": "KeepAlive"}))
+                     logger.debug("Deepgram keepalive sid=%s interval=%s", sid, self._keepalive_interval)
+                 except websockets.ConnectionClosed as exc:
+                     logger.warning("Deepgram keepalive closed sid=%s err=%s", sid, exc)
+                     break
+                 except Exception as exc:
+                     logger.warning("Deepgram keepalive failed sid=%s err=%s", sid, exc)
+                     try:
+                         await asyncio.sleep(self._keepalive_interval)
+                     except asyncio.CancelledError:
+                         return
+                     continue
+ 
+                 try:
+                     await asyncio.sleep(self._keepalive_interval)
+                 except asyncio.CancelledError:
+                     return
+         finally:
+             self._keepalive_task = None
+ 
+     async def _stop_keepalive(self) -> None:
+diff --git a/tests/test_deepgram_client_connect.py b/tests/test_deepgram_client_connect.py
+index 154722f5c592317d8fe7543468bf3a1d06816084..a4e50f468052645d6abe90a29a4b50fd9bb8d370 100644
+--- a/tests/test_deepgram_client_connect.py
++++ b/tests/test_deepgram_client_connect.py
+@@ -1,29 +1,30 @@
+ import asyncio
+ import json
+ import logging
+ from collections import deque
++from websockets import protocol as ws_protocol
+ from urllib.parse import parse_qs, urlparse
+ 
+ import pytest
+ 
+ from app.services.streaming_asr import deepgram_client as dg_mod
+ 
+ 
+ class DummyWS:
+     def __init__(self):
+         self.open = True
+         self.sent = []
+ 
+     async def send(self, data):
+         self.sent.append(data)
+ 
+     async def close(self):
+         self.open = False
+ 
+     def __aiter__(self):
+         async def _gen():
+             yield json.dumps({"type": "Metadata"})
+         return _gen()
+ 
+ 
+ class ConcurrentGuardWS(DummyWS):
+@@ -44,50 +45,76 @@ class ConcurrentGuardWS(DummyWS):
+         """Return (payload, event) for the next blocked send."""
+ 
+         payload, event = await self._blocked_sends.get()
+         return payload, event
+ 
+     async def send(self, data):
+         if self._inflight:
+             raise RuntimeError("cannot call send while another coroutine is already waiting")
+ 
+         self._inflight = True
+         try:
+             if self._auto_release:
+                 await asyncio.sleep(0)
+                 self.sent.append(data)
+                 return
+ 
+             self._auto_release = True
+             release = asyncio.Event()
+             await self._blocked_sends.put((data, release))
+             await release.wait()
+             self.sent.append(data)
+         finally:
+             self._inflight = False
+ 
+ 
++class AsyncioClientWS:
++    """Minimal stub that mimics asyncio-style websockets.client connection."""
++
++    def __init__(self):
++        self.state = ws_protocol.State.CONNECTING
++        self.sent = []
++        self.close_called = False
++
++    @property
++    def closed(self) -> bool:
++        return self.state in (ws_protocol.State.CLOSING, ws_protocol.State.CLOSED)
++
++    async def send(self, data):
++        self.sent.append(data)
++
++    async def close(self):
++        self.state = ws_protocol.State.CLOSED
++        self.close_called = True
++
++    def __aiter__(self):
++        async def _gen():
++            yield json.dumps({"type": "Metadata"})
++
++        return _gen()
++
++
+ def test_connect_prefers_additional_headers(monkeypatch):
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+ 
+     record = {}
+ 
+     async def fake_connect(url, **kwargs):
+         record["url"] = url
+         record["kwargs"] = kwargs
+         return DummyWS()
+ 
+     monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
+ 
+     async def run():
+         client = dg_mod.DeepgramClient()
+ 
+         await client.connect()
+ 
+         assert "additional_headers" in record["kwargs"]
+         assert record["kwargs"]["additional_headers"] == [("Authorization", "Token abc123")]
+         assert "extra_headers" not in record["kwargs"]
+         assert record["kwargs"]["max_size"] is None
+ 
+         assert json.loads(client._ws.sent[0])["type"] == "Configure"
+ 
+@@ -139,50 +166,101 @@ def test_close_retries_flush_until_socket_open(monkeypatch):
+ 
+         def _capture(event, **payload):
+             events.append((event, payload))
+ 
+         client._jlog = _capture
+ 
+         async def _enable_open():
+             await asyncio.sleep(0.05)
+             ws.open = True
+ 
+         asyncio.create_task(_enable_open())
+ 
+         await client.close(wait_for_final=False)
+ 
+         # Data should have been sent once the socket opened
+         assert any(item == b"queued-bytes" for item in ws.sent)
+         assert any(
+             event == "dg_writer_drained" and payload.get("bytes", 0) > 0
+             for event, payload in events
+         )
+         assert client._tx_queue == deque()
+ 
+     asyncio.run(run())
+ 
+ 
++def test_asyncio_client_connection_flushes_and_closes(monkeypatch):
++    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
++    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
++
++    async def run():
++        client = dg_mod.DeepgramClient()
++        ws = AsyncioClientWS()
++        client._ws = ws
++        client._open_evt.set()
++        client._min_valid_bytes = 1
++
++        client._tx_queue.append(b"a" * 4)
++        if client._drain_event.is_set():
++            client._drain_event.clear()
++
++        flush_task = asyncio.create_task(client._flush_tx())
++        await asyncio.sleep(0.02)
++        assert not flush_task.done()
++
++        ws.state = ws_protocol.State.OPEN
++        bytes_sent, _ = await asyncio.wait_for(flush_task, timeout=0.5)
++
++        assert bytes_sent == 4
++        assert ws.sent == [b"a" * 4]
++        assert client._tx_queue == deque()
++        assert client._drain_event.is_set()
++
++        client._tx_queue.extend([b"b" * 4, b"c" * 4])
++        if client._drain_event.is_set():
++            client._drain_event.clear()
++
++        ws.state = ws_protocol.State.CONNECTING
++        close_task = asyncio.create_task(client.close(wait_for_final=False))
++        await asyncio.sleep(0.02)
++        assert not close_task.done()
++
++        ws.state = ws_protocol.State.OPEN
++        await asyncio.wait_for(close_task, timeout=0.5)
++
++        assert ws.close_called is True
++        assert client._tx_queue == deque()
++        payload_types = [
++            json.loads(item).get("type")
++            for item in ws.sent
++            if isinstance(item, str)
++        ]
++        assert "CloseStream" in payload_types
++
++    asyncio.run(run())
++
++
+ def test_connect_falls_back_to_extra_headers(monkeypatch):
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+ 
+     calls = []
+ 
+     async def fake_connect(url, **kwargs):
+         calls.append(kwargs)
+         if len(calls) == 1:
+             assert "additional_headers" in kwargs
+             raise TypeError("no additional_headers")
+         assert "extra_headers" in kwargs
+         return DummyWS()
+ 
+     monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
+ 
+     async def run():
+         client = dg_mod.DeepgramClient()
+ 
+         await client.connect()
+ 
+         assert len(calls) == 2
+         assert calls[0]["additional_headers"] == [("Authorization", "Token abc123")]
+         assert calls[1]["extra_headers"] == [("Authorization", "Token abc123")]
+         assert calls[1]["max_size"] is None
