@@ -1,7 +1,7 @@
 import os, json
 import importlib
 
-from app.ws.ws_asgi import ws_chat
+from app.ws.ws_asgi import _ws_chat_asgi_impl
 
 def _run_ws(events):
     sent = []
@@ -11,13 +11,15 @@ def _run_ws(events):
         sent.append(msg)
     scope = {'type':'websocket','path':'/ws/v1/chat','query_string': b''}
     import asyncio
-    asyncio.get_event_loop().run_until_complete(ws_chat(scope, receive, send))
+    asyncio.get_event_loop().run_until_complete(_ws_chat_asgi_impl(scope, receive, send))
     return sent
 
 def test_phase3_config_values_flow_into_provider_url_and_config(monkeypatch):
     # Enable vendor path but keep DG in test-mode (no network)
     monkeypatch.setenv("DEEPGRAM_API_KEY","test")
     monkeypatch.setenv("DG_TEST_MODE","1")
+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+    monkeypatch.setenv("WS_BEARER_ONLY", "0")
 
     # Reload module to clear globals
     mod = importlib.import_module("app.services.streaming_asr.deepgram_client")
@@ -46,6 +48,7 @@ def test_phase3_config_values_flow_into_provider_url_and_config(monkeypatch):
     assert mod.DG_LAST_URL is not None, "Deepgram URL not recorded"
     assert "sample_rate=16000" in mod.DG_LAST_URL, mod.DG_LAST_URL
     assert "channels=1" in mod.DG_LAST_URL, mod.DG_LAST_URL
+    assert "tag=" in mod.DG_LAST_URL, mod.DG_LAST_URL
     # Ensure flags appear (vad_events, smart_format, punctuate, utterance_end_ms)
     for tok in ("vad_events=true","smart_format=true","punctuate=true","utterance_end_ms=1500"):
         assert tok in mod.DG_LAST_URL, f"Missing {tok} in URL: {mod.DG_LAST_URL}"

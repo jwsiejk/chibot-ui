@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from typing import AsyncGenerator, Optional, Any, Deque
 from collections import deque
@@ -15,6 +16,21 @@ import websockets  # provided by uvicorn[standard]
 DG_TEST_MODE = os.getenv("DG_TEST_MODE", "").strip() == "1"
 DG_LAST_URL: str | None = None
 DG_LAST_CONFIG: dict | None = None
+
+_TAG_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.:-]")
+
+
+def _sanitize_tag(val: Optional[str], *, limit: int = 64) -> Optional[str]:
+    if not val:
+        return None
+    try:
+        txt = str(val)
+    except Exception:
+        return None
+    txt = _TAG_SANITIZE_RE.sub("_", txt)
+    if not txt:
+        return None
+    return txt[:limit]
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +103,8 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
                 return str(int(v))
             return str(v)
 
+        tag_source: Optional[str] = None
+
         # Allow top-level overrides (model, language, etc.)
         if overrides:
             for k in (
@@ -103,6 +121,29 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             ):
                 if k in overrides and overrides[k] is not None:
                     qd[k] = _fmt(overrides[k])
+
+            for key in ("_url_tag", "dg_url_tag", "url_tag"):
+                try:
+                    if overrides.get(key):
+                        tag_source = str(overrides[key])
+                        break
+                except Exception:
+                    continue
+            if not tag_source:
+                try:
+                    sid_val = overrides.get("session_id") or overrides.get("sid")
+                    if sid_val:
+                        tag_source = f"sid:{sid_val}"
+                except Exception:
+                    pass
+
+        env_tag = os.getenv("DG_URL_TAG", "").strip() or None
+        tag = tag_source or env_tag
+        if tag_source and env_tag:
+            tag = f"{env_tag}:{tag_source}"
+        safe_tag = _sanitize_tag(tag)
+        if safe_tag:
+            qd["tag"] = safe_tag
 
         # If containerized, remove transport params regardless of how they got here
         if containerized:
@@ -187,6 +228,29 @@ def _initial_config(overrides: Optional[dict] = None) -> dict:
 
     return cfg
 
+
+def _diagnostic_config(payload: dict, overrides: Optional[dict] = None) -> dict:
+    diag = dict(payload)
+    try:
+        if overrides:
+            for key in (
+                "encoding",
+                "sample_rate",
+                "channels",
+                "language",
+                "model",
+                "utterance_end_ms",
+                "interim_results",
+                "smart_format",
+                "punctuate",
+                "vad_events",
+            ):
+                if overrides.get(key) is not None:
+                    diag[key] = overrides[key]
+    except Exception:
+        pass
+    return diag
+
 # ------------------------------ Client ---------------------------------------
 
 class DeepgramClient:
@@ -208,6 +272,7 @@ class DeepgramClient:
         self._ev_queue: asyncio.Queue = asyncio.Queue()
         self._closed = False
         self._closing = False
+        self._url_tag: Optional[str] = None
 
         # TX queue + flushing
         self._tx_queue: Deque[bytes] = deque()
@@ -343,6 +408,17 @@ class DeepgramClient:
                 self._tx_queue.popleft()
                 logger.debug("Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
                              sid, len(data), len(self._tx_queue))
+                if callable(self._jlog):
+                    try:
+                        self._jlog(
+                            "dg_forward",
+                            sid=sid,
+                            tag=self._url_tag,
+                            bytes=len(data),
+                            queued=len(self._tx_queue),
+                        )
+                    except Exception:
+                        pass
             except Exception as e:
                 # Transient send issue; stop and retry on next trigger
                 logger.debug("Deepgram deferred send sid=%s err=%s queued=%s",
@@ -359,11 +435,14 @@ class DeepgramClient:
         url = _dg_url(self._cfg)
         sid = self._sid_for_log()
 
+        containerized = False
+
         # Diagnostic: parse params and emit compact JSON log that shows
         # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
         try:
             import urllib.parse as _p
             q = dict(_p.parse_qsl(_p.urlsplit(url).query, keep_blank_values=True))
+            self._url_tag = q.get("tag") or None
             transport = (self._cfg or {}).get("_transport", {}) or {}
             containerized = bool(transport.get("containerized_opus"))
             url_meta = {
@@ -418,10 +497,16 @@ class DeepgramClient:
         if DG_TEST_MODE:
             self._ws = _FakeWSForTests()
             DG_LAST_URL = url
-            DG_LAST_CONFIG = _initial_config(self._cfg)
+            cfg_payload = _initial_config(self._cfg)
+            DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
             self._open_evt.set()
             await self._signal_ready()
             logger.info("Deepgram test-mode connect sid=%s", sid)
+            if callable(self._jlog):
+                try:
+                    self._jlog("dg_open", sid=sid, url=url, tag=self._url_tag, test_mode=True)
+                except Exception:
+                    pass
             return
 
         headers = [("Authorization", _auth_header())]
@@ -441,10 +526,11 @@ class DeepgramClient:
         # Micro-wait to ensure the underlying socket is actually open
         await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S','0.75')))
 
+        cfg_payload = _initial_config(self._cfg)
         DG_LAST_URL = url
-        DG_LAST_CONFIG = _initial_config(self._cfg)
+        DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
         async with self._send_lock:
-            await self._ws.send(json.dumps(DG_LAST_CONFIG))
+            await self._ws.send(json.dumps(cfg_payload))
 
         await self._signal_ready()
         self._rx_task = asyncio.create_task(self._rx_loop())
@@ -453,6 +539,17 @@ class DeepgramClient:
             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
         logger.info("Deepgram connect ok sid=%s", sid)
+        if callable(self._jlog):
+            try:
+                self._jlog(
+                    "dg_open",
+                    sid=sid,
+                    url=url,
+                    tag=self._url_tag,
+                    containerized=containerized,
+                )
+            except Exception:
+                pass
 
     async def close(
         self,
@@ -529,6 +626,18 @@ class DeepgramClient:
             await self._stop_keepalive()
 
         logger.info("Deepgram close complete sid=%s", sid)
+        if callable(self._jlog):
+            try:
+                self._jlog(
+                    "dg_close",
+                    sid=sid,
+                    tag=self._url_tag,
+                    wait_for_final=wait_for_final,
+                    linger_ms=linger_ms,
+                    had_result=self._any_result,
+                )
+            except Exception:
+                pass
 
     # -- sending ---------------------------------------------------------------
 

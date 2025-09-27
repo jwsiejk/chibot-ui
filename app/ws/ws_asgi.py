@@ -489,6 +489,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     asr_ready_evt.clear()
                 cfg['_transport'] = transport
                 cfg['_jlog'] = _jlog
+                cfg.setdefault('session_id', sid)
+                cfg['_url_tag'] = f"{WS_ASGI_BUILD}:{sid}"
                 _jlog("asr_connect_begin", sid=sid, transport=transport)
                 client = DeepgramClient(cfg)
                 dg = client

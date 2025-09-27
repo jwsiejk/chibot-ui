@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from collections import deque
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -440,3 +441,59 @@ def test_send_does_not_wait_for_provider_ready(monkeypatch):
         await client.close(wait_for_final=False)
 
     asyncio.run(run())
+
+
+def test_dg_url_tag_includes_session(monkeypatch):
+    monkeypatch.delenv("DG_URL_TAG", raising=False)
+    url = dg_mod._dg_url({"session_id": "user$sess", "_transport": {"containerized_opus": False}})
+    qs = parse_qs(urlparse(url).query)
+    assert qs.get("tag"), url
+    assert qs["tag"][0] == "sid:user_sess"
+
+
+def test_dg_url_tag_combines_env_and_override(monkeypatch):
+    monkeypatch.setenv("DG_URL_TAG", "build42")
+    url = dg_mod._dg_url({"_url_tag": "custom tag!!", "_transport": {"containerized_opus": True}})
+    qs = parse_qs(urlparse(url).query)
+    assert qs.get("tag"), url
+    assert qs["tag"][0] == "build42:custom_tag__"
+
+
+def test_structured_logs_cover_open_forward_close(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+
+    events = []
+
+    def capture(event, **data):
+        events.append((event, data))
+
+    dummy_ws = DummyWS()
+
+    async def fake_connect(url, **kwargs):
+        return dummy_ws
+
+    monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
+
+    async def run():
+        client = dg_mod.DeepgramClient({
+            "_jlog": capture,
+            "session_id": "sess-123",
+            "_url_tag": "tag*value",
+        })
+
+        await client.connect()
+        await client.send(b"a" * 96)
+        await client._flush_tx()
+        await client.close(wait_for_final=False)
+
+    asyncio.run(run())
+
+    names = [evt for evt, _ in events]
+    assert "dg_open" in names
+    assert "dg_forward" in names
+    assert "dg_close" in names
+
+    tags = [data.get("tag") for evt, data in events if evt in {"dg_open", "dg_forward", "dg_close"}]
+    assert tags, events
+    assert all(tag == "tag_value" for tag in tags)

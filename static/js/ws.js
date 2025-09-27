@@ -271,6 +271,36 @@ export function openWS(options = {}){
     }
   } catch(_) {}
 
+  try {
+    const stamp = {
+      module: import.meta && import.meta.url ? import.meta.url : undefined,
+      version: (() => {
+        try {
+          if (!import.meta || !import.meta.url) return undefined;
+          const u = new URL(import.meta.url, location.href);
+          return u.searchParams.get('v') || undefined;
+        } catch (_) {
+          return undefined;
+        }
+      })(),
+      flags: (() => {
+        try {
+          const cfg = window.__askchip_config || {};
+          return cfg.flags || cfg.ws_flags || undefined;
+        } catch (_) {
+          return undefined;
+        }
+      })(),
+      reconnectEnabled: __WS_RECONNECT_ENABLED,
+      sessionStarted: !!(window && window.__askchip_session_started),
+    };
+    console.info('[ws] openWS build', stamp);
+  } catch (_) {}
+
+  try {
+    console.info('[ws] openWS options=', options, 'reconnect=', __WS_RECONNECT_ENABLED);
+  } catch (_) {}
+
   if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)){
     return Promise.resolve(_ws);
   }
@@ -306,23 +336,29 @@ export function openWS(options = {}){
     };
 
     ws.onclose = (e) => {
-      if (!__WS_RECONNECT_ENABLED) {
-        try { window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }})); } catch {}
-        return;
-      }
+      const sessionActive = !!(window && window.__askchip_session_started);
+      const shouldReconnect = __WS_RECONNECT_ENABLED && sessionActive;
+
       _stopKeepAlive();
 
-      // If we closed before receiving server "ready", a transient connect race happened.
-      if (!_gotReady){
-        _scheduleReconnect();
+      if (!shouldReconnect) {
+        try { window.__askchip_session_started = false; } catch {}
       } else {
-        // If already "ready", only reconnect if session is active
-        _scheduleReconnect();
+        // If we closed before receiving server "ready", a transient connect race happened.
+        if (!_gotReady){
+          _scheduleReconnect();
+        } else {
+          // If already "ready", only reconnect if session is active
+          _scheduleReconnect();
+        }
       }
 
       try {
         window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }}));
       } catch {}
+      if (!shouldReconnect) {
+        return;
+      }
     };
 
     ws.onerror = (e) => console.warn('[ws] error', e);
@@ -398,6 +434,7 @@ export function closeWS(code = 1000, reason = ''){
   _stopKeepAlive();
   clearTimeout(_reconnectTimer);
   _reconnecting = false;
+  try { window.__askchip_session_started = false; } catch {}
   try {
     if (_ws) _ws.close(code, reason || undefined);
   } catch {}
