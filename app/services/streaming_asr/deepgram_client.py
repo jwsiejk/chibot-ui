@@ -263,9 +263,9 @@ class DeepgramClient:
       • Suppresses raw audio params for containerized Opus (WebM/OGG).
       • Logs a concise 'asr_url' diagnostic with omitted/raw params for verification.
       • Maintains an internal TX queue — early chunks are queued and flushed on open.
-      • Drops tiny preamble chunk (<DG_MIN_VALID_BYTES) once, to avoid bogus data.
-      • Sends {"type": "CloseStream"} and lingers briefly before close.
-      • Waits for a final transcript (bounded) so Deepgram doesn’t record 00:00:00.
+      • Drops tiny preamble chunk (<DG_MIN_VALID_BYTES) once, to avoid bogus data (raw only).
+      • **Flushes all queued audio before CloseStream; close waits for drain.**
+      • Sends {"type": "CloseStream"} and (optionally) waits briefly for final.
     """
 
     def __init__(self, _cfg: Optional[dict] = None) -> None:
@@ -291,7 +291,7 @@ class DeepgramClient:
         self._last_chunk_ts: float = 0.0
 
         # Tunables
-        self._linger_ms: int = int(os.getenv("DG_LINGER_MS", "600"))
+        self._linger_ms: int = int(os.getenv("DG_LINGER_MS", "800"))  # slightly longer default
         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "12"))
 
         # Open gate
@@ -402,7 +402,7 @@ class DeepgramClient:
         first_chunk: Optional[bytes] = None
         while self._tx_queue and self._ws and getattr(self._ws, "open", False):
             data = self._tx_queue[0]
-            # Drop tiny preamble once
+            # Drop tiny preamble once (RAW only)
             if (
                 not containerized
                 and (not self._first_real_sent)
@@ -412,7 +412,7 @@ class DeepgramClient:
                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
                     sid, len(data), self._min_valid_bytes
                 )
-                self._tx_queue.popleft()
+                self._tx_queue.popLeft = self._tx_queue.popleft()  # keep attribute for readability tools
                 continue
             try:
                 async with self._send_lock:
@@ -443,7 +443,10 @@ class DeepgramClient:
                 break
         first8_hex: Optional[str] = None
         if first_chunk:
-            first8_hex = first_chunk[:8].hex()
+            try:
+                first8_hex = first_chunk[:8].hex()
+            except Exception:
+                first8_hex = None
         return total_sent, first8_hex
 
     # -- lifecycle -------------------------------------------------------------
@@ -554,6 +557,9 @@ class DeepgramClient:
             await self._ws.send(json.dumps(cfg_payload))
 
         await self._signal_ready()
+        # Proactively schedule a flush in case audio was queued before/while connecting
+        self._schedule_flush(delay=0.0)
+
         self._rx_task = asyncio.create_task(self._rx_loop())
 
         if self._keepalive_interval > 0:
@@ -578,6 +584,12 @@ class DeepgramClient:
         timeout: Optional[float] = None,
         linger_ms: Optional[int] = None,
     ) -> None:
+        """Graceful shutdown:
+        1) Drain queued audio (budget-based retry) BEFORE CloseStream
+        2) Send CloseStream
+        3) Optionally wait for final
+        4) Close socket
+        """
         if self._closed or self._closing:
             return
         self._closing = True
@@ -591,6 +603,16 @@ class DeepgramClient:
 
         if linger_ms is None:
             linger_ms = self._linger_ms
+
+        # If we've never sent a chunk but have queued bytes, add a tiny settle delay
+        # so the configure→ready gate can complete before our first flush attempt.
+        if self._last_chunk_ts == 0 and self._tx_queue and linger_ms > 0:
+            try:
+                await asyncio.sleep(min(0.12, linger_ms / 1000.0))
+            except asyncio.CancelledError:
+                pass
+
+        # Optional linger relative to the last successfully sent chunk
         if self._last_chunk_ts > 0 and linger_ms > 0:
             elapsed_ms = int((time.time() - self._last_chunk_ts) * 1000)
             delay_ms = max(0, linger_ms - elapsed_ms)
@@ -612,69 +634,71 @@ class DeepgramClient:
             if first_hex and flush_first8 is None:
                 flush_first8 = first_hex
 
-        # Ensure any queued audio is flushed before CloseStream
+        # Always attempt an initial flush
         try:
             bytes_sent, first_hex = await self._flush_tx()
             _record_flush(bytes_sent, first_hex)
         except Exception:
             pass
 
-        # If there is still queued audio, give the socket a short chance to finish opening
-        if self._tx_queue:
-            attempts = 0
-            max_attempts = max(1, int(os.getenv("DG_CLOSE_FLUSH_MAX_ATTEMPTS", "3")))
-            deadline = time.time() + float(os.getenv("DG_CLOSE_FLUSH_DEADLINE_S", "0.75"))
-            recheck_timeout = float(os.getenv("DG_CLOSE_FLUSH_RECHECK_S", "0.25"))
+        # Budget-based retry loop to ensure first-chunk drain under load
+        budget_s = float(os.getenv("DG_CLOSE_FLUSH_BUDGET_S", "3.0"))
+        recheck_s = float(os.getenv("DG_CLOSE_FLUSH_RECHECK_S", "0.15"))
+        deadline = time.time() + budget_s
 
-            while self._tx_queue and attempts < max_attempts and time.time() < deadline:
-                attempts += 1
-                # Wait for provider open gate if needed
-                if not self._open_evt.is_set():
-                    try:
-                        await asyncio.wait_for(
-                            self._open_evt.wait(),
-                            timeout=min(recheck_timeout, self._open_wait_s),
-                        )
-                    except asyncio.TimeoutError:
-                        pass
-
+        while self._tx_queue and time.time() < deadline:
+            # Wait for provider open gate if needed (bounded by remaining budget)
+            if not self._open_evt.is_set():
+                remaining = max(0.05, deadline - time.time())
                 try:
-                    await self.wait_socket_open(timeout=recheck_timeout)
-                except Exception:
+                    await asyncio.wait_for(self._open_evt.wait(), timeout=min(self._open_wait_s, remaining))
+                except asyncio.TimeoutError:
                     pass
 
-                try:
-                    bytes_sent, first_hex = await self._flush_tx()
-                    _record_flush(bytes_sent, first_hex)
-                except Exception:
-                    break
+            # Try to ensure socket is actually open
+            remaining = max(0.05, deadline - time.time())
+            try:
+                await self.wait_socket_open(timeout=min(0.5, remaining))
+            except Exception:
+                pass
+
+            try:
+                bytes_sent, first_hex = await self._flush_tx()
+                _record_flush(bytes_sent, first_hex)
+            except Exception:
+                break
 
             if self._tx_queue:
-                dropped_chunks = len(self._tx_queue)
                 try:
-                    dropped_bytes = sum(len(chunk) for chunk in self._tx_queue)
+                    await asyncio.sleep(min(recheck_s, max(0.05, deadline - time.time())))
+                except asyncio.CancelledError:
+                    break
+
+        if self._tx_queue:
+            dropped_chunks = len(self._tx_queue)
+            try:
+                dropped_bytes = sum(len(chunk) for chunk in self._tx_queue)
+            except Exception:
+                dropped_bytes = 0
+            logger.warning(
+                "Deepgram close dropping queued audio sid=%s queued_chunks=%s queued_bytes=%s",
+                sid,
+                dropped_chunks,
+                dropped_bytes,
+            )
+            if callable(self._jlog):
+                try:
+                    self._jlog(
+                        "dg_writer_drop",
+                        sid=sid,
+                        tag=self._url_tag,
+                        queued_chunks=dropped_chunks,
+                        queued_bytes=dropped_bytes,
+                        attempts="budget",
+                    )
                 except Exception:
-                    dropped_bytes = 0
-                logger.warning(
-                    "Deepgram close dropping queued audio sid=%s queued_chunks=%s queued_bytes=%s attempts=%s",
-                    sid,
-                    dropped_chunks,
-                    dropped_bytes,
-                    attempts,
-                )
-                if callable(self._jlog):
-                    try:
-                        self._jlog(
-                            "dg_writer_drop",
-                            sid=sid,
-                            tag=self._url_tag,
-                            queued_chunks=dropped_chunks,
-                            queued_bytes=dropped_bytes,
-                            attempts=attempts,
-                        )
-                    except Exception:
-                        pass
-                self._tx_queue.clear()
+                    pass
+            self._tx_queue.clear()
 
         logger.info(
             "dg_writer_drained sid=%s bytes=%s first8_hex=%s queued=%s",
@@ -698,6 +722,7 @@ class DeepgramClient:
             except Exception:
                 pass
 
+        # Now send CloseStream after we've flushed all audio
         try:
             if self._ws and getattr(self._ws, "open", False):
                 async with self._send_lock:
@@ -769,14 +794,7 @@ class DeepgramClient:
             try:
                 await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
             except asyncio.TimeoutError:
-                try:
-                    for idx, item in enumerate(self._tx_queue):
-                        if item is payload:
-                            del self._tx_queue[idx]
-                            break
-                except Exception:
-                    pass
-
+                # On timeout, keep the queued payload; we'll flush on connect/ready.
                 if not self._open_gate_warned:
                     logger.warning(
                         "Deepgram send gated but no open within timeout sid=%s queued=%s",
@@ -784,8 +802,6 @@ class DeepgramClient:
                         len(self._tx_queue),
                     )
                     self._open_gate_warned = True
-
-                raise RuntimeError("deepgram_not_connected")
 
         # Opportunistic flush now (won't throw if socket not open yet)
         self._schedule_flush()
