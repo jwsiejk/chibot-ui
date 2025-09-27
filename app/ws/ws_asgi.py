@@ -1,6 +1,6 @@
 # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
 from __future__ import annotations
-import asyncio, os, contextlib, time, io, struct, base64
+import asyncio, os, contextlib, time, io, struct, base64, uuid
 from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple
 from collections import deque
 from app.services.audio.container_sniffer import AudioContainerSniffer, coerce_detection_from_meta
@@ -277,11 +277,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     _jlog("mic_capture_cfg", sid="pending", enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
 
+    raw_query = (scope.get("query_string") or b"").decode("utf-8", "ignore")
+
     try:
         _admin_emit and _admin_emit(
             "ws_handshake_enter",
             path=scope.get("path"),
-            raw_query=(scope.get("query_string") or b"").decode("utf-8", "ignore"),
+            raw_query=raw_query,
         )
     except Exception:
         pass
@@ -292,6 +294,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return
 
     sid = _get_session_id(scope)
+    conn_id = uuid.uuid4().hex
+    start_ts = time.time()
+    last_msg_ts = start_ts
+    had_disconnect = False
     _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
 
     # Auth
@@ -337,6 +343,26 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             return
 
     await send({"type": "websocket.accept", "subprotocol": "bearer"})
+
+    with contextlib.suppress(Exception):
+        _jlog(
+            "ws_conn_open",
+            sid=sid,
+            conn_id=conn_id,
+            client_ip=client_ip,
+            path=scope.get("path"),
+            query_string=raw_query,
+        )
+    with contextlib.suppress(Exception):
+        if _admin_emit:
+            _admin_emit(
+                "ws_conn_open",
+                sid=sid,
+                conn_id=conn_id,
+                client_ip=client_ip,
+                path=scope.get("path"),
+                query_string=raw_query,
+            )
 
     with contextlib.suppress(Exception):
         db.memory.setdefault("greet_turns", {}).pop(sid, None)
@@ -480,9 +506,33 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             et = ev.get("type")
 
             if et == "websocket.disconnect":
+                had_disconnect = True
+                now = time.time()
+                idle_s = max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
+                with contextlib.suppress(Exception):
+                    _jlog(
+                        "ws_conn_disconnect",
+                        conn_id=conn_id,
+                        sid=sid,
+                        code=ev.get("code"),
+                        reason=ev.get("reason"),
+                        idle_s=idle_s,
+                    )
+                with contextlib.suppress(Exception):
+                    if _admin_emit:
+                        _admin_emit(
+                            "ws_conn_disconnect",
+                            conn_id=conn_id,
+                            sid=sid,
+                            code=ev.get("code"),
+                            reason=ev.get("reason"),
+                            idle_s=idle_s,
+                        )
+                last_msg_ts = now
                 break
 
             if et == "websocket.receive":
+                last_msg_ts = time.time()
                 # -------------------- Binary / audio lane --------------------
                 if ev.get("bytes") is not None:
                     now = time.time()
@@ -830,6 +880,24 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 pass
 
     finally:
+        duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ws_conn_cleanup",
+                conn_id=conn_id,
+                sid=sid,
+                duration=duration,
+                had_disconnect=had_disconnect,
+            )
+        with contextlib.suppress(Exception):
+            if _admin_emit:
+                _admin_emit(
+                    "ws_conn_cleanup",
+                    conn_id=conn_id,
+                    sid=sid,
+                    duration=duration,
+                    had_disconnect=had_disconnect,
+                )
         # Clean up safely; never raise in cleanup
         with contextlib.suppress(Exception):
             if rx_task:

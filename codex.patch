@@ -1,506 +1,320 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index b9304a4e5bae90e8199dd3df5cb0896ba5a0a74e..2f16639ad33496ff13b90aa0ebe048d6fed80071 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -217,50 +217,53 @@ class DeepgramClient:
-         self._final_event: asyncio.Event = asyncio.Event()
-         self._any_result: bool = False
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 62e1c2b4ce3d8d208e1cb78c1ebcd1e7dacf2a71..c337eeec0e8bbda1446f95443e25f9a643c18d43 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -1,28 +1,28 @@
+ # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
+ from __future__ import annotations
+-import asyncio, os, contextlib, time, io, struct, base64
++import asyncio, os, contextlib, time, io, struct, base64, uuid
+ from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple
+ from collections import deque
+ from app.services.audio.container_sniffer import AudioContainerSniffer, coerce_detection_from_meta
  
-         # First-chunk guard & timing
-         self._first_real_sent: bool = False
-         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
-         self._last_chunk_ts: float = 0.0
+ from .schema_v1 import parse_client_json, make_keepalive_ack, make_results, make_utterance_end, make_error
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import DeepgramClient
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.metrics import ws_metrics
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import run_ws_user_turn  # NEW
  
-         # Tunables
-         self._linger_ms: int = int(os.getenv("DG_LINGER_MS", "600"))
-         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "12"))
+ # Optional admin emitter
+ try:
+     from app.api_v1.admin import _emit as _admin_emit
+ except Exception:
+     _admin_emit = None
  
-         # Open gate
-         self._open_evt: asyncio.Event = asyncio.Event()
-         self._asr_open_emitted: bool = False
-         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
-         self._open_gate_warned: bool = False
+ WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
+ try:
+     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
+ except Exception:
+     pass
  
-         # Keepalive
-         self._keepalive_task: Optional[asyncio.Task] = None
-         self._keepalive_interval: float = float(os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0"))
- 
-         # Optional JSON logger injected by WS layer (ws_asgi)
-         self._jlog = self._cfg.get("_jlog")
- 
-+        # Serialize outbound websocket sends to avoid concurrent writer errors
-+        self._send_lock = asyncio.Lock()
-+
-     def is_open(self) -> bool:
-         """Return True if the underlying websocket appears open."""
-         try:
-             return bool(self._ws) and bool(getattr(self._ws, "open", False))
-         except Exception:
-             return False
- 
-     # -- helpers ---------------------------------------------------------------
- 
-     async def _signal_ready(self) -> None:
-         if not self._open_evt.is_set():
-             self._open_evt.set()
-         if not self._asr_open_emitted:
-             self._asr_open_emitted = True
-             try:
-                 await self._ev_queue.put({"type": "asr_open"})
-             except Exception:
-                 pass
-         # schedule a flush shortly after ASR open (lets DG finish configure)
-         self._schedule_flush(delay=0.05)
- 
-     def _sid_for_log(self) -> str:
-         try:
-             for key in ("session_id", "sid"):
-                 if key in self._cfg and self._cfg[key]:
-@@ -311,51 +314,52 @@ class DeepgramClient:
-                 pass
- 
-         transport_cfg = {}
-         try:
-             transport_cfg = (self._cfg or {}).get("_transport") or {}
-         except Exception:
-             transport_cfg = {}
-         containerized = bool(transport_cfg.get("containerized_opus"))
- 
-         sid = self._sid_for_log()
-         while self._tx_queue and self._ws and getattr(self._ws, "open", False):
-             data = self._tx_queue[0]
-             # Drop tiny preamble once
-             if (
-                 not containerized
-                 and (not self._first_real_sent)
-                 and len(data) < self._min_valid_bytes
-             ):
-                 logger.debug(
-                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
-                     sid, len(data), self._min_valid_bytes
-                 )
-                 self._tx_queue.popleft()
-                 continue
-             try:
--                await self._ws.send(data)
-+                async with self._send_lock:
-+                    await self._ws.send(data)
-                 self._first_real_sent = True
-                 self._last_chunk_ts = time.time()
-                 self._tx_queue.popleft()
-                 logger.debug("Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
-                              sid, len(data), len(self._tx_queue))
-             except Exception as e:
-                 # Transient send issue; stop and retry on next trigger
-                 logger.debug("Deepgram deferred send sid=%s err=%s queued=%s",
-                              sid, type(e).__name__, len(self._tx_queue))
-                 break
- 
-     # -- lifecycle -------------------------------------------------------------
- 
-     async def connect(self) -> None:
-         global DG_LAST_URL, DG_LAST_CONFIG
-         if self._ws:
-             return
- 
-         url = _dg_url(self._cfg)
-         sid = self._sid_for_log()
- 
-         # Diagnostic: parse params and emit compact JSON log that shows
-         # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
-         try:
-             import urllib.parse as _p
-@@ -417,97 +421,99 @@ class DeepgramClient:
-             DG_LAST_CONFIG = _initial_config(self._cfg)
-             self._open_evt.set()
-             await self._signal_ready()
-             logger.info("Deepgram test-mode connect sid=%s", sid)
-             return
- 
-         headers = [("Authorization", _auth_header())]
-         try:
-             self._ws = await websockets.connect(
-                 url,
-                 additional_headers=headers,
-                 max_size=None,
-             )
-         except TypeError:
-             self._ws = await websockets.connect(
-                 url,
-                 extra_headers=headers,
-                 max_size=None,
-             )
- 
-         # Micro-wait to ensure the underlying socket is actually open
-         await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S','0.75')))
- 
-         DG_LAST_URL = url
-         DG_LAST_CONFIG = _initial_config(self._cfg)
--        await self._ws.send(json.dumps(DG_LAST_CONFIG))
-+        async with self._send_lock:
-+            await self._ws.send(json.dumps(DG_LAST_CONFIG))
- 
-         await self._signal_ready()
-         self._rx_task = asyncio.create_task(self._rx_loop())
- 
-         if self._keepalive_interval > 0:
-             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
- 
-         logger.info("Deepgram connect ok sid=%s", sid)
- 
-     async def close(
-         self,
-         wait_for_final: bool = True,
-         timeout: Optional[float] = None,
-         linger_ms: Optional[int] = None,
-     ) -> None:
-         if self._closed or self._closing:
-             return
-         self._closing = True
-         sid = self._sid_for_log()
-         logger.info(
-             "Deepgram close start sid=%s wait_for_final=%s linger_ms=%s",
-             sid,
-             wait_for_final,
-             linger_ms,
-         )
- 
-         if linger_ms is None:
-             linger_ms = self._linger_ms
-         if self._last_chunk_ts > 0 and linger_ms > 0:
-             elapsed_ms = int((time.time() - self._last_chunk_ts) * 1000)
-             delay_ms = max(0, linger_ms - elapsed_ms)
-             if delay_ms > 0:
+@@ -255,111 +255,137 @@ async def _pump_dg_to_client(
                  try:
-                     await asyncio.sleep(delay_ms / 1000.0)
-                 except asyncio.CancelledError:
-                     pass
- 
-         # Ensure any queued audio is flushed before CloseStream
-         try:
-             await self._flush_tx()
-         except Exception:
-             pass
- 
-         try:
-             if self._ws and getattr(self._ws, "open", False):
--                await self._ws.send(json.dumps({"type": "CloseStream"}))
-+                async with self._send_lock:
-+                    await self._ws.send(json.dumps({"type": "CloseStream"}))
-         except Exception:
-             pass
- 
-         if wait_for_final:
-             if timeout is None:
-                 timeout = self._final_wait_s
-             try:
-                 await asyncio.wait_for(self._final_event.wait(), timeout=timeout)
-             except asyncio.TimeoutError:
-                 try:
-                     await self._ev_queue.put(
-                         {"type": "asr_error", "error": f"final_timeout:{timeout}s"}
-                     )
+                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=err)
                  except Exception:
                      pass
+                 await _ws_send_json(send, make_error("asr_error", err))
+     except asyncio.CancelledError:
+         return
+     except Exception as e:
+         with contextlib.suppress(Exception):
+             await _ws_send_json(send, make_error("relay_fail", e.__class__.__name__))
  
+ 
+ # ------------------------------ main WS impl ------------------------------
+ 
+ async def _ws_chat_asgi_impl(scope, receive, send):
+     # Session-scoped transport flags for ASR
+     transport = {"protocol":"websocket","container":None,"codec":None,"containerized_opus":False,"features":[]}
+     sniffer = AudioContainerSniffer()
+     audio_sig_logged = False
+ 
+     MIC_CAPTURE = _env_truth("MIC_CAPTURE", False)
+     MIC_ECHO_WS = _env_truth("MIC_ECHO_WS", False)
+ 
+     _jlog("mic_capture_cfg", sid="pending", enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
+ 
++    raw_query = (scope.get("query_string") or b"").decode("utf-8", "ignore")
++
+     try:
+         _admin_emit and _admin_emit(
+             "ws_handshake_enter",
+             path=scope.get("path"),
+-            raw_query=(scope.get("query_string") or b"").decode("utf-8", "ignore"),
++            raw_query=raw_query,
+         )
+     except Exception:
+         pass
+ 
+     if scope.get("type") != "websocket":
+         await send({"type": "http.response.start", "status": 404, "headers": []})
+         await send({"type": "http.response.body", "body": b"not found"})
+         return
+ 
+     sid = _get_session_id(scope)
++    conn_id = uuid.uuid4().hex
++    start_ts = time.time()
++    last_msg_ts = start_ts
++    had_disconnect = False
+     _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
+ 
+     # Auth
+     require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in ("0", "false", "no")
+     bearer_only = os.getenv("WS_BEARER_ONLY", "1").lower() not in ("0", "false", "no")
+     fail_limit = int(os.getenv("WS_FAIL_LIMIT", "10"))
+     fail_window_sec = float(os.getenv("WS_FAIL_WINDOW_SEC", "60"))
+     client_ip = _client_ip_from_scope(scope)
+ 
+     token = None
+     try:
+         for _sp in (scope.get("subprotocols") or []):
+             if isinstance(_sp, str) and _sp.startswith("bearer."):
+                 token = _sp.split(".", 1)[1].strip()
+                 break
+     except Exception:
+         pass
+     if not token:
          try:
-             ws = self._ws
-             if ws and getattr(ws, "open", True):
-                 await ws.close()
-         finally:
-             self._ws = None
- 
-         try:
-             task = self._rx_task
-@@ -667,50 +673,58 @@ class DeepgramClient:
-         except Exception as e:
-             logger.exception("Deepgram rx loop error sid=%s", sid)
-             try:
-                 await self._ev_queue.put({"type": "asr_error", "error": f"rx:{e.__class__.__name__}"})
-             except Exception:
-                 pass
- 
-     # -- keepalive -------------------------------------------------------------
- 
-     async def _keepalive_loop(self) -> None:
-         """Send KeepAlive frames immediately and then periodically."""
-         sid = self._sid_for_log()
-         try:
-             while True:
-                 if self._closed:
-                     break
-                 ws = self._ws
-                 if not ws:
-                     break
-                 if getattr(ws, "closed", False) or getattr(ws, "closing", False):
-                     break
-                 if not getattr(ws, "open", False):
-                     break
- 
-                 try:
--                    await ws.send(json.dumps({"type": "KeepAlive"}))
-+                    async with self._send_lock:
-+                        await ws.send(json.dumps({"type": "KeepAlive"}))
-                     logger.debug("Deepgram keepalive sid=%s interval=%s", sid, self._keepalive_interval)
-+                except websockets.ConnectionClosed as exc:
-+                    logger.warning("Deepgram keepalive closed sid=%s err=%s", sid, exc)
-+                    break
-                 except Exception as exc:
-                     logger.warning("Deepgram keepalive failed sid=%s err=%s", sid, exc)
--                    break
-+                    try:
-+                        await asyncio.sleep(self._keepalive_interval)
-+                    except asyncio.CancelledError:
-+                        return
-+                    continue
- 
-                 try:
-                     await asyncio.sleep(self._keepalive_interval)
-                 except asyncio.CancelledError:
-                     return
-         finally:
-             self._keepalive_task = None
- 
-     async def _stop_keepalive(self) -> None:
-         task = self._keepalive_task
-         if not task:
-             return
-         self._keepalive_task = None
-         task.cancel()
-         try:
-             await task
-         except asyncio.CancelledError:
-             pass
+             hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
+             if "authorization" in hdrs and hdrs["authorization"].lower().startswith("bearer "):
+                 token = hdrs["authorization"].split(" ", 1)[1].strip()
          except Exception:
              pass
-diff --git a/tests/test_deepgram_client_connect.py b/tests/test_deepgram_client_connect.py
-index 5341f4417e24317483026f7b1557aecba6908193..af83bfb9033b923cd4f5060a7c216a666bb90104 100644
---- a/tests/test_deepgram_client_connect.py
-+++ b/tests/test_deepgram_client_connect.py
-@@ -3,50 +3,90 @@ import json
- import logging
- from collections import deque
+     if (not bearer_only) and (not token) and scope.get("query_string"):
+         try:
+             q = dict([tuple(p.split("=", 1)) for p in scope.get("query_string").decode().split("&") if "=" in p])
+             token = q.get("ws_token") or token
+         except Exception:
+             pass
+     if require_token:
+         try:
+             _ = verify_ws_token(token or "")
+         except Exception:
+             over = ws_metrics.record_fail(client_ip, fail_limit, fail_window_sec)
+             _jlog("ws_auth_fail", ip=client_ip, sid=sid, over_limit=over, via="preaccept")
+             try:
+                 _admin_emit and _admin_emit("ws_auth_fail", sid=sid, ip=client_ip, over_limit=over)
+             except Exception:
+                 pass
+             with contextlib.suppress(Exception):
+                 await send({"type": "websocket.close", "code": 4401})
+             return
  
- import pytest
+     await send({"type": "websocket.accept", "subprotocol": "bearer"})
  
- from app.services.streaming_asr import deepgram_client as dg_mod
++    with contextlib.suppress(Exception):
++        _jlog(
++            "ws_conn_open",
++            sid=sid,
++            conn_id=conn_id,
++            client_ip=client_ip,
++            path=scope.get("path"),
++            query_string=raw_query,
++        )
++    with contextlib.suppress(Exception):
++        if _admin_emit:
++            _admin_emit(
++                "ws_conn_open",
++                sid=sid,
++                conn_id=conn_id,
++                client_ip=client_ip,
++                path=scope.get("path"),
++                query_string=raw_query,
++            )
++
+     with contextlib.suppress(Exception):
+         db.memory.setdefault("greet_turns", {}).pop(sid, None)
+ 
+     bus_task = asyncio.create_task(_pump_bus_to_client(sid, send))
+ 
+     async def _ping_loop():
+         try:
+             while True:
+                 await asyncio.sleep(20)
+                 try:
+                     await _ws_send_json(send, {"type": "keepalive", "ts": int(time.time() * 1000)})
+                 except Exception:
+                     break
+         except asyncio.CancelledError:
+             pass
+ 
+     ping_task = asyncio.create_task(_ping_loop())
+ 
+     try:
+         await _ws_send_json(send, {"type": "ready", "session_id": sid})
+     except Exception:
+         with contextlib.suppress(Exception):
+             await send({"type": "websocket.close", "code": 1011, "reason": "initial_ready_failed"})
+         return
+ 
+@@ -458,53 +484,77 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
+         except Exception as e:
+             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
+         return False
+ 
+     async def _flush_buffered_chunks() -> None:
+         nonlocal dg
+         if not buffered_chunks:
+             return
+         if not _has_deepgram_key() or dg is None:
+             return
+         while buffered_chunks:
+             chunk = buffered_chunks[0]
+             ok = await _send_chunk(chunk, from_buffer=True)
+             if ok:
+                 buffered_chunks.popleft()
+                 continue
+             break
+ 
+     try:
+         while True:
+             ev = await receive()
+             et = ev.get("type")
+ 
+             if et == "websocket.disconnect":
++                had_disconnect = True
++                now = time.time()
++                idle_s = max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
++                with contextlib.suppress(Exception):
++                    _jlog(
++                        "ws_conn_disconnect",
++                        conn_id=conn_id,
++                        sid=sid,
++                        code=ev.get("code"),
++                        reason=ev.get("reason"),
++                        idle_s=idle_s,
++                    )
++                with contextlib.suppress(Exception):
++                    if _admin_emit:
++                        _admin_emit(
++                            "ws_conn_disconnect",
++                            conn_id=conn_id,
++                            sid=sid,
++                            code=ev.get("code"),
++                            reason=ev.get("reason"),
++                            idle_s=idle_s,
++                        )
++                last_msg_ts = now
+                 break
+ 
+             if et == "websocket.receive":
++                last_msg_ts = time.time()
+                 # -------------------- Binary / audio lane --------------------
+                 if ev.get("bytes") is not None:
+                     now = time.time()
+                     chunk = ev.get("bytes") or b""
+                     if chunk:
+                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
+                         if not audio_sig_logged:
+                             with contextlib.suppress(Exception):
+                                 _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
+                             audio_sig_logged = True
+ 
+                     if buf.is_empty():
+                         # New audio turn
+                         turn_id_ref[0] = buf.turn_seq + 1
+                         final_seen[0] = False
+                         sent_any_audio[0] = False
+                         buffered_chunks.clear()
+                         turn_connect_started[0] = False
+                         # reset mic capture
+                         mic_chunks.clear()
+                         mic_first_ts[0] = now
+                         mic_last_ts[0] = now
+ 
+                     buf.append(chunk)
+ 
+@@ -808,50 +858,68 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                                 f.write(wav)
+                                             data_to_echo = wav
+ 
+                                         _jlog("mic_capture_saved", sid=sid, turn_id=turn_id, path=out_path, bytes=len(raw), mime=mime)
+ 
+                                         if MIC_ECHO_WS:
+                                             # Send the audio back over WS so the client can play it
+                                             await _ws_send_diagnostic_audio(send, turn_id, mime, data_to_echo)
+                                 except Exception as e:
+                                     _jlog("mic_capture_fail", sid=sid, err=type(e).__name__)
+ 
+                         else:
+                             # Unknown type already filtered by schema; no-op to future-proof.
+                             pass
+ 
+                     except ValueError as e:
+                         await _ws_send_json(send, make_error("bad_message", str(e)))
+                 else:
+                     # websocket.receive without text/bytes
+                     pass
+             else:
+                 # Other ASGI events are ignored
+                 pass
+ 
+     finally:
++        duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
++        with contextlib.suppress(Exception):
++            _jlog(
++                "ws_conn_cleanup",
++                conn_id=conn_id,
++                sid=sid,
++                duration=duration,
++                had_disconnect=had_disconnect,
++            )
++        with contextlib.suppress(Exception):
++            if _admin_emit:
++                _admin_emit(
++                    "ws_conn_cleanup",
++                    conn_id=conn_id,
++                    sid=sid,
++                    duration=duration,
++                    had_disconnect=had_disconnect,
++                )
+         # Clean up safely; never raise in cleanup
+         with contextlib.suppress(Exception):
+             if rx_task:
+                 rx_task.cancel()
+                 await rx_task
+         with contextlib.suppress(Exception):
+             if dg is not None:
+                 await dg.close(wait_for_final=False)
+         with contextlib.suppress(Exception):
+             bus_task.cancel()
+             await bus_task
+         with contextlib.suppress(Exception):
+             ping_task.cancel()
+             await ping_task
+         with contextlib.suppress(Exception):
+             await send({"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"})
  
  
- class DummyWS:
-     def __init__(self):
-         self.open = True
-         self.sent = []
- 
-     async def send(self, data):
-         self.sent.append(data)
- 
-     async def close(self):
-         self.open = False
- 
-     def __aiter__(self):
-         async def _gen():
-             yield json.dumps({"type": "Metadata"})
-         return _gen()
+ # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
+ try:
+     from starlette.websockets import WebSocket as _StarletteWebSocket  # noqa
+ except Exception:
+     _StarletteWebSocket = None
  
  
-+class ConcurrentGuardWS(DummyWS):
-+    """Websocket double that raises when concurrent sends overlap."""
-+
-+    def __init__(self):
-+        super().__init__()
-+        self._inflight = False
-+        self._blocked_sends: asyncio.Queue = asyncio.Queue()
-+        self._auto_release = True
-+
-+    def hold_next_send(self) -> None:
-+        """Ensure the next send blocks until released via `wait_for_blocked_send`."""
-+
-+        self._auto_release = False
-+
-+    async def wait_for_blocked_send(self):
-+        """Return (payload, event) for the next blocked send."""
-+
-+        payload, event = await self._blocked_sends.get()
-+        return payload, event
-+
-+    async def send(self, data):
-+        if self._inflight:
-+            raise RuntimeError("cannot call send while another coroutine is already waiting")
-+
-+        self._inflight = True
-+        try:
-+            if self._auto_release:
-+                await asyncio.sleep(0)
-+                self.sent.append(data)
-+                return
-+
-+            self._auto_release = True
-+            release = asyncio.Event()
-+            await self._blocked_sends.put((data, release))
-+            await release.wait()
-+            self.sent.append(data)
-+        finally:
-+            self._inflight = False
-+
-+
- def test_connect_prefers_additional_headers(monkeypatch):
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
-     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
- 
-     record = {}
- 
-     async def fake_connect(url, **kwargs):
-         record["url"] = url
-         record["kwargs"] = kwargs
-         return DummyWS()
- 
-     monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
- 
-     async def run():
-         client = dg_mod.DeepgramClient()
- 
-         await client.connect()
- 
-         assert "additional_headers" in record["kwargs"]
-         assert record["kwargs"]["additional_headers"] == [("Authorization", "Token abc123")]
-         assert "extra_headers" not in record["kwargs"]
-         assert record["kwargs"]["max_size"] is None
- 
-         assert json.loads(client._ws.sent[0])["type"] == "Configure"
- 
-@@ -206,50 +246,135 @@ def test_close_waits_for_final_keepalive(monkeypatch):
-         pre_close_keepalives = count_keepalives()
- 
-         close_task = asyncio.create_task(client.close(wait_for_final=True, timeout=0.2))
- 
-         await asyncio.sleep(0.05)
-         assert not close_task.done()
- 
-         mid_close_keepalives = count_keepalives()
-         assert mid_close_keepalives > pre_close_keepalives
- 
-         client._final_event.set()
- 
-         await close_task
- 
-         post_close_keepalives = count_keepalives()
- 
-         await asyncio.sleep(0.05)
- 
-         assert count_keepalives() == post_close_keepalives
-         assert keepalive_ws.open is False
-         assert client._keepalive_task is None
- 
-     asyncio.run(run())
- 
- 
-+def _count_keepalives(ws: DummyWS) -> int:
-+    return sum(
-+        1
-+        for item in ws.sent
-+        if isinstance(item, str) and json.loads(item).get("type") == "KeepAlive"
-+    )
-+
-+
-+def test_keepalive_waits_for_flush_and_close(monkeypatch):
-+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
-+    monkeypatch.setenv("DG_KEEPALIVE_INTERVAL_S", "0.01")
-+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
-+
-+    guard_ws = ConcurrentGuardWS()
-+
-+    async def fake_connect(url, **kwargs):
-+        return guard_ws
-+
-+    monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
-+
-+    async def run():
-+        client = dg_mod.DeepgramClient()
-+        await client.connect()
-+        client._min_valid_bytes = 1
-+
-+        assert client._keepalive_task and not client._keepalive_task.done()
-+
-+        async def wait_for_keepalives(target: int) -> int:
-+            deadline = asyncio.get_running_loop().time() + 0.5
-+            while _count_keepalives(guard_ws) < target:
-+                if asyncio.get_running_loop().time() >= deadline:
-+                    raise AssertionError("expected keepalive count to reach target")
-+                await asyncio.sleep(0.01)
-+            return _count_keepalives(guard_ws)
-+
-+        baseline_keepalives = await wait_for_keepalives(1)
-+
-+        guard_ws.hold_next_send()
-+        send_task = asyncio.create_task(client.send(b"a" * 4))
-+
-+        while True:
-+            payload, release = await asyncio.wait_for(guard_ws.wait_for_blocked_send(), timeout=0.2)
-+            if payload == b"a" * 4:
-+                break
-+            release.set()
-+            guard_ws.hold_next_send()
-+
-+        await asyncio.sleep(0.05)
-+        assert client._keepalive_task and not client._keepalive_task.done()
-+
-+        release.set()
-+        await asyncio.wait_for(send_task, timeout=0.2)
-+
-+        post_flush_keepalives = await wait_for_keepalives(baseline_keepalives + 1)
-+
-+        guard_ws.hold_next_send()
-+        close_task = asyncio.create_task(client.close(wait_for_final=True, timeout=0.5))
-+
-+        while True:
-+            payload, release = await asyncio.wait_for(guard_ws.wait_for_blocked_send(), timeout=0.2)
-+            if isinstance(payload, str) and json.loads(payload).get("type") == "CloseStream":
-+                break
-+            release.set()
-+            guard_ws.hold_next_send()
-+
-+        await asyncio.sleep(0.05)
-+        assert client._keepalive_task and not client._keepalive_task.done()
-+
-+        mid_close_keepalives = await wait_for_keepalives(post_flush_keepalives + 1)
-+
-+        release.set()
-+
-+        await asyncio.sleep(0.05)
-+        assert client._keepalive_task and not client._keepalive_task.done()
-+
-+        client._final_event.set()
-+        await asyncio.wait_for(close_task, timeout=0.5)
-+
-+        await asyncio.sleep(0.05)
-+        assert guard_ws.open is False
-+        assert client._keepalive_task is None
-+
-+    asyncio.run(run())
-+
-+
- def test_send_warns_but_continues_after_open_timeout(monkeypatch, caplog):
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
-     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
- 
-     caplog.set_level(logging.WARNING)
- 
-     async def run():
-         client = dg_mod.DeepgramClient()
-         client._ws = DummyWS()
-         client._open_wait_s = 0.0
-         client._min_valid_bytes = 1
- 
-         await client.send(b"a" * 4)
-         await client.send(b"b" * 4)
-         await asyncio.sleep(0.06)
-         return client
- 
-     client = asyncio.run(run())
- 
-     assert client._ws.sent == [b"a" * 4, b"b" * 4]
-     assert client._open_evt.is_set()
-     assert client._open_gate_warned is True
-     assert caplog.text.count("Deepgram send gated but no open within timeout") == 1
-     event = client._ev_queue.get_nowait()
-     assert event["type"] == "asr_open"
