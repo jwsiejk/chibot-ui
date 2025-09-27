@@ -213,6 +213,7 @@ async def _pump_dg_to_client(
                     pass
                 try:
                     if on_asr_open_flush:
+                        await on_asr_open_flush()
                         await asyncio.sleep(0.05)
                         await on_asr_open_flush()
                 except Exception:
@@ -657,11 +658,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         buffered_chunks.append(chunk)
 
                     # Ensure provider connection
-                    if not turn_connect_started[0]:
+                    if not turn_connect_started[0] and dg_state == "closed":
                         turn_connect_started[0] = True
-                        dg_connect_task = asyncio.create_task(_ensure_dg_connected())
-                        connected = await _ensure_dg_connected()                        
-                    elif dg_state == "connecting" and dg_connect_task is not None:
+                        if dg_connect_task is None:
+                           dg_connect_task = asyncio.create_task(_ensure_dg_connected())                  
+                    elif dg_state == "connecting":
                         pass
                         
                     # Flush when ready
@@ -781,15 +782,22 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                                 # Flush any staged audio first
                                 await _flush_buffered_chunks()
-                                with contextlib.suppress(asyncio.TimeoutError, Exception):
-                                    if not final_seen[0] and not asr_seen_partial[0]:
-                                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=0.0)
-                                        await asyncio.sleep(float(os.getenv("ASR_POST_FLUSH_WAIT_S", "0.35"))) 
 
-                                if sent_any_audio[0]:
-                                    # Ask provider to finish; if no final came, synthesize empty final.
+                                # Give ASR a brief chance to be "ready", then flush again
+                                with contextlib.suppress(asyncio.TimeoutError):
+                                    await asyncio.wait_for(asr_ready_evt.wait(), timeout=1.0)
+
+                                await _flush_buffered_chunks()
+
+                                # Optional tiny settle after flush if no partials yet (helps very short clips)
+                                if not final_seen[0] and not asr_seen_partial[0]:
                                     with contextlib.suppress(Exception):
-                                        await asyncio.sleep(float(os.getenv("ASR_FINAL_GRACE_S", "0.30")))  # 300 ms grace
+                                        await asyncio.sleep(float(os.getenv("ASR_POST_FLUSH_WAIT_S", "0.35")))
+
+                                if sent_any_audio[0] and dg is not None:
+                                    # Ask provider to finish; if no final came, we'll synthesize after
+                                    with contextlib.suppress(Exception):
+                                        await asyncio.sleep(float(os.getenv("ASR_FINAL_GRACE_S", "0.30")))  # ~300 ms grace
                                         await dg.close(wait_for_final=True)
                                     dg_state = "closed"
                                     _relay_task = rx_task
