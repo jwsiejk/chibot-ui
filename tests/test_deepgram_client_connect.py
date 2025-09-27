@@ -118,6 +118,49 @@ def test_flush_keeps_small_chunk_for_containerized_transport(monkeypatch):
     asyncio.run(run())
 
 
+def test_close_retries_flush_until_socket_open(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+
+    class DelayedOpenWS(DummyWS):
+        def __init__(self):
+            super().__init__()
+            self.open = False
+
+    async def run():
+        client = dg_mod.DeepgramClient()
+        ws = DelayedOpenWS()
+        client._ws = ws
+        client._open_evt.set()
+        client._min_valid_bytes = 1
+        client._tx_queue.append(b"queued-bytes")
+
+        events = []
+
+        def _capture(event, **payload):
+            events.append((event, payload))
+
+        client._jlog = _capture
+
+        async def _enable_open():
+            await asyncio.sleep(0.05)
+            ws.open = True
+
+        asyncio.create_task(_enable_open())
+
+        await client.close(wait_for_final=False)
+
+        # Data should have been sent once the socket opened
+        assert any(item == b"queued-bytes" for item in ws.sent)
+        assert any(
+            event == "dg_writer_drained" and payload.get("bytes", 0) > 0
+            for event, payload in events
+        )
+        assert client._tx_queue == deque()
+
+    asyncio.run(run())
+
+
 def test_connect_falls_back_to_extra_headers(monkeypatch):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)

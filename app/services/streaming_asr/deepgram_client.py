@@ -601,12 +601,80 @@ class DeepgramClient:
                     pass
 
         flush_bytes = 0
-        flush_first8 = None
+        flush_first8: Optional[str] = None
+        dropped_chunks = 0
+        dropped_bytes = 0
+
+        def _record_flush(bytes_sent: int, first_hex: Optional[str]) -> None:
+            nonlocal flush_bytes, flush_first8
+            if bytes_sent:
+                flush_bytes += bytes_sent
+            if first_hex and flush_first8 is None:
+                flush_first8 = first_hex
+
         # Ensure any queued audio is flushed before CloseStream
         try:
-            flush_bytes, flush_first8 = await self._flush_tx()
+            bytes_sent, first_hex = await self._flush_tx()
+            _record_flush(bytes_sent, first_hex)
         except Exception:
             pass
+
+        # If there is still queued audio, give the socket a short chance to finish opening
+        if self._tx_queue:
+            attempts = 0
+            max_attempts = max(1, int(os.getenv("DG_CLOSE_FLUSH_MAX_ATTEMPTS", "3")))
+            deadline = time.time() + float(os.getenv("DG_CLOSE_FLUSH_DEADLINE_S", "0.75"))
+            recheck_timeout = float(os.getenv("DG_CLOSE_FLUSH_RECHECK_S", "0.25"))
+
+            while self._tx_queue and attempts < max_attempts and time.time() < deadline:
+                attempts += 1
+                # Wait for provider open gate if needed
+                if not self._open_evt.is_set():
+                    try:
+                        await asyncio.wait_for(
+                            self._open_evt.wait(),
+                            timeout=min(recheck_timeout, self._open_wait_s),
+                        )
+                    except asyncio.TimeoutError:
+                        pass
+
+                try:
+                    await self.wait_socket_open(timeout=recheck_timeout)
+                except Exception:
+                    pass
+
+                try:
+                    bytes_sent, first_hex = await self._flush_tx()
+                    _record_flush(bytes_sent, first_hex)
+                except Exception:
+                    break
+
+            if self._tx_queue:
+                dropped_chunks = len(self._tx_queue)
+                try:
+                    dropped_bytes = sum(len(chunk) for chunk in self._tx_queue)
+                except Exception:
+                    dropped_bytes = 0
+                logger.warning(
+                    "Deepgram close dropping queued audio sid=%s queued_chunks=%s queued_bytes=%s attempts=%s",
+                    sid,
+                    dropped_chunks,
+                    dropped_bytes,
+                    attempts,
+                )
+                if callable(self._jlog):
+                    try:
+                        self._jlog(
+                            "dg_writer_drop",
+                            sid=sid,
+                            tag=self._url_tag,
+                            queued_chunks=dropped_chunks,
+                            queued_bytes=dropped_bytes,
+                            attempts=attempts,
+                        )
+                    except Exception:
+                        pass
+                self._tx_queue.clear()
 
         logger.info(
             "dg_writer_drained sid=%s bytes=%s first8_hex=%s queued=%s",
@@ -624,6 +692,8 @@ class DeepgramClient:
                     bytes=flush_bytes,
                     first8_hex=flush_first8,
                     queued=len(self._tx_queue),
+                    dropped_chunks=dropped_chunks,
+                    dropped_bytes=dropped_bytes,
                 )
             except Exception:
                 pass
