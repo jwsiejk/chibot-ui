@@ -779,13 +779,6 @@ class DeepgramClient:
 
         # -- sending ---------------------------------------------------------------
 
-        async def send(self, chunk: bytes) -> None:
-        if not isinstance(chunk, (bytes, bytearray)):
-            raise TypeError("chunk must be bytes")
-             if not chunk:
-            return
-
-        payload = bytes(chunk)
     async def send(self, chunk: bytes) -> None:
         if not isinstance(chunk, (bytes, bytearray)):
             raise TypeError("chunk must be bytes")
@@ -819,7 +812,7 @@ class DeepgramClient:
 
         # Opportunistic flush now (won't raise if socket not open yet)
         self._schedule_flush()
-
+        
     # -- events API ------------------------------------------------------------
 
     async def events(self) -> AsyncGenerator[dict, None]:
