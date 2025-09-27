@@ -11,6 +11,8 @@ def test_containerized_omits_sr_channels(monkeypatch):
     assert "sample_rate=" not in url
     assert "channels=" not in url
     assert "encoding=" not in url
+    assert "endpointing=" not in url
+    assert "utterance_end_ms=2000" in url
 
 def test_non_containerized_includes_sr_channels(monkeypatch):
     monkeypatch.setenv("DG_TEST_MODE", "1")
@@ -18,3 +20,5 @@ def test_non_containerized_includes_sr_channels(monkeypatch):
     url = _dg_url(overrides)
     assert "sample_rate=48000" in url
     assert "channels=1" in url
+    assert "endpointing=" not in url
+    assert "utterance_end_ms=2000" in url

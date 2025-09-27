@@ -86,7 +86,7 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             + sep
             # RAW defaults; safe for legacy raw paths. If truly containerized, these will be stripped below.
             + "encoding=opus&sample_rate=48000&channels=1"
-            + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true&utterance_end_ms=1200"
+            + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true"
         )
 
     # Apply overrides into query string and clean up for containerized
@@ -116,7 +116,6 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
                 "punctuate",
                 "vad_events",
                 "utterance_end_ms",
-                "endpointing",
                 "model",
                 "language",
             ):
@@ -177,9 +176,8 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         if "model" not in qd:
             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
 
-        # Request 200 ms of silence for endpointing unless explicitly overridden
-        if "endpointing" not in qd:
-            qd["endpointing"] = "200"
+        # Provide a sensible default for utterance_end_ms (2s) unless explicitly overridden
+        qd.setdefault("utterance_end_ms", "2000")
 
         query = _p.urlencode(qd)
         base = _p.urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
