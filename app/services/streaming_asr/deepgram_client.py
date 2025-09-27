@@ -412,7 +412,7 @@ class DeepgramClient:
                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
                     sid, len(data), self._min_valid_bytes
                 )
-                self._tx_queue.popLeft = self._tx_queue.popleft()  # keep attribute for readability tools
+                self._tx_queue.popleft()
                 continue
             try:
                 async with self._send_lock:
@@ -777,8 +777,15 @@ class DeepgramClient:
             except Exception:
                 pass
 
-    # -- sending ---------------------------------------------------------------
+        # -- sending ---------------------------------------------------------------
 
+        async def send(self, chunk: bytes) -> None:
+        if not isinstance(chunk, (bytes, bytearray)):
+            raise TypeError("chunk must be bytes")
+             if not chunk:
+            return
+
+        payload = bytes(chunk)
     async def send(self, chunk: bytes) -> None:
         if not isinstance(chunk, (bytes, bytearray)):
             raise TypeError("chunk must be bytes")
@@ -787,20 +794,21 @@ class DeepgramClient:
 
         payload = bytes(chunk)
         self._tx_queue.append(payload)
-    if not self.is_open() and not self._closing:
-        try:
-            # fire-and-forget; _flush_tx will wait for open gate
-            asyncio.create_task(self.connect())
-        except Exception:
-            pass     
-        
+
+        # Lazy preconnect: if socket isn't open yet, kick off connect in the background.
+        if not self.is_open() and not self._closing:
+            try:
+                asyncio.create_task(self.connect())
+            except Exception:
+                pass
+
         sid = self._sid_for_log()
 
         if not self._open_evt.is_set():
             try:
                 await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
             except asyncio.TimeoutError:
-                # On timeout, keep the queued payload; we'll flush on connect/ready.
+                # Keep the payload queued; we'll flush once the connection is ready.
                 if not self._open_gate_warned:
                     logger.warning(
                         "Deepgram send gated but no open within timeout sid=%s queued=%s",
@@ -809,7 +817,7 @@ class DeepgramClient:
                     )
                     self._open_gate_warned = True
 
-        # Opportunistic flush now (won't throw if socket not open yet)
+        # Opportunistic flush now (won't raise if socket not open yet)
         self._schedule_flush()
 
     # -- events API ------------------------------------------------------------
