@@ -771,7 +771,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             turn_id_ref[0] = turn_id
                          
                             # ---- THEN finish the ASR turn (unchanged logic) ----
-                            if _has_deepgram_key() and dg is not None:
+                            if _has_deepgram_key():
+                                # If provider isn't ready yet but we have audio, try to connect now (bounded wait)
+                                if dg is None and (buffered_chunks or mic_chunks):
+                                    if dg_connect_task is None:
+                                        dg_connect_task = asyncio.create_task(_ensure_dg_connected())
+                                    with contextlib.suppress(asyncio.TimeoutError):
+                                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=1.2)
+
                                 # If we have buffered chunks but ASR not ready yet, give it a moment then flush.
                                 if buffered_chunks and not asr_ready_evt.is_set():
                                     if dg_state == "connecting" and dg_connect_task is not None:
