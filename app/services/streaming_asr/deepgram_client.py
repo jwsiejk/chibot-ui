@@ -314,6 +314,15 @@ class DeepgramClient:
         except Exception:
             return False
 
+    def _had_result(self) -> bool:
+        """True if any final result has been observed (event-aware)."""
+        if self._any_result:
+            return True
+        if self._final_event.is_set():
+            self._any_result = True
+            return True
+        return False
+
     # -- helpers ---------------------------------------------------------------
 
     async def _signal_ready(self) -> None:
@@ -634,7 +643,7 @@ class DeepgramClient:
                     tag=self._url_tag,
                     wait_for_final=wait_for_final,
                     linger_ms=linger_ms,
-                    had_result=self._any_result,
+                    had_result=self._had_result(),
                 )
             except Exception:
                 pass
@@ -770,9 +779,9 @@ class DeepgramClient:
                 sid,
                 getattr(e, "code", None),
                 getattr(e, "reason", ""),
-                self._any_result,
+                self._had_result(),
             )
-            if not self._any_result:
+            if not self._had_result():
                 try:
                     await self._ev_queue.put(
                         {"type": "asr_error", "error": f"recv_closed:{getattr(e, 'code', '')}:{getattr(e, 'reason', '')}"}
