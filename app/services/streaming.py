@@ -1383,6 +1383,34 @@ def schedule_tts_audio(session_id: str,
     threading.Thread(target=_run, daemon=True).start()
 
 
+def _update_assistant_turn_state(session_id: str,
+                                 frame: Dict[str, Any],
+                                 current_turn_id: Optional[str]) -> Optional[str]:
+    if not isinstance(frame, dict):
+        return current_turn_id
+    ftype = frame.get('type')
+    turn_id = frame.get('turn_id')
+    if ftype in ('assistant_chunk', 'assistant_audio', 'audio_chunk') and turn_id:
+        try:
+            bus.note_assistant_turn(session_id, turn_id)
+        except Exception:
+            pass
+        return turn_id
+    if ftype in ('assistant_end', 'end'):
+        try:
+            bus.note_assistant_turn(session_id, None)
+        except Exception:
+            pass
+        return None
+    return current_turn_id
+
+
+def _apply_assistant_turn_state(session_id: str, frames: Iterable[Dict[str, Any]]) -> None:
+    current_turn_id: Optional[str] = None
+    for frame in frames:
+        current_turn_id = _update_assistant_turn_state(session_id, frame, current_turn_id)
+
+
 def schedule_frames(session_id: str,
                     frames: List[Dict],
                     delay_ms: int = 0,
@@ -1401,13 +1429,7 @@ def schedule_frames(session_id: str,
                     # Belt-and-suspenders: never let legacy stamps slip through on rebroadcast.
                     if isinstance(fr, dict) and fr.get('type') == 'assistant_chunk' and 'text' in fr:
                         fr['text'] = _scrub_debug_stamps(fr['text'])
-                    ftype = fr.get('type') if isinstance(fr, dict) else None
-                    turn_id = fr.get('turn_id') if isinstance(fr, dict) else None
-                    if ftype in ('assistant_chunk', 'assistant_audio', 'audio_chunk') and turn_id:
-                        current_turn_id = turn_id
-                        bus.note_assistant_turn(session_id, turn_id)
-                    elif ftype in ('assistant_end', 'end'):
-                        bus.note_assistant_turn(session_id, None)
+                    current_turn_id = _update_assistant_turn_state(session_id, fr, current_turn_id)
                     bus.broadcast(session_id, fr)
                 except Exception:
                     pass
@@ -1419,7 +1441,7 @@ def schedule_frames(session_id: str,
                 if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
                     end_fr['correlation_user_msg_id'] = correlation_user_msg_id
                 try:
-                    bus.note_assistant_turn(session_id, None)
+                    _apply_assistant_turn_state(session_id, [end_fr])
                     bus.broadcast(session_id, end_fr)
                 except Exception:
                     pass
@@ -1529,13 +1551,16 @@ def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Option
         tid = _allocate_turn_id(force_turn_id=None)
         frames = _emit_ws_outage(session_id, tid, correlation_user_msg_id=correlation_user_msg_id)
         try:
+            _apply_assistant_turn_state(session_id, frames)
+        except Exception:
+            pass
+        try:
             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='turn')
         except Exception:
             pass
         return tid
-    # Keep schedule_frames for pacing/end guarantees to mirror HTTP route
     try:
-        schedule_frames(session_id, frames, correlation_user_msg_id=correlation_user_msg_id)
+        _apply_assistant_turn_state(session_id, frames)
     except Exception:
         pass
     # TTS for assistant text

@@ -241,6 +241,46 @@ def test_run_ws_user_turn_emits_action_metadata_once(monkeypatch):
     assert payload["policy"]["show_suggestions"] is True
 
 
+def test_run_ws_user_turn_emits_single_chunk_frame(monkeypatch):
+    _stub_config(monkeypatch)
+
+    emitted = []
+
+    def fake_broadcast(session_id, frame):
+        emitted.append(frame)
+
+    monkeypatch.setattr(streaming.bus, "broadcast", fake_broadcast)
+
+    def fake_make_frames(text, session_id, meta=None, correlation_user_msg_id=None, **kwargs):
+        frames = [
+            {"type": "assistant_chunk", "turn_id": "turn-1", "text": "Hello there"},
+            {"type": "assistant_end", "turn_id": "turn-1"},
+        ]
+        for fr in frames:
+            fake_broadcast(session_id, fr)
+        return "turn-1", frames
+
+    monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
+
+    def fail_schedule_frames(*args, **kwargs):  # pragma: no cover - guard against regressions
+        raise AssertionError("schedule_frames should not run")
+
+    monkeypatch.setattr(streaming, "schedule_frames", fail_schedule_frames)
+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
+    monkeypatch.setattr(streaming, "classify_turn", lambda text, meta=None: {"intent": "test"})
+    monkeypatch.setattr(
+        streaming,
+        "pick_dialog_policy",
+        lambda nlu: {"action": "ask_clarify", "verbosity": "medium", "show_suggestions": True},
+    )
+
+    tid = streaming.run_ws_user_turn("session-single-chunk", "hello")
+
+    assert tid == "turn-1"
+    chunk_frames = [fr for fr in emitted if isinstance(fr, dict) and fr.get("type") == "assistant_chunk"]
+    assert len(chunk_frames) == 1
+
+
 def test_prepare_turn_metadata_respects_policy_show_suggestions(monkeypatch):
     _stub_config(monkeypatch)
 
