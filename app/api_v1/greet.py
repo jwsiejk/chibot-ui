@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request, session
 from ..db import db
 from ..ws.bus import bus
 from ..services.suggestions import hygienic_suggestions
+from ..services.streaming import merge_suggestions, build_suggestion_items
 from ..middleware.csrf import ensure_csrf_headers
 from ..services.greet_idempotency import get_or_create_greet_turn, DEFAULT_TTL_SEC
 
@@ -111,7 +112,9 @@ def greet():
     # Always nudge UI awake
     try:
         bus.broadcast(sid, {"type": "state", "phase": "ready"})
-        bus.broadcast(sid, {"type": "suggestions", "turn_id": tid, "items": hygienic_suggestions("")})
+        merged = merge_suggestions(hygienic_suggestions(""))
+        if merged:
+            bus.broadcast(sid, {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(merged)})
     except Exception:
         pass
 

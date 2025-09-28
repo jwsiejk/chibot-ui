@@ -3,7 +3,7 @@
 # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
 
 from __future__ import annotations
-from typing import List, Dict, Tuple, Optional, Any
+from typing import List, Dict, Tuple, Optional, Any, Iterable
 import base64
 import threading, time as _t
 import os
@@ -68,6 +68,7 @@ def _scrub_debug_stamps(s: str) -> str:
 
 
 ENABLE_CHIP_FOUNDATION = os.getenv("ENABLE_CHIP_FOUNDATION", "1").lower() not in ("0", "false", "no")
+ENABLE_POLICY_CHIPS = os.getenv("ENABLE_POLICY_CHIPS", "1").strip().lower() not in ("0", "false", "no")
 STRICT_SYSTEM_SHIM = (
     "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
     "and never mention being an AI or chatbot."
@@ -146,6 +147,90 @@ def _broadcast_frames(session_id: str, frames: List[Dict], turn_id: str) -> None
         pass
 
 
+def _suggestion_cap(default: int = 4) -> int:
+    try:
+        cap = int(os.getenv("SUGGESTION_MAX", str(default)))
+    except Exception:
+        return default
+    return max(0, cap)
+
+
+def _normalize_suggestion_item(raw: Any) -> str:
+    if isinstance(raw, str):
+        return raw.strip()
+    if isinstance(raw, dict):
+        for key in ("text", "label", "title"):
+            val = raw.get(key)
+            if isinstance(val, str):
+                return val.strip()
+        for val in raw.values():
+            if isinstance(val, str):
+                return val.strip()
+    try:
+        return str(raw or "").strip()
+    except Exception:
+        return ""
+
+
+def merge_suggestions(*lists: Iterable[Any], cap: int = 4) -> List[str]:
+    limit = _suggestion_cap()
+    if cap is not None:
+        limit = min(limit, cap)
+    if limit <= 0:
+        return []
+
+    seen: List[str] = []
+    seen_set = set()
+    for lst in lists:
+        if not lst:
+            continue
+        for raw in lst:
+            text = _normalize_suggestion_item(raw)
+            if not text:
+                continue
+            if len(text) > 50:
+                text = text[:50].rstrip()
+            if not text or text in seen_set:
+                continue
+            seen.append(text)
+            seen_set.add(text)
+            if len(seen) >= limit:
+                return seen
+    return seen[:limit]
+
+
+def build_suggestion_items(items: List[str]) -> List[Dict[str, str]]:
+    return [{"text": it} for it in items]
+
+
+def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
+    if not ENABLE_POLICY_CHIPS or not policy:
+        return []
+    raw = policy.get("chips") if isinstance(policy, dict) else None
+    if not raw:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        chips = list(raw)
+    else:
+        chips = [raw]
+    cap = _suggestion_cap()
+    cleaned: List[str] = []
+    seen = set()
+    for item in chips:
+        text = _normalize_suggestion_item(item)
+        if not text:
+            continue
+        if len(text) > 50:
+            text = text[:50].rstrip()
+        if not text or text in seen:
+            continue
+        cleaned.append(text)
+        seen.add(text)
+        if len(cleaned) >= cap:
+            break
+    return cleaned
+
+
 def make_assistant_frames(seed_text: str,
                           session_id: str,
                           meta: Optional[Dict] = None,
@@ -213,8 +298,7 @@ def _make_foundation_frames(seed_text: str,
     reply = _call_foundation_with_retry(messages, cfg)
     safe_reply = _scrub_debug_stamps(reply)
 
-    chips = list(policy.get('chips') or [])
-    chip_items = [str(c).strip() for c in chips if str(c).strip()]
+    policy_chips = _collect_policy_chips(policy)
 
     try:
         _jlog(
@@ -223,7 +307,7 @@ def _make_foundation_frames(seed_text: str,
             intent=nlu_result.get('intent'),
             confidence=nlu_result.get('confidence'),
             teacher_move=policy.get('teacher_move') or teacher_move,
-            chips=len(chip_items),
+            chips=len(policy_chips),
             prompt_hash=prompt_hash,
         )
     except Exception:
@@ -247,11 +331,31 @@ def _make_foundation_frames(seed_text: str,
 
     frames.append({'type': 'state', 'phase': 'ready'})
 
-    suggestion_items = chip_items
-    if not suggestion_items and cfg.get('suggestions_enabled', True):
-        suggestion_items = hygienic_suggestions(safe_reply)
-    if suggestion_items:
-        frames.append({'type': 'suggestions', 'turn_id': str(turn_id), 'items': suggestion_items})
+    legacy_suggestions = []
+    try:
+        if cfg.get('suggestions_enabled', True):
+            legacy_suggestions = hygienic_suggestions(safe_reply)
+    except Exception:
+        legacy_suggestions = []
+    merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
+    try:
+        _jlog(
+            "chips_emit",
+            sid=session_id,
+            intent=nlu_result.get('intent'),
+            count=len(merged_suggestions),
+            items=merged_suggestions,
+        )
+    except Exception:
+        pass
+    if merged_suggestions:
+        frames.append(
+            {
+                'type': 'suggestions',
+                'turn_id': str(turn_id),
+                'items': build_suggestion_items(merged_suggestions),
+            }
+        )
 
     end_fr = {'type': 'assistant_end', 'turn_id': str(turn_id)}
     if correlation_user_msg_id:
@@ -335,11 +439,33 @@ def _make_legacy_frames(seed_text: str,
         chunk['note'] = error_note
     frames.append(chunk)
 
+    legacy_suggestions: List[Any] = []
     try:
         if cfg.get('suggestions_enabled', True):
-            frames.append({'type': 'suggestions', 'turn_id': str(turn_id), 'items': hygienic_suggestions(safe_reply)})
+            legacy_suggestions = hygienic_suggestions(safe_reply)
+    except Exception:
+        legacy_suggestions = []
+    policy_chips = _collect_policy_chips(policy)
+    merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
+    try:
+        intent = labels.get('intent') if isinstance(labels, dict) else None
+        _jlog(
+            "chips_emit",
+            sid=session_id,
+            intent=intent,
+            count=len(merged_suggestions),
+            items=merged_suggestions,
+        )
     except Exception:
         pass
+    if merged_suggestions:
+        frames.append(
+            {
+                'type': 'suggestions',
+                'turn_id': str(turn_id),
+                'items': build_suggestion_items(merged_suggestions),
+            }
+        )
 
     end_fr = {'type': 'assistant_end', 'turn_id': str(turn_id)}
     if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
@@ -568,7 +694,12 @@ def run_ws_greet(session_id: str) -> str:
     # UI nudges
     try:
         bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-        bus.broadcast(session_id, {"type": "suggestions", "turn_id": tid, "items": hygienic_suggestions("")})
+        base_suggestions = merge_suggestions(hygienic_suggestions(""))
+        if base_suggestions:
+            bus.broadcast(
+                session_id,
+                {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
+            )
     except Exception:
         pass
     return tid

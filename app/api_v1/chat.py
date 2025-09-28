@@ -4,7 +4,12 @@ from flask import Blueprint, jsonify, request, session
 from ..db import db
 from ..security_state import get_user
 from ..services.mailer import send_transcript
-from ..services.streaming import make_assistant_frames, schedule_frames
+from ..services.streaming import (
+    make_assistant_frames,
+    schedule_frames,
+    merge_suggestions,
+    build_suggestion_items,
+)
 from ..middleware.rate_limit import limit, check_now
 from ..ws.bus import bus
 import os, uuid
@@ -63,7 +68,9 @@ def post_chat():
             mark_nudge(sid)
             try:
                 from ..services.suggestions import hygienic_suggestions
-                bus.broadcast(sid, {"type":"suggestions","turn_id":"nudge","items": hygienic_suggestions("")})
+                merged = merge_suggestions(hygienic_suggestions(""))
+                if merged:
+                    bus.broadcast(sid, {"type":"suggestions","turn_id":"nudge","items": build_suggestion_items(merged)})
             except Exception:
                 pass
             return jsonify(ok=True, nudged=True), 200
@@ -180,7 +187,9 @@ def chat_entry():
             mark_nudge(sid)
             try:
                 from ..services.suggestions import hygienic_suggestions
-                bus.broadcast(sid, {"type":"suggestions","turn_id":"nudge","items": hygienic_suggestions("")})
+                merged = merge_suggestions(hygienic_suggestions(""))
+                if merged:
+                    bus.broadcast(sid, {"type":"suggestions","turn_id":"nudge","items": build_suggestion_items(merged)})
             except Exception:
                 pass
             return jsonify({"ok": True, "nudged": True})
