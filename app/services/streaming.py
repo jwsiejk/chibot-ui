@@ -78,6 +78,10 @@ STRICT_SYSTEM_SHIM = (
     "and never mention being an AI or chatbot."
 )
 
+_WS_SOURCES = {"ws_greet", "user_ws"}
+_WS_PIPELINE_UNAVAILABLE_NOTE = "ws_pipeline_unavailable"
+_WS_PIPELINE_MESSAGE = "I'm still warming up. Please try again in a moment."
+
 
 def _should_use_foundation(seed_text: str) -> bool:
     if not ENABLE_CHIP_FOUNDATION:
@@ -236,12 +240,32 @@ def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
     return cleaned
 
 
+def _should_skip_legacy(meta: Optional[Dict[str, Any]]) -> bool:
+    if not meta:
+        return False
+    if bool(meta.get("skip_legacy_fallback")):
+        return True
+    source = str(meta.get("source", "") or "").strip().lower()
+    if source in _WS_SOURCES:
+        return True
+    return False
+
+
+def _allocate_turn_id(force_turn_id: Optional[str]) -> str:
+    if force_turn_id is not None:
+        db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
+        return str(force_turn_id)
+    turn_seq = db.memory.setdefault('turn_seq', 0) + 1
+    db.memory['turn_seq'] = turn_seq
+    return str(turn_seq)
+
+
 def make_assistant_frames(seed_text: str,
                           session_id: str,
                           meta: Optional[Dict] = None,
                           correlation_user_msg_id: Optional[str] = None,
                           *,
-                          force_turn_id: Optional[str] = None) -> Tuple[str, List[Dict]]:
+                          force_turn_id: Optional[str] = None) -> Tuple[Optional[str], List[Dict]]:
     """
     Produce assistant frames for a given user seed text using the configured LLM provider.
     ALWAYS returns a frames list that includes at least:
@@ -251,6 +275,7 @@ def make_assistant_frames(seed_text: str,
     """
     meta = meta or {}
     cfg = db.get_config()
+    skip_legacy = _should_skip_legacy(meta)
 
     if _should_use_foundation(seed_text):
         try:
@@ -267,6 +292,9 @@ def make_assistant_frames(seed_text: str,
                 _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
             except Exception:
                 pass
+
+    if skip_legacy:
+        return None, []
 
     return _make_legacy_frames(
         seed_text,
@@ -698,6 +726,33 @@ def schedule_frames(session_id: str,
 
 # ---- WS orchestration helpers (centralize greet/user pipelines) ----
 
+def _emit_ws_outage(session_id: str,
+                    turn_id: str,
+                    *,
+                    correlation_user_msg_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    frames: List[Dict[str, Any]] = []
+    chunk: Dict[str, Any] = {
+        'type': 'assistant_chunk',
+        'turn_id': turn_id,
+        'text': _WS_PIPELINE_MESSAGE,
+        'kb_hits': 0,
+        'note': _WS_PIPELINE_UNAVAILABLE_NOTE,
+    }
+    if correlation_user_msg_id:
+        chunk['correlation_user_msg_id'] = correlation_user_msg_id
+    frames.append(chunk)
+    end_fr: Dict[str, Any] = {'type': 'assistant_end', 'turn_id': turn_id}
+    if correlation_user_msg_id:
+        end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+    frames.append(end_fr)
+    _broadcast_frames(session_id, frames, turn_id)
+    return frames
+
+
+def _ws_generation_failed(turn_id: Optional[str], frames: List[Dict[str, Any]]) -> bool:
+    return turn_id is None and not frames
+
+
 def run_ws_greet(session_id: str) -> str:
     """
     Produce assistant text for greet, broadcast frames, schedule TTS audio,
@@ -710,6 +765,18 @@ def run_ws_greet(session_id: str) -> str:
         meta={"source": "ws_greet"},
         force_turn_id=forced_tid,
     )
+    if _ws_generation_failed(tid, frames):
+        tid = _allocate_turn_id(forced_tid)
+        frames = _emit_ws_outage(session_id, tid)
+        try:
+            _admin_emit('ws_pipeline_outage', session_id=session_id, phase='greet')
+        except Exception:
+            pass
+        try:
+            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+        except Exception:
+            pass
+        return tid
     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
     try:
         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
@@ -739,6 +806,14 @@ def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Option
     """
     tid, frames = make_assistant_frames(text, session_id, meta={"source": "user_ws"},
                                         correlation_user_msg_id=correlation_user_msg_id)
+    if _ws_generation_failed(tid, frames):
+        tid = _allocate_turn_id(force_turn_id=None)
+        frames = _emit_ws_outage(session_id, tid, correlation_user_msg_id=correlation_user_msg_id)
+        try:
+            _admin_emit('ws_pipeline_outage', session_id=session_id, phase='turn')
+        except Exception:
+            pass
+        return tid
     # Keep schedule_frames for pacing/end guarantees to mirror HTTP route
     try:
         schedule_frames(session_id, frames, correlation_user_msg_id=correlation_user_msg_id)
