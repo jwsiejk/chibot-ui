@@ -7,14 +7,14 @@ Citations for context (non-functional):
 /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
    Goals satisfied:
     • Echo-aware VAD (threshold boost while TTS is playing)
-    • One Opus blob per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
+    • Streaming Opus blobs per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
     • Soft barge-in: pause Chip TTS on committed speech start
     • Turn timeout (safety), robust errors, clean session end
     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
 
    Notes:
     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
-    • CloseStream is emitted AFTER the blob is successfully queued to the socket.
+    • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
 */
 
 import { VAD } from './voice/vad.js';
@@ -48,7 +48,9 @@ const state = {
   analyser: null,
   vad: null,
   rec: null,
-  recChunks: [],
+  chunkSendPromise: Promise.resolve(),
+  chunkBytesSent: 0,
+  chunkSendError: null,
   turnTimer: null,
   turnOpen: false,   // track whether a turn is currently open server-side
 };
@@ -194,7 +196,9 @@ function _startRecorder() {
     return false;
   }
 
-  state.recChunks = [];
+  state.chunkSendPromise = Promise.resolve();
+  state.chunkBytesSent = 0;
+  state.chunkSendError = null;
   let recorder;
   try {
     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
@@ -211,31 +215,67 @@ function _startRecorder() {
   state.rec = recorder;
 
   state.rec.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) state.recChunks.push(e.data);
+    const blob = e.data;
+    if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
+      return;
+    }
+
+    // Chain chunk sends to preserve ordering across the WS.
+    state.chunkSendPromise = state.chunkSendPromise
+      .catch(() => {}) // allow queue to continue even if a prior chunk failed
+      .then(async () => {
+        try {
+          await sendAudioChunk(blob);
+          state.chunkBytesSent += blob.size;
+          try {
+            console.debug('[voice] streamed audio chunk', { bytes: blob.size });
+          } catch {}
+        } catch (err) {
+          state.chunkSendError = err;
+          try {
+            console.warn('[voice] failed to stream audio chunk', err);
+          } catch {}
+        }
+      });
   };
 
   state.rec.onstop = async () => {
     let finalDetail;
     try {
-      const blob = new Blob(state.recChunks, { type: REC_MIME });
-      state.recChunks = [];
-      try {
-        console.debug('[voice] recorder stopped', { bytes: blob.size, mime: blob.type });
-      } catch {}
-      // Drop obviously-empty/prelude-only blobs (rec preambles can be tiny)
-      if (blob.size >= MIN_VALID_BLOB_BYTES) {
-        // One blob per user turn → WS → server STT
-        await sendAudioChunk(blob);
-      } else {
-        console.warn('[voice] recorded blob too small', blob.size);
+      await state.chunkSendPromise.catch((err) => {
+        state.chunkSendError = state.chunkSendError || err;
+      });
+      if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
+        console.warn('[voice] recorded chunks too small', state.chunkBytesSent);
         finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
       }
     } catch (e) {
       console.warn('[voice] send audio failed', e);
+      state.chunkSendError = state.chunkSendError || e;
     } finally {
+      if (state.chunkSendError && !finalDetail) {
+        finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
+      }
+      if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
+        try {
+          console.warn('[voice] recorder stopped with issues', {
+            bytesSent: state.chunkBytesSent,
+            error: state.chunkSendError,
+          });
+        } catch {}
+      } else {
+        try {
+          console.debug('[voice] recorder stopped', {
+            bytesSent: state.chunkBytesSent,
+            mime: state.rec?.mimeType || REC_MIME,
+          });
+        } catch {}
+      }
       // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
       if (state.turnOpen) {
-        try { sendCloseStream(); } catch {}
+        try {
+          await sendCloseStream();
+        } catch {}
         state.turnOpen = false;
       }
       _emitVoiceState('armed', finalDetail);

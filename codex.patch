@@ -1,505 +1,231 @@
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index aaea1195148bedbef66f88238abc3cdf0c46bd02..1e586666117cdbad243e626e55afd7cc0e345a7d 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -1,32 +1,33 @@
- # app/services/streaming.py — Production-grade assistant framing
- # Guarantees assistant_* frames are broadcast even if the LLM provider fails.
- # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
+diff --git a/static/js/voice.js b/static/js/voice.js
+index 67ffe967f38e4895b6104a5bc6d980066fb46dd6..2cd5cf3f19e7e80c45832356ac32d97353ceee38 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -1,76 +1,78 @@
+ /*
+ Citations for context (non-functional):
+ :contentReference[oaicite:0]{index=0}
+ :contentReference[oaicite:1]{index=1}
+ */
  
- from __future__ import annotations
- from typing import List, Dict, Tuple, Optional, Any, Iterable
- import base64
-+import hashlib
- import threading, time as _t
- import os
- import re
+ /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
+    Goals satisfied:
+     • Echo-aware VAD (threshold boost while TTS is playing)
+-    • One Opus blob per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
++    • Streaming Opus blobs per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
+     • Soft barge-in: pause Chip TTS on committed speech start
+     • Turn timeout (safety), robust errors, clean session end
+     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
  
- from .llm_provider import get_provider
- from .awareness import annotate
- from .engagement import score as score_engagement
- from .retrieval import search as kb_search
- from .persona_prompt import build_persona_preamble, format_kb_context
- from .suggestions import hygienic_suggestions
- from .vendor_clients import make_openai_client
- from .nlg.humanize import humanize_text, sounds_botty
- from .greet_idempotency import get_or_create_greet_turn, DEFAULT_TTL_SEC
- from ..db import db
- from ..ws.bus import bus
- from ..obs import jlog as _jlog
- from ..personas.store import PersonaManager, PersonaStore
- from ..personas.prompt_builder import build_messages
- from .. import nlu as _nlu
- from ..nlu.classifier import classify as classify_turn
- from ..dialog.policy import pick as pick_dialog_policy
- from ..config import load_settings
+    Notes:
+     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
+-    • CloseStream is emitted AFTER the blob is successfully queued to the socket.
++    • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
+ */
  
- try:
-     from ..api_v1.admin import _emit as _admin_emit  # SSE to Admin
-@@ -1229,183 +1230,316 @@ def _make_legacy_frames(seed_text: str,
-     return turn_id, frames
+ import { VAD } from './voice/vad.js';
+ import { sendAudioChunk, sendCloseStream } from '/static/js/ws.js?v=v20250911b';
+ import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
  
+ // Public API (matches prior usage)
+ export async function initMic(stream = null) { return await _ensureMic(stream); }
+ export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
+ export function disarmVAD() { _disarm(); }
+ export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
+ export function bargeIn() { _bargeIn(); }         // keeps API parity
+ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
  
- # --- MIME mapping helper ------------------------------------------------------
+ // ---- Internal state ---------------------------------------------------------
  
- def _guess_tts_mime(output_format: str | None) -> str:
-     """
-     Map configured TTS output format to an appropriate MIME/container for MSE playback.
-     We keep this conservative to avoid mismatches with provider bytes.
-     """
-     fmt = (output_format or os.environ.get('ELEVEN_OUTPUT_FORMAT') or '').lower()
-     # Prefer actual, common provider defaults. If unknown, assume MP3 to avoid mismatches.
-     if 'webm' in fmt and 'opus' in fmt:
-         return 'audio/webm; codecs="opus"'
-     if 'ogg' in fmt and 'opus' in fmt:
-         return 'audio/ogg; codecs="opus"'
-     if 'mp3' in fmt:
-         return 'audio/mpeg'
-     if 'wav' in fmt or 'pcm' in fmt or 'l16' in fmt:
-         return 'audio/wav'
-     # Fallback to MP3 (widely supported; safer than claiming WebM if provider returned MP3)
-     return 'audio/mpeg'
+ // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   && typeof MediaRecorder.isTypeSupported === 'function'
+   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
+   ? 'audio/ogg; codecs=opus'
+   : 'audio/webm; codecs=opus';
  
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
  
- # --- WS TTS scheduling (audio over WS) ---------------------------------------
-+def _tts_text_markers(text: str) -> Dict[str, Any]:
-+    """Privacy-safe markers for logging text identity."""
-+    normalized: str
-+    if isinstance(text, str):
-+        normalized = text
-+    else:
-+        normalized = str(text or "")
-+    try:
-+        encoded = normalized.encode("utf-8")
-+    except Exception:
-+        encoded = str(normalized).encode("utf-8", "ignore")
-+    digest = hashlib.sha256(encoded).hexdigest()
-+    return {
-+        "text_hash": digest[:16],
-+        "text_len": len(normalized),
+ const state = {
+   stream: null,
+   ctx: null,
+   source: null,
+   analyser: null,
+   vad: null,
+   rec: null,
+-  recChunks: [],
++  chunkSendPromise: Promise.resolve(),
++  chunkBytesSent: 0,
++  chunkSendError: null,
+   turnTimer: null,
+   turnOpen: false,   // track whether a turn is currently open server-side
+ };
+ 
+ // ---- Helpers ----------------------------------------------------------------
+ 
+ function _emitVoiceState(state, detail = {}) {
+   try {
+     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
+   } catch {}
+ }
+ 
+ async function _ensureMic(externalStream = null) {
+   if (state.stream && state.stream.active) return state.stream;
+ 
+   if (state.stream && !state.stream.active) {
+     _teardownAudioGraph();
+     state.stream = null;
+   }
+ 
+   let stream = externalStream;
+ 
+   if (!stream || !stream.active) {
+     // Request a clean mono stream with echo/noise controls
+     stream = await navigator.mediaDevices.getUserMedia({
+@@ -172,92 +174,130 @@ async function _arm(stream = null, opts = {}) {
+     {
+       onSpeechStart: _onSpeechStartCommitted,
+       onSpeechEnd: _onSpeechEndCommitted,
+     }
+   );
+ 
+   state.vad = vad;
+   state.vad.start();
+   _emitVoiceState('armed');
+ 
+   return mic;
+ }
+ 
+ // ---- Recorder lifecycle -----------------------------------------------------
+ 
+ function _startRecorder() {
+   if (!state.stream) return false;
+   if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
+ 
+   if (typeof MediaRecorder === 'undefined') {
+     console.warn('[voice] MediaRecorder not supported in this browser');
+     state.rec = null;
+     return false;
+   }
+ 
+-  state.recChunks = [];
++  state.chunkSendPromise = Promise.resolve();
++  state.chunkBytesSent = 0;
++  state.chunkSendError = null;
+   let recorder;
+   try {
+     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
+   } catch (primaryErr) {
+     try {
+       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
+     } catch (fallbackErr) {
+       console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
+       state.rec = null;
+       return false;
+     }
+   }
+ 
+   state.rec = recorder;
+ 
+   state.rec.ondataavailable = (e) => {
+-    if (e.data && e.data.size > 0) state.recChunks.push(e.data);
++    const blob = e.data;
++    if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
++      return;
 +    }
 +
-+
- def schedule_tts_audio(session_id: str,
-                        text: str,
-                        turn_id: str | None = None,
-                        correlation_user_msg_id: Optional[str] = None,
-+                       audio_bytes: Optional[bytes] = None,
-                        chunk_bytes: int = 8192,
-                        delay_ms: int = 0) -> None:
-     """Synthesize TTS for `text` and stream as WS frames.
-     Emits frames like:
-         {
-           "type": "assistant_audio",
-           "turn_id": <str or null>,
-           "mime": "<audio mime>",
-           "audio_chunks": ["<base64>", ...],
-           "is_last": <bool>
-         }
-     After the final chunk, an explicit:
-         { "type": "UtteranceEnd", "turn_id": <str or null> }
-     is broadcast to mark audio-complete.
-     Non-blocking: runs in a background thread.
-     """
-     if not text:
-         return
-     cfg = db.get_config()
-     feature_audio = bool(cfg.get("feature_audio", True))
- 
-     # Track TTS lifecycle for admin truth
-     tts_tbl = db.memory.setdefault('tts_status', {})
-     sess_tbl = tts_tbl.setdefault(session_id, {})
-     turn_key = str(turn_id) if turn_id is not None else 'greet'
-     state = sess_tbl.setdefault(turn_key, {'started': False, 'first_chunk': False, 'done': False, 'error': None})
- 
-+    safe_turn_id = str(turn_id) if turn_id is not None else None
-+    text_markers = _tts_text_markers(text)
-+    audio_override = audio_bytes is not None
-+
-+    def _log(kind: str, **fields: Any) -> None:
-+        payload: Dict[str, Any] = {
-+            "session_id": session_id,
-+            "sid": session_id,
++    // Chain chunk sends to preserve ordering across the WS.
++    state.chunkSendPromise = state.chunkSendPromise
++      .catch(() => {}) // allow queue to continue even if a prior chunk failed
++      .then(async () => {
++        try {
++          await sendAudioChunk(blob);
++          state.chunkBytesSent += blob.size;
++          try {
++            console.debug('[voice] streamed audio chunk', { bytes: blob.size });
++          } catch {}
++        } catch (err) {
++          state.chunkSendError = err;
++          try {
++            console.warn('[voice] failed to stream audio chunk', err);
++          } catch {}
 +        }
-+        if safe_turn_id is not None:
-+            payload["turn_id"] = safe_turn_id
-+        if correlation_user_msg_id:
-+            payload["correlation_user_msg_id"] = correlation_user_msg_id
-+        payload.update(text_markers)
-+        payload["audio_override"] = audio_override
-+        payload.update(fields)
-+        try:
-+            _jlog(kind, **payload)
-+        except Exception:
-+            pass
-+
-+    state_snapshot = dict(state)
-+    level = "warning" if state_snapshot.get('started') or state_snapshot.get('done') else "info"
-+    _log("tts.schedule", level=level, state=state_snapshot, feature_audio=feature_audio)
-+
-     if not feature_audio:
-         return
++      });
+   };
  
-     def _run():
-+        total_audio_bytes = 0
-+        chunk_count = 0
-+        chunk_bytes_sent = 0
-+        canceled = False
-+        truncated = False
-+        utterance_end_sent = False
-+        max_frames = 256  # guardrail
-+
-+        def _emit_utterance_end(reason: str) -> None:
-+            nonlocal utterance_end_sent
-+            _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
-+            try:
-+                bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
-+            except Exception:
-+                pass
-+            utterance_end_sent = True
-+
-+        audio_payload = audio_bytes
-         try:
-             # Small pacing delay if requested
-             if delay_ms and delay_ms > 0:
-                 _t.sleep(max(0, delay_ms) / 1000.0)
- 
--            # Pick provider (vendor only)
--            from app.services.tts_provider import get_tts_provider
--            provider = get_tts_provider(cfg or {})
--
-             # Determine desired MIME from configured output format
-             desired_mime = _guess_tts_mime(cfg.get('tts_output_format'))
- 
--            # Synthesize
--            try:
--                # Re-scrub here as a safety net in case any upstream callers missed it
--                audio_bytes, _vis = provider.synth(_scrub_debug_stamps(text))
--                state['started'] = True
--                try:
--                    _admin_emit('tts:start', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
--                except Exception:
--                    pass
--            except Exception as e:
--                state['error'] = str(e)
-+            if audio_payload is None:
-+                # Pick provider (vendor only)
-+                from app.services.tts_provider import get_tts_provider
-+                provider = get_tts_provider(cfg or {})
-+                provider_label = getattr(provider, "name", None) or getattr(type(provider), "__name__", "unknown")
-+                _log("tts.provider_selected", provider=provider_label, override=False)
-+
-+                # Synthesize
-                 try:
--                    _admin_emit('tts:error', session_id=session_id, turn_id=str(turn_id) if turn_id else None, error=str(e))
--                except Exception:
--                    pass
--                # Even on error, signal end-of-utterance so clients can clean up gracefully
-+                    # Re-scrub here as a safety net in case any upstream callers missed it
-+                    synth_started_at = _t.time()
-+                    _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=False)
-+                    audio_payload, _vis = provider.synth(_scrub_debug_stamps(text))
-+                    state['started'] = True
-+                    total_audio_bytes = len(audio_payload or b"")
-+                    synth_duration_ms = int((_t.time() - synth_started_at) * 1000)
-+                    _log(
-+                        "tts.synth.done",
-+                        desired_mime=desired_mime,
-+                        chunk_bytes=chunk_bytes,
-+                        dur_ms=synth_duration_ms,
-+                        audio_bytes=total_audio_bytes,
-+                        override=False,
-+                    )
-+                    try:
-+                        _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
-+                    except Exception:
-+                        pass
-+                except Exception as e:
-+                    state['error'] = str(e)
-+                    _log("tts.synth.error", error=str(e), override=False)
-+                    try:
-+                        _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
-+                    except Exception:
-+                        pass
-+                    # Even on error, signal end-of-utterance so clients can clean up gracefully
-+                    _log(
-+                        "tts.chunks.summary",
-+                        chunk_count=chunk_count,
-+                        bytes_sent=chunk_bytes_sent,
-+                        total_bytes=total_audio_bytes,
-+                        status="synth_error",
-+                        max_frames=max_frames,
-+                    )
-+                    _emit_utterance_end("synth_error")
-+                    return
-+            else:
-+                _log("tts.provider_selected", provider="prebaked", override=True)
-+                _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=True)
-+                state['started'] = True
-+                total_audio_bytes = len(audio_payload or b"")
-+                _log(
-+                    "tts.synth.done",
-+                    desired_mime=desired_mime,
-+                    chunk_bytes=chunk_bytes,
-+                    dur_ms=0,
-+                    audio_bytes=total_audio_bytes,
-+                    override=True,
-+                )
-                 try:
--                    bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": str(turn_id) if turn_id else None})
-+                    _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
-                 except Exception:
-                     pass
-+
-+            if audio_payload is None:
-+                state['error'] = 'empty_audio'
-+                _log("tts.synth.error", error='empty_audio', override=audio_override)
-+                _log(
-+                    "tts.chunks.summary",
-+                    chunk_count=chunk_count,
-+                    bytes_sent=chunk_bytes_sent,
-+                    total_bytes=total_audio_bytes,
-+                    status="synth_error",
-+                    max_frames=max_frames,
-+                )
-+                _emit_utterance_end("empty_audio")
-                 return
- 
-             # Chunk and broadcast
--            mv = memoryview(audio_bytes)
-+            mv = memoryview(audio_payload)
-             idx = 0
--            max_frames = 256  # guardrail
--            sent = 0
-             first_sent = False
- 
-             while idx < len(mv):
-                 # stop early if canceled
-                 try:
-                     from ..ws.bus import bus as _bus_ref
--                    if _bus_ref.is_canceled(session_id, str(turn_id) if turn_id else None):
-+                    if _bus_ref.is_canceled(session_id, safe_turn_id):
-+                        canceled = True
-+                        _log(
-+                            "tts.chunks.cancelled",
-+                            chunk_count=chunk_count,
-+                            bytes_sent=chunk_bytes_sent,
-+                            total_bytes=total_audio_bytes,
-+                        )
-                         break
-                 except Exception:
-                     pass
- 
-                 next_idx = idx + int(chunk_bytes)
-                 part = bytes(mv[idx: next_idx])
-                 idx = next_idx
-+                chunk_len = len(part)
- 
-                 try:
-                     b64 = base64.b64encode(part).decode("ascii")
-                     fr = {
-                         "type": "assistant_audio",
--                        "turn_id": str(turn_id) if turn_id else None,
-+                        "turn_id": safe_turn_id,
-                         "mime": desired_mime,
-                         "audio_chunks": [b64],
-                         "is_last": (idx >= len(mv)),
-                     }
-                     if correlation_user_msg_id:
-                         fr["correlation_user_msg_id"] = correlation_user_msg_id
- 
-                     bus.broadcast(session_id, fr)
- 
-                     if not first_sent:
-                         first_sent = True
-                         state['first_chunk'] = True
-                         try:
-                             _admin_emit('tts:first_chunk', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
-                         except Exception:
-                             pass
- 
--                    sent += 1
--                    if sent >= max_frames:
-+                    chunk_count += 1
-+                    chunk_bytes_sent += chunk_len
-+                    if chunk_count >= max_frames:
-                         # Safety cut: end stream explicitly if we truncated
--                        try:
--                            bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": str(turn_id) if turn_id else None})
--                        except Exception:
--                            pass
-+                        truncated = True
-+                        _log(
-+                            "tts.chunks.truncated",
-+                            chunk_count=chunk_count,
-+                            bytes_sent=chunk_bytes_sent,
-+                            total_bytes=total_audio_bytes,
-+                            max_frames=max_frames,
-+                        )
-+                        _emit_utterance_end("truncated_guard")
-                         break
-                 except Exception:
-                     # If a single chunk fails, try to continue; we'll still emit UtteranceEnd.
-                     pass
-+
-+            status = "canceled" if canceled else ("truncated" if truncated else "complete")
-+            _log(
-+                "tts.chunks.summary",
-+                chunk_count=chunk_count,
-+                bytes_sent=chunk_bytes_sent,
-+                total_bytes=total_audio_bytes,
-+                status=status,
-+                max_frames=max_frames,
-+            )
-         finally:
-             # Always mark tts done (admin), and always signal UtteranceEnd if we haven't already.
-             try:
-                 _admin_emit('tts:done', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
-             except Exception:
-                 pass
- 
--            try:
--                bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": str(turn_id) if turn_id else None})
--            except Exception:
--                pass
-+            _emit_utterance_end("finalizer")
- 
-             state['done'] = True
- 
-     threading.Thread(target=_run, daemon=True).start()
- 
- 
- def _update_assistant_turn_state(session_id: str,
-                                  frame: Dict[str, Any],
-                                  current_turn_id: Optional[str]) -> Optional[str]:
-     if not isinstance(frame, dict):
-         return current_turn_id
-     ftype = frame.get('type')
-     turn_id = frame.get('turn_id')
-     if ftype in ('assistant_chunk', 'assistant_audio', 'audio_chunk') and turn_id:
-         try:
-             bus.note_assistant_turn(session_id, turn_id)
-         except Exception:
-             pass
-         return turn_id
-     if ftype in ('assistant_end', 'end'):
-         try:
-             bus.note_assistant_turn(session_id, None)
-         except Exception:
-             pass
-         return None
-@@ -1497,51 +1631,63 @@ def run_ws_greet(session_id: str) -> str:
-     """
-     forced_tid, _idempotent = get_or_create_greet_turn(session_id, force=False, ttl_sec=DEFAULT_TTL_SEC)
-     tid, frames = make_assistant_frames(
-         "greet",
-         session_id,
-         meta={"source": "ws_greet"},
-         force_turn_id=forced_tid,
-     )
-     if _ws_generation_failed(tid, frames):
-         tid = _allocate_turn_id(forced_tid)
-         frames = _emit_ws_outage(session_id, tid)
-         try:
-             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='greet')
-         except Exception:
-             pass
-         try:
-             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-         except Exception:
-             pass
-         return tid
-     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
-     try:
-         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
--            schedule_tts_audio(session_id, _scrub_debug_stamps(text_for_tts), turn_id=tid)
-+            safe_text = _scrub_debug_stamps(text_for_tts)
-+            try:
-+                _jlog(
-+                    "tts.pre_schedule",
-+                    session_id=session_id,
-+                    sid=session_id,
-+                    turn_id=tid,
-+                    flow="greet",
-+                    **_tts_text_markers(safe_text),
-+                )
-+            except Exception:
-+                pass
-+            schedule_tts_audio(session_id, safe_text, turn_id=tid)
-     except Exception:
-         pass
-     # UI nudges
-     try:
-         bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-         base_suggestions = merge_suggestions(hygienic_suggestions(""))
-         if base_suggestions:
-             bus.broadcast(
-                 session_id,
-                 {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
-             )
-     except Exception:
-         pass
-     return tid
- 
- 
- def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Optional[str] = None) -> str:
-     """
-     Produce assistant text for a user turn and schedule both text pacing and TTS.
-     Mirrors HTTP /api_v1/chat behavior for consistency.
-     """
-     base_meta = {"source": "user_ws"}
-     nlu_result = classify_turn(text, meta=base_meta)
-     policy = pick_dialog_policy(nlu_result)
-     meta = {
-@@ -1553,29 +1699,48 @@ def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Option
+   state.rec.onstop = async () => {
+     let finalDetail;
+     try {
+-      const blob = new Blob(state.recChunks, { type: REC_MIME });
+-      state.recChunks = [];
+-      try {
+-        console.debug('[voice] recorder stopped', { bytes: blob.size, mime: blob.type });
+-      } catch {}
+-      // Drop obviously-empty/prelude-only blobs (rec preambles can be tiny)
+-      if (blob.size >= MIN_VALID_BLOB_BYTES) {
+-        // One blob per user turn → WS → server STT
+-        await sendAudioChunk(blob);
+-      } else {
+-        console.warn('[voice] recorded blob too small', blob.size);
++      await state.chunkSendPromise.catch((err) => {
++        state.chunkSendError = state.chunkSendError || err;
++      });
++      if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
++        console.warn('[voice] recorded chunks too small', state.chunkBytesSent);
+         finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
+       }
+     } catch (e) {
+       console.warn('[voice] send audio failed', e);
++      state.chunkSendError = state.chunkSendError || e;
+     } finally {
++      if (state.chunkSendError && !finalDetail) {
++        finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
++      }
++      if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
++        try {
++          console.warn('[voice] recorder stopped with issues', {
++            bytesSent: state.chunkBytesSent,
++            error: state.chunkSendError,
++          });
++        } catch {}
++      } else {
++        try {
++          console.debug('[voice] recorder stopped', {
++            bytesSent: state.chunkBytesSent,
++            mime: state.rec?.mimeType || REC_MIME,
++          });
++        } catch {}
++      }
+       // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
+       if (state.turnOpen) {
+-        try { sendCloseStream(); } catch {}
++        try {
++          await sendCloseStream();
++        } catch {}
+         state.turnOpen = false;
+       }
+       _emitVoiceState('armed', finalDetail);
      }
+   };
  
-     tid, frames = make_assistant_frames(text, session_id, meta=meta,
-                                         correlation_user_msg_id=correlation_user_msg_id)
-     if _ws_generation_failed(tid, frames):
-         tid = _allocate_turn_id(force_turn_id=None)
-         frames = _emit_ws_outage(session_id, tid, correlation_user_msg_id=correlation_user_msg_id)
-         try:
-             _apply_assistant_turn_state(session_id, frames)
-         except Exception:
-             pass
-         try:
-             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='turn')
-         except Exception:
-             pass
-         return tid
-     try:
-         _apply_assistant_turn_state(session_id, frames)
-     except Exception:
-         pass
-     # TTS for assistant text
-     try:
-         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
--            schedule_tts_audio(session_id, _scrub_debug_stamps(text_for_tts), turn_id=tid, correlation_user_msg_id=correlation_user_msg_id)
-+            safe_text = _scrub_debug_stamps(text_for_tts)
-+            try:
-+                payload = {
-+                    "session_id": session_id,
-+                    "sid": session_id,
-+                    "turn_id": tid,
-+                    "flow": "user",
-+                    **_tts_text_markers(safe_text),
-+                }
-+                if correlation_user_msg_id:
-+                    payload["correlation_user_msg_id"] = correlation_user_msg_id
-+                _jlog("tts.pre_schedule", **payload)
-+            except Exception:
-+                pass
-+            schedule_tts_audio(
-+                session_id,
-+                safe_text,
-+                turn_id=tid,
-+                correlation_user_msg_id=correlation_user_msg_id,
-+            )
-     except Exception:
-         pass
-     return tid
+   try {
+     // Small timeslice ensures non-empty dataavailable frames while still producing a single turn blob.
+     const timeslice = 150; // 150 ms sits comfortably within the 100–200 ms target window
+     state.rec.start(timeslice);
+     state.turnOpen = true; // mark an open ASR turn on the server
+     try {
+       console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice });
+     } catch {}
+   } catch (e) {
+     console.warn('[voice] recorder start failed', e);
+     state.rec = null;
+     state.turnOpen = false;
+     return false;
+   }
+ 
+   // Safety timeout to prevent runaway recordings
+   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
+   _safeClearTurnTimer();
+   state.turnTimer = setTimeout(() => {
