@@ -9,6 +9,7 @@ from ..services.streaming import (
     schedule_frames,
     merge_suggestions,
     build_suggestion_items,
+    prepare_policy_meta,
 )
 from ..middleware.rate_limit import limit, check_now
 from ..ws.bus import bus
@@ -117,7 +118,8 @@ def post_chat():
 
     # Try to schedule frames; if provider unavailable, still return ok with tid (offline-safe)
     try:
-        frames = make_assistant_frames(text, sid, meta=data, correlation_user_msg_id=user_msg_id)
+        prepared_meta, _, _ = prepare_policy_meta(text, data)
+        frames = make_assistant_frames(text, sid, meta=prepared_meta, correlation_user_msg_id=user_msg_id)
         # ✅ Broadcast them to the WS client
         schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
         try:
@@ -210,7 +212,8 @@ def chat_entry():
     # Otherwise, treat as a normal text turn
     if not text:
         return jsonify({"ok": False, "error": "empty_text"}), 400
-    frames = make_assistant_frames(text, sid, meta=data, correlation_user_msg_id=user_msg_id)
+    prepared_meta, _, _ = prepare_policy_meta(text, data)
+    frames = make_assistant_frames(text, sid, meta=prepared_meta, correlation_user_msg_id=user_msg_id)
     # ✅ Broadcast them to the WS client (fallback path too)
     schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
     turn_id = None

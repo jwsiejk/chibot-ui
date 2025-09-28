@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, request, session
 from ..db import db
 from ..ws.bus import bus
 from ..services.suggestions import hygienic_suggestions
-from ..services.streaming import merge_suggestions, build_suggestion_items
+from ..services.streaming import merge_suggestions, build_suggestion_items, prepare_policy_meta
 from ..middleware.csrf import ensure_csrf_headers
 from ..services.greet_idempotency import get_or_create_greet_turn, DEFAULT_TTL_SEC
 
@@ -51,7 +51,8 @@ def greet():
     if have_openai:
         try:
             from ..services.streaming import make_assistant_frames, schedule_frames
-            _tid, frames = make_assistant_frames("greet", sid, meta={"source": "greet"})
+            greet_meta, _, _ = prepare_policy_meta("greet", {"source": "greet"})
+            _tid, frames = make_assistant_frames("greet", sid, meta=greet_meta)
             # Prefer the LLM’s chosen turn if it returns one (keep correlation tidy)
             if isinstance(_tid, str) and _tid:
                 tid = _tid
@@ -68,7 +69,8 @@ def greet():
             try:
                 fallback_text = "Hi, I’m Chip. How can I help today?"
                 from ..services.streaming import make_assistant_frames, schedule_frames
-                _tid2, frames2 = make_assistant_frames(fallback_text, sid, meta={"source":"greet_fallback"})
+                fallback_meta, _, _ = prepare_policy_meta(fallback_text, {"source":"greet_fallback"})
+                _tid2, frames2 = make_assistant_frames(fallback_text, sid, meta=fallback_meta)
                 if isinstance(_tid2, str) and _tid2:
                     tid = _tid2
                 schedule_frames(sid, frames2)

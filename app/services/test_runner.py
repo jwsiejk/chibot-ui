@@ -5,7 +5,7 @@ import time, threading, uuid, json
 from typing import Dict, List, Any, Tuple
 
 from ..db import db
-from .streaming import make_assistant_frames
+from .streaming import make_assistant_frames, prepare_policy_meta
 
 _TEST_RUNS: Dict[str, Dict[str, Any]] = {}
 _LOCK = threading.Lock()
@@ -56,7 +56,8 @@ def _run(run_id: str, mode: str) -> None:
 
         # Step 1: GREET
         _log(run_id, "greet:req", "calling make_assistant_frames('greet')", label="greet:req – make_assistant_frames('greet')", route='/api/v1/greet')
-        tid, frames = make_assistant_frames("greet", sid)
+        greet_meta, _, _ = prepare_policy_meta("greet", {"source": "greet"})
+        tid, frames = make_assistant_frames("greet", sid, meta=greet_meta)
         _log(run_id, "greet:ok", "frames ready", label='greet:ok – frames ready', turn_id=tid, n=len(frames))
 
         # Summarize audio bytes and visemes if present
@@ -66,7 +67,8 @@ def _run(run_id: str, mode: str) -> None:
 
         # Step 2: CHAT TURN
         _log(run_id, "chat:req", "calling make_assistant_frames('chat')", text="Run a built-in health check.")
-        tid2, frames2 = make_assistant_frames("chat", sid)
+        chat_meta, _, _ = prepare_policy_meta("chat", {"source": "test_runner"})
+        tid2, frames2 = make_assistant_frames("chat", sid, meta=chat_meta)
         _log(run_id, "chat:ok", "frames ready", label='chat:ok – frames ready', turn_id=tid2, n=len(frames2))
 
         a2_sizes = [len(f.get("audio_bytes", b"")) for f in frames2 if f.get("type")=="audio"]

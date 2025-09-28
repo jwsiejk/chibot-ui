@@ -223,6 +223,64 @@ def build_suggestion_items(items: List[str]) -> List[Dict[str, str]]:
     return [{"text": it} for it in items]
 
 
+def classify(seed_text: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Lightweight, offline-safe heuristic classifier for legacy policy usage."""
+    base_meta = meta or {}
+    labels = {}
+    try:
+        labels.update(annotate(seed_text, base_meta))
+    except Exception:
+        labels.update({})
+    try:
+        engagement = score_engagement(seed_text, base_meta)
+        if isinstance(engagement, dict):
+            labels.update(engagement)
+    except Exception:
+        pass
+
+    text = (seed_text or "").strip()
+    lowered = text.lower()
+    if not text:
+        intent = "idle"
+    elif lowered == "greet":
+        intent = "greet"
+    elif text.endswith("?"):
+        intent = "question"
+    elif "help" in lowered or "how" in lowered:
+        intent = "help_request"
+    else:
+        intent = "statement"
+
+    labels.setdefault("intent", intent)
+    labels.setdefault("confidence", 0.5 if text else 0.0)
+    return labels
+
+
+def prepare_policy_meta(seed_text: str,
+                        meta: Optional[Dict[str, Any]] = None,
+                        *,
+                        cfg: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Ensure policy-related metadata is populated for downstream consumers."""
+    cfg = cfg or db.get_config()
+    incoming_meta = meta if isinstance(meta, dict) else {}
+    target_meta = incoming_meta if incoming_meta is meta and isinstance(meta, dict) else dict(incoming_meta)
+
+    labels = classify(seed_text, target_meta)
+    policy = pick_policy(labels, cfg)
+
+    if not isinstance(target_meta.get("nlu"), dict):
+        target_meta["nlu"] = dict(labels)
+    if "action" not in target_meta:
+        target_meta["action"] = policy.get("teacher_move") or "respond"
+    if "verbosity" not in target_meta:
+        target_meta["verbosity"] = cfg.get("gen_target_verbosity", "medium")
+    if "show_suggestions" not in target_meta:
+        suggestions_enabled = bool(cfg.get("suggestions_enabled", True))
+        target_meta["show_suggestions"] = suggestions_enabled and bool(policy)
+
+    return target_meta, labels, policy
+
+
 def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
     if not ENABLE_POLICY_CHIPS or not policy:
         return []
@@ -284,8 +342,8 @@ def make_assistant_frames(seed_text: str,
         - one 'assistant_end'.
     Also broadcasts frames to the WS bus as they are prepared.
     """
-    meta = meta or {}
     cfg = db.get_config()
+    meta, classified_labels, classified_policy = prepare_policy_meta(seed_text, meta, cfg=cfg)
     skip_legacy = _should_skip_legacy(meta)
 
     try:
@@ -352,6 +410,8 @@ def make_assistant_frames(seed_text: str,
         fallback_on_empty=fallback_on_empty,
         fallback_on_error=fallback_on_error,
         fallback_emit_event=fallback_emit_event,
+        labels=classified_labels,
+        policy=classified_policy,
     )
 
 
@@ -517,12 +577,19 @@ def _make_legacy_frames(seed_text: str,
                         fallback_line: str,
                         fallback_on_empty: bool,
                         fallback_on_error: bool,
-                        fallback_emit_event: bool) -> Tuple[str, List[Dict]]:
+                        fallback_emit_event: bool,
+                        labels: Optional[Dict[str, Any]] = None,
+                        policy: Optional[Dict[str, Any]] = None) -> Tuple[str, List[Dict]]:
     persona = _get_persona_for_session(session_id)
 
-    labels = annotate(seed_text, meta)
-    labels['engagement'] = score_engagement(seed_text, meta)
-    policy = pick_policy(labels, cfg)
+    if labels is None:
+        labels = classify(seed_text, meta)
+    else:
+        labels = dict(labels)
+    if policy is None:
+        policy = pick_policy(labels, cfg)
+    else:
+        policy = dict(policy)
     teacher_move = (policy or {}).get('teacher_move')
 
     kb: List[str] = []
