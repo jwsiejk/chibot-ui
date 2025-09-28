@@ -39,9 +39,14 @@ def test_make_assistant_frames_http_allows_legacy(monkeypatch):
     def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
         captured.called = True
         assert isinstance(meta.get("nlu"), dict)
+        assert isinstance(meta.get("dialog_nlu"), dict)
         assert "action" in meta
+        assert meta["dialog_action"] == meta["action"]
         assert "verbosity" in meta
+        assert meta["dialog_verbosity"] == meta["verbosity"]
         assert "show_suggestions" in meta
+        assert meta["dialog_show_suggestions"] == meta["show_suggestions"]
+        assert meta["dialog_policy"]["teacher_move"] == kwargs["policy"]["teacher_move"]
         assert isinstance(kwargs.get("labels"), dict)
         assert isinstance(kwargs.get("policy"), dict)
         return "tid-123", [
@@ -71,9 +76,13 @@ def test_make_assistant_frames_health_check_allows_legacy(monkeypatch):
     def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
         legacy_calls.append((seed_text, meta))
         assert isinstance(meta.get("nlu"), dict)
+        assert isinstance(meta.get("dialog_nlu"), dict)
         assert "action" in meta
+        assert meta["dialog_action"] == meta["action"]
         assert "verbosity" in meta
+        assert meta["dialog_verbosity"] == meta["verbosity"]
         assert "show_suggestions" in meta
+        assert meta["dialog_show_suggestions"] == meta["show_suggestions"]
         return "health", [
             {"type": "assistant_chunk", "turn_id": "health", "text": "ok", "kb_hits": 0},
             {"type": "assistant_end", "turn_id": "health"},
@@ -100,9 +109,14 @@ def test_prepare_policy_meta_injects_fields(monkeypatch):
 
     assert prepared is seed_meta
     assert isinstance(prepared.get("nlu"), dict)
+    assert isinstance(prepared.get("dialog_nlu"), dict)
     assert prepared["action"]
+    assert prepared["dialog_action"] == prepared["action"]
     assert prepared["verbosity"] == "medium"
+    assert prepared["dialog_verbosity"] == prepared["verbosity"]
     assert prepared["show_suggestions"] is policy["show_suggestions"]
+    assert prepared["dialog_show_suggestions"] is policy["show_suggestions"]
+    assert prepared["dialog_policy"]["show_suggestions"] is policy["show_suggestions"]
     assert isinstance(labels, dict) and labels.get("intent")
     assert isinstance(policy, dict)
 
@@ -158,7 +172,9 @@ def test_prepare_policy_meta_respects_policy_show_suggestions(monkeypatch):
     prepared, _, policy = streaming.prepare_policy_meta("Need a short answer", {})
 
     assert prepared["action"] == "give_brief_answer"
+    assert prepared["dialog_action"] == "give_brief_answer"
     assert prepared["show_suggestions"] is False
+    assert prepared["dialog_show_suggestions"] is False
     assert policy["show_suggestions"] is False
 
 
@@ -174,7 +190,9 @@ def test_prepare_policy_meta_enables_suggestions_for_ask_clarify(monkeypatch):
     prepared, _, policy = streaming.prepare_policy_meta("Can you clarify?", {})
 
     assert prepared["action"] == "ask_clarify"
+    assert prepared["dialog_action"] == "ask_clarify"
     assert prepared["show_suggestions"] is True
+    assert prepared["dialog_show_suggestions"] is True
     assert policy["show_suggestions"] is True
 
 

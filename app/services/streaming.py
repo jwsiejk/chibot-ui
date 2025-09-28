@@ -42,11 +42,16 @@ def _emit_turn_action_metadata(turn_id: Optional[str],
     if not turn_id or not isinstance(meta, dict):
         return
 
-    nlu_meta = meta.get("nlu") if isinstance(meta.get("nlu"), dict) else {}
+    if isinstance(meta.get(_DIALOG_NLU_KEY), dict):
+        nlu_meta = meta.get(_DIALOG_NLU_KEY) or {}
+    elif isinstance(meta.get("nlu"), dict):
+        nlu_meta = meta.get("nlu") or {}
+    else:
+        nlu_meta = {}
     policy_payload = {
-        "action": meta.get("action"),
-        "verbosity": meta.get("verbosity"),
-        "show_suggestions": meta.get("show_suggestions"),
+        "action": meta.get(_DIALOG_ACTION_KEY) or meta.get("action"),
+        "verbosity": meta.get(_DIALOG_VERBOSITY_KEY) or meta.get("verbosity"),
+        "show_suggestions": meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY) or meta.get("show_suggestions"),
     }
     payload = {
         "turn_id": turn_id,
@@ -126,6 +131,12 @@ _WS_PIPELINE_UNAVAILABLE_NOTE = "ws_pipeline_unavailable"
 _WS_PIPELINE_MESSAGE = "I'm still warming up. Please try again in a moment."
 _LEGACY_WARMUP_LINE = "Hi! I’m ready to help. (Model is warming up.)"
 
+_DIALOG_ACTION_KEY = "dialog_action"
+_DIALOG_VERBOSITY_KEY = "dialog_verbosity"
+_DIALOG_SHOW_SUGGESTIONS_KEY = "dialog_show_suggestions"
+_DIALOG_NLU_KEY = "dialog_nlu"
+_DIALOG_POLICY_KEY = "dialog_policy"
+
 
 def _should_use_foundation(seed_text: str) -> bool:
     if not ENABLE_CHIP_FOUNDATION:
@@ -141,6 +152,23 @@ def _should_use_foundation(seed_text: str) -> bool:
 _POLICY_SUGGESTION_ACTIONS = frozenset(
     getattr(_nlu.policy, "SUGGESTION_MOVES", {"ask_clarify", "offer_steps"})
 )
+
+
+def _get_dialog_action(meta: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(meta, dict):
+        return None
+    action = meta.get(_DIALOG_ACTION_KEY)
+    if action:
+        return action
+    return meta.get("action")
+
+
+def _get_dialog_show_suggestions(meta: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(meta, dict):
+        return False
+    if _DIALOG_SHOW_SUGGESTIONS_KEY in meta:
+        return bool(meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY))
+    return bool(meta.get("show_suggestions"))
 
 
 def _resolve_show_suggestions(meta: Dict[str, Any],
@@ -168,13 +196,16 @@ def _resolve_show_suggestions(meta: Dict[str, Any],
     policy_flag: Optional[bool] = None
     if isinstance(policy, dict) and "show_suggestions" in policy:
         policy_flag = _coerce_pref(policy.get("show_suggestions"))
-    elif isinstance(meta, dict) and "show_suggestions" in meta:
-        policy_flag = _coerce_pref(meta.get("show_suggestions"))
+    elif isinstance(meta, dict):
+        if _DIALOG_SHOW_SUGGESTIONS_KEY in meta:
+            policy_flag = _coerce_pref(meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY))
+        elif "show_suggestions" in meta:
+            policy_flag = _coerce_pref(meta.get("show_suggestions"))
 
     if policy_flag is None:
         action = None
         if isinstance(meta, dict):
-            action = meta.get("action")
+            action = _get_dialog_action(meta)
         if not action and isinstance(policy, dict):
             action = policy.get("teacher_move")
         if action:
@@ -348,18 +379,33 @@ def prepare_policy_meta(seed_text: str,
     labels = classify(seed_text, target_meta)
     policy = pick_policy(labels, cfg) or {}
 
+    dialog_nlu = dict(labels)
     if not isinstance(target_meta.get("nlu"), dict):
-        target_meta["nlu"] = dict(labels)
+        target_meta["nlu"] = dict(dialog_nlu)
+    else:
+        try:
+            target_meta["nlu"].update(dialog_nlu)
+        except Exception:
+            target_meta["nlu"] = dict(dialog_nlu)
+    target_meta[_DIALOG_NLU_KEY] = dict(dialog_nlu)
 
-    action = target_meta.get("action")
+    action = target_meta.get(_DIALOG_ACTION_KEY) or target_meta.get("action")
     if not action:
         action = policy.get("teacher_move") or "respond"
     target_meta["action"] = action
+    target_meta[_DIALOG_ACTION_KEY] = action
 
+    if _DIALOG_VERBOSITY_KEY not in target_meta:
+        target_meta[_DIALOG_VERBOSITY_KEY] = cfg.get("gen_target_verbosity", "medium")
     if "verbosity" not in target_meta:
-        target_meta["verbosity"] = cfg.get("gen_target_verbosity", "medium")
+        target_meta["verbosity"] = target_meta[_DIALOG_VERBOSITY_KEY]
+    elif _DIALOG_VERBOSITY_KEY not in target_meta:
+        target_meta[_DIALOG_VERBOSITY_KEY] = target_meta["verbosity"]
 
-    target_meta["show_suggestions"] = _resolve_show_suggestions(target_meta, policy, cfg)
+    show_suggestions = _resolve_show_suggestions(target_meta, policy, cfg)
+    target_meta["show_suggestions"] = show_suggestions
+    target_meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
+    target_meta[_DIALOG_POLICY_KEY] = dict(policy)
 
     return target_meta, labels, policy
 
@@ -523,17 +569,26 @@ def _make_foundation_frames(seed_text: str,
         nlu_meta = {}
     else:
         meta["nlu"] = nlu_meta
+        meta[_DIALOG_NLU_KEY] = dict(nlu_meta)
 
-    action = meta.get('action')
+    action = _get_dialog_action(meta)
     policy_move = policy.get('teacher_move') if isinstance(policy, dict) else None
     if not action and policy_move:
         action = policy_move
     if action:
         meta['action'] = action
+        meta[_DIALOG_ACTION_KEY] = action
+    if _DIALOG_VERBOSITY_KEY not in meta:
+        meta[_DIALOG_VERBOSITY_KEY] = cfg.get('gen_target_verbosity', 'medium')
     if 'verbosity' not in meta:
-        meta['verbosity'] = cfg.get('gen_target_verbosity', 'medium')
+        meta['verbosity'] = meta[_DIALOG_VERBOSITY_KEY]
+    elif _DIALOG_VERBOSITY_KEY not in meta:
+        meta[_DIALOG_VERBOSITY_KEY] = meta['verbosity']
 
-    meta['show_suggestions'] = _resolve_show_suggestions(meta, policy, cfg)
+    show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
+    meta['show_suggestions'] = show_suggestions
+    meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
+    meta[_DIALOG_POLICY_KEY] = dict(policy)
 
     prompt_meta = dict(dialog_meta)
     prompt_meta['intent'] = nlu_result.get('intent')
@@ -649,7 +704,7 @@ def _make_foundation_frames(seed_text: str,
     except Exception:
         pass
     should_emit_suggestions = bool(merged_suggestions) and (
-        is_greet or bool(meta.get('show_suggestions'))
+        is_greet or _get_dialog_show_suggestions(meta)
     )
     if should_emit_suggestions:
         frames.append(
@@ -695,19 +750,36 @@ def _make_legacy_frames(seed_text: str,
         policy = dict(policy or {})
 
     try:
-        meta_nlu = meta.setdefault('nlu', {}) if isinstance(meta, dict) else {}
-        meta_nlu.update(labels)
+        if isinstance(meta, dict):
+            meta_nlu = meta.setdefault('nlu', {})
+            meta_nlu.update(labels)
+            dialog_nlu = meta.setdefault(_DIALOG_NLU_KEY, {})
+            try:
+                dialog_nlu.update(labels)
+            except Exception:
+                meta[_DIALOG_NLU_KEY] = dict(labels)
     except Exception:
         pass
     teacher_move = policy.get('teacher_move') if isinstance(policy, dict) else None
 
-    action = meta.get('action') if isinstance(meta, dict) else None
+    action = _get_dialog_action(meta)
     if not action and teacher_move:
         action = teacher_move
     if isinstance(meta, dict):
         if action:
             meta['action'] = action
-        meta['show_suggestions'] = _resolve_show_suggestions(meta, policy, cfg)
+            meta[_DIALOG_ACTION_KEY] = action
+        if _DIALOG_VERBOSITY_KEY not in meta:
+            if 'verbosity' in meta:
+                meta[_DIALOG_VERBOSITY_KEY] = meta.get('verbosity')
+            else:
+                meta[_DIALOG_VERBOSITY_KEY] = cfg.get('gen_target_verbosity', 'medium')
+        if 'verbosity' not in meta:
+            meta['verbosity'] = meta[_DIALOG_VERBOSITY_KEY]
+        show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
+        meta['show_suggestions'] = show_suggestions
+        meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
+        meta[_DIALOG_POLICY_KEY] = dict(policy)
 
     kb: List[str] = []
     try:
@@ -821,7 +893,7 @@ def _make_legacy_frames(seed_text: str,
     except Exception:
         pass
     should_emit_suggestions = bool(merged_suggestions) and (
-        is_greet or bool(meta.get('show_suggestions'))
+        is_greet or _get_dialog_show_suggestions(meta)
     )
     if should_emit_suggestions:
         frames.append(
