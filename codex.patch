@@ -1,14 +1,177 @@
+diff --git a/app/services/audio/raw_fallback.py b/app/services/audio/raw_fallback.py
+index 3e2b88f6e5ef7aed35e0be3cbdf7185efe27a95b..174596294315d10faac0031acd6392a542513de7 100644
+--- a/app/services/audio/raw_fallback.py
++++ b/app/services/audio/raw_fallback.py
+@@ -6,50 +6,52 @@ switched to Deepgram's raw PCM ingest path. The logic lives here so it can be
+ shared by the WS handler and tests without sprinkling guard-rail state across
+ the codebase.
+ 
+ The workflow is:
+ 
+ ``StreamStats``
+     Mutable per-session counters – frame counts, decode errors, jitter, etc.
+ 
+ ``DetectionSignal`` & ``StreamMeta``
+     Lightweight dataclasses representing what we know about the stream (codec,
+     channel count, sample rate hints).
+ 
+ ``should_use_raw_fallback``
+     Given the latest detection signal and stats, decide if we should coerce the
+     Deepgram connection into raw PCM mode.
+ 
+ ``coerce_to_raw_config``
+     Produce Deepgram configuration overrides that enable raw PCM ingest.
+ 
+ Helper functions provide deterministic frame sizing (padding, silence
+ insertion) so the WS layer can keep its buffering logic tidy.
+ """
+ 
+ from __future__ import annotations
+ 
++import os
++
+ from dataclasses import dataclass, field
+ from typing import Mapping, Optional
+ 
+ PCM_BYTES_PER_SAMPLE = 2
+ DEFAULT_SAMPLE_RATE = 48_000
+ DEFAULT_CHANNELS = 1
+ DEFAULT_FRAME_MS = 20
+ 
+ # Frame length ≥ this threshold suggests we're receiving PCM rather than Opus.
+ RAW_PCM_SUSPECT_BYTES = 320  # 20 ms @ 8 kHz mono 16-bit PCM
+ 
+ 
+ @dataclass(frozen=True)
+ class DetectionSignal:
+     """Lightweight representation of the current transport detection."""
+ 
+     container: Optional[str] = None
+     codec: Optional[str] = None
+     containerized: bool = False
+     source: str = "unknown"
+ 
+ 
+ @dataclass
+ class StreamMeta:
+     """Mutable hints about the stream supplied by clients or heuristics."""
+@@ -249,58 +251,71 @@ def normalize_pcm_frame(frame: bytes, meta: StreamMeta) -> bytes:
+     return frame[:expected]
+ 
+ 
+ def pad_frame_to_expected(frame: bytes, meta: StreamMeta) -> bytes:
+     """Public wrapper used by tests – identical to ``normalize_pcm_frame``."""
+ 
+     return normalize_pcm_frame(frame, meta)
+ 
+ 
+ def silence_frame(meta: StreamMeta) -> bytes:
+     expected = expected_pcm_frame_bytes(meta)
+     if expected <= 0:
+         return b""
+     return b"\x00" * expected
+ 
+ 
+ def is_probable_silence(frame: bytes) -> bool:
+     if not frame:
+         return True
+     if len(frame) <= 2:
+         return False
+     first = frame[:1]
+     return frame.count(first) == len(frame) and first in (b"\x00", b"\xff")
+ 
+ 
++def raw_fallback_disabled() -> bool:
++    """Return ``True`` when the runtime kill-switch disables raw fallback."""
++
++    flag = os.getenv("CHIBOT_DISABLE_RAW_FALLBACK")
++    if not flag:
++        return False
++    return flag.strip().lower() not in {"0", "false", "off"}
++
++
+ def should_buffer_for_jitter(stats: StreamStats) -> bool:
+     return stats.jitter_slip_frames >= stats.guardrails.jitter_slip_limit
+ 
+ 
+ def should_use_raw_fallback(
+     detection: Optional[DetectionSignal],
+     stats: Optional[StreamStats],
+ ) -> bool:
++    if raw_fallback_disabled():
++        if stats is not None and stats.forced_fallback:
++            stats.forced_fallback = False
++        return False
+     if stats is None:
+         return False
+     if stats.forced_fallback:
+         return True
+ 
+     detect = detection or stats.detection
+ 
+     if detect and not detect.containerized and not stats.suspected_raw:
+         return False
+ 
+     guard = stats.guardrails
+ 
+     if stats.suspected_raw and stats.decode_errors >= guard.min_errors_for_suspect:
+         return True
+ 
+     if detect and detect.containerized:
+         if stats.consecutive_decode_errors >= guard.max_consecutive_decode_errors:
+             return True
+ 
+     if stats.decode_errors >= guard.max_total_decode_errors:
+         return True
+ 
+     if should_buffer_for_jitter(stats):
+         return True
+ 
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index eb541da9af234e65328d3c89eb9a9d63f7afd5af..f1fce460520aab29e4140f92ecdadf76cd294e99 100644
+index f1fce460520aab29e4140f92ecdadf76cd294e99..a29410ca531996744a67d7e77c4f98cc12c99bc0 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -743,51 +743,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         _log_turn_finish(
-             turn_id,
-             reason=reason,
-             synthetic=True,
-             transcript_chars=len(transcript or ""),
-         )
+@@ -1,38 +1,39 @@
+ # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
+ from __future__ import annotations
+ import asyncio, os, contextlib, time, io, struct, base64, uuid
+ from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
+ from collections import deque
+ from app.services.audio.container_sniffer import (
+     AudioContainerSniffer,
+     coerce_detection_from_meta,
+ )
+ from app.services.audio.raw_fallback import (
+     DetectionSignal as RawDetectionSignal,
+     StreamMeta as RawStreamMeta,
+     StreamStats as RawStreamStats,
++    raw_fallback_disabled,
+     coerce_to_raw_config,
+     normalize_pcm_frame,
+     should_use_raw_fallback,
+ )
+ 
+ from .schema_v1 import (
+     parse_client_json,
+     make_keepalive_ack,
+     make_results,
+     make_utterance_end,
+     make_error,
+ )
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
+ 
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import run_ws_user_turn  # NEW
+ from app.ws.barge import BargeState
+@@ -749,51 +750,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
          return True
  
      async def _ensure_dg_connected() -> bool:
@@ -28,14 +191,16 @@ index eb541da9af234e65328d3c89eb9a9d63f7afd5af..f1fce460520aab29e4140f92ecdadf76
          connect_result = {"ok": False}
  
          async def _connect() -> None:
--            nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
-+            nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result, fallback_detection
+             nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result, fallback_detection
              try:
                  dg_state = "connecting"
                  with contextlib.suppress(Exception):
                      asr_ready_evt.clear()
  
-                 if should_use_raw_fallback(fallback_detection, stream_stats):
+-                if should_use_raw_fallback(fallback_detection, stream_stats):
++                if not raw_fallback_disabled() and should_use_raw_fallback(
++                    fallback_detection, stream_stats
++                ):
                      if not stream_stats.forced_fallback:
                          stream_stats.force_fallback()
                          overrides = coerce_to_raw_config(stream_meta)
@@ -55,3 +220,83 @@ index eb541da9af234e65328d3c89eb9a9d63f7afd5af..f1fce460520aab29e4140f92ecdadf76
                              _jlog(
                                  "raw_fallback_applied",
                                  sid=sid,
+                                 sample_rate=transport.get("sample_rate"),
+                                 channels=transport.get("channels"),
+                             )
+                         if buffered_chunks:
+                             normalized_buffer: Deque[bytes] = deque()
+                             for existing in list(buffered_chunks):
+diff --git a/env_vars.md b/env_vars.md
+index ad5dae68881eaf2d86c65206c62cac25c9cb52f7..31bc4e35a42de674bf8c2ff368cb8380fc715670 100644
+--- a/env_vars.md
++++ b/env_vars.md
+@@ -1,5 +1,6 @@
+ # Environment Variables (Phase 8)
+ SECRET_KEY=change-me
+ ADMIN_EMAILS=james@example.com
+ DATABASE_URL=postgresql://...  (unused in tests; DAL is in-memory mock)
+ WS_PING_INTERVAL_MS=25000
++CHIBOT_DISABLE_RAW_FALLBACK=0  # Truthy to disable the Deepgram raw PCM fallback heuristics.
+diff --git a/tests_phase3_5/test_containerized_opus_url.py b/tests_phase3_5/test_containerized_opus_url.py
+index 05b6a2ea257d613e4e8f025a2721678f45c195e4..1cbff683beb8a5e08f6848db417efabbc0639741 100644
+--- a/tests_phase3_5/test_containerized_opus_url.py
++++ b/tests_phase3_5/test_containerized_opus_url.py
+@@ -41,42 +41,58 @@ def test_raw_fallback_url_includes_params(monkeypatch):
+     assert "encoding=linear16" in url
+     assert "sample_rate=16000" in url
+     assert "channels=1" in url
+     transport = overrides.get("_transport", {})
+     assert transport.get("raw_fallback") is True
+     assert transport.get("normalized_pcm") is True
+ 
+ 
+ def test_raw_fallback_guardrail_leniency():
+     stats = StreamStats()
+     stats.guardrails.raw_candidate_confirmations = 1
+     stats.guardrails.lenient_prefix_frames = 1
+     stats.guardrails.max_consecutive_decode_errors = 2
+     stats.guardrails.min_errors_for_suspect = 2
+     detection = DetectionSignal(container="webm", codec="opus", containerized=True)
+     stats.note_detection(detection)
+ 
+     frame = b"\x00" * 640
+     stats.observe_frame(frame)
+     assert not should_use_raw_fallback(detection, stats)
+ 
+     stats.observe_frame(frame)
+     assert should_use_raw_fallback(detection, stats)
+ 
+ 
++def test_raw_fallback_disabled_env(monkeypatch):
++    monkeypatch.setenv("CHIBOT_DISABLE_RAW_FALLBACK", "1")
++    stats = StreamStats()
++    stats.guardrails.raw_candidate_confirmations = 1
++    detection = DetectionSignal(container="webm", codec="opus", containerized=True)
++    stats.note_detection(detection)
++
++    frame = b"\x00" * 640
++    stats.observe_frame(frame)
++
++    assert not should_use_raw_fallback(detection, stats)
++
++    monkeypatch.delenv("CHIBOT_DISABLE_RAW_FALLBACK", raising=False)
++    assert should_use_raw_fallback(detection, stats)
++
++
+ def test_frame_normalization_and_silence():
+     meta = StreamMeta(sample_rate=16000, channels=1)
+     expected = 640
+     padded = pad_frame_to_expected(b"\x01\x02", meta)
+     assert len(padded) == expected
+     assert padded[:2] == b"\x01\x02"
+     assert padded[2:] == b"\x00" * (expected - 2)
+ 
+     silence = silence_frame(meta)
+     assert len(silence) == expected
+     assert set(silence) == {0}
+ 
+     stats = StreamStats(meta=meta)
+     stats.force_fallback()
+     normalized = stats.observe_frame(b"\x01\x02")
+     assert len(normalized) == expected
+     assert stats.normalized_frames == 1

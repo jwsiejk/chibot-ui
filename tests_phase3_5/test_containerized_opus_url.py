@@ -63,6 +63,22 @@ def test_raw_fallback_guardrail_leniency():
     assert should_use_raw_fallback(detection, stats)
 
 
+def test_raw_fallback_disabled_env(monkeypatch):
+    monkeypatch.setenv("CHIBOT_DISABLE_RAW_FALLBACK", "1")
+    stats = StreamStats()
+    stats.guardrails.raw_candidate_confirmations = 1
+    detection = DetectionSignal(container="webm", codec="opus", containerized=True)
+    stats.note_detection(detection)
+
+    frame = b"\x00" * 640
+    stats.observe_frame(frame)
+
+    assert not should_use_raw_fallback(detection, stats)
+
+    monkeypatch.delenv("CHIBOT_DISABLE_RAW_FALLBACK", raising=False)
+    assert should_use_raw_fallback(detection, stats)
+
+
 def test_frame_normalization_and_silence():
     meta = StreamMeta(sample_rate=16000, channels=1)
     expected = 640

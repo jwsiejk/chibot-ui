@@ -28,6 +28,8 @@ insertion) so the WS layer can keep its buffering logic tidy.
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field
 from typing import Mapping, Optional
 
@@ -271,6 +273,15 @@ def is_probable_silence(frame: bytes) -> bool:
     return frame.count(first) == len(frame) and first in (b"\x00", b"\xff")
 
 
+def raw_fallback_disabled() -> bool:
+    """Return ``True`` when the runtime kill-switch disables raw fallback."""
+
+    flag = os.getenv("CHIBOT_DISABLE_RAW_FALLBACK")
+    if not flag:
+        return False
+    return flag.strip().lower() not in {"0", "false", "off"}
+
+
 def should_buffer_for_jitter(stats: StreamStats) -> bool:
     return stats.jitter_slip_frames >= stats.guardrails.jitter_slip_limit
 
@@ -279,6 +290,10 @@ def should_use_raw_fallback(
     detection: Optional[DetectionSignal],
     stats: Optional[StreamStats],
 ) -> bool:
+    if raw_fallback_disabled():
+        if stats is not None and stats.forced_fallback:
+            stats.forced_fallback = False
+        return False
     if stats is None:
         return False
     if stats.forced_fallback:

@@ -11,6 +11,7 @@ from app.services.audio.raw_fallback import (
     DetectionSignal as RawDetectionSignal,
     StreamMeta as RawStreamMeta,
     StreamStats as RawStreamStats,
+    raw_fallback_disabled,
     coerce_to_raw_config,
     normalize_pcm_frame,
     should_use_raw_fallback,
@@ -771,7 +772,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 with contextlib.suppress(Exception):
                     asr_ready_evt.clear()
 
-                if should_use_raw_fallback(fallback_detection, stream_stats):
+                if not raw_fallback_disabled() and should_use_raw_fallback(
+                    fallback_detection, stream_stats
+                ):
                     if not stream_stats.forced_fallback:
                         stream_stats.force_fallback()
                         overrides = coerce_to_raw_config(stream_meta)
