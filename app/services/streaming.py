@@ -24,6 +24,7 @@ from ..obs import jlog as _jlog
 from ..personas.store import PersonaManager, PersonaStore
 from ..personas.prompt_builder import build_messages
 from .. import nlu as _nlu
+from ..config import load_settings
 
 try:
     from ..api_v1.admin import _emit as _admin_emit  # SSE to Admin
@@ -67,8 +68,10 @@ def _scrub_debug_stamps(s: str) -> str:
     return _KB_TAG_RE.sub(" ", s).strip()
 
 
-ENABLE_CHIP_FOUNDATION = os.getenv("ENABLE_CHIP_FOUNDATION", "1").lower() not in ("0", "false", "no")
-ENABLE_POLICY_CHIPS = os.getenv("ENABLE_POLICY_CHIPS", "1").strip().lower() not in ("0", "false", "no")
+SETTINGS = load_settings()
+ENABLE_CHIP_FOUNDATION = SETTINGS.enable_chip_foundation
+ENABLE_POLICY_CHIPS = SETTINGS.enable_policy_chips
+SUGGESTION_MAX = SETTINGS.suggestion_max
 STRICT_SYSTEM_SHIM = (
     "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
     "and never mention being an AI or chatbot."
@@ -148,11 +151,12 @@ def _broadcast_frames(session_id: str, frames: List[Dict], turn_id: str) -> None
 
 
 def _suggestion_cap(default: int = 4) -> int:
+    cap = SUGGESTION_MAX if SUGGESTION_MAX is not None else default
     try:
-        cap = int(os.getenv("SUGGESTION_MAX", str(default)))
+        cap_int = int(cap)
     except Exception:
         return default
-    return max(0, cap)
+    return max(0, cap_int)
 
 
 def _normalize_suggestion_item(raw: Any) -> str:

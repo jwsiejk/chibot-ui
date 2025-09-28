@@ -22,6 +22,9 @@ class Settings:
     feature_admin_ui: bool = os.getenv("FEATURE_ADMIN_UI", "true").lower() == "true"
     feature_audio: bool = os.getenv("FEATURE_AUDIO", "true").lower() == "true"
     feature_tools: bool = os.getenv("FEATURE_TOOLS", "false").lower() == "true"
+    enable_chip_foundation: bool = os.getenv("ENABLE_CHIP_FOUNDATION", "1").strip().lower() not in ("0", "false", "no")
+    enable_policy_chips: bool = os.getenv("ENABLE_POLICY_CHIPS", "1").strip().lower() not in ("0", "false", "no")
+    suggestion_max: int = int(os.getenv("SUGGESTION_MAX", "4"))
     secret_key: str = os.getenv("SECRET_KEY", "dev-secret")
     session_type: str = os.getenv("SESSION_TYPE", "filesystem")
     ws_ping_interval_ms: int = int(os.getenv("WS_PING_INTERVAL_MS", "25000"))
