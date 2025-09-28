@@ -1,77 +1,219 @@
-diff --git a/app/services/greet_idempotency.py b/app/services/greet_idempotency.py
-index 93d1fd28f70d1ae9c6976bcc466468083a76bcb0..31d188fd9f86e9a8c78e87436d2398088a3ee73f 100644
---- a/app/services/greet_idempotency.py
-+++ b/app/services/greet_idempotency.py
-@@ -1,66 +1,68 @@
- from __future__ import annotations
- import uuid, time
- from typing import Tuple
- from ..db import db
+diff --git a/app/dialog/policy.py b/app/dialog/policy.py
+index 87066819eefa1f14a2b87a4b68b5f78dfa320227..ce4c7117a521f2afee3ed7723bae2cd1b15f3504 100644
+--- a/app/dialog/policy.py
++++ b/app/dialog/policy.py
+@@ -12,50 +12,59 @@ def _coerce_depth(nlu_result: Dict[str, Any]) -> str:
+     if depth not in {"brief", "normal"}:
+         return "normal"
+     return depth
  
- DEFAULT_TTL_SEC = 600
  
- def _now() -> float:
+ def _coerce_confidence(raw: Any) -> float:
      try:
-         return time.time()
+         return float(raw)
      except Exception:
          return 0.0
  
- def _get_mem_table():
-     mem = getattr(db, "memory", None)
-     if isinstance(mem, dict):
-         return mem.setdefault("greet_turns_mem", {})
-     if not hasattr(_get_mem_table, "_tbl"):
-         _get_mem_table._tbl = {}
-     return _get_mem_table._tbl  # type: ignore[attr-defined]
  
- def clear_greet_turn_cache(session_id: str) -> None:
--    """
-+    """Clear cached greet turn metadata for the given session identifier."""
-     sid = (session_id or "default").strip() or "default"
-     try:
-         mem = getattr(db, "memory", None)
-         if isinstance(mem, dict):
-             mem.setdefault("greet_turns", {}).pop(sid, None)
-     except Exception:
-         pass
-     try:
-         tbl = _get_mem_table()
-         if isinstance(tbl, dict):
-             tbl.pop(sid, None)
-     except Exception:
-         pass
-         
--def get_or_create_greet_turn(session_id: str, *, force: bool=False, ttl_sec: int=DEFAULT_TTL_SEC) -> Tuple[str, bool]:         
-+def get_or_create_greet_turn(session_id: str, *, force: bool=False, ttl_sec: int=DEFAULT_TTL_SEC) -> Tuple[str, bool]:
-+    """Return the greet turn identifier for the provided session.
+ def pick(nlu_result: Dict[str, Any]) -> Dict[str, Any]:
+     """Select a dialog action based on the classifier output."""
+     nlu_result = nlu_result or {}
+     intent = (nlu_result.get("intent") or "broad_topic_help").strip().lower()
+     needs_scoping = bool(nlu_result.get("needs_scoping"))
+     wants_list = bool(nlu_result.get("wants_list"))
+     expected_depth = _coerce_depth(nlu_result)
+     confidence = _coerce_confidence(nlu_result.get("confidence"))
+ 
+     action = "give_brief_answer"
+     verbosity = "brief" if expected_depth == "brief" else "normal"
+     show_suggestions = False
+ 
++    if intent == "greet":
++        result = {
++            "action": action,
++            "verbosity": verbosity,
++            "show_suggestions": False,
++            "teacher_move": action,
++        }
++        return result
 +
-     Returns (turn_id, idempotent). Works in two modes:
--      1) Neon/DAL mode (preferred): uses db.sql_one / db.sql against table greet_turns.
--      2) Dev/in-memory mode: falls back to db.memory['greet_turns_mem'] with TTL.
-+    1) Neon/DAL mode (preferred): uses db.sql_one / db.sql against table greet_turns.
-+    2) Dev/in-memory mode: falls back to db.memory['greet_turns_mem'] with TTL.
-     """
-     sid = (session_id or "default").strip() or "default"
+     if confidence < 0.35 or needs_scoping:
+         action = "ask_clarify"
+         verbosity = "brief"
+         show_suggestions = True
+     elif intent == "how_to_steps":
+         action = "offer_steps"
+         verbosity = "normal"
+         show_suggestions = True
+     elif intent == "troubleshoot":
+         action = "summarize_next_actions"
+         verbosity = "normal"
+     elif intent == "compare_options":
+         action = "deep_dive"
+         verbosity = "normal"
+         show_suggestions = wants_list
+     elif intent == "sizing_licensing":
+         action = "summarize_next_actions"
+         verbosity = "normal"
+         show_suggestions = wants_list
+     elif expected_depth != "brief" and wants_list:
+         action = "deep_dive"
+         verbosity = "normal"
+         show_suggestions = True
  
-     # --- Mode 1: Neon / DAL available ---
-     if hasattr(db, "sql_one") and hasattr(db, "sql"):
-         if not force:
-             row = db.sql_one("""
-                 SELECT turn_id
-                 FROM greet_turns
-                 WHERE session_id = %(sid)s AND expires_at > now()
-                 LIMIT 1
-             """, {"sid": sid})
-             if row and row.get("turn_id"):
-                 return str(row["turn_id"]), True
+     result = {
+diff --git a/app/nlu/classifier.py b/app/nlu/classifier.py
+index 569f933575f4977533dad30ecc34126e40518bb8..21c875985a04e9ff0bcb6d8435090ea4a09e220d 100644
+--- a/app/nlu/classifier.py
++++ b/app/nlu/classifier.py
+@@ -84,50 +84,60 @@ def _classify_intent(text: str) -> Tuple[str, float]:
+         return intent, score
  
-         new_tid = uuid.uuid4().hex
-         db.sql(
-             """
-             INSERT INTO greet_turns (session_id, turn_id, created_at, expires_at)
-             VALUES (%(sid)s, %(tid)s, now(), now() + interval '%(ttl)s seconds')
-             ON CONFLICT (session_id) DO UPDATE
-               SET turn_id = EXCLUDED.turn_id,
-                   created_at = now(),
-                   expires_at = now() + interval '%(ttl)s seconds'
-             """.replace("%(ttl)s", str(int(ttl_sec))),
+     if _has_any(lowered, ("how do i", "how to", "set up", "configure", "deploy", "install")):
+         intent = "how_to_steps"
+         score += 0.25
+     elif _has_any(lowered, ("error", "issue", "fail", "failure", "down", "not working", "troubleshoot")):
+         intent = "troubleshoot"
+         score += 0.3
+     elif _has_any(lowered, ("compare", "versus", "vs", "difference", "better than")):
+         intent = "compare_options"
+         score += 0.25
+     elif _has_any(lowered, ("license", "licensing", "subscription", "cost", "price", "pricing", "capacity", "sizing")):
+         intent = "sizing_licensing"
+         score += 0.2
+     elif lowered.endswith("?") or lowered.startswith("what"):
+         intent = "broad_topic_help"
+         score += 0.1
+ 
+     return intent, score
+ 
+ 
+ def classify(seed_text: str, meta: Dict[str, Any] | None = None) -> Dict[str, Any]:
+     """Return dialog-oriented NLU labels for a user message."""
+     text = (seed_text or "").strip()
+     lowered = text.lower()
++    if lowered == "greet":
++        return {
++            "topic": "general",
++            "intent": "greet",
++            "needs_scoping": False,
++            "wants_list": False,
++            "expected_depth": "normal",
++            "confidence": 0.95,
++            "products": [],
++        }
+     products = _detect_products(lowered) if text else []
+     topic = products[0] if products else "general"
+ 
+     base_confidence = 0.0
+     if text:
+         base_confidence = 0.45
+         if text.endswith("?"):
+             base_confidence += 0.05
+ 
+     intent, intent_score = _classify_intent(text)
+     confidence = base_confidence + intent_score
+ 
+     wants_list = _has_any(lowered, ("list", "options", "catalog", "which ones", "which products"))
+     needs_scoping = False
+ 
+     word_count = _word_count(text)
+     if not text or word_count <= 2:
+         needs_scoping = True
+         confidence = min(confidence, 0.35)
+     elif products and wants_list:
+         confidence += 0.05
+     elif not products and intent in {"broad_topic_help", "how_to_steps"} and word_count < 6:
+         needs_scoping = True
+         confidence = min(confidence, 0.4)
+ 
+diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
+index ba59c032107a140d82b53442aef352bf68c9f2dd..9879e41ea8586530989344f554102f69bab5cce7 100644
+--- a/tests/test_streaming_ws_fallbacks.py
++++ b/tests/test_streaming_ws_fallbacks.py
+@@ -55,50 +55,85 @@ def test_run_ws_greet_uses_foundation_frames(monkeypatch):
+         return turn_id, frames
+ 
+     monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
+ 
+     outage_calls = []
+     monkeypatch.setattr(streaming, "_emit_ws_outage", lambda *a, **k: outage_calls.append((a, k)))
+ 
+     tts_texts = []
+ 
+     def fake_schedule_tts(session_id, text, turn_id=None, correlation_user_msg_id=None):
+         tts_texts.append(text)
+ 
+     monkeypatch.setattr(streaming, "schedule_tts_audio", fake_schedule_tts)
+     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
+ 
+     tid = streaming.run_ws_greet("session-foundation")
+ 
+     assert captured["called"] == 1
+     assert captured["seed_text"] == "greet"
+     assert tid == captured["frames"][0]["turn_id"]
+     assert not outage_calls
+     assert tts_texts and tts_texts[0] == "foundation hello"
+     assert streaming._WS_PIPELINE_MESSAGE not in captured["frames"][0]["text"]
+ 
+ 
++def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
++    _stub_config(monkeypatch)
++
++    monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
++
++    captured = {}
++
++    def fake_foundation(seed_text, session_id, meta, cfg, **kwargs):
++        action = kwargs.get("action")
++        fallback_text = streaming._build_clarify_question(seed_text, meta)
++        turn_id = kwargs.get("force_turn_id") or "tid-greet"
++        if action == "ask_clarify":
++            text = fallback_text
++        else:
++            text = "foundation hello"
++        frames = [
++            {"type": "assistant_chunk", "turn_id": turn_id, "text": text, "kb_hits": 0},
++            {"type": "assistant_end", "turn_id": turn_id},
++        ]
++        captured["frames"] = frames
++        captured["action"] = action
++        captured["fallback_text"] = fallback_text
++        return turn_id, frames
++
++    monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
++    monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
++    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
++
++    tid = streaming.run_ws_greet("session-no-clarify")
++
++    assert tid == captured["frames"][0]["turn_id"]
++    assert captured["action"] == "give_brief_answer"
++    assert captured["frames"][0]["text"] != captured["fallback_text"]
++
++
+ def test_make_assistant_frames_http_allows_legacy(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     captured = types.SimpleNamespace(called=False)
+ 
+     def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
+         captured.called = True
+         assert isinstance(meta.get("nlu"), dict)
+         assert isinstance(meta.get("dialog_nlu"), dict)
+         assert "action" in meta
+         assert meta["dialog_action"] == meta["action"]
+         assert "verbosity" in meta
+         assert meta["dialog_verbosity"] == meta["verbosity"]
+         assert "show_suggestions" in meta
+         assert meta["dialog_show_suggestions"] == meta["show_suggestions"]
+         assert meta["dialog_policy"]["teacher_move"] == kwargs["policy"]["teacher_move"]
+         assert isinstance(kwargs.get("labels"), dict)
+         assert isinstance(kwargs.get("policy"), dict)
+         return "tid-123", [
+             {"type": "assistant_chunk", "turn_id": "tid-123", "text": "hi", "kb_hits": 0},
+             {"type": "assistant_end", "turn_id": "tid-123"},
+         ]
+ 
+     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
+     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)

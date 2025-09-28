@@ -34,6 +34,15 @@ def pick(nlu_result: Dict[str, Any]) -> Dict[str, Any]:
     verbosity = "brief" if expected_depth == "brief" else "normal"
     show_suggestions = False
 
+    if intent == "greet":
+        result = {
+            "action": action,
+            "verbosity": verbosity,
+            "show_suggestions": False,
+            "teacher_move": action,
+        }
+        return result
+
     if confidence < 0.35 or needs_scoping:
         action = "ask_clarify"
         verbosity = "brief"

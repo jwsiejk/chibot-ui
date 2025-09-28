@@ -106,6 +106,16 @@ def classify(seed_text: str, meta: Dict[str, Any] | None = None) -> Dict[str, An
     """Return dialog-oriented NLU labels for a user message."""
     text = (seed_text or "").strip()
     lowered = text.lower()
+    if lowered == "greet":
+        return {
+            "topic": "general",
+            "intent": "greet",
+            "needs_scoping": False,
+            "wants_list": False,
+            "expected_depth": "normal",
+            "confidence": 0.95,
+            "products": [],
+        }
     products = _detect_products(lowered) if text else []
     topic = products[0] if products else "general"
 

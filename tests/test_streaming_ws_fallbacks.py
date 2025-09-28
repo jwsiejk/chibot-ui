@@ -77,6 +77,41 @@ def test_run_ws_greet_uses_foundation_frames(monkeypatch):
     assert streaming._WS_PIPELINE_MESSAGE not in captured["frames"][0]["text"]
 
 
+def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
+    _stub_config(monkeypatch)
+
+    monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
+
+    captured = {}
+
+    def fake_foundation(seed_text, session_id, meta, cfg, **kwargs):
+        action = kwargs.get("action")
+        fallback_text = streaming._build_clarify_question(seed_text, meta)
+        turn_id = kwargs.get("force_turn_id") or "tid-greet"
+        if action == "ask_clarify":
+            text = fallback_text
+        else:
+            text = "foundation hello"
+        frames = [
+            {"type": "assistant_chunk", "turn_id": turn_id, "text": text, "kb_hits": 0},
+            {"type": "assistant_end", "turn_id": turn_id},
+        ]
+        captured["frames"] = frames
+        captured["action"] = action
+        captured["fallback_text"] = fallback_text
+        return turn_id, frames
+
+    monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
+    monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
+
+    tid = streaming.run_ws_greet("session-no-clarify")
+
+    assert tid == captured["frames"][0]["turn_id"]
+    assert captured["action"] == "give_brief_answer"
+    assert captured["frames"][0]["text"] != captured["fallback_text"]
+
+
 def test_make_assistant_frames_http_allows_legacy(monkeypatch):
     _stub_config(monkeypatch)
 
