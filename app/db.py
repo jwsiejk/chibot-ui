@@ -63,6 +63,41 @@ class DB:
 db=DB()
 def seed_default_persona():
     db.memory['personas']['chip']={'id':'chip','owner':'system','published':{'version':1,'pack':{'id':'chip'}},'draft':{'version':1,'pack':{'id':'chip'}},'history':[{'version':1,'pack':{'id':'chip'}}],'active':True}
+
+# --- DAL wrappers for generic SQL (used by greet idempotency etc.) -----------
+def sql(q: str, params=None):
+    """Execute a SQL statement (no fetch). Uses Neon DAL when available."""
+    if not persist_enabled():
+        raise AttributeError("sql unavailable: DATABASE_URL not set")
+    from .dal import neon_pg
+    neon_pg.ensure_schema()
+    neon_pg._exec(q, params or [])
+
+def sql_one(q: str, params=None):
+    """Execute a SQL query and return the first row as a dict-like mapping.
+    If the backend returns tuples, we map the first column to the key 'turn_id'
+    when the SELECT list is a single column commonly used by our helpers.
+    """
+    if not persist_enabled():
+        raise AttributeError("sql_one unavailable: DATABASE_URL not set")
+    from .dal import neon_pg
+    neon_pg.ensure_schema()
+    row = neon_pg._fetch_one(q, params or [])
+    if row is None:
+        return {}
+    # sqlite3.Row behaves like a mapping
+    try:
+        keys = list(row.keys())  # works for sqlite Row
+        return {k: row[k] for k in keys}
+    except Exception:
+        # Likely a tuple (psycopg)
+        try:
+            if len(row) == 1:
+                return {"turn_id": row[0]}
+            # Fallback: enumerate
+            return {f"col{i}": v for i, v in enumerate(row)}
+        except Exception:
+            return {}
 seed_default_persona()
 
 
