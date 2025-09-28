@@ -69,6 +69,16 @@ def _scrub_debug_stamps(s: str) -> str:
     return _KB_TAG_RE.sub(" ", s).strip()
 
 
+def _short_greeting(text: str) -> str:
+    try:
+        words = (text or "Hi there!").strip().split()
+        if len(words) > 5:
+            return " ".join(words[:5]).rstrip(",.;:!")
+        return (text or "").strip()
+    except Exception:
+        return text
+
+
 SETTINGS = load_settings()
 ENABLE_CHIP_FOUNDATION = SETTINGS.enable_chip_foundation
 ENABLE_POLICY_CHIPS = SETTINGS.enable_policy_chips
@@ -277,6 +287,34 @@ def make_assistant_frames(seed_text: str,
     cfg = db.get_config()
     skip_legacy = _should_skip_legacy(meta)
 
+    try:
+        source = str(meta.get("source", "") or "").strip().lower()
+    except Exception:
+        source = ""
+    try:
+        is_greet = str(seed_text or "").strip().lower() == "greet"
+    except Exception:
+        is_greet = False
+    if not is_greet and source:
+        is_greet = source in {"greet", "ws_greet", "greet_fallback"}
+
+    fallback_line = str(cfg.get("assistant_fallback_line") or "Hi! I’m ready to help.")
+
+    def _cfg_flag(key: str, default: bool) -> bool:
+        val = meta.get(key)
+        if val is None:
+            val = cfg.get(key, default)
+        try:
+            if isinstance(val, str):
+                return val.strip().lower() in ("1", "true", "yes", "on")
+            return bool(val)
+        except Exception:
+            return default
+
+    fallback_on_empty = _cfg_flag("assistant_fallback_on_empty", True)
+    fallback_on_error = _cfg_flag("assistant_fallback_on_error", True)
+    fallback_emit_event = _cfg_flag("assistant_fallback_emit_event", True)
+
     if _should_use_foundation(seed_text):
         try:
             return _make_foundation_frames(
@@ -286,6 +324,11 @@ def make_assistant_frames(seed_text: str,
                 cfg,
                 correlation_user_msg_id=correlation_user_msg_id,
                 force_turn_id=force_turn_id,
+                is_greet=is_greet,
+                fallback_line=fallback_line,
+                fallback_on_empty=fallback_on_empty,
+                fallback_on_error=fallback_on_error,
+                fallback_emit_event=fallback_emit_event,
             )
         except Exception as e:
             try:
@@ -303,6 +346,11 @@ def make_assistant_frames(seed_text: str,
         cfg,
         correlation_user_msg_id=correlation_user_msg_id,
         force_turn_id=force_turn_id,
+        is_greet=is_greet,
+        fallback_line=fallback_line,
+        fallback_on_empty=fallback_on_empty,
+        fallback_on_error=fallback_on_error,
+        fallback_emit_event=fallback_emit_event,
     )
 
 
@@ -312,7 +360,12 @@ def _make_foundation_frames(seed_text: str,
                             cfg: Dict[str, Any],
                             *,
                             correlation_user_msg_id: Optional[str],
-                            force_turn_id: Optional[str]) -> Tuple[str, List[Dict]]:
+                            force_turn_id: Optional[str],
+                            is_greet: bool,
+                            fallback_line: str,
+                            fallback_on_empty: bool,
+                            fallback_on_error: bool,
+                            fallback_emit_event: bool) -> Tuple[str, List[Dict]]:
     store = PersonaStore()
     persona = PersonaManager(store).get_active()
     dialog_meta = dict(meta or {})
@@ -334,7 +387,26 @@ def _make_foundation_frames(seed_text: str,
     )
 
     reply = _call_foundation_with_retry(messages, cfg)
+
+    fallback_fired = False
+    fallback_reason: Optional[str] = None
+
+    if fallback_on_error and not reply and not fallback_fired:
+        # Foundation path has no explicit error flag; treat empty as error when allowed.
+        reply = fallback_line
+        fallback_fired = True
+        fallback_reason = "empty"
+    elif fallback_on_empty and not (reply or "").strip():
+        reply = fallback_line
+        fallback_fired = True
+        fallback_reason = "empty"
+
     safe_reply = _scrub_debug_stamps(reply)
+
+    if is_greet:
+        safe_reply = _short_greeting(safe_reply)
+    elif fallback_fired:
+        safe_reply = _short_greeting(safe_reply)
 
     policy_chips = _collect_policy_chips(policy)
 
@@ -359,14 +431,21 @@ def _make_foundation_frames(seed_text: str,
         db.memory['turn_seq'] = turn_seq
         turn_id = str(turn_seq)
 
+    if fallback_fired and fallback_emit_event:
+        try:
+            _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
+        except Exception:
+            pass
+
     frames: List[Dict] = []
+    active_teacher_move = policy.get('teacher_move') or teacher_move
     chunk: Dict[str, Any] = {
         'type': 'assistant_chunk',
         'turn_id': turn_id,
         'text': safe_reply,
         'kb_hits': 0,
         'intent': nlu_result.get('intent'),
-        'teacher_move': policy.get('teacher_move') or teacher_move,
+        'teacher_move': active_teacher_move,
     }
     if correlation_user_msg_id:
         chunk['correlation_user_msg_id'] = correlation_user_msg_id
@@ -391,7 +470,10 @@ def _make_foundation_frames(seed_text: str,
         )
     except Exception:
         pass
-    if merged_suggestions:
+    should_emit_suggestions = bool(merged_suggestions) and (
+        is_greet or fallback_fired or (active_teacher_move in ("offer_steps", "summarize_next_actions"))
+    )
+    if should_emit_suggestions:
         frames.append(
             {
                 'type': 'suggestions',
@@ -415,7 +497,12 @@ def _make_legacy_frames(seed_text: str,
                         cfg: Dict[str, Any],
                         *,
                         correlation_user_msg_id: Optional[str],
-                        force_turn_id: Optional[str]) -> Tuple[str, List[Dict]]:
+                        force_turn_id: Optional[str],
+                        is_greet: bool,
+                        fallback_line: str,
+                        fallback_on_empty: bool,
+                        fallback_on_error: bool,
+                        fallback_emit_event: bool) -> Tuple[str, List[Dict]]:
     persona = _get_persona_for_session(session_id)
 
     labels = annotate(seed_text, meta)
@@ -451,20 +538,24 @@ def _make_legacy_frames(seed_text: str,
         error_note = "llm_not_available"
         reply = "Hi! I’m ready to help."
 
+    fallback_fired = False
+    fallback_reason: Optional[str] = None
+
+    if fallback_on_error and error_note:
+        reply = fallback_line
+        fallback_fired = True
+        fallback_reason = error_note
+    elif fallback_on_empty and not (reply or "").strip():
+        reply = fallback_line
+        fallback_fired = True
+        fallback_reason = "empty"
+
     safe_reply = _scrub_debug_stamps(reply)
 
-    try:
-        _is_greet = False
-        try:
-            _is_greet = (str(seed_text).strip().lower() == "greet") or (str((meta or {}).get("source","")).strip().lower() == "greet")
-        except Exception:
-            _is_greet = (str(seed_text).strip().lower() == "greet")
-        if _is_greet:
-            _words = (safe_reply or "Hi there!").strip().split()
-            if len(_words) > 5:
-                safe_reply = " ".join(_words[:5]).rstrip(",.;:!")
-    except Exception:
-        pass
+    if is_greet:
+        safe_reply = _short_greeting(safe_reply)
+    elif fallback_fired:
+        safe_reply = _short_greeting(safe_reply)
 
     if force_turn_id is not None:
         db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
@@ -474,8 +565,15 @@ def _make_legacy_frames(seed_text: str,
         db.memory['turn_seq'] = turn_seq
         turn_id = str(turn_seq)
 
+    if fallback_fired and fallback_emit_event:
+        try:
+            _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
+        except Exception:
+            pass
+
     frames: List[Dict] = []
 
+    active_teacher_move = teacher_move
     chunk = {
         'type': 'assistant_chunk',
         'turn_id': turn_id,
@@ -507,7 +605,10 @@ def _make_legacy_frames(seed_text: str,
         )
     except Exception:
         pass
-    if merged_suggestions:
+    should_emit_suggestions = bool(merged_suggestions) and (
+        is_greet or fallback_fired or (active_teacher_move in ("offer_steps", "summarize_next_actions"))
+    )
+    if should_emit_suggestions:
         frames.append(
             {
                 'type': 'suggestions',

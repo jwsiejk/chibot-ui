@@ -1,115 +1,455 @@
-diff --git a/static/js/visualizer.js b/static/js/visualizer.js
-index c07055c942f4a2c559938b5c7587551994b6ae71..cbaafe4de88db262704ebc3fb77cd2817b52b35c 100644
---- a/static/js/visualizer.js
-+++ b/static/js/visualizer.js
-@@ -42,55 +42,55 @@ function traceWave(points) {
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index 859a8ca3ba3b4ecb691618fffedb095a2822fb68..759c623117f1837f1ea5ea89b1d4cb2d45f4ceb3 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -47,50 +47,60 @@ def _build_prompt(seed_text: str, persona: Dict, kb_snippets: List[str], teacher
+     parts = [build_persona_preamble(persona)]
+     if kb_snippets:
+         parts.append(format_kb_context(kb_snippets))
+     if teacher_move:
+         parts.append(f"Teacher move: {teacher_move}.")
+     parts.append(f"User said: {seed_text.strip()}")
+     return "\n\n".join(parts)
  
-   const last = points[points.length - 1];
-   ctx.lineTo(last.x, last.y);
- }
  
- function drawIdleWave() {
-   if (!ctx || !canvasWidth || !canvasHeight) return;
-   clearCanvas();
-   const midY = canvasHeight / 2;
-   ctx.beginPath();
-   ctx.moveTo(0, midY);
-   ctx.lineTo(canvasWidth, midY);
-   ctx.strokeStyle = 'rgba(120, 150, 220, 0.28)';
-   ctx.lineWidth = 1.2;
-   ctx.stroke();
- }
+ # --- text hygiene -------------------------------------------------------------
+ # Remove ANY occurrence (not just trailing) of legacy "[KB:n]" stamps, case-insensitive.
+ _KB_TAG_RE = re.compile(r"\s*\[(?:KB|kb)\s*:\s*\d+\]\s*")
  
- function drawWaveform(values) {
-   if (!ctx || !values || values.length === 0 || !canvasWidth || !canvasHeight) {
-     return;
-   }
+ def _scrub_debug_stamps(s: str) -> str:
+     """
+     Remove legacy debug stamps like "[KB:0]" that were historically appended to
+     assistant text for telemetry. We keep the value as metadata instead.
+     This removes ALL occurrences safely without touching other content.
+     """
+     if not s:
+         return s
+     # Replace any matches with a single space, then trim.
+     return _KB_TAG_RE.sub(" ", s).strip()
  
-   clearCanvas();
  
-   const midY = canvasHeight / 2;
--  const amplitude = canvasHeight * 0.42;
-+  const amplitude = canvasHeight * 0.62;
-   const sampleCount = Math.max(2, Math.min(220, values.length));
-   const step = (values.length - 1) / (sampleCount - 1);
-   const slice = canvasWidth / (sampleCount - 1);
--  const smoothing = 0.45;
-+  const smoothing = 0.3;
-   const points = new Array(sampleCount);
++def _short_greeting(text: str) -> str:
++    try:
++        words = (text or "Hi there!").strip().split()
++        if len(words) > 5:
++            return " ".join(words[:5]).rstrip(",.;:!")
++        return (text or "").strip()
++    except Exception:
++        return text
++
++
+ SETTINGS = load_settings()
+ ENABLE_CHIP_FOUNDATION = SETTINGS.enable_chip_foundation
+ ENABLE_POLICY_CHIPS = SETTINGS.enable_policy_chips
+ SUGGESTION_MAX = SETTINGS.suggestion_max
+ STRICT_SYSTEM_SHIM = (
+     "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
+     "and never mention being an AI or chatbot."
+ )
  
-   let lastY = midY;
-   for (let i = 0; i < sampleCount; i++) {
-     const dataIndex = Math.round(i * step);
-     const value = (values[dataIndex] - 128) / 128;
-     const targetY = midY + value * amplitude;
-     const y = lastY + (targetY - lastY) * smoothing;
-     const x = slice * i;
-     points[i] = { x, y };
-     lastY = y;
-   }
+ _WS_SOURCES = {"ws_greet", "user_ws"}
+ _WS_PIPELINE_UNAVAILABLE_NOTE = "ws_pipeline_unavailable"
+ _WS_PIPELINE_MESSAGE = "I'm still warming up. Please try again in a moment."
  
-   ctx.beginPath();
-   traceWave(points);
-   ctx.lineTo(canvasWidth, midY);
-   ctx.lineTo(0, midY);
-   ctx.closePath();
  
-   if (fillGradient) {
-     ctx.fillStyle = fillGradient;
-     ctx.fill();
-   }
+ def _should_use_foundation(seed_text: str) -> bool:
+     if not ENABLE_CHIP_FOUNDATION:
+         return False
+     try:
+         if str(seed_text or "").strip().lower() == "greet":
+             return False
+     except Exception:
+         return False
+     return True
  
-   ctx.beginPath();
-@@ -219,51 +219,51 @@ export async function start() {
  
-   if (!stream || !stream.active) {
-     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
-       throw new Error('getUserMedia is not supported in this browser');
+@@ -255,281 +265,372 @@ def _allocate_turn_id(force_turn_id: Optional[str]) -> str:
+     if force_turn_id is not None:
+         db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
+         return str(force_turn_id)
+     turn_seq = db.memory.setdefault('turn_seq', 0) + 1
+     db.memory['turn_seq'] = turn_seq
+     return str(turn_seq)
+ 
+ 
+ def make_assistant_frames(seed_text: str,
+                           session_id: str,
+                           meta: Optional[Dict] = None,
+                           correlation_user_msg_id: Optional[str] = None,
+                           *,
+                           force_turn_id: Optional[str] = None) -> Tuple[Optional[str], List[Dict]]:
+     """
+     Produce assistant frames for a given user seed text using the configured LLM provider.
+     ALWAYS returns a frames list that includes at least:
+         - one 'assistant_chunk' (with either model text OR a safe fallback), and
+         - one 'assistant_end'.
+     Also broadcasts frames to the WS bus as they are prepared.
+     """
+     meta = meta or {}
+     cfg = db.get_config()
+     skip_legacy = _should_skip_legacy(meta)
+ 
++    try:
++        source = str(meta.get("source", "") or "").strip().lower()
++    except Exception:
++        source = ""
++    try:
++        is_greet = str(seed_text or "").strip().lower() == "greet"
++    except Exception:
++        is_greet = False
++    if not is_greet and source:
++        is_greet = source in {"greet", "ws_greet", "greet_fallback"}
++
++    fallback_line = str(cfg.get("assistant_fallback_line") or "Hi! I’m ready to help.")
++
++    def _cfg_flag(key: str, default: bool) -> bool:
++        val = meta.get(key)
++        if val is None:
++            val = cfg.get(key, default)
++        try:
++            if isinstance(val, str):
++                return val.strip().lower() in ("1", "true", "yes", "on")
++            return bool(val)
++        except Exception:
++            return default
++
++    fallback_on_empty = _cfg_flag("assistant_fallback_on_empty", True)
++    fallback_on_error = _cfg_flag("assistant_fallback_on_error", True)
++    fallback_emit_event = _cfg_flag("assistant_fallback_emit_event", True)
++
+     if _should_use_foundation(seed_text):
+         try:
+             return _make_foundation_frames(
+                 seed_text,
+                 session_id,
+                 meta,
+                 cfg,
+                 correlation_user_msg_id=correlation_user_msg_id,
+                 force_turn_id=force_turn_id,
++                is_greet=is_greet,
++                fallback_line=fallback_line,
++                fallback_on_empty=fallback_on_empty,
++                fallback_on_error=fallback_on_error,
++                fallback_emit_event=fallback_emit_event,
+             )
+         except Exception as e:
+             try:
+                 _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
+             except Exception:
+                 pass
+ 
+     if skip_legacy:
+         return None, []
+ 
+     return _make_legacy_frames(
+         seed_text,
+         session_id,
+         meta,
+         cfg,
+         correlation_user_msg_id=correlation_user_msg_id,
+         force_turn_id=force_turn_id,
++        is_greet=is_greet,
++        fallback_line=fallback_line,
++        fallback_on_empty=fallback_on_empty,
++        fallback_on_error=fallback_on_error,
++        fallback_emit_event=fallback_emit_event,
+     )
+ 
+ 
+ def _make_foundation_frames(seed_text: str,
+                             session_id: str,
+                             meta: Dict[str, Any],
+                             cfg: Dict[str, Any],
+                             *,
+                             correlation_user_msg_id: Optional[str],
+-                            force_turn_id: Optional[str]) -> Tuple[str, List[Dict]]:
++                            force_turn_id: Optional[str],
++                            is_greet: bool,
++                            fallback_line: str,
++                            fallback_on_empty: bool,
++                            fallback_on_error: bool,
++                            fallback_emit_event: bool) -> Tuple[str, List[Dict]]:
+     store = PersonaStore()
+     persona = PersonaManager(store).get_active()
+     dialog_meta = dict(meta or {})
+ 
+     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
+     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store)
+ 
+     prompt_meta = dict(dialog_meta)
+     prompt_meta['intent'] = nlu_result.get('intent')
+     if policy.get('teacher_move'):
+         prompt_meta['teacher_move'] = policy.get('teacher_move')
+ 
+     examples = store.match_examples(persona['id'], seed_text)
+     messages, teacher_move, prompt_hash = build_messages(
+         persona=persona,
+         user_text=seed_text,
+         dialog_meta=prompt_meta,
+         examples=examples,
+     )
+ 
+     reply = _call_foundation_with_retry(messages, cfg)
++
++    fallback_fired = False
++    fallback_reason: Optional[str] = None
++
++    if fallback_on_error and not reply and not fallback_fired:
++        # Foundation path has no explicit error flag; treat empty as error when allowed.
++        reply = fallback_line
++        fallback_fired = True
++        fallback_reason = "empty"
++    elif fallback_on_empty and not (reply or "").strip():
++        reply = fallback_line
++        fallback_fired = True
++        fallback_reason = "empty"
++
+     safe_reply = _scrub_debug_stamps(reply)
+ 
++    if is_greet:
++        safe_reply = _short_greeting(safe_reply)
++    elif fallback_fired:
++        safe_reply = _short_greeting(safe_reply)
++
+     policy_chips = _collect_policy_chips(policy)
+ 
+     try:
+         _jlog(
+             "turn_telemetry",
+             sid=session_id,
+             intent=nlu_result.get('intent'),
+             confidence=nlu_result.get('confidence'),
+             teacher_move=policy.get('teacher_move') or teacher_move,
+             chips=len(policy_chips),
+             prompt_hash=prompt_hash,
+         )
+     except Exception:
+         pass
+ 
+     if force_turn_id is not None:
+         db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
+         turn_id = str(force_turn_id)
+     else:
+         turn_seq = db.memory.setdefault('turn_seq', 0) + 1
+         db.memory['turn_seq'] = turn_seq
+         turn_id = str(turn_seq)
+ 
++    if fallback_fired and fallback_emit_event:
++        try:
++            _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
++        except Exception:
++            pass
++
+     frames: List[Dict] = []
++    active_teacher_move = policy.get('teacher_move') or teacher_move
+     chunk: Dict[str, Any] = {
+         'type': 'assistant_chunk',
+         'turn_id': turn_id,
+         'text': safe_reply,
+         'kb_hits': 0,
+         'intent': nlu_result.get('intent'),
+-        'teacher_move': policy.get('teacher_move') or teacher_move,
++        'teacher_move': active_teacher_move,
      }
-     stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
-   }
+     if correlation_user_msg_id:
+         chunk['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(chunk)
  
-   if (!audioCtx) {
-     const AC = window.AudioContext || window.webkitAudioContext;
-     if (!AC) {
-       throw new Error('Web Audio API not supported');
+     frames.append({'type': 'state', 'phase': 'ready'})
+ 
+     legacy_suggestions = []
+     try:
+         if cfg.get('suggestions_enabled', True):
+             legacy_suggestions = hygienic_suggestions(safe_reply)
+     except Exception:
+         legacy_suggestions = []
+     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
+     try:
+         _jlog(
+             "chips_emit",
+             sid=session_id,
+             intent=nlu_result.get('intent'),
+             count=len(merged_suggestions),
+             items=merged_suggestions,
+         )
+     except Exception:
+         pass
+-    if merged_suggestions:
++    should_emit_suggestions = bool(merged_suggestions) and (
++        is_greet or fallback_fired or (active_teacher_move in ("offer_steps", "summarize_next_actions"))
++    )
++    if should_emit_suggestions:
+         frames.append(
+             {
+                 'type': 'suggestions',
+                 'turn_id': turn_id,
+                 'items': build_suggestion_items(merged_suggestions),
+             }
+         )
+ 
+     end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
+     if correlation_user_msg_id:
+         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(end_fr)
+ 
+     _broadcast_frames(session_id, frames, turn_id)
+     return turn_id, frames
+ 
+ 
+ def _make_legacy_frames(seed_text: str,
+                         session_id: str,
+                         meta: Dict[str, Any],
+                         cfg: Dict[str, Any],
+                         *,
+                         correlation_user_msg_id: Optional[str],
+-                        force_turn_id: Optional[str]) -> Tuple[str, List[Dict]]:
++                        force_turn_id: Optional[str],
++                        is_greet: bool,
++                        fallback_line: str,
++                        fallback_on_empty: bool,
++                        fallback_on_error: bool,
++                        fallback_emit_event: bool) -> Tuple[str, List[Dict]]:
+     persona = _get_persona_for_session(session_id)
+ 
+     labels = annotate(seed_text, meta)
+     labels['engagement'] = score_engagement(seed_text, meta)
+     policy = pick_policy(labels, cfg)
+     teacher_move = (policy or {}).get('teacher_move')
+ 
+     kb: List[str] = []
+     try:
+         if cfg.get('kb_enabled', False):
+             kb = kb_search(seed_text, top_k=int(cfg.get('kb_top_k', 3)))
+     except Exception:
+         kb = []
+ 
+     prompt = _build_prompt(seed_text, persona, kb, teacher_move)
+ 
+     try:
+         provider = get_provider(cfg)
+     except Exception as e:
+         provider = None
+         _admin_emit("llm_provider_error", error=e.__class__.__name__)
+ 
+     reply: str
+     error_note: Optional[str] = None
+     if provider is not None:
+         try:
+             reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
+         except Exception as e:
+             error_note = f"llm_error:{e.__class__.__name__}"
+             reply = "Hi! I’m ready to help. (Model is warming up.)"
+             _admin_emit("llm_generate_error", error=e.__class__.__name__)
+     else:
+         error_note = "llm_not_available"
+         reply = "Hi! I’m ready to help."
+ 
++    fallback_fired = False
++    fallback_reason: Optional[str] = None
++
++    if fallback_on_error and error_note:
++        reply = fallback_line
++        fallback_fired = True
++        fallback_reason = error_note
++    elif fallback_on_empty and not (reply or "").strip():
++        reply = fallback_line
++        fallback_fired = True
++        fallback_reason = "empty"
++
+     safe_reply = _scrub_debug_stamps(reply)
+ 
+-    try:
+-        _is_greet = False
+-        try:
+-            _is_greet = (str(seed_text).strip().lower() == "greet") or (str((meta or {}).get("source","")).strip().lower() == "greet")
+-        except Exception:
+-            _is_greet = (str(seed_text).strip().lower() == "greet")
+-        if _is_greet:
+-            _words = (safe_reply or "Hi there!").strip().split()
+-            if len(_words) > 5:
+-                safe_reply = " ".join(_words[:5]).rstrip(",.;:!")
+-    except Exception:
+-        pass
++    if is_greet:
++        safe_reply = _short_greeting(safe_reply)
++    elif fallback_fired:
++        safe_reply = _short_greeting(safe_reply)
+ 
+     if force_turn_id is not None:
+         db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
+         turn_id = str(force_turn_id)
+     else:
+         turn_seq = db.memory.setdefault('turn_seq', 0) + 1
+         db.memory['turn_seq'] = turn_seq
+         turn_id = str(turn_seq)
+ 
++    if fallback_fired and fallback_emit_event:
++        try:
++            _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
++        except Exception:
++            pass
++
+     frames: List[Dict] = []
+ 
++    active_teacher_move = teacher_move
+     chunk = {
+         'type': 'assistant_chunk',
+         'turn_id': turn_id,
+         'text': safe_reply,
+         'kb_hits': len(kb),
      }
-     audioCtx = new AC({ sampleRate: 48000 });
-   }
+     if correlation_user_msg_id:
+         chunk['correlation_user_msg_id'] = correlation_user_msg_id
+     if error_note:
+         chunk['note'] = error_note
+     frames.append(chunk)
  
-   if (audioCtx.state === 'suspended') {
-     try { await audioCtx.resume(); } catch (_) {}
-   }
+     legacy_suggestions: List[Any] = []
+     try:
+         if cfg.get('suggestions_enabled', True):
+             legacy_suggestions = hygienic_suggestions(safe_reply)
+     except Exception:
+         legacy_suggestions = []
+     policy_chips = _collect_policy_chips(policy)
+     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
+     try:
+         intent = labels.get('intent') if isinstance(labels, dict) else None
+         _jlog(
+             "chips_emit",
+             sid=session_id,
+             intent=intent,
+             count=len(merged_suggestions),
+             items=merged_suggestions,
+         )
+     except Exception:
+         pass
+-    if merged_suggestions:
++    should_emit_suggestions = bool(merged_suggestions) and (
++        is_greet or fallback_fired or (active_teacher_move in ("offer_steps", "summarize_next_actions"))
++    )
++    if should_emit_suggestions:
+         frames.append(
+             {
+                 'type': 'suggestions',
+                 'turn_id': turn_id,
+                 'items': build_suggestion_items(merged_suggestions),
+             }
+         )
  
-   cleanupGraph();
+     end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
+     if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
+         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(end_fr)
  
-   source = audioCtx.createMediaStreamSource(stream);
-   analyser = audioCtx.createAnalyser();
-   analyser.fftSize = 2048;
--  analyser.smoothingTimeConstant = 0.7;
-+  analyser.smoothingTimeConstant = 0.55;
-   analyser.minDecibels = -90;
-   analyser.maxDecibels = -10;
-   source.connect(analyser);
+     _broadcast_frames(session_id, frames, turn_id)
+     return turn_id, frames
  
-   dataArray = new Uint8Array(analyser.fftSize);
-   resizeCanvas();
-   renderFrame();
-   return stream;
- }
  
- export function stop({ reset = true } = {}) {
-   if (rafId) {
-     window.cancelAnimationFrame(rafId);
-     rafId = null;
-   }
+ # --- MIME mapping helper ------------------------------------------------------
  
-   cleanupGraph();
- 
-   if (reset) {
-     drawIdleWave();
-   }
- 
-   if (audioCtx && typeof audioCtx.suspend === 'function' && audioCtx.state === 'running') {
-     audioCtx.suspend().catch(() => {});
-   }
+ def _guess_tts_mime(output_format: str | None) -> str:
+     """
+     Map configured TTS output format to an appropriate MIME/container for MSE playback.
+     We keep this conservative to avoid mismatches with provider bytes.
+     """
+     fmt = (output_format or os.environ.get('ELEVEN_OUTPUT_FORMAT') or '').lower()
