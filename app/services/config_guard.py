@@ -15,7 +15,7 @@ SCHEMA = {
 def validate_config(cfg: Dict[str, Any]) -> Dict[str, str]:
     errors = {}
     for k, rule in SCHEMA.items():
-        if k not in cfg: 
+        if k not in cfg:
             continue
         v = cfg[k]
         t = rule["type"]

@@ -811,10 +811,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     if not turn_connect_started[0] and dg_state == "closed":
                         turn_connect_started[0] = True
                         if dg_connect_task is None:
-                           dg_connect_task = asyncio.create_task(_ensure_dg_connected())                  
+                           dg_connect_task = asyncio.create_task(_ensure_dg_connected())
                     elif dg_state == "connecting":
                         pass
-                        
+
                     # Flush when ready
                     if dg is not None:
                         if not asr_ready_evt.is_set():
@@ -928,7 +928,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 _pcm = None
                             _jlog("after_close_turn", sid=sid, turn_id=turn_id)
                             turn_id_ref[0] = turn_id
-                         
+
                             # ---- THEN finish the ASR turn (unchanged logic) ----
                             if _has_deepgram_key():
                                 # If provider isn't ready yet but we have audio, try to connect now (bounded wait)

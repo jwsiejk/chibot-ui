@@ -1111,7 +1111,7 @@ class DeepgramClient:
 
         # Opportunistic flush now (won't raise if socket not open yet)
         self._schedule_flush()
-        
+
     # -- events API ------------------------------------------------------------
 
     async def events(self) -> AsyncGenerator[dict, None]:

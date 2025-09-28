@@ -11,7 +11,7 @@ def hygienic_suggestions(text: str = ""):
         {"id":"compare","label":"Compare options briefly"},
         {"id":"next","label":"Summarize next actions"},
     ]
-    out=[]; 
+    out=[];
     for item in base[:max_items]:
         out.append({"id": item["id"], "label": trim_words(item["label"], max_words)})
     return out[:max_items]
