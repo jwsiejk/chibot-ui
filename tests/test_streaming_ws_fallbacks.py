@@ -105,3 +105,42 @@ def test_prepare_policy_meta_injects_fields(monkeypatch):
     assert prepared["show_suggestions"] is True
     assert isinstance(labels, dict) and labels.get("intent")
     assert isinstance(policy, dict)
+
+
+def test_run_ws_user_turn_emits_action_metadata_once(monkeypatch):
+    _stub_config(monkeypatch)
+
+    monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
+    monkeypatch.setattr(streaming, "kb_search", lambda *a, **k: [])
+    monkeypatch.setattr(streaming, "_get_persona_for_session", lambda sid: {"id": "chip"})
+
+    class DummyProvider:
+        def generate_reply(self, *args, **kwargs):
+            return "Hello!"
+
+    monkeypatch.setattr(streaming, "get_provider", lambda cfg: DummyProvider())
+    monkeypatch.setattr(streaming, "_broadcast_frames", lambda *a, **k: None)
+    monkeypatch.setattr(streaming, "schedule_frames", lambda *a, **k: None)
+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
+
+    captured = []
+
+    def fake_admin_emit(event, **payload):
+        captured.append((event, payload))
+
+    monkeypatch.setattr(streaming, "_admin_emit", fake_admin_emit)
+
+    monkeypatch.setattr(streaming, "_should_skip_legacy", lambda *_: False)
+
+    tid = streaming.run_ws_user_turn("session-meta", "Hello there", correlation_user_msg_id="abc123")
+
+    assert tid
+    assert len(captured) == 1
+
+    event, payload = captured[0]
+    assert event == "turn_action_metadata"
+    assert payload["turn_id"] == tid
+    assert payload["is_greet"] is False
+    assert payload["nlu"]["intent"] == "statement"
+    assert payload["policy"]["action"] == "offer_steps"
+    assert payload["policy"]["show_suggestions"] is True

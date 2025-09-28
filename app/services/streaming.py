@@ -34,6 +34,39 @@ except Exception:
         pass
 
 
+def _emit_turn_action_metadata(turn_id: Optional[str],
+                               meta: Optional[Dict[str, Any]],
+                               *,
+                               is_greet: bool) -> None:
+    """Emit structured NLU/policy metadata for admin observers."""
+    if not turn_id or not isinstance(meta, dict):
+        return
+
+    nlu_meta = meta.get("nlu") if isinstance(meta.get("nlu"), dict) else {}
+    policy_payload = {
+        "action": meta.get("action"),
+        "verbosity": meta.get("verbosity"),
+        "show_suggestions": meta.get("show_suggestions"),
+    }
+    payload = {
+        "turn_id": turn_id,
+        "is_greet": bool(is_greet),
+        "nlu": {
+            "intent": nlu_meta.get("intent"),
+            "topic": nlu_meta.get("topic"),
+            "needs_scoping": nlu_meta.get("needs_scoping"),
+            "wants_list": nlu_meta.get("wants_list"),
+            "expected_depth": nlu_meta.get("expected_depth"),
+            "confidence": nlu_meta.get("confidence"),
+        },
+        "policy": policy_payload,
+    }
+    try:
+        _admin_emit("turn_action_metadata", **payload)
+    except Exception:
+        pass
+
+
 def _get_persona_for_session(session_id: str) -> Dict:
     try:
         sess = db.memory.get('sessions', {}).get(session_id) or {}
@@ -434,6 +467,22 @@ def _make_foundation_frames(seed_text: str,
     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store)
 
+    try:
+        nlu_meta = dict(nlu_result)
+    except Exception:
+        nlu_meta = {}
+    else:
+        meta["nlu"] = nlu_meta
+
+    if policy:
+        action = policy.get('teacher_move') or meta.get('action')
+        if action:
+            meta['action'] = action
+    if 'verbosity' not in meta:
+        meta['verbosity'] = cfg.get('gen_target_verbosity', 'medium')
+    if 'show_suggestions' not in meta:
+        meta['show_suggestions'] = bool(cfg.get('suggestions_enabled', True) and policy)
+
     prompt_meta = dict(dialog_meta)
     prompt_meta['intent'] = nlu_result.get('intent')
     if policy.get('teacher_move'):
@@ -511,6 +560,8 @@ def _make_foundation_frames(seed_text: str,
             _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
         except Exception:
             pass
+
+    _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
 
     frames: List[Dict] = []
     active_teacher_move = policy.get('teacher_move') or teacher_move
@@ -590,6 +641,12 @@ def _make_legacy_frames(seed_text: str,
         policy = pick_policy(labels, cfg)
     else:
         policy = dict(policy)
+
+    try:
+        meta_nlu = meta.setdefault('nlu', {}) if isinstance(meta, dict) else {}
+        meta_nlu.update(labels)
+    except Exception:
+        pass
     teacher_move = (policy or {}).get('teacher_move')
 
     kb: List[str] = []
@@ -666,6 +723,8 @@ def _make_legacy_frames(seed_text: str,
             _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
         except Exception:
             pass
+
+    _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
 
     frames: List[Dict] = []
 
