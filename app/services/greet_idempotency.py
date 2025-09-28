@@ -19,8 +19,23 @@ def _get_mem_table():
         _get_mem_table._tbl = {}
     return _get_mem_table._tbl  # type: ignore[attr-defined]
 
-def get_or_create_greet_turn(session_id: str, *, force: bool=False, ttl_sec: int=DEFAULT_TTL_SEC) -> Tuple[str, bool]:
+def clear_greet_turn_cache(session_id: str) -> None:
     """
+    sid = (session_id or "default").strip() or "default"
+    try:
+        mem = getattr(db, "memory", None)
+        if isinstance(mem, dict):
+            mem.setdefault("greet_turns", {}).pop(sid, None)
+    except Exception:
+        pass
+    try:
+        tbl = _get_mem_table()
+        if isinstance(tbl, dict):
+            tbl.pop(sid, None)
+    except Exception:
+        pass
+        
+def get_or_create_greet_turn(session_id: str, *, force: bool=False, ttl_sec: int=DEFAULT_TTL_SEC) -> Tuple[str, bool]:         
     Returns (turn_id, idempotent). Works in two modes:
       1) Neon/DAL mode (preferred): uses db.sql_one / db.sql against table greet_turns.
       2) Dev/in-memory mode: falls back to db.memory['greet_turns_mem'] with TTL.
