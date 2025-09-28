@@ -297,7 +297,16 @@ function wireUI(){
   if (form) form.addEventListener('submit', (e) => { e.preventDefault(); stopAudio(); App.onSend(); });
 
   if (composer) {
-    composer.addEventListener('keydown', stopAudio);
+    composer.addEventListener('keydown', (ev) => {
+      stopAudio();
+      if (ev.key !== 'Enter') return;
+      if (ev.shiftKey || ev.ctrlKey || ev.altKey || ev.metaKey) return;
+      const disabled = (sendBtnA && sendBtnA.disabled) || (sendBtnB && sendBtnB.disabled);
+      if (disabled) return;
+      if (!composer.value || !composer.value.trim()) return;
+      ev.preventDefault();
+      App.onSend();
+    });
     composer.addEventListener('input', stopAudio);
   }
 
