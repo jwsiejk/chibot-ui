@@ -12,12 +12,14 @@ const $  = (s)=>document.querySelector(s);
 
 function setDot(state){
   const dot = $('#stateDot'); if (!dot) return;
-  dot.className = 'dot ' + (
-    state==='listening' ? 'dot-listening' :
-    state==='speaking'  ? 'dot-speaking'  :
-    state==='ready'     ? 'dot-ready'     :
-    'dot-idle'
-  );
+  const DOT_CLASSES = {
+    ready: 'dot-ready',
+    listening: 'dot-listening',
+    speaking: 'dot-speaking',
+    thinking: 'dot-thinking',
+  };
+  const nextClass = DOT_CLASSES[state] || 'dot-idle';
+  dot.className = 'dot ' + nextClass;
 }
 
 function showBanner(msg){ const el=$('#statusText'); if(el) el.textContent = msg || ''; }

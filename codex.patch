@@ -1,267 +1,58 @@
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 8b464ee5340b2f040364fd68df4177a4391d776e..6391c5d95c1d0b4ee59457640318fb47beff7380 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -1361,87 +1361,109 @@ def schedule_tts_audio(session_id: str,
-                         try:
-                             bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": str(turn_id) if turn_id else None})
-                         except Exception:
-                             pass
-                         break
-                 except Exception:
-                     # If a single chunk fails, try to continue; we'll still emit UtteranceEnd.
-                     pass
-         finally:
-             # Always mark tts done (admin), and always signal UtteranceEnd if we haven't already.
-             try:
-                 _admin_emit('tts:done', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
-             except Exception:
-                 pass
+diff --git a/static/js/app.js b/static/js/app.js
+index 88a36dbcd7da76897c86e7ac813e3b410dafd4b3..d5e41775ae2b7bebbcbf9cc5455e743ed68e805d 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -1,45 +1,47 @@
+ // /static/js/app.js — chat helpers only (imports constrained by spec)
+ import { closeWS, sendCloseStream, sendJSON } from '/static/js/ws.js?v=v20250911b';
+ import { getSID } from '/static/js/util/sid.js';
+ import { renderSuggestions } from '/static/js/suggestions.js';
  
-             try:
-                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": str(turn_id) if turn_id else None})
-             except Exception:
-                 pass
+ // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
+ // Exports: onEnd, onSend, handleAssistantFrame
  
-             state['done'] = True
+ const $  = (s)=>document.querySelector(s);
  
-     threading.Thread(target=_run, daemon=True).start()
+ /* ---------------- UI helpers ---------------- */
  
+ function setDot(state){
+   const dot = $('#stateDot'); if (!dot) return;
+-  dot.className = 'dot ' + (
+-    state==='listening' ? 'dot-listening' :
+-    state==='speaking'  ? 'dot-speaking'  :
+-    state==='ready'     ? 'dot-ready'     :
+-    'dot-idle'
+-  );
++  const DOT_CLASSES = {
++    ready: 'dot-ready',
++    listening: 'dot-listening',
++    speaking: 'dot-speaking',
++    thinking: 'dot-thinking',
++  };
++  const nextClass = DOT_CLASSES[state] || 'dot-idle';
++  dot.className = 'dot ' + nextClass;
+ }
  
-+def _update_assistant_turn_state(session_id: str,
-+                                 frame: Dict[str, Any],
-+                                 current_turn_id: Optional[str]) -> Optional[str]:
-+    if not isinstance(frame, dict):
-+        return current_turn_id
-+    ftype = frame.get('type')
-+    turn_id = frame.get('turn_id')
-+    if ftype in ('assistant_chunk', 'assistant_audio', 'audio_chunk') and turn_id:
-+        try:
-+            bus.note_assistant_turn(session_id, turn_id)
-+        except Exception:
-+            pass
-+        return turn_id
-+    if ftype in ('assistant_end', 'end'):
-+        try:
-+            bus.note_assistant_turn(session_id, None)
-+        except Exception:
-+            pass
-+        return None
-+    return current_turn_id
-+
-+
-+def _apply_assistant_turn_state(session_id: str, frames: Iterable[Dict[str, Any]]) -> None:
-+    current_turn_id: Optional[str] = None
-+    for frame in frames:
-+        current_turn_id = _update_assistant_turn_state(session_id, frame, current_turn_id)
-+
-+
- def schedule_frames(session_id: str,
-                     frames: List[Dict],
-                     delay_ms: int = 0,
-                     correlation_user_msg_id: Optional[str] = None) -> None:
-     """
-     Optionally schedule frames with a delay (for pacing). Ensures an assistant_end is emitted.
-     Non-blocking: runs in a background thread.
-     """
-     def _run():
-         try:
-             if delay_ms and delay_ms > 0:
-                 _t.sleep(max(0, delay_ms) / 1000.0)
-             current_turn_id = None
-             for fr in frames:
-                 try:
-                     # Belt-and-suspenders: never let legacy stamps slip through on rebroadcast.
-                     if isinstance(fr, dict) and fr.get('type') == 'assistant_chunk' and 'text' in fr:
-                         fr['text'] = _scrub_debug_stamps(fr['text'])
--                    ftype = fr.get('type') if isinstance(fr, dict) else None
--                    turn_id = fr.get('turn_id') if isinstance(fr, dict) else None
--                    if ftype in ('assistant_chunk', 'assistant_audio', 'audio_chunk') and turn_id:
--                        current_turn_id = turn_id
--                        bus.note_assistant_turn(session_id, turn_id)
--                    elif ftype in ('assistant_end', 'end'):
--                        bus.note_assistant_turn(session_id, None)
-+                    current_turn_id = _update_assistant_turn_state(session_id, fr, current_turn_id)
-                     bus.broadcast(session_id, fr)
-                 except Exception:
-                     pass
-             # Ensure an assistant_end terminator exists
-             if not any(fr.get('type') in ('assistant_end', 'end') for fr in frames):
-                 end_fr = {'type': 'assistant_end', 'turn_id': frames[-1].get('turn_id') if frames else None}
-                 if current_turn_id and not end_fr.get('turn_id'):
-                     end_fr['turn_id'] = current_turn_id
-                 if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
-                     end_fr['correlation_user_msg_id'] = correlation_user_msg_id
-                 try:
--                    bus.note_assistant_turn(session_id, None)
-+                    _apply_assistant_turn_state(session_id, [end_fr])
-                     bus.broadcast(session_id, end_fr)
-                 except Exception:
-                     pass
-         finally:
-             try:
-                 _admin_emit('schedule_frames_done', session_id=session_id)
-             except Exception:
-                 pass
+ function showBanner(msg){ const el=$('#statusText'); if(el) el.textContent = msg || ''; }
+ function disableForEnded(){
+   const input = $('#composer');
+   const sendA = $('#composerSend');
+   const sendB = $('#sendBtn');
+   const endBtn= $('#endButton');
+   if (input) input.value = '';
+   [sendA, sendB].forEach(b=>{ if(b) b.disabled = true; });
+   if (endBtn) endBtn.disabled = true;
+   setDot('ready');
+ }
  
-     threading.Thread(target=_run, daemon=True).start()
+ // Optional safety: strip legacy debug stamps like "[KB:0]" if any slip through
+ const _KB_TAG_RE = /\s*\[(?:KB|kb)\s*:\s*\d+\]\s*/g;
+ function _cleanText(s){ return (s||'').replace(_KB_TAG_RE,' ').trim(); }
  
+ /* ---------------- Rendering of assistant frames ---------------- */
  
- # ---- WS orchestration helpers (centralize greet/user pipelines) ----
- 
- def _emit_ws_outage(session_id: str,
-                     turn_id: str,
-                     *,
-                     correlation_user_msg_id: Optional[str] = None) -> List[Dict[str, Any]]:
-     frames: List[Dict[str, Any]] = []
-     chunk: Dict[str, Any] = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': _WS_PIPELINE_MESSAGE,
-         'kb_hits': 0,
-         'note': _WS_PIPELINE_UNAVAILABLE_NOTE,
-@@ -1506,44 +1528,47 @@ def run_ws_greet(session_id: str) -> str:
-         pass
-     return tid
- 
- 
- def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Optional[str] = None) -> str:
-     """
-     Produce assistant text for a user turn and schedule both text pacing and TTS.
-     Mirrors HTTP /api_v1/chat behavior for consistency.
-     """
-     base_meta = {"source": "user_ws"}
-     nlu_result = classify_turn(text, meta=base_meta)
-     policy = pick_dialog_policy(nlu_result)
-     meta = {
-         **base_meta,
-         "nlu": nlu_result,
-         "action": policy["action"],
-         "verbosity": policy["verbosity"],
-         "show_suggestions": policy["show_suggestions"],
-     }
- 
-     tid, frames = make_assistant_frames(text, session_id, meta=meta,
-                                         correlation_user_msg_id=correlation_user_msg_id)
-     if _ws_generation_failed(tid, frames):
-         tid = _allocate_turn_id(force_turn_id=None)
-         frames = _emit_ws_outage(session_id, tid, correlation_user_msg_id=correlation_user_msg_id)
-+        try:
-+            _apply_assistant_turn_state(session_id, frames)
-+        except Exception:
-+            pass
-         try:
-             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='turn')
-         except Exception:
-             pass
-         return tid
--    # Keep schedule_frames for pacing/end guarantees to mirror HTTP route
-     try:
--        schedule_frames(session_id, frames, correlation_user_msg_id=correlation_user_msg_id)
-+        _apply_assistant_turn_state(session_id, frames)
-     except Exception:
-         pass
-     # TTS for assistant text
-     try:
-         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
-             schedule_tts_audio(session_id, _scrub_debug_stamps(text_for_tts), turn_id=tid, correlation_user_msg_id=correlation_user_msg_id)
-     except Exception:
-         pass
-     return tid
-diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
-index 9879e41ea8586530989344f554102f69bab5cce7..0de6b44b61ce9f5bdf7fdd67014f21f193c73aed 100644
---- a/tests/test_streaming_ws_fallbacks.py
-+++ b/tests/test_streaming_ws_fallbacks.py
-@@ -219,50 +219,90 @@ def test_run_ws_user_turn_emits_action_metadata_once(monkeypatch):
-     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
- 
-     captured = []
- 
-     def fake_admin_emit(event, **payload):
-         captured.append((event, payload))
- 
-     monkeypatch.setattr(streaming, "_admin_emit", fake_admin_emit)
- 
-     monkeypatch.setattr(streaming, "_should_skip_legacy", lambda *_: False)
- 
-     tid = streaming.run_ws_user_turn("session-meta", "Hello there", correlation_user_msg_id="abc123")
- 
-     assert tid
-     assert len(captured) == 1
- 
-     event, payload = captured[0]
-     assert event == "turn_action_metadata"
-     assert payload["turn_id"] == tid
-     assert payload["is_greet"] is False
-     assert payload["nlu"]["intent"] == "broad_topic_help"
-     assert payload["policy"]["action"] == "ask_clarify"
-     assert payload["policy"]["show_suggestions"] is True
- 
- 
-+def test_run_ws_user_turn_emits_single_chunk_frame(monkeypatch):
-+    _stub_config(monkeypatch)
-+
-+    emitted = []
-+
-+    def fake_broadcast(session_id, frame):
-+        emitted.append(frame)
-+
-+    monkeypatch.setattr(streaming.bus, "broadcast", fake_broadcast)
-+
-+    def fake_make_frames(text, session_id, meta=None, correlation_user_msg_id=None, **kwargs):
-+        frames = [
-+            {"type": "assistant_chunk", "turn_id": "turn-1", "text": "Hello there"},
-+            {"type": "assistant_end", "turn_id": "turn-1"},
-+        ]
-+        for fr in frames:
-+            fake_broadcast(session_id, fr)
-+        return "turn-1", frames
-+
-+    monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
-+
-+    def fail_schedule_frames(*args, **kwargs):  # pragma: no cover - guard against regressions
-+        raise AssertionError("schedule_frames should not run")
-+
-+    monkeypatch.setattr(streaming, "schedule_frames", fail_schedule_frames)
-+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
-+    monkeypatch.setattr(streaming, "classify_turn", lambda text, meta=None: {"intent": "test"})
-+    monkeypatch.setattr(
-+        streaming,
-+        "pick_dialog_policy",
-+        lambda nlu: {"action": "ask_clarify", "verbosity": "medium", "show_suggestions": True},
-+    )
-+
-+    tid = streaming.run_ws_user_turn("session-single-chunk", "hello")
-+
-+    assert tid == "turn-1"
-+    chunk_frames = [fr for fr in emitted if isinstance(fr, dict) and fr.get("type") == "assistant_chunk"]
-+    assert len(chunk_frames) == 1
-+
-+
- def test_prepare_turn_metadata_respects_policy_show_suggestions(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     monkeypatch.setattr(
-         streaming,
-         "pick_dialog_policy",
-         lambda labels: {"action": "give_brief_answer", "show_suggestions": False, "teacher_move": "give_brief_answer"},
-     )
- 
-     prepared, _, policy = streaming.prepare_turn_metadata("Need a short answer", {})
- 
-     assert prepared["action"] == "give_brief_answer"
-     assert prepared["dialog_action"] == "give_brief_answer"
-     assert prepared["show_suggestions"] is False
-     assert prepared["dialog_show_suggestions"] is False
-     assert policy["show_suggestions"] is False
- 
- 
- def test_prepare_turn_metadata_enables_suggestions_for_ask_clarify(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     monkeypatch.setattr(
-         streaming,
-         "pick_dialog_policy",
-         lambda labels: {"action": "ask_clarify", "show_suggestions": True, "teacher_move": "ask_clarify"},
+ // Accept WS assistant text frames
+ function _isAssistantTextFrame(d){
+   return d && (
+     (d.type === 'assistant_chunk' && (d.text || d.delta || d.content)) ||
+     (d.type === 'assistant_text' && (d.text || d.delta || d.content)) ||
