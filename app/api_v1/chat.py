@@ -9,8 +9,9 @@ from ..services.streaming import (
     schedule_frames,
     merge_suggestions,
     build_suggestion_items,
-    prepare_turn_metadata,
 )
+from ..nlu.classifier import classify as classify_turn
+from ..dialog.policy import pick as pick_dialog_policy
 from ..middleware.rate_limit import limit, check_now
 from ..ws.bus import bus
 import os, uuid
@@ -118,8 +119,21 @@ def post_chat():
 
     # Try to schedule frames; if provider unavailable, still return ok with tid (offline-safe)
     try:
-        prepared_meta, _, _ = prepare_turn_metadata(text, data)
-        frames = make_assistant_frames(text, sid, meta=prepared_meta, correlation_user_msg_id=user_msg_id)
+        request_meta = dict(data) if isinstance(data, dict) else {}
+        nested_meta = request_meta.pop("meta", None)
+        if isinstance(nested_meta, dict):
+            request_meta.update(nested_meta)
+        request_meta.setdefault("source", "user_http")
+        nlu_result = classify_turn(text, meta=request_meta)
+        policy = pick_dialog_policy(nlu_result) or {}
+        enriched_meta = {
+            **request_meta,
+            "nlu": nlu_result,
+            "action": policy.get("action"),
+            "verbosity": policy.get("verbosity"),
+            "show_suggestions": policy.get("show_suggestions"),
+        }
+        frames = make_assistant_frames(text, sid, meta=enriched_meta, correlation_user_msg_id=user_msg_id)
         # ✅ Broadcast them to the WS client
         schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
         try:
@@ -212,8 +226,21 @@ def chat_entry():
     # Otherwise, treat as a normal text turn
     if not text:
         return jsonify({"ok": False, "error": "empty_text"}), 400
-    prepared_meta, _, _ = prepare_turn_metadata(text, data)
-    frames = make_assistant_frames(text, sid, meta=prepared_meta, correlation_user_msg_id=user_msg_id)
+    request_meta = dict(data) if isinstance(data, dict) else {}
+    nested_meta = request_meta.pop("meta", None)
+    if isinstance(nested_meta, dict):
+        request_meta.update(nested_meta)
+    request_meta.setdefault("source", "user_http")
+    nlu_result = classify_turn(text, meta=request_meta)
+    policy = pick_dialog_policy(nlu_result) or {}
+    enriched_meta = {
+        **request_meta,
+        "nlu": nlu_result,
+        "action": policy.get("action"),
+        "verbosity": policy.get("verbosity"),
+        "show_suggestions": policy.get("show_suggestions"),
+    }
+    frames = make_assistant_frames(text, sid, meta=enriched_meta, correlation_user_msg_id=user_msg_id)
     # ✅ Broadcast them to the WS client (fallback path too)
     schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
     turn_id = None

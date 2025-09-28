@@ -1,66 +1,164 @@
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 8c3071308dafac0ec3911164abd9e55699ae0633..2394e95628e7232fa91192b91704504c85967415 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -1213,49 +1213,60 @@ def run_ws_greet(session_id: str) -> str:
-         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
-             schedule_tts_audio(session_id, _scrub_debug_stamps(text_for_tts), turn_id=tid)
-     except Exception:
-         pass
-     # UI nudges
-     try:
-         bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-         base_suggestions = merge_suggestions(hygienic_suggestions(""))
-         if base_suggestions:
-             bus.broadcast(
-                 session_id,
-                 {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
-             )
-     except Exception:
-         pass
-     return tid
+diff --git a/app/api_v1/chat.py b/app/api_v1/chat.py
+index 720f3ff9b402b6e66d074937b2199107b0e81c2e..da3005620d4ee761490c6546b0b34ee721a4041b 100644
+--- a/app/api_v1/chat.py
++++ b/app/api_v1/chat.py
+@@ -1,38 +1,39 @@
  
+ import base64
+ from flask import Blueprint, jsonify, request, session
+ from ..db import db
+ from ..security_state import get_user
+ from ..services.mailer import send_transcript
+ from ..services.streaming import (
+     make_assistant_frames,
+     schedule_frames,
+     merge_suggestions,
+     build_suggestion_items,
+-    prepare_turn_metadata,
+ )
++from ..nlu.classifier import classify as classify_turn
++from ..dialog.policy import pick as pick_dialog_policy
+ from ..middleware.rate_limit import limit, check_now
+ from ..ws.bus import bus
+ import os, uuid
  
- def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Optional[str] = None) -> str:
-     """
-     Produce assistant text for a user turn and schedule both text pacing and TTS.
-     Mirrors HTTP /api_v1/chat behavior for consistency.
-     """
--    tid, frames = make_assistant_frames(text, session_id, meta={"source": "user_ws"},
-+    base_meta = {"source": "user_ws"}
-+    nlu_result = classify_turn(text, meta=base_meta)
-+    policy = pick_dialog_policy(nlu_result)
-+    meta = {
-+        **base_meta,
-+        "nlu": nlu_result,
-+        "action": policy["action"],
-+        "verbosity": policy["verbosity"],
-+        "show_suggestions": policy["show_suggestions"],
-+    }
-+
-+    tid, frames = make_assistant_frames(text, session_id, meta=meta,
-                                         correlation_user_msg_id=correlation_user_msg_id)
-     if _ws_generation_failed(tid, frames):
-         tid = _allocate_turn_id(force_turn_id=None)
-         frames = _emit_ws_outage(session_id, tid, correlation_user_msg_id=correlation_user_msg_id)
+ bp = Blueprint("chat", __name__)
+ _TTS_MEMO = {}
+ 
+ # Phase 1/2: map Idempotency-Key header to user_msg_id for correlation
+ def _get_user_msg_id():
+     return (request.headers.get('Idempotency-Key') or request.headers.get('X-User-Msg-Id') or '').strip()
+ 
+ @bp.before_request
+ def _chat_rl_guard():
+     # Rate-limit guard: skip for control commands
+     data = request.get_json(silent=True) or {}
+     cmd = (data.get('cmd') or '').strip().lower()
+     if cmd in ('nudge','interrupt','end_session'):
+         return None
+     rv = check_now('chat')
+     return rv
+ 
+ @limit("chat")
+ @bp.post("")
+ def post_chat():
+     # Unified chat entrypoint used by the UI
+@@ -96,52 +97,65 @@ def post_chat():
+ 
+     # Normal text turn path
+     user_msg_id = _get_user_msg_id()
+     if not user_msg_id:
+         return jsonify(ok=False, error="missing_idempotency_key", detail="Provide Idempotency-Key header", session_id=sid), 400
+ 
+     # Typed chat idempotency store
+     idem = db.memory.setdefault("chat_turns", {}).setdefault(sid, {})
+ 
+     # If duplicate, return same turn_id and mark idempotent
+     if user_msg_id in idem:
+         tid = idem[user_msg_id]
          try:
-             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='turn')
+             from ..api_v1.admin import _emit
+             _emit('chat:idempotent', session_id=sid, user_msg_id=user_msg_id, turn_id=tid)
          except Exception:
              pass
-         return tid
-     # Keep schedule_frames for pacing/end guarantees to mirror HTTP route
+         return jsonify(ok=True, user_msg_id=user_msg_id, turn_id=tid, idempotent=True), 200
+ 
+     # First time this user_msg_id seen for this session: allocate a turn_id
+     tid = uuid.uuid4().hex
+     idem[user_msg_id] = tid
+ 
+     # Try to schedule frames; if provider unavailable, still return ok with tid (offline-safe)
      try:
-         schedule_frames(session_id, frames, correlation_user_msg_id=correlation_user_msg_id)
-     except Exception:
-         pass
-     # TTS for assistant text
-     try:
-         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
-             schedule_tts_audio(session_id, _scrub_debug_stamps(text_for_tts), turn_id=tid, correlation_user_msg_id=correlation_user_msg_id)
-     except Exception:
-         pass
-     return tid
+-        prepared_meta, _, _ = prepare_turn_metadata(text, data)
+-        frames = make_assistant_frames(text, sid, meta=prepared_meta, correlation_user_msg_id=user_msg_id)
++        request_meta = dict(data) if isinstance(data, dict) else {}
++        nested_meta = request_meta.pop("meta", None)
++        if isinstance(nested_meta, dict):
++            request_meta.update(nested_meta)
++        request_meta.setdefault("source", "user_http")
++        nlu_result = classify_turn(text, meta=request_meta)
++        policy = pick_dialog_policy(nlu_result) or {}
++        enriched_meta = {
++            **request_meta,
++            "nlu": nlu_result,
++            "action": policy.get("action"),
++            "verbosity": policy.get("verbosity"),
++            "show_suggestions": policy.get("show_suggestions"),
++        }
++        frames = make_assistant_frames(text, sid, meta=enriched_meta, correlation_user_msg_id=user_msg_id)
+         # ✅ Broadcast them to the WS client
+         schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
+         try:
+             from ..api_v1.admin import _emit
+             _emit('chat:scheduled', label='chat:scheduled', session_id=sid, n=len(frames))
+             _emit('chat:ok', label='chat:ok – frames ready', turn_id=tid, n=len(frames))
+         except Exception:
+             pass
+         return jsonify(ok=True, user_msg_id=user_msg_id, turn_id=tid), 200
+     except Exception as e:
+         try:
+             from ..api_v1.admin import _emit
+             _emit('chat:ok', label='chat:ok – no vendor (offline fallback)', turn_id=tid, n=0)
+         except Exception:
+             pass
+         return jsonify(ok=True, user_msg_id=user_msg_id, turn_id=tid), 200
+ 
+ @limit("voice_tts")
+ @bp.post("/tts-with-visemes")
+ def tts_with_visemes():
+     from ..services.tts_provider import get_tts_provider
+     data = request.get_json(silent=True) or {}
+     text = (data.get("text") or "").strip()
+     cfg = db.get_config()
+     if text in _TTS_MEMO:
+@@ -190,35 +204,48 @@ def chat_entry():
+             try:
+                 from ..services.suggestions import hygienic_suggestions
+                 merged = merge_suggestions(hygienic_suggestions(""))
+                 if merged:
+                     bus.broadcast(sid, {"type":"suggestions","turn_id":"nudge","items": build_suggestion_items(merged)})
+             except Exception:
+                 pass
+             return jsonify({"ok": True, "nudged": True})
+         return jsonify({"ok": True, "nudged": False})
+ 
+     if cmd == "end_session":
+         # Send transcript to the logged-in user
+         to_email = session.get("email")
+         emailed = False
+         if to_email:
+             try:
+                 from time import time as _now
+                 emailed = bool(send_transcript(db=db, session_id=sid, ended_at=_now(), to_email=to_email))
+             except Exception:
+                 emailed = False
+         return jsonify({"ok": True, "emailed": emailed})
+ 
+     # Otherwise, treat as a normal text turn
+     if not text:
+         return jsonify({"ok": False, "error": "empty_text"}), 400
+-    prepared_meta, _, _ = prepare_turn_metadata(text, data)
+-    frames = make_assistant_frames(text, sid, meta=prepared_meta, correlation_user_msg_id=user_msg_id)
++    request_meta = dict(data) if isinstance(data, dict) else {}
++    nested_meta = request_meta.pop("meta", None)
++    if isinstance(nested_meta, dict):
++        request_meta.update(nested_meta)
++    request_meta.setdefault("source", "user_http")
++    nlu_result = classify_turn(text, meta=request_meta)
++    policy = pick_dialog_policy(nlu_result) or {}
++    enriched_meta = {
++        **request_meta,
++        "nlu": nlu_result,
++        "action": policy.get("action"),
++        "verbosity": policy.get("verbosity"),
++        "show_suggestions": policy.get("show_suggestions"),
++    }
++    frames = make_assistant_frames(text, sid, meta=enriched_meta, correlation_user_msg_id=user_msg_id)
+     # ✅ Broadcast them to the WS client (fallback path too)
+     schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
+     turn_id = None
+     for fr in frames:
+         if fr.get("type") in ("assistant_chunk","text") and fr.get("turn_id"):
+             turn_id = fr.get("turn_id")
+             break
+     return jsonify({"ok": True, "turn_id": turn_id})
