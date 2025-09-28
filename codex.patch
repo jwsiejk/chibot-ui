@@ -1,8 +1,76 @@
 diff --git a/static/js/app.js b/static/js/app.js
-index d5e41775ae2b7bebbcbf9cc5455e743ed68e805d..9a4c136c42e4db4bb1a0063be91d421112b92a22 100644
+index 9a4c136c42e4db4bb1a0063be91d421112b92a22..13a654073c056d644a3ed4acb8f57cc6156416d3 100644
 --- a/static/js/app.js
 +++ b/static/js/app.js
-@@ -159,73 +159,85 @@ export function handleAssistantFrame(d){
+@@ -99,51 +99,59 @@ function _dedupeAssistant(d){
+     const msgs = $('#chatMessages');
+     if (!msgs) return true;
+     const last = msgs.lastElementChild;
+ 
+     const raw = (d.text || d.delta || d.content || '');
+ 
+     const text = _cleanText(raw);
+ 
+     if (last && last.dataset && last.dataset.role === 'assistant'){
+       last.className = 'msg assistant';
+       last.textContent = text;
+       return false; // swallowed
+     }
+     const li = document.createElement('div');
+     li.dataset.role = 'assistant';
+     li.className = 'msg assistant';
+     li.textContent = text;
+     msgs.appendChild(li);
+     try { msgs.scrollTop = msgs.scrollHeight; } catch {}
+   }catch{}
+   return true;
+ }
+ 
+ let _lastSuggestionsKey = null;
+ 
++function _clearSuggestions(){
++  const wrap = document.getElementById('suggestions');
++  if (!wrap) return;
++  try { wrap.innerHTML = ''; } catch {}
++  _lastSuggestionsKey = null;
++}
++
+ function _handleSuggestionClick(text){
++  if (!window.__askchip_session_started) return;
+   const suggestion = (text || '').trim();
+   if (!suggestion) return;
+   const input = $('#composer');
+   if (input) {
+     try { input.value = suggestion; } catch {}
+   }
+   try { onSend(suggestion); } catch (err) { console.warn('[suggestion click] send failed', err); }
+ }
+ 
+ export function handleAssistantFrame(d){
+   if (!d) return;
+ 
+   // Surface server errors to the UI banner
+   if (d.type === 'Error') {
+     const msg = `Error: ${(d.code||'')}${d.message ? ' ' + d.message : ''}`.trim();
+     showBanner(msg || 'An error occurred.');
+     return;
+   }
+ 
+   // Lightweight state hints (non-invasive)
+   if (d.type === 'assistant_audio') setDot('speaking');
+   if (d.type === 'UtteranceEnd')    setDot('ready');
+ 
+   if (d.type === 'Results' && d.nlu === undefined){
+     _renderUserTranscript(d);
+@@ -151,50 +159,51 @@ export function handleAssistantFrame(d){
+   }
+ 
+   if (d.type === 'suggestions'){
+     const items = Array.isArray(d.items) ? d.items : [];
+     let key = '[]';
+     try { key = JSON.stringify(items ?? []); } catch { key = '[]'; }
+     if (key !== _lastSuggestionsKey){
+       _lastSuggestionsKey = key;
        try { renderSuggestions(items, _handleSuggestionClick); } catch (err) {
          console.warn('[handleAssistantFrame] renderSuggestions failed', err);
        }
@@ -20,6 +88,7 @@ index d5e41775ae2b7bebbcbf9cc5455e743ed68e805d..9a4c136c42e4db4bb1a0063be91d4211
  
  export async function onSend(overrideText){
    try{
++    if (!window.__askchip_session_started) return;
      const input = $('#composer');
      if (!input && overrideText == null) return;
      const raw = overrideText != null ? overrideText : (input?.value || '');
@@ -28,7 +97,7 @@ index d5e41775ae2b7bebbcbf9cc5455e743ed68e805d..9a4c136c42e4db4bb1a0063be91d4211
      const sid = getSID();
  
      // Optimistic render of user bubble
-+    let optimisticBubble = null;
+     let optimisticBubble = null;
      try{
        const msgs = $('#chatMessages');
        if (msgs){
@@ -37,34 +106,22 @@ index d5e41775ae2b7bebbcbf9cc5455e743ed68e805d..9a4c136c42e4db4bb1a0063be91d4211
          li.className = 'msg user';
          li.textContent = val;
          msgs.appendChild(li);
-+        optimisticBubble = li;
+         optimisticBubble = li;
          try { msgs.scrollTop = msgs.scrollHeight; } catch {}
        }
      }catch{}
  
      // WS send (WS-only turns; replaces legacy HTTP POST)
      const correlation = (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random()));
-+    let sendSucceeded = false;
-     try {
-       // Server expects: type='user_msg' and correlation_user_msg_id
--      sendJSON({ type: 'user_msg', text: val, correlation_user_msg_id: correlation, session_id: sid });
--      setDot('thinking');
-+      sendSucceeded = sendJSON({ type: 'user_msg', text: val, correlation_user_msg_id: correlation, session_id: sid });
-     } catch (e){
-       console.warn('[onSend] WS send failed', e);
-+      sendSucceeded = false;
-+    }
-+
-+    if (!sendSucceeded){
-+      if (optimisticBubble && optimisticBubble.parentElement){
-+        try { optimisticBubble.remove(); } catch {}
-+      }
+     let sendSucceeded = false;
+@@ -212,52 +221,57 @@ export async function onSend(overrideText){
+       }
        showBanner('Message failed to send over WebSocket.');
-+      return;
+       return;
      }
  
-+    setDot('thinking');
-+
+     setDot('thinking');
+ 
      // Clear composer after send
      if (input){
        try { input.value = ''; } catch {}
@@ -83,6 +140,7 @@ index d5e41775ae2b7bebbcbf9cc5455e743ed68e805d..9a4c136c42e4db4bb1a0063be91d4211
    if (ending) return;
    ending = true;
    try {
++    _clearSuggestions();
      // Politely signal end of stream over WS, then close with code 1000
      try { sendCloseStream(); } catch {}
      await new Promise(r => setTimeout(r, 100));
@@ -90,3 +148,27 @@ index d5e41775ae2b7bebbcbf9cc5455e743ed68e805d..9a4c136c42e4db4bb1a0063be91d4211
      try { closeWS(1000, 'user_end'); } catch {}
  
      // Rotate the session so the next Start is clean (correct key)
+     try { localStorage.removeItem('chip.sid'); } catch {}
+ 
+     // Notify others (bootstrap etc.)
+     try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
+ 
+     // Update UI
+     disableForEnded();
+     showBanner('Session ended. Press Start to begin a new one.');
+ 
+     // Clear any bootstrap “session started” latch
+     window.__askchip_session_started = false;
+ 
+   } finally {
+     ending = false;
+   }
+ }
+ 
++try {
++  window.addEventListener('askchip-session-ended', () => { _clearSuggestions(); });
++} catch {}
++
+ /* ---------------- Expose minimal helpers (optional) ---------------- */
+ 
+ // (Intentionally minimal public surface)

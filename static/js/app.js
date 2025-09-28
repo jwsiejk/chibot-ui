@@ -121,7 +121,15 @@ function _dedupeAssistant(d){
 
 let _lastSuggestionsKey = null;
 
+function _clearSuggestions(){
+  const wrap = document.getElementById('suggestions');
+  if (!wrap) return;
+  try { wrap.innerHTML = ''; } catch {}
+  _lastSuggestionsKey = null;
+}
+
 function _handleSuggestionClick(text){
+  if (!window.__askchip_session_started) return;
   const suggestion = (text || '').trim();
   if (!suggestion) return;
   const input = $('#composer');
@@ -173,6 +181,7 @@ export function handleAssistantFrame(d){
 
 export async function onSend(overrideText){
   try{
+    if (!window.__askchip_session_started) return;
     const input = $('#composer');
     if (!input && overrideText == null) return;
     const raw = overrideText != null ? overrideText : (input?.value || '');
@@ -234,6 +243,7 @@ export async function onEnd(){
   if (ending) return;
   ending = true;
   try {
+    _clearSuggestions();
     // Politely signal end of stream over WS, then close with code 1000
     try { sendCloseStream(); } catch {}
     await new Promise(r => setTimeout(r, 100));
@@ -257,6 +267,10 @@ export async function onEnd(){
     ending = false;
   }
 }
+
+try {
+  window.addEventListener('askchip-session-ended', () => { _clearSuggestions(); });
+} catch {}
 
 /* ---------------- Expose minimal helpers (optional) ---------------- */
 
