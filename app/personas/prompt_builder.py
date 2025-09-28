@@ -85,6 +85,24 @@ def _is_greet(dialog_meta: Optional[Dict[str, Any]]) -> bool:
         return False
 
 
+def _first_name_from_profile(user_profile: Optional[Dict[str, Any]]) -> str:
+    """Best-effort: prefer first_name; else split 'name'/'full_name' on space; else ''."""
+    try:
+        p = user_profile or {}
+        fn = str(p.get("first_name") or "").strip()
+        if fn:
+            return fn
+        nm = str(p.get("name") or p.get("full_name") or "").strip()
+        if nm:
+            # Avoid greeting with emails or long identifiers
+            if "@" in nm:
+                return ""
+            return nm.split()[0]
+        return ""
+    except Exception:
+        return ""
+
+
 # ----------------------------
 # Main
 # ----------------------------
@@ -124,6 +142,7 @@ def build_messages(
     """
     dialog_meta = dialog_meta or {}
     cfg: Dict[str, Any] = _coerce_str_map(persona.get("config"))
+
     # Clamp intensity into [0,1] and default to 0.13 (12–15% persona presence target)
     try:
         intensity = float(persona.get("intensity", 0.13))
@@ -186,19 +205,25 @@ def build_messages(
         sys_lines.append(f"User profile: {user_profile}")
 
     # ---------- DEVELOPER MESSAGE ----------
-    dev_lines: List[str] = [
-        # Place greet rule first (weighting inside a single developer message favors earlier lines)
-        # (We insert/append the greet/non-greet rule below; this placeholder keeps structure explicit.)
-    ]
+    dev_lines: List[str] = []
 
     # If this is a greet turn, steer to a welcoming opener; otherwise allow short acks.
     is_greet = _is_greet(dialog_meta)
+    user_first = _first_name_from_profile(user_profile)
+
     if is_greet:
-        dev_lines.insert(
-            0,
-            'For greet: start with a warm, brief welcome as Chip (e.g., "Hey—I’m Chip. Ready when you are."). '
-            'Do not say "Got it."'
-        )
+        if user_first:
+            dev_lines.insert(
+                0,
+                f'For greet: start with a warm, brief welcome as Chip and address the user by first name '
+                f'(e.g., "Hello {user_first}, how can I help today?"). Do not say "Got it."'
+            )
+        else:
+            dev_lines.insert(
+                0,
+                'For greet: start with a warm, brief welcome as Chip (e.g., "Hey—I’m Chip. Ready when you are."). '
+                'Do not say "Got it."'
+            )
     else:
         dev_lines.insert(
             0,
