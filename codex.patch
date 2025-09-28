@@ -1,179 +1,52 @@
-diff --git a/static/js/app.js b/static/js/app.js
-index 519fab0a4409c024d38a16feac10f0439c22def5..249a5889d032baaab544d45d387d75de4e287f04 100644
---- a/static/js/app.js
-+++ b/static/js/app.js
-@@ -1,28 +1,29 @@
- // /static/js/app.js — chat helpers only (imports constrained by spec)
- import { closeWS, sendCloseStream, sendJSON } from '/static/js/ws.js?v=v20250911b';
- import { getSID } from '/static/js/util/sid.js';
-+import { renderSuggestions } from '/static/js/suggestions.js';
+diff --git a/static/js/voice.js b/static/js/voice.js
+index 6275b09b6b7497369c9dd3e51f78574ebb7a6de8..c990328a7c9714995129ad978c4bd80ee4337f1d 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -1,46 +1,46 @@
+ /*
+ Citations for context (non-functional):
+ :contentReference[oaicite:0]{index=0}
+ :contentReference[oaicite:1]{index=1}
+ */
  
- // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
- // Exports: onEnd, onSend, handleAssistantFrame
+ /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
+    Goals satisfied:
+     • Echo-aware VAD (threshold boost while TTS is playing)
+     • One Opus blob per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
+     • Soft barge-in: pause Chip TTS on committed speech start
+     • Turn timeout (safety), robust errors, clean session end
+     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
  
- const $  = (s)=>document.querySelector(s);
+    Notes:
+     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
+     • CloseStream is emitted AFTER the blob is successfully queued to the socket.
+ */
  
- /* ---------------- UI helpers ---------------- */
+ import { VAD } from './voice/vad.js';
+-import { sendAudioChunk, sendCloseStream } from './ws.js';
++import { sendAudioChunk, sendCloseStream } from '/static/js/ws.js?v=v20250911b';
+ import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
  
- function setDot(state){
-   const dot = $('#stateDot'); if (!dot) return;
-   dot.className = 'dot ' + (
-     state==='listening' ? 'dot-listening' :
-     state==='speaking'  ? 'dot-speaking'  :
-     state==='ready'     ? 'dot-ready'     :
-     'dot-idle'
-   );
- }
+ // Public API (matches prior usage)
+ export async function initMic(stream = null) { return await _ensureMic(stream); }
+ export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
+ export function disarmVAD() { _disarm(); }
+ export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
+ export function bargeIn() { _bargeIn(); }         // keeps API parity
+ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
  
- function showBanner(msg){ const el=$('#statusText'); if(el) el.textContent = msg || ''; }
- function disableForEnded(){
-   const input = $('#composer');
-   const sendA = $('#composerSend');
-   const sendB = $('#sendBtn');
-   const endBtn= $('#endButton');
-   if (input) input.value = '';
-@@ -94,110 +95,139 @@ function _dedupeAssistant(d){
-   // single-bubble de-dupe; keep only latest revision for same turn
-   try{
-     const msgs = $('#chatMessages');
-     if (!msgs) return true;
-     const last = msgs.lastElementChild;
+ // ---- Internal state ---------------------------------------------------------
  
-     const raw = (d.text || d.delta || d.content || '');
+ // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   && typeof MediaRecorder.isTypeSupported === 'function'
+   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
+   ? 'audio/ogg; codecs=opus'
+   : 'audio/webm; codecs=opus';
  
-     const text = _cleanText(raw);
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
  
-     if (last && last.dataset && last.dataset.role === 'assistant'){
-       last.className = 'msg assistant';
-       last.textContent = text;
-       return false; // swallowed
-     }
-     const li = document.createElement('div');
-     li.dataset.role = 'assistant';
-     li.className = 'msg assistant';
-     li.textContent = text;
-     msgs.appendChild(li);
-     try { msgs.scrollTop = msgs.scrollHeight; } catch {}
-   }catch{}
-   return true;
- }
- 
-+let _lastSuggestionsKey = null;
-+
-+function _handleSuggestionClick(text){
-+  const suggestion = (text || '').trim();
-+  if (!suggestion) return;
-+  const input = $('#composer');
-+  if (input) {
-+    try { input.value = suggestion; } catch {}
-+  }
-+  try { onSend(suggestion); } catch (err) { console.warn('[suggestion click] send failed', err); }
-+}
-+
- export function handleAssistantFrame(d){
-   if (!d) return;
- 
-   // Surface server errors to the UI banner
-   if (d.type === 'Error') {
-     const msg = `Error: ${(d.code||'')}${d.message ? ' ' + d.message : ''}`.trim();
-     showBanner(msg || 'An error occurred.');
-     return;
-   }
- 
-   // Lightweight state hints (non-invasive)
-   if (d.type === 'assistant_audio') setDot('speaking');
-   if (d.type === 'UtteranceEnd')    setDot('ready');
- 
-   if (d.type === 'Results' && d.nlu === undefined){
-     _renderUserTranscript(d);
-     return;
-   }
--  
-+
-+  if (d.type === 'suggestions'){
-+    const items = Array.isArray(d.items) ? d.items : [];
-+    let key = '[]';
-+    try { key = JSON.stringify(items ?? []); } catch { key = '[]'; }
-+    if (key !== _lastSuggestionsKey){
-+      _lastSuggestionsKey = key;
-+      try { renderSuggestions(items, _handleSuggestionClick); } catch (err) {
-+        console.warn('[handleAssistantFrame] renderSuggestions failed', err);
-+      }
-+    }
-+    return;
-+  }
-+
-   if (_isAssistantTextFrame(d)) {
-     if (!_dedupeAssistant(d)) return;
-   }
-   // (other frame types can be handled here as needed)
- }
- 
- /* ---------------- Send (WS-only) ---------------- */
- 
--export async function onSend(){
-+export async function onSend(overrideText){
-   try{
--    const input = $('#composer'); if (!input) return;
--    const val = (input.value || '').trim(); if (!val) return;
-+    const input = $('#composer');
-+    if (!input && overrideText == null) return;
-+    const raw = overrideText != null ? overrideText : (input?.value || '');
-+    const val = (raw || '').trim(); if (!val) return;
- 
-     const sid = getSID();
- 
-     // Optimistic render of user bubble
-     try{
-       const msgs = $('#chatMessages');
-       if (msgs){
-         const li = document.createElement('div');
-         li.dataset.role = 'user';
-         li.className = 'msg user';
-         li.textContent = val;
-         msgs.appendChild(li);
-         try { msgs.scrollTop = msgs.scrollHeight; } catch {}
-       }
-     }catch{}
- 
-     // WS send (WS-only turns; replaces legacy HTTP POST)
-     const correlation = (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random()));
-     try {
-       // Server expects: type='user_msg' and correlation_user_msg_id
-       sendJSON({ type: 'user_msg', text: val, correlation_user_msg_id: correlation, session_id: sid });
-       setDot('thinking');
-     } catch (e){
-       console.warn('[onSend] WS send failed', e);
-       showBanner('Message failed to send over WebSocket.');
-     }
- 
-     // Clear composer after send
--    try { input.value = ''; } catch {}
-+    if (input){
-+      try { input.value = ''; } catch {}
-+    }
- 
-   } catch (e){
-     console.warn('[onSend] error', e);
-   }
- }
- 
- /* ---------------- End session (graceful) ---------------- */
- 
- let ending = false;
- 
- export async function onEnd(){
-   if (ending) return;
-   ending = true;
-   try {
-     // Politely signal end of stream over WS, then close with code 1000
-     try { sendCloseStream(); } catch {}
-     await new Promise(r => setTimeout(r, 100));
- 
-     try { closeWS(1000, 'user_end'); } catch {}
- 
-     // Rotate the session so the next Start is clean (correct key)
-     try { localStorage.removeItem('chip.sid'); } catch {}
- 
-     // Notify others (bootstrap etc.)
-     try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
+ const state = {
+   stream: null,
+   ctx: null,
