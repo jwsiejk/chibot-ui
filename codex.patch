@@ -1,798 +1,287 @@
-diff --git a/app/api_v1/chat.py b/app/api_v1/chat.py
-index 8d93351692769b5d0aa1e3c08eb8e1d71ee20b41..4361d32956db206e1a2c51d21c32fc2b069c2fe6 100644
---- a/app/api_v1/chat.py
-+++ b/app/api_v1/chat.py
-@@ -107,51 +107,57 @@ def post_chat():
-             _emit('chat:idempotent', session_id=sid, user_msg_id=user_msg_id, turn_id=tid)
-         except Exception:
-             pass
-         return jsonify(ok=True, user_msg_id=user_msg_id, turn_id=tid, idempotent=True), 200
+diff --git a/app/services/audio/raw_fallback.py b/app/services/audio/raw_fallback.py
+index 174596294315d10faac0031acd6392a542513de7..355ba836da8ff6a588367f915715b1a115ae8d58 100644
+--- a/app/services/audio/raw_fallback.py
++++ b/app/services/audio/raw_fallback.py
+@@ -20,50 +20,59 @@ The workflow is:
+     Deepgram connection into raw PCM mode.
  
-     # First time this user_msg_id seen for this session: allocate a turn_id
-     tid = uuid.uuid4().hex
-     idem[user_msg_id] = tid
+ ``coerce_to_raw_config``
+     Produce Deepgram configuration overrides that enable raw PCM ingest.
  
-     # Try to schedule frames; if provider unavailable, still return ok with tid (offline-safe)
-     try:
-         request_meta = dict(data) if isinstance(data, dict) else {}
-         nested_meta = request_meta.pop("meta", None)
-         if isinstance(nested_meta, dict):
-             request_meta.update(nested_meta)
-         request_meta.setdefault("source", "user_http")
-         nlu_result = classify_turn(text, meta=request_meta)
-         policy = pick_dialog_policy(nlu_result) or {}
-         enriched_meta = {
-             **request_meta,
-             "nlu": nlu_result,
-             "action": policy.get("action"),
-             "verbosity": policy.get("verbosity"),
-             "show_suggestions": policy.get("show_suggestions"),
-         }
--        frames = make_assistant_frames(text, sid, meta=enriched_meta, correlation_user_msg_id=user_msg_id)
-+        _provider_tid, frames = make_assistant_frames(
-+            text,
-+            sid,
-+            meta=enriched_meta,
-+            correlation_user_msg_id=user_msg_id,
-+            broadcast_immediately=False,
-+        )
-         # ✅ Broadcast them to the WS client
-         schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
-         try:
-             from ..api_v1.admin import _emit
-             _emit('chat:scheduled', label='chat:scheduled', session_id=sid, n=len(frames))
-             _emit('chat:ok', label='chat:ok – frames ready', turn_id=tid, n=len(frames))
-         except Exception:
-             pass
-         return jsonify(ok=True, user_msg_id=user_msg_id, turn_id=tid), 200
-     except Exception as e:
-         try:
-             from ..api_v1.admin import _emit
-             _emit('chat:ok', label='chat:ok – no vendor (offline fallback)', turn_id=tid, n=0)
-         except Exception:
-             pass
-         return jsonify(ok=True, user_msg_id=user_msg_id, turn_id=tid), 200
+ Helper functions provide deterministic frame sizing (padding, silence
+ insertion) so the WS layer can keep its buffering logic tidy.
+ """
  
- @limit("voice_tts")
- @bp.post("/tts-with-visemes")
- def tts_with_visemes():
-     from ..services.tts_provider import get_tts_provider
-     data = request.get_json(silent=True) or {}
-     text = (data.get("text") or "").strip()
-     cfg = db.get_config()
-     if text in _TTS_MEMO:
-@@ -214,34 +220,40 @@ def chat_entry():
-         if to_email:
-             try:
-                 from time import time as _now
-                 emailed = bool(send_transcript(db=db, session_id=sid, ended_at=_now(), to_email=to_email))
-             except Exception:
-                 emailed = False
-         return jsonify({"ok": True, "emailed": emailed})
+ from __future__ import annotations
  
-     # Otherwise, treat as a normal text turn
-     if not text:
-         return jsonify({"ok": False, "error": "empty_text"}), 400
-     request_meta = dict(data) if isinstance(data, dict) else {}
-     nested_meta = request_meta.pop("meta", None)
-     if isinstance(nested_meta, dict):
-         request_meta.update(nested_meta)
-     request_meta.setdefault("source", "user_http")
-     nlu_result = classify_turn(text, meta=request_meta)
-     policy = pick_dialog_policy(nlu_result) or {}
-     enriched_meta = {
-         **request_meta,
-         "nlu": nlu_result,
-         "action": policy.get("action"),
-         "verbosity": policy.get("verbosity"),
-         "show_suggestions": policy.get("show_suggestions"),
-     }
--    frames = make_assistant_frames(text, sid, meta=enriched_meta, correlation_user_msg_id=user_msg_id)
-+    _provider_tid, frames = make_assistant_frames(
-+        text,
-+        sid,
-+        meta=enriched_meta,
-+        correlation_user_msg_id=user_msg_id,
-+        broadcast_immediately=False,
-+    )
-     # ✅ Broadcast them to the WS client (fallback path too)
-     schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
-     turn_id = None
-     for fr in frames:
-         if fr.get("type") in ("assistant_chunk","text") and fr.get("turn_id"):
-             turn_id = fr.get("turn_id")
-             break
-     return jsonify({"ok": True, "turn_id": turn_id})
-diff --git a/app/api_v1/greet.py b/app/api_v1/greet.py
-index c385cb51cf6a7d2327cbf4c371bd3cc3767ca3bd..524898dee6e4afa70444bd5aa8dea093fdbe54ed 100644
---- a/app/api_v1/greet.py
-+++ b/app/api_v1/greet.py
-@@ -30,69 +30,79 @@ def _session_id() -> str:
-         session["sid"] = sid
-     except Exception:
-         pass
-     return sid
+ import os
  
- @bp.get("")
- def greet():
-     sid = _session_id()
+ from dataclasses import dataclass, field
+ from typing import Mapping, Optional
  
-     # Allow client to force a fresh greet for this session (e.g., on Start)
-     force_flag = (request.args.get("reset") or request.args.get("force") or "").strip().lower() in ("1", "true", "yes")
+ PCM_BYTES_PER_SAMPLE = 2
+ DEFAULT_SAMPLE_RATE = 48_000
+ DEFAULT_CHANNELS = 1
+ DEFAULT_FRAME_MS = 20
  
-     # Shared, Neon-backed idempotency (works across workers)
-     tid, idempotent = get_or_create_greet_turn(sid, force=force_flag, ttl_sec=DEFAULT_TTL_SEC)
+ # Frame length ≥ this threshold suggests we're receiving PCM rather than Opus.
+ RAW_PCM_SUSPECT_BYTES = 320  # 20 ms @ 8 kHz mono 16-bit PCM
  
-     have_openai = bool(os.environ.get("OPENAI_API_KEY"))
-     have_eleven = bool(os.environ.get("ELEVENLABS_API_KEY"))
  
-     audio_scheduled = False
-     note = None
++# Temporary kill-switch that keeps the raw fallback disabled by default. The
++# ``CHIBOT_FORCE_ENABLE_RAW_FALLBACK`` environment variable flips the module
++# back to the historical behaviour without requiring a code change.
++RAW_FALLBACK_TEMP_DISABLED = True
++
++_ENV_TRUTHY = {"1", "true", "on", "yes"}
++_ENV_FALSEY = {"0", "false", "off", "no"}
++
++
+ @dataclass(frozen=True)
+ class DetectionSignal:
+     """Lightweight representation of the current transport detection."""
  
-     if have_openai:
-         try:
-             from ..services.streaming import make_assistant_frames, schedule_frames
-             greet_meta, _, _ = prepare_turn_metadata("greet", {"source": "greet"})
--            _tid, frames = make_assistant_frames("greet", sid, meta=greet_meta)
-+            _tid, frames = make_assistant_frames(
-+                "greet",
-+                sid,
-+                meta=greet_meta,
-+                broadcast_immediately=False,
-+            )
-             # Prefer the LLM’s chosen turn if it returns one (keep correlation tidy)
-             if isinstance(_tid, str) and _tid:
-                 tid = _tid
-             schedule_frames(sid, frames)
-             if have_eleven:
-                 audio_scheduled = True
-         except Exception as e:
-             note = f"llm_error:{e.__class__.__name__}"
-             import traceback as _tb
-             try:
-                 trace = _tb.format_exc()
-             except Exception:
-                 trace = ""
-             try:
-                 fallback_text = "Hi, I’m Chip. How can I help today?"
-                 from ..services.streaming import make_assistant_frames, schedule_frames
-                 fallback_meta, _, _ = prepare_turn_metadata(fallback_text, {"source":"greet_fallback"})
--                _tid2, frames2 = make_assistant_frames(fallback_text, sid, meta=fallback_meta)
-+                _tid2, frames2 = make_assistant_frames(
-+                    fallback_text,
-+                    sid,
-+                    meta=fallback_meta,
-+                    broadcast_immediately=False,
-+                )
-                 if isinstance(_tid2, str) and _tid2:
-                     tid = _tid2
-                 schedule_frames(sid, frames2)
-                 if have_eleven:
-                     audio_scheduled = True
-             except Exception:
-                 pass
-     else:
-         note = "missing_openai_key"
+     container: Optional[str] = None
+     codec: Optional[str] = None
+     containerized: bool = False
+     source: str = "unknown"
  
-     payload = {"ok": True, "turn_id": tid, "idempotent": bool(idempotent)}
-     if not audio_scheduled:
-         payload["audio_scheduled"] = False
-         if note:
-             payload["note"] = note
  
-     try:
-         payload["diag"] = {
-             "have_openai": bool(have_openai),
-             "have_eleven": bool(have_eleven),
-             "pid": os.getpid(),
-         }
-         try:
-             if 'trace' in locals() and note:
-                 payload["diag"]["trace"] = trace
-diff --git a/app/policy/nudges.py b/app/policy/nudges.py
-index 48c91009df1e19066f048c8399a0b3220bb6355a..7873c94672134b4f01fb891a9152ad06ce0b071e 100644
---- a/app/policy/nudges.py
-+++ b/app/policy/nudges.py
-@@ -14,51 +14,56 @@ def _nudge_delay_ms():
-     cfg = db.get_config()
-     return int(cfg.get("nudge_delay_ms", 4200))
+ @dataclass
+ class StreamMeta:
+     """Mutable hints about the stream supplied by clients or heuristics."""
  
- def _enabled():
-     cfg = db.get_config()
-     return bool(cfg.get("nudges_enabled", True))
+     sample_rate: Optional[int] = None
+     channels: Optional[int] = None
+     encoding: str = "opus"
+     frame_ms: int = DEFAULT_FRAME_MS
+     bits_per_sample: int = 16
  
- def _backoff_max():
-     cfg = db.get_config()
-     return int(cfg.get("nudge_backoff_after_ignored", 2))
+     def apply_config(self, cfg: Mapping[str, object]) -> None:
+         """Apply a client Configure payload (best-effort)."""
  
- def arm_nudge(session_id: str):
-     if not _enabled():
-         return False
-     # Check per-session backoff
-     s = db.memory['sessions'].setdefault(session_id, {'email': 'user@example.com','messages': [], 'nudges': 0, 'persona_id':'chip'})
-     if s.get('nudges', 0) >= _backoff_max():
-         return False
- 
-     def fire():
-         # If canceled/replaced, exit early
-         if session_id not in _scheduled:
+         if not cfg:
              return
-         # Build and send a short nudge response
-         meta, _, _ = prepare_turn_metadata(_nudge_text(), {"source": "nudge"})
--        tid, frames = make_assistant_frames(_nudge_text(), session_id, meta=meta)
-+        tid, frames = make_assistant_frames(
-+            _nudge_text(),
-+            session_id,
-+            meta=meta,
-+            broadcast_immediately=False,
-+        )
-         for fr in frames:
-             if fr.get("type") == "end":
-                 fr["reason"] = "nudge"
-             bus.broadcast(session_id, fr)
-         # Count this nudge
-         s = db.memory['sessions'].setdefault(session_id, {'email': 'user@example.com','messages': [], 'nudges': 0, 'persona_id':'chip'})
-         s['nudges'] = s.get('nudges', 0) + 1
-         # Done; remove from scheduled
-         _scheduled.pop(session_id, None)
+@@ -251,57 +260,76 @@ def normalize_pcm_frame(frame: bytes, meta: StreamMeta) -> bytes:
+     return frame[:expected]
  
-     delay = max(0, _nudge_delay_ms()) / 1000.0
-     t = threading.Timer(delay, fire)
-     # Overwrite any existing
-     cancel_nudge(session_id)
-     _scheduled[session_id] = t
-     t.daemon = True
-     t.start()
-     return True
  
- def cancel_nudge(session_id: str):
-     t = _scheduled.pop(session_id, None)
-     if t:
-         try:
-             t.cancel()
-         except Exception:
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 6391c5d95c1d0b4ee59457640318fb47beff7380..aaea1195148bedbef66f88238abc3cdf0c46bd02 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -659,57 +659,58 @@ def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
- def _should_skip_legacy(meta: Optional[Dict[str, Any]]) -> bool:
-     if not meta:
+ def pad_frame_to_expected(frame: bytes, meta: StreamMeta) -> bytes:
+     """Public wrapper used by tests – identical to ``normalize_pcm_frame``."""
+ 
+     return normalize_pcm_frame(frame, meta)
+ 
+ 
+ def silence_frame(meta: StreamMeta) -> bytes:
+     expected = expected_pcm_frame_bytes(meta)
+     if expected <= 0:
+         return b""
+     return b"\x00" * expected
+ 
+ 
+ def is_probable_silence(frame: bytes) -> bool:
+     if not frame:
+         return True
+     if len(frame) <= 2:
          return False
-     if bool(meta.get("skip_legacy_fallback")):
+     first = frame[:1]
+     return frame.count(first) == len(frame) and first in (b"\x00", b"\xff")
+ 
+ 
+-def raw_fallback_disabled() -> bool:
+-    """Return ``True`` when the runtime kill-switch disables raw fallback."""
++def _disable_flag_from_env() -> bool:
++    """Replicate the legacy opt-out behaviour controlled by the env var."""
+ 
+     flag = os.getenv("CHIBOT_DISABLE_RAW_FALLBACK")
+     if not flag:
+         return False
+-    return flag.strip().lower() not in {"0", "false", "off"}
++    return flag.strip().lower() not in _ENV_FALSEY
++
++
++def _force_enable_requested() -> bool:
++    flag = os.getenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK")
++    if not flag:
++        return False
++    return flag.strip().lower() in _ENV_TRUTHY
++
++
++def raw_fallback_disabled() -> bool:
++    """Return ``True`` when the runtime kill-switch disables raw fallback."""
++
++    if _force_enable_requested():
++        return _disable_flag_from_env()
++
++    if not RAW_FALLBACK_TEMP_DISABLED:
++        return _disable_flag_from_env()
++
++    return True
+ 
+ 
+ def should_buffer_for_jitter(stats: StreamStats) -> bool:
+     return stats.jitter_slip_frames >= stats.guardrails.jitter_slip_limit
+ 
+ 
+ def should_use_raw_fallback(
+     detection: Optional[DetectionSignal],
+     stats: Optional[StreamStats],
+ ) -> bool:
+     if raw_fallback_disabled():
+         if stats is not None and stats.forced_fallback:
+             stats.forced_fallback = False
+         return False
+     if stats is None:
+         return False
+     if stats.forced_fallback:
          return True
-     source = str(meta.get("source", "") or "").strip().lower()
-     if source in _WS_SOURCES:
-         return True
-     return False
+ 
+     detect = detection or stats.detection
+ 
+     if detect and not detect.containerized and not stats.suspected_raw:
+         return False
+ 
+     guard = stats.guardrails
+diff --git a/env_vars.md b/env_vars.md
+index 31bc4e35a42de674bf8c2ff368cb8380fc715670..f6d8a36e831da8597814405fdddebd7b57a84da8 100644
+--- a/env_vars.md
++++ b/env_vars.md
+@@ -1,6 +1,9 @@
+ # Environment Variables (Phase 8)
+ SECRET_KEY=change-me
+ ADMIN_EMAILS=james@example.com
+ DATABASE_URL=postgresql://...  (unused in tests; DAL is in-memory mock)
+ WS_PING_INTERVAL_MS=25000
+-CHIBOT_DISABLE_RAW_FALLBACK=0  # Truthy to disable the Deepgram raw PCM fallback heuristics.
++# Raw fallback is temporarily disabled by default; set the FORCE flag below to
++# opt back in while the kill-switch remains in place.
++CHIBOT_DISABLE_RAW_FALLBACK=0  # Legacy kill switch; truthy to disable the Deepgram raw PCM fallback heuristics.
++CHIBOT_FORCE_ENABLE_RAW_FALLBACK=0  # Set to 1/true to re-enable raw fallback heuristics (default is temporarily off).
+diff --git a/tests_phase3_5/test_containerized_opus_url.py b/tests_phase3_5/test_containerized_opus_url.py
+index 1cbff683beb8a5e08f6848db417efabbc0639741..14f01301435d599d97c289c259d096d1aaadefa9 100644
+--- a/tests_phase3_5/test_containerized_opus_url.py
++++ b/tests_phase3_5/test_containerized_opus_url.py
+@@ -1,98 +1,119 @@
+-import os
+ from app.services.streaming_asr.deepgram_client import DG_TEST_MODE
+ from app.services.streaming_asr.deepgram_client import _dg_url  # if exported
+ from app.services.audio.raw_fallback import (
+     DetectionSignal,
+     StreamMeta,
+     StreamStats,
+     coerce_to_raw_config,
+     pad_frame_to_expected,
+     should_use_raw_fallback,
+     silence_frame,
+ )
+ import pytest
+ 
+ def test_containerized_omits_sr_channels(monkeypatch):
+     monkeypatch.setenv("DG_TEST_MODE", "1")
+     # Build overrides with containerized flag in _transport
+     overrides = {"_transport": {"containerized_opus": True}}
+     url = _dg_url(overrides)
+     assert "sample_rate=" not in url
+     assert "channels=" not in url
+     assert "encoding=" not in url
+     assert "endpointing=" not in url
+     assert "utterance_end_ms=2000" in url
+ 
+ def test_non_containerized_includes_sr_channels(monkeypatch):
+     monkeypatch.setenv("DG_TEST_MODE", "1")
+     overrides = {"_transport": {"containerized_opus": False}}
+     url = _dg_url(overrides)
+     assert "sample_rate=48000" in url
+     assert "channels=1" in url
+     assert "endpointing=" not in url
+     assert "utterance_end_ms=2000" in url
  
  
- def _allocate_turn_id(force_turn_id: Optional[str]) -> str:
-     if force_turn_id is not None:
-         db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
-         return str(force_turn_id)
-     turn_seq = db.memory.setdefault('turn_seq', 0) + 1
-     db.memory['turn_seq'] = turn_seq
-     return str(turn_seq)
+ def test_raw_fallback_url_includes_params(monkeypatch):
+     monkeypatch.setenv("DG_TEST_MODE", "1")
+     meta = StreamMeta(sample_rate=16000, channels=1)
+     overrides = coerce_to_raw_config(meta)
+     url = _dg_url(overrides)
+     assert "encoding=linear16" in url
+     assert "sample_rate=16000" in url
+     assert "channels=1" in url
+     transport = overrides.get("_transport", {})
+     assert transport.get("raw_fallback") is True
+     assert transport.get("normalized_pcm") is True
  
  
- def make_assistant_frames(seed_text: str,
-                           session_id: str,
-                           meta: Optional[Dict] = None,
-                           correlation_user_msg_id: Optional[str] = None,
-                           *,
--                          force_turn_id: Optional[str] = None) -> Tuple[Optional[str], List[Dict]]:
-+                          force_turn_id: Optional[str] = None,
-+                          broadcast_immediately: bool = True) -> Tuple[Optional[str], List[Dict]]:
-     """
-     Produce assistant frames for a given user seed text using the configured LLM provider.
-     ALWAYS returns a frames list that includes at least:
-         - one 'assistant_chunk' (with either model text OR a safe fallback), and
-         - one 'assistant_end'.
--    Also broadcasts frames to the WS bus as they are prepared.
-+    When broadcast_immediately is True (default) frames are broadcast to the WS bus.
-     """
-     cfg = db.get_config()
-     meta, classified_labels, classified_policy = prepare_turn_metadata(seed_text, meta, cfg=cfg)
-     skip_legacy = _should_skip_legacy(meta)
+-def test_raw_fallback_guardrail_leniency():
++def test_raw_fallback_guardrail_leniency(monkeypatch):
++    monkeypatch.setenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", "1")
+     stats = StreamStats()
+     stats.guardrails.raw_candidate_confirmations = 1
+     stats.guardrails.lenient_prefix_frames = 1
+     stats.guardrails.max_consecutive_decode_errors = 2
+     stats.guardrails.min_errors_for_suspect = 2
+     detection = DetectionSignal(container="webm", codec="opus", containerized=True)
+     stats.note_detection(detection)
  
-     action = _normalize_action(meta)
-     if isinstance(meta, dict):
-         meta['action'] = action
-         meta[_DIALOG_ACTION_KEY] = action
+     frame = b"\x00" * 640
+     stats.observe_frame(frame)
+     assert not should_use_raw_fallback(detection, stats)
  
-     try:
-         source = str(meta.get("source", "") or "").strip().lower()
-     except Exception:
-         source = ""
-     try:
-         is_greet = str(seed_text or "").strip().lower() == "greet"
-     except Exception:
-         is_greet = False
-     if not is_greet and source:
-         is_greet = source in {"greet", "ws_greet", "greet_fallback"}
+     stats.observe_frame(frame)
+     assert should_use_raw_fallback(detection, stats)
  
-     fallback_line = str(cfg.get("assistant_fallback_line") or "Hi! I’m ready to help.")
++    monkeypatch.delenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", raising=False)
++
++
++def test_raw_fallback_disabled_by_default(monkeypatch):
++    monkeypatch.delenv("CHIBOT_DISABLE_RAW_FALLBACK", raising=False)
++    monkeypatch.delenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", raising=False)
  
-     def _cfg_flag(key: str, default: bool) -> bool:
-         val = meta.get(key)
-@@ -719,91 +720,94 @@ def make_assistant_frames(seed_text: str,
-             if isinstance(val, str):
-                 return val.strip().lower() in ("1", "true", "yes", "on")
-             return bool(val)
-         except Exception:
-             return default
+-def test_raw_fallback_disabled_env(monkeypatch):
+-    monkeypatch.setenv("CHIBOT_DISABLE_RAW_FALLBACK", "1")
+     stats = StreamStats()
+     stats.guardrails.raw_candidate_confirmations = 1
+     detection = DetectionSignal(container="webm", codec="opus", containerized=True)
+     stats.note_detection(detection)
  
-     fallback_on_empty = _cfg_flag("assistant_fallback_on_empty", True)
-     fallback_on_error = _cfg_flag("assistant_fallback_on_error", True)
-     fallback_emit_event = _cfg_flag("assistant_fallback_emit_event", True)
+     frame = b"\x00" * 640
+     stats.observe_frame(frame)
  
-     if _should_use_foundation(seed_text):
-         try:
-             return _make_foundation_frames(
-                 seed_text,
-                 session_id,
-                 meta,
-                 cfg,
-                 correlation_user_msg_id=correlation_user_msg_id,
-                 force_turn_id=force_turn_id,
-                 is_greet=is_greet,
-                 fallback_line=fallback_line,
-                 fallback_on_empty=fallback_on_empty,
-                 fallback_on_error=fallback_on_error,
-                 fallback_emit_event=fallback_emit_event,
-                 action=action,
-+                broadcast_immediately=broadcast_immediately,
-             )
-         except Exception as e:
-             try:
-                 _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
-             except Exception:
-                 pass
+     assert not should_use_raw_fallback(detection, stats)
  
-     if skip_legacy:
-         return None, []
++
++def test_raw_fallback_force_enable_respects_disable_flag(monkeypatch):
+     monkeypatch.delenv("CHIBOT_DISABLE_RAW_FALLBACK", raising=False)
++    monkeypatch.setenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", "1")
++
++    stats = StreamStats()
++    stats.guardrails.raw_candidate_confirmations = 1
++    detection = DetectionSignal(container="webm", codec="opus", containerized=True)
++    stats.note_detection(detection)
++
++    frame = b"\x00" * 640
++    stats.observe_frame(frame)
++
+     assert should_use_raw_fallback(detection, stats)
  
-     return _make_legacy_frames(
-         seed_text,
-         session_id,
-         meta,
-         cfg,
-         correlation_user_msg_id=correlation_user_msg_id,
-         force_turn_id=force_turn_id,
-         is_greet=is_greet,
-         fallback_line=fallback_line,
-         fallback_on_empty=fallback_on_empty,
-         fallback_on_error=fallback_on_error,
-         fallback_emit_event=fallback_emit_event,
-         action=action,
-         labels=classified_labels,
-         policy=classified_policy,
-+        broadcast_immediately=broadcast_immediately,
-     )
++    monkeypatch.setenv("CHIBOT_DISABLE_RAW_FALLBACK", "1")
++    assert not should_use_raw_fallback(detection, stats)
++
++    monkeypatch.delenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", raising=False)
++
  
+ def test_frame_normalization_and_silence():
+     meta = StreamMeta(sample_rate=16000, channels=1)
+     expected = 640
+     padded = pad_frame_to_expected(b"\x01\x02", meta)
+     assert len(padded) == expected
+     assert padded[:2] == b"\x01\x02"
+     assert padded[2:] == b"\x00" * (expected - 2)
  
- def _make_foundation_frames(seed_text: str,
-                             session_id: str,
-                             meta: Dict[str, Any],
-                             cfg: Dict[str, Any],
-                             *,
-                             correlation_user_msg_id: Optional[str],
-                             force_turn_id: Optional[str],
-                             is_greet: bool,
-                             fallback_line: str,
-                             fallback_on_empty: bool,
-                             fallback_on_error: bool,
-                             fallback_emit_event: bool,
--                            action: Optional[str] = None) -> Tuple[str, List[Dict]]:
-+                            action: Optional[str] = None,
-+                            broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
-     store = PersonaStore()
-     persona = PersonaManager(store).get_active()
-     dialog_meta = dict(meta or {})
+     silence = silence_frame(meta)
+     assert len(silence) == expected
+     assert set(silence) == {0}
  
-     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
-     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store) or {}
- 
-     try:
-         nlu_meta = dict(nlu_result)
-     except Exception:
-         nlu_meta = {}
-     else:
-         meta["nlu"] = nlu_meta
-         meta[_DIALOG_NLU_KEY] = dict(nlu_meta)
- 
-     provided_action: Optional[str] = None
-     if action is not None:
-         try:
-             provided_action = str(action or "").strip().lower()
-         except Exception:
-             provided_action = None
-     normalized_action = provided_action or _normalize_action(meta)
-     policy_move = _policy_action(policy)
-     if not provided_action and policy_move and not normalized_action:
-         normalized_action = str(policy_move or "").strip().lower() or normalized_action
-@@ -965,69 +969,71 @@ def _make_foundation_frames(seed_text: str,
-         _jlog(
-             "chips_emit",
-             sid=session_id,
-             intent=nlu_result.get('intent'),
-             count=len(merged_suggestions),
-             items=merged_suggestions,
-         )
-     except Exception:
-         pass
-     allow_suggestions = bool(meta.get('show_suggestions')) if isinstance(meta, dict) else False
-     should_emit_suggestions = bool(merged_suggestions) and (is_greet or allow_suggestions)
-     if should_emit_suggestions:
-         frames.append(
-             {
-                 'type': 'suggestions',
-                 'turn_id': turn_id,
-                 'items': build_suggestion_items(merged_suggestions),
-             }
-         )
- 
-     end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
-     if correlation_user_msg_id:
-         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
-     frames.append(end_fr)
- 
--    _broadcast_frames(session_id, frames, turn_id)
-+    if broadcast_immediately:
-+        _broadcast_frames(session_id, frames, turn_id)
-     return turn_id, frames
- 
- 
- def _make_legacy_frames(seed_text: str,
-                         session_id: str,
-                         meta: Dict[str, Any],
-                         cfg: Dict[str, Any],
-                         *,
-                         correlation_user_msg_id: Optional[str],
-                         force_turn_id: Optional[str],
-                         is_greet: bool,
-                         fallback_line: str,
-                         fallback_on_empty: bool,
-                         fallback_on_error: bool,
-                         fallback_emit_event: bool,
-                         action: Optional[str] = None,
-                         labels: Optional[Dict[str, Any]] = None,
--                        policy: Optional[Dict[str, Any]] = None) -> Tuple[str, List[Dict]]:
-+                        policy: Optional[Dict[str, Any]] = None,
-+                        broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
-     persona = _get_persona_for_session(session_id)
- 
-     if labels is None:
-         labels = classify(seed_text, meta)
-     else:
-         labels = dict(labels)
-     if policy is None:
-         policy = pick_dialog_policy(labels) or {}
-     else:
-         policy = dict(policy or {})
- 
-     try:
-         if isinstance(meta, dict):
-             meta_nlu = meta.setdefault('nlu', {})
-             meta_nlu.update(labels)
-             dialog_nlu = meta.setdefault(_DIALOG_NLU_KEY, {})
-             try:
-                 dialog_nlu.update(labels)
-             except Exception:
-                 meta[_DIALOG_NLU_KEY] = dict(labels)
-     except Exception:
-         pass
-     policy_action = _policy_action(policy)
-     teacher_move = policy_action
- 
-@@ -1196,51 +1202,52 @@ def _make_legacy_frames(seed_text: str,
-         _jlog(
-             "chips_emit",
-             sid=session_id,
-             intent=intent,
-             count=len(merged_suggestions),
-             items=merged_suggestions,
-         )
-     except Exception:
-         pass
-     allow_suggestions = bool(meta.get('show_suggestions')) if isinstance(meta, dict) else False
-     should_emit_suggestions = bool(merged_suggestions) and (is_greet or allow_suggestions)
-     if should_emit_suggestions:
-         frames.append(
-             {
-                 'type': 'suggestions',
-                 'turn_id': turn_id,
-                 'items': build_suggestion_items(merged_suggestions),
-             }
-         )
- 
-     end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
-     if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
-         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
-     frames.append(end_fr)
- 
--    _broadcast_frames(session_id, frames, turn_id)
-+    if broadcast_immediately:
-+        _broadcast_frames(session_id, frames, turn_id)
-     return turn_id, frames
- 
- 
- # --- MIME mapping helper ------------------------------------------------------
- 
- def _guess_tts_mime(output_format: str | None) -> str:
-     """
-     Map configured TTS output format to an appropriate MIME/container for MSE playback.
-     We keep this conservative to avoid mismatches with provider bytes.
-     """
-     fmt = (output_format or os.environ.get('ELEVEN_OUTPUT_FORMAT') or '').lower()
-     # Prefer actual, common provider defaults. If unknown, assume MP3 to avoid mismatches.
-     if 'webm' in fmt and 'opus' in fmt:
-         return 'audio/webm; codecs="opus"'
-     if 'ogg' in fmt and 'opus' in fmt:
-         return 'audio/ogg; codecs="opus"'
-     if 'mp3' in fmt:
-         return 'audio/mpeg'
-     if 'wav' in fmt or 'pcm' in fmt or 'l16' in fmt:
-         return 'audio/wav'
-     # Fallback to MP3 (widely supported; safer than claiming WebM if provider returned MP3)
-     return 'audio/mpeg'
- 
- 
- # --- WS TTS scheduling (audio over WS) ---------------------------------------
-diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
-index 0de6b44b61ce9f5bdf7fdd67014f21f193c73aed..7317267b7366cb028a9327ea7b2304607d01ea14 100644
---- a/tests/test_streaming_ws_fallbacks.py
-+++ b/tests/test_streaming_ws_fallbacks.py
-@@ -1,30 +1,46 @@
-+import importlib
- import types
- 
- from app.services import streaming
- 
- 
-+def _test_client():
-+    mod = importlib.import_module("app")
-+    if hasattr(mod, "create_app"):
-+        flask_app = mod.create_app()
-+    else:
-+        flask_app = mod.app
-+    flask_app.config["TESTING"] = True
-+    return flask_app.test_client()
-+
-+
-+def _csrf_token(client):
-+    resp = client.get("/api/v1/csrf")
-+    return resp.headers.get("X-CSRF-Token")
-+
-+
- def _stub_config(monkeypatch):
-     monkeypatch.setattr(streaming.db, "get_config", lambda: {})
- 
- 
- def test_short_greeting_preserves_sentence():
-     text = "What should we clarify so I can help?"
-     assert streaming._short_greeting(text) == text
- 
- 
- def test_make_assistant_frames_ws_skips_legacy(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     legacy_called = False
- 
-     def fake_legacy(*args, **kwargs):  # pragma: no cover - should never be invoked
-         nonlocal legacy_called
-         legacy_called = True
-         return "legacy", [{"type": "assistant_end", "turn_id": "legacy"}]
- 
-     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
-     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
- 
-     tid, frames = streaming.make_assistant_frames(
-         "hello",
-         "session-ws",
-@@ -393,25 +409,204 @@ def test_legacy_frames_emit_suggestions_only_when_allowed(monkeypatch):
-         policy=allow_policy,
-     )
- 
-     assert any(fr.get("type") == "suggestions" for fr in allow_frames)
- 
-     offer_meta = {"nlu": {}, "action": "offer_steps"}
-     offer_policy = {"teacher_move": "offer_steps", "show_suggestions": True}
- 
-     _, offer_frames = streaming._make_legacy_frames(
-         "Hello",
-         "sess-offer",
-         offer_meta,
-         cfg,
-         correlation_user_msg_id=None,
-         force_turn_id=None,
-         is_greet=False,
-         fallback_line="Fallback",
-         fallback_on_empty=True,
-         fallback_on_error=True,
-         fallback_emit_event=False,
-         labels={},
-         policy=offer_policy,
-     )
- 
-     assert any(fr.get("type") == "suggestions" for fr in offer_frames)
-+
-+
-+def test_make_assistant_frames_allows_opt_out(monkeypatch):
-+    _stub_config(monkeypatch)
-+
-+    monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
-+
-+    captured = {}
-+
-+    def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
-+        captured["broadcast_immediately"] = kwargs.get("broadcast_immediately")
-+        frames = [
-+            {"type": "assistant_chunk", "turn_id": "abc", "text": "hi", "kb_hits": 0},
-+            {"type": "assistant_end", "turn_id": "abc"},
-+        ]
-+        return "abc", frames
-+
-+    monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
-+
-+    tid, frames = streaming.make_assistant_frames(
-+        "hello",
-+        "sess-opt",
-+        meta={"source": "user_http"},
-+        broadcast_immediately=False,
-+    )
-+
-+    assert tid == "abc"
-+    assert captured.get("broadcast_immediately") is False
-+    assert sum(1 for fr in frames if fr.get("type") == "assistant_chunk") == 1
-+
-+
-+def test_post_chat_emits_single_chunk(monkeypatch):
-+    _stub_config(monkeypatch)
-+
-+    import app.api_v1.chat as chat_api
-+
-+    monkeypatch.setattr(chat_api, "check_now", lambda *a, **k: None)
-+    monkeypatch.setattr(chat_api, "classify_turn", lambda *a, **k: {"intent": "ask", "verbosity": "normal", "show_suggestions": False})
-+    monkeypatch.setattr(chat_api, "pick_dialog_policy", lambda *a, **k: {"action": "answer", "verbosity": "normal", "show_suggestions": False})
-+
-+    calls = {}
-+
-+    def fake_make_frames(text, sid, **kwargs):
-+        calls["broadcast_immediately"] = kwargs.get("broadcast_immediately")
-+        return "tid-chat", [
-+            {"type": "assistant_chunk", "turn_id": "tid-chat", "text": "ok", "kb_hits": 0},
-+            {"type": "assistant_end", "turn_id": "tid-chat"},
-+        ]
-+
-+    emitted = []
-+
-+    def fake_schedule_frames(session_id, frames, **kwargs):
-+        emitted.extend(frames)
-+
-+    monkeypatch.setattr(chat_api, "make_assistant_frames", fake_make_frames)
-+    monkeypatch.setattr(chat_api, "schedule_frames", fake_schedule_frames)
-+
-+    client = _test_client()
-+    token = _csrf_token(client)
-+
-+    resp = client.post(
-+        "/api/v1/chat",
-+        json={"text": "Hello", "session_id": "sess-post"},
-+        headers={"Idempotency-Key": "abc", "X-CSRF-Token": token},
-+    )
-+
-+    assert resp.status_code == 200
-+    assert calls.get("broadcast_immediately") is False
-+    assert sum(1 for fr in emitted if fr.get("type") == "assistant_chunk") == 1
-+
-+
-+def test_chat_entry_emits_single_chunk(monkeypatch):
-+    _stub_config(monkeypatch)
-+
-+    import app.api_v1.chat as chat_api
-+
-+    monkeypatch.setattr(chat_api, "check_now", lambda *a, **k: None)
-+    monkeypatch.setattr(chat_api, "classify_turn", lambda *a, **k: {"intent": "ask", "verbosity": "normal", "show_suggestions": False})
-+    monkeypatch.setattr(chat_api, "pick_dialog_policy", lambda *a, **k: {"action": "answer", "verbosity": "normal", "show_suggestions": False})
-+
-+    calls = {}
-+
-+    def fake_make_frames(text, sid, **kwargs):
-+        calls.setdefault("broadcast_immediately", []).append(kwargs.get("broadcast_immediately"))
-+        return "tid-chat-entry", [
-+            {"type": "assistant_chunk", "turn_id": "tid-chat-entry", "text": "ok", "kb_hits": 0},
-+            {"type": "assistant_end", "turn_id": "tid-chat-entry"},
-+        ]
-+
-+    emitted = []
-+
-+    def fake_schedule_frames(session_id, frames, **kwargs):
-+        emitted.extend(frames)
-+
-+    monkeypatch.setattr(chat_api, "make_assistant_frames", fake_make_frames)
-+    monkeypatch.setattr(chat_api, "schedule_frames", fake_schedule_frames)
-+
-+    client = _test_client()
-+    token = _csrf_token(client)
-+
-+    resp = client.post(
-+        "/api/v1/chat/",
-+        json={"text": "Hello", "session_id": "sess-entry"},
-+        headers={"Idempotency-Key": "entry", "X-CSRF-Token": token},
-+    )
-+
-+    assert resp.status_code == 200
-+    assert calls.get("broadcast_immediately") == [False]
-+    assert sum(1 for fr in emitted if fr.get("type") == "assistant_chunk") == 1
-+
-+
-+def test_greet_emits_single_chunk(monkeypatch):
-+    _stub_config(monkeypatch)
-+
-+    monkeypatch.setenv("OPENAI_API_KEY", "test")
-+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
-+
-+    emitted = []
-+    flags = []
-+
-+    def fake_prepare(seed_text, meta, cfg=None):
-+        return {"source": meta.get("source")}, {}, {}
-+
-+    def fake_make_frames(seed_text, sid, **kwargs):
-+        flags.append(kwargs.get("broadcast_immediately"))
-+        return "tid-greet", [
-+            {"type": "assistant_chunk", "turn_id": "tid-greet", "text": "hello", "kb_hits": 0},
-+            {"type": "assistant_end", "turn_id": "tid-greet"},
-+        ]
-+
-+    def fake_schedule(session_id, frames, **kwargs):
-+        emitted.extend(frames)
-+
-+    monkeypatch.setattr(streaming, "prepare_turn_metadata", fake_prepare)
-+    monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
-+    monkeypatch.setattr(streaming, "schedule_frames", fake_schedule)
-+
-+    client = _test_client()
-+
-+    resp = client.get("/api/v1/greet?session_id=sess-greet")
-+
-+    assert resp.status_code == 200
-+    assert flags == [False]
-+    assert sum(1 for fr in emitted if fr.get("type") == "assistant_chunk") == 1
-+
-+
-+def test_nudge_emits_single_chunk(monkeypatch):
-+    _stub_config(monkeypatch)
-+
-+    import app.policy.nudges as nudges
-+
-+    emitted = []
-+    flags = []
-+
-+    def fake_make_frames(text, sid, **kwargs):
-+        flags.append(kwargs.get("broadcast_immediately"))
-+        return "tid-nudge", [
-+            {"type": "assistant_chunk", "turn_id": "tid-nudge", "text": "ping", "kb_hits": 0},
-+            {"type": "assistant_end", "turn_id": "tid-nudge"},
-+        ]
-+
-+    class InstantTimer:
-+        def __init__(self, delay, func):
-+            self.func = func
-+
-+        def start(self):
-+            self.func()
-+
-+        def cancel(self):
-+            pass
-+
-+    monkeypatch.setattr(nudges, "make_assistant_frames", fake_make_frames)
-+    monkeypatch.setattr(nudges.bus, "broadcast", lambda sid, frame: emitted.append(frame))
-+    monkeypatch.setattr(nudges.threading, "Timer", InstantTimer)
-+
-+    nudges.arm_nudge("sess-nudge")
-+
-+    assert flags == [False]
-+    assert sum(1 for fr in emitted if fr.get("type") == "assistant_chunk") == 1
+     stats = StreamStats(meta=meta)
+     stats.force_fallback()
+     normalized = stats.observe_frame(b"\x01\x02")
+     assert len(normalized) == expected
+     assert stats.normalized_frames == 1

@@ -1,4 +1,3 @@
-import os
 from app.services.streaming_asr.deepgram_client import DG_TEST_MODE
 from app.services.streaming_asr.deepgram_client import _dg_url  # if exported
 from app.services.audio.raw_fallback import (
@@ -46,7 +45,8 @@ def test_raw_fallback_url_includes_params(monkeypatch):
     assert transport.get("normalized_pcm") is True
 
 
-def test_raw_fallback_guardrail_leniency():
+def test_raw_fallback_guardrail_leniency(monkeypatch):
+    monkeypatch.setenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", "1")
     stats = StreamStats()
     stats.guardrails.raw_candidate_confirmations = 1
     stats.guardrails.lenient_prefix_frames = 1
@@ -62,9 +62,13 @@ def test_raw_fallback_guardrail_leniency():
     stats.observe_frame(frame)
     assert should_use_raw_fallback(detection, stats)
 
+    monkeypatch.delenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", raising=False)
 
-def test_raw_fallback_disabled_env(monkeypatch):
-    monkeypatch.setenv("CHIBOT_DISABLE_RAW_FALLBACK", "1")
+
+def test_raw_fallback_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("CHIBOT_DISABLE_RAW_FALLBACK", raising=False)
+    monkeypatch.delenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", raising=False)
+
     stats = StreamStats()
     stats.guardrails.raw_candidate_confirmations = 1
     detection = DetectionSignal(container="webm", codec="opus", containerized=True)
@@ -75,8 +79,25 @@ def test_raw_fallback_disabled_env(monkeypatch):
 
     assert not should_use_raw_fallback(detection, stats)
 
+
+def test_raw_fallback_force_enable_respects_disable_flag(monkeypatch):
     monkeypatch.delenv("CHIBOT_DISABLE_RAW_FALLBACK", raising=False)
+    monkeypatch.setenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", "1")
+
+    stats = StreamStats()
+    stats.guardrails.raw_candidate_confirmations = 1
+    detection = DetectionSignal(container="webm", codec="opus", containerized=True)
+    stats.note_detection(detection)
+
+    frame = b"\x00" * 640
+    stats.observe_frame(frame)
+
     assert should_use_raw_fallback(detection, stats)
+
+    monkeypatch.setenv("CHIBOT_DISABLE_RAW_FALLBACK", "1")
+    assert not should_use_raw_fallback(detection, stats)
+
+    monkeypatch.delenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", raising=False)
 
 
 def test_frame_normalization_and_silence():

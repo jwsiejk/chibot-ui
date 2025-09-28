@@ -42,6 +42,15 @@ DEFAULT_FRAME_MS = 20
 RAW_PCM_SUSPECT_BYTES = 320  # 20 ms @ 8 kHz mono 16-bit PCM
 
 
+# Temporary kill-switch that keeps the raw fallback disabled by default. The
+# ``CHIBOT_FORCE_ENABLE_RAW_FALLBACK`` environment variable flips the module
+# back to the historical behaviour without requiring a code change.
+RAW_FALLBACK_TEMP_DISABLED = True
+
+_ENV_TRUTHY = {"1", "true", "on", "yes"}
+_ENV_FALSEY = {"0", "false", "off", "no"}
+
+
 @dataclass(frozen=True)
 class DetectionSignal:
     """Lightweight representation of the current transport detection."""
@@ -273,13 +282,32 @@ def is_probable_silence(frame: bytes) -> bool:
     return frame.count(first) == len(frame) and first in (b"\x00", b"\xff")
 
 
-def raw_fallback_disabled() -> bool:
-    """Return ``True`` when the runtime kill-switch disables raw fallback."""
+def _disable_flag_from_env() -> bool:
+    """Replicate the legacy opt-out behaviour controlled by the env var."""
 
     flag = os.getenv("CHIBOT_DISABLE_RAW_FALLBACK")
     if not flag:
         return False
-    return flag.strip().lower() not in {"0", "false", "off"}
+    return flag.strip().lower() not in _ENV_FALSEY
+
+
+def _force_enable_requested() -> bool:
+    flag = os.getenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK")
+    if not flag:
+        return False
+    return flag.strip().lower() in _ENV_TRUTHY
+
+
+def raw_fallback_disabled() -> bool:
+    """Return ``True`` when the runtime kill-switch disables raw fallback."""
+
+    if _force_enable_requested():
+        return _disable_flag_from_env()
+
+    if not RAW_FALLBACK_TEMP_DISABLED:
+        return _disable_flag_from_env()
+
+    return True
 
 
 def should_buffer_for_jitter(stats: StreamStats) -> bool:
