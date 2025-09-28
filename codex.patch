@@ -1,92 +1,247 @@
+diff --git a/app/nlu/policy.py b/app/nlu/policy.py
+index bf93ae197a9f0571e5a3632dbe899cc679739fab..dc69eb08aa751d9eda74b9e39f4af5edd860f64c 100644
+--- a/app/nlu/policy.py
++++ b/app/nlu/policy.py
+@@ -1,21 +1,29 @@
+ from typing import Dict
+ 
+ DEFAULT_MOVE = "summarize_next_actions"
++SUGGESTION_MOVES = {"ask_clarify", "offer_steps"}
+ 
+ def decide(nlu: Dict, tags: Dict, persona_id: str, store) -> Dict:
+     cfg = store.fetch_intent_config(persona_id, nlu.get("intent","")) or {}
+     move = cfg.get("teacher_move") or DEFAULT_MOVE
+     chips = cfg.get("chips", [])
+     tool = cfg.get("tool")
+     tool_payload = cfg.get("tool_payload", {})
+ 
+     # Prosody overrides
+     if tags.get("in_a_hurry"): move = "check_understanding"
+     if tags.get("frustrated"): move = "check_understanding"
+ 
+     # Low confidence → ask clarifier instead of taking action
+     if nlu.get("confidence", 0) < 0.5:
+         move = "check_understanding"
+         chips = ["Send me the email", "Walk me through it live"]
+ 
+-    return {"teacher_move": move, "chips": chips, "tool": tool, "tool_payload": tool_payload}
++    show_suggestions = move in SUGGESTION_MOVES
++    return {
++        "teacher_move": move,
++        "chips": chips,
++        "tool": tool,
++        "tool_payload": tool_payload,
++        "show_suggestions": show_suggestions,
++    }
+diff --git a/app/services/dialog_policy.py b/app/services/dialog_policy.py
+index f6e575e919885566bbff515f7c5e7db413c87443..618d3e373292c2fe831fac33bc99521398905968 100644
+--- a/app/services/dialog_policy.py
++++ b/app/services/dialog_policy.py
+@@ -1,24 +1,27 @@
+ # app/services/dialog_policy.py
+ from typing import Dict
+ 
++from app.nlu.policy import SUGGESTION_MOVES
++
+ ALLOWED_MOVES = ("check_understanding","deep_dive","offer_steps","compare","visualize","summarize_next_actions")
+ ALLOWED_TONES = ("brief","empathetic","energetic")
+ 
+ def pick(labels: Dict, cfg: Dict) -> Dict:
+     if not cfg.get("awareness_enabled", True):
+         return {"teacher_move":"offer_steps","tone":"brief"}
+     sent = labels.get("sentiment")
+     eng  = labels.get("engagement")
+     move, tone = "offer_steps","brief"
+     if sent == "frustrated":
+         move, tone = "summarize_next_actions","brief"
+     elif sent == "uncertain":
+         move, tone = "check_understanding","empathetic"
+     elif eng == "high":
+         move, tone = "deep_dive","energetic"
+     # Respect allowlists if present
+     if cfg.get("policy_teacher_moves"):
+         if move not in cfg["policy_teacher_moves"]: move = cfg["policy_teacher_moves"][0]
+     if cfg.get("policy_tones"):
+         if tone not in cfg["policy_tones"]: tone = cfg["policy_tones"][0]
+-    return {"teacher_move": move, "tone": tone}
++    show_suggestions = move in SUGGESTION_MOVES
++    return {"teacher_move": move, "tone": tone, "show_suggestions": show_suggestions}
 diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 1de8c720b77e63aa3012e1431752895cd384cacb..b128842e08b26b66470583e1f4d6156fcccb6ae1 100644
+index b128842e08b26b66470583e1f4d6156fcccb6ae1..02daf337af69005c202393a5d2b1ea58fd9ecf7d 100644
 --- a/app/services/streaming.py
 +++ b/app/services/streaming.py
-@@ -12,50 +12,83 @@ import re
- from .llm_provider import get_provider
- from .awareness import annotate
- from .engagement import score as score_engagement
- from .dialog_policy import pick as pick_policy
- from .retrieval import search as kb_search
- from .persona_prompt import build_persona_preamble, format_kb_context
- from .suggestions import hygienic_suggestions
- from .vendor_clients import make_openai_client
- from .nlg.humanize import humanize_text, sounds_botty
- from .greet_idempotency import get_or_create_greet_turn, DEFAULT_TTL_SEC
- from ..db import db
- from ..ws.bus import bus
- from ..obs import jlog as _jlog
- from ..personas.store import PersonaManager, PersonaStore
- from ..personas.prompt_builder import build_messages
- from .. import nlu as _nlu
- from ..config import load_settings
+@@ -116,50 +116,97 @@ SETTINGS = load_settings()
+ ENABLE_CHIP_FOUNDATION = SETTINGS.enable_chip_foundation
+ ENABLE_POLICY_CHIPS = SETTINGS.enable_policy_chips
+ SUGGESTION_MAX = SETTINGS.suggestion_max
+ STRICT_SYSTEM_SHIM = (
+     "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
+     "and never mention being an AI or chatbot."
+ )
  
- try:
-     from ..api_v1.admin import _emit as _admin_emit  # SSE to Admin
- except Exception:
-     def _admin_emit(*a, **k):  # no-op if admin channel absent
-         pass
+ _WS_SOURCES = {"ws_greet", "user_ws"}
+ _WS_PIPELINE_UNAVAILABLE_NOTE = "ws_pipeline_unavailable"
+ _WS_PIPELINE_MESSAGE = "I'm still warming up. Please try again in a moment."
+ _LEGACY_WARMUP_LINE = "Hi! I’m ready to help. (Model is warming up.)"
  
  
-+def _emit_turn_action_metadata(turn_id: Optional[str],
-+                               meta: Optional[Dict[str, Any]],
-+                               *,
-+                               is_greet: bool) -> None:
-+    """Emit structured NLU/policy metadata for admin observers."""
-+    if not turn_id or not isinstance(meta, dict):
-+        return
-+
-+    nlu_meta = meta.get("nlu") if isinstance(meta.get("nlu"), dict) else {}
-+    policy_payload = {
-+        "action": meta.get("action"),
-+        "verbosity": meta.get("verbosity"),
-+        "show_suggestions": meta.get("show_suggestions"),
-+    }
-+    payload = {
-+        "turn_id": turn_id,
-+        "is_greet": bool(is_greet),
-+        "nlu": {
-+            "intent": nlu_meta.get("intent"),
-+            "topic": nlu_meta.get("topic"),
-+            "needs_scoping": nlu_meta.get("needs_scoping"),
-+            "wants_list": nlu_meta.get("wants_list"),
-+            "expected_depth": nlu_meta.get("expected_depth"),
-+            "confidence": nlu_meta.get("confidence"),
-+        },
-+        "policy": policy_payload,
-+    }
-+    try:
-+        _admin_emit("turn_action_metadata", **payload)
-+    except Exception:
-+        pass
-+
-+
- def _get_persona_for_session(session_id: str) -> Dict:
+ def _should_use_foundation(seed_text: str) -> bool:
+     if not ENABLE_CHIP_FOUNDATION:
+         return False
      try:
-         sess = db.memory.get('sessions', {}).get(session_id) or {}
-         persona_id = (sess.get('persona_id') or 'chip')
-         return db.memory.get('personas', {}).get(persona_id) or {'id': 'chip'}
+         if str(seed_text or "").strip().lower() == "greet":
+             return False
      except Exception:
-         return {'id': 'chip'}
+         return False
+     return True
  
  
- def _build_prompt(seed_text: str, persona: Dict, kb_snippets: List[str], teacher_move: Optional[str]) -> str:
-     parts = [build_persona_preamble(persona)]
-     if kb_snippets:
-         parts.append(format_kb_context(kb_snippets))
-     if teacher_move:
-         parts.append(f"Teacher move: {teacher_move}.")
-     parts.append(f"User said: {seed_text.strip()}")
-     return "\n\n".join(parts)
++_POLICY_SUGGESTION_ACTIONS = frozenset(
++    getattr(_nlu.policy, "SUGGESTION_MOVES", {"ask_clarify", "offer_steps"})
++)
++
++
++def _resolve_show_suggestions(meta: Dict[str, Any],
++                              policy: Optional[Dict[str, Any]],
++                              cfg: Dict[str, Any]) -> bool:
++    suggestions_enabled = bool(cfg.get("suggestions_enabled", True))
++    if not suggestions_enabled:
++        return False
++
++    def _coerce_pref(raw: Any) -> Optional[bool]:
++        if raw is None:
++            return None
++        if isinstance(raw, str):
++            lowered = raw.strip().lower()
++            if lowered in {"1", "true", "yes", "on"}:
++                return True
++            if lowered in {"0", "false", "no", "off"}:
++                return False
++            return None
++        try:
++            return bool(raw)
++        except Exception:
++            return None
++
++    policy_flag: Optional[bool] = None
++    if isinstance(policy, dict) and "show_suggestions" in policy:
++        policy_flag = _coerce_pref(policy.get("show_suggestions"))
++    elif isinstance(meta, dict) and "show_suggestions" in meta:
++        policy_flag = _coerce_pref(meta.get("show_suggestions"))
++
++    if policy_flag is None:
++        action = None
++        if isinstance(meta, dict):
++            action = meta.get("action")
++        if not action and isinstance(policy, dict):
++            action = policy.get("teacher_move")
++        if action:
++            policy_flag = action in _POLICY_SUGGESTION_ACTIONS
++
++    if policy_flag is None:
++        return False
++    return bool(policy_flag) and suggestions_enabled
++
++
+ def _apply_system_shim(messages: List[Dict[str, str]], shim: str) -> List[Dict[str, str]]:
+     cloned: List[Dict[str, str]] = [dict(m) for m in messages]
+     for msg in cloned:
+         if msg.get("role") == "system":
+             msg["content"] = (msg.get("content") or "").rstrip() + "\n" + shim
+             return cloned
+     cloned.insert(0, {"role": "system", "content": shim})
+     return cloned
  
  
- # --- text hygiene -------------------------------------------------------------
- # Remove ANY occurrence (not just trailing) of legacy "[KB:n]" stamps, case-insensitive.
- _KB_TAG_RE = re.compile(r"\s*\[(?:KB|kb)\s*:\s*\d+\]\s*")
+ def _call_foundation_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
+     client = make_openai_client()
+     model = (
+         cfg.get("openai_model")
+         or cfg.get("OPENAI_MODEL")
+         or os.getenv("OPENAI_MODEL")
+         or "gpt-4o-mini"
+     )
+     temperature = float(cfg.get("gen_temperature", 0.3))
+     top_p = float(cfg.get("gen_top_p", 1.0))
+     payload = [dict(m) for m in messages]
+     resp = client.chat.completions.create(
+         model=model,
+         messages=payload,
+         temperature=temperature,
+@@ -277,61 +324,64 @@ def classify(seed_text: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str,
+         intent = "idle"
+     elif lowered == "greet":
+         intent = "greet"
+     elif text.endswith("?"):
+         intent = "question"
+     elif "help" in lowered or "how" in lowered:
+         intent = "help_request"
+     else:
+         intent = "statement"
  
- def _scrub_debug_stamps(s: str) -> str:
-     """
-@@ -412,50 +445,66 @@ def make_assistant_frames(seed_text: str,
+     labels.setdefault("intent", intent)
+     labels.setdefault("confidence", 0.5 if text else 0.0)
+     return labels
+ 
+ 
+ def prepare_policy_meta(seed_text: str,
+                         meta: Optional[Dict[str, Any]] = None,
+                         *,
+                         cfg: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+     """Ensure policy-related metadata is populated for downstream consumers."""
+     cfg = cfg or db.get_config()
+     incoming_meta = meta if isinstance(meta, dict) else {}
+     target_meta = incoming_meta if incoming_meta is meta and isinstance(meta, dict) else dict(incoming_meta)
+ 
+     labels = classify(seed_text, target_meta)
+-    policy = pick_policy(labels, cfg)
++    policy = pick_policy(labels, cfg) or {}
+ 
+     if not isinstance(target_meta.get("nlu"), dict):
+         target_meta["nlu"] = dict(labels)
+-    if "action" not in target_meta:
+-        target_meta["action"] = policy.get("teacher_move") or "respond"
++
++    action = target_meta.get("action")
++    if not action:
++        action = policy.get("teacher_move") or "respond"
++    target_meta["action"] = action
++
+     if "verbosity" not in target_meta:
+         target_meta["verbosity"] = cfg.get("gen_target_verbosity", "medium")
+-    if "show_suggestions" not in target_meta:
+-        suggestions_enabled = bool(cfg.get("suggestions_enabled", True))
+-        target_meta["show_suggestions"] = suggestions_enabled and bool(policy)
++
++    target_meta["show_suggestions"] = _resolve_show_suggestions(target_meta, policy, cfg)
+ 
+     return target_meta, labels, policy
+ 
+ 
+ def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
+     if not ENABLE_POLICY_CHIPS or not policy:
+         return []
+     raw = policy.get("chips") if isinstance(policy, dict) else None
+     if not raw:
+         return []
+     if isinstance(raw, (list, tuple, set)):
+         chips = list(raw)
+     else:
+         chips = [raw]
+     cap = _suggestion_cap()
+     cleaned: List[str] = []
+     seen = set()
+     for item in chips:
+         text = _normalize_suggestion_item(item)
+         if not text:
+             continue
+         if len(text) > 50:
+             text = text[:50].rstrip()
+         if not text or text in seen:
+             continue
+@@ -443,67 +493,69 @@ def make_assistant_frames(seed_text: str,
+         fallback_on_empty=fallback_on_empty,
+         fallback_on_error=fallback_on_error,
          fallback_emit_event=fallback_emit_event,
          labels=classified_labels,
          policy=classified_policy,
@@ -110,24 +265,33 @@ index 1de8c720b77e63aa3012e1431752895cd384cacb..b128842e08b26b66470583e1f4d6156f
      dialog_meta = dict(meta or {})
  
      nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
-     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store)
+-    policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store)
++    policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store) or {}
  
-+    try:
-+        nlu_meta = dict(nlu_result)
-+    except Exception:
-+        nlu_meta = {}
-+    else:
-+        meta["nlu"] = nlu_meta
+     try:
+         nlu_meta = dict(nlu_result)
+     except Exception:
+         nlu_meta = {}
+     else:
+         meta["nlu"] = nlu_meta
+ 
+-    if policy:
+-        action = policy.get('teacher_move') or meta.get('action')
+-        if action:
+-            meta['action'] = action
++    action = meta.get('action')
++    policy_move = policy.get('teacher_move') if isinstance(policy, dict) else None
++    if not action and policy_move:
++        action = policy_move
++    if action:
++        meta['action'] = action
+     if 'verbosity' not in meta:
+         meta['verbosity'] = cfg.get('gen_target_verbosity', 'medium')
+-    if 'show_suggestions' not in meta:
+-        meta['show_suggestions'] = bool(cfg.get('suggestions_enabled', True) and policy)
 +
-+    if policy:
-+        action = policy.get('teacher_move') or meta.get('action')
-+        if action:
-+            meta['action'] = action
-+    if 'verbosity' not in meta:
-+        meta['verbosity'] = cfg.get('gen_target_verbosity', 'medium')
-+    if 'show_suggestions' not in meta:
-+        meta['show_suggestions'] = bool(cfg.get('suggestions_enabled', True) and policy)
-+
++    meta['show_suggestions'] = _resolve_show_suggestions(meta, policy, cfg)
+ 
      prompt_meta = dict(dialog_meta)
      prompt_meta['intent'] = nlu_result.get('intent')
      if policy.get('teacher_move'):
@@ -152,44 +316,7 @@ index 1de8c720b77e63aa3012e1431752895cd384cacb..b128842e08b26b66470583e1f4d6156f
          fallback_fired = True
          fallback_reason = "empty"
      elif fallback_on_empty and not (reply or "").strip():
-         reply = fallback_line
-@@ -490,50 +539,52 @@ def _make_foundation_frames(seed_text: str,
-             "turn_telemetry",
-             sid=session_id,
-             intent=nlu_result.get('intent'),
-             confidence=nlu_result.get('confidence'),
-             teacher_move=policy.get('teacher_move') or teacher_move,
-             chips=len(policy_chips),
-             prompt_hash=prompt_hash,
-         )
-     except Exception:
-         pass
- 
-     if force_turn_id is not None:
-         db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
-         turn_id = str(force_turn_id)
-     else:
-         turn_seq = db.memory.setdefault('turn_seq', 0) + 1
-         db.memory['turn_seq'] = turn_seq
-         turn_id = str(turn_seq)
- 
-     if fallback_fired and fallback_emit_event:
-         try:
-             _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
-         except Exception:
-             pass
- 
-+    _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
-+
-     frames: List[Dict] = []
-     active_teacher_move = policy.get('teacher_move') or teacher_move
-     chunk: Dict[str, Any] = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': safe_reply,
-         'kb_hits': 0,
-         'intent': nlu_result.get('intent'),
-         'teacher_move': active_teacher_move,
+@@ -575,101 +627,109 @@ def _make_foundation_frames(seed_text: str,
      }
      if correlation_user_msg_id:
          chunk['correlation_user_msg_id'] = correlation_user_msg_id
@@ -206,7 +333,35 @@ index 1de8c720b77e63aa3012e1431752895cd384cacb..b128842e08b26b66470583e1f4d6156f
      merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
      try:
          _jlog(
-@@ -568,50 +619,56 @@ def _make_foundation_frames(seed_text: str,
+             "chips_emit",
+             sid=session_id,
+             intent=nlu_result.get('intent'),
+             count=len(merged_suggestions),
+             items=merged_suggestions,
+         )
+     except Exception:
+         pass
+     should_emit_suggestions = bool(merged_suggestions) and (
+-        is_greet or fallback_fired or (active_teacher_move in ("offer_steps", "summarize_next_actions"))
++        is_greet or bool(meta.get('show_suggestions'))
+     )
+     if should_emit_suggestions:
+         frames.append(
+             {
+                 'type': 'suggestions',
+                 'turn_id': turn_id,
+                 'items': build_suggestion_items(merged_suggestions),
+             }
+         )
+ 
+     end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
+     if correlation_user_msg_id:
+         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(end_fr)
+ 
+     _broadcast_frames(session_id, frames, turn_id)
+     return turn_id, frames
+ 
  
  def _make_legacy_frames(seed_text: str,
                          session_id: str,
@@ -229,16 +384,27 @@ index 1de8c720b77e63aa3012e1431752895cd384cacb..b128842e08b26b66470583e1f4d6156f
      else:
          labels = dict(labels)
      if policy is None:
-         policy = pick_policy(labels, cfg)
+-        policy = pick_policy(labels, cfg)
++        policy = pick_policy(labels, cfg) or {}
      else:
-         policy = dict(policy)
+-        policy = dict(policy)
++        policy = dict(policy or {})
+ 
+     try:
+         meta_nlu = meta.setdefault('nlu', {}) if isinstance(meta, dict) else {}
+         meta_nlu.update(labels)
+     except Exception:
+         pass
+-    teacher_move = (policy or {}).get('teacher_move')
++    teacher_move = policy.get('teacher_move') if isinstance(policy, dict) else None
 +
-+    try:
-+        meta_nlu = meta.setdefault('nlu', {}) if isinstance(meta, dict) else {}
-+        meta_nlu.update(labels)
-+    except Exception:
-+        pass
-     teacher_move = (policy or {}).get('teacher_move')
++    action = meta.get('action') if isinstance(meta, dict) else None
++    if not action and teacher_move:
++        action = teacher_move
++    if isinstance(meta, dict):
++        if action:
++            meta['action'] = action
++        meta['show_suggestions'] = _resolve_show_suggestions(meta, policy, cfg)
  
      kb: List[str] = []
      try:
@@ -263,44 +429,8 @@ index 1de8c720b77e63aa3012e1431752895cd384cacb..b128842e08b26b66470583e1f4d6156f
          except Exception as e:
              error_note = f"llm_error:{e.__class__.__name__}"
              reply = _LEGACY_WARMUP_LINE
-@@ -645,50 +702,52 @@ def _make_legacy_frames(seed_text: str,
-             if not safe_reply.strip():
-                 safe_reply = fallback_line.strip() or _LEGACY_WARMUP_LINE
-             if not fallback_fired:
-                 fallback_fired = True
-                 if not fallback_reason:
-                     fallback_reason = "empty"
-             elif not fallback_reason:
-                 fallback_reason = "empty"
-         else:
-             safe_reply = _LEGACY_WARMUP_LINE
- 
-     if force_turn_id is not None:
-         db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
-         turn_id = str(force_turn_id)
-     else:
-         turn_seq = db.memory.setdefault('turn_seq', 0) + 1
-         db.memory['turn_seq'] = turn_seq
-         turn_id = str(turn_seq)
- 
-     if fallback_fired and fallback_emit_event:
-         try:
-             _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
-         except Exception:
-             pass
- 
-+    _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
-+
-     frames: List[Dict] = []
- 
-     active_teacher_move = teacher_move
-     chunk = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': safe_reply,
-         'kb_hits': len(kb),
-     }
-     if correlation_user_msg_id:
+             _admin_emit("llm_generate_error", error=e.__class__.__name__)
+@@ -739,51 +799,51 @@ def _make_legacy_frames(seed_text: str,
          chunk['correlation_user_msg_id'] = correlation_user_msg_id
      if error_note:
          chunk['note'] = error_note
@@ -316,11 +446,51 @@ index 1de8c720b77e63aa3012e1431752895cd384cacb..b128842e08b26b66470583e1f4d6156f
      merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
      try:
          intent = labels.get('intent') if isinstance(labels, dict) else None
+         _jlog(
+             "chips_emit",
+             sid=session_id,
+             intent=intent,
+             count=len(merged_suggestions),
+             items=merged_suggestions,
+         )
+     except Exception:
+         pass
+     should_emit_suggestions = bool(merged_suggestions) and (
+-        is_greet or fallback_fired or (active_teacher_move in ("offer_steps", "summarize_next_actions"))
++        is_greet or bool(meta.get('show_suggestions'))
+     )
+     if should_emit_suggestions:
+         frames.append(
+             {
+                 'type': 'suggestions',
+                 'turn_id': turn_id,
+                 'items': build_suggestion_items(merged_suggestions),
+             }
+         )
+ 
+     end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
+     if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
+         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(end_fr)
+ 
+     _broadcast_frames(session_id, frames, turn_id)
+     return turn_id, frames
+ 
+ 
+ # --- MIME mapping helper ------------------------------------------------------
+ 
+ def _guess_tts_mime(output_format: str | None) -> str:
+     """
+     Map configured TTS output format to an appropriate MIME/container for MSE playback.
+     We keep this conservative to avoid mismatches with provider bytes.
 diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
-index b30365af7bf585e76f54e977cd197677bb10a198..6e947b68baa8b8dc424c77e1fd5a46e9b6f0813e 100644
+index 6e947b68baa8b8dc424c77e1fd5a46e9b6f0813e..ca1b21b5f9353cbce01b334c6ffabb72facc09b2 100644
 --- a/tests/test_streaming_ws_fallbacks.py
 +++ b/tests/test_streaming_ws_fallbacks.py
-@@ -83,25 +83,64 @@ def test_make_assistant_frames_health_check_allows_legacy(monkeypatch):
+@@ -80,67 +80,160 @@ def test_make_assistant_frames_health_check_allows_legacy(monkeypatch):
+         ]
+ 
+     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
      monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
  
      tid, _ = streaming.make_assistant_frames(
@@ -343,45 +513,139 @@ index b30365af7bf585e76f54e977cd197677bb10a198..6e947b68baa8b8dc424c77e1fd5a46e9
      assert isinstance(prepared.get("nlu"), dict)
      assert prepared["action"]
      assert prepared["verbosity"] == "medium"
-     assert prepared["show_suggestions"] is True
+-    assert prepared["show_suggestions"] is True
++    assert prepared["show_suggestions"] is policy["show_suggestions"]
      assert isinstance(labels, dict) and labels.get("intent")
      assert isinstance(policy, dict)
+ 
+ 
+ def test_run_ws_user_turn_emits_action_metadata_once(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
+     monkeypatch.setattr(streaming, "kb_search", lambda *a, **k: [])
+     monkeypatch.setattr(streaming, "_get_persona_for_session", lambda sid: {"id": "chip"})
+ 
+     class DummyProvider:
+         def generate_reply(self, *args, **kwargs):
+             return "Hello!"
+ 
+     monkeypatch.setattr(streaming, "get_provider", lambda cfg: DummyProvider())
+     monkeypatch.setattr(streaming, "_broadcast_frames", lambda *a, **k: None)
+     monkeypatch.setattr(streaming, "schedule_frames", lambda *a, **k: None)
+     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
+ 
+     captured = []
+ 
+     def fake_admin_emit(event, **payload):
+         captured.append((event, payload))
+ 
+     monkeypatch.setattr(streaming, "_admin_emit", fake_admin_emit)
+ 
+     monkeypatch.setattr(streaming, "_should_skip_legacy", lambda *_: False)
+ 
+     tid = streaming.run_ws_user_turn("session-meta", "Hello there", correlation_user_msg_id="abc123")
+ 
+     assert tid
+     assert len(captured) == 1
+ 
+     event, payload = captured[0]
+     assert event == "turn_action_metadata"
+     assert payload["turn_id"] == tid
+     assert payload["is_greet"] is False
+     assert payload["nlu"]["intent"] == "statement"
+     assert payload["policy"]["action"] == "offer_steps"
+     assert payload["policy"]["show_suggestions"] is True
 +
 +
-+def test_run_ws_user_turn_emits_action_metadata_once(monkeypatch):
++def test_prepare_policy_meta_respects_policy_show_suggestions(monkeypatch):
 +    _stub_config(monkeypatch)
 +
-+    monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
++    monkeypatch.setattr(
++        streaming,
++        "pick_policy",
++        lambda labels, cfg: {"teacher_move": "give_brief_answer", "show_suggestions": False},
++    )
++
++    prepared, _, policy = streaming.prepare_policy_meta("Need a short answer", {})
++
++    assert prepared["action"] == "give_brief_answer"
++    assert prepared["show_suggestions"] is False
++    assert policy["show_suggestions"] is False
++
++
++def test_prepare_policy_meta_enables_suggestions_for_ask_clarify(monkeypatch):
++    _stub_config(monkeypatch)
++
++    monkeypatch.setattr(
++        streaming,
++        "pick_policy",
++        lambda labels, cfg: {"teacher_move": "ask_clarify", "show_suggestions": True},
++    )
++
++    prepared, _, policy = streaming.prepare_policy_meta("Can you clarify?", {})
++
++    assert prepared["action"] == "ask_clarify"
++    assert prepared["show_suggestions"] is True
++    assert policy["show_suggestions"] is True
++
++
++def test_legacy_frames_emit_suggestions_only_when_allowed(monkeypatch):
++    _stub_config(monkeypatch)
++
 +    monkeypatch.setattr(streaming, "kb_search", lambda *a, **k: [])
-+    monkeypatch.setattr(streaming, "_get_persona_for_session", lambda sid: {"id": "chip"})
++    monkeypatch.setattr(streaming, "_emit_turn_action_metadata", lambda *a, **k: None)
++    monkeypatch.setattr(streaming, "_broadcast_frames", lambda *a, **k: None)
++    monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: [])
++    monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: ["Next steps"])
++    monkeypatch.setattr(streaming.db, "memory", {})
 +
 +    class DummyProvider:
 +        def generate_reply(self, *args, **kwargs):
-+            return "Hello!"
++            return "Here you go"
 +
 +    monkeypatch.setattr(streaming, "get_provider", lambda cfg: DummyProvider())
-+    monkeypatch.setattr(streaming, "_broadcast_frames", lambda *a, **k: None)
-+    monkeypatch.setattr(streaming, "schedule_frames", lambda *a, **k: None)
-+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
 +
-+    captured = []
++    cfg = {"suggestions_enabled": True}
 +
-+    def fake_admin_emit(event, **payload):
-+        captured.append((event, payload))
++    deny_meta = {"nlu": {}, "action": "give_brief_answer"}
++    deny_policy = {"teacher_move": "give_brief_answer", "show_suggestions": False}
 +
-+    monkeypatch.setattr(streaming, "_admin_emit", fake_admin_emit)
++    _, deny_frames = streaming._make_legacy_frames(
++        "Hello",
++        "sess-deny",
++        deny_meta,
++        cfg,
++        correlation_user_msg_id=None,
++        force_turn_id=None,
++        is_greet=False,
++        fallback_line="Fallback",
++        fallback_on_empty=True,
++        fallback_on_error=True,
++        fallback_emit_event=False,
++        labels={},
++        policy=deny_policy,
++    )
 +
-+    monkeypatch.setattr(streaming, "_should_skip_legacy", lambda *_: False)
++    assert all(fr.get("type") != "suggestions" for fr in deny_frames)
 +
-+    tid = streaming.run_ws_user_turn("session-meta", "Hello there", correlation_user_msg_id="abc123")
++    allow_meta = {"nlu": {}, "action": "ask_clarify"}
++    allow_policy = {"teacher_move": "ask_clarify", "show_suggestions": True}
 +
-+    assert tid
-+    assert len(captured) == 1
++    _, allow_frames = streaming._make_legacy_frames(
++        "Hello",
++        "sess-allow",
++        allow_meta,
++        cfg,
++        correlation_user_msg_id=None,
++        force_turn_id=None,
++        is_greet=False,
++        fallback_line="Fallback",
++        fallback_on_empty=True,
++        fallback_on_error=True,
++        fallback_emit_event=False,
++        labels={},
++        policy=allow_policy,
++    )
 +
-+    event, payload = captured[0]
-+    assert event == "turn_action_metadata"
-+    assert payload["turn_id"] == tid
-+    assert payload["is_greet"] is False
-+    assert payload["nlu"]["intent"] == "statement"
-+    assert payload["policy"]["action"] == "offer_steps"
-+    assert payload["policy"]["show_suggestions"] is True
++    assert any(fr.get("type") == "suggestions" for fr in allow_frames)

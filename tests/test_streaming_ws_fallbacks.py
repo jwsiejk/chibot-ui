@@ -102,7 +102,7 @@ def test_prepare_policy_meta_injects_fields(monkeypatch):
     assert isinstance(prepared.get("nlu"), dict)
     assert prepared["action"]
     assert prepared["verbosity"] == "medium"
-    assert prepared["show_suggestions"] is True
+    assert prepared["show_suggestions"] is policy["show_suggestions"]
     assert isinstance(labels, dict) and labels.get("intent")
     assert isinstance(policy, dict)
 
@@ -144,3 +144,96 @@ def test_run_ws_user_turn_emits_action_metadata_once(monkeypatch):
     assert payload["nlu"]["intent"] == "statement"
     assert payload["policy"]["action"] == "offer_steps"
     assert payload["policy"]["show_suggestions"] is True
+
+
+def test_prepare_policy_meta_respects_policy_show_suggestions(monkeypatch):
+    _stub_config(monkeypatch)
+
+    monkeypatch.setattr(
+        streaming,
+        "pick_policy",
+        lambda labels, cfg: {"teacher_move": "give_brief_answer", "show_suggestions": False},
+    )
+
+    prepared, _, policy = streaming.prepare_policy_meta("Need a short answer", {})
+
+    assert prepared["action"] == "give_brief_answer"
+    assert prepared["show_suggestions"] is False
+    assert policy["show_suggestions"] is False
+
+
+def test_prepare_policy_meta_enables_suggestions_for_ask_clarify(monkeypatch):
+    _stub_config(monkeypatch)
+
+    monkeypatch.setattr(
+        streaming,
+        "pick_policy",
+        lambda labels, cfg: {"teacher_move": "ask_clarify", "show_suggestions": True},
+    )
+
+    prepared, _, policy = streaming.prepare_policy_meta("Can you clarify?", {})
+
+    assert prepared["action"] == "ask_clarify"
+    assert prepared["show_suggestions"] is True
+    assert policy["show_suggestions"] is True
+
+
+def test_legacy_frames_emit_suggestions_only_when_allowed(monkeypatch):
+    _stub_config(monkeypatch)
+
+    monkeypatch.setattr(streaming, "kb_search", lambda *a, **k: [])
+    monkeypatch.setattr(streaming, "_emit_turn_action_metadata", lambda *a, **k: None)
+    monkeypatch.setattr(streaming, "_broadcast_frames", lambda *a, **k: None)
+    monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: [])
+    monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: ["Next steps"])
+    monkeypatch.setattr(streaming.db, "memory", {})
+
+    class DummyProvider:
+        def generate_reply(self, *args, **kwargs):
+            return "Here you go"
+
+    monkeypatch.setattr(streaming, "get_provider", lambda cfg: DummyProvider())
+
+    cfg = {"suggestions_enabled": True}
+
+    deny_meta = {"nlu": {}, "action": "give_brief_answer"}
+    deny_policy = {"teacher_move": "give_brief_answer", "show_suggestions": False}
+
+    _, deny_frames = streaming._make_legacy_frames(
+        "Hello",
+        "sess-deny",
+        deny_meta,
+        cfg,
+        correlation_user_msg_id=None,
+        force_turn_id=None,
+        is_greet=False,
+        fallback_line="Fallback",
+        fallback_on_empty=True,
+        fallback_on_error=True,
+        fallback_emit_event=False,
+        labels={},
+        policy=deny_policy,
+    )
+
+    assert all(fr.get("type") != "suggestions" for fr in deny_frames)
+
+    allow_meta = {"nlu": {}, "action": "ask_clarify"}
+    allow_policy = {"teacher_move": "ask_clarify", "show_suggestions": True}
+
+    _, allow_frames = streaming._make_legacy_frames(
+        "Hello",
+        "sess-allow",
+        allow_meta,
+        cfg,
+        correlation_user_msg_id=None,
+        force_turn_id=None,
+        is_greet=False,
+        fallback_line="Fallback",
+        fallback_on_empty=True,
+        fallback_on_error=True,
+        fallback_emit_event=False,
+        labels={},
+        policy=allow_policy,
+    )
+
+    assert any(fr.get("type") == "suggestions" for fr in allow_frames)

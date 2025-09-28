@@ -1,6 +1,7 @@
 from typing import Dict
 
 DEFAULT_MOVE = "summarize_next_actions"
+SUGGESTION_MOVES = {"ask_clarify", "offer_steps"}
 
 def decide(nlu: Dict, tags: Dict, persona_id: str, store) -> Dict:
     cfg = store.fetch_intent_config(persona_id, nlu.get("intent","")) or {}
@@ -18,4 +19,11 @@ def decide(nlu: Dict, tags: Dict, persona_id: str, store) -> Dict:
         move = "check_understanding"
         chips = ["Send me the email", "Walk me through it live"]
 
-    return {"teacher_move": move, "chips": chips, "tool": tool, "tool_payload": tool_payload}
+    show_suggestions = move in SUGGESTION_MOVES
+    return {
+        "teacher_move": move,
+        "chips": chips,
+        "tool": tool,
+        "tool_payload": tool_payload,
+        "show_suggestions": show_suggestions,
+    }

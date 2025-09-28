@@ -1,6 +1,8 @@
 # app/services/dialog_policy.py
 from typing import Dict
 
+from app.nlu.policy import SUGGESTION_MOVES
+
 ALLOWED_MOVES = ("check_understanding","deep_dive","offer_steps","compare","visualize","summarize_next_actions")
 ALLOWED_TONES = ("brief","empathetic","energetic")
 
@@ -21,4 +23,5 @@ def pick(labels: Dict, cfg: Dict) -> Dict:
         if move not in cfg["policy_teacher_moves"]: move = cfg["policy_teacher_moves"][0]
     if cfg.get("policy_tones"):
         if tone not in cfg["policy_tones"]: tone = cfg["policy_tones"][0]
-    return {"teacher_move": move, "tone": tone}
+    show_suggestions = move in SUGGESTION_MOVES
+    return {"teacher_move": move, "tone": tone, "show_suggestions": show_suggestions}

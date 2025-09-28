@@ -138,6 +138,53 @@ def _should_use_foundation(seed_text: str) -> bool:
     return True
 
 
+_POLICY_SUGGESTION_ACTIONS = frozenset(
+    getattr(_nlu.policy, "SUGGESTION_MOVES", {"ask_clarify", "offer_steps"})
+)
+
+
+def _resolve_show_suggestions(meta: Dict[str, Any],
+                              policy: Optional[Dict[str, Any]],
+                              cfg: Dict[str, Any]) -> bool:
+    suggestions_enabled = bool(cfg.get("suggestions_enabled", True))
+    if not suggestions_enabled:
+        return False
+
+    def _coerce_pref(raw: Any) -> Optional[bool]:
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            lowered = raw.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+            return None
+        try:
+            return bool(raw)
+        except Exception:
+            return None
+
+    policy_flag: Optional[bool] = None
+    if isinstance(policy, dict) and "show_suggestions" in policy:
+        policy_flag = _coerce_pref(policy.get("show_suggestions"))
+    elif isinstance(meta, dict) and "show_suggestions" in meta:
+        policy_flag = _coerce_pref(meta.get("show_suggestions"))
+
+    if policy_flag is None:
+        action = None
+        if isinstance(meta, dict):
+            action = meta.get("action")
+        if not action and isinstance(policy, dict):
+            action = policy.get("teacher_move")
+        if action:
+            policy_flag = action in _POLICY_SUGGESTION_ACTIONS
+
+    if policy_flag is None:
+        return False
+    return bool(policy_flag) and suggestions_enabled
+
+
 def _apply_system_shim(messages: List[Dict[str, str]], shim: str) -> List[Dict[str, str]]:
     cloned: List[Dict[str, str]] = [dict(m) for m in messages]
     for msg in cloned:
@@ -299,17 +346,20 @@ def prepare_policy_meta(seed_text: str,
     target_meta = incoming_meta if incoming_meta is meta and isinstance(meta, dict) else dict(incoming_meta)
 
     labels = classify(seed_text, target_meta)
-    policy = pick_policy(labels, cfg)
+    policy = pick_policy(labels, cfg) or {}
 
     if not isinstance(target_meta.get("nlu"), dict):
         target_meta["nlu"] = dict(labels)
-    if "action" not in target_meta:
-        target_meta["action"] = policy.get("teacher_move") or "respond"
+
+    action = target_meta.get("action")
+    if not action:
+        action = policy.get("teacher_move") or "respond"
+    target_meta["action"] = action
+
     if "verbosity" not in target_meta:
         target_meta["verbosity"] = cfg.get("gen_target_verbosity", "medium")
-    if "show_suggestions" not in target_meta:
-        suggestions_enabled = bool(cfg.get("suggestions_enabled", True))
-        target_meta["show_suggestions"] = suggestions_enabled and bool(policy)
+
+    target_meta["show_suggestions"] = _resolve_show_suggestions(target_meta, policy, cfg)
 
     return target_meta, labels, policy
 
@@ -465,7 +515,7 @@ def _make_foundation_frames(seed_text: str,
     dialog_meta = dict(meta or {})
 
     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
-    policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store)
+    policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store) or {}
 
     try:
         nlu_meta = dict(nlu_result)
@@ -474,14 +524,16 @@ def _make_foundation_frames(seed_text: str,
     else:
         meta["nlu"] = nlu_meta
 
-    if policy:
-        action = policy.get('teacher_move') or meta.get('action')
-        if action:
-            meta['action'] = action
+    action = meta.get('action')
+    policy_move = policy.get('teacher_move') if isinstance(policy, dict) else None
+    if not action and policy_move:
+        action = policy_move
+    if action:
+        meta['action'] = action
     if 'verbosity' not in meta:
         meta['verbosity'] = cfg.get('gen_target_verbosity', 'medium')
-    if 'show_suggestions' not in meta:
-        meta['show_suggestions'] = bool(cfg.get('suggestions_enabled', True) and policy)
+
+    meta['show_suggestions'] = _resolve_show_suggestions(meta, policy, cfg)
 
     prompt_meta = dict(dialog_meta)
     prompt_meta['intent'] = nlu_result.get('intent')
@@ -597,7 +649,7 @@ def _make_foundation_frames(seed_text: str,
     except Exception:
         pass
     should_emit_suggestions = bool(merged_suggestions) and (
-        is_greet or fallback_fired or (active_teacher_move in ("offer_steps", "summarize_next_actions"))
+        is_greet or bool(meta.get('show_suggestions'))
     )
     if should_emit_suggestions:
         frames.append(
@@ -638,16 +690,24 @@ def _make_legacy_frames(seed_text: str,
     else:
         labels = dict(labels)
     if policy is None:
-        policy = pick_policy(labels, cfg)
+        policy = pick_policy(labels, cfg) or {}
     else:
-        policy = dict(policy)
+        policy = dict(policy or {})
 
     try:
         meta_nlu = meta.setdefault('nlu', {}) if isinstance(meta, dict) else {}
         meta_nlu.update(labels)
     except Exception:
         pass
-    teacher_move = (policy or {}).get('teacher_move')
+    teacher_move = policy.get('teacher_move') if isinstance(policy, dict) else None
+
+    action = meta.get('action') if isinstance(meta, dict) else None
+    if not action and teacher_move:
+        action = teacher_move
+    if isinstance(meta, dict):
+        if action:
+            meta['action'] = action
+        meta['show_suggestions'] = _resolve_show_suggestions(meta, policy, cfg)
 
     kb: List[str] = []
     try:
@@ -761,7 +821,7 @@ def _make_legacy_frames(seed_text: str,
     except Exception:
         pass
     should_emit_suggestions = bool(merged_suggestions) and (
-        is_greet or fallback_fired or (active_teacher_move in ("offer_steps", "summarize_next_actions"))
+        is_greet or bool(meta.get('show_suggestions'))
     )
     if should_emit_suggestions:
         frames.append(
