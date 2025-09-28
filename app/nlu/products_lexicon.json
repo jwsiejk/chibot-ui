@@ -1,0 +1,68 @@
+{
+  "Portworx": [
+    "px",
+    "portworx enterprise",
+    "portworx backup",
+    "port worx",
+    "px-backup",
+    "px backup"
+  ],
+  "FlashArray": [
+    "fa",
+    "flash array",
+    "flasharray//x",
+    "flasharray//xl",
+    "flasharray xl",
+    "flasharray x",
+    "fa-x",
+    "fa-xl"
+  ],
+  "FlashBlade": [
+    "fb",
+    "flash blade",
+    "flashblade//s",
+    "flashblade//e",
+    "flashblade s",
+    "flashblade e"
+  ],
+  "Pure1": [
+    "pure 1",
+    "pure one",
+    "pure1 manage",
+    "pure1 analyze",
+    "pure1 meta"
+  ],
+  "Fusion": [
+    "pure fusion",
+    "fusion cloud",
+    "fusion control plane",
+    "pure fusion cloud"
+  ],
+  "Evergreen//One": [
+    "evergreen one",
+    "evergreen subscription",
+    "evergreen service",
+    "evergreen//one service",
+    "as-a-service"
+  ],
+  "Evergreen//Forever": [
+    "evergreen forever",
+    "evergreen upgrade"
+  ],
+  "Airi": [
+    "airi",
+    "airi//s",
+    "ai-ready infrastructure"
+  ],
+  "Cloud Block Store": [
+    "cbs",
+    "cloud block",
+    "cloud block store for aws",
+    "cloud block store for azure"
+  ],
+  "Pure Storage": [
+    "pure storage",
+    "purestorage",
+    "pure systems"
+  ]
+}

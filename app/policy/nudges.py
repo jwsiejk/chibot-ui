@@ -2,7 +2,7 @@ import threading, time
 from typing import Dict
 from ..db import db
 from ..ws.bus import bus
-from ..services.streaming import make_assistant_frames, prepare_policy_meta
+from ..services.streaming import make_assistant_frames, prepare_turn_metadata
 
 # Scheduled nudges by session_id
 _scheduled: Dict[str, threading.Timer] = {}
@@ -35,7 +35,7 @@ def arm_nudge(session_id: str):
         if session_id not in _scheduled:
             return
         # Build and send a short nudge response
-        meta, _, _ = prepare_policy_meta(_nudge_text(), {"source": "nudge"})
+        meta, _, _ = prepare_turn_metadata(_nudge_text(), {"source": "nudge"})
         tid, frames = make_assistant_frames(_nudge_text(), session_id, meta=meta)
         for fr in frames:
             if fr.get("type") == "end":

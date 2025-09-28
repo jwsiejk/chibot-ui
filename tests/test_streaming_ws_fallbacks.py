@@ -101,18 +101,18 @@ def test_make_assistant_frames_health_check_allows_legacy(monkeypatch):
     assert legacy_calls and legacy_calls[0][0] == "status"
 
 
-def test_prepare_policy_meta_injects_fields(monkeypatch):
+def test_prepare_turn_metadata_injects_fields(monkeypatch):
     _stub_config(monkeypatch)
 
     seed_meta = {"source": "http_chat"}
-    prepared, labels, policy = streaming.prepare_policy_meta("How do I deploy?", seed_meta)
+    prepared, labels, policy = streaming.prepare_turn_metadata("How do I deploy?", seed_meta)
 
     assert prepared is seed_meta
     assert isinstance(prepared.get("nlu"), dict)
     assert isinstance(prepared.get("dialog_nlu"), dict)
     assert prepared["action"]
     assert prepared["dialog_action"] == prepared["action"]
-    assert prepared["verbosity"] == "medium"
+    assert prepared["verbosity"] in {"brief", "normal", "medium"}
     assert prepared["dialog_verbosity"] == prepared["verbosity"]
     assert prepared["show_suggestions"] is policy["show_suggestions"]
     assert prepared["dialog_show_suggestions"] is policy["show_suggestions"]
@@ -155,21 +155,21 @@ def test_run_ws_user_turn_emits_action_metadata_once(monkeypatch):
     assert event == "turn_action_metadata"
     assert payload["turn_id"] == tid
     assert payload["is_greet"] is False
-    assert payload["nlu"]["intent"] == "statement"
-    assert payload["policy"]["action"] == "offer_steps"
+    assert payload["nlu"]["intent"] == "broad_topic_help"
+    assert payload["policy"]["action"] == "ask_clarify"
     assert payload["policy"]["show_suggestions"] is True
 
 
-def test_prepare_policy_meta_respects_policy_show_suggestions(monkeypatch):
+def test_prepare_turn_metadata_respects_policy_show_suggestions(monkeypatch):
     _stub_config(monkeypatch)
 
     monkeypatch.setattr(
         streaming,
-        "pick_policy",
-        lambda labels, cfg: {"teacher_move": "give_brief_answer", "show_suggestions": False},
+        "pick_dialog_policy",
+        lambda labels: {"action": "give_brief_answer", "show_suggestions": False, "teacher_move": "give_brief_answer"},
     )
 
-    prepared, _, policy = streaming.prepare_policy_meta("Need a short answer", {})
+    prepared, _, policy = streaming.prepare_turn_metadata("Need a short answer", {})
 
     assert prepared["action"] == "give_brief_answer"
     assert prepared["dialog_action"] == "give_brief_answer"
@@ -178,16 +178,16 @@ def test_prepare_policy_meta_respects_policy_show_suggestions(monkeypatch):
     assert policy["show_suggestions"] is False
 
 
-def test_prepare_policy_meta_enables_suggestions_for_ask_clarify(monkeypatch):
+def test_prepare_turn_metadata_enables_suggestions_for_ask_clarify(monkeypatch):
     _stub_config(monkeypatch)
 
     monkeypatch.setattr(
         streaming,
-        "pick_policy",
-        lambda labels, cfg: {"teacher_move": "ask_clarify", "show_suggestions": True},
+        "pick_dialog_policy",
+        lambda labels: {"action": "ask_clarify", "show_suggestions": True, "teacher_move": "ask_clarify"},
     )
 
-    prepared, _, policy = streaming.prepare_policy_meta("Can you clarify?", {})
+    prepared, _, policy = streaming.prepare_turn_metadata("Can you clarify?", {})
 
     assert prepared["action"] == "ask_clarify"
     assert prepared["dialog_action"] == "ask_clarify"

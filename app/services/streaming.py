@@ -12,7 +12,6 @@ import re
 from .llm_provider import get_provider
 from .awareness import annotate
 from .engagement import score as score_engagement
-from .dialog_policy import pick as pick_policy
 from .retrieval import search as kb_search
 from .persona_prompt import build_persona_preamble, format_kb_context
 from .suggestions import hygienic_suggestions
@@ -25,6 +24,8 @@ from ..obs import jlog as _jlog
 from ..personas.store import PersonaManager, PersonaStore
 from ..personas.prompt_builder import build_messages
 from .. import nlu as _nlu
+from ..nlu.classifier import classify as classify_turn
+from ..dialog.policy import pick as pick_dialog_policy
 from ..config import load_settings
 
 try:
@@ -149,9 +150,7 @@ def _should_use_foundation(seed_text: str) -> bool:
     return True
 
 
-_POLICY_SUGGESTION_ACTIONS = frozenset(
-    getattr(_nlu.policy, "SUGGESTION_MOVES", {"ask_clarify", "offer_steps"})
-)
+_POLICY_SUGGESTION_ACTIONS = frozenset({"ask_clarify", "offer_steps"})
 
 
 def _get_dialog_action(meta: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -169,6 +168,13 @@ def _get_dialog_show_suggestions(meta: Optional[Dict[str, Any]]) -> bool:
     if _DIALOG_SHOW_SUGGESTIONS_KEY in meta:
         return bool(meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY))
     return bool(meta.get("show_suggestions"))
+
+
+def _policy_action(policy: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(policy, dict):
+        return None
+    action = policy.get("action") or policy.get("teacher_move")
+    return action if isinstance(action, str) else None
 
 
 def _resolve_show_suggestions(meta: Dict[str, Any],
@@ -203,11 +209,9 @@ def _resolve_show_suggestions(meta: Dict[str, Any],
             policy_flag = _coerce_pref(meta.get("show_suggestions"))
 
     if policy_flag is None:
-        action = None
-        if isinstance(meta, dict):
-            action = _get_dialog_action(meta)
-        if not action and isinstance(policy, dict):
-            action = policy.get("teacher_move")
+        action = _get_dialog_action(meta) if isinstance(meta, dict) else None
+        if not action:
+            action = _policy_action(policy)
         if action:
             policy_flag = action in _POLICY_SUGGESTION_ACTIONS
 
@@ -335,51 +339,72 @@ def build_suggestion_items(items: List[str]) -> List[Dict[str, str]]:
 
 
 def classify(seed_text: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Lightweight, offline-safe heuristic classifier for legacy policy usage."""
+    """Run lightweight classifiers and awareness annotators for a user turn."""
     base_meta = meta or {}
-    labels = {}
+    labels: Dict[str, Any] = {}
+
     try:
-        labels.update(annotate(seed_text, base_meta))
-    except Exception:
-        labels.update({})
-    try:
-        engagement = score_engagement(seed_text, base_meta)
-        if isinstance(engagement, dict):
-            labels.update(engagement)
+        primary_labels = classify_turn(seed_text, base_meta)
+        if isinstance(primary_labels, dict):
+            labels.update(primary_labels)
     except Exception:
         pass
 
-    text = (seed_text or "").strip()
-    lowered = text.lower()
-    if not text:
-        intent = "idle"
-    elif lowered == "greet":
-        intent = "greet"
-    elif text.endswith("?"):
-        intent = "question"
-    elif "help" in lowered or "how" in lowered:
-        intent = "help_request"
-    else:
-        intent = "statement"
+    try:
+        awareness = annotate(seed_text, base_meta)
+        if isinstance(awareness, dict):
+            labels.update({k: v for k, v in awareness.items() if k not in labels})
+            # Allow awareness annotators to augment existing labels without
+            # clobbering core classifier outputs like intent/topic.
+            for key, value in awareness.items():
+                if key not in {"intent", "topic", "expected_depth", "needs_scoping"}:
+                    labels[key] = value
+    except Exception:
+        pass
 
-    labels.setdefault("intent", intent)
-    labels.setdefault("confidence", 0.5 if text else 0.0)
+    try:
+        engagement = score_engagement(seed_text, base_meta)
+        if isinstance(engagement, dict):
+            for key, value in engagement.items():
+                if key not in labels:
+                    labels[key] = value
+    except Exception:
+        pass
+
+    if "intent" not in labels:
+        text = (seed_text or "").strip().lower()
+        if not text:
+            labels["intent"] = "idle"
+        elif text == "greet":
+            labels["intent"] = "greet"
+        elif seed_text.endswith("?") if isinstance(seed_text, str) else False:
+            labels["intent"] = "broad_topic_help"
+        else:
+            labels["intent"] = "broad_topic_help"
+
+    if "confidence" not in labels:
+        labels["confidence"] = 0.0 if not (seed_text or "").strip() else 0.5
+
     return labels
 
 
-def prepare_policy_meta(seed_text: str,
-                        meta: Optional[Dict[str, Any]] = None,
-                        *,
-                        cfg: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
-    """Ensure policy-related metadata is populated for downstream consumers."""
+def prepare_turn_metadata(seed_text: str,
+                          meta: Optional[Dict[str, Any]] = None,
+                          *,
+                          cfg: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Ensure dialog metadata is populated for downstream consumers."""
     cfg = cfg or db.get_config()
     incoming_meta = meta if isinstance(meta, dict) else {}
     target_meta = incoming_meta if incoming_meta is meta and isinstance(meta, dict) else dict(incoming_meta)
 
     labels = classify(seed_text, target_meta)
-    policy = pick_policy(labels, cfg) or {}
-
     dialog_nlu = dict(labels)
+
+    raw_policy = pick_dialog_policy(dialog_nlu) or {}
+    policy = dict(raw_policy)
+    if policy.get("action") and "teacher_move" not in policy:
+        policy["teacher_move"] = policy["action"]
+
     if not isinstance(target_meta.get("nlu"), dict):
         target_meta["nlu"] = dict(dialog_nlu)
     else:
@@ -391,9 +416,17 @@ def prepare_policy_meta(seed_text: str,
 
     action = target_meta.get(_DIALOG_ACTION_KEY) or target_meta.get("action")
     if not action:
-        action = policy.get("teacher_move") or "respond"
+        action = policy.get("action") or policy.get("teacher_move") or "respond"
     target_meta["action"] = action
     target_meta[_DIALOG_ACTION_KEY] = action
+
+    policy_verbosity = str(policy.get("verbosity") or "").strip().lower() or None
+    if policy_verbosity and policy_verbosity not in {"brief", "normal"}:
+        policy_verbosity = None
+
+    if policy_verbosity:
+        target_meta.setdefault(_DIALOG_VERBOSITY_KEY, policy_verbosity)
+        target_meta.setdefault("verbosity", policy_verbosity)
 
     if _DIALOG_VERBOSITY_KEY not in target_meta:
         target_meta[_DIALOG_VERBOSITY_KEY] = cfg.get("gen_target_verbosity", "medium")
@@ -407,7 +440,15 @@ def prepare_policy_meta(seed_text: str,
     target_meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
     target_meta[_DIALOG_POLICY_KEY] = dict(policy)
 
-    return target_meta, labels, policy
+    return target_meta, dialog_nlu, policy
+
+
+def prepare_policy_meta(seed_text: str,
+                        meta: Optional[Dict[str, Any]] = None,
+                        *,
+                        cfg: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Deprecated alias for backwards compatibility."""
+    return prepare_turn_metadata(seed_text, meta, cfg=cfg)
 
 
 def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
@@ -472,7 +513,7 @@ def make_assistant_frames(seed_text: str,
     Also broadcasts frames to the WS bus as they are prepared.
     """
     cfg = db.get_config()
-    meta, classified_labels, classified_policy = prepare_policy_meta(seed_text, meta, cfg=cfg)
+    meta, classified_labels, classified_policy = prepare_turn_metadata(seed_text, meta, cfg=cfg)
     skip_legacy = _should_skip_legacy(meta)
 
     try:
@@ -572,7 +613,7 @@ def _make_foundation_frames(seed_text: str,
         meta[_DIALOG_NLU_KEY] = dict(nlu_meta)
 
     action = _get_dialog_action(meta)
-    policy_move = policy.get('teacher_move') if isinstance(policy, dict) else None
+    policy_move = _policy_action(policy)
     if not action and policy_move:
         action = policy_move
     if action:
@@ -592,8 +633,9 @@ def _make_foundation_frames(seed_text: str,
 
     prompt_meta = dict(dialog_meta)
     prompt_meta['intent'] = nlu_result.get('intent')
-    if policy.get('teacher_move'):
-        prompt_meta['teacher_move'] = policy.get('teacher_move')
+    policy_action = _policy_action(policy)
+    if policy_action:
+        prompt_meta['teacher_move'] = policy_action
 
     examples = store.match_examples(persona['id'], seed_text)
     messages, teacher_move, prompt_hash = build_messages(
@@ -647,7 +689,7 @@ def _make_foundation_frames(seed_text: str,
             sid=session_id,
             intent=nlu_result.get('intent'),
             confidence=nlu_result.get('confidence'),
-            teacher_move=policy.get('teacher_move') or teacher_move,
+            teacher_move=policy_action or teacher_move,
             chips=len(policy_chips),
             prompt_hash=prompt_hash,
         )
@@ -671,7 +713,7 @@ def _make_foundation_frames(seed_text: str,
     _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
 
     frames: List[Dict] = []
-    active_teacher_move = policy.get('teacher_move') or teacher_move
+    active_teacher_move = policy_action or teacher_move
     chunk: Dict[str, Any] = {
         'type': 'assistant_chunk',
         'turn_id': turn_id,
@@ -745,7 +787,7 @@ def _make_legacy_frames(seed_text: str,
     else:
         labels = dict(labels)
     if policy is None:
-        policy = pick_policy(labels, cfg) or {}
+        policy = pick_dialog_policy(labels) or {}
     else:
         policy = dict(policy or {})
 
@@ -760,11 +802,12 @@ def _make_legacy_frames(seed_text: str,
                 meta[_DIALOG_NLU_KEY] = dict(labels)
     except Exception:
         pass
-    teacher_move = policy.get('teacher_move') if isinstance(policy, dict) else None
+    policy_action = _policy_action(policy)
+    teacher_move = policy_action
 
     action = _get_dialog_action(meta)
-    if not action and teacher_move:
-        action = teacher_move
+    if not action and policy_action:
+        action = policy_action
     if isinstance(meta, dict):
         if action:
             meta['action'] = action
