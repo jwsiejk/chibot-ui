@@ -2,7 +2,7 @@
 
 This module centralises all heuristics that decide whether an incoming
 WebSocket audio stream should continue to be treated as containerised Opus or
-switched to Deepgram's raw PCM ingest path.  The logic lives here so it can be
+switched to Deepgram's raw PCM ingest path. The logic lives here so it can be
 shared by the WS handler and tests without sprinkling guard-rail state across
 the codebase.
 

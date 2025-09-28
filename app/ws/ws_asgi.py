@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio, os, contextlib, time, io, struct, base64, uuid
 from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
 from collections import deque
-from app.services.audio.container_sniffer import AudioContainerSniffer, coerce_detection_from_meta
+from app.services.audio.container_sniffer import (
+    AudioContainerSniffer,
+    coerce_detection_from_meta,
+)
 from app.services.audio.raw_fallback import (
     DetectionSignal as RawDetectionSignal,
     StreamMeta as RawStreamMeta,
@@ -13,13 +16,23 @@ from app.services.audio.raw_fallback import (
     should_use_raw_fallback,
 )
 
-from .schema_v1 import parse_client_json, make_keepalive_ack, make_results, make_utterance_end, make_error
+from .schema_v1 import (
+    parse_client_json,
+    make_keepalive_ack,
+    make_results,
+    make_utterance_end,
+    make_error,
+)
 from .turn_buffer import TurnBuffer
-from app.services.streaming_asr.deepgram_client import DeepgramClient, DeepgramDrainTimeoutError
+from app.services.streaming_asr.deepgram_client import (
+    DeepgramClient,
+    DeepgramDrainTimeoutError,
+)
 from app.security.ws_token import verify as verify_ws_token
 from app.db import db
 from app.services.greet_idempotency import clear_greet_turn_cache
 from app.metrics import ws_metrics
+
 # NEW: invoke LLM on final transcript
 from app.services.streaming import run_ws_user_turn  # NEW
 from app.ws.barge import BargeState
@@ -43,6 +56,7 @@ except Exception:
 
 # ------------------------------ small helpers ------------------------------
 
+
 def _client_ip_from_scope(scope) -> str:
     try:
         c = scope.get("client") or ()
@@ -64,6 +78,7 @@ def _jlog(event: str, **fields):
     """Lightweight JSON log (stdout). Keep dependency-free inside WS path."""
     try:
         import time as _t, json as _json
+
         fields.setdefault("event", event)
         fields.setdefault("ts", _t.time())
         print(_json.dumps(fields, separators=(",", ":"), ensure_ascii=False))
@@ -83,6 +98,7 @@ def _clip_text(txt: str, limit: int = 120) -> str:
 
 def _dumps(obj) -> str:
     import json as _json
+
     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -112,7 +128,9 @@ def _env_truth(name: str, default: bool = False) -> bool:
     return v in ("1", "true", "yes", "on")
 
 
-def _wav_with_header(pcm: bytes, sample_rate: int, channels: int, bits_per_sample: int = 16) -> bytes:
+def _wav_with_header(
+    pcm: bytes, sample_rate: int, channels: int, bits_per_sample: int = 16
+) -> bytes:
     """Wrap raw PCM in a minimal RIFF/WAVE header for easy playback."""
     byte_rate = sample_rate * channels * (bits_per_sample // 8)
     block_align = channels * (bits_per_sample // 8)
@@ -123,7 +141,18 @@ def _wav_with_header(pcm: bytes, sample_rate: int, channels: int, bits_per_sampl
     buf.write(struct.pack("<I", riffsz))
     buf.write(b"WAVE")
     buf.write(b"fmt ")
-    buf.write(struct.pack("<IHHIIHH", 16, 1, channels, sample_rate, byte_rate, block_align, bits_per_sample))
+    buf.write(
+        struct.pack(
+            "<IHHIIHH",
+            16,
+            1,
+            channels,
+            sample_rate,
+            byte_rate,
+            block_align,
+            bits_per_sample,
+        )
+    )
     buf.write(b"data")
     buf.write(struct.pack("<I", datasz))
     buf.write(pcm)
@@ -144,31 +173,38 @@ async def _ws_send_diagnostic_audio(send, turn_id: int, mime: str, data: bytes) 
     off = 0
     part = 0
     # announce
-    await _ws_send_json(send, {
-        "type": "diagnostic_audio",
-        "turn_id": str(turn_id),
-        "mime": mime,
-        "total_bytes": total,
-        "part": part,
-        "is_last": (total == 0),
-        "b64": ""  # header-only announcement
-    })
-    while off < total:
-        chunk = data[off: off + CHUNK]
-        off += len(chunk)
-        part += 1
-        await _ws_send_json(send, {
+    await _ws_send_json(
+        send,
+        {
             "type": "diagnostic_audio",
             "turn_id": str(turn_id),
             "mime": mime,
             "total_bytes": total,
             "part": part,
-            "is_last": (off >= total),
-            "b64": base64.b64encode(chunk).decode("ascii")
-        })
+            "is_last": (total == 0),
+            "b64": "",  # header-only announcement
+        },
+    )
+    while off < total:
+        chunk = data[off : off + CHUNK]
+        off += len(chunk)
+        part += 1
+        await _ws_send_json(
+            send,
+            {
+                "type": "diagnostic_audio",
+                "turn_id": str(turn_id),
+                "mime": mime,
+                "total_bytes": total,
+                "part": part,
+                "is_last": (off >= total),
+                "b64": base64.b64encode(chunk).decode("ascii"),
+            },
+        )
 
 
 # ------------------------------ bus pumpers ------------------------------
+
 
 async def _pump_bus_to_client(sid: str, send):
     """Forward frames from StreamBus to the WS client as JSON."""
@@ -185,7 +221,14 @@ async def _pump_bus_to_client(sid: str, send):
                 await asyncio.sleep(0.01)
                 continue
             try:
-                await send({"type": "websocket.send", "text": _json.dumps(fr, separators=(",", ":"), ensure_ascii=False)})
+                await send(
+                    {
+                        "type": "websocket.send",
+                        "text": _json.dumps(
+                            fr, separators=(",", ":"), ensure_ascii=False
+                        ),
+                    }
+                )
             except Exception:
                 await asyncio.sleep(0.01)
     except asyncio.CancelledError:
@@ -253,7 +296,7 @@ async def _pump_dg_to_client(
                 continue
 
             if et in ("user_partial", "user_final"):
-                is_final = (et == "user_final")
+                is_final = et == "user_final"
                 text = (ev.get("text") or "").strip()
                 turn_id_for_event = turn_id_ref[0]
                 if is_final:
@@ -278,32 +321,53 @@ async def _pump_dg_to_client(
                         pass
                     if turn_timing is not None:
                         try:
-                            first_holder = turn_timing.setdefault("first_partial", [0.0])
+                            first_holder = turn_timing.setdefault(
+                                "first_partial", [0.0]
+                            )
                             if not first_holder[0]:
                                 first_holder[0] = time.time()
                         except Exception:
                             pass
-                _jlog("dg_transcript", sid=sid, turn_id=turn_id_for_event, is_final=is_final, chars=len(text), preview=_clip_text(text))
+                _jlog(
+                    "dg_transcript",
+                    sid=sid,
+                    turn_id=turn_id_for_event,
+                    is_final=is_final,
+                    chars=len(text),
+                    preview=_clip_text(text),
+                )
                 try:
                     if et == "user_partial":
                         _admin_emit and _admin_emit("asr:first_partial", session_id=sid)
                 except Exception:
                     pass
 
-                await _ws_send_json(send, make_results(turn_id_for_event, transcript=text, confidence=0.0, is_final=is_final))
+                await _ws_send_json(
+                    send,
+                    make_results(
+                        turn_id_for_event,
+                        transcript=text,
+                        confidence=0.0,
+                        is_final=is_final,
+                    ),
+                )
 
                 if is_final:
                     final_seen[0] = True
                     if turn_timing is not None and text:
                         try:
-                            first_holder = turn_timing.setdefault("first_partial", [0.0])
+                            first_holder = turn_timing.setdefault(
+                                "first_partial", [0.0]
+                            )
                             if not first_holder[0]:
                                 first_holder[0] = time.time()
                         except Exception:
                             pass
                     if on_turn_finish:
                         try:
-                            on_turn_finish(turn_id_for_event, "provider_final", False, len(text))
+                            on_turn_finish(
+                                turn_id_for_event, "provider_final", False, len(text)
+                            )
                         except Exception:
                             pass
                     await _ws_send_json(send, make_utterance_end(turn_id_for_event))
@@ -313,12 +377,21 @@ async def _pump_dg_to_client(
                         pass
 
                     if text:
+
                         async def _bg_turn():
                             try:
-                                await asyncio.to_thread(run_ws_user_turn, sid, text, None)
+                                await asyncio.to_thread(
+                                    run_ws_user_turn, sid, text, None
+                                )
                             except Exception as e:
                                 with contextlib.suppress(Exception):
-                                    await _ws_send_json(send, make_error("llm_turn_fail", e.__class__.__name__))
+                                    await _ws_send_json(
+                                        send,
+                                        make_error(
+                                            "llm_turn_fail", e.__class__.__name__
+                                        ),
+                                    )
+
                         asyncio.create_task(_bg_turn())
 
             elif et == "asr_error":
@@ -343,9 +416,16 @@ async def _pump_dg_to_client(
 
 # ------------------------------ main WS impl ------------------------------
 
+
 async def _ws_chat_asgi_impl(scope, receive, send):
     # Session-scoped transport flags for ASR
-    transport = {"protocol":"websocket","container":None,"codec":None,"containerized_opus":False,"features":[]}
+    transport = {
+        "protocol": "websocket",
+        "container": None,
+        "codec": None,
+        "containerized_opus": False,
+        "features": [],
+    }
     sniffer = AudioContainerSniffer()
     stream_meta = RawStreamMeta()
     stream_stats = RawStreamStats(meta=stream_meta)
@@ -383,7 +463,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
 
     # Auth
-    require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in ("0", "false", "no")
+    require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+    )
     bearer_only = os.getenv("WS_BEARER_ONLY", "1").lower() not in ("0", "false", "no")
     fail_limit = int(os.getenv("WS_FAIL_LIMIT", "10"))
     fail_window_sec = float(os.getenv("WS_FAIL_WINDOW_SEC", "60"))
@@ -391,7 +475,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     token = None
     try:
-        for _sp in (scope.get("subprotocols") or []):
+        for _sp in scope.get("subprotocols") or []:
             if isinstance(_sp, str) and _sp.startswith("bearer."):
                 token = _sp.split(".", 1)[1].strip()
                 break
@@ -399,14 +483,24 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         pass
     if not token:
         try:
-            hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
-            if "authorization" in hdrs and hdrs["authorization"].lower().startswith("bearer "):
+            hdrs = {
+                k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])
+            }
+            if "authorization" in hdrs and hdrs["authorization"].lower().startswith(
+                "bearer "
+            ):
                 token = hdrs["authorization"].split(" ", 1)[1].strip()
         except Exception:
             pass
     if (not bearer_only) and (not token) and scope.get("query_string"):
         try:
-            q = dict([tuple(p.split("=", 1)) for p in scope.get("query_string").decode().split("&") if "=" in p])
+            q = dict(
+                [
+                    tuple(p.split("=", 1))
+                    for p in scope.get("query_string").decode().split("&")
+                    if "=" in p
+                ]
+            )
             token = q.get("ws_token") or token
         except Exception:
             pass
@@ -415,9 +509,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             _ = verify_ws_token(token or "")
         except Exception:
             over = ws_metrics.record_fail(client_ip, fail_limit, fail_window_sec)
-            _jlog("ws_auth_fail", ip=client_ip, sid=sid, over_limit=over, via="preaccept")
+            _jlog(
+                "ws_auth_fail", ip=client_ip, sid=sid, over_limit=over, via="preaccept"
+            )
             try:
-                _admin_emit and _admin_emit("ws_auth_fail", sid=sid, ip=client_ip, over_limit=over)
+                _admin_emit and _admin_emit(
+                    "ws_auth_fail", sid=sid, ip=client_ip, over_limit=over
+                )
             except Exception:
                 pass
             with contextlib.suppress(Exception):
@@ -460,7 +558,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 _jlog("ws_conn_missing", conn_id=conn_id, sid=sid, source=source)
             return
         with contextlib.suppress(Exception):
-            _jlog("ws_conn_close", conn_id=conn_id, sid=sid, active=active_count, source=source)
+            _jlog(
+                "ws_conn_close",
+                conn_id=conn_id,
+                sid=sid,
+                active=active_count,
+                source=source,
+            )
         with contextlib.suppress(Exception):
             if _admin_emit:
                 _admin_emit("ws_conn_close", conn_id=conn_id, active=active_count)
@@ -503,7 +607,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             while True:
                 await asyncio.sleep(20)
                 try:
-                    await _ws_send_json(send, {"type": "keepalive", "ts": int(time.time() * 1000)})
+                    await _ws_send_json(
+                        send, {"type": "keepalive", "ts": int(time.time() * 1000)}
+                    )
                 except Exception:
                     break
         except asyncio.CancelledError:
@@ -515,7 +621,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         await _ws_send_json(send, {"type": "ready", "session_id": sid})
     except Exception:
         with contextlib.suppress(Exception):
-            await send({"type": "websocket.close", "code": 1011, "reason": "initial_ready_failed"})
+            await send(
+                {
+                    "type": "websocket.close",
+                    "code": 1011,
+                    "reason": "initial_ready_failed",
+                }
+            )
         return
 
     cfg: Dict[str, Any] = {}
@@ -541,9 +653,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             if running is loop:
                 asyncio.create_task(_ws_send_json(send, payload))
             else:
-                loop.call_soon_threadsafe(asyncio.create_task, _ws_send_json(send, payload))
+                loop.call_soon_threadsafe(
+                    asyncio.create_task, _ws_send_json(send, payload)
+                )
         except Exception:
             pass
+
     buf = TurnBuffer()
     dg: Optional[DeepgramClient] = None
     rx_task: Optional[asyncio.Task] = None
@@ -582,7 +697,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         turn_timing["final"][0] = 0.0
         turn_finish_logged[0] = False
 
-    def _log_turn_finish(turn_id: int, reason: str, synthetic: bool, transcript_chars: int) -> None:
+    def _log_turn_finish(
+        turn_id: int, reason: str, synthetic: bool, transcript_chars: int
+    ) -> None:
         if turn_finish_logged[0]:
             return
         turn_finish_logged[0] = True
@@ -593,7 +710,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         first_partial_ts = turn_timing.get("first_partial", [0.0])[0]
         delta_start = int((now_ts - start_ts) * 1000) if start_ts else None
         delta_open = int((now_ts - dg_open_ts) * 1000) if dg_open_ts else None
-        delta_partial = int((now_ts - first_partial_ts) * 1000) if first_partial_ts else None
+        delta_partial = (
+            int((now_ts - first_partial_ts) * 1000) if first_partial_ts else None
+        )
         with contextlib.suppress(Exception):
             _jlog(
                 "turn_finish",
@@ -607,7 +726,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 transcript_chars=int(transcript_chars),
             )
 
-    async def _emit_synthetic_final(turn_id: int, reason: str, transcript: str = "") -> bool:
+    async def _emit_synthetic_final(
+        turn_id: int, reason: str, transcript: str = ""
+    ) -> bool:
         if final_seen[0]:
             return False
         final_seen[0] = True
@@ -619,7 +740,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         await _ws_send_json(send, utterance_payload)
         with contextlib.suppress(Exception):
             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
-        _log_turn_finish(turn_id, reason=reason, synthetic=True, transcript_chars=len(transcript or ""))
+        _log_turn_finish(
+            turn_id,
+            reason=reason,
+            synthetic=True,
+            transcript_chars=len(transcript or ""),
+        )
         return True
 
     async def _ensure_dg_connected() -> bool:
@@ -684,10 +810,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     stream_stats.note_jitter_slip()
                                 mic_chunks[idx] = normalized
 
-                cfg['_transport'] = transport
-                cfg['_jlog'] = _jlog
-                cfg.setdefault('session_id', sid)
-                cfg['_url_tag'] = f"{WS_ASGI_BUILD}:{sid}"
+                cfg["_transport"] = transport
+                cfg["_jlog"] = _jlog
+                cfg.setdefault("session_id", sid)
+                cfg["_url_tag"] = f"{WS_ASGI_BUILD}:{sid}"
                 _jlog("asr_connect_begin", sid=sid, transport=transport)
                 client = DeepgramClient(cfg)
                 dg = client
@@ -717,9 +843,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 dg = None
                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
                 with contextlib.suppress(Exception):
-                    await _ws_send_json(send, make_error("asr_connect_fail", type(e).__name__))
+                    await _ws_send_json(
+                        send, make_error("asr_connect_fail", type(e).__name__)
+                    )
                 with contextlib.suppress(Exception):
-                    _admin_emit and _admin_emit("asr:error", session_id=sid, error=f"connect:{type(e).__name__}")
+                    _admin_emit and _admin_emit(
+                        "asr:error", session_id=sid, error=f"connect:{type(e).__name__}"
+                    )
             finally:
                 dg_connect_task = None
 
@@ -746,7 +876,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 return False
         return False
 
-    async def _send_chunk(data: bytes, *, from_buffer: bool = False, retry: bool = True) -> bool:
+    async def _send_chunk(
+        data: bytes, *, from_buffer: bool = False, retry: bool = True
+    ) -> bool:
         nonlocal dg, dg_state
         if dg is None:
             return False
@@ -813,7 +945,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             if et == "websocket.disconnect":
                 had_disconnect = True
                 now = time.time()
-                idle_s = max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
+                idle_s = (
+                    max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
+                )
                 with contextlib.suppress(Exception):
                     _jlog(
                         "ws_conn_disconnect",
@@ -912,7 +1046,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             )
                     # Detect container early using raw bytes
 
-
                     # Detect container early
                     try:
                         if transport.get("container") is None and raw_chunk:
@@ -920,7 +1053,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             if det:
                                 container = getattr(det, "container", None)
                                 codec = getattr(det, "codec", None)
-                                containerized = bool(getattr(det, "containerized", codec == "opus"))
+                                containerized = bool(
+                                    getattr(det, "containerized", codec == "opus")
+                                )
                                 transport["container"] = container
                                 transport["codec"] = codec
                                 transport["containerized_opus"] = containerized
@@ -937,14 +1072,22 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     sid=sid,
                                     container=transport.get("container"),
                                     codec=transport.get("codec"),
-                                    containerized_opus=transport.get("containerized_opus"),
+                                    containerized_opus=transport.get(
+                                        "containerized_opus"
+                                    ),
                                 )
                             else:
-                                meta_det = coerce_detection_from_meta(getattr(sniffer, "meta", lambda: None)())
+                                meta_det = coerce_detection_from_meta(
+                                    getattr(sniffer, "meta", lambda: None)()
+                                )
                                 if meta_det and getattr(meta_det, "container", None):
                                     container = getattr(meta_det, "container", None)
                                     codec = getattr(meta_det, "codec", None)
-                                    containerized = bool(getattr(meta_det, "containerized", codec == "opus"))
+                                    containerized = bool(
+                                        getattr(
+                                            meta_det, "containerized", codec == "opus"
+                                        )
+                                    )
                                     transport["container"] = container
                                     transport["codec"] = codec
                                     transport["containerized_opus"] = containerized
@@ -961,7 +1104,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         sid=sid,
                                         container=transport.get("container"),
                                         codec=transport.get("codec"),
-                                        containerized_opus=transport.get("containerized_opus"),
+                                        containerized_opus=transport.get(
+                                            "containerized_opus"
+                                        ),
                                     )
                     except Exception:
                         pass
@@ -994,7 +1139,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     if not turn_connect_started[0] and dg_state == "closed":
                         turn_connect_started[0] = True
                         if dg_connect_task is None:
-                           dg_connect_task = asyncio.create_task(_ensure_dg_connected())
+                            dg_connect_task = asyncio.create_task(
+                                _ensure_dg_connected()
+                            )
                     elif dg_state == "connecting":
                         pass
 
@@ -1002,14 +1149,20 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     if dg is not None:
                         if not asr_ready_evt.is_set():
                             try:
-                                await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
+                                await asyncio.wait_for(
+                                    asr_ready_evt.wait(), timeout=asr_ready_wait_s
+                                )
                             except asyncio.TimeoutError:
                                 _jlog("asr_not_ready_timeout", sid=sid)
                         if len(buffered_chunks) >= max_buffered_chunks:
                             await _flush_buffered_chunks()
                         await _flush_buffered_chunks()
                     else:
-                        _jlog("ws_audio_provider_connecting", sid=sid, queued=len(buffered_chunks))
+                        _jlog(
+                            "ws_audio_provider_connecting",
+                            sid=sid,
+                            queued=len(buffered_chunks),
+                        )
                     continue
 
                 # -------------------- Text / control lane --------------------
@@ -1023,19 +1176,36 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                         elif t == "greet":
                             _jlog("ws_greet_recv", sid=sid)
+
                             async def _bg():
                                 try:
                                     from app.services.streaming import run_ws_greet
+
                                     tid = await asyncio.to_thread(run_ws_greet, sid)
                                     with contextlib.suppress(Exception):
                                         if _admin_emit:
                                             cfg_now = db.get_config()
-                                            audio_on = bool((cfg_now or {}).get("feature_audio", True))
-                                            _admin_emit("greet:resp", label="greet:resp",
-                                                        session_id=sid, turn_id=tid, audio_scheduled=audio_on)
+                                            audio_on = bool(
+                                                (cfg_now or {}).get(
+                                                    "feature_audio", True
+                                                )
+                                            )
+                                            _admin_emit(
+                                                "greet:resp",
+                                                label="greet:resp",
+                                                session_id=sid,
+                                                turn_id=tid,
+                                                audio_scheduled=audio_on,
+                                            )
                                 except Exception as e:
                                     with contextlib.suppress(Exception):
-                                        await _ws_send_json(send, make_error("greet_fail", e.__class__.__name__))
+                                        await _ws_send_json(
+                                            send,
+                                            make_error(
+                                                "greet_fail", e.__class__.__name__
+                                            ),
+                                        )
+
                             asyncio.create_task(_bg())
 
                         elif t == "Configure":
@@ -1054,41 +1224,86 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 with contextlib.suppress(Exception):
                                     clear_greet_turn_cache(sid)
                                 with contextlib.suppress(Exception):
-                                    _admin_emit and _admin_emit("greet:reset", route="/ws/v1/chat",
-                                                                label="greet:reset", session_id=sid)
+                                    _admin_emit and _admin_emit(
+                                        "greet:reset",
+                                        route="/ws/v1/chat",
+                                        label="greet:reset",
+                                        session_id=sid,
+                                    )
                             if obj.get("greet"):
                                 _jlog("ws_greet_recv", sid=sid, via="Configure")
+
                                 async def _bg2():
                                     try:
                                         from app.services.streaming import run_ws_greet
+
                                         tid = await asyncio.to_thread(run_ws_greet, sid)
                                         with contextlib.suppress(Exception):
                                             if _admin_emit:
                                                 cfg_now = db.get_config()
-                                                audio_on = bool((cfg_now or {}).get("feature_audio", True))
-                                                _admin_emit("greet:resp", label="greet:resp",
-                                                            session_id=sid, turn_id=tid, audio_scheduled=audio_on)
+                                                audio_on = bool(
+                                                    (cfg_now or {}).get(
+                                                        "feature_audio", True
+                                                    )
+                                                )
+                                                _admin_emit(
+                                                    "greet:resp",
+                                                    label="greet:resp",
+                                                    session_id=sid,
+                                                    turn_id=tid,
+                                                    audio_scheduled=audio_on,
+                                                )
                                     except Exception as e:
                                         with contextlib.suppress(Exception):
-                                            await _ws_send_json(send, make_error("greet_fail", e.__class__.__name__))
+                                            await _ws_send_json(
+                                                send,
+                                                make_error(
+                                                    "greet_fail", e.__class__.__name__
+                                                ),
+                                            )
+
                                 asyncio.create_task(_bg2())
 
-                        elif t in ("user_msg", "User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage"):
+                        elif t in (
+                            "user_msg",
+                            "User",
+                            "UserText",
+                            "UserMessage",
+                            "UserUtterance",
+                            "UserTextMessage",
+                        ):
                             text = (obj.get("text") or "").strip()
                             if not text:
                                 continue
                             if len(text) > 8000:
-                                await _ws_send_json(send, make_error("payload_too_large", "user_text"))
+                                await _ws_send_json(
+                                    send, make_error("payload_too_large", "user_text")
+                                )
                                 continue
-                            corr = obj.get("correlation_user_msg_id") or obj.get("userMsgId")
-                            _jlog("ws_user_msg_recv", sid=sid, text_len=len(text), corr=bool(corr))
+                            corr = obj.get("correlation_user_msg_id") or obj.get(
+                                "userMsgId"
+                            )
+                            _jlog(
+                                "ws_user_msg_recv",
+                                sid=sid,
+                                text_len=len(text),
+                                corr=bool(corr),
+                            )
 
                             async def _bg_user():
                                 try:
-                                    await asyncio.to_thread(run_ws_user_turn, sid, text, corr)
+                                    await asyncio.to_thread(
+                                        run_ws_user_turn, sid, text, corr
+                                    )
                                 except Exception as e:
                                     with contextlib.suppress(Exception):
-                                        await _ws_send_json(send, make_error("user_fail", e.__class__.__name__))
+                                        await _ws_send_json(
+                                            send,
+                                            make_error(
+                                                "user_fail", e.__class__.__name__
+                                            ),
+                                        )
+
                             asyncio.create_task(_bg_user())
 
                         elif t == "CloseStream":
@@ -1112,7 +1327,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     )
 
                             # --- Get a turn_id (with guard logs) ---
-                            _jlog("before_close_turn", sid=sid, next_turn_id=buf.turn_seq + 1)
+                            _jlog(
+                                "before_close_turn",
+                                sid=sid,
+                                next_turn_id=buf.turn_seq + 1,
+                            )
                             try:
                                 turn_id, _pcm = buf.close_turn()
                             except Exception as e:
@@ -1127,55 +1346,98 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 # If provider isn't ready yet but we have audio, try to connect now (bounded wait)
                                 if dg is None and (buffered_chunks or mic_chunks):
                                     if dg_connect_task is None:
-                                        dg_connect_task = asyncio.create_task(_ensure_dg_connected())
+                                        dg_connect_task = asyncio.create_task(
+                                            _ensure_dg_connected()
+                                        )
                                     with contextlib.suppress(asyncio.TimeoutError):
-                                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=1.2)
+                                        await asyncio.wait_for(
+                                            asr_ready_evt.wait(), timeout=1.2
+                                        )
 
                                 # If we have buffered chunks but ASR not ready yet, give it a moment then flush.
                                 if buffered_chunks and not asr_ready_evt.is_set():
-                                    if dg_state == "connecting" and dg_connect_task is not None:
+                                    if (
+                                        dg_state == "connecting"
+                                        and dg_connect_task is not None
+                                    ):
                                         with contextlib.suppress(Exception):
-                                            await asyncio.wait_for(dg_connect_task, timeout=asr_ready_wait_s)
+                                            await asyncio.wait_for(
+                                                dg_connect_task,
+                                                timeout=asr_ready_wait_s,
+                                            )
                                     with contextlib.suppress(asyncio.TimeoutError):
-                                        await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
+                                        await asyncio.wait_for(
+                                            asr_ready_evt.wait(),
+                                            timeout=asr_ready_wait_s,
+                                        )
 
                                 # Flush any staged audio first
                                 await _flush_buffered_chunks()
 
                                 # Give ASR a brief chance to be "ready", then flush again
                                 with contextlib.suppress(asyncio.TimeoutError):
-                                    await asyncio.wait_for(asr_ready_evt.wait(), timeout=1.0)
+                                    await asyncio.wait_for(
+                                        asr_ready_evt.wait(), timeout=1.0
+                                    )
 
                                 await _flush_buffered_chunks()
 
                                 # Optional tiny settle after flush if no partials yet (helps very short clips)
                                 if not final_seen[0] and not asr_seen_partial[0]:
                                     with contextlib.suppress(Exception):
-                                        await asyncio.sleep(float(os.getenv("ASR_POST_FLUSH_WAIT_S", "0.35")))
+                                        await asyncio.sleep(
+                                            float(
+                                                os.getenv(
+                                                    "ASR_POST_FLUSH_WAIT_S", "0.35"
+                                                )
+                                            )
+                                        )
 
                                 provider_can_close = False
                                 fallback_reason = "no_audio"
                                 if dg is not None and sent_any_audio[0]:
                                     fallback_reason = None
                                     readiness_timeout = False
-                                    if dg_connect_task is not None and not dg_connect_task.done():
+                                    if (
+                                        dg_connect_task is not None
+                                        and not dg_connect_task.done()
+                                    ):
                                         try:
-                                            await asyncio.wait_for(dg_connect_task, timeout=asr_ready_wait_s)
+                                            await asyncio.wait_for(
+                                                dg_connect_task,
+                                                timeout=asr_ready_wait_s,
+                                            )
                                         except asyncio.TimeoutError:
                                             readiness_timeout = True
-                                            _jlog("ws_close_dg_connect_timeout", sid=sid)
+                                            _jlog(
+                                                "ws_close_dg_connect_timeout", sid=sid
+                                            )
                                         except Exception as exc:
-                                            _jlog("ws_close_dg_connect_error", sid=sid, err=type(exc).__name__)
-                                    if asr_ready_evt is not None and not asr_ready_evt.is_set():
+                                            _jlog(
+                                                "ws_close_dg_connect_error",
+                                                sid=sid,
+                                                err=type(exc).__name__,
+                                            )
+                                    if (
+                                        asr_ready_evt is not None
+                                        and not asr_ready_evt.is_set()
+                                    ):
                                         try:
-                                            await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
+                                            await asyncio.wait_for(
+                                                asr_ready_evt.wait(),
+                                                timeout=asr_ready_wait_s,
+                                            )
                                         except asyncio.TimeoutError:
                                             readiness_timeout = True
                                             _jlog("ws_close_dg_ready_timeout", sid=sid)
                                     provider_open = _dg_client_ready(dg)
                                     if not provider_open:
                                         _jlog("ws_close_dg_not_open", sid=sid)
-                                    sent_any_audio[0] = sent_any_audio[0] and provider_open and not readiness_timeout
+                                    sent_any_audio[0] = (
+                                        sent_any_audio[0]
+                                        and provider_open
+                                        and not readiness_timeout
+                                    )
                                     if not sent_any_audio[0]:
                                         if readiness_timeout or not provider_open:
                                             fallback_reason = "dg_not_ready"
@@ -1183,36 +1445,60 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             fallback_reason = "no_audio"
                                     else:
                                         provider_can_close = True
-                                elif fallback_reason == "dg_not_ready" and dg_connect_task is not None:
+                                elif (
+                                    fallback_reason == "dg_not_ready"
+                                    and dg_connect_task is not None
+                                ):
                                     if not dg_connect_task.done():
                                         with contextlib.suppress(Exception):
-                                            await asyncio.wait_for(dg_connect_task, timeout=asr_ready_wait_s)
+                                            await asyncio.wait_for(
+                                                dg_connect_task,
+                                                timeout=asr_ready_wait_s,
+                                            )
                                     if dg is not None and sent_any_audio[0]:
                                         fallback_reason = None
                                         provider_can_close = True
                                 if provider_can_close:
                                     # Ask provider to finish; if no final came, we'll synthesize after
-                                    drain_timeout_exc: Optional[DeepgramDrainTimeoutError] = None
+                                    drain_timeout_exc: Optional[
+                                        DeepgramDrainTimeoutError
+                                    ] = None
                                     try:
-                                        await asyncio.sleep(float(os.getenv("ASR_FINAL_GRACE_S", "0.30")))  # ~300 ms grace
+                                        await asyncio.sleep(
+                                            float(
+                                                os.getenv("ASR_FINAL_GRACE_S", "0.30")
+                                            )
+                                        )  # ~300 ms grace
                                         await dg.close(wait_for_final=True)
                                     except DeepgramDrainTimeoutError as exc:
                                         drain_timeout_exc = exc
                                         _jlog(
                                             "ws_close_dg_drain_timeout",
                                             sid=sid,
-                                            queued_chunks=getattr(exc, "queued_chunks", None),
-                                            queued_bytes=getattr(exc, "queued_bytes", None),
-                                            wait_timeout=getattr(exc, "wait_timeout", None),
+                                            queued_chunks=getattr(
+                                                exc, "queued_chunks", None
+                                            ),
+                                            queued_bytes=getattr(
+                                                exc, "queued_bytes", None
+                                            ),
+                                            wait_timeout=getattr(
+                                                exc, "wait_timeout", None
+                                            ),
                                         )
                                     except Exception as exc:
-                                        _jlog("ws_close_dg_close_error", sid=sid, err=type(exc).__name__)
+                                        _jlog(
+                                            "ws_close_dg_close_error",
+                                            sid=sid,
+                                            err=type(exc).__name__,
+                                        )
                                     dg_state = "closed"
                                     _relay_task = rx_task
                                     rx_task = None
                                     if _relay_task:
                                         _relay_task.cancel()
-                                        with contextlib.suppress(asyncio.CancelledError, Exception):
+                                        with contextlib.suppress(
+                                            asyncio.CancelledError, Exception
+                                        ):
                                             await _relay_task
                                     dg = None
                                     with contextlib.suppress(Exception):
@@ -1221,7 +1507,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         synth_reason = "dg_close_no_final"
                                         if drain_timeout_exc is not None:
                                             synth_reason = "dg_drain_timeout"
-                                    if await _emit_synthetic_final(turn_id, synth_reason):
+                                    if await _emit_synthetic_final(
+                                        turn_id, synth_reason
+                                    ):
                                         synthetic_emitted = True
                                         with contextlib.suppress(ValueError):
                                             pending_final_turns.remove(turn_id)
@@ -1230,8 +1518,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         _jlog(
                                             "ws_close_dg_drain_timeout_fallback",
                                             sid=sid,
-                                            queued_chunks=getattr(drain_timeout_exc, "queued_chunks", None),
-                                            queued_bytes=getattr(drain_timeout_exc, "queued_bytes", None),
+                                            queued_chunks=getattr(
+                                                drain_timeout_exc, "queued_chunks", None
+                                            ),
+                                            queued_bytes=getattr(
+                                                drain_timeout_exc, "queued_bytes", None
+                                            ),
                                         )
                                 else:
                                     if fallback_reason == "dg_not_ready":
@@ -1239,7 +1531,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     else:
                                         _jlog("ws_close_skip_no_audio", sid=sid)
                                     if not final_seen[0]:
-                                        reason = "fallback_dg_not_ready" if fallback_reason == "dg_not_ready" else "fallback_no_audio"
+                                        reason = (
+                                            "fallback_dg_not_ready"
+                                            if fallback_reason == "dg_not_ready"
+                                            else "fallback_no_audio"
+                                        )
                                         if await _emit_synthetic_final(turn_id, reason):
                                             synthetic_emitted = True
                                             with contextlib.suppress(ValueError):
@@ -1248,7 +1544,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             else:
                                 # No provider configured: still emit empty final + end to advance the dialog.
                                 if not final_seen[0]:
-                                    if await _emit_synthetic_final(turn_id, "no_provider"):
+                                    if await _emit_synthetic_final(
+                                        turn_id, "no_provider"
+                                    ):
                                         synthetic_emitted = True
                                         with contextlib.suppress(ValueError):
                                             pending_final_turns.remove(turn_id)
@@ -1263,52 +1561,81 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     barge.cancel(_send_barge_state)
                                 await asyncio.sleep(0)
 
-
-
                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
 
-                            _jlog("mic_capture_block_enter", sid=sid, turn_id=turn_id, mic_chunks=len(mic_chunks))
+                            _jlog(
+                                "mic_capture_block_enter",
+                                sid=sid,
+                                turn_id=turn_id,
+                                mic_chunks=len(mic_chunks),
+                            )
                             if MIC_CAPTURE:
                                 try:
                                     raw = b"".join(mic_chunks)
                                     _jlog(
                                         "mic_capture_summary",
-                                         sid=sid,
-                                         turn_id=turn_id,
-                                         bytes=len(raw),
-                                         chunks=len(mic_chunks),
-                                         container=transport.get("container"),
-                                         codec=transport.get("codec"),
-                                         containerized_opus=transport.get("containerized_opus"),
+                                        sid=sid,
+                                        turn_id=turn_id,
+                                        bytes=len(raw),
+                                        chunks=len(mic_chunks),
+                                        container=transport.get("container"),
+                                        codec=transport.get("codec"),
+                                        containerized_opus=transport.get(
+                                            "containerized_opus"
+                                        ),
                                     )
 
                                     if raw:
                                         base_dir = os.getenv("TMPDIR") or "/tmp"
                                         if transport.get("containerized_opus"):
                                             # Containerized Opus → save WebM bytes as-is
-                                            out_path = os.path.join(base_dir, f"mic_{sid}_{turn_id}.webm")
+                                            out_path = os.path.join(
+                                                base_dir, f"mic_{sid}_{turn_id}.webm"
+                                            )
                                             mime = "audio/webm"
                                             with open(out_path, "wb") as f:
                                                 f.write(raw)
                                             data_to_echo = raw
                                         else:
                                             # Raw PCM → wrap in a WAV header for easy playback
-                                            rate = int(os.getenv("DG_RAW_SAMPLE_RATE", "48000"))
+                                            rate = int(
+                                                os.getenv("DG_RAW_SAMPLE_RATE", "48000")
+                                            )
                                             ch = int(os.getenv("DG_RAW_CHANNELS", "1"))
-                                            wav = _wav_with_header(raw, sample_rate=rate, channels=ch, bits_per_sample=16)
-                                            out_path = os.path.join(base_dir, f"mic_{sid}_{turn_id}.wav")
+                                            wav = _wav_with_header(
+                                                raw,
+                                                sample_rate=rate,
+                                                channels=ch,
+                                                bits_per_sample=16,
+                                            )
+                                            out_path = os.path.join(
+                                                base_dir, f"mic_{sid}_{turn_id}.wav"
+                                            )
                                             mime = "audio/wav"
                                             with open(out_path, "wb") as f:
                                                 f.write(wav)
                                             data_to_echo = wav
 
-                                        _jlog("mic_capture_saved", sid=sid, turn_id=turn_id, path=out_path, bytes=len(raw), mime=mime)
+                                        _jlog(
+                                            "mic_capture_saved",
+                                            sid=sid,
+                                            turn_id=turn_id,
+                                            path=out_path,
+                                            bytes=len(raw),
+                                            mime=mime,
+                                        )
 
                                         if MIC_ECHO_WS:
                                             # Send the audio back over WS so the client can play it
-                                            await _ws_send_diagnostic_audio(send, turn_id, mime, data_to_echo)
+                                            await _ws_send_diagnostic_audio(
+                                                send, turn_id, mime, data_to_echo
+                                            )
                                 except Exception as e:
-                                    _jlog("mic_capture_fail", sid=sid, err=type(e).__name__)
+                                    _jlog(
+                                        "mic_capture_fail",
+                                        sid=sid,
+                                        err=type(e).__name__,
+                                    )
 
                         else:
                             # Unknown type already filtered by schema; no-op to future-proof.
@@ -1358,7 +1685,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             ping_task.cancel()
             await ping_task
         with contextlib.suppress(Exception):
-            await send({"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"})
+            await send(
+                {"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"}
+            )
 
 
 # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
@@ -1386,7 +1715,9 @@ async def ws_chat(websocket):
         return
 
     try:
-        await _pump_bus_to_client(sid, lambda msg: websocket.send_text(msg.get("text") or ""))
+        await _pump_bus_to_client(
+            sid, lambda msg: websocket.send_text(msg.get("text") or "")
+        )
     except Exception:
         pass
     finally:

@@ -40,13 +40,16 @@ def _sanitize_tag(val: Optional[str], *, limit: int = 64) -> Optional[str]:
         return None
     return txt[:limit]
 
+
 logger = logging.getLogger(__name__)
 
 
 class DeepgramDrainTimeoutError(RuntimeError):
     """Raised when the transmit queue fails to drain during close."""
 
-    def __init__(self, sid: str, *, queued_chunks: int, queued_bytes: int, wait_timeout: bool) -> None:
+    def __init__(
+        self, sid: str, *, queued_chunks: int, queued_bytes: int, wait_timeout: bool
+    ) -> None:
         self.sid = sid
         self.queued_chunks = queued_chunks
         self.queued_bytes = queued_bytes
@@ -60,18 +63,24 @@ class _FakeWSForTests:
     def __init__(self):
         self.open = True
         self.sent = []
+
     async def send(self, data):
         self.sent.append(data)
+
     async def close(self):
         self.open = False
+
     def __aiter__(self):
         # No incoming provider frames in test mode
         async def _gen():
             if False:
                 yield None
+
         return _gen()
 
+
 # ------------------------- URL & Config Helpers -------------------------------
+
 
 def _clip_text(txt: str, limit: int = 120) -> str:
     try:
@@ -113,6 +122,7 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
     # Apply overrides into query string and clean up for containerized
     try:
         import urllib.parse as _p
+
         parts = _p.urlsplit(base)
         q = _p.parse_qsl(parts.query, keep_blank_values=True)
         qd = {k: v for k, v in q}
@@ -201,7 +211,9 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         qd.setdefault("utterance_end_ms", "2000")
 
         query = _p.urlencode(qd)
-        base = _p.urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+        base = _p.urlunsplit(
+            (parts.scheme, parts.netloc, parts.path, query, parts.fragment)
+        )
     except Exception:
         pass
 
@@ -275,7 +287,9 @@ def _diagnostic_config(payload: dict, overrides: Optional[dict] = None) -> dict:
         pass
     return diag
 
+
 # ------------------------------ Client ---------------------------------------
+
 
 class DeepgramClient:
     """Async wrapper for Deepgram streaming WS with internal send queue.
@@ -308,7 +322,9 @@ class DeepgramClient:
         self._any_result: bool = False
         self._drain_event: asyncio.Event = asyncio.Event()
         self._drain_event.set()
-        self._drain_timeout_s: float = float(os.getenv("DG_CLOSE_DRAIN_TIMEOUT_S", "1.5"))
+        self._drain_timeout_s: float = float(
+            os.getenv("DG_CLOSE_DRAIN_TIMEOUT_S", "1.5")
+        )
 
         # First-chunk guard & timing
         self._first_real_sent: bool = False
@@ -316,7 +332,9 @@ class DeepgramClient:
         self._last_chunk_ts: float = 0.0
 
         # Tunables
-        self._linger_ms: int = int(os.getenv("DG_LINGER_MS", "800"))  # slightly longer default
+        self._linger_ms: int = int(
+            os.getenv("DG_LINGER_MS", "800")
+        )  # slightly longer default
         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "12"))
 
         # Open gate
@@ -327,7 +345,9 @@ class DeepgramClient:
 
         # Keepalive
         self._keepalive_task: Optional[asyncio.Task] = None
-        self._keepalive_interval: float = float(os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0"))
+        self._keepalive_interval: float = float(
+            os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0")
+        )
 
         # Optional JSON logger injected by WS layer (ws_asgi)
         self._jlog = self._cfg.get("_jlog")
@@ -365,7 +385,9 @@ class DeepgramClient:
                     pass
                 try:
                     state_cls = getattr(proto_mod, "State", None)
-                    open_member = getattr(state_cls, "OPEN", None) if state_cls else None
+                    open_member = (
+                        getattr(state_cls, "OPEN", None) if state_cls else None
+                    )
                     if open_member is not None and state == open_member:
                         return True
                 except Exception:
@@ -434,6 +456,7 @@ class DeepgramClient:
     def _schedule_flush(self, delay: float = 0.0) -> None:
         if self._flush_task and not self._flush_task.done():
             return
+
         async def _runner():
             if delay > 0:
                 try:
@@ -443,7 +466,11 @@ class DeepgramClient:
             try:
                 await self._flush_tx()
             except Exception:
-                logger.debug("Deepgram flush_tx raised; will retry on next trigger", exc_info=True)
+                logger.debug(
+                    "Deepgram flush_tx raised; will retry on next trigger",
+                    exc_info=True,
+                )
+
         self._flush_task = asyncio.create_task(_runner())
 
     async def _flush_tx(self) -> Tuple[int, Optional[str]]:
@@ -502,7 +529,9 @@ class DeepgramClient:
             )
             return 0, None
         # Wait until socket open — don't raise; just give it a short chance
-        await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S', '0.75')))
+        await self.wait_socket_open(
+            timeout=float(os.getenv("DG_OPEN_MICRO_WAIT_S", "0.75"))
+        )
         if not self._ws_is_open():
             if callable(self._jlog):
                 try:
@@ -559,7 +588,9 @@ class DeepgramClient:
             ):
                 logger.debug(
                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
-                    sid, len(data), self._min_valid_bytes
+                    sid,
+                    len(data),
+                    self._min_valid_bytes,
                 )
                 self._tx_queue.popleft()
                 continue
@@ -573,8 +604,12 @@ class DeepgramClient:
                 sent_chunks += 1
                 if first_chunk is None:
                     first_chunk = data
-                logger.debug("Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
-                             sid, len(data), len(self._tx_queue))
+                logger.debug(
+                    "Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
+                    sid,
+                    len(data),
+                    len(self._tx_queue),
+                )
                 if callable(self._jlog):
                     try:
                         self._jlog(
@@ -590,8 +625,12 @@ class DeepgramClient:
                         pass
             except Exception as e:
                 # Transient send issue; stop and retry on next trigger
-                logger.debug("Deepgram deferred send sid=%s err=%s queued=%s",
-                             sid, type(e).__name__, len(self._tx_queue))
+                logger.debug(
+                    "Deepgram deferred send sid=%s err=%s queued=%s",
+                    sid,
+                    type(e).__name__,
+                    len(self._tx_queue),
+                )
                 break
         if not self._tx_queue and not self._drain_event.is_set():
             self._drain_event.set()
@@ -660,6 +699,7 @@ class DeepgramClient:
         # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
         try:
             import urllib.parse as _p
+
             q = dict(_p.parse_qsl(_p.urlsplit(url).query, keep_blank_values=True))
             self._url_tag = q.get("tag") or None
             transport = (self._cfg or {}).get("_transport", {}) or {}
@@ -757,7 +797,9 @@ class DeepgramClient:
             )
 
         # Micro-wait to ensure the underlying socket is actually open
-        await self.wait_socket_open(timeout=float(os.getenv('DG_OPEN_MICRO_WAIT_S','0.75')))
+        await self.wait_socket_open(
+            timeout=float(os.getenv("DG_OPEN_MICRO_WAIT_S", "0.75"))
+        )
 
         cfg_payload = _initial_config(self._cfg)
         DG_LAST_URL = url
@@ -882,7 +924,9 @@ class DeepgramClient:
         # Wait briefly for drain acknowledgement before the retry loop
         if self._tx_queue and self._drain_timeout_s > 0:
             try:
-                await asyncio.wait_for(self._drain_event.wait(), timeout=self._drain_timeout_s)
+                await asyncio.wait_for(
+                    self._drain_event.wait(), timeout=self._drain_timeout_s
+                )
             except asyncio.TimeoutError:
                 drain_wait_timeout = True
 
@@ -896,7 +940,9 @@ class DeepgramClient:
             if not self._open_evt.is_set():
                 remaining = max(0.05, deadline - time.time())
                 try:
-                    await asyncio.wait_for(self._open_evt.wait(), timeout=min(self._open_wait_s, remaining))
+                    await asyncio.wait_for(
+                        self._open_evt.wait(), timeout=min(self._open_wait_s, remaining)
+                    )
                 except asyncio.TimeoutError:
                     pass
 
@@ -915,7 +961,9 @@ class DeepgramClient:
 
             if self._tx_queue:
                 try:
-                    await asyncio.sleep(min(recheck_s, max(0.05, deadline - time.time())))
+                    await asyncio.sleep(
+                        min(recheck_s, max(0.05, deadline - time.time()))
+                    )
                 except asyncio.CancelledError:
                     break
 
@@ -1132,7 +1180,11 @@ class DeepgramClient:
         try:
             async for raw in self._ws:  # type: ignore
                 try:
-                    msg = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
+                    msg = (
+                        json.loads(raw)
+                        if isinstance(raw, (str, bytes, bytearray))
+                        else raw
+                    )
                 except Exception:
                     continue
 
@@ -1142,7 +1194,12 @@ class DeepgramClient:
                     await self._signal_ready()
                     continue
 
-                if evt_type in ("results", "transcript", "partialtranscript", "speech.update"):
+                if evt_type in (
+                    "results",
+                    "transcript",
+                    "partialtranscript",
+                    "speech.update",
+                ):
                     text = ""
                     is_final = False
 
@@ -1186,7 +1243,10 @@ class DeepgramClient:
                     )
                     try:
                         await self._ev_queue.put(
-                            {"type": "user_final" if is_final else "user_partial", "text": text}
+                            {
+                                "type": "user_final" if is_final else "user_partial",
+                                "text": text,
+                            }
                         )
                     except Exception:
                         pass
@@ -1211,7 +1271,11 @@ class DeepgramClient:
                         pass
 
                 else:
-                    logger.debug("Deepgram unhandled event sid=%s evt_type=%s", sid, evt_type or "unknown")
+                    logger.debug(
+                        "Deepgram unhandled event sid=%s evt_type=%s",
+                        sid,
+                        evt_type or "unknown",
+                    )
                     continue
 
         except asyncio.CancelledError:
@@ -1227,14 +1291,19 @@ class DeepgramClient:
             if not self._had_result():
                 try:
                     await self._ev_queue.put(
-                        {"type": "asr_error", "error": f"recv_closed:{getattr(e, 'code', '')}:{getattr(e, 'reason', '')}"}
+                        {
+                            "type": "asr_error",
+                            "error": f"recv_closed:{getattr(e, 'code', '')}:{getattr(e, 'reason', '')}",
+                        }
                     )
                 except Exception:
                     pass
         except Exception as e:
             logger.exception("Deepgram rx loop error sid=%s", sid)
             try:
-                await self._ev_queue.put({"type": "asr_error", "error": f"rx:{e.__class__.__name__}"})
+                await self._ev_queue.put(
+                    {"type": "asr_error", "error": f"rx:{e.__class__.__name__}"}
+                )
             except Exception:
                 pass
 
@@ -1258,7 +1327,11 @@ class DeepgramClient:
                 try:
                     async with self._send_lock:
                         await ws.send(json.dumps({"type": "KeepAlive"}))
-                    logger.debug("Deepgram keepalive sid=%s interval=%s", sid, self._keepalive_interval)
+                    logger.debug(
+                        "Deepgram keepalive sid=%s interval=%s",
+                        sid,
+                        self._keepalive_interval,
+                    )
                 except websockets.ConnectionClosed as exc:
                     logger.warning("Deepgram keepalive closed sid=%s err=%s", sid, exc)
                     break
