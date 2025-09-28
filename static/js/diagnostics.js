@@ -97,14 +97,14 @@ async function recordUntilSilence(){
       };
       window.addEventListener('askchip-voice', onVoice);
       btnStop.onclick = ()=>{ status.textContent = 'Manual stop requested. Stopping…'; cleanup(); resolve('manual'); };
-    });    
+    });
     btnStop.disabled = true;
-    
+
      if (reason === 'timeout'){
       status.textContent = 'Timed out waiting for speech. Stopping…';
     }else if (reason === 'disarmed'){
       status.textContent = 'Microphone disarmed. Stopping…';
-    } 
+    }
     disarmVAD();
     if ((reason === 'silence' || reason === 'manual') && recordedSpeech){
       status.textContent = 'Audio captured (sending)…';

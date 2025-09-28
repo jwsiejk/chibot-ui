@@ -143,9 +143,10 @@ def _should_use_foundation(seed_text: str) -> bool:
     if not ENABLE_CHIP_FOUNDATION:
         return False
     try:
-        if str(seed_text or "").strip().lower() == "greet":
-            return False
+        normalized = str(seed_text or "").strip().lower()
     except Exception:
+        return False
+    if not normalized:
         return False
     return True
 

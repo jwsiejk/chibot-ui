@@ -1,42 +1,158 @@
-diff --git a/scripts/phase11_ui_csrf_usage.py b/scripts/phase11_ui_csrf_usage.py
-index d905d4d8898d196a517d2673a29996b9be18cd6c..599db45752d98d1c8d71ff7e0414abd573be4bca 100644
---- a/scripts/phase11_ui_csrf_usage.py
-+++ b/scripts/phase11_ui_csrf_usage.py
-@@ -1,35 +1,35 @@
- #!/usr/bin/env python3
- import os, re, sys
- ROOT = os.path.dirname(os.path.dirname(__file__))
- js_dir = os.path.join(ROOT, "static", "js")
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index 3239e7f5fc6a2a4621e28fc415f6ab79a98ccca5..eb7c3218035eb82b58116b577648f0c85306cd9c 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -121,54 +121,55 @@ def _short_greeting(text: str) -> str:
+ SETTINGS = load_settings()
+ ENABLE_CHIP_FOUNDATION = SETTINGS.enable_chip_foundation
+ ENABLE_POLICY_CHIPS = SETTINGS.enable_policy_chips
+ SUGGESTION_MAX = SETTINGS.suggestion_max
+ STRICT_SYSTEM_SHIM = (
+     "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
+     "and never mention being an AI or chatbot."
+ )
  
--def A(c, m): 
-+def A(c, m):
-     print(("PASS" if c else "FAIL") + ": " + m)
-     return c
+ _WS_SOURCES = {"ws_greet", "user_ws"}
+ _WS_PIPELINE_UNAVAILABLE_NOTE = "ws_pipeline_unavailable"
+ _WS_PIPELINE_MESSAGE = "I'm still warming up. Please try again in a moment."
+ _LEGACY_WARMUP_LINE = "Hi! I’m ready to help. (Model is warming up.)"
  
- ok = True
- if not os.path.isdir(js_dir):
-     print("PASS: no static/js directory present (skipping)")
-     sys.exit(0)
+ _DIALOG_ACTION_KEY = "dialog_action"
+ _DIALOG_VERBOSITY_KEY = "dialog_verbosity"
+ _DIALOG_SHOW_SUGGESTIONS_KEY = "dialog_show_suggestions"
+ _DIALOG_NLU_KEY = "dialog_nlu"
+ _DIALOG_POLICY_KEY = "dialog_policy"
  
- bad = []
- pat = re.compile(r"fetch\(\s*['\"]/api/v1/chat['\"][^)]*\)")
- for dp, _, files in os.walk(js_dir):
-     for fn in files:
--        if not fn.endswith(".js"): 
-+        if not fn.endswith(".js"):
-             continue
-         p = os.path.join(dp, fn)
-         try:
-             txt = open(p, "r", encoding="utf-8").read()
-         except Exception:
-             continue
-         for m in pat.finditer(txt):
-             # If the same file references apiPost, consider it ok
-             if "apiPost(" in txt or "window.apiPost" in txt:
-                 continue
-             bad.append(p)
  
- ok &= A(len(bad) == 0, "no raw fetch('/api/v1/chat') without apiPost helper")
- if bad:
-     print("   offending files:", *sorted(set(bad)), sep="\n   ")
- sys.exit(0 if ok else 1)
+ def _should_use_foundation(seed_text: str) -> bool:
+     if not ENABLE_CHIP_FOUNDATION:
+         return False
+     try:
+-        if str(seed_text or "").strip().lower() == "greet":
+-            return False
++        normalized = str(seed_text or "").strip().lower()
+     except Exception:
+         return False
++    if not normalized:
++        return False
+     return True
+ 
+ 
+ _POLICY_SUGGESTION_ACTIONS = frozenset({"ask_clarify", "offer_steps"})
+ 
+ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+ 
+ 
+ def _get_dialog_action(meta: Optional[Dict[str, Any]]) -> Optional[str]:
+     if not isinstance(meta, dict):
+         return None
+     action = meta.get(_DIALOG_ACTION_KEY)
+     if action:
+         return action
+     return meta.get("action")
+ 
+ 
+ def _get_dialog_show_suggestions(meta: Optional[Dict[str, Any]]) -> bool:
+     if not isinstance(meta, dict):
+         return False
+     if _DIALOG_SHOW_SUGGESTIONS_KEY in meta:
+         return bool(meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY))
+     return bool(meta.get("show_suggestions"))
+ 
+ 
+diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
+index 956db37512d7d456effa6b2922fe24b0b84b434a..80b3b843611da3556ff7888999e5e53fb0b8ce58 100644
+--- a/tests/test_streaming_ws_fallbacks.py
++++ b/tests/test_streaming_ws_fallbacks.py
+@@ -9,50 +9,91 @@ def _stub_config(monkeypatch):
+ 
+ def test_make_assistant_frames_ws_skips_legacy(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     legacy_called = False
+ 
+     def fake_legacy(*args, **kwargs):  # pragma: no cover - should never be invoked
+         nonlocal legacy_called
+         legacy_called = True
+         return "legacy", [{"type": "assistant_end", "turn_id": "legacy"}]
+ 
+     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
+     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
+ 
+     tid, frames = streaming.make_assistant_frames(
+         "hello",
+         "session-ws",
+         meta={"source": "user_ws"},
+     )
+ 
+     assert tid is None
+     assert frames == []
+     assert legacy_called is False
+ 
+ 
++def test_run_ws_greet_uses_foundation_frames(monkeypatch):
++    _stub_config(monkeypatch)
++
++    monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
++
++    captured = {"called": 0}
++
++    def fake_foundation(seed_text, session_id, meta, cfg, **kwargs):
++        captured["called"] += 1
++        captured["seed_text"] = seed_text
++        turn_id = kwargs.get("force_turn_id") or "tid-foundation"
++        frames = [
++            {"type": "assistant_chunk", "turn_id": turn_id, "text": "foundation hello", "kb_hits": 0},
++            {"type": "assistant_end", "turn_id": turn_id},
++        ]
++        captured["frames"] = frames
++        return turn_id, frames
++
++    monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
++
++    outage_calls = []
++    monkeypatch.setattr(streaming, "_emit_ws_outage", lambda *a, **k: outage_calls.append((a, k)))
++
++    tts_texts = []
++
++    def fake_schedule_tts(session_id, text, turn_id=None, correlation_user_msg_id=None):
++        tts_texts.append(text)
++
++    monkeypatch.setattr(streaming, "schedule_tts_audio", fake_schedule_tts)
++    monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
++
++    tid = streaming.run_ws_greet("session-foundation")
++
++    assert captured["called"] == 1
++    assert captured["seed_text"] == "greet"
++    assert tid == captured["frames"][0]["turn_id"]
++    assert not outage_calls
++    assert tts_texts and tts_texts[0] == "foundation hello"
++    assert streaming._WS_PIPELINE_MESSAGE not in captured["frames"][0]["text"]
++
++
+ def test_make_assistant_frames_http_allows_legacy(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     captured = types.SimpleNamespace(called=False)
+ 
+     def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
+         captured.called = True
+         assert isinstance(meta.get("nlu"), dict)
+         assert isinstance(meta.get("dialog_nlu"), dict)
+         assert "action" in meta
+         assert meta["dialog_action"] == meta["action"]
+         assert "verbosity" in meta
+         assert meta["dialog_verbosity"] == meta["verbosity"]
+         assert "show_suggestions" in meta
+         assert meta["dialog_show_suggestions"] == meta["show_suggestions"]
+         assert meta["dialog_policy"]["teacher_move"] == kwargs["policy"]["teacher_move"]
+         assert isinstance(kwargs.get("labels"), dict)
+         assert isinstance(kwargs.get("policy"), dict)
+         return "tid-123", [
+             {"type": "assistant_chunk", "turn_id": "tid-123", "text": "hi", "kb_hits": 0},
+             {"type": "assistant_end", "turn_id": "tid-123"},
+         ]
+ 
+     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
+     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)

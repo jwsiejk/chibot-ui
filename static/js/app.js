@@ -73,7 +73,7 @@ function _renderUserTranscript(d){
     } else {
       bubble.className = 'msg user';
     }
-      
+
     bubble.textContent = transcript;
 
     const isFinal = (

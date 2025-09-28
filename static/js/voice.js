@@ -209,7 +209,7 @@ function _startRecorder() {
   }
 
   state.rec = recorder;
-   
+
   state.rec.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) state.recChunks.push(e.data);
   };
@@ -263,7 +263,7 @@ function _startRecorder() {
   state.turnTimer = setTimeout(() => {
     try { _onSpeechEndCommitted(); } catch {}
   }, limitMs);
-   
+
   return true;
 }
 

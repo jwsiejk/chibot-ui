@@ -3,7 +3,7 @@ import os, re, sys
 ROOT = os.path.dirname(os.path.dirname(__file__))
 js_dir = os.path.join(ROOT, "static", "js")
 
-def A(c, m): 
+def A(c, m):
     print(("PASS" if c else "FAIL") + ": " + m)
     return c
 
@@ -16,7 +16,7 @@ bad = []
 pat = re.compile(r"fetch\(\s*['\"]/api/v1/chat['\"][^)]*\)")
 for dp, _, files in os.walk(js_dir):
     for fn in files:
-        if not fn.endswith(".js"): 
+        if not fn.endswith(".js"):
             continue
         p = os.path.join(dp, fn)
         try:

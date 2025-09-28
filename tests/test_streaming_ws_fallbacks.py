@@ -31,6 +31,47 @@ def test_make_assistant_frames_ws_skips_legacy(monkeypatch):
     assert legacy_called is False
 
 
+def test_run_ws_greet_uses_foundation_frames(monkeypatch):
+    _stub_config(monkeypatch)
+
+    monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
+
+    captured = {"called": 0}
+
+    def fake_foundation(seed_text, session_id, meta, cfg, **kwargs):
+        captured["called"] += 1
+        captured["seed_text"] = seed_text
+        turn_id = kwargs.get("force_turn_id") or "tid-foundation"
+        frames = [
+            {"type": "assistant_chunk", "turn_id": turn_id, "text": "foundation hello", "kb_hits": 0},
+            {"type": "assistant_end", "turn_id": turn_id},
+        ]
+        captured["frames"] = frames
+        return turn_id, frames
+
+    monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
+
+    outage_calls = []
+    monkeypatch.setattr(streaming, "_emit_ws_outage", lambda *a, **k: outage_calls.append((a, k)))
+
+    tts_texts = []
+
+    def fake_schedule_tts(session_id, text, turn_id=None, correlation_user_msg_id=None):
+        tts_texts.append(text)
+
+    monkeypatch.setattr(streaming, "schedule_tts_audio", fake_schedule_tts)
+    monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
+
+    tid = streaming.run_ws_greet("session-foundation")
+
+    assert captured["called"] == 1
+    assert captured["seed_text"] == "greet"
+    assert tid == captured["frames"][0]["turn_id"]
+    assert not outage_calls
+    assert tts_texts and tts_texts[0] == "foundation hello"
+    assert streaming._WS_PIPELINE_MESSAGE not in captured["frames"][0]["text"]
+
+
 def test_make_assistant_frames_http_allows_legacy(monkeypatch):
     _stub_config(monkeypatch)
 
