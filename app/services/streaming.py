@@ -681,13 +681,14 @@ def make_assistant_frames(seed_text: str,
                           meta: Optional[Dict] = None,
                           correlation_user_msg_id: Optional[str] = None,
                           *,
-                          force_turn_id: Optional[str] = None) -> Tuple[Optional[str], List[Dict]]:
+                          force_turn_id: Optional[str] = None,
+                          broadcast_immediately: bool = True) -> Tuple[Optional[str], List[Dict]]:
     """
     Produce assistant frames for a given user seed text using the configured LLM provider.
     ALWAYS returns a frames list that includes at least:
         - one 'assistant_chunk' (with either model text OR a safe fallback), and
         - one 'assistant_end'.
-    Also broadcasts frames to the WS bus as they are prepared.
+    When broadcast_immediately is True (default) frames are broadcast to the WS bus.
     """
     cfg = db.get_config()
     meta, classified_labels, classified_policy = prepare_turn_metadata(seed_text, meta, cfg=cfg)
@@ -741,6 +742,7 @@ def make_assistant_frames(seed_text: str,
                 fallback_on_error=fallback_on_error,
                 fallback_emit_event=fallback_emit_event,
                 action=action,
+                broadcast_immediately=broadcast_immediately,
             )
         except Exception as e:
             try:
@@ -766,6 +768,7 @@ def make_assistant_frames(seed_text: str,
         action=action,
         labels=classified_labels,
         policy=classified_policy,
+        broadcast_immediately=broadcast_immediately,
     )
 
 
@@ -781,7 +784,8 @@ def _make_foundation_frames(seed_text: str,
                             fallback_on_empty: bool,
                             fallback_on_error: bool,
                             fallback_emit_event: bool,
-                            action: Optional[str] = None) -> Tuple[str, List[Dict]]:
+                            action: Optional[str] = None,
+                            broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
     store = PersonaStore()
     persona = PersonaManager(store).get_active()
     dialog_meta = dict(meta or {})
@@ -987,7 +991,8 @@ def _make_foundation_frames(seed_text: str,
         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
     frames.append(end_fr)
 
-    _broadcast_frames(session_id, frames, turn_id)
+    if broadcast_immediately:
+        _broadcast_frames(session_id, frames, turn_id)
     return turn_id, frames
 
 
@@ -1005,7 +1010,8 @@ def _make_legacy_frames(seed_text: str,
                         fallback_emit_event: bool,
                         action: Optional[str] = None,
                         labels: Optional[Dict[str, Any]] = None,
-                        policy: Optional[Dict[str, Any]] = None) -> Tuple[str, List[Dict]]:
+                        policy: Optional[Dict[str, Any]] = None,
+                        broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
     persona = _get_persona_for_session(session_id)
 
     if labels is None:
@@ -1218,7 +1224,8 @@ def _make_legacy_frames(seed_text: str,
         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
     frames.append(end_fr)
 
-    _broadcast_frames(session_id, frames, turn_id)
+    if broadcast_immediately:
+        _broadcast_frames(session_id, frames, turn_id)
     return turn_id, frames
 
 

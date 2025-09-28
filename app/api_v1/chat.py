@@ -129,7 +129,13 @@ def post_chat():
             "verbosity": policy.get("verbosity"),
             "show_suggestions": policy.get("show_suggestions"),
         }
-        frames = make_assistant_frames(text, sid, meta=enriched_meta, correlation_user_msg_id=user_msg_id)
+        _provider_tid, frames = make_assistant_frames(
+            text,
+            sid,
+            meta=enriched_meta,
+            correlation_user_msg_id=user_msg_id,
+            broadcast_immediately=False,
+        )
         # ✅ Broadcast them to the WS client
         schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
         try:
@@ -236,7 +242,13 @@ def chat_entry():
         "verbosity": policy.get("verbosity"),
         "show_suggestions": policy.get("show_suggestions"),
     }
-    frames = make_assistant_frames(text, sid, meta=enriched_meta, correlation_user_msg_id=user_msg_id)
+    _provider_tid, frames = make_assistant_frames(
+        text,
+        sid,
+        meta=enriched_meta,
+        correlation_user_msg_id=user_msg_id,
+        broadcast_immediately=False,
+    )
     # ✅ Broadcast them to the WS client (fallback path too)
     schedule_frames(sid, frames, correlation_user_msg_id=user_msg_id)
     turn_id = None

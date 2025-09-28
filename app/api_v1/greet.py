@@ -52,7 +52,12 @@ def greet():
         try:
             from ..services.streaming import make_assistant_frames, schedule_frames
             greet_meta, _, _ = prepare_turn_metadata("greet", {"source": "greet"})
-            _tid, frames = make_assistant_frames("greet", sid, meta=greet_meta)
+            _tid, frames = make_assistant_frames(
+                "greet",
+                sid,
+                meta=greet_meta,
+                broadcast_immediately=False,
+            )
             # Prefer the LLM’s chosen turn if it returns one (keep correlation tidy)
             if isinstance(_tid, str) and _tid:
                 tid = _tid
@@ -70,7 +75,12 @@ def greet():
                 fallback_text = "Hi, I’m Chip. How can I help today?"
                 from ..services.streaming import make_assistant_frames, schedule_frames
                 fallback_meta, _, _ = prepare_turn_metadata(fallback_text, {"source":"greet_fallback"})
-                _tid2, frames2 = make_assistant_frames(fallback_text, sid, meta=fallback_meta)
+                _tid2, frames2 = make_assistant_frames(
+                    fallback_text,
+                    sid,
+                    meta=fallback_meta,
+                    broadcast_immediately=False,
+                )
                 if isinstance(_tid2, str) and _tid2:
                     tid = _tid2
                 schedule_frames(sid, frames2)

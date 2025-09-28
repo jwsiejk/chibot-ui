@@ -1,6 +1,22 @@
+import importlib
 import types
 
 from app.services import streaming
+
+
+def _test_client():
+    mod = importlib.import_module("app")
+    if hasattr(mod, "create_app"):
+        flask_app = mod.create_app()
+    else:
+        flask_app = mod.app
+    flask_app.config["TESTING"] = True
+    return flask_app.test_client()
+
+
+def _csrf_token(client):
+    resp = client.get("/api/v1/csrf")
+    return resp.headers.get("X-CSRF-Token")
 
 
 def _stub_config(monkeypatch):
@@ -415,3 +431,182 @@ def test_legacy_frames_emit_suggestions_only_when_allowed(monkeypatch):
     )
 
     assert any(fr.get("type") == "suggestions" for fr in offer_frames)
+
+
+def test_make_assistant_frames_allows_opt_out(monkeypatch):
+    _stub_config(monkeypatch)
+
+    monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
+
+    captured = {}
+
+    def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
+        captured["broadcast_immediately"] = kwargs.get("broadcast_immediately")
+        frames = [
+            {"type": "assistant_chunk", "turn_id": "abc", "text": "hi", "kb_hits": 0},
+            {"type": "assistant_end", "turn_id": "abc"},
+        ]
+        return "abc", frames
+
+    monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
+
+    tid, frames = streaming.make_assistant_frames(
+        "hello",
+        "sess-opt",
+        meta={"source": "user_http"},
+        broadcast_immediately=False,
+    )
+
+    assert tid == "abc"
+    assert captured.get("broadcast_immediately") is False
+    assert sum(1 for fr in frames if fr.get("type") == "assistant_chunk") == 1
+
+
+def test_post_chat_emits_single_chunk(monkeypatch):
+    _stub_config(monkeypatch)
+
+    import app.api_v1.chat as chat_api
+
+    monkeypatch.setattr(chat_api, "check_now", lambda *a, **k: None)
+    monkeypatch.setattr(chat_api, "classify_turn", lambda *a, **k: {"intent": "ask", "verbosity": "normal", "show_suggestions": False})
+    monkeypatch.setattr(chat_api, "pick_dialog_policy", lambda *a, **k: {"action": "answer", "verbosity": "normal", "show_suggestions": False})
+
+    calls = {}
+
+    def fake_make_frames(text, sid, **kwargs):
+        calls["broadcast_immediately"] = kwargs.get("broadcast_immediately")
+        return "tid-chat", [
+            {"type": "assistant_chunk", "turn_id": "tid-chat", "text": "ok", "kb_hits": 0},
+            {"type": "assistant_end", "turn_id": "tid-chat"},
+        ]
+
+    emitted = []
+
+    def fake_schedule_frames(session_id, frames, **kwargs):
+        emitted.extend(frames)
+
+    monkeypatch.setattr(chat_api, "make_assistant_frames", fake_make_frames)
+    monkeypatch.setattr(chat_api, "schedule_frames", fake_schedule_frames)
+
+    client = _test_client()
+    token = _csrf_token(client)
+
+    resp = client.post(
+        "/api/v1/chat",
+        json={"text": "Hello", "session_id": "sess-post"},
+        headers={"Idempotency-Key": "abc", "X-CSRF-Token": token},
+    )
+
+    assert resp.status_code == 200
+    assert calls.get("broadcast_immediately") is False
+    assert sum(1 for fr in emitted if fr.get("type") == "assistant_chunk") == 1
+
+
+def test_chat_entry_emits_single_chunk(monkeypatch):
+    _stub_config(monkeypatch)
+
+    import app.api_v1.chat as chat_api
+
+    monkeypatch.setattr(chat_api, "check_now", lambda *a, **k: None)
+    monkeypatch.setattr(chat_api, "classify_turn", lambda *a, **k: {"intent": "ask", "verbosity": "normal", "show_suggestions": False})
+    monkeypatch.setattr(chat_api, "pick_dialog_policy", lambda *a, **k: {"action": "answer", "verbosity": "normal", "show_suggestions": False})
+
+    calls = {}
+
+    def fake_make_frames(text, sid, **kwargs):
+        calls.setdefault("broadcast_immediately", []).append(kwargs.get("broadcast_immediately"))
+        return "tid-chat-entry", [
+            {"type": "assistant_chunk", "turn_id": "tid-chat-entry", "text": "ok", "kb_hits": 0},
+            {"type": "assistant_end", "turn_id": "tid-chat-entry"},
+        ]
+
+    emitted = []
+
+    def fake_schedule_frames(session_id, frames, **kwargs):
+        emitted.extend(frames)
+
+    monkeypatch.setattr(chat_api, "make_assistant_frames", fake_make_frames)
+    monkeypatch.setattr(chat_api, "schedule_frames", fake_schedule_frames)
+
+    client = _test_client()
+    token = _csrf_token(client)
+
+    resp = client.post(
+        "/api/v1/chat/",
+        json={"text": "Hello", "session_id": "sess-entry"},
+        headers={"Idempotency-Key": "entry", "X-CSRF-Token": token},
+    )
+
+    assert resp.status_code == 200
+    assert calls.get("broadcast_immediately") == [False]
+    assert sum(1 for fr in emitted if fr.get("type") == "assistant_chunk") == 1
+
+
+def test_greet_emits_single_chunk(monkeypatch):
+    _stub_config(monkeypatch)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+
+    emitted = []
+    flags = []
+
+    def fake_prepare(seed_text, meta, cfg=None):
+        return {"source": meta.get("source")}, {}, {}
+
+    def fake_make_frames(seed_text, sid, **kwargs):
+        flags.append(kwargs.get("broadcast_immediately"))
+        return "tid-greet", [
+            {"type": "assistant_chunk", "turn_id": "tid-greet", "text": "hello", "kb_hits": 0},
+            {"type": "assistant_end", "turn_id": "tid-greet"},
+        ]
+
+    def fake_schedule(session_id, frames, **kwargs):
+        emitted.extend(frames)
+
+    monkeypatch.setattr(streaming, "prepare_turn_metadata", fake_prepare)
+    monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
+    monkeypatch.setattr(streaming, "schedule_frames", fake_schedule)
+
+    client = _test_client()
+
+    resp = client.get("/api/v1/greet?session_id=sess-greet")
+
+    assert resp.status_code == 200
+    assert flags == [False]
+    assert sum(1 for fr in emitted if fr.get("type") == "assistant_chunk") == 1
+
+
+def test_nudge_emits_single_chunk(monkeypatch):
+    _stub_config(monkeypatch)
+
+    import app.policy.nudges as nudges
+
+    emitted = []
+    flags = []
+
+    def fake_make_frames(text, sid, **kwargs):
+        flags.append(kwargs.get("broadcast_immediately"))
+        return "tid-nudge", [
+            {"type": "assistant_chunk", "turn_id": "tid-nudge", "text": "ping", "kb_hits": 0},
+            {"type": "assistant_end", "turn_id": "tid-nudge"},
+        ]
+
+    class InstantTimer:
+        def __init__(self, delay, func):
+            self.func = func
+
+        def start(self):
+            self.func()
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(nudges, "make_assistant_frames", fake_make_frames)
+    monkeypatch.setattr(nudges.bus, "broadcast", lambda sid, frame: emitted.append(frame))
+    monkeypatch.setattr(nudges.threading, "Timer", InstantTimer)
+
+    nudges.arm_nudge("sess-nudge")
+
+    assert flags == [False]
+    assert sum(1 for fr in emitted if fr.get("type") == "assistant_chunk") == 1

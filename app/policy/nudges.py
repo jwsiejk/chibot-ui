@@ -36,7 +36,12 @@ def arm_nudge(session_id: str):
             return
         # Build and send a short nudge response
         meta, _, _ = prepare_turn_metadata(_nudge_text(), {"source": "nudge"})
-        tid, frames = make_assistant_frames(_nudge_text(), session_id, meta=meta)
+        tid, frames = make_assistant_frames(
+            _nudge_text(),
+            session_id,
+            meta=meta,
+            broadcast_immediately=False,
+        )
         for fr in frames:
             if fr.get("type") == "end":
                 fr["reason"] = "nudge"
