@@ -765,7 +765,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         connect_result = {"ok": False}
 
         async def _connect() -> None:
-            nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
+            nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result, fallback_detection
             try:
                 dg_state = "connecting"
                 with contextlib.suppress(Exception):
