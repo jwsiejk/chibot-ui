@@ -64,11 +64,11 @@ function drawWaveform(values) {
   clearCanvas();
 
   const midY = canvasHeight / 2;
-  const amplitude = canvasHeight * 0.42;
+  const amplitude = canvasHeight * 0.62;
   const sampleCount = Math.max(2, Math.min(220, values.length));
   const step = (values.length - 1) / (sampleCount - 1);
   const slice = canvasWidth / (sampleCount - 1);
-  const smoothing = 0.45;
+  const smoothing = 0.3;
   const points = new Array(sampleCount);
 
   let lastY = midY;
@@ -241,7 +241,7 @@ export async function start() {
   source = audioCtx.createMediaStreamSource(stream);
   analyser = audioCtx.createAnalyser();
   analyser.fftSize = 2048;
-  analyser.smoothingTimeConstant = 0.7;
+  analyser.smoothingTimeConstant = 0.55;
   analyser.minDecibels = -90;
   analyser.maxDecibels = -10;
   source.connect(analyser);

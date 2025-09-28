@@ -1,383 +1,115 @@
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 87ece0609010ec2a12384170f34cf1175e82201b..859a8ca3ba3b4ecb691618fffedb095a2822fb68 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -56,50 +56,54 @@ def _build_prompt(seed_text: str, persona: Dict, kb_snippets: List[str], teacher
- # --- text hygiene -------------------------------------------------------------
- # Remove ANY occurrence (not just trailing) of legacy "[KB:n]" stamps, case-insensitive.
- _KB_TAG_RE = re.compile(r"\s*\[(?:KB|kb)\s*:\s*\d+\]\s*")
+diff --git a/static/js/visualizer.js b/static/js/visualizer.js
+index c07055c942f4a2c559938b5c7587551994b6ae71..cbaafe4de88db262704ebc3fb77cd2817b52b35c 100644
+--- a/static/js/visualizer.js
++++ b/static/js/visualizer.js
+@@ -42,55 +42,55 @@ function traceWave(points) {
  
- def _scrub_debug_stamps(s: str) -> str:
-     """
-     Remove legacy debug stamps like "[KB:0]" that were historically appended to
-     assistant text for telemetry. We keep the value as metadata instead.
-     This removes ALL occurrences safely without touching other content.
-     """
-     if not s:
-         return s
-     # Replace any matches with a single space, then trim.
-     return _KB_TAG_RE.sub(" ", s).strip()
+   const last = points[points.length - 1];
+   ctx.lineTo(last.x, last.y);
+ }
  
+ function drawIdleWave() {
+   if (!ctx || !canvasWidth || !canvasHeight) return;
+   clearCanvas();
+   const midY = canvasHeight / 2;
+   ctx.beginPath();
+   ctx.moveTo(0, midY);
+   ctx.lineTo(canvasWidth, midY);
+   ctx.strokeStyle = 'rgba(120, 150, 220, 0.28)';
+   ctx.lineWidth = 1.2;
+   ctx.stroke();
+ }
  
- SETTINGS = load_settings()
- ENABLE_CHIP_FOUNDATION = SETTINGS.enable_chip_foundation
- ENABLE_POLICY_CHIPS = SETTINGS.enable_policy_chips
- SUGGESTION_MAX = SETTINGS.suggestion_max
- STRICT_SYSTEM_SHIM = (
-     "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
-     "and never mention being an AI or chatbot."
- )
+ function drawWaveform(values) {
+   if (!ctx || !values || values.length === 0 || !canvasWidth || !canvasHeight) {
+     return;
+   }
  
-+_WS_SOURCES = {"ws_greet", "user_ws"}
-+_WS_PIPELINE_UNAVAILABLE_NOTE = "ws_pipeline_unavailable"
-+_WS_PIPELINE_MESSAGE = "I'm still warming up. Please try again in a moment."
-+
+   clearCanvas();
  
- def _should_use_foundation(seed_text: str) -> bool:
-     if not ENABLE_CHIP_FOUNDATION:
-         return False
-     try:
-         if str(seed_text or "").strip().lower() == "greet":
-             return False
-     except Exception:
-         return False
-     return True
+   const midY = canvasHeight / 2;
+-  const amplitude = canvasHeight * 0.42;
++  const amplitude = canvasHeight * 0.62;
+   const sampleCount = Math.max(2, Math.min(220, values.length));
+   const step = (values.length - 1) / (sampleCount - 1);
+   const slice = canvasWidth / (sampleCount - 1);
+-  const smoothing = 0.45;
++  const smoothing = 0.3;
+   const points = new Array(sampleCount);
  
+   let lastY = midY;
+   for (let i = 0; i < sampleCount; i++) {
+     const dataIndex = Math.round(i * step);
+     const value = (values[dataIndex] - 128) / 128;
+     const targetY = midY + value * amplitude;
+     const y = lastY + (targetY - lastY) * smoothing;
+     const x = slice * i;
+     points[i] = { x, y };
+     lastY = y;
+   }
  
- def _apply_system_shim(messages: List[Dict[str, str]], shim: str) -> List[Dict[str, str]]:
-     cloned: List[Dict[str, str]] = [dict(m) for m in messages]
-     for msg in cloned:
-         if msg.get("role") == "system":
-             msg["content"] = (msg.get("content") or "").rstrip() + "\n" + shim
-             return cloned
-     cloned.insert(0, {"role": "system", "content": shim})
-     return cloned
+   ctx.beginPath();
+   traceWave(points);
+   ctx.lineTo(canvasWidth, midY);
+   ctx.lineTo(0, midY);
+   ctx.closePath();
  
+   if (fillGradient) {
+     ctx.fillStyle = fillGradient;
+     ctx.fill();
+   }
  
- def _call_foundation_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
-     client = make_openai_client()
-     model = (
-@@ -214,82 +218,106 @@ def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
-     raw = policy.get("chips") if isinstance(policy, dict) else None
-     if not raw:
-         return []
-     if isinstance(raw, (list, tuple, set)):
-         chips = list(raw)
-     else:
-         chips = [raw]
-     cap = _suggestion_cap()
-     cleaned: List[str] = []
-     seen = set()
-     for item in chips:
-         text = _normalize_suggestion_item(item)
-         if not text:
-             continue
-         if len(text) > 50:
-             text = text[:50].rstrip()
-         if not text or text in seen:
-             continue
-         cleaned.append(text)
-         seen.add(text)
-         if len(cleaned) >= cap:
-             break
-     return cleaned
+   ctx.beginPath();
+@@ -219,51 +219,51 @@ export async function start() {
  
+   if (!stream || !stream.active) {
+     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+       throw new Error('getUserMedia is not supported in this browser');
+     }
+     stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+   }
  
-+def _should_skip_legacy(meta: Optional[Dict[str, Any]]) -> bool:
-+    if not meta:
-+        return False
-+    if bool(meta.get("skip_legacy_fallback")):
-+        return True
-+    source = str(meta.get("source", "") or "").strip().lower()
-+    if source in _WS_SOURCES:
-+        return True
-+    return False
-+
-+
-+def _allocate_turn_id(force_turn_id: Optional[str]) -> str:
-+    if force_turn_id is not None:
-+        db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
-+        return str(force_turn_id)
-+    turn_seq = db.memory.setdefault('turn_seq', 0) + 1
-+    db.memory['turn_seq'] = turn_seq
-+    return str(turn_seq)
-+
-+
- def make_assistant_frames(seed_text: str,
-                           session_id: str,
-                           meta: Optional[Dict] = None,
-                           correlation_user_msg_id: Optional[str] = None,
-                           *,
--                          force_turn_id: Optional[str] = None) -> Tuple[str, List[Dict]]:
-+                          force_turn_id: Optional[str] = None) -> Tuple[Optional[str], List[Dict]]:
-     """
-     Produce assistant frames for a given user seed text using the configured LLM provider.
-     ALWAYS returns a frames list that includes at least:
-         - one 'assistant_chunk' (with either model text OR a safe fallback), and
-         - one 'assistant_end'.
-     Also broadcasts frames to the WS bus as they are prepared.
-     """
-     meta = meta or {}
-     cfg = db.get_config()
-+    skip_legacy = _should_skip_legacy(meta)
+   if (!audioCtx) {
+     const AC = window.AudioContext || window.webkitAudioContext;
+     if (!AC) {
+       throw new Error('Web Audio API not supported');
+     }
+     audioCtx = new AC({ sampleRate: 48000 });
+   }
  
-     if _should_use_foundation(seed_text):
-         try:
-             return _make_foundation_frames(
-                 seed_text,
-                 session_id,
-                 meta,
-                 cfg,
-                 correlation_user_msg_id=correlation_user_msg_id,
-                 force_turn_id=force_turn_id,
-             )
-         except Exception as e:
-             try:
-                 _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
-             except Exception:
-                 pass
+   if (audioCtx.state === 'suspended') {
+     try { await audioCtx.resume(); } catch (_) {}
+   }
  
-+    if skip_legacy:
-+        return None, []
-+
-     return _make_legacy_frames(
-         seed_text,
-         session_id,
-         meta,
-         cfg,
-         correlation_user_msg_id=correlation_user_msg_id,
-         force_turn_id=force_turn_id,
-     )
+   cleanupGraph();
  
+   source = audioCtx.createMediaStreamSource(stream);
+   analyser = audioCtx.createAnalyser();
+   analyser.fftSize = 2048;
+-  analyser.smoothingTimeConstant = 0.7;
++  analyser.smoothingTimeConstant = 0.55;
+   analyser.minDecibels = -90;
+   analyser.maxDecibels = -10;
+   source.connect(analyser);
  
- def _make_foundation_frames(seed_text: str,
-                             session_id: str,
-                             meta: Dict[str, Any],
-                             cfg: Dict[str, Any],
-                             *,
-                             correlation_user_msg_id: Optional[str],
-                             force_turn_id: Optional[str]) -> Tuple[str, List[Dict]]:
-     store = PersonaStore()
-     persona = PersonaManager(store).get_active()
-     dialog_meta = dict(meta or {})
+   dataArray = new Uint8Array(analyser.fftSize);
+   resizeCanvas();
+   renderFrame();
+   return stream;
+ }
  
-     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
-     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store)
+ export function stop({ reset = true } = {}) {
+   if (rafId) {
+     window.cancelAnimationFrame(rafId);
+     rafId = null;
+   }
  
-     prompt_meta = dict(dialog_meta)
-@@ -676,80 +704,127 @@ def schedule_frames(session_id: str,
-                     if isinstance(fr, dict) and fr.get('type') == 'assistant_chunk' and 'text' in fr:
-                         fr['text'] = _scrub_debug_stamps(fr['text'])
-                     bus.broadcast(session_id, fr)
-                 except Exception:
-                     pass
-             # Ensure an assistant_end terminator exists
-             if not any(fr.get('type') in ('assistant_end', 'end') for fr in frames):
-                 end_fr = {'type': 'assistant_end', 'turn_id': frames[-1].get('turn_id') if frames else None}
-                 if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
-                     end_fr['correlation_user_msg_id'] = correlation_user_msg_id
-                 try:
-                     bus.broadcast(session_id, end_fr)
-                 except Exception:
-                     pass
-         finally:
-             try:
-                 _admin_emit('schedule_frames_done', session_id=session_id)
-             except Exception:
-                 pass
+   cleanupGraph();
  
-     threading.Thread(target=_run, daemon=True).start()
+   if (reset) {
+     drawIdleWave();
+   }
  
- 
- # ---- WS orchestration helpers (centralize greet/user pipelines) ----
- 
-+def _emit_ws_outage(session_id: str,
-+                    turn_id: str,
-+                    *,
-+                    correlation_user_msg_id: Optional[str] = None) -> List[Dict[str, Any]]:
-+    frames: List[Dict[str, Any]] = []
-+    chunk: Dict[str, Any] = {
-+        'type': 'assistant_chunk',
-+        'turn_id': turn_id,
-+        'text': _WS_PIPELINE_MESSAGE,
-+        'kb_hits': 0,
-+        'note': _WS_PIPELINE_UNAVAILABLE_NOTE,
-+    }
-+    if correlation_user_msg_id:
-+        chunk['correlation_user_msg_id'] = correlation_user_msg_id
-+    frames.append(chunk)
-+    end_fr: Dict[str, Any] = {'type': 'assistant_end', 'turn_id': turn_id}
-+    if correlation_user_msg_id:
-+        end_fr['correlation_user_msg_id'] = correlation_user_msg_id
-+    frames.append(end_fr)
-+    _broadcast_frames(session_id, frames, turn_id)
-+    return frames
-+
-+
-+def _ws_generation_failed(turn_id: Optional[str], frames: List[Dict[str, Any]]) -> bool:
-+    return turn_id is None and not frames
-+
-+
- def run_ws_greet(session_id: str) -> str:
-     """
-     Produce assistant text for greet, broadcast frames, schedule TTS audio,
-     and nudge UI with state+suggestions. Returns turn_id.
-     """
-     forced_tid, _idempotent = get_or_create_greet_turn(session_id, force=False, ttl_sec=DEFAULT_TTL_SEC)
-     tid, frames = make_assistant_frames(
-         "greet",
-         session_id,
-         meta={"source": "ws_greet"},
-         force_turn_id=forced_tid,
-     )
-+    if _ws_generation_failed(tid, frames):
-+        tid = _allocate_turn_id(forced_tid)
-+        frames = _emit_ws_outage(session_id, tid)
-+        try:
-+            _admin_emit('ws_pipeline_outage', session_id=session_id, phase='greet')
-+        except Exception:
-+            pass
-+        try:
-+            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-+        except Exception:
-+            pass
-+        return tid
-     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
-     try:
-         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
-             schedule_tts_audio(session_id, _scrub_debug_stamps(text_for_tts), turn_id=tid)
-     except Exception:
-         pass
-     # UI nudges
-     try:
-         bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-         base_suggestions = merge_suggestions(hygienic_suggestions(""))
-         if base_suggestions:
-             bus.broadcast(
-                 session_id,
-                 {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
-             )
-     except Exception:
-         pass
-     return tid
- 
- 
- def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Optional[str] = None) -> str:
-     """
-     Produce assistant text for a user turn and schedule both text pacing and TTS.
-     Mirrors HTTP /api_v1/chat behavior for consistency.
-     """
-     tid, frames = make_assistant_frames(text, session_id, meta={"source": "user_ws"},
-                                         correlation_user_msg_id=correlation_user_msg_id)
-+    if _ws_generation_failed(tid, frames):
-+        tid = _allocate_turn_id(force_turn_id=None)
-+        frames = _emit_ws_outage(session_id, tid, correlation_user_msg_id=correlation_user_msg_id)
-+        try:
-+            _admin_emit('ws_pipeline_outage', session_id=session_id, phase='turn')
-+        except Exception:
-+            pass
-+        return tid
-     # Keep schedule_frames for pacing/end guarantees to mirror HTTP route
-     try:
-         schedule_frames(session_id, frames, correlation_user_msg_id=correlation_user_msg_id)
-     except Exception:
-         pass
-     # TTS for assistant text
-     try:
-         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
-             schedule_tts_audio(session_id, _scrub_debug_stamps(text_for_tts), turn_id=tid, correlation_user_msg_id=correlation_user_msg_id)
-     except Exception:
-         pass
-     return tid
-diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..735775820a9c15896dad054599f45358be4ca69d
---- /dev/null
-+++ b/tests/test_streaming_ws_fallbacks.py
-@@ -0,0 +1,82 @@
-+import types
-+
-+from app.services import streaming
-+
-+
-+def _stub_config(monkeypatch):
-+    monkeypatch.setattr(streaming.db, "get_config", lambda: {})
-+
-+
-+def test_make_assistant_frames_ws_skips_legacy(monkeypatch):
-+    _stub_config(monkeypatch)
-+
-+    legacy_called = False
-+
-+    def fake_legacy(*args, **kwargs):  # pragma: no cover - should never be invoked
-+        nonlocal legacy_called
-+        legacy_called = True
-+        return "legacy", [{"type": "assistant_end", "turn_id": "legacy"}]
-+
-+    monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
-+    monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
-+
-+    tid, frames = streaming.make_assistant_frames(
-+        "hello",
-+        "session-ws",
-+        meta={"source": "user_ws"},
-+    )
-+
-+    assert tid is None
-+    assert frames == []
-+    assert legacy_called is False
-+
-+
-+def test_make_assistant_frames_http_allows_legacy(monkeypatch):
-+    _stub_config(monkeypatch)
-+
-+    captured = types.SimpleNamespace(called=False)
-+
-+    def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
-+        captured.called = True
-+        return "tid-123", [
-+            {"type": "assistant_chunk", "turn_id": "tid-123", "text": "hi", "kb_hits": 0},
-+            {"type": "assistant_end", "turn_id": "tid-123"},
-+        ]
-+
-+    monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
-+    monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
-+
-+    tid, frames = streaming.make_assistant_frames(
-+        "hello",
-+        "session-http",
-+        meta={"source": "http_chat"},
-+    )
-+
-+    assert tid == "tid-123"
-+    assert frames and frames[-1]["type"] == "assistant_end"
-+    assert captured.called is True
-+
-+
-+def test_make_assistant_frames_health_check_allows_legacy(monkeypatch):
-+    _stub_config(monkeypatch)
-+
-+    legacy_calls = []
-+
-+    def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
-+        legacy_calls.append((seed_text, meta))
-+        return "health", [
-+            {"type": "assistant_chunk", "turn_id": "health", "text": "ok", "kb_hits": 0},
-+            {"type": "assistant_end", "turn_id": "health"},
-+        ]
-+
-+    monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
-+    monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
-+
-+    tid, _ = streaming.make_assistant_frames(
-+        "status",
-+        "session-health",
-+        meta={"source": "health_check"},
-+    )
-+
-+    assert tid == "health"
-+    assert legacy_calls and legacy_calls[0][0] == "status"
+   if (audioCtx && typeof audioCtx.suspend === 'function' && audioCtx.state === 'running') {
+     audioCtx.suspend().catch(() => {});
+   }
