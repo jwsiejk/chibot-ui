@@ -110,12 +110,17 @@ def _scrub_debug_stamps(s: str) -> str:
 
 def _short_greeting(text: str) -> str:
     try:
-        words = (text or "Hi there!").strip().split()
-        if len(words) > 5:
-            return " ".join(words[:5]).rstrip(",.;:!")
-        return (text or "").strip()
+        candidate = _collapse_whitespace(text or "Hi there!")
+        if not candidate:
+            return "Hi there!"
+        limited = _limit_sentences(candidate, 1)
+        snippet = limited or candidate
+        shortened = _truncate_chars(snippet, 160)
+        result = (shortened or snippet or "").strip()
+        return result or "Hi there!"
     except Exception:
-        return text
+        fallback = (text or "").strip()
+        return fallback or "Hi there!"
 
 
 SETTINGS = load_settings()

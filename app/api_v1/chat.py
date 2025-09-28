@@ -10,6 +10,7 @@ from ..services.streaming import (
     merge_suggestions,
     build_suggestion_items,
 )
+from ..services.greet_idempotency import clear_greet_turn_cache
 from ..nlu.classifier import classify as classify_turn
 from ..dialog.policy import pick as pick_dialog_policy
 from ..middleware.rate_limit import limit, check_now
@@ -87,13 +88,8 @@ def post_chat():
                 emailed = bool(send_transcript(db=db, session_id=sid, ended_at=_now(), to_email=to_email))
             except Exception:
                 emailed = False
+        clear_greet_turn_cache(sid)
         return jsonify(ok=True, emailed=emailed), 200
-
-            # Clear greet idempotency so next Start greets again
-        try:
-            db.memory.setdefault("greet_turns", {}).pop(sid, None)
-        except Exception:
-            pass
 
     # Normal text turn path
     user_msg_id = _get_user_msg_id()

@@ -10,6 +10,7 @@ from .turn_buffer import TurnBuffer
 from app.services.streaming_asr.deepgram_client import DeepgramClient, DeepgramDrainTimeoutError
 from app.security.ws_token import verify as verify_ws_token
 from app.db import db
+from app.services.greet_idempotency import clear_greet_turn_cache
 from app.metrics import ws_metrics
 # NEW: invoke LLM on final transcript
 from app.services.streaming import run_ws_user_turn  # NEW
@@ -476,7 +477,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 _admin_emit("ws_conn_active", conn_id=conn_id, active=active_count)
 
     with contextlib.suppress(Exception):
-        db.memory.setdefault("greet_turns", {}).pop(sid, None)
+        clear_greet_turn_cache(sid)
 
     bus_task = asyncio.create_task(_pump_bus_to_client(sid, send))
 
@@ -945,7 +946,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             cfg.update(obj or {})
                             if obj.get("reset"):
                                 with contextlib.suppress(Exception):
-                                    db.memory.setdefault("greet_turns", {}).pop(sid, None)
+                                    clear_greet_turn_cache(sid)
                                 with contextlib.suppress(Exception):
                                     _admin_emit and _admin_emit("greet:reset", route="/ws/v1/chat",
                                                                 label="greet:reset", session_id=sid)

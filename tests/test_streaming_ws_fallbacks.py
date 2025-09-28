@@ -7,6 +7,11 @@ def _stub_config(monkeypatch):
     monkeypatch.setattr(streaming.db, "get_config", lambda: {})
 
 
+def test_short_greeting_preserves_sentence():
+    text = "What should we clarify so I can help?"
+    assert streaming._short_greeting(text) == text
+
+
 def test_make_assistant_frames_ws_skips_legacy(monkeypatch):
     _stub_config(monkeypatch)
 

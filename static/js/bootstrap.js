@@ -231,11 +231,22 @@ async function startOnce(){
 
     // Watchdog: if no assistant frames within 6s after sending WS greet, warn
     let gotAssistant = false;
+    let markAssistantRemove = false;
     const markAssistant = (ev) => {
       const d = ev.detail || {};
       if (_isAssistantTextFrame(d)) gotAssistant = true;
+      if (markAssistantRemove) {
+        markAssistantRemove = false;
+        try { window.removeEventListener('askchip-ws', markAssistant); } catch {}
+      }
     };
-    window.addEventListener('askchip-ws', markAssistant, { once: true });
+    try {
+      window.addEventListener('askchip-ws', markAssistant, { once: true });
+    } catch (err) {
+      markAssistantRemove = true;
+      window.addEventListener('askchip-ws', markAssistant);
+      try { console.warn('[bootstrap] once listener fallback', err); } catch {}
+    }
 
     setTimeout(() => {
       if (!gotAssistant) showBanner('No assistant frames after greet — check WS handler/payload.');

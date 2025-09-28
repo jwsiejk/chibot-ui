@@ -1,276 +1,44 @@
-diff --git a/tests/test_ws_two_turn_regression.py b/tests/test_ws_two_turn_regression.py
-index 7497a5a3d39dfbeb5b454381a1574f7bc9cf22a8..18347151e5944382a00001fcc7f21a50395261b1 100644
---- a/tests/test_ws_two_turn_regression.py
-+++ b/tests/test_ws_two_turn_regression.py
-@@ -1,88 +1,268 @@
- import asyncio
- import json
-+import time
- from collections import deque
+diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
+index 80b3b843611da3556ff7888999e5e53fb0b8ce58..ba59c032107a140d82b53442aef352bf68c9f2dd 100644
+--- a/tests/test_streaming_ws_fallbacks.py
++++ b/tests/test_streaming_ws_fallbacks.py
+@@ -1,34 +1,39 @@
+ import types
  
- import app.services.streaming_asr.deepgram_client as dg_mod
-+from app.services.streaming import schedule_frames
- from app.ws import ws_asgi
-+from app.ws.bus import bus
+ from app.services import streaming
  
  
- class _FakeDeepgram:
-     """Minimal Deepgram stub for tests with controllable finals."""
- 
-     def __init__(self, _cfg=None):
-         self._queue: asyncio.Queue = asyncio.Queue()
-         self._final_sent = False
-         self._close_calls = 0
- 
-     async def connect(self):
-         # Mirror provider open event to satisfy the relay loop.
-         await self._queue.put({"type": "asr_open"})
- 
-     async def events(self):
-         while True:
-             ev = await self._queue.get()
-             if ev is None:
-                 break
-             yield ev
- 
-     async def send(self, _chunk: bytes):
-         # First turn: emit a final result immediately.
-         if not self._final_sent:
-             self._final_sent = True
-             await self._queue.put({"type": "user_final", "text": "turn-one"})
- 
-     async def close(self, wait_for_final: bool = True, **_):
-         self._close_calls += 1
-         if not wait_for_final:
-             # Signal the relay loop to exit during cleanup.
-             await self._queue.put(None)
+ def _stub_config(monkeypatch):
+     monkeypatch.setattr(streaming.db, "get_config", lambda: {})
  
  
--def _run_ws_session(events):
-+def _run_ws_session(events, sid: str = "default"):
-     sent = []
++def test_short_greeting_preserves_sentence():
++    text = "What should we clarify so I can help?"
++    assert streaming._short_greeting(text) == text
++
++
+ def test_make_assistant_frames_ws_skips_legacy(monkeypatch):
+     _stub_config(monkeypatch)
  
-     async def _receive():
--        return events.popleft() if events else {"type": "websocket.disconnect"}
-+        while True:
-+            if not events:
-+                return {"type": "websocket.disconnect"}
-+            ev = events.popleft()
-+            if isinstance(ev, dict) and "sleep" in ev:
-+                await asyncio.sleep(ev["sleep"])
-+                continue
-+            return ev
+     legacy_called = False
  
-     async def _send(msg):
-         sent.append(msg)
+     def fake_legacy(*args, **kwargs):  # pragma: no cover - should never be invoked
+         nonlocal legacy_called
+         legacy_called = True
+         return "legacy", [{"type": "assistant_end", "turn_id": "legacy"}]
  
--    scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
-+    scope = {
-+        "type": "websocket",
-+        "path": "/ws/v1/chat",
-+        "query_string": f"session_id={sid}".encode(),
-+    }
+     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
+     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
  
-     loop = asyncio.new_event_loop()
-     asyncio.set_event_loop(loop)
-     try:
-         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-+    except asyncio.CancelledError:
-+        pass
-     finally:
-         loop.run_until_complete(asyncio.sleep(0))
-         asyncio.set_event_loop(None)
-         loop.close()
- 
-     return sent
- 
- 
-+def test_schedule_frames_tracks_current_assistant_turn(monkeypatch):
-+    sid = "s-schedule-track"
-+    frames = [
-+        {"type": "assistant_chunk", "turn_id": "turn-42", "text": "hi"},
-+        {"type": "assistant_end", "turn_id": "turn-42"},
-+    ]
-+    calls = []
-+    orig_note = bus.note_assistant_turn
-+
-+    def _capture_note(sid_arg, tid_arg):
-+        calls.append((sid_arg, tid_arg))
-+        orig_note(sid_arg, tid_arg)
-+
-+    monkeypatch.setattr(bus, "note_assistant_turn", _capture_note)
-+
-+    q = bus.subscribe(sid)
-+    try:
-+        schedule_frames(sid, frames)
-+        q.get(timeout=1.0)
-+        q.get(timeout=1.0)
-+    finally:
-+        bus.unsubscribe(sid, q)
-+        bus.note_assistant_turn(sid, None)
-+        bus._canceled.discard((sid, "turn-42"))
-+
-+    assert (sid, "turn-42") in calls
-+    assert (sid, None) in calls
-+
-+
-+def test_ws_barge_commit_cancels_turn(monkeypatch):
-+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
-+
-+    sid = "s-barge-commit"
-+    bus.note_assistant_turn(sid, "turn-commit")
-+
-+    cancel_calls = []
-+    orig_cancel = bus.cancel_turn
-+
-+    def _capture_cancel(sid_arg, tid_arg):
-+        cancel_calls.append((sid_arg, tid_arg))
-+        orig_cancel(sid_arg, tid_arg)
-+
-+    monkeypatch.setattr(bus, "cancel_turn", _capture_cancel)
-+
-+    start_results = []
-+    orig_start = ws_asgi.BargeState.start
-+
-+    def _capture_start(self, *args, **kwargs):
-+        result = orig_start(self, *args, **kwargs)
-+        start_results.append(result)
-+        return result
-+
-+    monkeypatch.setattr(ws_asgi.BargeState, "start", _capture_start)
-+
-+    orig_current = bus.current_assistant_turn
-+
-+    def _patched_current(sid_arg):
-+        result = orig_current(sid_arg)
-+        if result:
-+            return result
-+        return "turn-commit" if sid_arg == sid else None
-+
-+    monkeypatch.setattr(bus, "current_assistant_turn", _patched_current)
-+
-+    assert bus.current_assistant_turn(sid) == "turn-commit"
-+
-+    events = deque(
-+        [
-+            {"type": "websocket.receive", "text": json.dumps({"type": "Configure", "confirm_ms": 30})},
-+            {"type": "websocket.receive", "bytes": b"\x01"},
-+            {"sleep": 0.08},
-+            {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
-+            {"type": "websocket.disconnect"},
-+        ]
-+    )
-+
-+    sent = _run_ws_session(events, sid=sid)
-+    time.sleep(0.1)
-+
-+    state_frames = []
-+    for msg in sent:
-+        if msg.get("type") == "websocket.send" and msg.get("text"):
-+            payload = json.loads(msg["text"])
-+            if payload.get("type") == "state":
-+                state_frames.append(payload)
-+
-+    assert start_results, "barge.start should be invoked"
-+    phases = [frame.get("phase") for frame in state_frames]
-+    assert "paused" in phases
-+    assert "ready" in phases
-+    assert cancel_calls and cancel_calls[0] == (sid, "turn-commit")
-+    assert orig_current(sid) is None
-+
-+    bus.note_assistant_turn(sid, None)
-+    bus._canceled.discard((sid, "turn-commit"))
-+
-+
-+def test_ws_close_stream_resumes_without_interrupt(monkeypatch):
-+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
-+
-+    sid = "s-barge-cancel"
-+    bus.note_assistant_turn(sid, "turn-cancel")
-+
-+    cancel_calls = []
-+    orig_cancel = bus.cancel_turn
-+
-+    def _capture_cancel(sid_arg, tid_arg):
-+        cancel_calls.append((sid_arg, tid_arg))
-+        orig_cancel(sid_arg, tid_arg)
-+
-+    monkeypatch.setattr(bus, "cancel_turn", _capture_cancel)
-+
-+    orig_current = bus.current_assistant_turn
-+
-+    def _patched_current(sid_arg):
-+        result = orig_current(sid_arg)
-+        if result:
-+            return result
-+        return "turn-cancel" if sid_arg == sid else None
-+
-+    monkeypatch.setattr(bus, "current_assistant_turn", _patched_current)
-+
-+    start_results = []
-+    orig_start = ws_asgi.BargeState.start
-+
-+    def _capture_start(self, *args, **kwargs):
-+        result = orig_start(self, *args, **kwargs)
-+        start_results.append(result)
-+        return result
-+
-+    monkeypatch.setattr(ws_asgi.BargeState, "start", _capture_start)
-+
-+    assert bus.current_assistant_turn(sid) == "turn-cancel"
-+
-+    events = deque(
-+        [
-+            {"type": "websocket.receive", "bytes": b"\x02"},
-+            {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
-+            {"type": "websocket.disconnect"},
-+        ]
-+    )
-+
-+    sent = _run_ws_session(events, sid=sid)
-+    time.sleep(0.05)
-+
-+    state_frames = []
-+    for msg in sent:
-+        if msg.get("type") == "websocket.send" and msg.get("text"):
-+            payload = json.loads(msg["text"])
-+            if payload.get("type") == "state":
-+                state_frames.append(payload)
-+
-+    phases = [frame.get("phase") for frame in state_frames]
-+    assert "paused" in phases
-+    assert "assistant_speaking" in phases
-+    assert not cancel_calls
-+
-+    bus.note_assistant_turn(sid, None)
-+    bus._canceled.discard((sid, "turn-cancel"))
-+    assert start_results, "barge.start should be invoked"
-+
-+
- def test_second_turn_without_final_emits_fallback(monkeypatch):
-     # Disable auth and enable the Deepgram path.
-     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
-     monkeypatch.setenv("DG_LINGER_MS", "0")
- 
-     monkeypatch.setattr(ws_asgi, "DeepgramClient", _FakeDeepgram)
- 
-     events = deque(
-         [
-             {"type": "websocket.receive", "bytes": b"\x00\x01"},
-             {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
-             {"type": "websocket.receive", "bytes": b"\x00\x02"},
-             {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
-             {"type": "websocket.disconnect"},
-         ]
+     tid, frames = streaming.make_assistant_frames(
+         "hello",
+         "session-ws",
+         meta={"source": "user_ws"},
      )
  
-     sent = _run_ws_session(events)
+     assert tid is None
+     assert frames == []
+     assert legacy_called is False
  
-     payloads = [
-         json.loads(m["text"])
-         for m in sent
-         if m.get("type") == "websocket.send" and m.get("text")
-     ]
+ 
+ def test_run_ws_greet_uses_foundation_frames(monkeypatch):
