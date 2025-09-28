@@ -196,6 +196,24 @@ def test_prepare_turn_metadata_enables_suggestions_for_ask_clarify(monkeypatch):
     assert policy["show_suggestions"] is True
 
 
+def test_prepare_turn_metadata_enables_suggestions_for_offer_steps(monkeypatch):
+    _stub_config(monkeypatch)
+
+    monkeypatch.setattr(
+        streaming,
+        "pick_dialog_policy",
+        lambda labels: {"action": "offer_steps", "show_suggestions": True, "teacher_move": "offer_steps"},
+    )
+
+    prepared, _, policy = streaming.prepare_turn_metadata("Walk me through", {})
+
+    assert prepared["action"] == "offer_steps"
+    assert prepared["dialog_action"] == "offer_steps"
+    assert prepared["show_suggestions"] is True
+    assert prepared["dialog_show_suggestions"] is True
+    assert policy["show_suggestions"] is True
+
+
 def test_legacy_frames_emit_suggestions_only_when_allowed(monkeypatch):
     _stub_config(monkeypatch)
 
@@ -255,3 +273,24 @@ def test_legacy_frames_emit_suggestions_only_when_allowed(monkeypatch):
     )
 
     assert any(fr.get("type") == "suggestions" for fr in allow_frames)
+
+    offer_meta = {"nlu": {}, "action": "offer_steps"}
+    offer_policy = {"teacher_move": "offer_steps", "show_suggestions": True}
+
+    _, offer_frames = streaming._make_legacy_frames(
+        "Hello",
+        "sess-offer",
+        offer_meta,
+        cfg,
+        correlation_user_msg_id=None,
+        force_turn_id=None,
+        is_greet=False,
+        fallback_line="Fallback",
+        fallback_on_empty=True,
+        fallback_on_error=True,
+        fallback_emit_event=False,
+        labels={},
+        policy=offer_policy,
+    )
+
+    assert any(fr.get("type") == "suggestions" for fr in offer_frames)

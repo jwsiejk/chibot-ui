@@ -811,7 +811,33 @@ def _make_foundation_frames(seed_text: str,
     elif _DIALOG_VERBOSITY_KEY not in meta:
         meta[_DIALOG_VERBOSITY_KEY] = meta['verbosity']
 
-    show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
+    def _coerce_dialog_flag(value: Any) -> Optional[bool]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+            return None
+        try:
+            return bool(value)
+        except Exception:
+            return None
+
+    existing_pref = None
+    if isinstance(meta, dict):
+        if "show_suggestions" in meta:
+            existing_pref = _coerce_dialog_flag(meta.get("show_suggestions"))
+        elif _DIALOG_SHOW_SUGGESTIONS_KEY in meta:
+            existing_pref = _coerce_dialog_flag(meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY))
+
+    if existing_pref is None:
+        show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
+    else:
+        show_suggestions = bool(existing_pref)
+
     meta['show_suggestions'] = show_suggestions
     meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
     meta[_DIALOG_POLICY_KEY] = dict(policy)
@@ -939,9 +965,8 @@ def _make_foundation_frames(seed_text: str,
         )
     except Exception:
         pass
-    should_emit_suggestions = bool(merged_suggestions) and (
-        is_greet or bool(meta.get('show_suggestions'))
-    )
+    allow_suggestions = bool(meta.get('show_suggestions')) if isinstance(meta, dict) else False
+    should_emit_suggestions = bool(merged_suggestions) and (is_greet or allow_suggestions)
     if should_emit_suggestions:
         frames.append(
             {
@@ -1020,7 +1045,33 @@ def _make_legacy_frames(seed_text: str,
                 meta[_DIALOG_VERBOSITY_KEY] = cfg.get('gen_target_verbosity', 'medium')
         if 'verbosity' not in meta:
             meta['verbosity'] = meta[_DIALOG_VERBOSITY_KEY]
-        show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
+
+        def _coerce_dialog_flag(value: Any) -> Optional[bool]:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered in {"1", "true", "yes", "on"}:
+                    return True
+                if lowered in {"0", "false", "no", "off"}:
+                    return False
+                return None
+            try:
+                return bool(value)
+            except Exception:
+                return None
+
+        existing_pref = None
+        if 'show_suggestions' in meta:
+            existing_pref = _coerce_dialog_flag(meta.get('show_suggestions'))
+        elif _DIALOG_SHOW_SUGGESTIONS_KEY in meta:
+            existing_pref = _coerce_dialog_flag(meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY))
+
+        if existing_pref is None:
+            show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
+        else:
+            show_suggestions = bool(existing_pref)
+
         meta['show_suggestions'] = show_suggestions
         meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
         meta[_DIALOG_POLICY_KEY] = dict(policy)
@@ -1145,9 +1196,8 @@ def _make_legacy_frames(seed_text: str,
         )
     except Exception:
         pass
-    should_emit_suggestions = bool(merged_suggestions) and (
-        is_greet or bool(meta.get('show_suggestions'))
-    )
+    allow_suggestions = bool(meta.get('show_suggestions')) if isinstance(meta, dict) else False
+    should_emit_suggestions = bool(merged_suggestions) and (is_greet or allow_suggestions)
     if should_emit_suggestions:
         frames.append(
             {

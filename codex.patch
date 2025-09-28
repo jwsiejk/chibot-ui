@@ -1,430 +1,26 @@
 diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 2394e95628e7232fa91192b91704504c85967415..14ab8e989f6cf77a377578a3769140a023cbebd0 100644
+index 14ab8e989f6cf77a377578a3769140a023cbebd0..3239e7f5fc6a2a4621e28fc415f6ab79a98ccca5 100644
 --- a/app/services/streaming.py
 +++ b/app/services/streaming.py
-@@ -130,50 +130,52 @@ STRICT_SYSTEM_SHIM = (
- _WS_SOURCES = {"ws_greet", "user_ws"}
- _WS_PIPELINE_UNAVAILABLE_NOTE = "ws_pipeline_unavailable"
- _WS_PIPELINE_MESSAGE = "I'm still warming up. Please try again in a moment."
- _LEGACY_WARMUP_LINE = "Hi! I’m ready to help. (Model is warming up.)"
- 
- _DIALOG_ACTION_KEY = "dialog_action"
- _DIALOG_VERBOSITY_KEY = "dialog_verbosity"
- _DIALOG_SHOW_SUGGESTIONS_KEY = "dialog_show_suggestions"
- _DIALOG_NLU_KEY = "dialog_nlu"
- _DIALOG_POLICY_KEY = "dialog_policy"
- 
- 
- def _should_use_foundation(seed_text: str) -> bool:
-     if not ENABLE_CHIP_FOUNDATION:
-         return False
-     try:
-         if str(seed_text or "").strip().lower() == "greet":
-             return False
-     except Exception:
-         return False
-     return True
- 
- 
- _POLICY_SUGGESTION_ACTIONS = frozenset({"ask_clarify", "offer_steps"})
- 
-+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
-+
- 
- def _get_dialog_action(meta: Optional[Dict[str, Any]]) -> Optional[str]:
-     if not isinstance(meta, dict):
-         return None
-     action = meta.get(_DIALOG_ACTION_KEY)
-     if action:
-         return action
-     return meta.get("action")
- 
- 
- def _get_dialog_show_suggestions(meta: Optional[Dict[str, Any]]) -> bool:
-     if not isinstance(meta, dict):
-         return False
-     if _DIALOG_SHOW_SUGGESTIONS_KEY in meta:
-         return bool(meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY))
-     return bool(meta.get("show_suggestions"))
- 
- 
- def _policy_action(policy: Optional[Dict[str, Any]]) -> Optional[str]:
-     if not isinstance(policy, dict):
-         return None
-     action = policy.get("action") or policy.get("teacher_move")
-     return action if isinstance(action, str) else None
- 
- 
-@@ -208,50 +210,219 @@ def _resolve_show_suggestions(meta: Dict[str, Any],
-         elif "show_suggestions" in meta:
-             policy_flag = _coerce_pref(meta.get("show_suggestions"))
- 
-     if policy_flag is None:
-         action = _get_dialog_action(meta) if isinstance(meta, dict) else None
-         if not action:
-             action = _policy_action(policy)
-         if action:
-             policy_flag = action in _POLICY_SUGGESTION_ACTIONS
- 
-     if policy_flag is None:
-         return False
-     return bool(policy_flag) and suggestions_enabled
- 
- 
- def _apply_system_shim(messages: List[Dict[str, str]], shim: str) -> List[Dict[str, str]]:
-     cloned: List[Dict[str, str]] = [dict(m) for m in messages]
-     for msg in cloned:
-         if msg.get("role") == "system":
-             msg["content"] = (msg.get("content") or "").rstrip() + "\n" + shim
-             return cloned
-     cloned.insert(0, {"role": "system", "content": shim})
-     return cloned
- 
- 
-+def _normalize_action(meta: Optional[Dict[str, Any]], default: str = "respond") -> str:
-+    action = _get_dialog_action(meta) or default
-+    try:
-+        normalized = str(action or "").strip().lower()
-+    except Exception:
-+        normalized = ""
-+    return normalized or default
-+
-+
-+def _dialog_verbosity(meta: Optional[Dict[str, Any]]) -> str:
-+    if not isinstance(meta, dict):
-+        return "normal"
-+    raw = meta.get("verbosity")
-+    if raw is None:
-+        raw = meta.get(_DIALOG_VERBOSITY_KEY)
-+    try:
-+        lowered = str(raw or "").strip().lower()
-+    except Exception:
-+        lowered = ""
-+    if lowered in {"brief", "normal"}:
-+        return lowered
-+    if lowered == "medium":
-+        return "normal"
-+    return "normal"
-+
-+
-+def _extract_topic(meta: Optional[Dict[str, Any]]) -> Optional[str]:
-+    if not isinstance(meta, dict):
-+        return None
-+    topic: Optional[str] = None
-+    nlu_meta = meta.get("nlu")
-+    if isinstance(nlu_meta, dict):
-+        topic = nlu_meta.get("topic")
-+    if not topic:
-+        dialog_nlu = meta.get(_DIALOG_NLU_KEY)
-+        if isinstance(dialog_nlu, dict):
-+            topic = dialog_nlu.get("topic")
-+    if not topic:
-+        return None
-+    try:
-+        cleaned = str(topic or "").strip()
-+    except Exception:
-+        cleaned = ""
-+    cleaned = cleaned.rstrip("?.! ")
-+    return cleaned or None
-+
-+
-+def _build_clarify_question(seed_text: str, meta: Optional[Dict[str, Any]]) -> str:
-+    topic = _extract_topic(meta)
-+    verbosity = _dialog_verbosity(meta)
-+    if topic:
-+        if verbosity == "brief":
-+            return f"What part of {topic} should we focus on?"
-+        return f"What part of {topic} should we focus on so I can help?"
-+    if verbosity == "brief":
-+        return "What should we clarify so I can help?"
-+    return "What detail should we clarify so I can point you the right way?"
-+
-+
-+def _collapse_whitespace(text: str) -> str:
-+    return re.sub(r"\s+", " ", text or "").strip()
-+
-+
-+def _limit_sentences(text: str, max_sentences: int) -> str:
-+    collapsed = _collapse_whitespace(text)
-+    if not collapsed:
-+        return ""
-+    parts = _SENTENCE_SPLIT_RE.split(collapsed)
-+    if not parts:
-+        return collapsed
-+    limited: List[str] = []
-+    for part in parts:
-+        candidate = part.strip()
-+        if not candidate:
-+            continue
-+        limited.append(candidate)
-+        if len(limited) >= max_sentences:
-+            break
-+    if not limited:
-+        return collapsed
-+    return " ".join(limited)
-+
-+
-+def _truncate_chars(text: str, limit: int) -> str:
-+    if limit <= 0:
-+        return ""
-+    if len(text) <= limit:
-+        return text
-+    shortened = text[:limit].rstrip(" ,;:-")
-+    if not shortened:
-+        return text[:limit]
-+    if shortened.endswith(('.', '!', '?')):
-+        return shortened
-+    return shortened + "…"
-+
-+
-+def _extract_list_items(text: str) -> List[str]:
-+    if not text:
-+        return []
-+    items: List[str] = []
-+    for raw_line in text.splitlines():
-+        cleaned = raw_line.strip()
-+        if not cleaned:
-+            continue
-+        cleaned = re.sub(r"^[\-\*•\d]+[\.)\s]*", "", cleaned).strip()
-+        if cleaned:
-+            items.append(_collapse_whitespace(cleaned))
-+    if items:
-+        return items
-+    collapsed = _collapse_whitespace(text)
-+    if not collapsed:
-+        return []
-+    parts = _SENTENCE_SPLIT_RE.split(collapsed)
-+    return [part.strip(" -") for part in parts if part.strip(" -")]
-+
-+
-+def _format_offer_steps(text: str, meta: Optional[Dict[str, Any]]) -> str:
-+    verbosity = _dialog_verbosity(meta)
-+    max_items = 3 if verbosity == "brief" else 4
-+    max_chars = 80 if verbosity == "brief" else 110
-+    items = _extract_list_items(text)
-+    if not items:
-+        return ""
-+    formatted: List[str] = []
-+    for idx, item in enumerate(items[:max_items], start=1):
-+        cleaned = _truncate_chars(item, max_chars)
-+        formatted.append(f"{idx}. {cleaned}")
-+    return "\n".join(formatted)
-+
-+
-+def _format_brief_answer(text: str, meta: Optional[Dict[str, Any]]) -> str:
-+    verbosity = _dialog_verbosity(meta)
-+    max_sentences = 1 if verbosity == "brief" else 2
-+    max_chars = 160 if verbosity == "brief" else 220
-+    limited = _limit_sentences(text, max_sentences)
-+    return _truncate_chars(limited, max_chars)
-+
-+
-+def _format_next_actions(text: str, meta: Optional[Dict[str, Any]]) -> str:
-+    verbosity = _dialog_verbosity(meta)
-+    max_items = 2 if verbosity == "brief" else 3
-+    max_chars = 90 if verbosity == "brief" else 120
-+    items = _extract_list_items(text)
-+    if not items:
-+        return ""
-+    trimmed: List[str] = []
-+    for item in items[:max_items]:
-+        cleaned = _truncate_chars(item, max_chars)
-+        trimmed.append(f"• {cleaned}")
-+    if verbosity == "brief":
-+        return "\n".join(trimmed)
-+    return "Next actions:\n" + "\n".join(trimmed)
-+
-+
-+def _apply_action_shape(action: str,
-+                        text: str,
-+                        meta: Optional[Dict[str, Any]]) -> str:
-+    if not text:
-+        return text
-+    normalized = (action or "").strip().lower()
-+    if normalized == "give_brief_answer":
-+        return _format_brief_answer(text, meta)
-+    if normalized == "offer_steps":
-+        return _format_offer_steps(text, meta)
-+    if normalized == "summarize_next_actions":
-+        return _format_next_actions(text, meta)
-+    return text
-+
-+
- def _call_foundation_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
-     client = make_openai_client()
-     model = (
-         cfg.get("openai_model")
-         or cfg.get("OPENAI_MODEL")
-         or os.getenv("OPENAI_MODEL")
-         or "gpt-4o-mini"
-     )
-     temperature = float(cfg.get("gen_temperature", 0.3))
-     top_p = float(cfg.get("gen_top_p", 1.0))
-     payload = [dict(m) for m in messages]
-     resp = client.chat.completions.create(
-         model=model,
-         messages=payload,
-         temperature=temperature,
-         top_p=top_p,
-         stream=False,
-     )
-     return (resp.choices[0].message.content or "").strip()
- 
- 
- def _call_foundation_with_retry(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
-     primary = _call_foundation_llm(messages, cfg)
-     human = humanize_text(primary)
-     if not human:
-@@ -494,471 +665,510 @@ def _allocate_turn_id(force_turn_id: Optional[str]) -> str:
-     if force_turn_id is not None:
-         db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
-         return str(force_turn_id)
-     turn_seq = db.memory.setdefault('turn_seq', 0) + 1
-     db.memory['turn_seq'] = turn_seq
-     return str(turn_seq)
- 
- 
- def make_assistant_frames(seed_text: str,
-                           session_id: str,
-                           meta: Optional[Dict] = None,
-                           correlation_user_msg_id: Optional[str] = None,
-                           *,
-                           force_turn_id: Optional[str] = None) -> Tuple[Optional[str], List[Dict]]:
-     """
-     Produce assistant frames for a given user seed text using the configured LLM provider.
-     ALWAYS returns a frames list that includes at least:
-         - one 'assistant_chunk' (with either model text OR a safe fallback), and
-         - one 'assistant_end'.
-     Also broadcasts frames to the WS bus as they are prepared.
-     """
-     cfg = db.get_config()
-     meta, classified_labels, classified_policy = prepare_turn_metadata(seed_text, meta, cfg=cfg)
-     skip_legacy = _should_skip_legacy(meta)
- 
-+    action = _normalize_action(meta)
-+    if isinstance(meta, dict):
-+        meta['action'] = action
-+        meta[_DIALOG_ACTION_KEY] = action
-+
-     try:
-         source = str(meta.get("source", "") or "").strip().lower()
-     except Exception:
-         source = ""
-     try:
-         is_greet = str(seed_text or "").strip().lower() == "greet"
-     except Exception:
-         is_greet = False
-     if not is_greet and source:
-         is_greet = source in {"greet", "ws_greet", "greet_fallback"}
- 
-     fallback_line = str(cfg.get("assistant_fallback_line") or "Hi! I’m ready to help.")
- 
-     def _cfg_flag(key: str, default: bool) -> bool:
-         val = meta.get(key)
-         if val is None:
-             val = cfg.get(key, default)
-         try:
-             if isinstance(val, str):
-                 return val.strip().lower() in ("1", "true", "yes", "on")
-             return bool(val)
-         except Exception:
-             return default
- 
-     fallback_on_empty = _cfg_flag("assistant_fallback_on_empty", True)
-     fallback_on_error = _cfg_flag("assistant_fallback_on_error", True)
-     fallback_emit_event = _cfg_flag("assistant_fallback_emit_event", True)
- 
-     if _should_use_foundation(seed_text):
-         try:
-             return _make_foundation_frames(
-                 seed_text,
-                 session_id,
-                 meta,
-                 cfg,
-                 correlation_user_msg_id=correlation_user_msg_id,
-                 force_turn_id=force_turn_id,
-                 is_greet=is_greet,
-                 fallback_line=fallback_line,
-                 fallback_on_empty=fallback_on_empty,
-                 fallback_on_error=fallback_on_error,
-                 fallback_emit_event=fallback_emit_event,
-+                action=action,
-             )
-         except Exception as e:
-             try:
-                 _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
-             except Exception:
-                 pass
- 
-     if skip_legacy:
-         return None, []
- 
-     return _make_legacy_frames(
-         seed_text,
-         session_id,
-         meta,
-         cfg,
-         correlation_user_msg_id=correlation_user_msg_id,
-         force_turn_id=force_turn_id,
-         is_greet=is_greet,
-         fallback_line=fallback_line,
-         fallback_on_empty=fallback_on_empty,
-         fallback_on_error=fallback_on_error,
-         fallback_emit_event=fallback_emit_event,
-+        action=action,
-         labels=classified_labels,
-         policy=classified_policy,
-     )
- 
- 
- def _make_foundation_frames(seed_text: str,
-                             session_id: str,
-                             meta: Dict[str, Any],
-                             cfg: Dict[str, Any],
-                             *,
-                             correlation_user_msg_id: Optional[str],
-                             force_turn_id: Optional[str],
-                             is_greet: bool,
-                             fallback_line: str,
-                             fallback_on_empty: bool,
-                             fallback_on_error: bool,
--                            fallback_emit_event: bool) -> Tuple[str, List[Dict]]:
-+                            fallback_emit_event: bool,
-+                            action: Optional[str] = None) -> Tuple[str, List[Dict]]:
-     store = PersonaStore()
-     persona = PersonaManager(store).get_active()
-     dialog_meta = dict(meta or {})
- 
-     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
-     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store) or {}
- 
-     try:
-         nlu_meta = dict(nlu_result)
-     except Exception:
+@@ -789,51 +789,77 @@ def _make_foundation_frames(seed_text: str,
          nlu_meta = {}
      else:
          meta["nlu"] = nlu_meta
          meta[_DIALOG_NLU_KEY] = dict(nlu_meta)
  
--    action = _get_dialog_action(meta)
-+    provided_action: Optional[str] = None
-+    if action is not None:
-+        try:
-+            provided_action = str(action or "").strip().lower()
-+        except Exception:
-+            provided_action = None
-+    normalized_action = provided_action or _normalize_action(meta)
+     provided_action: Optional[str] = None
+     if action is not None:
+         try:
+             provided_action = str(action or "").strip().lower()
+         except Exception:
+             provided_action = None
+     normalized_action = provided_action or _normalize_action(meta)
      policy_move = _policy_action(policy)
--    if not action and policy_move:
--        action = policy_move
--    if action:
--        meta['action'] = action
--        meta[_DIALOG_ACTION_KEY] = action
-+    if not provided_action and policy_move and not normalized_action:
-+        normalized_action = str(policy_move or "").strip().lower() or normalized_action
-+    if normalized_action:
-+        meta['action'] = normalized_action
-+        meta[_DIALOG_ACTION_KEY] = normalized_action
+     if not provided_action and policy_move and not normalized_action:
+         normalized_action = str(policy_move or "").strip().lower() or normalized_action
+     if normalized_action:
+         meta['action'] = normalized_action
+         meta[_DIALOG_ACTION_KEY] = normalized_action
      if _DIALOG_VERBOSITY_KEY not in meta:
          meta[_DIALOG_VERBOSITY_KEY] = cfg.get('gen_target_verbosity', 'medium')
      if 'verbosity' not in meta:
@@ -432,7 +28,34 @@ index 2394e95628e7232fa91192b91704504c85967415..14ab8e989f6cf77a377578a3769140a0
      elif _DIALOG_VERBOSITY_KEY not in meta:
          meta[_DIALOG_VERBOSITY_KEY] = meta['verbosity']
  
-     show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
+-    show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
++    def _coerce_dialog_flag(value: Any) -> Optional[bool]:
++        if value is None:
++            return None
++        if isinstance(value, str):
++            lowered = value.strip().lower()
++            if lowered in {"1", "true", "yes", "on"}:
++                return True
++            if lowered in {"0", "false", "no", "off"}:
++                return False
++            return None
++        try:
++            return bool(value)
++        except Exception:
++            return None
++
++    existing_pref = None
++    if isinstance(meta, dict):
++        if "show_suggestions" in meta:
++            existing_pref = _coerce_dialog_flag(meta.get("show_suggestions"))
++        elif _DIALOG_SHOW_SUGGESTIONS_KEY in meta:
++            existing_pref = _coerce_dialog_flag(meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY))
++
++    if existing_pref is None:
++        show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
++    else:
++        show_suggestions = bool(existing_pref)
++
      meta['show_suggestions'] = show_suggestions
      meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
      meta[_DIALOG_POLICY_KEY] = dict(policy)
@@ -451,108 +74,14 @@ index 2394e95628e7232fa91192b91704504c85967415..14ab8e989f6cf77a377578a3769140a0
          examples=examples,
      )
  
--    reply = _call_foundation_with_retry(messages, cfg)
-+    use_llm = normalized_action != "ask_clarify"
-+    if use_llm:
-+        reply = _call_foundation_with_retry(messages, cfg)
-+    else:
-+        reply = _build_clarify_question(seed_text, meta)
+     use_llm = normalized_action != "ask_clarify"
+     if use_llm:
+         reply = _call_foundation_with_retry(messages, cfg)
+     else:
+         reply = _build_clarify_question(seed_text, meta)
  
      fallback_fired = False
-     fallback_reason: Optional[str] = None
- 
--    if fallback_on_error and not reply and not fallback_fired:
--        # Foundation path has no explicit error flag; treat empty as error when allowed.
--        reply = fallback_line
--        fallback_fired = True
--        fallback_reason = "empty"
--    elif fallback_on_empty and not (reply or "").strip():
--        reply = fallback_line
--        fallback_fired = True
--        fallback_reason = "empty"
-+    if use_llm:
-+        if fallback_on_error and not reply and not fallback_fired:
-+            # Foundation path has no explicit error flag; treat empty as error when allowed.
-+            reply = fallback_line
-+            fallback_fired = True
-+            fallback_reason = "empty"
-+        elif fallback_on_empty and not (reply or "").strip():
-+            reply = fallback_line
-+            fallback_fired = True
-+            fallback_reason = "empty"
- 
-     safe_reply = _scrub_debug_stamps(reply)
- 
-+    if use_llm and not fallback_fired:
-+        shaped = _apply_action_shape(normalized_action, safe_reply, meta)
-+        if shaped:
-+            safe_reply = shaped
-+        else:
-+            safe_reply = ""
-+
-     if is_greet:
-         safe_reply = _short_greeting(safe_reply)
-     elif fallback_fired:
-         safe_reply = _short_greeting(safe_reply)
- 
-     if not (safe_reply or "").strip():
--        if fallback_fired or fallback_on_empty:
-+        use_configured_fallback = fallback_fired or (use_llm and fallback_on_empty)
-+        if not use_llm:
-+            use_configured_fallback = True
-+        if use_configured_fallback:
-             safe_reply = _scrub_debug_stamps(fallback_line)
-             if not safe_reply.strip():
-                 safe_reply = fallback_line.strip() or _LEGACY_WARMUP_LINE
-             if not fallback_fired:
-                 fallback_fired = True
-                 if not fallback_reason:
-                     fallback_reason = "empty"
-             elif not fallback_reason:
-                 fallback_reason = "empty"
-         else:
-             safe_reply = _LEGACY_WARMUP_LINE
- 
-     policy_chips = _collect_policy_chips(policy)
- 
-     try:
-         _jlog(
-             "turn_telemetry",
-             sid=session_id,
-             intent=nlu_result.get('intent'),
-             confidence=nlu_result.get('confidence'),
-             teacher_move=policy_action or teacher_move,
-             chips=len(policy_chips),
-             prompt_hash=prompt_hash,
-         )
-     except Exception:
-         pass
- 
--    if force_turn_id is not None:
--        db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
--        turn_id = str(force_turn_id)
--    else:
--        turn_seq = db.memory.setdefault('turn_seq', 0) + 1
--        db.memory['turn_seq'] = turn_seq
--        turn_id = str(turn_seq)
-+    turn_id = _allocate_turn_id(force_turn_id)
- 
-     if fallback_fired and fallback_emit_event:
-         try:
-             _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
-         except Exception:
-             pass
- 
-     _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
- 
-     frames: List[Dict] = []
-     active_teacher_move = policy_action or teacher_move
-     chunk: Dict[str, Any] = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': safe_reply,
-         'kb_hits': 0,
-         'intent': nlu_result.get('intent'),
+@@ -917,53 +943,52 @@ def _make_foundation_frames(seed_text: str,
          'teacher_move': active_teacher_move,
      }
      if correlation_user_msg_id:
@@ -578,10 +107,11 @@ index 2394e95628e7232fa91192b91704504c85967415..14ab8e989f6cf77a377578a3769140a0
          )
      except Exception:
          pass
-     should_emit_suggestions = bool(merged_suggestions) and (
--        is_greet or _get_dialog_show_suggestions(meta)
-+        is_greet or bool(meta.get('show_suggestions'))
-     )
+-    should_emit_suggestions = bool(merged_suggestions) and (
+-        is_greet or bool(meta.get('show_suggestions'))
+-    )
++    allow_suggestions = bool(meta.get('show_suggestions')) if isinstance(meta, dict) else False
++    should_emit_suggestions = bool(merged_suggestions) and (is_greet or allow_suggestions)
      if should_emit_suggestions:
          frames.append(
              {
@@ -607,58 +137,25 @@ index 2394e95628e7232fa91192b91704504c85967415..14ab8e989f6cf77a377578a3769140a0
                          *,
                          correlation_user_msg_id: Optional[str],
                          force_turn_id: Optional[str],
-                         is_greet: bool,
-                         fallback_line: str,
-                         fallback_on_empty: bool,
-                         fallback_on_error: bool,
-                         fallback_emit_event: bool,
-+                        action: Optional[str] = None,
-                         labels: Optional[Dict[str, Any]] = None,
-                         policy: Optional[Dict[str, Any]] = None) -> Tuple[str, List[Dict]]:
-     persona = _get_persona_for_session(session_id)
- 
-     if labels is None:
-         labels = classify(seed_text, meta)
-     else:
-         labels = dict(labels)
-     if policy is None:
-         policy = pick_dialog_policy(labels) or {}
-     else:
-         policy = dict(policy or {})
- 
-     try:
-         if isinstance(meta, dict):
-             meta_nlu = meta.setdefault('nlu', {})
-             meta_nlu.update(labels)
-             dialog_nlu = meta.setdefault(_DIALOG_NLU_KEY, {})
-             try:
-                 dialog_nlu.update(labels)
-             except Exception:
-                 meta[_DIALOG_NLU_KEY] = dict(labels)
+@@ -998,51 +1023,77 @@ def _make_legacy_frames(seed_text: str,
      except Exception:
          pass
      policy_action = _policy_action(policy)
      teacher_move = policy_action
  
--    action = _get_dialog_action(meta)
--    if not action and policy_action:
--        action = policy_action
-+    provided_action: Optional[str] = None
-+    if action is not None:
-+        try:
-+            provided_action = str(action or "").strip().lower()
-+        except Exception:
-+            provided_action = None
-+    normalized_action = provided_action or _normalize_action(meta)
-+    if not provided_action and policy_action and not normalized_action:
-+        normalized_action = str(policy_action or "").strip().lower() or normalized_action
+     provided_action: Optional[str] = None
+     if action is not None:
+         try:
+             provided_action = str(action or "").strip().lower()
+         except Exception:
+             provided_action = None
+     normalized_action = provided_action or _normalize_action(meta)
+     if not provided_action and policy_action and not normalized_action:
+         normalized_action = str(policy_action or "").strip().lower() or normalized_action
      if isinstance(meta, dict):
--        if action:
--            meta['action'] = action
--            meta[_DIALOG_ACTION_KEY] = action
-+        if normalized_action:
-+            meta['action'] = normalized_action
-+            meta[_DIALOG_ACTION_KEY] = normalized_action
+         if normalized_action:
+             meta['action'] = normalized_action
+             meta[_DIALOG_ACTION_KEY] = normalized_action
          if _DIALOG_VERBOSITY_KEY not in meta:
              if 'verbosity' in meta:
                  meta[_DIALOG_VERBOSITY_KEY] = meta.get('verbosity')
@@ -666,7 +163,34 @@ index 2394e95628e7232fa91192b91704504c85967415..14ab8e989f6cf77a377578a3769140a0
                  meta[_DIALOG_VERBOSITY_KEY] = cfg.get('gen_target_verbosity', 'medium')
          if 'verbosity' not in meta:
              meta['verbosity'] = meta[_DIALOG_VERBOSITY_KEY]
-         show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
+-        show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
++
++        def _coerce_dialog_flag(value: Any) -> Optional[bool]:
++            if value is None:
++                return None
++            if isinstance(value, str):
++                lowered = value.strip().lower()
++                if lowered in {"1", "true", "yes", "on"}:
++                    return True
++                if lowered in {"0", "false", "no", "off"}:
++                    return False
++                return None
++            try:
++                return bool(value)
++            except Exception:
++                return None
++
++        existing_pref = None
++        if 'show_suggestions' in meta:
++            existing_pref = _coerce_dialog_flag(meta.get('show_suggestions'))
++        elif _DIALOG_SHOW_SUGGESTIONS_KEY in meta:
++            existing_pref = _coerce_dialog_flag(meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY))
++
++        if existing_pref is None:
++            show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
++        else:
++            show_suggestions = bool(existing_pref)
++
          meta['show_suggestions'] = show_suggestions
          meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
          meta[_DIALOG_POLICY_KEY] = dict(policy)
@@ -680,121 +204,19 @@ index 2394e95628e7232fa91192b91704504c85967415..14ab8e989f6cf77a377578a3769140a0
  
      prompt = _build_prompt(seed_text, persona, kb, teacher_move)
  
--    try:
--        provider = get_provider(cfg)
--    except Exception as e:
--        provider = None
--        _admin_emit("llm_provider_error", error=e.__class__.__name__)
--
      reply: str
      error_note: Optional[str] = None
--    if provider is not None:
-+    use_llm = normalized_action != "ask_clarify"
-+
-+    if use_llm:
+     use_llm = normalized_action != "ask_clarify"
+ 
+     if use_llm:
          try:
--            reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
-+            provider = get_provider(cfg)
+             provider = get_provider(cfg)
          except Exception as e:
--            error_note = f"llm_error:{e.__class__.__name__}"
--            reply = _LEGACY_WARMUP_LINE
--            _admin_emit("llm_generate_error", error=e.__class__.__name__)
-+            provider = None
-+            error_note = "llm_not_available"
-+            _admin_emit("llm_provider_error", error=e.__class__.__name__)
-+        if provider is not None:
-+            try:
-+                reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
-+            except Exception as e:
-+                error_note = f"llm_error:{e.__class__.__name__}"
-+                reply = _LEGACY_WARMUP_LINE
-+                _admin_emit("llm_generate_error", error=e.__class__.__name__)
-+        else:
-+            reply = "Hi! I’m ready to help."
-     else:
--        error_note = "llm_not_available"
--        reply = "Hi! I’m ready to help."
-+        reply = _build_clarify_question(seed_text, meta)
- 
-     fallback_fired = False
-     fallback_reason: Optional[str] = None
- 
--    if fallback_on_error and error_note:
--        reply = fallback_line
--        fallback_fired = True
--        fallback_reason = error_note
--    elif fallback_on_empty and not (reply or "").strip():
--        reply = fallback_line
--        fallback_fired = True
--        fallback_reason = "empty"
-+    if use_llm:
-+        if fallback_on_error and error_note:
-+            reply = fallback_line
-+            fallback_fired = True
-+            fallback_reason = error_note
-+        elif fallback_on_empty and not (reply or "").strip():
-+            reply = fallback_line
-+            fallback_fired = True
-+            fallback_reason = "empty"
- 
-     safe_reply = _scrub_debug_stamps(reply)
- 
-+    if use_llm and not fallback_fired:
-+        shaped = _apply_action_shape(normalized_action, safe_reply, meta)
-+        if shaped:
-+            safe_reply = shaped
-+        else:
-+            safe_reply = ""
-+
-     if is_greet:
-         safe_reply = _short_greeting(safe_reply)
-     elif fallback_fired:
-         safe_reply = _short_greeting(safe_reply)
- 
-     if not (safe_reply or "").strip():
--        if fallback_fired or fallback_on_empty:
-+        use_configured_fallback = fallback_fired or (use_llm and fallback_on_empty)
-+        if not use_llm:
-+            use_configured_fallback = True
-+        if use_configured_fallback:
-             safe_reply = _scrub_debug_stamps(fallback_line)
-             if not safe_reply.strip():
-                 safe_reply = fallback_line.strip() or _LEGACY_WARMUP_LINE
-             if not fallback_fired:
-                 fallback_fired = True
-                 if not fallback_reason:
-                     fallback_reason = "empty"
-             elif not fallback_reason:
-                 fallback_reason = "empty"
-         else:
-             safe_reply = _LEGACY_WARMUP_LINE
- 
--    if force_turn_id is not None:
--        db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
--        turn_id = str(force_turn_id)
--    else:
--        turn_seq = db.memory.setdefault('turn_seq', 0) + 1
--        db.memory['turn_seq'] = turn_seq
--        turn_id = str(turn_seq)
-+    turn_id = _allocate_turn_id(force_turn_id)
- 
-     if fallback_fired and fallback_emit_event:
-         try:
-             _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
-         except Exception:
-             pass
- 
-     _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
- 
-     frames: List[Dict] = []
- 
-     active_teacher_move = teacher_move
-     chunk = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': safe_reply,
-         'kb_hits': len(kb),
-     }
+             provider = None
+             error_note = "llm_not_available"
+             _admin_emit("llm_provider_error", error=e.__class__.__name__)
+         if provider is not None:
+@@ -1123,53 +1174,52 @@ def _make_legacy_frames(seed_text: str,
      if correlation_user_msg_id:
          chunk['correlation_user_msg_id'] = correlation_user_msg_id
      if error_note:
@@ -820,10 +242,11 @@ index 2394e95628e7232fa91192b91704504c85967415..14ab8e989f6cf77a377578a3769140a0
          )
      except Exception:
          pass
-     should_emit_suggestions = bool(merged_suggestions) and (
--        is_greet or _get_dialog_show_suggestions(meta)
-+        is_greet or bool(meta.get('show_suggestions'))
-     )
+-    should_emit_suggestions = bool(merged_suggestions) and (
+-        is_greet or bool(meta.get('show_suggestions'))
+-    )
++    allow_suggestions = bool(meta.get('show_suggestions')) if isinstance(meta, dict) else False
++    should_emit_suggestions = bool(merged_suggestions) and (is_greet or allow_suggestions)
      if should_emit_suggestions:
          frames.append(
              {
@@ -848,3 +271,124 @@ index 2394e95628e7232fa91192b91704504c85967415..14ab8e989f6cf77a377578a3769140a0
      """
      Map configured TTS output format to an appropriate MIME/container for MSE playback.
      We keep this conservative to avoid mismatches with provider bytes.
+     """
+diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
+index 64ee9bc6132850492a21b8cbc18b25f77018498e..956db37512d7d456effa6b2922fe24b0b84b434a 100644
+--- a/tests/test_streaming_ws_fallbacks.py
++++ b/tests/test_streaming_ws_fallbacks.py
+@@ -174,50 +174,68 @@ def test_prepare_turn_metadata_respects_policy_show_suggestions(monkeypatch):
+     assert prepared["action"] == "give_brief_answer"
+     assert prepared["dialog_action"] == "give_brief_answer"
+     assert prepared["show_suggestions"] is False
+     assert prepared["dialog_show_suggestions"] is False
+     assert policy["show_suggestions"] is False
+ 
+ 
+ def test_prepare_turn_metadata_enables_suggestions_for_ask_clarify(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     monkeypatch.setattr(
+         streaming,
+         "pick_dialog_policy",
+         lambda labels: {"action": "ask_clarify", "show_suggestions": True, "teacher_move": "ask_clarify"},
+     )
+ 
+     prepared, _, policy = streaming.prepare_turn_metadata("Can you clarify?", {})
+ 
+     assert prepared["action"] == "ask_clarify"
+     assert prepared["dialog_action"] == "ask_clarify"
+     assert prepared["show_suggestions"] is True
+     assert prepared["dialog_show_suggestions"] is True
+     assert policy["show_suggestions"] is True
+ 
+ 
++def test_prepare_turn_metadata_enables_suggestions_for_offer_steps(monkeypatch):
++    _stub_config(monkeypatch)
++
++    monkeypatch.setattr(
++        streaming,
++        "pick_dialog_policy",
++        lambda labels: {"action": "offer_steps", "show_suggestions": True, "teacher_move": "offer_steps"},
++    )
++
++    prepared, _, policy = streaming.prepare_turn_metadata("Walk me through", {})
++
++    assert prepared["action"] == "offer_steps"
++    assert prepared["dialog_action"] == "offer_steps"
++    assert prepared["show_suggestions"] is True
++    assert prepared["dialog_show_suggestions"] is True
++    assert policy["show_suggestions"] is True
++
++
+ def test_legacy_frames_emit_suggestions_only_when_allowed(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     monkeypatch.setattr(streaming, "kb_search", lambda *a, **k: [])
+     monkeypatch.setattr(streaming, "_emit_turn_action_metadata", lambda *a, **k: None)
+     monkeypatch.setattr(streaming, "_broadcast_frames", lambda *a, **k: None)
+     monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: [])
+     monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: ["Next steps"])
+     monkeypatch.setattr(streaming.db, "memory", {})
+ 
+     class DummyProvider:
+         def generate_reply(self, *args, **kwargs):
+             return "Here you go"
+ 
+     monkeypatch.setattr(streaming, "get_provider", lambda cfg: DummyProvider())
+ 
+     cfg = {"suggestions_enabled": True}
+ 
+     deny_meta = {"nlu": {}, "action": "give_brief_answer"}
+     deny_policy = {"teacher_move": "give_brief_answer", "show_suggestions": False}
+ 
+     _, deny_frames = streaming._make_legacy_frames(
+         "Hello",
+         "sess-deny",
+         deny_meta,
+@@ -233,25 +251,46 @@ def test_legacy_frames_emit_suggestions_only_when_allowed(monkeypatch):
+         policy=deny_policy,
+     )
+ 
+     assert all(fr.get("type") != "suggestions" for fr in deny_frames)
+ 
+     allow_meta = {"nlu": {}, "action": "ask_clarify"}
+     allow_policy = {"teacher_move": "ask_clarify", "show_suggestions": True}
+ 
+     _, allow_frames = streaming._make_legacy_frames(
+         "Hello",
+         "sess-allow",
+         allow_meta,
+         cfg,
+         correlation_user_msg_id=None,
+         force_turn_id=None,
+         is_greet=False,
+         fallback_line="Fallback",
+         fallback_on_empty=True,
+         fallback_on_error=True,
+         fallback_emit_event=False,
+         labels={},
+         policy=allow_policy,
+     )
+ 
+     assert any(fr.get("type") == "suggestions" for fr in allow_frames)
++
++    offer_meta = {"nlu": {}, "action": "offer_steps"}
++    offer_policy = {"teacher_move": "offer_steps", "show_suggestions": True}
++
++    _, offer_frames = streaming._make_legacy_frames(
++        "Hello",
++        "sess-offer",
++        offer_meta,
++        cfg,
++        correlation_user_msg_id=None,
++        force_turn_id=None,
++        is_greet=False,
++        fallback_line="Fallback",
++        fallback_on_empty=True,
++        fallback_on_error=True,
++        fallback_emit_event=False,
++        labels={},
++        policy=offer_policy,
++    )
++
++    assert any(fr.get("type") == "suggestions" for fr in offer_frames)
