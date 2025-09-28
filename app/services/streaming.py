@@ -18,6 +18,7 @@ from .persona_prompt import build_persona_preamble, format_kb_context
 from .suggestions import hygienic_suggestions
 from .vendor_clients import make_openai_client
 from .nlg.humanize import humanize_text, sounds_botty
+from .greet_idempotency import get_or_create_greet_turn, DEFAULT_TTL_SEC
 from ..db import db
 from ..ws.bus import bus
 from ..obs import jlog as _jlog
@@ -238,7 +239,9 @@ def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
 def make_assistant_frames(seed_text: str,
                           session_id: str,
                           meta: Optional[Dict] = None,
-                          correlation_user_msg_id: Optional[str] = None) -> Tuple[str, List[Dict]]:
+                          correlation_user_msg_id: Optional[str] = None,
+                          *,
+                          force_turn_id: Optional[str] = None) -> Tuple[str, List[Dict]]:
     """
     Produce assistant frames for a given user seed text using the configured LLM provider.
     ALWAYS returns a frames list that includes at least:
@@ -257,6 +260,7 @@ def make_assistant_frames(seed_text: str,
                 meta,
                 cfg,
                 correlation_user_msg_id=correlation_user_msg_id,
+                force_turn_id=force_turn_id,
             )
         except Exception as e:
             try:
@@ -270,6 +274,7 @@ def make_assistant_frames(seed_text: str,
         meta,
         cfg,
         correlation_user_msg_id=correlation_user_msg_id,
+        force_turn_id=force_turn_id,
     )
 
 
@@ -278,7 +283,8 @@ def _make_foundation_frames(seed_text: str,
                             meta: Dict[str, Any],
                             cfg: Dict[str, Any],
                             *,
-                            correlation_user_msg_id: Optional[str]) -> Tuple[str, List[Dict]]:
+                            correlation_user_msg_id: Optional[str],
+                            force_turn_id: Optional[str]) -> Tuple[str, List[Dict]]:
     store = PersonaStore()
     persona = PersonaManager(store).get_active()
     dialog_meta = dict(meta or {})
@@ -317,13 +323,18 @@ def _make_foundation_frames(seed_text: str,
     except Exception:
         pass
 
-    turn_id = db.memory.setdefault('turn_seq', 0) + 1
-    db.memory['turn_seq'] = turn_id
+    if force_turn_id is not None:
+        db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
+        turn_id = str(force_turn_id)
+    else:
+        turn_seq = db.memory.setdefault('turn_seq', 0) + 1
+        db.memory['turn_seq'] = turn_seq
+        turn_id = str(turn_seq)
 
     frames: List[Dict] = []
     chunk: Dict[str, Any] = {
         'type': 'assistant_chunk',
-        'turn_id': str(turn_id),
+        'turn_id': turn_id,
         'text': safe_reply,
         'kb_hits': 0,
         'intent': nlu_result.get('intent'),
@@ -356,18 +367,18 @@ def _make_foundation_frames(seed_text: str,
         frames.append(
             {
                 'type': 'suggestions',
-                'turn_id': str(turn_id),
+                'turn_id': turn_id,
                 'items': build_suggestion_items(merged_suggestions),
             }
         )
 
-    end_fr = {'type': 'assistant_end', 'turn_id': str(turn_id)}
+    end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
     if correlation_user_msg_id:
         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
     frames.append(end_fr)
 
-    _broadcast_frames(session_id, frames, str(turn_id))
-    return str(turn_id), frames
+    _broadcast_frames(session_id, frames, turn_id)
+    return turn_id, frames
 
 
 def _make_legacy_frames(seed_text: str,
@@ -375,7 +386,8 @@ def _make_legacy_frames(seed_text: str,
                         meta: Dict[str, Any],
                         cfg: Dict[str, Any],
                         *,
-                        correlation_user_msg_id: Optional[str]) -> Tuple[str, List[Dict]]:
+                        correlation_user_msg_id: Optional[str],
+                        force_turn_id: Optional[str]) -> Tuple[str, List[Dict]]:
     persona = _get_persona_for_session(session_id)
 
     labels = annotate(seed_text, meta)
@@ -426,14 +438,19 @@ def _make_legacy_frames(seed_text: str,
     except Exception:
         pass
 
-    turn_id = db.memory.setdefault('turn_seq', 0) + 1
-    db.memory['turn_seq'] = turn_id
+    if force_turn_id is not None:
+        db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
+        turn_id = str(force_turn_id)
+    else:
+        turn_seq = db.memory.setdefault('turn_seq', 0) + 1
+        db.memory['turn_seq'] = turn_seq
+        turn_id = str(turn_seq)
 
     frames: List[Dict] = []
 
     chunk = {
         'type': 'assistant_chunk',
-        'turn_id': str(turn_id),
+        'turn_id': turn_id,
         'text': safe_reply,
         'kb_hits': len(kb),
     }
@@ -466,18 +483,18 @@ def _make_legacy_frames(seed_text: str,
         frames.append(
             {
                 'type': 'suggestions',
-                'turn_id': str(turn_id),
+                'turn_id': turn_id,
                 'items': build_suggestion_items(merged_suggestions),
             }
         )
 
-    end_fr = {'type': 'assistant_end', 'turn_id': str(turn_id)}
+    end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
     if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
     frames.append(end_fr)
 
-    _broadcast_frames(session_id, frames, str(turn_id))
-    return str(turn_id), frames
+    _broadcast_frames(session_id, frames, turn_id)
+    return turn_id, frames
 
 
 # --- MIME mapping helper ------------------------------------------------------
@@ -686,7 +703,13 @@ def run_ws_greet(session_id: str) -> str:
     Produce assistant text for greet, broadcast frames, schedule TTS audio,
     and nudge UI with state+suggestions. Returns turn_id.
     """
-    tid, frames = make_assistant_frames("greet", session_id, meta={"source": "ws_greet"})
+    forced_tid, _idempotent = get_or_create_greet_turn(session_id, force=False, ttl_sec=DEFAULT_TTL_SEC)
+    tid, frames = make_assistant_frames(
+        "greet",
+        session_id,
+        meta={"source": "ws_greet"},
+        force_turn_id=forced_tid,
+    )
     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
     try:
         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")

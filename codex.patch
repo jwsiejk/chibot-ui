@@ -1,54 +1,9 @@
-diff --git a/app/config.py b/app/config.py
-index d9a4e0b67e774a5cf06546f36c1008ba53903c13..5f8e98a9bf41aa07e5db0395e9320e517823ff88 100644
---- a/app/config.py
-+++ b/app/config.py
-@@ -1,38 +1,41 @@
- import os
- from dataclasses import dataclass
- 
- @dataclass
- class Settings:
-     admin_emails: str = os.getenv("ADMIN_EMAILS", "")
-     database_url: str = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/ask_chip?sslmode=require")
-     openai_api_key: str = os.getenv("OPENAI_API_KEY", "mock-openai-key")
-     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-     openai_stt_language: str = os.getenv("OPENAI_STT_LANGUAGE", "en")
-     elevenlabs_api_key: str = os.getenv("ELEVENLABS_API_KEY", "mock-eleven-key")
-     eleven_voice_id: str = os.getenv("ELEVENLABS_VOICE_ID", "mock-voice")
-     eleven_output_format: str = os.getenv("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128")
-     eleven_output_format_ws: str = os.getenv("ELEVEN_OUTPUT_FORMAT_WS", "mp3_44100_128")
-     email_host: str = os.getenv("EMAIL_HOST", "mock.smtp.local")
-     email_port: int = int(os.getenv("EMAIL_PORT", "587"))
-     email_use_tls: bool = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
-     email_host_user: str = os.getenv("EMAIL_HOST_USER", "mock-user")
-     email_host_password: str = os.getenv("EMAIL_HOST_PASSWORD", "mock-pass")
-     email_from_name: str = os.getenv("EMAIL_FROM_NAME", "Chip")
-     from_email: str = os.getenv("FROM_EMAIL", "chip@example.com")
-     feature_admin_ui: bool = os.getenv("FEATURE_ADMIN_UI", "true").lower() == "true"
-     feature_audio: bool = os.getenv("FEATURE_AUDIO", "true").lower() == "true"
-     feature_tools: bool = os.getenv("FEATURE_TOOLS", "false").lower() == "true"
-+    enable_chip_foundation: bool = os.getenv("ENABLE_CHIP_FOUNDATION", "1").strip().lower() not in ("0", "false", "no")
-+    enable_policy_chips: bool = os.getenv("ENABLE_POLICY_CHIPS", "1").strip().lower() not in ("0", "false", "no")
-+    suggestion_max: int = int(os.getenv("SUGGESTION_MAX", "4"))
-     secret_key: str = os.getenv("SECRET_KEY", "dev-secret")
-     session_type: str = os.getenv("SESSION_TYPE", "filesystem")
-     ws_ping_interval_ms: int = int(os.getenv("WS_PING_INTERVAL_MS", "25000"))
- 
- def load_settings() -> Settings:
-     return Settings()
- 
- 
- import os
- 
- # Usage caps / rate limits (Phase 3)
- MAX_TURN_SEC = int(os.getenv("MAX_TURN_SEC", "30"))
- MAX_SESSION_MIN = int(os.getenv("MAX_SESSION_MIN", "15"))
- RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))  # requests per minute
 diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 94fc7882d2eadbbb276295df22dff655cb1ce3fb..00d86b1ce780385cb08e5c9750d6b19e5848257a 100644
+index 00d86b1ce780385cb08e5c9750d6b19e5848257a..87ece0609010ec2a12384170f34cf1175e82201b 100644
 --- a/app/services/streaming.py
 +++ b/app/services/streaming.py
-@@ -2,95 +2,98 @@
+@@ -1,45 +1,46 @@
+ # app/services/streaming.py — Production-grade assistant framing
  # Guarantees assistant_* frames are broadcast even if the LLM provider fails.
  # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
  
@@ -68,13 +23,14 @@ index 94fc7882d2eadbbb276295df22dff655cb1ce3fb..00d86b1ce780385cb08e5c9750d6b19e
  from .suggestions import hygienic_suggestions
  from .vendor_clients import make_openai_client
  from .nlg.humanize import humanize_text, sounds_botty
++from .greet_idempotency import get_or_create_greet_turn, DEFAULT_TTL_SEC
  from ..db import db
  from ..ws.bus import bus
  from ..obs import jlog as _jlog
  from ..personas.store import PersonaManager, PersonaStore
  from ..personas.prompt_builder import build_messages
  from .. import nlu as _nlu
-+from ..config import load_settings
+ from ..config import load_settings
  
  try:
      from ..api_v1.admin import _emit as _admin_emit  # SSE to Admin
@@ -93,118 +49,386 @@ index 94fc7882d2eadbbb276295df22dff655cb1ce3fb..00d86b1ce780385cb08e5c9750d6b19e
  
  
  def _build_prompt(seed_text: str, persona: Dict, kb_snippets: List[str], teacher_move: Optional[str]) -> str:
-     parts = [build_persona_preamble(persona)]
-     if kb_snippets:
-         parts.append(format_kb_context(kb_snippets))
-     if teacher_move:
-         parts.append(f"Teacher move: {teacher_move}.")
-     parts.append(f"User said: {seed_text.strip()}")
-     return "\n\n".join(parts)
+@@ -216,290 +217,306 @@ def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
+     if isinstance(raw, (list, tuple, set)):
+         chips = list(raw)
+     else:
+         chips = [raw]
+     cap = _suggestion_cap()
+     cleaned: List[str] = []
+     seen = set()
+     for item in chips:
+         text = _normalize_suggestion_item(item)
+         if not text:
+             continue
+         if len(text) > 50:
+             text = text[:50].rstrip()
+         if not text or text in seen:
+             continue
+         cleaned.append(text)
+         seen.add(text)
+         if len(cleaned) >= cap:
+             break
+     return cleaned
  
  
- # --- text hygiene -------------------------------------------------------------
- # Remove ANY occurrence (not just trailing) of legacy "[KB:n]" stamps, case-insensitive.
- _KB_TAG_RE = re.compile(r"\s*\[(?:KB|kb)\s*:\s*\d+\]\s*")
- 
- def _scrub_debug_stamps(s: str) -> str:
+ def make_assistant_frames(seed_text: str,
+                           session_id: str,
+                           meta: Optional[Dict] = None,
+-                          correlation_user_msg_id: Optional[str] = None) -> Tuple[str, List[Dict]]:
++                          correlation_user_msg_id: Optional[str] = None,
++                          *,
++                          force_turn_id: Optional[str] = None) -> Tuple[str, List[Dict]]:
      """
-     Remove legacy debug stamps like "[KB:0]" that were historically appended to
-     assistant text for telemetry. We keep the value as metadata instead.
-     This removes ALL occurrences safely without touching other content.
+     Produce assistant frames for a given user seed text using the configured LLM provider.
+     ALWAYS returns a frames list that includes at least:
+         - one 'assistant_chunk' (with either model text OR a safe fallback), and
+         - one 'assistant_end'.
+     Also broadcasts frames to the WS bus as they are prepared.
      """
-     if not s:
-         return s
-     # Replace any matches with a single space, then trim.
-     return _KB_TAG_RE.sub(" ", s).strip()
+     meta = meta or {}
+     cfg = db.get_config()
+ 
+     if _should_use_foundation(seed_text):
+         try:
+             return _make_foundation_frames(
+                 seed_text,
+                 session_id,
+                 meta,
+                 cfg,
+                 correlation_user_msg_id=correlation_user_msg_id,
++                force_turn_id=force_turn_id,
+             )
+         except Exception as e:
+             try:
+                 _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
+             except Exception:
+                 pass
+ 
+     return _make_legacy_frames(
+         seed_text,
+         session_id,
+         meta,
+         cfg,
+         correlation_user_msg_id=correlation_user_msg_id,
++        force_turn_id=force_turn_id,
+     )
  
  
--ENABLE_CHIP_FOUNDATION = os.getenv("ENABLE_CHIP_FOUNDATION", "1").lower() not in ("0", "false", "no")
--ENABLE_POLICY_CHIPS = os.getenv("ENABLE_POLICY_CHIPS", "1").strip().lower() not in ("0", "false", "no")
-+SETTINGS = load_settings()
-+ENABLE_CHIP_FOUNDATION = SETTINGS.enable_chip_foundation
-+ENABLE_POLICY_CHIPS = SETTINGS.enable_policy_chips
-+SUGGESTION_MAX = SETTINGS.suggestion_max
- STRICT_SYSTEM_SHIM = (
-     "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
-     "and never mention being an AI or chatbot."
- )
+ def _make_foundation_frames(seed_text: str,
+                             session_id: str,
+                             meta: Dict[str, Any],
+                             cfg: Dict[str, Any],
+                             *,
+-                            correlation_user_msg_id: Optional[str]) -> Tuple[str, List[Dict]]:
++                            correlation_user_msg_id: Optional[str],
++                            force_turn_id: Optional[str]) -> Tuple[str, List[Dict]]:
+     store = PersonaStore()
+     persona = PersonaManager(store).get_active()
+     dialog_meta = dict(meta or {})
  
+     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
+     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store)
  
- def _should_use_foundation(seed_text: str) -> bool:
-     if not ENABLE_CHIP_FOUNDATION:
-         return False
+     prompt_meta = dict(dialog_meta)
+     prompt_meta['intent'] = nlu_result.get('intent')
+     if policy.get('teacher_move'):
+         prompt_meta['teacher_move'] = policy.get('teacher_move')
+ 
+     examples = store.match_examples(persona['id'], seed_text)
+     messages, teacher_move, prompt_hash = build_messages(
+         persona=persona,
+         user_text=seed_text,
+         dialog_meta=prompt_meta,
+         examples=examples,
+     )
+ 
+     reply = _call_foundation_with_retry(messages, cfg)
+     safe_reply = _scrub_debug_stamps(reply)
+ 
+     policy_chips = _collect_policy_chips(policy)
+ 
      try:
-         if str(seed_text or "").strip().lower() == "greet":
-             return False
-     except Exception:
-         return False
-     return True
- 
- 
- def _apply_system_shim(messages: List[Dict[str, str]], shim: str) -> List[Dict[str, str]]:
-     cloned: List[Dict[str, str]] = [dict(m) for m in messages]
-     for msg in cloned:
-         if msg.get("role") == "system":
-             msg["content"] = (msg.get("content") or "").rstrip() + "\n" + shim
-             return cloned
-     cloned.insert(0, {"role": "system", "content": shim})
-     return cloned
-@@ -126,55 +129,56 @@ def _call_foundation_with_retry(messages: List[Dict[str, str]], cfg: Dict[str, A
-         return human
-     try:
-         strict_msgs = _apply_system_shim(messages, STRICT_SYSTEM_SHIM)
-         strict_reply = _call_foundation_llm(strict_msgs, cfg)
-         strict_human = humanize_text(strict_reply)
-         if strict_human:
-             return strict_human
+         _jlog(
+             "turn_telemetry",
+             sid=session_id,
+             intent=nlu_result.get('intent'),
+             confidence=nlu_result.get('confidence'),
+             teacher_move=policy.get('teacher_move') or teacher_move,
+             chips=len(policy_chips),
+             prompt_hash=prompt_hash,
+         )
      except Exception:
          pass
-     return human
  
+-    turn_id = db.memory.setdefault('turn_seq', 0) + 1
+-    db.memory['turn_seq'] = turn_id
++    if force_turn_id is not None:
++        db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
++        turn_id = str(force_turn_id)
++    else:
++        turn_seq = db.memory.setdefault('turn_seq', 0) + 1
++        db.memory['turn_seq'] = turn_seq
++        turn_id = str(turn_seq)
  
- def _broadcast_frames(session_id: str, frames: List[Dict], turn_id: str) -> None:
+     frames: List[Dict] = []
+     chunk: Dict[str, Any] = {
+         'type': 'assistant_chunk',
+-        'turn_id': str(turn_id),
++        'turn_id': turn_id,
+         'text': safe_reply,
+         'kb_hits': 0,
+         'intent': nlu_result.get('intent'),
+         'teacher_move': policy.get('teacher_move') or teacher_move,
+     }
+     if correlation_user_msg_id:
+         chunk['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(chunk)
+ 
+     frames.append({'type': 'state', 'phase': 'ready'})
+ 
+     legacy_suggestions = []
      try:
-         for fr in frames:
-             bus.broadcast(session_id, fr)
-             if fr.get('type') == 'assistant_chunk':
-                 _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(turn_id))
-             elif fr.get('type') == 'assistant_end':
-                 _admin_emit('assistant_end', session_id=session_id, turn_id=str(turn_id))
+         if cfg.get('suggestions_enabled', True):
+             legacy_suggestions = hygienic_suggestions(safe_reply)
+     except Exception:
+         legacy_suggestions = []
+     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
+     try:
+         _jlog(
+             "chips_emit",
+             sid=session_id,
+             intent=nlu_result.get('intent'),
+             count=len(merged_suggestions),
+             items=merged_suggestions,
+         )
+     except Exception:
+         pass
+     if merged_suggestions:
+         frames.append(
+             {
+                 'type': 'suggestions',
+-                'turn_id': str(turn_id),
++                'turn_id': turn_id,
+                 'items': build_suggestion_items(merged_suggestions),
+             }
+         )
+ 
+-    end_fr = {'type': 'assistant_end', 'turn_id': str(turn_id)}
++    end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
+     if correlation_user_msg_id:
+         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(end_fr)
+ 
+-    _broadcast_frames(session_id, frames, str(turn_id))
+-    return str(turn_id), frames
++    _broadcast_frames(session_id, frames, turn_id)
++    return turn_id, frames
+ 
+ 
+ def _make_legacy_frames(seed_text: str,
+                         session_id: str,
+                         meta: Dict[str, Any],
+                         cfg: Dict[str, Any],
+                         *,
+-                        correlation_user_msg_id: Optional[str]) -> Tuple[str, List[Dict]]:
++                        correlation_user_msg_id: Optional[str],
++                        force_turn_id: Optional[str]) -> Tuple[str, List[Dict]]:
+     persona = _get_persona_for_session(session_id)
+ 
+     labels = annotate(seed_text, meta)
+     labels['engagement'] = score_engagement(seed_text, meta)
+     policy = pick_policy(labels, cfg)
+     teacher_move = (policy or {}).get('teacher_move')
+ 
+     kb: List[str] = []
+     try:
+         if cfg.get('kb_enabled', False):
+             kb = kb_search(seed_text, top_k=int(cfg.get('kb_top_k', 3)))
+     except Exception:
+         kb = []
+ 
+     prompt = _build_prompt(seed_text, persona, kb, teacher_move)
+ 
+     try:
+         provider = get_provider(cfg)
+     except Exception as e:
+         provider = None
+         _admin_emit("llm_provider_error", error=e.__class__.__name__)
+ 
+     reply: str
+     error_note: Optional[str] = None
+     if provider is not None:
+         try:
+             reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
+         except Exception as e:
+             error_note = f"llm_error:{e.__class__.__name__}"
+             reply = "Hi! I’m ready to help. (Model is warming up.)"
+             _admin_emit("llm_generate_error", error=e.__class__.__name__)
+     else:
+         error_note = "llm_not_available"
+         reply = "Hi! I’m ready to help."
+ 
+     safe_reply = _scrub_debug_stamps(reply)
+ 
+     try:
+         _is_greet = False
+         try:
+             _is_greet = (str(seed_text).strip().lower() == "greet") or (str((meta or {}).get("source","")).strip().lower() == "greet")
+         except Exception:
+             _is_greet = (str(seed_text).strip().lower() == "greet")
+         if _is_greet:
+             _words = (safe_reply or "Hi there!").strip().split()
+             if len(_words) > 5:
+                 safe_reply = " ".join(_words[:5]).rstrip(",.;:!")
      except Exception:
          pass
  
+-    turn_id = db.memory.setdefault('turn_seq', 0) + 1
+-    db.memory['turn_seq'] = turn_id
++    if force_turn_id is not None:
++        db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
++        turn_id = str(force_turn_id)
++    else:
++        turn_seq = db.memory.setdefault('turn_seq', 0) + 1
++        db.memory['turn_seq'] = turn_seq
++        turn_id = str(turn_seq)
  
- def _suggestion_cap(default: int = 4) -> int:
-+    cap = SUGGESTION_MAX if SUGGESTION_MAX is not None else default
+     frames: List[Dict] = []
+ 
+     chunk = {
+         'type': 'assistant_chunk',
+-        'turn_id': str(turn_id),
++        'turn_id': turn_id,
+         'text': safe_reply,
+         'kb_hits': len(kb),
+     }
+     if correlation_user_msg_id:
+         chunk['correlation_user_msg_id'] = correlation_user_msg_id
+     if error_note:
+         chunk['note'] = error_note
+     frames.append(chunk)
+ 
+     legacy_suggestions: List[Any] = []
      try:
--        cap = int(os.getenv("SUGGESTION_MAX", str(default)))
-+        cap_int = int(cap)
+         if cfg.get('suggestions_enabled', True):
+             legacy_suggestions = hygienic_suggestions(safe_reply)
      except Exception:
-         return default
--    return max(0, cap)
-+    return max(0, cap_int)
- 
- 
- def _normalize_suggestion_item(raw: Any) -> str:
-     if isinstance(raw, str):
-         return raw.strip()
-     if isinstance(raw, dict):
-         for key in ("text", "label", "title"):
-             val = raw.get(key)
-             if isinstance(val, str):
-                 return val.strip()
-         for val in raw.values():
-             if isinstance(val, str):
-                 return val.strip()
+         legacy_suggestions = []
+     policy_chips = _collect_policy_chips(policy)
+     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
      try:
-         return str(raw or "").strip()
+         intent = labels.get('intent') if isinstance(labels, dict) else None
+         _jlog(
+             "chips_emit",
+             sid=session_id,
+             intent=intent,
+             count=len(merged_suggestions),
+             items=merged_suggestions,
+         )
      except Exception:
-         return ""
+         pass
+     if merged_suggestions:
+         frames.append(
+             {
+                 'type': 'suggestions',
+-                'turn_id': str(turn_id),
++                'turn_id': turn_id,
+                 'items': build_suggestion_items(merged_suggestions),
+             }
+         )
+ 
+-    end_fr = {'type': 'assistant_end', 'turn_id': str(turn_id)}
++    end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
+     if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
+         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(end_fr)
+ 
+-    _broadcast_frames(session_id, frames, str(turn_id))
+-    return str(turn_id), frames
++    _broadcast_frames(session_id, frames, turn_id)
++    return turn_id, frames
  
  
- def merge_suggestions(*lists: Iterable[Any], cap: int = 4) -> List[str]:
-     limit = _suggestion_cap()
-     if cap is not None:
-         limit = min(limit, cap)
-     if limit <= 0:
-         return []
+ # --- MIME mapping helper ------------------------------------------------------
+ 
+ def _guess_tts_mime(output_format: str | None) -> str:
+     """
+     Map configured TTS output format to an appropriate MIME/container for MSE playback.
+     We keep this conservative to avoid mismatches with provider bytes.
+     """
+     fmt = (output_format or os.environ.get('ELEVEN_OUTPUT_FORMAT') or '').lower()
+     # Prefer actual, common provider defaults. If unknown, assume MP3 to avoid mismatches.
+     if 'webm' in fmt and 'opus' in fmt:
+         return 'audio/webm; codecs="opus"'
+     if 'ogg' in fmt and 'opus' in fmt:
+         return 'audio/ogg; codecs="opus"'
+     if 'mp3' in fmt:
+         return 'audio/mpeg'
+     if 'wav' in fmt or 'pcm' in fmt or 'l16' in fmt:
+         return 'audio/wav'
+     # Fallback to MP3 (widely supported; safer than claiming WebM if provider returned MP3)
+     return 'audio/mpeg'
+ 
+ 
+ # --- WS TTS scheduling (audio over WS) ---------------------------------------
+ def schedule_tts_audio(session_id: str,
+@@ -664,51 +681,57 @@ def schedule_frames(session_id: str,
+             # Ensure an assistant_end terminator exists
+             if not any(fr.get('type') in ('assistant_end', 'end') for fr in frames):
+                 end_fr = {'type': 'assistant_end', 'turn_id': frames[-1].get('turn_id') if frames else None}
+                 if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
+                     end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+                 try:
+                     bus.broadcast(session_id, end_fr)
+                 except Exception:
+                     pass
+         finally:
+             try:
+                 _admin_emit('schedule_frames_done', session_id=session_id)
+             except Exception:
+                 pass
+ 
+     threading.Thread(target=_run, daemon=True).start()
+ 
+ 
+ # ---- WS orchestration helpers (centralize greet/user pipelines) ----
+ 
+ def run_ws_greet(session_id: str) -> str:
+     """
+     Produce assistant text for greet, broadcast frames, schedule TTS audio,
+     and nudge UI with state+suggestions. Returns turn_id.
+     """
+-    tid, frames = make_assistant_frames("greet", session_id, meta={"source": "ws_greet"})
++    forced_tid, _idempotent = get_or_create_greet_turn(session_id, force=False, ttl_sec=DEFAULT_TTL_SEC)
++    tid, frames = make_assistant_frames(
++        "greet",
++        session_id,
++        meta={"source": "ws_greet"},
++        force_turn_id=forced_tid,
++    )
+     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
+     try:
+         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
+         if text_for_tts:
+             # Pass scrubbed text to TTS (extra safety)
+             schedule_tts_audio(session_id, _scrub_debug_stamps(text_for_tts), turn_id=tid)
+     except Exception:
+         pass
+     # UI nudges
+     try:
+         bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+         base_suggestions = merge_suggestions(hygienic_suggestions(""))
+         if base_suggestions:
+             bus.broadcast(
+                 session_id,
+                 {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
+             )
+     except Exception:
+         pass
+     return tid
+ 
+ 
+ def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Optional[str] = None) -> str:
+     """
+     Produce assistant text for a user turn and schedule both text pacing and TTS.
