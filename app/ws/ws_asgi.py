@@ -1510,13 +1510,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         synth_reason = "dg_close_no_final"
                                         if drain_timeout_exc is not None:
                                             synth_reason = "dg_drain_timeout"
-                                    if await _emit_synthetic_final(
-                                        turn_id, synth_reason
-                                    ):
-                                        synthetic_emitted = True
-                                        with contextlib.suppress(ValueError):
-                                            pending_final_turns.remove(turn_id)
-                                        synthetic_final_turns.add(turn_id)
+                                        if await _emit_synthetic_final(
+                                            turn_id, synth_reason
+                                        ):
+                                            synthetic_emitted = True
+                                            with contextlib.suppress(ValueError):
+                                                pending_final_turns.remove(turn_id)
+                                            synthetic_final_turns.add(turn_id)
                                     if drain_timeout_exc is not None:
                                         _jlog(
                                             "ws_close_dg_drain_timeout_fallback",

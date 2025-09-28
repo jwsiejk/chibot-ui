@@ -51,6 +51,43 @@ class _DelayedOpenDeepgram:
         await self._queue.put(None)
 
 
+class _ImmediateFinalDeepgram:
+    """Deepgram stub that emits a final result before CloseStream."""
+
+    instances = []
+
+    def __init__(self, _cfg=None):
+        self.__class__.instances.append(self)
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self.close_called = False
+
+    async def connect(self):
+        async def _emit_final():
+            await asyncio.sleep(0.01)
+            await self._queue.put({"type": "asr_open"})
+            await asyncio.sleep(0.01)
+            await self._queue.put({"type": "user_final", "text": ""})
+
+        asyncio.create_task(_emit_final())
+
+    def is_open(self):
+        return True
+
+    async def events(self):
+        while True:
+            ev = await self._queue.get()
+            if ev is None:
+                break
+            yield ev
+
+    async def send(self, chunk: bytes):
+        return
+
+    async def close(self, wait_for_final: bool = True, **_):
+        self.close_called = True
+        await self._queue.put(None)
+
+
 def test_close_stream_waits_for_delayed_open(monkeypatch):
     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
@@ -101,3 +138,70 @@ def test_close_stream_waits_for_delayed_open(monkeypatch):
     finals = [p for p in payloads if p.get("type") == "Results" and p.get("channel", {}).get("is_final")]
 
     assert finals, "CloseStream should emit a final result even if provider open is delayed"
+
+
+def test_close_stream_with_existing_final_does_not_emit_synthetic(monkeypatch):
+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
+    monkeypatch.setenv("DG_LINGER_MS", "0")
+    monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
+
+    _ImmediateFinalDeepgram.instances = []
+    monkeypatch.setattr(ws_asgi, "DeepgramClient", _ImmediateFinalDeepgram)
+
+    events = deque(
+        [
+            {"type": "websocket.receive", "bytes": b"\x00\x01"},
+            {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
+            {"type": "websocket.disconnect"},
+        ]
+    )
+
+    sent = []
+    final_sent_evt: asyncio.Event = asyncio.Event()
+
+    async def _receive():
+        if not events:
+            return {"type": "websocket.disconnect"}
+        next_event = events[0]
+        text = next_event.get("text")
+        if text:
+            try:
+                payload = json.loads(text)
+            except Exception:
+                payload = {}
+            if payload.get("type") == "CloseStream":
+                await final_sent_evt.wait()
+        return events.popleft()
+
+    async def _send(msg):
+        sent.append(msg)
+        if msg.get("type") == "websocket.send" and msg.get("text"):
+            try:
+                payload = json.loads(msg["text"])
+            except Exception:
+                return
+            channel = payload.get("channel") or {}
+            if payload.get("type") == "Results" and channel.get("is_final"):
+                final_sent_evt.set()
+
+    scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
+        loop.run_until_complete(asyncio.sleep(0.05))
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+    payloads = [
+        json.loads(m["text"])
+        for m in sent
+        if m.get("type") == "websocket.send" and m.get("text")
+    ]
+
+    finals = [p for p in payloads if p.get("type") == "Results" and p.get("channel", {}).get("is_final")]
+
+    assert len(finals) == 1, "Only provider final should be emitted when already observed"

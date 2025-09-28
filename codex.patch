@@ -1,302 +1,253 @@
-diff --git a/app/services/audio/raw_fallback.py b/app/services/audio/raw_fallback.py
-index 3e2b88f6e5ef7aed35e0be3cbdf7185efe27a95b..174596294315d10faac0031acd6392a542513de7 100644
---- a/app/services/audio/raw_fallback.py
-+++ b/app/services/audio/raw_fallback.py
-@@ -6,50 +6,52 @@ switched to Deepgram's raw PCM ingest path. The logic lives here so it can be
- shared by the WS handler and tests without sprinkling guard-rail state across
- the codebase.
- 
- The workflow is:
- 
- ``StreamStats``
-     Mutable per-session counters – frame counts, decode errors, jitter, etc.
- 
- ``DetectionSignal`` & ``StreamMeta``
-     Lightweight dataclasses representing what we know about the stream (codec,
-     channel count, sample rate hints).
- 
- ``should_use_raw_fallback``
-     Given the latest detection signal and stats, decide if we should coerce the
-     Deepgram connection into raw PCM mode.
- 
- ``coerce_to_raw_config``
-     Produce Deepgram configuration overrides that enable raw PCM ingest.
- 
- Helper functions provide deterministic frame sizing (padding, silence
- insertion) so the WS layer can keep its buffering logic tidy.
- """
- 
- from __future__ import annotations
- 
-+import os
-+
- from dataclasses import dataclass, field
- from typing import Mapping, Optional
- 
- PCM_BYTES_PER_SAMPLE = 2
- DEFAULT_SAMPLE_RATE = 48_000
- DEFAULT_CHANNELS = 1
- DEFAULT_FRAME_MS = 20
- 
- # Frame length ≥ this threshold suggests we're receiving PCM rather than Opus.
- RAW_PCM_SUSPECT_BYTES = 320  # 20 ms @ 8 kHz mono 16-bit PCM
- 
- 
- @dataclass(frozen=True)
- class DetectionSignal:
-     """Lightweight representation of the current transport detection."""
- 
-     container: Optional[str] = None
-     codec: Optional[str] = None
-     containerized: bool = False
-     source: str = "unknown"
- 
- 
- @dataclass
- class StreamMeta:
-     """Mutable hints about the stream supplied by clients or heuristics."""
-@@ -249,58 +251,71 @@ def normalize_pcm_frame(frame: bytes, meta: StreamMeta) -> bytes:
-     return frame[:expected]
- 
- 
- def pad_frame_to_expected(frame: bytes, meta: StreamMeta) -> bytes:
-     """Public wrapper used by tests – identical to ``normalize_pcm_frame``."""
- 
-     return normalize_pcm_frame(frame, meta)
- 
- 
- def silence_frame(meta: StreamMeta) -> bytes:
-     expected = expected_pcm_frame_bytes(meta)
-     if expected <= 0:
-         return b""
-     return b"\x00" * expected
- 
- 
- def is_probable_silence(frame: bytes) -> bool:
-     if not frame:
-         return True
-     if len(frame) <= 2:
-         return False
-     first = frame[:1]
-     return frame.count(first) == len(frame) and first in (b"\x00", b"\xff")
- 
- 
-+def raw_fallback_disabled() -> bool:
-+    """Return ``True`` when the runtime kill-switch disables raw fallback."""
-+
-+    flag = os.getenv("CHIBOT_DISABLE_RAW_FALLBACK")
-+    if not flag:
-+        return False
-+    return flag.strip().lower() not in {"0", "false", "off"}
-+
-+
- def should_buffer_for_jitter(stats: StreamStats) -> bool:
-     return stats.jitter_slip_frames >= stats.guardrails.jitter_slip_limit
- 
- 
- def should_use_raw_fallback(
-     detection: Optional[DetectionSignal],
-     stats: Optional[StreamStats],
- ) -> bool:
-+    if raw_fallback_disabled():
-+        if stats is not None and stats.forced_fallback:
-+            stats.forced_fallback = False
-+        return False
-     if stats is None:
-         return False
-     if stats.forced_fallback:
-         return True
- 
-     detect = detection or stats.detection
- 
-     if detect and not detect.containerized and not stats.suspected_raw:
-         return False
- 
-     guard = stats.guardrails
- 
-     if stats.suspected_raw and stats.decode_errors >= guard.min_errors_for_suspect:
-         return True
- 
-     if detect and detect.containerized:
-         if stats.consecutive_decode_errors >= guard.max_consecutive_decode_errors:
-             return True
- 
-     if stats.decode_errors >= guard.max_total_decode_errors:
-         return True
- 
-     if should_buffer_for_jitter(stats):
-         return True
- 
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index f1fce460520aab29e4140f92ecdadf76cd294e99..a29410ca531996744a67d7e77c4f98cc12c99bc0 100644
+index a29410ca531996744a67d7e77c4f98cc12c99bc0..5c660820544a8c2e8b99a161dd2419f15658cda7 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -1,38 +1,39 @@
- # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
- from __future__ import annotations
- import asyncio, os, contextlib, time, io, struct, base64, uuid
- from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
- from collections import deque
- from app.services.audio.container_sniffer import (
-     AudioContainerSniffer,
-     coerce_detection_from_meta,
- )
- from app.services.audio.raw_fallback import (
-     DetectionSignal as RawDetectionSignal,
-     StreamMeta as RawStreamMeta,
-     StreamStats as RawStreamStats,
-+    raw_fallback_disabled,
-     coerce_to_raw_config,
-     normalize_pcm_frame,
-     should_use_raw_fallback,
- )
+@@ -1488,57 +1488,57 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                                 exc, "wait_timeout", None
+                                             ),
+                                         )
+                                     except Exception as exc:
+                                         _jlog(
+                                             "ws_close_dg_close_error",
+                                             sid=sid,
+                                             err=type(exc).__name__,
+                                         )
+                                     dg_state = "closed"
+                                     _relay_task = rx_task
+                                     rx_task = None
+                                     if _relay_task:
+                                         _relay_task.cancel()
+                                         with contextlib.suppress(
+                                             asyncio.CancelledError, Exception
+                                         ):
+                                             await _relay_task
+                                     dg = None
+                                     with contextlib.suppress(Exception):
+                                         asr_ready_evt.clear()
+                                     if not final_seen[0]:
+                                         synth_reason = "dg_close_no_final"
+                                         if drain_timeout_exc is not None:
+                                             synth_reason = "dg_drain_timeout"
+-                                    if await _emit_synthetic_final(
+-                                        turn_id, synth_reason
+-                                    ):
+-                                        synthetic_emitted = True
+-                                        with contextlib.suppress(ValueError):
+-                                            pending_final_turns.remove(turn_id)
+-                                        synthetic_final_turns.add(turn_id)
++                                        if await _emit_synthetic_final(
++                                            turn_id, synth_reason
++                                        ):
++                                            synthetic_emitted = True
++                                            with contextlib.suppress(ValueError):
++                                                pending_final_turns.remove(turn_id)
++                                            synthetic_final_turns.add(turn_id)
+                                     if drain_timeout_exc is not None:
+                                         _jlog(
+                                             "ws_close_dg_drain_timeout_fallback",
+                                             sid=sid,
+                                             queued_chunks=getattr(
+                                                 drain_timeout_exc, "queued_chunks", None
+                                             ),
+                                             queued_bytes=getattr(
+                                                 drain_timeout_exc, "queued_bytes", None
+                                             ),
+                                         )
+                                 else:
+                                     if fallback_reason == "dg_not_ready":
+                                         _jlog("ws_close_fallback_not_ready", sid=sid)
+                                     else:
+                                         _jlog("ws_close_skip_no_audio", sid=sid)
+                                     if not final_seen[0]:
+                                         reason = (
+                                             "fallback_dg_not_ready"
+                                             if fallback_reason == "dg_not_ready"
+                                             else "fallback_no_audio"
+                                         )
+                                         if await _emit_synthetic_final(turn_id, reason):
+                                             synthetic_emitted = True
+                                             with contextlib.suppress(ValueError):
+diff --git a/tests/test_ws_close_stream_timeout.py b/tests/test_ws_close_stream_timeout.py
+index 6ba3563cdce6c5e1375e0b87969e64c605e37a9f..efef13d92514eb6ca418d47c306ed868786600c4 100644
+--- a/tests/test_ws_close_stream_timeout.py
++++ b/tests/test_ws_close_stream_timeout.py
+@@ -29,75 +29,179 @@ class _DelayedOpenDeepgram:
+             await self._queue.put(None)
  
- from .schema_v1 import (
-     parse_client_json,
-     make_keepalive_ack,
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
+         asyncio.create_task(_delayed_ready())
  
- # NEW: invoke LLM on final transcript
- from app.services.streaming import run_ws_user_turn  # NEW
- from app.ws.barge import BargeState
-@@ -749,51 +750,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         return True
+     def is_open(self):
+         return self._is_open
  
-     async def _ensure_dg_connected() -> bool:
-         nonlocal dg, rx_task, dg_connect_task, dg_state, fallback_detection
+     async def events(self):
+         while True:
+             ev = await self._queue.get()
+             if ev is None:
+                 break
+             yield ev
  
-         if not _has_deepgram_key():
-             return False
+     async def send(self, chunk: bytes):
+         self.sent_chunks.append(bytes(chunk))
+         if not self._open_evt.is_set():
+             await self._open_evt.wait()
  
-         if dg_state == "open" and dg is not None:
-             return True
- 
-         if dg_state == "connecting" and dg_connect_task is not None:
-             with contextlib.suppress(Exception):
-                 await dg_connect_task
-             return dg_state == "open" and dg is not None
- 
-         connect_result = {"ok": False}
- 
-         async def _connect() -> None:
-             nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result, fallback_detection
-             try:
-                 dg_state = "connecting"
-                 with contextlib.suppress(Exception):
-                     asr_ready_evt.clear()
- 
--                if should_use_raw_fallback(fallback_detection, stream_stats):
-+                if not raw_fallback_disabled() and should_use_raw_fallback(
-+                    fallback_detection, stream_stats
-+                ):
-                     if not stream_stats.forced_fallback:
-                         stream_stats.force_fallback()
-                         overrides = coerce_to_raw_config(stream_meta)
-                         for key, value in overrides.items():
-                             if key == "_transport":
-                                 continue
-                             cfg[key] = value
-                         transport.update(overrides.get("_transport", {}))
-                         fallback_detection = RawDetectionSignal(
-                             container="raw",
-                             codec="pcm",
-                             containerized=False,
-                             source="raw_fallback",
-                         )
-                         stream_stats.note_detection(fallback_detection)
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "raw_fallback_applied",
-                                 sid=sid,
-                                 sample_rate=transport.get("sample_rate"),
-                                 channels=transport.get("channels"),
-                             )
-                         if buffered_chunks:
-                             normalized_buffer: Deque[bytes] = deque()
-                             for existing in list(buffered_chunks):
-diff --git a/env_vars.md b/env_vars.md
-index ad5dae68881eaf2d86c65206c62cac25c9cb52f7..31bc4e35a42de674bf8c2ff368cb8380fc715670 100644
---- a/env_vars.md
-+++ b/env_vars.md
-@@ -1,5 +1,6 @@
- # Environment Variables (Phase 8)
- SECRET_KEY=change-me
- ADMIN_EMAILS=james@example.com
- DATABASE_URL=postgresql://...  (unused in tests; DAL is in-memory mock)
- WS_PING_INTERVAL_MS=25000
-+CHIBOT_DISABLE_RAW_FALLBACK=0  # Truthy to disable the Deepgram raw PCM fallback heuristics.
-diff --git a/tests_phase3_5/test_containerized_opus_url.py b/tests_phase3_5/test_containerized_opus_url.py
-index 05b6a2ea257d613e4e8f025a2721678f45c195e4..1cbff683beb8a5e08f6848db417efabbc0639741 100644
---- a/tests_phase3_5/test_containerized_opus_url.py
-+++ b/tests_phase3_5/test_containerized_opus_url.py
-@@ -41,42 +41,58 @@ def test_raw_fallback_url_includes_params(monkeypatch):
-     assert "encoding=linear16" in url
-     assert "sample_rate=16000" in url
-     assert "channels=1" in url
-     transport = overrides.get("_transport", {})
-     assert transport.get("raw_fallback") is True
-     assert transport.get("normalized_pcm") is True
+     async def close(self, wait_for_final: bool = True, **_):
+         self.close_called = True
+         self.closed_before_open = not self._open_evt.is_set()
+         await self._queue.put(None)
  
  
- def test_raw_fallback_guardrail_leniency():
-     stats = StreamStats()
-     stats.guardrails.raw_candidate_confirmations = 1
-     stats.guardrails.lenient_prefix_frames = 1
-     stats.guardrails.max_consecutive_decode_errors = 2
-     stats.guardrails.min_errors_for_suspect = 2
-     detection = DetectionSignal(container="webm", codec="opus", containerized=True)
-     stats.note_detection(detection)
- 
-     frame = b"\x00" * 640
-     stats.observe_frame(frame)
-     assert not should_use_raw_fallback(detection, stats)
- 
-     stats.observe_frame(frame)
-     assert should_use_raw_fallback(detection, stats)
- 
- 
-+def test_raw_fallback_disabled_env(monkeypatch):
-+    monkeypatch.setenv("CHIBOT_DISABLE_RAW_FALLBACK", "1")
-+    stats = StreamStats()
-+    stats.guardrails.raw_candidate_confirmations = 1
-+    detection = DetectionSignal(container="webm", codec="opus", containerized=True)
-+    stats.note_detection(detection)
++class _ImmediateFinalDeepgram:
++    """Deepgram stub that emits a final result before CloseStream."""
 +
-+    frame = b"\x00" * 640
-+    stats.observe_frame(frame)
++    instances = []
 +
-+    assert not should_use_raw_fallback(detection, stats)
++    def __init__(self, _cfg=None):
++        self.__class__.instances.append(self)
++        self._queue: asyncio.Queue = asyncio.Queue()
++        self.close_called = False
 +
-+    monkeypatch.delenv("CHIBOT_DISABLE_RAW_FALLBACK", raising=False)
-+    assert should_use_raw_fallback(detection, stats)
++    async def connect(self):
++        async def _emit_final():
++            await asyncio.sleep(0.01)
++            await self._queue.put({"type": "asr_open"})
++            await asyncio.sleep(0.01)
++            await self._queue.put({"type": "user_final", "text": ""})
++
++        asyncio.create_task(_emit_final())
++
++    def is_open(self):
++        return True
++
++    async def events(self):
++        while True:
++            ev = await self._queue.get()
++            if ev is None:
++                break
++            yield ev
++
++    async def send(self, chunk: bytes):
++        return
++
++    async def close(self, wait_for_final: bool = True, **_):
++        self.close_called = True
++        await self._queue.put(None)
 +
 +
- def test_frame_normalization_and_silence():
-     meta = StreamMeta(sample_rate=16000, channels=1)
-     expected = 640
-     padded = pad_frame_to_expected(b"\x01\x02", meta)
-     assert len(padded) == expected
-     assert padded[:2] == b"\x01\x02"
-     assert padded[2:] == b"\x00" * (expected - 2)
+ def test_close_stream_waits_for_delayed_open(monkeypatch):
+     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
+     monkeypatch.setenv("DG_LINGER_MS", "0")
+     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
  
-     silence = silence_frame(meta)
-     assert len(silence) == expected
-     assert set(silence) == {0}
+     _DelayedOpenDeepgram.instances = []
+     monkeypatch.setattr(ws_asgi, "DeepgramClient", _DelayedOpenDeepgram)
  
-     stats = StreamStats(meta=meta)
-     stats.force_fallback()
-     normalized = stats.observe_frame(b"\x01\x02")
-     assert len(normalized) == expected
-     assert stats.normalized_frames == 1
+     events = deque(
+         [
+             {"type": "websocket.receive", "bytes": b"\x00\x01"},
+             {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
+             {"type": "websocket.disconnect"},
+         ]
+     )
+ 
+     sent = []
+ 
+     async def _receive():
+         return events.popleft() if events else {"type": "websocket.disconnect"}
+ 
+     async def _send(msg):
+         sent.append(msg)
+ 
+     scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
+ 
+     loop = asyncio.new_event_loop()
+     asyncio.set_event_loop(loop)
+     try:
+         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
+         loop.run_until_complete(asyncio.sleep(0.05))
+     finally:
+         asyncio.set_event_loop(None)
+         loop.close()
+ 
+     instance = _DelayedOpenDeepgram.instances[0]
+ 
+     # Either we waited for open before closing or we avoided closing altogether.
+     assert not instance.closed_before_open, "Deepgram close should not run before the socket opens"
+ 
+     payloads = [
+         json.loads(m["text"])
+         for m in sent
+         if m.get("type") == "websocket.send" and m.get("text")
+     ]
+ 
+     finals = [p for p in payloads if p.get("type") == "Results" and p.get("channel", {}).get("is_final")]
+ 
+     assert finals, "CloseStream should emit a final result even if provider open is delayed"
++
++
++def test_close_stream_with_existing_final_does_not_emit_synthetic(monkeypatch):
++    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
++    monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
++    monkeypatch.setenv("DG_LINGER_MS", "0")
++    monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
++
++    _ImmediateFinalDeepgram.instances = []
++    monkeypatch.setattr(ws_asgi, "DeepgramClient", _ImmediateFinalDeepgram)
++
++    events = deque(
++        [
++            {"type": "websocket.receive", "bytes": b"\x00\x01"},
++            {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
++            {"type": "websocket.disconnect"},
++        ]
++    )
++
++    sent = []
++    final_sent_evt: asyncio.Event = asyncio.Event()
++
++    async def _receive():
++        if not events:
++            return {"type": "websocket.disconnect"}
++        next_event = events[0]
++        text = next_event.get("text")
++        if text:
++            try:
++                payload = json.loads(text)
++            except Exception:
++                payload = {}
++            if payload.get("type") == "CloseStream":
++                await final_sent_evt.wait()
++        return events.popleft()
++
++    async def _send(msg):
++        sent.append(msg)
++        if msg.get("type") == "websocket.send" and msg.get("text"):
++            try:
++                payload = json.loads(msg["text"])
++            except Exception:
++                return
++            channel = payload.get("channel") or {}
++            if payload.get("type") == "Results" and channel.get("is_final"):
++                final_sent_evt.set()
++
++    scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
++
++    loop = asyncio.new_event_loop()
++    asyncio.set_event_loop(loop)
++    try:
++        loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
++        loop.run_until_complete(asyncio.sleep(0.05))
++    finally:
++        asyncio.set_event_loop(None)
++        loop.close()
++
++    payloads = [
++        json.loads(m["text"])
++        for m in sent
++        if m.get("type") == "websocket.send" and m.get("text")
++    ]
++
++    finals = [p for p in payloads if p.get("type") == "Results" and p.get("channel", {}).get("is_final")]
++
++    assert len(finals) == 1, "Only provider final should be emitted when already observed"
