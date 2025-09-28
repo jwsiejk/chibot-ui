@@ -1235,7 +1235,18 @@ def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Option
     Produce assistant text for a user turn and schedule both text pacing and TTS.
     Mirrors HTTP /api_v1/chat behavior for consistency.
     """
-    tid, frames = make_assistant_frames(text, session_id, meta={"source": "user_ws"},
+    base_meta = {"source": "user_ws"}
+    nlu_result = classify_turn(text, meta=base_meta)
+    policy = pick_dialog_policy(nlu_result)
+    meta = {
+        **base_meta,
+        "nlu": nlu_result,
+        "action": policy["action"],
+        "verbosity": policy["verbosity"],
+        "show_suggestions": policy["show_suggestions"],
+    }
+
+    tid, frames = make_assistant_frames(text, session_id, meta=meta,
                                         correlation_user_msg_id=correlation_user_msg_id)
     if _ws_generation_failed(tid, frames):
         tid = _allocate_turn_id(force_turn_id=None)
