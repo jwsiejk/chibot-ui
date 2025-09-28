@@ -1,58 +1,92 @@
 diff --git a/static/js/app.js b/static/js/app.js
-index 88a36dbcd7da76897c86e7ac813e3b410dafd4b3..d5e41775ae2b7bebbcbf9cc5455e743ed68e805d 100644
+index d5e41775ae2b7bebbcbf9cc5455e743ed68e805d..9a4c136c42e4db4bb1a0063be91d421112b92a22 100644
 --- a/static/js/app.js
 +++ b/static/js/app.js
-@@ -1,45 +1,47 @@
- // /static/js/app.js — chat helpers only (imports constrained by spec)
- import { closeWS, sendCloseStream, sendJSON } from '/static/js/ws.js?v=v20250911b';
- import { getSID } from '/static/js/util/sid.js';
- import { renderSuggestions } from '/static/js/suggestions.js';
+@@ -159,73 +159,85 @@ export function handleAssistantFrame(d){
+       try { renderSuggestions(items, _handleSuggestionClick); } catch (err) {
+         console.warn('[handleAssistantFrame] renderSuggestions failed', err);
+       }
+     }
+     return;
+   }
  
- // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
- // Exports: onEnd, onSend, handleAssistantFrame
- 
- const $  = (s)=>document.querySelector(s);
- 
- /* ---------------- UI helpers ---------------- */
- 
- function setDot(state){
-   const dot = $('#stateDot'); if (!dot) return;
--  dot.className = 'dot ' + (
--    state==='listening' ? 'dot-listening' :
--    state==='speaking'  ? 'dot-speaking'  :
--    state==='ready'     ? 'dot-ready'     :
--    'dot-idle'
--  );
-+  const DOT_CLASSES = {
-+    ready: 'dot-ready',
-+    listening: 'dot-listening',
-+    speaking: 'dot-speaking',
-+    thinking: 'dot-thinking',
-+  };
-+  const nextClass = DOT_CLASSES[state] || 'dot-idle';
-+  dot.className = 'dot ' + nextClass;
+   if (_isAssistantTextFrame(d)) {
+     if (!_dedupeAssistant(d)) return;
+   }
+   // (other frame types can be handled here as needed)
  }
  
- function showBanner(msg){ const el=$('#statusText'); if(el) el.textContent = msg || ''; }
- function disableForEnded(){
-   const input = $('#composer');
-   const sendA = $('#composerSend');
-   const sendB = $('#sendBtn');
-   const endBtn= $('#endButton');
-   if (input) input.value = '';
-   [sendA, sendB].forEach(b=>{ if(b) b.disabled = true; });
-   if (endBtn) endBtn.disabled = true;
-   setDot('ready');
+ /* ---------------- Send (WS-only) ---------------- */
+ 
+ export async function onSend(overrideText){
+   try{
+     const input = $('#composer');
+     if (!input && overrideText == null) return;
+     const raw = overrideText != null ? overrideText : (input?.value || '');
+     const val = (raw || '').trim(); if (!val) return;
+ 
+     const sid = getSID();
+ 
+     // Optimistic render of user bubble
++    let optimisticBubble = null;
+     try{
+       const msgs = $('#chatMessages');
+       if (msgs){
+         const li = document.createElement('div');
+         li.dataset.role = 'user';
+         li.className = 'msg user';
+         li.textContent = val;
+         msgs.appendChild(li);
++        optimisticBubble = li;
+         try { msgs.scrollTop = msgs.scrollHeight; } catch {}
+       }
+     }catch{}
+ 
+     // WS send (WS-only turns; replaces legacy HTTP POST)
+     const correlation = (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random()));
++    let sendSucceeded = false;
+     try {
+       // Server expects: type='user_msg' and correlation_user_msg_id
+-      sendJSON({ type: 'user_msg', text: val, correlation_user_msg_id: correlation, session_id: sid });
+-      setDot('thinking');
++      sendSucceeded = sendJSON({ type: 'user_msg', text: val, correlation_user_msg_id: correlation, session_id: sid });
+     } catch (e){
+       console.warn('[onSend] WS send failed', e);
++      sendSucceeded = false;
++    }
++
++    if (!sendSucceeded){
++      if (optimisticBubble && optimisticBubble.parentElement){
++        try { optimisticBubble.remove(); } catch {}
++      }
+       showBanner('Message failed to send over WebSocket.');
++      return;
+     }
+ 
++    setDot('thinking');
++
+     // Clear composer after send
+     if (input){
+       try { input.value = ''; } catch {}
+     }
+ 
+   } catch (e){
+     console.warn('[onSend] error', e);
+   }
  }
  
- // Optional safety: strip legacy debug stamps like "[KB:0]" if any slip through
- const _KB_TAG_RE = /\s*\[(?:KB|kb)\s*:\s*\d+\]\s*/g;
- function _cleanText(s){ return (s||'').replace(_KB_TAG_RE,' ').trim(); }
+ /* ---------------- End session (graceful) ---------------- */
  
- /* ---------------- Rendering of assistant frames ---------------- */
+ let ending = false;
  
- // Accept WS assistant text frames
- function _isAssistantTextFrame(d){
-   return d && (
-     (d.type === 'assistant_chunk' && (d.text || d.delta || d.content)) ||
-     (d.type === 'assistant_text' && (d.text || d.delta || d.content)) ||
+ export async function onEnd(){
+   if (ending) return;
+   ending = true;
+   try {
+     // Politely signal end of stream over WS, then close with code 1000
+     try { sendCloseStream(); } catch {}
+     await new Promise(r => setTimeout(r, 100));
+ 
+     try { closeWS(1000, 'user_end'); } catch {}
+ 
+     // Rotate the session so the next Start is clean (correct key)

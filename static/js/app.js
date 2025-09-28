@@ -181,6 +181,7 @@ export async function onSend(overrideText){
     const sid = getSID();
 
     // Optimistic render of user bubble
+    let optimisticBubble = null;
     try{
       const msgs = $('#chatMessages');
       if (msgs){
@@ -189,20 +190,31 @@ export async function onSend(overrideText){
         li.className = 'msg user';
         li.textContent = val;
         msgs.appendChild(li);
+        optimisticBubble = li;
         try { msgs.scrollTop = msgs.scrollHeight; } catch {}
       }
     }catch{}
 
     // WS send (WS-only turns; replaces legacy HTTP POST)
     const correlation = (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random()));
+    let sendSucceeded = false;
     try {
       // Server expects: type='user_msg' and correlation_user_msg_id
-      sendJSON({ type: 'user_msg', text: val, correlation_user_msg_id: correlation, session_id: sid });
-      setDot('thinking');
+      sendSucceeded = sendJSON({ type: 'user_msg', text: val, correlation_user_msg_id: correlation, session_id: sid });
     } catch (e){
       console.warn('[onSend] WS send failed', e);
-      showBanner('Message failed to send over WebSocket.');
+      sendSucceeded = false;
     }
+
+    if (!sendSucceeded){
+      if (optimisticBubble && optimisticBubble.parentElement){
+        try { optimisticBubble.remove(); } catch {}
+      }
+      showBanner('Message failed to send over WebSocket.');
+      return;
+    }
+
+    setDot('thinking');
 
     // Clear composer after send
     if (input){
