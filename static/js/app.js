@@ -1,6 +1,7 @@
 // /static/js/app.js — chat helpers only (imports constrained by spec)
 import { closeWS, sendCloseStream, sendJSON } from '/static/js/ws.js?v=v20250911b';
 import { getSID } from '/static/js/util/sid.js';
+import { renderSuggestions } from '/static/js/suggestions.js';
 
 // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
 // Exports: onEnd, onSend, handleAssistantFrame
@@ -116,6 +117,18 @@ function _dedupeAssistant(d){
   return true;
 }
 
+let _lastSuggestionsKey = null;
+
+function _handleSuggestionClick(text){
+  const suggestion = (text || '').trim();
+  if (!suggestion) return;
+  const input = $('#composer');
+  if (input) {
+    try { input.value = suggestion; } catch {}
+  }
+  try { onSend(suggestion); } catch (err) { console.warn('[suggestion click] send failed', err); }
+}
+
 export function handleAssistantFrame(d){
   if (!d) return;
 
@@ -134,7 +147,20 @@ export function handleAssistantFrame(d){
     _renderUserTranscript(d);
     return;
   }
-  
+
+  if (d.type === 'suggestions'){
+    const items = Array.isArray(d.items) ? d.items : [];
+    let key = '[]';
+    try { key = JSON.stringify(items ?? []); } catch { key = '[]'; }
+    if (key !== _lastSuggestionsKey){
+      _lastSuggestionsKey = key;
+      try { renderSuggestions(items, _handleSuggestionClick); } catch (err) {
+        console.warn('[handleAssistantFrame] renderSuggestions failed', err);
+      }
+    }
+    return;
+  }
+
   if (_isAssistantTextFrame(d)) {
     if (!_dedupeAssistant(d)) return;
   }
@@ -143,10 +169,12 @@ export function handleAssistantFrame(d){
 
 /* ---------------- Send (WS-only) ---------------- */
 
-export async function onSend(){
+export async function onSend(overrideText){
   try{
-    const input = $('#composer'); if (!input) return;
-    const val = (input.value || '').trim(); if (!val) return;
+    const input = $('#composer');
+    if (!input && overrideText == null) return;
+    const raw = overrideText != null ? overrideText : (input?.value || '');
+    const val = (raw || '').trim(); if (!val) return;
 
     const sid = getSID();
 
@@ -175,7 +203,9 @@ export async function onSend(){
     }
 
     // Clear composer after send
-    try { input.value = ''; } catch {}
+    if (input){
+      try { input.value = ''; } catch {}
+    }
 
   } catch (e){
     console.warn('[onSend] error', e);
