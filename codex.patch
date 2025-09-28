@@ -1,52 +1,643 @@
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 6275b09b6b7497369c9dd3e51f78574ebb7a6de8..c990328a7c9714995129ad978c4bd80ee4337f1d 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -1,46 +1,46 @@
- /*
- Citations for context (non-functional):
- :contentReference[oaicite:0]{index=0}
- :contentReference[oaicite:1]{index=1}
- */
+diff --git a/app/personas/store.py b/app/personas/store.py
+index f51264a65662ab5991a6edfe8462c9a0fa93660e..53100827fad17e422b1e311d64d7b01383602580 100644
+--- a/app/personas/store.py
++++ b/app/personas/store.py
+@@ -1,7 +1,226 @@
+-def upsert_persona_by_slug(self, slug: str, name: str, config: dict, *, intensity: float = 0.13, is_active: bool = False) -> None: ...
++from __future__ import annotations
  
- /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
-    Goals satisfied:
-     • Echo-aware VAD (threshold boost while TTS is playing)
-     • One Opus blob per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
-     • Soft barge-in: pause Chip TTS on committed speech start
-     • Turn timeout (safety), robust errors, clean session end
-     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
+-def fetch_intent_patterns(self, persona_id: str) -> list[tuple[str, str, float]]:
+-    """Return [(intent_name, pattern, weight), ...] ordered by weight desc."""
++import json
++import os
++import re
++from functools import lru_cache
++from typing import Any, Dict, List, Optional, Tuple
  
-    Notes:
-     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
-     • CloseStream is emitted AFTER the blob is successfully queued to the socket.
- */
+-def fetch_intent_config(self, persona_id: str, intent: str) -> dict:
+-    """Return {teacher_move, chips, tool, tool_payload, priority} or {}."""
++from app.db import db
++from app.db_dal import DAL, DBConfig
++
++
++def _coerce_row_value(row: Any, key: str, index: int) -> Any:
++    """Helper to access sqlite3.Row / tuple values safely."""
++    if isinstance(row, dict):
++        return row.get(key)
++    if hasattr(row, "keys"):
++        try:
++            return row[key]
++        except Exception:
++            pass
++    try:
++        return row[index]
++    except Exception:
++        return None
++
++
++def _ensure_list(obj: Any) -> List[str]:
++    if isinstance(obj, list):
++        return [str(x) for x in obj]
++    if isinstance(obj, tuple):
++        return [str(x) for x in obj]
++    if isinstance(obj, str):
++        # Attempt to interpret simple array encodings (postgres text[] / JSON)
++        txt = obj.strip()
++        if txt.startswith("[") and txt.endswith("]"):
++            try:
++                data = json.loads(txt)
++                if isinstance(data, list):
++                    return [str(x) for x in data]
++            except Exception:
++                return [txt]
++        if txt.startswith("{") and txt.endswith("}"):
++            inner = txt[1:-1]
++            return [part.strip().strip('"') for part in inner.split(",") if part.strip()]
++        return [txt]
++    return []
++
++
++def _ensure_dict(obj: Any) -> Dict[str, Any]:
++    if isinstance(obj, dict):
++        return obj
++    if isinstance(obj, str):
++        try:
++            data = json.loads(obj)
++            if isinstance(data, dict):
++                return data
++        except Exception:
++            pass
++    return {}
++
++
++class PersonaStore:
++    """Persistence facade for persona configuration + few-shots."""
++
++    def __init__(self, *, url: Optional[str] = None) -> None:
++        default_url = os.environ.get("DATABASE_URL", "sqlite:///ci_phase15.sqlite3")
++        cfg = DBConfig(url=url or default_url)
++        self._dal = DAL(cfg)
++
++    # --- Persona core -------------------------------------------------
++
++    def get_active_persona(self) -> Optional[Dict[str, Any]]:
++        try:
++            rows = self._dal.query(
++                "SELECT id, name, intensity, config FROM personas WHERE is_active = ? ORDER BY updated_at DESC LIMIT 1",
++                (True,),
++            )
++        except Exception:
++            return None
++        if not rows:
++            return None
++        row = rows[0]
++        persona_id = _coerce_row_value(row, "id", 0)
++        name = _coerce_row_value(row, "name", 1) or "Chip"
++        intensity = float(_coerce_row_value(row, "intensity", 2) or 0.13)
++        config = _ensure_dict(_coerce_row_value(row, "config", 3))
++        return {"id": str(persona_id), "name": name, "intensity": intensity, "config": config}
++
++    # --- Intent registry ----------------------------------------------
++
++    def fetch_intent_patterns(self, persona_id: str) -> List[Tuple[str, str, float]]:
++        if not persona_id:
++            return []
++        try:
++            rows = self._dal.query(
++                "SELECT intent_name, pattern, weight FROM persona_intent_patterns WHERE persona_id = ? ORDER BY weight DESC",
++                (persona_id,),
++            )
++        except Exception:
++            return []
++        out: List[Tuple[str, str, float]] = []
++        for row in rows:
++            name = _coerce_row_value(row, "intent_name", 0)
++            pat = _coerce_row_value(row, "pattern", 1)
++            weight = float(_coerce_row_value(row, "weight", 2) or 1.0)
++            if name and pat:
++                out.append((str(name), str(pat), weight))
++        return out
++
++    def fetch_intent_config(self, persona_id: str, intent: str) -> Dict[str, Any]:
++        if not persona_id or not intent:
++            return {}
++        try:
++            rows = self._dal.query(
++                """
++                SELECT teacher_move, chips, tool, tool_payload, priority
++                  FROM persona_intents
++                 WHERE persona_id = ? AND name = ?
++                 ORDER BY priority ASC
++                 LIMIT 1
++                """,
++                (persona_id, intent),
++            )
++        except Exception:
++            return {}
++        if not rows:
++            return {}
++        row = rows[0]
++        chips = _ensure_list(_coerce_row_value(row, "chips", 1))
++        payload = _ensure_dict(_coerce_row_value(row, "tool_payload", 3))
++        return {
++            "teacher_move": _coerce_row_value(row, "teacher_move", 0),
++            "chips": chips,
++            "tool": _coerce_row_value(row, "tool", 2),
++            "tool_payload": payload,
++            "priority": _coerce_row_value(row, "priority", 4),
++        }
++
++    # --- Few-shot examples --------------------------------------------
++
++    def _fetch_examples(self, persona_id: str) -> List[Dict[str, Any]]:
++        try:
++            rows = self._dal.query(
++                """
++                SELECT intent, user_pattern, assistant_target
++                  FROM persona_examples
++                 WHERE persona_id = ?
++                 ORDER BY id ASC
++                """,
++                (persona_id,),
++            )
++        except Exception:
++            return []
++        examples: List[Dict[str, Any]] = []
++        for row in rows:
++            intent = _coerce_row_value(row, "intent", 0)
++            user_pat = _coerce_row_value(row, "user_pattern", 1) or ""
++            assistant = _coerce_row_value(row, "assistant_target", 2) or ""
++            if user_pat and assistant:
++                examples.append({
++                    "intent": str(intent) if intent else "",
++                    "pattern": str(user_pat),
++                    "assistant": str(assistant),
++                })
++        return examples
++
++    @lru_cache(maxsize=32)
++    def _cached_examples(self, persona_id: str) -> Tuple[Dict[str, Any], ...]:
++        items = self._fetch_examples(persona_id)
++        return tuple(items)
++
++    def match_examples(self, persona_id: str, user_text: str, limit: int = 4) -> List[Dict[str, str]]:
++        if not persona_id:
++            return []
++        cached = list(self._cached_examples(persona_id))
++        if not cached:
++            return []
++        text = (user_text or "").strip()
++        matches: List[Dict[str, str]] = []
++        if text:
++            for ex in cached:
++                pat = ex.get("pattern", "")
++                if not pat:
++                    continue
++                try:
++                    if re.search(pat, text, re.IGNORECASE):
++                        matches.append({"user": pat, "assistant": ex.get("assistant", "")})
++                        continue
++                except re.error:
++                    pass
++                if pat.lower() in text.lower():
++                    matches.append({"user": pat, "assistant": ex.get("assistant", "")})
++                if len(matches) >= limit:
++                    break
++        if not matches:
++            for ex in cached[:limit]:
++                matches.append({"user": ex.get("pattern", ""), "assistant": ex.get("assistant", "")})
++        return matches[:limit]
++
++
++class PersonaManager:
++    """Lightweight persona orchestrator."""
++
++    def __init__(self, store: PersonaStore) -> None:
++        self._store = store
++        self._cached: Optional[Dict[str, Any]] = None
++
++    def get_active(self) -> Dict[str, Any]:
++        if self._cached:
++            return self._cached
++        persona = self._store.get_active_persona()
++        if persona:
++            self._cached = persona
++            return persona
++        # Fallback to in-memory default persona
++        memory = getattr(db, "memory", {})
++        chip = (memory.get("personas", {}) or {}).get("chip") if isinstance(memory, dict) else None
++        fallback = {
++            "id": "chip",
++            "name": (chip or {}).get("name", "Chip"),
++            "intensity": (chip or {}).get("intensity", 0.13),
++            "config": (chip or {}).get("config") or {},
++        }
++        self._cached = fallback
++        return fallback
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index 5880787d5932fd03ff871d0c8235479e08271df7..1e7f2a4509013395aa607340eefef0f464308acf 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -1,203 +1,374 @@
+ # app/services/streaming.py — Production-grade assistant framing
+ # Guarantees assistant_* frames are broadcast even if the LLM provider fails.
+ # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
  
- import { VAD } from './voice/vad.js';
--import { sendAudioChunk, sendCloseStream } from './ws.js';
-+import { sendAudioChunk, sendCloseStream } from '/static/js/ws.js?v=v20250911b';
- import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
+ from __future__ import annotations
+-from typing import List, Dict, Tuple, Optional
++from typing import List, Dict, Tuple, Optional, Any
+ import base64
+ import threading, time as _t
+ import os
+ import re
  
- // Public API (matches prior usage)
- export async function initMic(stream = null) { return await _ensureMic(stream); }
- export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
- export function disarmVAD() { _disarm(); }
- export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
- export function bargeIn() { _bargeIn(); }         // keeps API parity
- export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+ from .llm_provider import get_provider
+ from .awareness import annotate
+ from .engagement import score as score_engagement
+ from .dialog_policy import pick as pick_policy
+ from .retrieval import search as kb_search
+ from .persona_prompt import build_persona_preamble, format_kb_context
+ from .suggestions import hygienic_suggestions
++from .vendor_clients import make_openai_client
++from .nlg.humanize import humanize_text, sounds_botty
+ from ..db import db
+ from ..ws.bus import bus
++from ..obs import jlog as _jlog
++from ..personas.store import PersonaManager, PersonaStore
++from ..personas.prompt_builder import build_messages
++from .. import nlu as _nlu
  
- // ---- Internal state ---------------------------------------------------------
+ try:
+     from ..api_v1.admin import _emit as _admin_emit  # SSE to Admin
+ except Exception:
+     def _admin_emit(*a, **k):  # no-op if admin channel absent
+         pass
  
- // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
- const REC_MIME = (typeof MediaRecorder !== 'undefined'
-   && typeof MediaRecorder.isTypeSupported === 'function'
-   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
-   ? 'audio/ogg; codecs=opus'
-   : 'audio/webm; codecs=opus';
  
- const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
- const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+ def _get_persona_for_session(session_id: str) -> Dict:
+     try:
+         sess = db.memory.get('sessions', {}).get(session_id) or {}
+         persona_id = (sess.get('persona_id') or 'chip')
+         return db.memory.get('personas', {}).get(persona_id) or {'id': 'chip'}
+     except Exception:
+         return {'id': 'chip'}
  
- const state = {
-   stream: null,
-   ctx: null,
+ 
+ def _build_prompt(seed_text: str, persona: Dict, kb_snippets: List[str], teacher_move: Optional[str]) -> str:
+     parts = [build_persona_preamble(persona)]
+     if kb_snippets:
+         parts.append(format_kb_context(kb_snippets))
+     if teacher_move:
+         parts.append(f"Teacher move: {teacher_move}.")
+     parts.append(f"User said: {seed_text.strip()}")
+     return "\n\n".join(parts)
+ 
+ 
+ # --- text hygiene -------------------------------------------------------------
+ # Remove ANY occurrence (not just trailing) of legacy "[KB:n]" stamps, case-insensitive.
+ _KB_TAG_RE = re.compile(r"\s*\[(?:KB|kb)\s*:\s*\d+\]\s*")
+ 
+ def _scrub_debug_stamps(s: str) -> str:
+     """
+     Remove legacy debug stamps like "[KB:0]" that were historically appended to
+     assistant text for telemetry. We keep the value as metadata instead.
+     This removes ALL occurrences safely without touching other content.
+     """
+     if not s:
+         return s
+     # Replace any matches with a single space, then trim.
+     return _KB_TAG_RE.sub(" ", s).strip()
+ 
+ 
++ENABLE_CHIP_FOUNDATION = os.getenv("ENABLE_CHIP_FOUNDATION", "1").lower() not in ("0", "false", "no")
++STRICT_SYSTEM_SHIM = (
++    "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
++    "and never mention being an AI or chatbot."
++)
++
++
++def _should_use_foundation(seed_text: str) -> bool:
++    if not ENABLE_CHIP_FOUNDATION:
++        return False
++    try:
++        if str(seed_text or "").strip().lower() == "greet":
++            return False
++    except Exception:
++        return False
++    return True
++
++
++def _apply_system_shim(messages: List[Dict[str, str]], shim: str) -> List[Dict[str, str]]:
++    cloned: List[Dict[str, str]] = [dict(m) for m in messages]
++    for msg in cloned:
++        if msg.get("role") == "system":
++            msg["content"] = (msg.get("content") or "").rstrip() + "\n" + shim
++            return cloned
++    cloned.insert(0, {"role": "system", "content": shim})
++    return cloned
++
++
++def _call_foundation_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
++    client = make_openai_client()
++    model = (
++        cfg.get("openai_model")
++        or cfg.get("OPENAI_MODEL")
++        or os.getenv("OPENAI_MODEL")
++        or "gpt-4o-mini"
++    )
++    temperature = float(cfg.get("gen_temperature", 0.3))
++    top_p = float(cfg.get("gen_top_p", 1.0))
++    payload = [dict(m) for m in messages]
++    resp = client.chat.completions.create(
++        model=model,
++        messages=payload,
++        temperature=temperature,
++        top_p=top_p,
++        stream=False,
++    )
++    return (resp.choices[0].message.content or "").strip()
++
++
++def _call_foundation_with_retry(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
++    primary = _call_foundation_llm(messages, cfg)
++    human = humanize_text(primary)
++    if not human:
++        return human
++    if not sounds_botty(human):
++        return human
++    try:
++        strict_msgs = _apply_system_shim(messages, STRICT_SYSTEM_SHIM)
++        strict_reply = _call_foundation_llm(strict_msgs, cfg)
++        strict_human = humanize_text(strict_reply)
++        if strict_human:
++            return strict_human
++    except Exception:
++        pass
++    return human
++
++
++def _broadcast_frames(session_id: str, frames: List[Dict], turn_id: str) -> None:
++    try:
++        for fr in frames:
++            bus.broadcast(session_id, fr)
++            if fr.get('type') == 'assistant_chunk':
++                _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(turn_id))
++            elif fr.get('type') == 'assistant_end':
++                _admin_emit('assistant_end', session_id=session_id, turn_id=str(turn_id))
++    except Exception:
++        pass
++
++
+ def make_assistant_frames(seed_text: str,
+                           session_id: str,
+                           meta: Optional[Dict] = None,
+                           correlation_user_msg_id: Optional[str] = None) -> Tuple[str, List[Dict]]:
+     """
+     Produce assistant frames for a given user seed text using the configured LLM provider.
+     ALWAYS returns a frames list that includes at least:
+         - one 'assistant_chunk' (with either model text OR a safe fallback), and
+         - one 'assistant_end'.
+     Also broadcasts frames to the WS bus as they are prepared.
+     """
+     meta = meta or {}
+     cfg = db.get_config()
++
++    if _should_use_foundation(seed_text):
++        try:
++            return _make_foundation_frames(
++                seed_text,
++                session_id,
++                meta,
++                cfg,
++                correlation_user_msg_id=correlation_user_msg_id,
++            )
++        except Exception as e:
++            try:
++                _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
++            except Exception:
++                pass
++
++    return _make_legacy_frames(
++        seed_text,
++        session_id,
++        meta,
++        cfg,
++        correlation_user_msg_id=correlation_user_msg_id,
++    )
++
++
++def _make_foundation_frames(seed_text: str,
++                            session_id: str,
++                            meta: Dict[str, Any],
++                            cfg: Dict[str, Any],
++                            *,
++                            correlation_user_msg_id: Optional[str]) -> Tuple[str, List[Dict]]:
++    store = PersonaStore()
++    persona = PersonaManager(store).get_active()
++    dialog_meta = dict(meta or {})
++
++    nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
++    policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store)
++
++    prompt_meta = dict(dialog_meta)
++    prompt_meta['intent'] = nlu_result.get('intent')
++    if policy.get('teacher_move'):
++        prompt_meta['teacher_move'] = policy.get('teacher_move')
++
++    examples = store.match_examples(persona['id'], seed_text)
++    messages, teacher_move, prompt_hash = build_messages(
++        persona=persona,
++        user_text=seed_text,
++        dialog_meta=prompt_meta,
++        examples=examples,
++    )
++
++    reply = _call_foundation_with_retry(messages, cfg)
++    safe_reply = _scrub_debug_stamps(reply)
++
++    chips = list(policy.get('chips') or [])
++    chip_items = [str(c).strip() for c in chips if str(c).strip()]
++
++    try:
++        _jlog(
++            "turn_telemetry",
++            sid=session_id,
++            intent=nlu_result.get('intent'),
++            confidence=nlu_result.get('confidence'),
++            teacher_move=policy.get('teacher_move') or teacher_move,
++            chips=len(chip_items),
++            prompt_hash=prompt_hash,
++        )
++    except Exception:
++        pass
++
++    turn_id = db.memory.setdefault('turn_seq', 0) + 1
++    db.memory['turn_seq'] = turn_id
++
++    frames: List[Dict] = []
++    chunk: Dict[str, Any] = {
++        'type': 'assistant_chunk',
++        'turn_id': str(turn_id),
++        'text': safe_reply,
++        'kb_hits': 0,
++        'intent': nlu_result.get('intent'),
++        'teacher_move': policy.get('teacher_move') or teacher_move,
++    }
++    if correlation_user_msg_id:
++        chunk['correlation_user_msg_id'] = correlation_user_msg_id
++    frames.append(chunk)
++
++    frames.append({'type': 'state', 'phase': 'ready'})
++
++    suggestion_items = chip_items
++    if not suggestion_items and cfg.get('suggestions_enabled', True):
++        suggestion_items = hygienic_suggestions(safe_reply)
++    if suggestion_items:
++        frames.append({'type': 'suggestions', 'turn_id': str(turn_id), 'items': suggestion_items})
++
++    end_fr = {'type': 'assistant_end', 'turn_id': str(turn_id)}
++    if correlation_user_msg_id:
++        end_fr['correlation_user_msg_id'] = correlation_user_msg_id
++    frames.append(end_fr)
++
++    _broadcast_frames(session_id, frames, str(turn_id))
++    return str(turn_id), frames
++
++
++def _make_legacy_frames(seed_text: str,
++                        session_id: str,
++                        meta: Dict[str, Any],
++                        cfg: Dict[str, Any],
++                        *,
++                        correlation_user_msg_id: Optional[str]) -> Tuple[str, List[Dict]]:
+     persona = _get_persona_for_session(session_id)
+ 
+-    # Awareness + dialog policy
+     labels = annotate(seed_text, meta)
+     labels['engagement'] = score_engagement(seed_text, meta)
+     policy = pick_policy(labels, cfg)
+     teacher_move = (policy or {}).get('teacher_move')
+ 
+-    # Light retrieval – safe to fail closed
+-    kb = []
++    kb: List[str] = []
+     try:
+         if cfg.get('kb_enabled', False):
+             kb = kb_search(seed_text, top_k=int(cfg.get('kb_top_k', 3)))
+     except Exception:
+         kb = []
+ 
+     prompt = _build_prompt(seed_text, persona, kb, teacher_move)
+ 
+-    # Choose provider (may raise if OPENAI_API_KEY missing/invalid)
+     try:
+         provider = get_provider(cfg)
+     except Exception as e:
+         provider = None
+         _admin_emit("llm_provider_error", error=e.__class__.__name__)
+ 
+-    # --- Generate reply (with safe fallback) ---------------------------------
+     reply: str
+     error_note: Optional[str] = None
+     if provider is not None:
+         try:
+             reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
+         except Exception as e:
+-            # Fallback text if provider errors out
+             error_note = f"llm_error:{e.__class__.__name__}"
+             reply = "Hi! I’m ready to help. (Model is warming up.)"
+             _admin_emit("llm_generate_error", error=e.__class__.__name__)
+     else:
+         error_note = "llm_not_available"
+         reply = "Hi! I’m ready to help."
+ 
+-    # Scrub any legacy stamps like "[KB:0]" so UI/TTS never surface them
+     safe_reply = _scrub_debug_stamps(reply)
+ 
+-    
+-    # Enforce short greeting when this is the greet path
+     try:
+         _is_greet = False
+         try:
+             _is_greet = (str(seed_text).strip().lower() == "greet") or (str((meta or {}).get("source","")).strip().lower() == "greet")
+         except Exception:
+             _is_greet = (str(seed_text).strip().lower() == "greet")
+         if _is_greet:
+-            # Cap to <= 5 words, keep it friendly.
+             _words = (safe_reply or "Hi there!").strip().split()
+             if len(_words) > 5:
+                 safe_reply = " ".join(_words[:5]).rstrip(",.;:!")
+     except Exception:
+         pass
+-# --- Build frames --------------------------------------------------------
++
+     turn_id = db.memory.setdefault('turn_seq', 0) + 1
+-    db.memory['turn_seq'] = turn_id  # simple monotonic id; greet may override externally
++    db.memory['turn_seq'] = turn_id
+ 
+     frames: List[Dict] = []
+ 
+     chunk = {
+         'type': 'assistant_chunk',
+         'turn_id': str(turn_id),
+         'text': safe_reply,
+-        # Expose KB hits as metadata so UI can display it without polluting text.
+         'kb_hits': len(kb),
+     }
+     if correlation_user_msg_id:
+         chunk['correlation_user_msg_id'] = correlation_user_msg_id
+     if error_note:
+         chunk['note'] = error_note
+     frames.append(chunk)
+ 
+-    # Optional suggestions (respect config flags)
+     try:
+         if cfg.get('suggestions_enabled', True):
+             frames.append({'type': 'suggestions', 'turn_id': str(turn_id), 'items': hygienic_suggestions(safe_reply)})
+     except Exception:
+         pass
+ 
+     end_fr = {'type': 'assistant_end', 'turn_id': str(turn_id)}
+     if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
+         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(end_fr)
+ 
+-    # --- Broadcast -----------------------------------------------------------
+-    try:
+-        for fr in frames:
+-            bus.broadcast(session_id, fr)
+-            # Trace important milestones to Admin SSE
+-            if fr.get('type') == 'assistant_chunk':
+-                _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(turn_id))
+-            elif fr.get('type') == 'assistant_end':
+-                _admin_emit('assistant_end', session_id=session_id, turn_id=str(turn_id))
+-    except Exception:
+-        pass
+-        pass
+-
++    _broadcast_frames(session_id, frames, str(turn_id))
+     return str(turn_id), frames
+ 
+ 
+ # --- MIME mapping helper ------------------------------------------------------
+ 
+ def _guess_tts_mime(output_format: str | None) -> str:
+     """
+     Map configured TTS output format to an appropriate MIME/container for MSE playback.
+     We keep this conservative to avoid mismatches with provider bytes.
+     """
+     fmt = (output_format or os.environ.get('ELEVEN_OUTPUT_FORMAT') or '').lower()
+     # Prefer actual, common provider defaults. If unknown, assume MP3 to avoid mismatches.
+     if 'webm' in fmt and 'opus' in fmt:
+         return 'audio/webm; codecs="opus"'
+     if 'ogg' in fmt and 'opus' in fmt:
+         return 'audio/ogg; codecs="opus"'
+     if 'mp3' in fmt:
+         return 'audio/mpeg'
+     if 'wav' in fmt or 'pcm' in fmt or 'l16' in fmt:
+         return 'audio/wav'
+     # Fallback to MP3 (widely supported; safer than claiming WebM if provider returned MP3)
+     return 'audio/mpeg'
+ 
+ 
+ # --- WS TTS scheduling (audio over WS) ---------------------------------------

@@ -3,7 +3,7 @@
 # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
 
 from __future__ import annotations
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 import base64
 import threading, time as _t
 import os
@@ -16,8 +16,14 @@ from .dialog_policy import pick as pick_policy
 from .retrieval import search as kb_search
 from .persona_prompt import build_persona_preamble, format_kb_context
 from .suggestions import hygienic_suggestions
+from .vendor_clients import make_openai_client
+from .nlg.humanize import humanize_text, sounds_botty
 from ..db import db
 from ..ws.bus import bus
+from ..obs import jlog as _jlog
+from ..personas.store import PersonaManager, PersonaStore
+from ..personas.prompt_builder import build_messages
+from .. import nlu as _nlu
 
 try:
     from ..api_v1.admin import _emit as _admin_emit  # SSE to Admin
@@ -61,6 +67,85 @@ def _scrub_debug_stamps(s: str) -> str:
     return _KB_TAG_RE.sub(" ", s).strip()
 
 
+ENABLE_CHIP_FOUNDATION = os.getenv("ENABLE_CHIP_FOUNDATION", "1").lower() not in ("0", "false", "no")
+STRICT_SYSTEM_SHIM = (
+    "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
+    "and never mention being an AI or chatbot."
+)
+
+
+def _should_use_foundation(seed_text: str) -> bool:
+    if not ENABLE_CHIP_FOUNDATION:
+        return False
+    try:
+        if str(seed_text or "").strip().lower() == "greet":
+            return False
+    except Exception:
+        return False
+    return True
+
+
+def _apply_system_shim(messages: List[Dict[str, str]], shim: str) -> List[Dict[str, str]]:
+    cloned: List[Dict[str, str]] = [dict(m) for m in messages]
+    for msg in cloned:
+        if msg.get("role") == "system":
+            msg["content"] = (msg.get("content") or "").rstrip() + "\n" + shim
+            return cloned
+    cloned.insert(0, {"role": "system", "content": shim})
+    return cloned
+
+
+def _call_foundation_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
+    client = make_openai_client()
+    model = (
+        cfg.get("openai_model")
+        or cfg.get("OPENAI_MODEL")
+        or os.getenv("OPENAI_MODEL")
+        or "gpt-4o-mini"
+    )
+    temperature = float(cfg.get("gen_temperature", 0.3))
+    top_p = float(cfg.get("gen_top_p", 1.0))
+    payload = [dict(m) for m in messages]
+    resp = client.chat.completions.create(
+        model=model,
+        messages=payload,
+        temperature=temperature,
+        top_p=top_p,
+        stream=False,
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
+def _call_foundation_with_retry(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
+    primary = _call_foundation_llm(messages, cfg)
+    human = humanize_text(primary)
+    if not human:
+        return human
+    if not sounds_botty(human):
+        return human
+    try:
+        strict_msgs = _apply_system_shim(messages, STRICT_SYSTEM_SHIM)
+        strict_reply = _call_foundation_llm(strict_msgs, cfg)
+        strict_human = humanize_text(strict_reply)
+        if strict_human:
+            return strict_human
+    except Exception:
+        pass
+    return human
+
+
+def _broadcast_frames(session_id: str, frames: List[Dict], turn_id: str) -> None:
+    try:
+        for fr in frames:
+            bus.broadcast(session_id, fr)
+            if fr.get('type') == 'assistant_chunk':
+                _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(turn_id))
+            elif fr.get('type') == 'assistant_end':
+                _admin_emit('assistant_end', session_id=session_id, turn_id=str(turn_id))
+    except Exception:
+        pass
+
+
 def make_assistant_frames(seed_text: str,
                           session_id: str,
                           meta: Optional[Dict] = None,
@@ -74,16 +159,123 @@ def make_assistant_frames(seed_text: str,
     """
     meta = meta or {}
     cfg = db.get_config()
+
+    if _should_use_foundation(seed_text):
+        try:
+            return _make_foundation_frames(
+                seed_text,
+                session_id,
+                meta,
+                cfg,
+                correlation_user_msg_id=correlation_user_msg_id,
+            )
+        except Exception as e:
+            try:
+                _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
+            except Exception:
+                pass
+
+    return _make_legacy_frames(
+        seed_text,
+        session_id,
+        meta,
+        cfg,
+        correlation_user_msg_id=correlation_user_msg_id,
+    )
+
+
+def _make_foundation_frames(seed_text: str,
+                            session_id: str,
+                            meta: Dict[str, Any],
+                            cfg: Dict[str, Any],
+                            *,
+                            correlation_user_msg_id: Optional[str]) -> Tuple[str, List[Dict]]:
+    store = PersonaStore()
+    persona = PersonaManager(store).get_active()
+    dialog_meta = dict(meta or {})
+
+    nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
+    policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store)
+
+    prompt_meta = dict(dialog_meta)
+    prompt_meta['intent'] = nlu_result.get('intent')
+    if policy.get('teacher_move'):
+        prompt_meta['teacher_move'] = policy.get('teacher_move')
+
+    examples = store.match_examples(persona['id'], seed_text)
+    messages, teacher_move, prompt_hash = build_messages(
+        persona=persona,
+        user_text=seed_text,
+        dialog_meta=prompt_meta,
+        examples=examples,
+    )
+
+    reply = _call_foundation_with_retry(messages, cfg)
+    safe_reply = _scrub_debug_stamps(reply)
+
+    chips = list(policy.get('chips') or [])
+    chip_items = [str(c).strip() for c in chips if str(c).strip()]
+
+    try:
+        _jlog(
+            "turn_telemetry",
+            sid=session_id,
+            intent=nlu_result.get('intent'),
+            confidence=nlu_result.get('confidence'),
+            teacher_move=policy.get('teacher_move') or teacher_move,
+            chips=len(chip_items),
+            prompt_hash=prompt_hash,
+        )
+    except Exception:
+        pass
+
+    turn_id = db.memory.setdefault('turn_seq', 0) + 1
+    db.memory['turn_seq'] = turn_id
+
+    frames: List[Dict] = []
+    chunk: Dict[str, Any] = {
+        'type': 'assistant_chunk',
+        'turn_id': str(turn_id),
+        'text': safe_reply,
+        'kb_hits': 0,
+        'intent': nlu_result.get('intent'),
+        'teacher_move': policy.get('teacher_move') or teacher_move,
+    }
+    if correlation_user_msg_id:
+        chunk['correlation_user_msg_id'] = correlation_user_msg_id
+    frames.append(chunk)
+
+    frames.append({'type': 'state', 'phase': 'ready'})
+
+    suggestion_items = chip_items
+    if not suggestion_items and cfg.get('suggestions_enabled', True):
+        suggestion_items = hygienic_suggestions(safe_reply)
+    if suggestion_items:
+        frames.append({'type': 'suggestions', 'turn_id': str(turn_id), 'items': suggestion_items})
+
+    end_fr = {'type': 'assistant_end', 'turn_id': str(turn_id)}
+    if correlation_user_msg_id:
+        end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+    frames.append(end_fr)
+
+    _broadcast_frames(session_id, frames, str(turn_id))
+    return str(turn_id), frames
+
+
+def _make_legacy_frames(seed_text: str,
+                        session_id: str,
+                        meta: Dict[str, Any],
+                        cfg: Dict[str, Any],
+                        *,
+                        correlation_user_msg_id: Optional[str]) -> Tuple[str, List[Dict]]:
     persona = _get_persona_for_session(session_id)
 
-    # Awareness + dialog policy
     labels = annotate(seed_text, meta)
     labels['engagement'] = score_engagement(seed_text, meta)
     policy = pick_policy(labels, cfg)
     teacher_move = (policy or {}).get('teacher_move')
 
-    # Light retrieval – safe to fail closed
-    kb = []
+    kb: List[str] = []
     try:
         if cfg.get('kb_enabled', False):
             kb = kb_search(seed_text, top_k=int(cfg.get('kb_top_k', 3)))
@@ -92,21 +284,18 @@ def make_assistant_frames(seed_text: str,
 
     prompt = _build_prompt(seed_text, persona, kb, teacher_move)
 
-    # Choose provider (may raise if OPENAI_API_KEY missing/invalid)
     try:
         provider = get_provider(cfg)
     except Exception as e:
         provider = None
         _admin_emit("llm_provider_error", error=e.__class__.__name__)
 
-    # --- Generate reply (with safe fallback) ---------------------------------
     reply: str
     error_note: Optional[str] = None
     if provider is not None:
         try:
             reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
         except Exception as e:
-            # Fallback text if provider errors out
             error_note = f"llm_error:{e.__class__.__name__}"
             reply = "Hi! I’m ready to help. (Model is warming up.)"
             _admin_emit("llm_generate_error", error=e.__class__.__name__)
@@ -114,11 +303,8 @@ def make_assistant_frames(seed_text: str,
         error_note = "llm_not_available"
         reply = "Hi! I’m ready to help."
 
-    # Scrub any legacy stamps like "[KB:0]" so UI/TTS never surface them
     safe_reply = _scrub_debug_stamps(reply)
 
-    
-    # Enforce short greeting when this is the greet path
     try:
         _is_greet = False
         try:
@@ -126,15 +312,14 @@ def make_assistant_frames(seed_text: str,
         except Exception:
             _is_greet = (str(seed_text).strip().lower() == "greet")
         if _is_greet:
-            # Cap to <= 5 words, keep it friendly.
             _words = (safe_reply or "Hi there!").strip().split()
             if len(_words) > 5:
                 safe_reply = " ".join(_words[:5]).rstrip(",.;:!")
     except Exception:
         pass
-# --- Build frames --------------------------------------------------------
+
     turn_id = db.memory.setdefault('turn_seq', 0) + 1
-    db.memory['turn_seq'] = turn_id  # simple monotonic id; greet may override externally
+    db.memory['turn_seq'] = turn_id
 
     frames: List[Dict] = []
 
@@ -142,7 +327,6 @@ def make_assistant_frames(seed_text: str,
         'type': 'assistant_chunk',
         'turn_id': str(turn_id),
         'text': safe_reply,
-        # Expose KB hits as metadata so UI can display it without polluting text.
         'kb_hits': len(kb),
     }
     if correlation_user_msg_id:
@@ -151,7 +335,6 @@ def make_assistant_frames(seed_text: str,
         chunk['note'] = error_note
     frames.append(chunk)
 
-    # Optional suggestions (respect config flags)
     try:
         if cfg.get('suggestions_enabled', True):
             frames.append({'type': 'suggestions', 'turn_id': str(turn_id), 'items': hygienic_suggestions(safe_reply)})
@@ -163,19 +346,7 @@ def make_assistant_frames(seed_text: str,
         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
     frames.append(end_fr)
 
-    # --- Broadcast -----------------------------------------------------------
-    try:
-        for fr in frames:
-            bus.broadcast(session_id, fr)
-            # Trace important milestones to Admin SSE
-            if fr.get('type') == 'assistant_chunk':
-                _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(turn_id))
-            elif fr.get('type') == 'assistant_end':
-                _admin_emit('assistant_end', session_id=session_id, turn_id=str(turn_id))
-    except Exception:
-        pass
-        pass
-
+    _broadcast_frames(session_id, frames, str(turn_id))
     return str(turn_id), frames
 
 
