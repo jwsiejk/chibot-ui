@@ -1,7 +1,7 @@
 # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
 from __future__ import annotations
 import asyncio, os, contextlib, time, io, struct, base64, uuid
-from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple
+from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
 from collections import deque
 from app.services.audio.container_sniffer import AudioContainerSniffer, coerce_detection_from_meta
 
@@ -13,6 +13,8 @@ from app.db import db
 from app.metrics import ws_metrics
 # NEW: invoke LLM on final transcript
 from app.services.streaming import run_ws_user_turn  # NEW
+from app.ws.barge import BargeState
+from app.ws.bus import bus
 
 # Optional admin emitter
 try:
@@ -192,6 +194,8 @@ async def _pump_dg_to_client(
     send,
     turn_id_ref,
     final_seen,
+    pending_final_turns,
+    synthetic_final_turns,
     sid: str,
     asr_ready_evt: Optional[asyncio.Event] = None,
     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
@@ -241,6 +245,22 @@ async def _pump_dg_to_client(
             if et in ("user_partial", "user_final"):
                 is_final = (et == "user_final")
                 text = (ev.get("text") or "").strip()
+                turn_id_for_event = turn_id_ref[0]
+                if is_final:
+                    next_turn_id = None
+                    try:
+                        next_turn_id = pending_final_turns.popleft()
+                    except Exception:
+                        next_turn_id = None
+                    if next_turn_id is None:
+                        try:
+                            next_turn_id = min(synthetic_final_turns)
+                            synthetic_final_turns.discard(next_turn_id)
+                        except Exception:
+                            next_turn_id = turn_id_ref[0]
+                    else:
+                        synthetic_final_turns.discard(next_turn_id)
+                    turn_id_for_event = next_turn_id
                 if not is_final:
                     try:
                         asr_seen_partial[0] = True
@@ -253,14 +273,14 @@ async def _pump_dg_to_client(
                                 first_holder[0] = time.time()
                         except Exception:
                             pass
-                _jlog("dg_transcript", sid=sid, turn_id=turn_id_ref[0], is_final=is_final, chars=len(text), preview=_clip_text(text))
+                _jlog("dg_transcript", sid=sid, turn_id=turn_id_for_event, is_final=is_final, chars=len(text), preview=_clip_text(text))
                 try:
                     if et == "user_partial":
                         _admin_emit and _admin_emit("asr:first_partial", session_id=sid)
                 except Exception:
                     pass
 
-                await _ws_send_json(send, make_results(turn_id_ref[0], transcript=text, confidence=0.0, is_final=is_final))
+                await _ws_send_json(send, make_results(turn_id_for_event, transcript=text, confidence=0.0, is_final=is_final))
 
                 if is_final:
                     final_seen[0] = True
@@ -273,10 +293,10 @@ async def _pump_dg_to_client(
                             pass
                     if on_turn_finish:
                         try:
-                            on_turn_finish(turn_id_ref[0], "provider_final", False, len(text))
+                            on_turn_finish(turn_id_for_event, "provider_final", False, len(text))
                         except Exception:
                             pass
-                    await _ws_send_json(send, make_utterance_end(turn_id_ref[0]))
+                    await _ws_send_json(send, make_utterance_end(turn_id_for_event))
                     try:
                         _admin_emit and _admin_emit("asr:final", session_id=sid)
                     except Exception:
@@ -481,12 +501,39 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return
 
     cfg: Dict[str, Any] = {}
+    loop = asyncio.get_running_loop()
+    barge = BargeState()
+
+    def _send_barge_state(phase: str) -> None:
+        if not phase:
+            return
+        frame = {"type": "state", "phase": phase}
+        try:
+            bus.broadcast(sid, frame)
+        except Exception:
+            pass
+        try:
+            if loop.is_closed():
+                return
+            payload = dict(frame)
+            try:
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if running is loop:
+                asyncio.create_task(_ws_send_json(send, payload))
+            else:
+                loop.call_soon_threadsafe(asyncio.create_task, _ws_send_json(send, payload))
+        except Exception:
+            pass
     buf = TurnBuffer()
     dg: Optional[DeepgramClient] = None
     rx_task: Optional[asyncio.Task] = None
     dg_connect_task: Optional[asyncio.Task] = None
     dg_state: str = "closed"
     turn_id_ref = [0]
+    pending_final_turns: Deque[int] = deque()
+    synthetic_final_turns: Set[int] = set()
     final_seen = [False]
     asr_seen_partial = [False]
     turn_timing: Dict[str, List[float]] = {
@@ -596,6 +643,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         send,
                         turn_id_ref,
                         final_seen,
+                        pending_final_turns,
+                        synthetic_final_turns,
                         sid,
                         asr_ready_evt,
                         _flush_buffered_chunks,
@@ -744,7 +793,44 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                     if buf.is_empty():
                         # New audio turn
+                        current_assistant_turn = None
+                        try:
+                            current_assistant_turn = bus.current_assistant_turn(sid)
+                        except Exception:
+                            current_assistant_turn = None
+                        confirm_ms = 420
+                        try:
+                            confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
+                        except Exception:
+                            confirm_ms = 420
+
+                        def _on_barge_commit() -> None:
+                            target_turn = current_assistant_turn
+                            try:
+                                latest = bus.current_assistant_turn(sid)
+                            except Exception:
+                                latest = None
+                            if latest:
+                                target_turn = latest
+                            if target_turn:
+                                try:
+                                    bus.cancel_turn(sid, target_turn)
+                                except Exception:
+                                    pass
+                            try:
+                                bus.broadcast(sid, {"type": "state", "phase": "ready"})
+                            except Exception:
+                                pass
+
+                        with contextlib.suppress(Exception):
+                            barge.start(
+                                confirm_ms=confirm_ms,
+                                on_commit=_on_barge_commit,
+                                send_state=_send_barge_state,
+                            )
                         turn_id_ref[0] = buf.turn_seq + 1
+                        with contextlib.suppress(Exception):
+                            pending_final_turns.append(turn_id_ref[0])
                         final_seen[0] = False
                         asr_seen_partial[0] = False
                         sent_any_audio[0] = False
@@ -990,6 +1076,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             fallback_reason = "no_audio"
                                     else:
                                         provider_can_close = True
+                                elif fallback_reason == "dg_not_ready" and dg_connect_task is not None:
+                                    if not dg_connect_task.done():
+                                        with contextlib.suppress(Exception):
+                                            await asyncio.wait_for(dg_connect_task, timeout=asr_ready_wait_s)
+                                    if dg is not None and sent_any_audio[0]:
+                                        fallback_reason = None
+                                        provider_can_close = True
                                 if provider_can_close:
                                     # Ask provider to finish; if no final came, we'll synthesize after
                                     drain_timeout_exc: Optional[DeepgramDrainTimeoutError] = None
@@ -1021,8 +1114,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         synth_reason = "dg_close_no_final"
                                         if drain_timeout_exc is not None:
                                             synth_reason = "dg_drain_timeout"
-                                        if await _emit_synthetic_final(turn_id, synth_reason):
-                                            synthetic_emitted = True
+                                    if await _emit_synthetic_final(turn_id, synth_reason):
+                                        synthetic_emitted = True
+                                        with contextlib.suppress(ValueError):
+                                            pending_final_turns.remove(turn_id)
+                                        synthetic_final_turns.add(turn_id)
                                     if drain_timeout_exc is not None:
                                         _jlog(
                                             "ws_close_dg_drain_timeout_fallback",
@@ -1039,15 +1135,26 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         reason = "fallback_dg_not_ready" if fallback_reason == "dg_not_ready" else "fallback_no_audio"
                                         if await _emit_synthetic_final(turn_id, reason):
                                             synthetic_emitted = True
+                                            with contextlib.suppress(ValueError):
+                                                pending_final_turns.remove(turn_id)
+                                            synthetic_final_turns.add(turn_id)
                             else:
                                 # No provider configured: still emit empty final + end to advance the dialog.
                                 if not final_seen[0]:
                                     if await _emit_synthetic_final(turn_id, "no_provider"):
                                         synthetic_emitted = True
+                                        with contextlib.suppress(ValueError):
+                                            pending_final_turns.remove(turn_id)
+                                        synthetic_final_turns.add(turn_id)
 
                             if synthetic_emitted:
                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
                                 final_seen[0] = False
+
+                            if barge.is_paused():
+                                with contextlib.suppress(Exception):
+                                    barge.cancel(_send_barge_state)
+                                await asyncio.sleep(0)
 
 
 

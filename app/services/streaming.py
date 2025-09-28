@@ -1390,20 +1390,31 @@ def schedule_frames(session_id: str,
         try:
             if delay_ms and delay_ms > 0:
                 _t.sleep(max(0, delay_ms) / 1000.0)
+            current_turn_id = None
             for fr in frames:
                 try:
                     # Belt-and-suspenders: never let legacy stamps slip through on rebroadcast.
                     if isinstance(fr, dict) and fr.get('type') == 'assistant_chunk' and 'text' in fr:
                         fr['text'] = _scrub_debug_stamps(fr['text'])
+                    ftype = fr.get('type') if isinstance(fr, dict) else None
+                    turn_id = fr.get('turn_id') if isinstance(fr, dict) else None
+                    if ftype in ('assistant_chunk', 'assistant_audio', 'audio_chunk') and turn_id:
+                        current_turn_id = turn_id
+                        bus.note_assistant_turn(session_id, turn_id)
+                    elif ftype in ('assistant_end', 'end'):
+                        bus.note_assistant_turn(session_id, None)
                     bus.broadcast(session_id, fr)
                 except Exception:
                     pass
             # Ensure an assistant_end terminator exists
             if not any(fr.get('type') in ('assistant_end', 'end') for fr in frames):
                 end_fr = {'type': 'assistant_end', 'turn_id': frames[-1].get('turn_id') if frames else None}
+                if current_turn_id and not end_fr.get('turn_id'):
+                    end_fr['turn_id'] = current_turn_id
                 if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
                     end_fr['correlation_user_msg_id'] = correlation_user_msg_id
                 try:
+                    bus.note_assistant_turn(session_id, None)
                     bus.broadcast(session_id, end_fr)
                 except Exception:
                     pass

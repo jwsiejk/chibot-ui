@@ -48,6 +48,7 @@ class StreamBus:
         self._canceled = set()   # (sid, tid)
         self._pending = {}       # sid -> [frame]
         self._max_pending = 256  # cap to avoid unbounded memory
+        self._assistant_turn = {}  # sid -> current assistant turn_id
 
     def _lock(self, sid):
         if sid not in self._locks:
@@ -157,6 +158,23 @@ class StreamBus:
             except Exception:
                 pass
 
+    def note_assistant_turn(self, sid, tid):
+        """Record the assistant turn currently streaming to the session."""
+        lock = self._lock(sid)
+        with lock:
+            if tid is None:
+                self._assistant_turn.pop(sid, None)
+            else:
+                self._assistant_turn[sid] = tid
+
+    def current_assistant_turn(self, sid):
+        """Return the active assistant turn_id for the session, if any."""
+        lock = self._locks.get(sid)
+        if lock is None:
+            return self._assistant_turn.get(sid)
+        with lock:
+            return self._assistant_turn.get(sid)
+
     def unsubscribe(self, sid, q):
         """Remove a subscriber queue when a WS connection terminates."""
         lock = self._locks.get(sid)
@@ -189,6 +207,7 @@ class StreamBus:
                         (fr.get('type') in self._CANCELLABLE_TYPES)
                     )
                 ]
+        self.note_assistant_turn(sid, None)
 
 
 bus = StreamBus()
