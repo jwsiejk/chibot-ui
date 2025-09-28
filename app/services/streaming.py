@@ -91,6 +91,7 @@ STRICT_SYSTEM_SHIM = (
 _WS_SOURCES = {"ws_greet", "user_ws"}
 _WS_PIPELINE_UNAVAILABLE_NOTE = "ws_pipeline_unavailable"
 _WS_PIPELINE_MESSAGE = "I'm still warming up. Please try again in a moment."
+_LEGACY_WARMUP_LINE = "Hi! I’m ready to help. (Model is warming up.)"
 
 
 def _should_use_foundation(seed_text: str) -> bool:
@@ -408,6 +409,20 @@ def _make_foundation_frames(seed_text: str,
     elif fallback_fired:
         safe_reply = _short_greeting(safe_reply)
 
+    if not (safe_reply or "").strip():
+        if fallback_fired or fallback_on_empty:
+            safe_reply = _scrub_debug_stamps(fallback_line)
+            if not safe_reply.strip():
+                safe_reply = fallback_line.strip() or _LEGACY_WARMUP_LINE
+            if not fallback_fired:
+                fallback_fired = True
+                if not fallback_reason:
+                    fallback_reason = "empty"
+            elif not fallback_reason:
+                fallback_reason = "empty"
+        else:
+            safe_reply = _LEGACY_WARMUP_LINE
+
     policy_chips = _collect_policy_chips(policy)
 
     try:
@@ -532,7 +547,7 @@ def _make_legacy_frames(seed_text: str,
             reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
         except Exception as e:
             error_note = f"llm_error:{e.__class__.__name__}"
-            reply = "Hi! I’m ready to help. (Model is warming up.)"
+            reply = _LEGACY_WARMUP_LINE
             _admin_emit("llm_generate_error", error=e.__class__.__name__)
     else:
         error_note = "llm_not_available"
@@ -556,6 +571,20 @@ def _make_legacy_frames(seed_text: str,
         safe_reply = _short_greeting(safe_reply)
     elif fallback_fired:
         safe_reply = _short_greeting(safe_reply)
+
+    if not (safe_reply or "").strip():
+        if fallback_fired or fallback_on_empty:
+            safe_reply = _scrub_debug_stamps(fallback_line)
+            if not safe_reply.strip():
+                safe_reply = fallback_line.strip() or _LEGACY_WARMUP_LINE
+            if not fallback_fired:
+                fallback_fired = True
+                if not fallback_reason:
+                    fallback_reason = "empty"
+            elif not fallback_reason:
+                fallback_reason = "empty"
+        else:
+            safe_reply = _LEGACY_WARMUP_LINE
 
     if force_turn_id is not None:
         db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
