@@ -20,7 +20,7 @@ def _get_mem_table():
     return _get_mem_table._tbl  # type: ignore[attr-defined]
 
 def clear_greet_turn_cache(session_id: str) -> None:
-    """
+    """Clear cached greet turn metadata for the given session identifier."""
     sid = (session_id or "default").strip() or "default"
     try:
         mem = getattr(db, "memory", None)
@@ -35,10 +35,12 @@ def clear_greet_turn_cache(session_id: str) -> None:
     except Exception:
         pass
         
-def get_or_create_greet_turn(session_id: str, *, force: bool=False, ttl_sec: int=DEFAULT_TTL_SEC) -> Tuple[str, bool]:         
+def get_or_create_greet_turn(session_id: str, *, force: bool=False, ttl_sec: int=DEFAULT_TTL_SEC) -> Tuple[str, bool]:
+    """Return the greet turn identifier for the provided session.
+
     Returns (turn_id, idempotent). Works in two modes:
-      1) Neon/DAL mode (preferred): uses db.sql_one / db.sql against table greet_turns.
-      2) Dev/in-memory mode: falls back to db.memory['greet_turns_mem'] with TTL.
+    1) Neon/DAL mode (preferred): uses db.sql_one / db.sql against table greet_turns.
+    2) Dev/in-memory mode: falls back to db.memory['greet_turns_mem'] with TTL.
     """
     sid = (session_id or "default").strip() or "default"
 
