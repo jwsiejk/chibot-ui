@@ -1,158 +1,93 @@
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 3239e7f5fc6a2a4621e28fc415f6ab79a98ccca5..eb7c3218035eb82b58116b577648f0c85306cd9c 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -121,54 +121,55 @@ def _short_greeting(text: str) -> str:
- SETTINGS = load_settings()
- ENABLE_CHIP_FOUNDATION = SETTINGS.enable_chip_foundation
- ENABLE_POLICY_CHIPS = SETTINGS.enable_policy_chips
- SUGGESTION_MAX = SETTINGS.suggestion_max
- STRICT_SYSTEM_SHIM = (
-     "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
-     "and never mention being an AI or chatbot."
- )
+diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
+index 30f1bb922ababf99e2ae8824ca378d693c299cb7..0bcb68d83952576b9ffd9553e4958765d4d4274d 100644
+--- a/static/js/bootstrap.js
++++ b/static/js/bootstrap.js
+@@ -180,76 +180,77 @@ async function startOnce(){
+   const endBtn   = $('#endButton');
  
- _WS_SOURCES = {"ws_greet", "user_ws"}
- _WS_PIPELINE_UNAVAILABLE_NOTE = "ws_pipeline_unavailable"
- _WS_PIPELINE_MESSAGE = "I'm still warming up. Please try again in a moment."
- _LEGACY_WARMUP_LINE = "Hi! I’m ready to help. (Model is warming up.)"
+   try{
+     if (startBtn) startBtn.disabled = true;
  
- _DIALOG_ACTION_KEY = "dialog_action"
- _DIALOG_VERBOSITY_KEY = "dialog_verbosity"
- _DIALOG_SHOW_SUGGESTIONS_KEY = "dialog_show_suggestions"
- _DIALOG_NLU_KEY = "dialog_nlu"
- _DIALOG_POLICY_KEY = "dialog_policy"
+     // 0) Audio unlock so TTS is permitted by browser autoplay policies
+     try { await unlockAudio(); } catch {}
  
+     // 1) Network/CSRF prep (kept for compatibility; harmless in WS-only mode)
+     try { installFetchInterceptor(); } catch {}
+     try { await ensureCSRF(); } catch {}
  
- def _should_use_foundation(seed_text: str) -> bool:
-     if not ENABLE_CHIP_FOUNDATION:
-         return False
-     try:
--        if str(seed_text or "").strip().lower() == "greet":
--            return False
-+        normalized = str(seed_text or "").strip().lower()
-     except Exception:
-         return False
-+    if not normalized:
-+        return False
-     return True
+     // 2) WS first — verify actually OPEN or abort
+     const ok = await ensureWsOpenOrFail(5000);
+     if (!ok){
+       showBanner('WebSocket did not open — greet aborted.');
+       setDot('ready');
+       if (startBtn) startBtn.disabled = false;
+       startInFlight = false;
+       return;
+     }
  
+     // 3) Wire WS → UI events exactly once
+     wireWSEventsOnce();
  
- _POLICY_SUGGESTION_ACTIONS = frozenset({"ask_clarify", "offer_steps"})
- 
- _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
- 
- 
- def _get_dialog_action(meta: Optional[Dict[str, Any]]) -> Optional[str]:
-     if not isinstance(meta, dict):
-         return None
-     action = meta.get(_DIALOG_ACTION_KEY)
-     if action:
-         return action
-     return meta.get("action")
- 
- 
- def _get_dialog_show_suggestions(meta: Optional[Dict[str, Any]]) -> bool:
-     if not isinstance(meta, dict):
-         return False
-     if _DIALOG_SHOW_SUGGESTIONS_KEY in meta:
-         return bool(meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY))
-     return bool(meta.get("show_suggestions"))
- 
- 
-diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
-index 956db37512d7d456effa6b2922fe24b0b84b434a..80b3b843611da3556ff7888999e5e53fb0b8ce58 100644
---- a/tests/test_streaming_ws_fallbacks.py
-+++ b/tests/test_streaming_ws_fallbacks.py
-@@ -9,50 +9,91 @@ def _stub_config(monkeypatch):
- 
- def test_make_assistant_frames_ws_skips_legacy(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     legacy_called = False
- 
-     def fake_legacy(*args, **kwargs):  # pragma: no cover - should never be invoked
-         nonlocal legacy_called
-         legacy_called = True
-         return "legacy", [{"type": "assistant_end", "turn_id": "legacy"}]
- 
-     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
-     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
- 
-     tid, frames = streaming.make_assistant_frames(
-         "hello",
-         "session-ws",
-         meta={"source": "user_ws"},
-     )
- 
-     assert tid is None
-     assert frames == []
-     assert legacy_called is False
- 
- 
-+def test_run_ws_greet_uses_foundation_frames(monkeypatch):
-+    _stub_config(monkeypatch)
+-    // 4) Mic permission + arm echo-aware VAD (voice-first path)
++    // 4) WS-only greet using the SAME session id as WS — fire ASAP so text arrives while
++    //    audio hardware comes online.
++    const sid = getSID();
++    try {
++      configure({ greet: true, reset: 1, session_id: sid });
++    } catch (e) {
++      console.warn('[bootstrap] WS configure failed, cannot greet', e);
++      showBanner('Greet failed to send — check WS configure()');
++      throw e;
++    }
 +
-+    monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
-+
-+    captured = {"called": 0}
-+
-+    def fake_foundation(seed_text, session_id, meta, cfg, **kwargs):
-+        captured["called"] += 1
-+        captured["seed_text"] = seed_text
-+        turn_id = kwargs.get("force_turn_id") or "tid-foundation"
-+        frames = [
-+            {"type": "assistant_chunk", "turn_id": turn_id, "text": "foundation hello", "kb_hits": 0},
-+            {"type": "assistant_end", "turn_id": turn_id},
-+        ]
-+        captured["frames"] = frames
-+        return turn_id, frames
-+
-+    monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
-+
-+    outage_calls = []
-+    monkeypatch.setattr(streaming, "_emit_ws_outage", lambda *a, **k: outage_calls.append((a, k)))
-+
-+    tts_texts = []
-+
-+    def fake_schedule_tts(session_id, text, turn_id=None, correlation_user_msg_id=None):
-+        tts_texts.append(text)
-+
-+    monkeypatch.setattr(streaming, "schedule_tts_audio", fake_schedule_tts)
-+    monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
-+
-+    tid = streaming.run_ws_greet("session-foundation")
-+
-+    assert captured["called"] == 1
-+    assert captured["seed_text"] == "greet"
-+    assert tid == captured["frames"][0]["turn_id"]
-+    assert not outage_calls
-+    assert tts_texts and tts_texts[0] == "foundation hello"
-+    assert streaming._WS_PIPELINE_MESSAGE not in captured["frames"][0]["text"]
-+
-+
- def test_make_assistant_frames_http_allows_legacy(monkeypatch):
-     _stub_config(monkeypatch)
++    // 5) Mic permission + arm echo-aware VAD (voice-first path)
+     let visualizerStream = null;
+     try {
+       visualizerStream = await Visualizer.start();
+     } catch (e) {
+       console.warn('[bootstrap] visualizer init failed', e);
+     }
  
-     captured = types.SimpleNamespace(called=False)
+     try {
+       const stream = await initMic(visualizerStream ?? undefined);
+       await armVAD(stream);         // begins voice turns (one blob per user turn)
+     } catch (e) {
+       console.warn('[bootstrap] mic/VAD init failed', e);
+       try { Visualizer.stop({ reset: true }); } catch {}
+     }
  
-     def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
-         captured.called = True
-         assert isinstance(meta.get("nlu"), dict)
-         assert isinstance(meta.get("dialog_nlu"), dict)
-         assert "action" in meta
-         assert meta["dialog_action"] == meta["action"]
-         assert "verbosity" in meta
-         assert meta["dialog_verbosity"] == meta["verbosity"]
-         assert "show_suggestions" in meta
-         assert meta["dialog_show_suggestions"] == meta["show_suggestions"]
-         assert meta["dialog_policy"]["teacher_move"] == kwargs["policy"]["teacher_move"]
-         assert isinstance(kwargs.get("labels"), dict)
-         assert isinstance(kwargs.get("policy"), dict)
-         return "tid-123", [
-             {"type": "assistant_chunk", "turn_id": "tid-123", "text": "hi", "kb_hits": 0},
-             {"type": "assistant_end", "turn_id": "tid-123"},
-         ]
+-    // 5) WS-only greet using the SAME session id as WS
+-    const sid = getSID();
+-    // Fire the WS Configure greet (no HTTP fetch)
+-    try {
+-      configure({ greet: true, reset: 1, session_id: sid });
+-    } catch (e) {
+-      console.warn('[bootstrap] WS configure failed, cannot greet', e);
+-      showBanner('Greet failed to send — check WS configure()');
+-    }
+-
+     // Watchdog: if no assistant frames within 6s after sending WS greet, warn
+     let gotAssistant = false;
+     const markAssistant = (ev) => {
+       const d = ev.detail || {};
+       if (_isAssistantTextFrame(d)) gotAssistant = true;
+     };
+     window.addEventListener('askchip-ws', markAssistant, { once: true });
  
-     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
-     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
+     setTimeout(() => {
+       if (!gotAssistant) showBanner('No assistant frames after greet — check WS handler/payload.');
+     }, 6000);
+ 
+     // Ready for user input
+     if (endBtn) endBtn.disabled = false;
+     _enableButtons();
+ 
+     // Mark session active so ws.js auto-reconnects through restarts
+     window.__askchip_session_started = true;
+     started = true;
+     setDot('ready');
+ 
+   } catch (e){
+     console.error('[bootstrap] start failed', e);
+     if (startBtn) startBtn.disabled = false;
+     _disableButtons();

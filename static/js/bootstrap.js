@@ -202,7 +202,18 @@ async function startOnce(){
     // 3) Wire WS → UI events exactly once
     wireWSEventsOnce();
 
-    // 4) Mic permission + arm echo-aware VAD (voice-first path)
+    // 4) WS-only greet using the SAME session id as WS — fire ASAP so text arrives while
+    //    audio hardware comes online.
+    const sid = getSID();
+    try {
+      configure({ greet: true, reset: 1, session_id: sid });
+    } catch (e) {
+      console.warn('[bootstrap] WS configure failed, cannot greet', e);
+      showBanner('Greet failed to send — check WS configure()');
+      throw e;
+    }
+
+    // 5) Mic permission + arm echo-aware VAD (voice-first path)
     let visualizerStream = null;
     try {
       visualizerStream = await Visualizer.start();
@@ -216,16 +227,6 @@ async function startOnce(){
     } catch (e) {
       console.warn('[bootstrap] mic/VAD init failed', e);
       try { Visualizer.stop({ reset: true }); } catch {}
-    }
-
-    // 5) WS-only greet using the SAME session id as WS
-    const sid = getSID();
-    // Fire the WS Configure greet (no HTTP fetch)
-    try {
-      configure({ greet: true, reset: 1, session_id: sid });
-    } catch (e) {
-      console.warn('[bootstrap] WS configure failed, cannot greet', e);
-      showBanner('Greet failed to send — check WS configure()');
     }
 
     // Watchdog: if no assistant frames within 6s after sending WS greet, warn
