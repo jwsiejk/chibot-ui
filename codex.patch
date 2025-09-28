@@ -1,174 +1,1128 @@
-diff --git a/static/js/app.js b/static/js/app.js
-index 9a4c136c42e4db4bb1a0063be91d421112b92a22..13a654073c056d644a3ed4acb8f57cc6156416d3 100644
---- a/static/js/app.js
-+++ b/static/js/app.js
-@@ -99,51 +99,59 @@ function _dedupeAssistant(d){
-     const msgs = $('#chatMessages');
-     if (!msgs) return true;
-     const last = msgs.lastElementChild;
- 
-     const raw = (d.text || d.delta || d.content || '');
- 
-     const text = _cleanText(raw);
- 
-     if (last && last.dataset && last.dataset.role === 'assistant'){
-       last.className = 'msg assistant';
-       last.textContent = text;
-       return false; // swallowed
-     }
-     const li = document.createElement('div');
-     li.dataset.role = 'assistant';
-     li.className = 'msg assistant';
-     li.textContent = text;
-     msgs.appendChild(li);
-     try { msgs.scrollTop = msgs.scrollHeight; } catch {}
-   }catch{}
-   return true;
- }
- 
- let _lastSuggestionsKey = null;
- 
-+function _clearSuggestions(){
-+  const wrap = document.getElementById('suggestions');
-+  if (!wrap) return;
-+  try { wrap.innerHTML = ''; } catch {}
-+  _lastSuggestionsKey = null;
-+}
+diff --git a/app/services/audio/raw_fallback.py b/app/services/audio/raw_fallback.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ed191d08ad7d809bcf2798ec8a141114883aeeec
+--- /dev/null
++++ b/app/services/audio/raw_fallback.py
+@@ -0,0 +1,350 @@
++"""Utilities for detecting when to fall back to raw PCM transport.
 +
- function _handleSuggestionClick(text){
-+  if (!window.__askchip_session_started) return;
-   const suggestion = (text || '').trim();
-   if (!suggestion) return;
-   const input = $('#composer');
-   if (input) {
-     try { input.value = suggestion; } catch {}
-   }
-   try { onSend(suggestion); } catch (err) { console.warn('[suggestion click] send failed', err); }
- }
- 
- export function handleAssistantFrame(d){
-   if (!d) return;
- 
-   // Surface server errors to the UI banner
-   if (d.type === 'Error') {
-     const msg = `Error: ${(d.code||'')}${d.message ? ' ' + d.message : ''}`.trim();
-     showBanner(msg || 'An error occurred.');
-     return;
-   }
- 
-   // Lightweight state hints (non-invasive)
-   if (d.type === 'assistant_audio') setDot('speaking');
-   if (d.type === 'UtteranceEnd')    setDot('ready');
- 
-   if (d.type === 'Results' && d.nlu === undefined){
-     _renderUserTranscript(d);
-@@ -151,50 +159,51 @@ export function handleAssistantFrame(d){
-   }
- 
-   if (d.type === 'suggestions'){
-     const items = Array.isArray(d.items) ? d.items : [];
-     let key = '[]';
-     try { key = JSON.stringify(items ?? []); } catch { key = '[]'; }
-     if (key !== _lastSuggestionsKey){
-       _lastSuggestionsKey = key;
-       try { renderSuggestions(items, _handleSuggestionClick); } catch (err) {
-         console.warn('[handleAssistantFrame] renderSuggestions failed', err);
-       }
-     }
-     return;
-   }
- 
-   if (_isAssistantTextFrame(d)) {
-     if (!_dedupeAssistant(d)) return;
-   }
-   // (other frame types can be handled here as needed)
- }
- 
- /* ---------------- Send (WS-only) ---------------- */
- 
- export async function onSend(overrideText){
-   try{
-+    if (!window.__askchip_session_started) return;
-     const input = $('#composer');
-     if (!input && overrideText == null) return;
-     const raw = overrideText != null ? overrideText : (input?.value || '');
-     const val = (raw || '').trim(); if (!val) return;
- 
-     const sid = getSID();
- 
-     // Optimistic render of user bubble
-     let optimisticBubble = null;
-     try{
-       const msgs = $('#chatMessages');
-       if (msgs){
-         const li = document.createElement('div');
-         li.dataset.role = 'user';
-         li.className = 'msg user';
-         li.textContent = val;
-         msgs.appendChild(li);
-         optimisticBubble = li;
-         try { msgs.scrollTop = msgs.scrollHeight; } catch {}
-       }
-     }catch{}
- 
-     // WS send (WS-only turns; replaces legacy HTTP POST)
-     const correlation = (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random()));
-     let sendSucceeded = false;
-@@ -212,52 +221,57 @@ export async function onSend(overrideText){
-       }
-       showBanner('Message failed to send over WebSocket.');
-       return;
-     }
- 
-     setDot('thinking');
- 
-     // Clear composer after send
-     if (input){
-       try { input.value = ''; } catch {}
-     }
- 
-   } catch (e){
-     console.warn('[onSend] error', e);
-   }
- }
- 
- /* ---------------- End session (graceful) ---------------- */
- 
- let ending = false;
- 
- export async function onEnd(){
-   if (ending) return;
-   ending = true;
-   try {
-+    _clearSuggestions();
-     // Politely signal end of stream over WS, then close with code 1000
-     try { sendCloseStream(); } catch {}
-     await new Promise(r => setTimeout(r, 100));
- 
-     try { closeWS(1000, 'user_end'); } catch {}
- 
-     // Rotate the session so the next Start is clean (correct key)
-     try { localStorage.removeItem('chip.sid'); } catch {}
- 
-     // Notify others (bootstrap etc.)
-     try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
- 
-     // Update UI
-     disableForEnded();
-     showBanner('Session ended. Press Start to begin a new one.');
- 
-     // Clear any bootstrap “session started” latch
-     window.__askchip_session_started = false;
- 
-   } finally {
-     ending = false;
-   }
- }
- 
-+try {
-+  window.addEventListener('askchip-session-ended', () => { _clearSuggestions(); });
-+} catch {}
++This module centralises all heuristics that decide whether an incoming
++WebSocket audio stream should continue to be treated as containerised Opus or
++switched to Deepgram's raw PCM ingest path.  The logic lives here so it can be
++shared by the WS handler and tests without sprinkling guard-rail state across
++the codebase.
 +
- /* ---------------- Expose minimal helpers (optional) ---------------- */
++The workflow is:
++
++``StreamStats``
++    Mutable per-session counters – frame counts, decode errors, jitter, etc.
++
++``DetectionSignal`` & ``StreamMeta``
++    Lightweight dataclasses representing what we know about the stream (codec,
++    channel count, sample rate hints).
++
++``should_use_raw_fallback``
++    Given the latest detection signal and stats, decide if we should coerce the
++    Deepgram connection into raw PCM mode.
++
++``coerce_to_raw_config``
++    Produce Deepgram configuration overrides that enable raw PCM ingest.
++
++Helper functions provide deterministic frame sizing (padding, silence
++insertion) so the WS layer can keep its buffering logic tidy.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++from typing import Mapping, Optional
++
++PCM_BYTES_PER_SAMPLE = 2
++DEFAULT_SAMPLE_RATE = 48_000
++DEFAULT_CHANNELS = 1
++DEFAULT_FRAME_MS = 20
++
++# Frame length ≥ this threshold suggests we're receiving PCM rather than Opus.
++RAW_PCM_SUSPECT_BYTES = 320  # 20 ms @ 8 kHz mono 16-bit PCM
++
++
++@dataclass(frozen=True)
++class DetectionSignal:
++    """Lightweight representation of the current transport detection."""
++
++    container: Optional[str] = None
++    codec: Optional[str] = None
++    containerized: bool = False
++    source: str = "unknown"
++
++
++@dataclass
++class StreamMeta:
++    """Mutable hints about the stream supplied by clients or heuristics."""
++
++    sample_rate: Optional[int] = None
++    channels: Optional[int] = None
++    encoding: str = "opus"
++    frame_ms: int = DEFAULT_FRAME_MS
++    bits_per_sample: int = 16
++
++    def apply_config(self, cfg: Mapping[str, object]) -> None:
++        """Apply a client Configure payload (best-effort)."""
++
++        if not cfg:
++            return
++        sr = cfg.get("sample_rate") if isinstance(cfg, Mapping) else None
++        if isinstance(sr, int) and sr > 0:
++            self.sample_rate = sr
++
++        ch = cfg.get("channels") if isinstance(cfg, Mapping) else None
++        if isinstance(ch, int) and ch > 0:
++            self.channels = ch
++
++        enc = cfg.get("encoding") if isinstance(cfg, Mapping) else None
++        if isinstance(enc, str) and enc:
++            self.encoding = enc.lower()
++
++        frame = cfg.get("frame_ms") if isinstance(cfg, Mapping) else None
++        if not isinstance(frame, int):
++            frame = cfg.get("frame_duration_ms") if isinstance(cfg, Mapping) else None
++        if isinstance(frame, int) and frame > 0:
++            self.frame_ms = frame
++
++    def assume_raw_pcm(self) -> None:
++        """Ensure defaults suitable for PCM if the client did not specify them."""
++
++        if not self.sample_rate or self.sample_rate <= 0:
++            self.sample_rate = DEFAULT_SAMPLE_RATE
++        if not self.channels or self.channels <= 0:
++            self.channels = DEFAULT_CHANNELS
++        self.encoding = "linear16"
++
++
++@dataclass
++class FallbackGuardrails:
++    """Tunable guard rails controlling when the fallback is allowed."""
++
++    max_consecutive_decode_errors: int = 3
++    max_total_decode_errors: int = 6
++    lenient_prefix_frames: int = 2
++    jitter_slip_limit: int = 4
++    raw_pcm_suspect_bytes: int = RAW_PCM_SUSPECT_BYTES
++    raw_candidate_confirmations: int = 3
++    min_errors_for_suspect: int = 1
++
++
++@dataclass
++class StreamStats:
++    """Mutable, per-session counters that inform the fallback decision."""
++
++    meta: StreamMeta = field(default_factory=StreamMeta)
++    guardrails: FallbackGuardrails = field(default_factory=FallbackGuardrails)
++    detection: Optional[DetectionSignal] = None
++    frames_seen: int = 0
++    decode_errors: int = 0
++    consecutive_decode_errors: int = 0
++    jitter_slip_frames: int = 0
++    silence_frames: int = 0
++    normalized_frames: int = 0
++    raw_frame_candidates: int = 0
++    suspected_raw: bool = False
++    forced_fallback: bool = False
++    last_frame_size: Optional[int] = None
++
++    def note_detection(self, detection: DetectionSignal) -> None:
++        self.detection = detection
++
++    def note_decode_error(self, *, frame_index: Optional[int] = None) -> None:
++        self.decode_errors += 1
++        idx = frame_index if frame_index is not None else self.frames_seen
++        if idx > self.guardrails.lenient_prefix_frames:
++            self.consecutive_decode_errors += 1
++
++    def note_jitter_slip(self) -> None:
++        self.jitter_slip_frames += 1
++
++    def note_provider_error(self) -> None:
++        """Treat provider-originated errors as a decode issue."""
++
++        self.note_decode_error(frame_index=self.frames_seen + 1)
++
++    def note_frame(
++        self,
++        frame: bytes,
++        *,
++        normalized: bool,
++        success: bool,
++        silence: bool,
++    ) -> None:
++        self.frames_seen += 1
++        self.last_frame_size = len(frame)
++        if normalized:
++            self.normalized_frames += 1
++        if silence:
++            self.silence_frames += 1
++        if success:
++            self.consecutive_decode_errors = 0
++
++    def reset_turn(self) -> None:
++        """Reset per-turn counters while keeping the session heuristics."""
++
++        self.frames_seen = 0
++        self.decode_errors = 0
++        self.consecutive_decode_errors = 0
++        self.jitter_slip_frames = 0
++        self.silence_frames = 0
++        self.normalized_frames = 0
++        self.last_frame_size = None
++        if not self.forced_fallback:
++            self.raw_frame_candidates = 0
++            self.suspected_raw = False
++
++    def force_fallback(self) -> None:
++        self.forced_fallback = True
++        self.suspected_raw = True
++        self.meta.assume_raw_pcm()
++
++    @property
++    def should_normalize_frames(self) -> bool:
++        if self.forced_fallback:
++            return True
++        return (self.meta.encoding or "").lower() in {"pcm", "linear16"}
++
++    def observe_frame(self, frame: bytes) -> bytes:
++        """Observe a newly-arrived frame and return the bytes to forward."""
++
++        data = bytes(frame or b"")
++        next_idx = self.frames_seen + 1
++
++        if len(data) >= self.guardrails.raw_pcm_suspect_bytes:
++            self.raw_frame_candidates += 1
++            if self.raw_frame_candidates >= self.guardrails.raw_candidate_confirmations:
++                self.suspected_raw = True
++            if self.detection and self.detection.containerized:
++                # Containerised detection but receiving raw-sized frames — treat as a
++                # decode failure so guardrails can trip.
++                self.note_decode_error(frame_index=next_idx)
++                silence = is_probable_silence(data)
++                self.note_frame(data, normalized=False, success=False, silence=silence)
++                return data
++
++        if not data:
++            self.note_decode_error(frame_index=next_idx)
++            if self.should_normalize_frames:
++                fill = silence_frame(self.meta)
++                if fill:
++                    self.note_jitter_slip()
++                silence = True
++                self.note_frame(fill, normalized=True, success=True, silence=silence)
++                return fill
++            silence = True
++            self.note_frame(data, normalized=False, success=False, silence=silence)
++            return data
++
++        if self.should_normalize_frames:
++            normalized = normalize_pcm_frame(data, self.meta)
++            changed = normalized != data
++            if changed:
++                self.note_jitter_slip()
++            silence = is_probable_silence(normalized)
++            self.note_frame(normalized, normalized=True, success=True, silence=silence)
++            return normalized
++
++        silence = is_probable_silence(data)
++        self.note_frame(data, normalized=False, success=True, silence=silence)
++        return data
++
++
++def expected_pcm_frame_bytes(meta: Optional[StreamMeta]) -> int:
++    meta = meta or StreamMeta()
++    sr = meta.sample_rate or DEFAULT_SAMPLE_RATE
++    ch = meta.channels or DEFAULT_CHANNELS
++    frame_ms = meta.frame_ms or DEFAULT_FRAME_MS
++    bits = meta.bits_per_sample or (PCM_BYTES_PER_SAMPLE * 8)
++    bytes_per_sample = max(1, bits // 8)
++    return int(sr * ch * bytes_per_sample * frame_ms / 1000)
++
++
++def normalize_pcm_frame(frame: bytes, meta: StreamMeta) -> bytes:
++    expected = expected_pcm_frame_bytes(meta)
++    if expected <= 0:
++        return frame
++    if len(frame) == expected:
++        return frame
++    if len(frame) < expected:
++        return frame + b"\x00" * (expected - len(frame))
++    return frame[:expected]
++
++
++def pad_frame_to_expected(frame: bytes, meta: StreamMeta) -> bytes:
++    """Public wrapper used by tests – identical to ``normalize_pcm_frame``."""
++
++    return normalize_pcm_frame(frame, meta)
++
++
++def silence_frame(meta: StreamMeta) -> bytes:
++    expected = expected_pcm_frame_bytes(meta)
++    if expected <= 0:
++        return b""
++    return b"\x00" * expected
++
++
++def is_probable_silence(frame: bytes) -> bool:
++    if not frame:
++        return True
++    if len(frame) <= 2:
++        return False
++    first = frame[:1]
++    return frame.count(first) == len(frame) and first in (b"\x00", b"\xff")
++
++
++def should_buffer_for_jitter(stats: StreamStats) -> bool:
++    return stats.jitter_slip_frames >= stats.guardrails.jitter_slip_limit
++
++
++def should_use_raw_fallback(
++    detection: Optional[DetectionSignal],
++    stats: Optional[StreamStats],
++) -> bool:
++    if stats is None:
++        return False
++    if stats.forced_fallback:
++        return True
++
++    detect = detection or stats.detection
++
++    if detect and not detect.containerized and not stats.suspected_raw:
++        return False
++
++    guard = stats.guardrails
++
++    if stats.suspected_raw and stats.decode_errors >= guard.min_errors_for_suspect:
++        return True
++
++    if detect and detect.containerized:
++        if stats.consecutive_decode_errors >= guard.max_consecutive_decode_errors:
++            return True
++
++    if stats.decode_errors >= guard.max_total_decode_errors:
++        return True
++
++    if should_buffer_for_jitter(stats):
++        return True
++
++    return False
++
++
++def coerce_to_raw_config(meta: StreamMeta) -> dict:
++    meta.assume_raw_pcm()
++    sample_rate = meta.sample_rate or DEFAULT_SAMPLE_RATE
++    channels = meta.channels or DEFAULT_CHANNELS
++    frame_ms = meta.frame_ms or DEFAULT_FRAME_MS
++
++    transport = {
++        "protocol": "websocket",
++        "container": "raw",
++        "codec": "pcm",
++        "containerized_opus": False,
++        "normalized_pcm": True,
++        "sample_rate": sample_rate,
++        "channels": channels,
++        "frame_ms": frame_ms,
++        "bits_per_sample": meta.bits_per_sample,
++        "raw_fallback": True,
++    }
++
++    return {
++        "encoding": "linear16",
++        "sample_rate": sample_rate,
++        "channels": channels,
++        "_transport": transport,
++    }
++
++
++__all__ = [
++    "DetectionSignal",
++    "StreamMeta",
++    "StreamStats",
++    "FallbackGuardrails",
++    "expected_pcm_frame_bytes",
++    "normalize_pcm_frame",
++    "pad_frame_to_expected",
++    "silence_frame",
++    "is_probable_silence",
++    "should_buffer_for_jitter",
++    "should_use_raw_fallback",
++    "coerce_to_raw_config",
++]
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index 77b0cd3491d7c006cc3f631066401a0937ec81ab..ffc366cddf42df0b35632a7aff75dbffea9c39e3 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -646,89 +646,95 @@ class DeepgramClient:
+                     closing=self._closing,
+                     closed=self._closed,
+                 )
+             except Exception:
+                 pass
+         if self._ws:
+             logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
+             return
  
- // (Intentionally minimal public surface)
+         url = _dg_url(self._cfg)
+ 
+         containerized = False
+ 
+         # Diagnostic: parse params and emit compact JSON log that shows
+         # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
+         try:
+             import urllib.parse as _p
+             q = dict(_p.parse_qsl(_p.urlsplit(url).query, keep_blank_values=True))
+             self._url_tag = q.get("tag") or None
+             transport = (self._cfg or {}).get("_transport", {}) or {}
+             containerized = bool(transport.get("containerized_opus"))
+             url_meta = {
+                 "container": transport.get("container"),
+                 "codec": transport.get("codec"),
+                 "containerized_opus": containerized,
++                "normalized_pcm": bool(transport.get("normalized_pcm")),
++                "raw_fallback": bool(transport.get("raw_fallback")),
+                 "omitted_params": None,
+                 "raw_params": None,
+             }
+             if containerized:
+                 # These should be absent in containerized mode
+                 omitted = []
+                 for k in ("encoding", "sample_rate", "channels"):
+                     if k not in q:
+                         omitted.append(k)
+                 url_meta["omitted_params"] = omitted
+             else:
+                 url_meta["raw_params"] = {
+                     "encoding": q.get("encoding"),
+                     "sample_rate": q.get("sample_rate"),
+                     "channels": q.get("channels"),
+                 }
+ 
+             # Structured JSON log if _jlog is available (preferred for your admin viewer)
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "asr_url",
+                         dg_id=self._dg_id,
+                         url=url,
+                         container=url_meta.get("container"),
+                         codec=url_meta.get("codec"),
+                         containerized_opus=bool(url_meta.get("containerized_opus")),
++                        normalized_pcm=bool(url_meta.get("normalized_pcm")),
++                        raw_fallback=bool(url_meta.get("raw_fallback")),
+                         omitted_params=url_meta.get("omitted_params"),
+                         raw_params=url_meta.get("raw_params"),
+                     )
+                 except Exception:
+                     pass
+ 
+             # Keep existing human-readable info log
+             logger.info(
+-                "dg_ws_connect sid=%s url=%s containerized_opus=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
++                "dg_ws_connect sid=%s url=%s containerized_opus=%s normalized_pcm=%s raw_fallback=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
+                 sid,
+                 url,
+                 containerized,
++                url_meta.get("normalized_pcm"),
++                url_meta.get("raw_fallback"),
+                 q.get("encoding"),
+                 q.get("sample_rate"),
+                 q.get("channels"),
+             )
+         except Exception:
+             logger.info("Deepgram connect start sid=%s url=%s", sid, url)
+ 
+         if DG_TEST_MODE:
+             self._ws = _FakeWSForTests()
+             DG_LAST_URL = url
+             cfg_payload = _initial_config(self._cfg)
+             DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
+             self._open_evt.set()
+             await self._signal_ready()
+             logger.info("Deepgram test-mode connect sid=%s", sid)
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_open",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         url=url,
+                         tag=self._url_tag,
+                         test_mode=True,
+                     )
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index e7ae04db8aba9c4891c6809f715ac73d97ca3e1c..cf43a48b1259214f4efd0ed1b6426ff6ac9c864e 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -1,31 +1,39 @@
+ # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
+ from __future__ import annotations
+ import asyncio, os, contextlib, time, io, struct, base64, uuid
+ from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
+ from collections import deque
+ from app.services.audio.container_sniffer import AudioContainerSniffer, coerce_detection_from_meta
++from app.services.audio.raw_fallback import (
++    DetectionSignal as RawDetectionSignal,
++    StreamMeta as RawStreamMeta,
++    StreamStats as RawStreamStats,
++    coerce_to_raw_config,
++    normalize_pcm_frame,
++    should_use_raw_fallback,
++)
+ 
+ from .schema_v1 import parse_client_json, make_keepalive_ack, make_results, make_utterance_end, make_error
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import DeepgramClient, DeepgramDrainTimeoutError
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import run_ws_user_turn  # NEW
+ from app.ws.barge import BargeState
+ from app.ws.bus import bus
+ 
+ # Optional admin emitter
+ try:
+     from app.api_v1.admin import _emit as _admin_emit
+ except Exception:
+     _admin_emit = None
+ 
+ 
+ ACTIVE_WS: dict[str, dict[str, Any]] = {}
+ ACTIVE_WS_LOCK = asyncio.Lock()
+ 
+ WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
+ try:
+@@ -178,50 +186,51 @@ async def _pump_bus_to_client(sid: str, send):
+                 continue
+             try:
+                 await send({"type": "websocket.send", "text": _json.dumps(fr, separators=(",", ":"), ensure_ascii=False)})
+             except Exception:
+                 await asyncio.sleep(0.01)
+     except asyncio.CancelledError:
+         pass
+     finally:
+         try:
+             if hasattr(bus, "unsubscribe"):
+                 bus.unsubscribe(sid, q)
+         except Exception:
+             pass
+ 
+ 
+ async def _pump_dg_to_client(
+     dg: DeepgramClient,
+     send,
+     turn_id_ref,
+     final_seen,
+     pending_final_turns,
+     synthetic_final_turns,
+     sid: str,
+     asr_ready_evt: Optional[asyncio.Event] = None,
+     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
++    stream_stats: Optional[RawStreamStats] = None,
+     turn_timing: Optional[Dict[str, List[float]]] = None,
+     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
+ ):
+     """Relay Deepgram events to client and, on final, kick LLM turn."""
+     try:
+         async for ev in dg.events():
+             et = (ev.get("type") or "").lower()
+             if et == "asr_open":
+                 delta_ms = None
+                 now_ts = time.time()
+                 if turn_timing is not None:
+                     try:
+                         holder = turn_timing.setdefault("dg_open", [0.0])
+                         holder[0] = now_ts
+                         start_ts = turn_timing.get("start", [0.0])[0]
+                         if start_ts:
+                             delta_ms = int((now_ts - start_ts) * 1000)
+                     except Exception:
+                         pass
+                 _jlog(
+                     "dg_asr_open",
+                     sid=sid,
+                     turn_id=turn_id_ref[0],
+                     delta_from_turn_ms=delta_ms,
+                 )
+@@ -291,70 +300,78 @@ async def _pump_dg_to_client(
+                             if not first_holder[0]:
+                                 first_holder[0] = time.time()
+                         except Exception:
+                             pass
+                     if on_turn_finish:
+                         try:
+                             on_turn_finish(turn_id_for_event, "provider_final", False, len(text))
+                         except Exception:
+                             pass
+                     await _ws_send_json(send, make_utterance_end(turn_id_for_event))
+                     try:
+                         _admin_emit and _admin_emit("asr:final", session_id=sid)
+                     except Exception:
+                         pass
+ 
+                     if text:
+                         async def _bg_turn():
+                             try:
+                                 await asyncio.to_thread(run_ws_user_turn, sid, text, None)
+                             except Exception as e:
+                                 with contextlib.suppress(Exception):
+                                     await _ws_send_json(send, make_error("llm_turn_fail", e.__class__.__name__))
+                         asyncio.create_task(_bg_turn())
+ 
+             elif et == "asr_error":
++                if stream_stats is not None:
++                    try:
++                        stream_stats.note_provider_error()
++                    except Exception:
++                        pass
+                 err = _clip_text(str(ev.get("error") or "unknown"), 160)
+                 _jlog("dg_asr_error", sid=sid, turn_id=turn_id_ref[0], error=err)
+                 try:
+                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=err)
+                 except Exception:
+                     pass
+                 await _ws_send_json(send, make_error("asr_error", err))
+     except asyncio.CancelledError:
+         return
+     except Exception as e:
+         with contextlib.suppress(Exception):
+             await _ws_send_json(send, make_error("relay_fail", e.__class__.__name__))
+ 
+ 
+ # ------------------------------ main WS impl ------------------------------
+ 
+ async def _ws_chat_asgi_impl(scope, receive, send):
+     # Session-scoped transport flags for ASR
+     transport = {"protocol":"websocket","container":None,"codec":None,"containerized_opus":False,"features":[]}
+     sniffer = AudioContainerSniffer()
++    stream_meta = RawStreamMeta()
++    stream_stats = RawStreamStats(meta=stream_meta)
++    fallback_detection: Optional[RawDetectionSignal] = None
+     audio_sig_logged = False
+ 
+     MIC_CAPTURE = _env_truth("MIC_CAPTURE", False)
+     MIC_ECHO_WS = _env_truth("MIC_ECHO_WS", False)
+ 
+     _jlog("mic_capture_cfg", sid="pending", enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
+ 
+     raw_query = (scope.get("query_string") or b"").decode("utf-8", "ignore")
+ 
+     try:
+         _admin_emit and _admin_emit(
+             "ws_handshake_enter",
+             path=scope.get("path"),
+             raw_query=raw_query,
+         )
+     except Exception:
+         pass
+ 
+     if scope.get("type") != "websocket":
+         await send({"type": "http.response.start", "status": 404, "headers": []})
+         await send({"type": "http.response.body", "body": b"not found"})
+         return
+ 
+     sid = _get_session_id(scope)
+     conn_id = uuid.uuid4().hex
+@@ -584,93 +601,134 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 turn_id=turn_id,
+                 reason=reason,
+                 synthetic=bool(synthetic),
+                 delta_start_ms=delta_start,
+                 delta_asr_open_ms=delta_open,
+                 delta_first_partial_ms=delta_partial,
+                 transcript_chars=int(transcript_chars),
+             )
+ 
+     async def _emit_synthetic_final(turn_id: int, reason: str, transcript: str = "") -> bool:
+         if final_seen[0]:
+             return False
+         final_seen[0] = True
+         payload = make_results(turn_id, transcript=transcript, is_final=True)
+         payload["type"] = "Results"
+         await _ws_send_json(send, payload)
+         utterance_payload = make_utterance_end(turn_id)
+         utterance_payload["type"] = "UtteranceEnd"
+         await _ws_send_json(send, utterance_payload)
+         with contextlib.suppress(Exception):
+             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
+         _log_turn_finish(turn_id, reason=reason, synthetic=True, transcript_chars=len(transcript or ""))
+         return True
+ 
+     async def _ensure_dg_connected() -> bool:
+-        nonlocal dg, rx_task, dg_connect_task, dg_state
++        nonlocal dg, rx_task, dg_connect_task, dg_state, fallback_detection
+ 
+         if not _has_deepgram_key():
+             return False
+ 
+         if dg_state == "open" and dg is not None:
+             return True
+ 
+         if dg_state == "connecting" and dg_connect_task is not None:
+             with contextlib.suppress(Exception):
+                 await dg_connect_task
+             return dg_state == "open" and dg is not None
+ 
+         connect_result = {"ok": False}
+ 
+         async def _connect() -> None:
+             nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
+             try:
+                 dg_state = "connecting"
+                 with contextlib.suppress(Exception):
+                     asr_ready_evt.clear()
++
++                if should_use_raw_fallback(fallback_detection, stream_stats):
++                    if not stream_stats.forced_fallback:
++                        stream_stats.force_fallback()
++                        overrides = coerce_to_raw_config(stream_meta)
++                        for key, value in overrides.items():
++                            if key == "_transport":
++                                continue
++                            cfg[key] = value
++                        transport.update(overrides.get("_transport", {}))
++                        fallback_detection = RawDetectionSignal(
++                            container="raw",
++                            codec="pcm",
++                            containerized=False,
++                            source="raw_fallback",
++                        )
++                        stream_stats.note_detection(fallback_detection)
++                        with contextlib.suppress(Exception):
++                            _jlog(
++                                "raw_fallback_applied",
++                                sid=sid,
++                                sample_rate=transport.get("sample_rate"),
++                                channels=transport.get("channels"),
++                            )
++                        if buffered_chunks:
++                            normalized_buffer: Deque[bytes] = deque()
++                            for existing in list(buffered_chunks):
++                                normalized = normalize_pcm_frame(existing, stream_meta)
++                                if normalized != existing:
++                                    stream_stats.note_jitter_slip()
++                                normalized_buffer.append(normalized)
++                            buffered_chunks.clear()
++                            buffered_chunks.extend(normalized_buffer)
++                        if MIC_CAPTURE and mic_chunks:
++                            for idx, existing in enumerate(list(mic_chunks)):
++                                normalized = normalize_pcm_frame(existing, stream_meta)
++                                if normalized != existing:
++                                    stream_stats.note_jitter_slip()
++                                mic_chunks[idx] = normalized
++
+                 cfg['_transport'] = transport
+                 cfg['_jlog'] = _jlog
+                 cfg.setdefault('session_id', sid)
+                 cfg['_url_tag'] = f"{WS_ASGI_BUILD}:{sid}"
+                 _jlog("asr_connect_begin", sid=sid, transport=transport)
+                 client = DeepgramClient(cfg)
+                 dg = client
+                 await client.connect()
+                 dg_state = "open"
+                 connect_result["ok"] = True
+                 turn_id_ref[0] = buf.turn_seq + 1
+                 rx_task = asyncio.create_task(
+                     _pump_dg_to_client(
+                         client,
+                         send,
+                         turn_id_ref,
+                         final_seen,
+                         pending_final_turns,
+                         synthetic_final_turns,
+                         sid,
+                         asr_ready_evt,
+                         _flush_buffered_chunks,
++                        stream_stats,
+                         turn_timing,
+                         _log_turn_finish,
+                     )
+                 )
+                 _jlog("asr_connect_ok", sid=sid)
+             except Exception as e:
+                 dg_state = "closed"
+                 dg = None
+                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
+                 with contextlib.suppress(Exception):
+                     await _ws_send_json(send, make_error("asr_connect_fail", type(e).__name__))
+                 with contextlib.suppress(Exception):
+                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=f"connect:{type(e).__name__}")
+             finally:
+                 dg_connect_task = None
+ 
+         dg_connect_task = asyncio.create_task(_connect())
+         with contextlib.suppress(Exception):
+             await dg_connect_task
+         return connect_result["ok"]
+ 
+     def _dg_client_ready(client: Optional[DeepgramClient]) -> bool:
+         """Return True if the Deepgram client reports an open websocket."""
+         if client is None:
+             return False
+@@ -770,144 +828,182 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                         _admin_emit(
+                             "ws_conn_disconnect",
+                             conn_id=conn_id,
+                             sid=sid,
+                             code=ev.get("code"),
+                             reason=ev.get("reason"),
+                             idle_s=idle_s,
+                         )
+                 await _remove_active_ws_entry("disconnect")
+                 last_msg_ts = now
+                 break
+ 
+             if et == "websocket.receive":
+                 last_msg_ts = time.time()
+                 # -------------------- Binary / audio lane --------------------
+                 if ev.get("bytes") is not None:
+                     now = time.time()
+                     chunk = ev.get("bytes") or b""
+                     if chunk:
+                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
+                         if not audio_sig_logged:
+                             with contextlib.suppress(Exception):
+                                 _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
+                             audio_sig_logged = True
+ 
++                    raw_chunk = chunk
++
+                     if buf.is_empty():
+                         # New audio turn
+                         current_assistant_turn = None
+                         try:
+                             current_assistant_turn = bus.current_assistant_turn(sid)
+                         except Exception:
+                             current_assistant_turn = None
+                         confirm_ms = 420
+                         try:
+                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
+                         except Exception:
+                             confirm_ms = 420
+ 
+                         def _on_barge_commit() -> None:
+                             target_turn = current_assistant_turn
+                             try:
+                                 latest = bus.current_assistant_turn(sid)
+                             except Exception:
+                                 latest = None
+                             if latest:
+                                 target_turn = latest
+                             if target_turn:
+                                 try:
+                                     bus.cancel_turn(sid, target_turn)
+                                 except Exception:
+                                     pass
+                             try:
+                                 bus.broadcast(sid, {"type": "state", "phase": "ready"})
+                             except Exception:
+                                 pass
+ 
+                         with contextlib.suppress(Exception):
+                             barge.start(
+                                 confirm_ms=confirm_ms,
+                                 on_commit=_on_barge_commit,
+                                 send_state=_send_barge_state,
+                             )
+                         turn_id_ref[0] = buf.turn_seq + 1
+                         with contextlib.suppress(Exception):
+                             pending_final_turns.append(turn_id_ref[0])
+                         final_seen[0] = False
+                         asr_seen_partial[0] = False
+                         sent_any_audio[0] = False
+                         buffered_chunks.clear()
++                        stream_stats.reset_turn()
+                         turn_connect_started[0] = False
+                         # reset mic capture
+                         mic_chunks.clear()
+                         mic_first_ts[0] = now
+                         mic_last_ts[0] = now
+                         _reset_turn_metrics(now)
+                         with contextlib.suppress(Exception):
+                             _jlog(
+                                 "turn_start",
+                                 sid=sid,
+                                 turn_id=turn_id_ref[0],
+-                                first_bytes=len(chunk),
++                                first_bytes=len(raw_chunk),
+                             )
+-
+-                    buf.append(chunk)
+-
+-                    # capture bytes for diagnostic playback
+-                    if MIC_CAPTURE:
+-                        mic_chunks.append(chunk)
+-                        mic_last_ts[0] = now
+-                    _jlog("mic_capture_append", sid=sid, turn_id=turn_id_ref[0], chunks=len(mic_chunks), last_bytes=len(chunk))
++                    # Detect container early using raw bytes
+ 
+ 
+                     # Detect container early
+                     try:
+-                        if transport.get("container") is None and chunk:
+-                            det = sniffer.feed(chunk)
++                        if transport.get("container") is None and raw_chunk:
++                            det = sniffer.feed(raw_chunk)
+                             if det:
+-                                transport["container"] = getattr(det, "container", None)
+-                                transport["codec"] = getattr(det, "codec", None)
+-                                transport["containerized_opus"] = bool(getattr(det, "codec", "") == "opus")
+-                                _jlog("sniffer_detect",
+-                                      sid=sid,
+-                                      container=transport.get("container"),
+-                                      codec=transport.get("codec"),
+-                                      containerized_opus=transport.get("containerized_opus"))
++                                container = getattr(det, "container", None)
++                                codec = getattr(det, "codec", None)
++                                containerized = bool(getattr(det, "containerized", codec == "opus"))
++                                transport["container"] = container
++                                transport["codec"] = codec
++                                transport["containerized_opus"] = containerized
++                                fallback_detection = RawDetectionSignal(
++                                    container=container,
++                                    codec=codec,
++                                    containerized=containerized,
++                                    source="sniffer",
++                                )
++                                stream_stats.note_detection(fallback_detection)
++                                stream_meta.encoding = "opus"
++                                _jlog(
++                                    "sniffer_detect",
++                                    sid=sid,
++                                    container=transport.get("container"),
++                                    codec=transport.get("codec"),
++                                    containerized_opus=transport.get("containerized_opus"),
++                                )
+                             else:
+-                                meta = coerce_detection_from_meta(getattr(sniffer, "meta", lambda: None)())
+-                                if meta and meta.get("container"):
+-                                    transport["container"] = meta["container"]
+-                                    transport["codec"] = meta.get("codec")
+-                                    transport["containerized_opus"] = (meta.get("codec") == "opus")
+-                                    _jlog("sniffer_detect",
+-                                          sid=sid,
+-                                          container=transport.get("container"),
+-                                          codec=transport.get("codec"),
+-                                          containerized_opus=transport.get("containerized_opus"))
++                                meta_det = coerce_detection_from_meta(getattr(sniffer, "meta", lambda: None)())
++                                if meta_det and getattr(meta_det, "container", None):
++                                    container = getattr(meta_det, "container", None)
++                                    codec = getattr(meta_det, "codec", None)
++                                    containerized = bool(getattr(meta_det, "containerized", codec == "opus"))
++                                    transport["container"] = container
++                                    transport["codec"] = codec
++                                    transport["containerized_opus"] = containerized
++                                    fallback_detection = RawDetectionSignal(
++                                        container=container,
++                                        codec=codec,
++                                        containerized=containerized,
++                                        source="mime",
++                                    )
++                                    stream_stats.note_detection(fallback_detection)
++                                    stream_meta.encoding = "opus"
++                                    _jlog(
++                                        "sniffer_detect",
++                                        sid=sid,
++                                        container=transport.get("container"),
++                                        codec=transport.get("codec"),
++                                        containerized_opus=transport.get("containerized_opus"),
++                                    )
+                     except Exception:
+                         pass
+ 
++                    chunk = stream_stats.observe_frame(raw_chunk)
++
++                    buf.append(chunk)
++
++                    # capture bytes for diagnostic playback
++                    if MIC_CAPTURE:
++                        mic_chunks.append(chunk)
++                        mic_last_ts[0] = now
++                    _jlog(
++                        "mic_capture_append",
++                        sid=sid,
++                        turn_id=turn_id_ref[0],
++                        chunks=len(mic_chunks),
++                        last_bytes=len(chunk),
++                    )
++
+                     if not _has_deepgram_key():
+                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
+                         continue
+ 
+                     # Stage early frames
+                     if chunk:
+                         buffered_chunks.append(chunk)
+ 
+                     # Ensure provider connection
+                     if not turn_connect_started[0] and dg_state == "closed":
+                         turn_connect_started[0] = True
+                         if dg_connect_task is None:
+                            dg_connect_task = asyncio.create_task(_ensure_dg_connected())
+                     elif dg_state == "connecting":
+                         pass
+ 
+                     # Flush when ready
+                     if dg is not None:
+                         if not asr_ready_evt.is_set():
+                             try:
+                                 await asyncio.wait_for(asr_ready_evt.wait(), timeout=asr_ready_wait_s)
+                             except asyncio.TimeoutError:
+                                 _jlog("asr_not_ready_timeout", sid=sid)
+                         if len(buffered_chunks) >= max_buffered_chunks:
+                             await _flush_buffered_chunks()
+@@ -922,50 +1018,60 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                         obj = parse_client_json(ev.get("text") or "")
+                         t = obj.get("type")
+ 
+                         if t == "KeepAlive":
+                             await _ws_send_json(send, make_keepalive_ack())
+ 
+                         elif t == "greet":
+                             _jlog("ws_greet_recv", sid=sid)
+                             async def _bg():
+                                 try:
+                                     from app.services.streaming import run_ws_greet
+                                     tid = await asyncio.to_thread(run_ws_greet, sid)
+                                     with contextlib.suppress(Exception):
+                                         if _admin_emit:
+                                             cfg_now = db.get_config()
+                                             audio_on = bool((cfg_now or {}).get("feature_audio", True))
+                                             _admin_emit("greet:resp", label="greet:resp",
+                                                         session_id=sid, turn_id=tid, audio_scheduled=audio_on)
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+                                         await _ws_send_json(send, make_error("greet_fail", e.__class__.__name__))
+                             asyncio.create_task(_bg())
+ 
+                         elif t == "Configure":
+                             cfg.update(obj or {})
++                            stream_meta.apply_config(obj or {})
++                            enc_lower = (obj.get("encoding") or "").strip().lower()
++                            if enc_lower == "pcm":
++                                fallback_detection = RawDetectionSignal(
++                                    container="raw",
++                                    codec="pcm",
++                                    containerized=False,
++                                    source="configure",
++                                )
++                                stream_stats.note_detection(fallback_detection)
+                             if obj.get("reset"):
+                                 with contextlib.suppress(Exception):
+                                     clear_greet_turn_cache(sid)
+                                 with contextlib.suppress(Exception):
+                                     _admin_emit and _admin_emit("greet:reset", route="/ws/v1/chat",
+                                                                 label="greet:reset", session_id=sid)
+                             if obj.get("greet"):
+                                 _jlog("ws_greet_recv", sid=sid, via="Configure")
+                                 async def _bg2():
+                                     try:
+                                         from app.services.streaming import run_ws_greet
+                                         tid = await asyncio.to_thread(run_ws_greet, sid)
+                                         with contextlib.suppress(Exception):
+                                             if _admin_emit:
+                                                 cfg_now = db.get_config()
+                                                 audio_on = bool((cfg_now or {}).get("feature_audio", True))
+                                                 _admin_emit("greet:resp", label="greet:resp",
+                                                             session_id=sid, turn_id=tid, audio_scheduled=audio_on)
+                                     except Exception as e:
+                                         with contextlib.suppress(Exception):
+                                             await _ws_send_json(send, make_error("greet_fail", e.__class__.__name__))
+                                 asyncio.create_task(_bg2())
+ 
+                         elif t in ("user_msg", "User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage"):
+                             text = (obj.get("text") or "").strip()
+diff --git a/tests_phase3_5/test_containerized_opus_url.py b/tests_phase3_5/test_containerized_opus_url.py
+index d5741a112c2da5cb61989c07f86d77c99fe000e1..05b6a2ea257d613e4e8f025a2721678f45c195e4 100644
+--- a/tests_phase3_5/test_containerized_opus_url.py
++++ b/tests_phase3_5/test_containerized_opus_url.py
+@@ -1,24 +1,82 @@
+ import os
+ from app.services.streaming_asr.deepgram_client import DG_TEST_MODE
+ from app.services.streaming_asr.deepgram_client import _dg_url  # if exported
++from app.services.audio.raw_fallback import (
++    DetectionSignal,
++    StreamMeta,
++    StreamStats,
++    coerce_to_raw_config,
++    pad_frame_to_expected,
++    should_use_raw_fallback,
++    silence_frame,
++)
+ import pytest
+ 
+ def test_containerized_omits_sr_channels(monkeypatch):
+     monkeypatch.setenv("DG_TEST_MODE", "1")
+     # Build overrides with containerized flag in _transport
+     overrides = {"_transport": {"containerized_opus": True}}
+     url = _dg_url(overrides)
+     assert "sample_rate=" not in url
+     assert "channels=" not in url
+     assert "encoding=" not in url
+     assert "endpointing=" not in url
+     assert "utterance_end_ms=2000" in url
+ 
+ def test_non_containerized_includes_sr_channels(monkeypatch):
+     monkeypatch.setenv("DG_TEST_MODE", "1")
+     overrides = {"_transport": {"containerized_opus": False}}
+     url = _dg_url(overrides)
+     assert "sample_rate=48000" in url
+     assert "channels=1" in url
+     assert "endpointing=" not in url
+     assert "utterance_end_ms=2000" in url
++
++
++def test_raw_fallback_url_includes_params(monkeypatch):
++    monkeypatch.setenv("DG_TEST_MODE", "1")
++    meta = StreamMeta(sample_rate=16000, channels=1)
++    overrides = coerce_to_raw_config(meta)
++    url = _dg_url(overrides)
++    assert "encoding=linear16" in url
++    assert "sample_rate=16000" in url
++    assert "channels=1" in url
++    transport = overrides.get("_transport", {})
++    assert transport.get("raw_fallback") is True
++    assert transport.get("normalized_pcm") is True
++
++
++def test_raw_fallback_guardrail_leniency():
++    stats = StreamStats()
++    stats.guardrails.raw_candidate_confirmations = 1
++    stats.guardrails.lenient_prefix_frames = 1
++    stats.guardrails.max_consecutive_decode_errors = 2
++    stats.guardrails.min_errors_for_suspect = 2
++    detection = DetectionSignal(container="webm", codec="opus", containerized=True)
++    stats.note_detection(detection)
++
++    frame = b"\x00" * 640
++    stats.observe_frame(frame)
++    assert not should_use_raw_fallback(detection, stats)
++
++    stats.observe_frame(frame)
++    assert should_use_raw_fallback(detection, stats)
++
++
++def test_frame_normalization_and_silence():
++    meta = StreamMeta(sample_rate=16000, channels=1)
++    expected = 640
++    padded = pad_frame_to_expected(b"\x01\x02", meta)
++    assert len(padded) == expected
++    assert padded[:2] == b"\x01\x02"
++    assert padded[2:] == b"\x00" * (expected - 2)
++
++    silence = silence_frame(meta)
++    assert len(silence) == expected
++    assert set(silence) == {0}
++
++    stats = StreamStats(meta=meta)
++    stats.force_fallback()
++    normalized = stats.observe_frame(b"\x01\x02")
++    assert len(normalized) == expected
++    assert stats.normalized_frames == 1

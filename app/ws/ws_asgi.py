@@ -4,6 +4,14 @@ import asyncio, os, contextlib, time, io, struct, base64, uuid
 from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
 from collections import deque
 from app.services.audio.container_sniffer import AudioContainerSniffer, coerce_detection_from_meta
+from app.services.audio.raw_fallback import (
+    DetectionSignal as RawDetectionSignal,
+    StreamMeta as RawStreamMeta,
+    StreamStats as RawStreamStats,
+    coerce_to_raw_config,
+    normalize_pcm_frame,
+    should_use_raw_fallback,
+)
 
 from .schema_v1 import parse_client_json, make_keepalive_ack, make_results, make_utterance_end, make_error
 from .turn_buffer import TurnBuffer
@@ -200,6 +208,7 @@ async def _pump_dg_to_client(
     sid: str,
     asr_ready_evt: Optional[asyncio.Event] = None,
     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
+    stream_stats: Optional[RawStreamStats] = None,
     turn_timing: Optional[Dict[str, List[float]]] = None,
     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
 ):
@@ -313,6 +322,11 @@ async def _pump_dg_to_client(
                         asyncio.create_task(_bg_turn())
 
             elif et == "asr_error":
+                if stream_stats is not None:
+                    try:
+                        stream_stats.note_provider_error()
+                    except Exception:
+                        pass
                 err = _clip_text(str(ev.get("error") or "unknown"), 160)
                 _jlog("dg_asr_error", sid=sid, turn_id=turn_id_ref[0], error=err)
                 try:
@@ -333,6 +347,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     # Session-scoped transport flags for ASR
     transport = {"protocol":"websocket","container":None,"codec":None,"containerized_opus":False,"features":[]}
     sniffer = AudioContainerSniffer()
+    stream_meta = RawStreamMeta()
+    stream_stats = RawStreamStats(meta=stream_meta)
+    fallback_detection: Optional[RawDetectionSignal] = None
     audio_sig_logged = False
 
     MIC_CAPTURE = _env_truth("MIC_CAPTURE", False)
@@ -606,7 +623,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return True
 
     async def _ensure_dg_connected() -> bool:
-        nonlocal dg, rx_task, dg_connect_task, dg_state
+        nonlocal dg, rx_task, dg_connect_task, dg_state, fallback_detection
 
         if not _has_deepgram_key():
             return False
@@ -627,6 +644,46 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 dg_state = "connecting"
                 with contextlib.suppress(Exception):
                     asr_ready_evt.clear()
+
+                if should_use_raw_fallback(fallback_detection, stream_stats):
+                    if not stream_stats.forced_fallback:
+                        stream_stats.force_fallback()
+                        overrides = coerce_to_raw_config(stream_meta)
+                        for key, value in overrides.items():
+                            if key == "_transport":
+                                continue
+                            cfg[key] = value
+                        transport.update(overrides.get("_transport", {}))
+                        fallback_detection = RawDetectionSignal(
+                            container="raw",
+                            codec="pcm",
+                            containerized=False,
+                            source="raw_fallback",
+                        )
+                        stream_stats.note_detection(fallback_detection)
+                        with contextlib.suppress(Exception):
+                            _jlog(
+                                "raw_fallback_applied",
+                                sid=sid,
+                                sample_rate=transport.get("sample_rate"),
+                                channels=transport.get("channels"),
+                            )
+                        if buffered_chunks:
+                            normalized_buffer: Deque[bytes] = deque()
+                            for existing in list(buffered_chunks):
+                                normalized = normalize_pcm_frame(existing, stream_meta)
+                                if normalized != existing:
+                                    stream_stats.note_jitter_slip()
+                                normalized_buffer.append(normalized)
+                            buffered_chunks.clear()
+                            buffered_chunks.extend(normalized_buffer)
+                        if MIC_CAPTURE and mic_chunks:
+                            for idx, existing in enumerate(list(mic_chunks)):
+                                normalized = normalize_pcm_frame(existing, stream_meta)
+                                if normalized != existing:
+                                    stream_stats.note_jitter_slip()
+                                mic_chunks[idx] = normalized
+
                 cfg['_transport'] = transport
                 cfg['_jlog'] = _jlog
                 cfg.setdefault('session_id', sid)
@@ -649,6 +706,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         sid,
                         asr_ready_evt,
                         _flush_buffered_chunks,
+                        stream_stats,
                         turn_timing,
                         _log_turn_finish,
                     )
@@ -792,6 +850,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
                             audio_sig_logged = True
 
+                    raw_chunk = chunk
+
                     if buf.is_empty():
                         # New audio turn
                         current_assistant_turn = None
@@ -836,6 +896,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         asr_seen_partial[0] = False
                         sent_any_audio[0] = False
                         buffered_chunks.clear()
+                        stream_stats.reset_turn()
                         turn_connect_started[0] = False
                         # reset mic capture
                         mic_chunks.clear()
@@ -847,8 +908,65 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 "turn_start",
                                 sid=sid,
                                 turn_id=turn_id_ref[0],
-                                first_bytes=len(chunk),
+                                first_bytes=len(raw_chunk),
                             )
+                    # Detect container early using raw bytes
+
+
+                    # Detect container early
+                    try:
+                        if transport.get("container") is None and raw_chunk:
+                            det = sniffer.feed(raw_chunk)
+                            if det:
+                                container = getattr(det, "container", None)
+                                codec = getattr(det, "codec", None)
+                                containerized = bool(getattr(det, "containerized", codec == "opus"))
+                                transport["container"] = container
+                                transport["codec"] = codec
+                                transport["containerized_opus"] = containerized
+                                fallback_detection = RawDetectionSignal(
+                                    container=container,
+                                    codec=codec,
+                                    containerized=containerized,
+                                    source="sniffer",
+                                )
+                                stream_stats.note_detection(fallback_detection)
+                                stream_meta.encoding = "opus"
+                                _jlog(
+                                    "sniffer_detect",
+                                    sid=sid,
+                                    container=transport.get("container"),
+                                    codec=transport.get("codec"),
+                                    containerized_opus=transport.get("containerized_opus"),
+                                )
+                            else:
+                                meta_det = coerce_detection_from_meta(getattr(sniffer, "meta", lambda: None)())
+                                if meta_det and getattr(meta_det, "container", None):
+                                    container = getattr(meta_det, "container", None)
+                                    codec = getattr(meta_det, "codec", None)
+                                    containerized = bool(getattr(meta_det, "containerized", codec == "opus"))
+                                    transport["container"] = container
+                                    transport["codec"] = codec
+                                    transport["containerized_opus"] = containerized
+                                    fallback_detection = RawDetectionSignal(
+                                        container=container,
+                                        codec=codec,
+                                        containerized=containerized,
+                                        source="mime",
+                                    )
+                                    stream_stats.note_detection(fallback_detection)
+                                    stream_meta.encoding = "opus"
+                                    _jlog(
+                                        "sniffer_detect",
+                                        sid=sid,
+                                        container=transport.get("container"),
+                                        codec=transport.get("codec"),
+                                        containerized_opus=transport.get("containerized_opus"),
+                                    )
+                    except Exception:
+                        pass
+
+                    chunk = stream_stats.observe_frame(raw_chunk)
 
                     buf.append(chunk)
 
@@ -856,35 +974,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     if MIC_CAPTURE:
                         mic_chunks.append(chunk)
                         mic_last_ts[0] = now
-                    _jlog("mic_capture_append", sid=sid, turn_id=turn_id_ref[0], chunks=len(mic_chunks), last_bytes=len(chunk))
-
-
-                    # Detect container early
-                    try:
-                        if transport.get("container") is None and chunk:
-                            det = sniffer.feed(chunk)
-                            if det:
-                                transport["container"] = getattr(det, "container", None)
-                                transport["codec"] = getattr(det, "codec", None)
-                                transport["containerized_opus"] = bool(getattr(det, "codec", "") == "opus")
-                                _jlog("sniffer_detect",
-                                      sid=sid,
-                                      container=transport.get("container"),
-                                      codec=transport.get("codec"),
-                                      containerized_opus=transport.get("containerized_opus"))
-                            else:
-                                meta = coerce_detection_from_meta(getattr(sniffer, "meta", lambda: None)())
-                                if meta and meta.get("container"):
-                                    transport["container"] = meta["container"]
-                                    transport["codec"] = meta.get("codec")
-                                    transport["containerized_opus"] = (meta.get("codec") == "opus")
-                                    _jlog("sniffer_detect",
-                                          sid=sid,
-                                          container=transport.get("container"),
-                                          codec=transport.get("codec"),
-                                          containerized_opus=transport.get("containerized_opus"))
-                    except Exception:
-                        pass
+                    _jlog(
+                        "mic_capture_append",
+                        sid=sid,
+                        turn_id=turn_id_ref[0],
+                        chunks=len(mic_chunks),
+                        last_bytes=len(chunk),
+                    )
 
                     if not _has_deepgram_key():
                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
@@ -944,6 +1040,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                         elif t == "Configure":
                             cfg.update(obj or {})
+                            stream_meta.apply_config(obj or {})
+                            enc_lower = (obj.get("encoding") or "").strip().lower()
+                            if enc_lower == "pcm":
+                                fallback_detection = RawDetectionSignal(
+                                    container="raw",
+                                    codec="pcm",
+                                    containerized=False,
+                                    source="configure",
+                                )
+                                stream_stats.note_detection(fallback_detection)
                             if obj.get("reset"):
                                 with contextlib.suppress(Exception):
                                     clear_greet_turn_cache(sid)
