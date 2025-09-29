@@ -1,790 +1,404 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 5c660820544a8c2e8b99a161dd2419f15658cda7..59e62daf5d5c7c7830e77ad3d5a4c6986c425bbb 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -659,67 +659,150 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 )
-         except Exception:
-             pass
+diff --git a/app/api_v1/admin.py b/app/api_v1/admin.py
+index 8a2652c6ae73a93832fea23029da53acab6559e5..2459a9f8c2f8f574ece07a60cae7d4de6c00ba9f 100644
+--- a/app/api_v1/admin.py
++++ b/app/api_v1/admin.py
+@@ -233,62 +233,64 @@ def diag_stream():
+     return Response(gen(), mimetype="text/event-stream")
  
-     buf = TurnBuffer()
-     dg: Optional[DeepgramClient] = None
-     rx_task: Optional[asyncio.Task] = None
-     dg_connect_task: Optional[asyncio.Task] = None
-     dg_state: str = "closed"
-     turn_id_ref = [0]
-     pending_final_turns: Deque[int] = deque()
-     synthetic_final_turns: Set[int] = set()
-     final_seen = [False]
-     asr_seen_partial = [False]
-     turn_timing: Dict[str, List[float]] = {
-         "start": [0.0],
-         "dg_open": [0.0],
-         "first_partial": [0.0],
-         "final": [0.0],
-     }
-     turn_finish_logged = [False]
+ # ----------------- Admin Diagnostics (GET+POST) -----------------
  
-     # Turn-scoped buffering + state
-     buffered_chunks: Deque[bytes] = deque()
-     sent_any_audio = [False]
-+    no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
-+    no_audio_notified = [False]
-+    no_audio_turn_id = [0]
-+    try:
-+        no_audio_window_s = float(
-+            os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
-+        )
-+    except Exception:
-+        no_audio_window_s = 10.0
-+    if no_audio_window_s < 0:
-+        no_audio_window_s = 0.0
-+    no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
-     asr_ready_evt: asyncio.Event = asyncio.Event()
-     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
-     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
-     turn_connect_started = [False]
+ @bp.route("/diagnostics/vendor_status", methods=["GET", "POST"])
+ def _diag_vendor_status():
+     _require_admin()
+     return _no_store(jsonify(_vendor_status_payload())), 200
  
-     # NEW: per-turn mic capture state
-     mic_chunks: List[bytes] = []
-     mic_first_ts = [0.0]
-     mic_last_ts = [0.0]
+ @bp.route("/diagnostics/streaming_status", methods=["GET", "POST"])
+ def _diag_streaming_status():
+     _require_admin()
+     # Import inside to avoid circular import at module import time
+     from ..services.streaming_asr.stream_manager import get_manager  # type: ignore
  
-     def _reset_turn_metrics(start_ts: float) -> None:
-         turn_timing["start"][0] = start_ts
-         turn_timing["dg_open"][0] = 0.0
-         turn_timing["first_partial"][0] = 0.0
-         turn_timing["final"][0] = 0.0
-         turn_finish_logged[0] = False
+     sid = request.args.get("sid") or request.args.get("session_id")
+     mgr = get_manager()
  
-+    def _emit_no_audio_alert(reason: str) -> None:
-+        if no_audio_notified[0]:
-+            return
-+        if sent_any_audio[0]:
-+            return
-+        no_audio_notified[0] = True
-+        turn_id = no_audio_turn_id[0] or turn_id_ref[0] or 0
-+        since_first_ms = None
-+        if mic_first_ts[0]:
-+            since_first_ms = int(max(0.0, (time.time() - mic_first_ts[0]) * 1000))
-+        with contextlib.suppress(Exception):
-+            _jlog(
-+                "ws_no_audio_detected",
-+                sid=sid,
-+                turn_id=turn_id,
-+                reason=reason,
-+                window_s=no_audio_window_s,
-+                mic_chunks=len(mic_chunks),
-+                buffered=len(buffered_chunks),
-+                since_first_ms=since_first_ms,
-+            )
-+        if _admin_emit:
-+            with contextlib.suppress(Exception):
-+                _admin_emit(
-+                    "no_audio_detected",
-+                    session_id=sid,
-+                    turn_id=turn_id,
-+                    reason=reason,
-+                    window_s=no_audio_window_s,
-+                    mic_chunks=len(mic_chunks),
-+                    buffered_chunks=len(buffered_chunks),
-+                    since_first_chunk_ms=since_first_ms,
-+                )
-+        if no_audio_broadcast_enabled:
-+            frame = {
-+                "type": "no_audio_detected",
-+                "turn_id": str(turn_id),
-+                "window_s": no_audio_window_s,
-+                "reason": reason,
-+            }
-+            if since_first_ms is not None:
-+                frame["since_first_chunk_ms"] = since_first_ms
-+            with contextlib.suppress(Exception):
-+                bus.broadcast(sid, frame)
-+
-+    def _cancel_no_audio_watch() -> None:
-+        task = no_audio_watch_task[0]
-+        if task and not task.done():
-+            task.cancel()
-+        no_audio_watch_task[0] = None
-+
-+    def _schedule_no_audio_watch(turn_id: int) -> None:
-+        if no_audio_window_s <= 0:
-+            return
-+        _cancel_no_audio_watch()
-+        no_audio_notified[0] = False
-+        no_audio_turn_id[0] = turn_id
-+
-+        async def _watch() -> None:
-+            try:
-+                await asyncio.sleep(no_audio_window_s)
-+                if sent_any_audio[0] or no_audio_notified[0]:
-+                    return
-+                _emit_no_audio_alert("timeout")
-+            except asyncio.CancelledError:
-+                pass
-+            finally:
-+                no_audio_watch_task[0] = None
-+
-+        no_audio_watch_task[0] = asyncio.create_task(_watch())
-+
-     def _log_turn_finish(
-         turn_id: int, reason: str, synthetic: bool, transcript_chars: int
-     ) -> None:
-         if turn_finish_logged[0]:
-             return
-         turn_finish_logged[0] = True
-         now_ts = time.time()
-         turn_timing["final"][0] = now_ts
-         start_ts = turn_timing.get("start", [0.0])[0]
-         dg_open_ts = turn_timing.get("dg_open", [0.0])[0]
-         first_partial_ts = turn_timing.get("first_partial", [0.0])[0]
-         delta_start = int((now_ts - start_ts) * 1000) if start_ts else None
-         delta_open = int((now_ts - dg_open_ts) * 1000) if dg_open_ts else None
-         delta_partial = (
-             int((now_ts - first_partial_ts) * 1000) if first_partial_ts else None
-         )
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "turn_finish",
-                 sid=sid,
-                 turn_id=turn_id,
-                 reason=reason,
-                 synthetic=bool(synthetic),
-                 delta_start_ms=delta_start,
-                 delta_asr_open_ms=delta_open,
-@@ -866,50 +949,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         if client is None:
-             return False
-         try:
-             is_open = getattr(client, "is_open", None)
-             if callable(is_open) and is_open():
-                 return True
-         except Exception:
-             pass
-         evt = getattr(client, "_open_evt", None)
-         if isinstance(evt, asyncio.Event):
-             try:
-                 return evt.is_set()
-             except Exception:
-                 return False
-         return False
+     if sid:
+         s = mgr.stats(sid)
+         return _no_store(jsonify(
+             ok=True,
+             sid=sid,
+             partials=int(s.get("partials", 0)),
+             finals=int(s.get("finals", 0)),
++            provider_errors=int(s.get("provider_errors", 0)),
+             asr_error=bool(s.get("err")),
+             err=s.get("err"),
+         )), 200
  
-     async def _send_chunk(
-         data: bytes, *, from_buffer: bool = False, retry: bool = True
-     ) -> bool:
-         nonlocal dg, dg_state
-         if dg is None:
-             return False
-         try:
-             await dg.send(data)
-             sent_any_audio[0] = True
-+            _cancel_no_audio_watch()
-             _jlog("ws_audio_forward", sid=sid, bytes=len(data), buffered=from_buffer)
-             return True
-         except RuntimeError as e:
-             if "deepgram_not_connected" in str(e).lower() and retry:
-                 _jlog("asr_send_retry", sid=sid)
-                 if not asr_ready_evt.is_set():
-                     with contextlib.suppress(asyncio.TimeoutError):
-                         await asyncio.wait_for(asr_ready_evt.wait(), timeout=1.0)
-                 else:
-                     await asyncio.sleep(0.05)
-                 return await _send_chunk(data, from_buffer=from_buffer, retry=False)
-             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
-         except Exception as e:
-             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
-         return False
+     if hasattr(mgr, "stats_all"):
+         agg = mgr.stats_all()  # type: ignore[attr-defined]
+         return _no_store(jsonify(
+             ok=True,
+             partials=int(agg.get("partials", 0)),
+             finals=int(agg.get("finals", 0)),
+             asr_error=agg.get("err_count", 0) > 0,
+             err_count=int(agg.get("err_count", 0)),
++            provider_errors=int(agg.get("provider_errors", 0)),
+             sessions=agg.get("sessions", {}),
+         )), 200
  
-     async def _flush_buffered_chunks() -> None:
-         nonlocal dg
-         if not buffered_chunks:
-             return
-         if not _has_deepgram_key() or dg is None:
-             return
-         initial_queued = len(buffered_chunks)
-         flushed_chunks = 0
-         flushed_bytes = 0
-@@ -1018,50 +1102,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                             try:
-                                 bus.broadcast(sid, {"type": "state", "phase": "ready"})
-                             except Exception:
-                                 pass
+     return _no_store(jsonify(ok=True, partials=0, finals=0, asr_error=False)), 200
  
-                         with contextlib.suppress(Exception):
-                             barge.start(
-                                 confirm_ms=confirm_ms,
-                                 on_commit=_on_barge_commit,
-                                 send_state=_send_barge_state,
-                             )
-                         turn_id_ref[0] = buf.turn_seq + 1
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
-                         stream_stats.reset_turn()
-                         turn_connect_started[0] = False
-                         # reset mic capture
-                         mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
-                         _reset_turn_metrics(now)
-+                        _schedule_no_audio_watch(turn_id_ref[0])
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "turn_start",
-                                 sid=sid,
-                                 turn_id=turn_id_ref[0],
-                                 first_bytes=len(raw_chunk),
-                             )
-                     # Detect container early using raw bytes
+ @bp.route("/diagnostics/rate_limits", methods=["GET", "POST"])
+ def _diag_rate_limits():
+     _require_admin()
+     return jsonify(ok=True, status2=200), 200
  
-                     # Detect container early
-                     try:
-                         if transport.get("container") is None and raw_chunk:
-                             det = sniffer.feed(raw_chunk)
-                             if det:
-                                 container = getattr(det, "container", None)
-                                 codec = getattr(det, "codec", None)
-                                 containerized = bool(
-                                     getattr(det, "containerized", codec == "opus")
-                                 )
-                                 transport["container"] = container
-                                 transport["codec"] = codec
-                                 transport["containerized_opus"] = containerized
-                                 fallback_detection = RawDetectionSignal(
-                                     container=container,
-                                     codec=codec,
-@@ -1533,50 +1618,60 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                         _jlog("ws_close_fallback_not_ready", sid=sid)
-                                     else:
-                                         _jlog("ws_close_skip_no_audio", sid=sid)
-                                     if not final_seen[0]:
-                                         reason = (
-                                             "fallback_dg_not_ready"
-                                             if fallback_reason == "dg_not_ready"
-                                             else "fallback_no_audio"
-                                         )
-                                         if await _emit_synthetic_final(turn_id, reason):
-                                             synthetic_emitted = True
-                                             with contextlib.suppress(ValueError):
-                                                 pending_final_turns.remove(turn_id)
-                                             synthetic_final_turns.add(turn_id)
-                             else:
-                                 # No provider configured: still emit empty final + end to advance the dialog.
-                                 if not final_seen[0]:
-                                     if await _emit_synthetic_final(
-                                         turn_id, "no_provider"
-                                     ):
-                                         synthetic_emitted = True
-                                         with contextlib.suppress(ValueError):
-                                             pending_final_turns.remove(turn_id)
-                                         synthetic_final_turns.add(turn_id)
  
-+                            _cancel_no_audio_watch()
-+                            if (not sent_any_audio[0]) and not no_audio_notified[0]:
-+                                elapsed = None
-+                                if mic_first_ts[0]:
-+                                    elapsed = time.time() - mic_first_ts[0]
-+                                if no_audio_window_s <= 0 or (
-+                                    elapsed is not None and elapsed >= no_audio_window_s
-+                                ):
-+                                    _emit_no_audio_alert("close_stream")
-+
-                             if synthetic_emitted:
-                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
-                                 final_seen[0] = False
+ # ----------------- KB Seed (Phase 8) -----------------
  
-                             if barge.is_paused():
-                                 with contextlib.suppress(Exception):
-                                     barge.cancel(_send_barge_state)
-                                 await asyncio.sleep(0)
+ @bp.post("/kb/seed")
+ def kb_seed():
+     _require_admin()
+     from ..services.retrieval import add_document
+     data = request.get_json(silent=True) or {}
+     title = (data.get("title") or "").strip() or "Untitled"
+     body  = (data.get("body") or "").strip()
+     tags  = (data.get("tags") or "").strip()
+     if not body:
+         return jsonify({"ok": False, "error": "body required"}), 400
+     doc_id = add_document(title, body, tags)
+     try:
+diff --git a/app/api_v1/admin_diagnostics.py b/app/api_v1/admin_diagnostics.py
+index cc0cf499e8dabbf49b4061ff95072c8617c90b82..8f874faaa8a6f3fdbdba5f8a4c0be5a5ea822a93 100644
+--- a/app/api_v1/admin_diagnostics.py
++++ b/app/api_v1/admin_diagnostics.py
+@@ -31,47 +31,49 @@ def vendor_status():
+         deepgram=deepgram_ok,
+         elevenlabs=eleven_key_ok and eleven_voice_ok,
+         elevenlabs_key=eleven_key_ok,
+         elevenlabs_voice=eleven_voice_ok,
+     ), 200
  
-                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
  
-                             _jlog(
-                                 "mic_capture_block_enter",
-                                 sid=sid,
-                                 turn_id=turn_id,
-                                 mic_chunks=len(mic_chunks),
-                             )
-                             if MIC_CAPTURE:
-                                 try:
-                                     raw = b"".join(mic_chunks)
-                                     _jlog(
-                                         "mic_capture_summary",
-                                         sid=sid,
-                                         turn_id=turn_id,
-                                         bytes=len(raw),
-@@ -1632,50 +1727,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                             # Send the audio back over WS so the client can play it
-                                             await _ws_send_diagnostic_audio(
-                                                 send, turn_id, mime, data_to_echo
-                                             )
-                                 except Exception as e:
-                                     _jlog(
-                                         "mic_capture_fail",
-                                         sid=sid,
-                                         err=type(e).__name__,
-                                     )
+ @bp.route("/streaming_status", methods=["GET", "POST"])
+ def streaming_status():
+     """
+     Returns ASR streaming counters.
+     - If ?sid=... provided, returns stats for that session id.
+     - Otherwise returns an aggregate across active sessions.
+     Admin UI uses partials/finals/asr_error to drive the checks.
+     """
+     sid = request.args.get("sid") or request.args.get("session_id")
+     mgr = get_manager()
  
-                         else:
-                             # Unknown type already filtered by schema; no-op to future-proof.
-                             pass
+     if sid:
+         s = mgr.stats(sid)
+         return jsonify(
+             ok=True,
+             sid=sid,
+             partials=int(s.get("partials", 0)),
+             finals=int(s.get("finals", 0)),
++            provider_errors=int(s.get("provider_errors", 0)),
+             asr_error=bool(s.get("err")),
+             err=s.get("err"),
+         ), 200
  
-                     except ValueError as e:
-                         await _ws_send_json(send, make_error("bad_message", str(e)))
-                 else:
-                     # websocket.receive without text/bytes
-                     pass
-             else:
-                 # Other ASGI events are ignored
-                 pass
+     agg = mgr.stats_all()
+     return jsonify(
+         ok=True,
+         partials=int(agg.get("partials", 0)),
+         finals=int(agg.get("finals", 0)),
+         asr_error=agg.get("err_count", 0) > 0,
+         err_count=int(agg.get("err_count", 0)),
++        provider_errors=int(agg.get("provider_errors", 0)),
+         sessions=agg.get("sessions", {}),
+     ), 200
  
+ 
+ @bp.route("/rate_limits", methods=["GET", "POST"])
+ def rate_limits():
+     """
+     Lightweight health for rate limit check in Diagnostics.
+     If you later expose real counters, add them here.
+     """
+     return jsonify(ok=True, status2=200), 200
+diff --git a/app/services/streaming_asr/stream_manager.py b/app/services/streaming_asr/stream_manager.py
+index d61c4a52828f3ed227db3fb058c1088d434b7a40..c03094467273d4cff28f9fffe3f55bad1b077928 100644
+--- a/app/services/streaming_asr/stream_manager.py
++++ b/app/services/streaming_asr/stream_manager.py
+@@ -422,94 +422,198 @@ async def asr_send_chunk(session_id: str, data: bytes, seq: Optional[int] = None
+     await mgr.send_chunk(data, seq=seq)
+ 
+ 
+ async def asr_end(session_id: str, wait_for_final: bool = True):
+     with _streams_lock:
+         mgr = _streams.get(session_id)
+     if mgr is None:
+         return
+     try:
+         await mgr.end(wait_for_final=wait_for_final)
      finally:
-+        with contextlib.suppress(Exception):
-+            _cancel_no_audio_watch()
-         await _remove_active_ws_entry("cleanup")
-         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_conn_cleanup",
-                 conn_id=conn_id,
-                 sid=sid,
-                 duration=duration,
-                 had_disconnect=had_disconnect,
-             )
-         with contextlib.suppress(Exception):
-             if _admin_emit:
-                 _admin_emit(
-                     "ws_conn_cleanup",
-                     conn_id=conn_id,
-                     sid=sid,
-                     duration=duration,
-                     had_disconnect=had_disconnect,
-                 )
-         # Clean up safely; never raise in cleanup
-         with contextlib.suppress(Exception):
-             if rx_task:
-                 rx_task.cancel()
-                 await rx_task
-         with contextlib.suppress(Exception):
-diff --git a/static/js/app.js b/static/js/app.js
-index 720095854a4b1dd34d8983244dd0afab195bffd7..48b6a12731ae54175d4cac3cf17a743ee5a8a9de 100644
---- a/static/js/app.js
-+++ b/static/js/app.js
-@@ -1,77 +1,144 @@
- // /static/js/app.js — chat helpers only (imports constrained by spec)
- import { closeWS, sendCloseStream, sendJSON } from '/static/js/ws.js?v=v20250911b';
- import { getSID } from '/static/js/util/sid.js';
- import { renderSuggestions } from '/static/js/suggestions.js';
+         with _streams_lock:
+             _streams.pop(session_id, None)
  
- // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
- // Exports: onEnd, onSend, handleAssistantFrame
  
- const $  = (s)=>document.querySelector(s);
+ # -----------------------------------------------------------------------------
+ # Compatibility shim for legacy callers (Flask views call enqueue/end)
  
-+const ASR_TIMEOUT_MS = 10_000;
-+let _sessionReadyAt = 0;
-+let _awaitingFirstAsr = false;
-+let _noAsrTimeout = null;
-+let _noAsrNotified = false;
-+let _lastAsrLatencyMs = null;
+ class _CompatManager:
+     """
+     Back-compat manager exposing .enqueue(session_id, item) for legacy endpoints.
+     Accepts either raw bytes or a dict {'data': bytes, 'chunk_seq': int, 'user_msg_id': str}.
+     Uses a SINGLE background asyncio loop so futures are always bound to the same loop.
+     Also serializes open() so only ONE Deepgram WS is created per session_id.
+     """
++    _STATS_IDLE_MAX_AGE = 900.0  # seconds before inactive sessions are pruned
 +
-+function _clearAsrTimeout(){
-+  if (_noAsrTimeout){
-+    clearTimeout(_noAsrTimeout);
-+    _noAsrTimeout = null;
-+  }
-+}
+     def __init__(self):
+         self._opened = set()
+         self._opening = set()
+         self._lock = threading.Lock()
++        self._stats: Dict[str, Dict[str, object]] = {}
 +
-+function _resetAsrTracking(){
-+  _clearAsrTimeout();
-+  _awaitingFirstAsr = false;
-+  _noAsrNotified = false;
-+  _sessionReadyAt = 0;
-+  _lastAsrLatencyMs = null;
-+}
++    @staticmethod
++    def _blank_stats() -> Dict[str, object]:
++        return {
++            "partials": 0,
++            "finals": 0,
++            "err": None,
++            "err_count": 0,
++            "provider_errors": 0,
++            "active": False,
++            "last_event": None,
++        }
 +
-+function _scheduleAsrWatchdog(){
-+  _clearAsrTimeout();
-+  _awaitingFirstAsr = true;
-+  _noAsrNotified = false;
-+  _sessionReadyAt = Date.now();
-+  _lastAsrLatencyMs = null;
-+  _noAsrTimeout = setTimeout(()=>{
-+    if (_awaitingFirstAsr){
-+      _notifyNoAsr('timeout');
-+    }
-+  }, ASR_TIMEOUT_MS);
-+}
++    def _ensure_stats_locked(
++        self,
++        session_id: str,
++        *,
++        reset: bool = False,
++        active: Optional[bool] = None,
++    ) -> Dict[str, object]:
++        now = time.time()
++        stats = self._stats.get(session_id)
++        if stats is None:
++            stats = self._blank_stats()
++            self._stats[session_id] = stats
++        if reset:
++            stats.update(self._blank_stats())
++        if active is not None:
++            stats["active"] = bool(active)
++        stats["_updated"] = now
++        return stats
 +
-+function _markAsrFrameSeen(){
-+  if (!_awaitingFirstAsr) return;
-+  _awaitingFirstAsr = false;
-+  _clearAsrTimeout();
-+  if (_sessionReadyAt){
-+    _lastAsrLatencyMs = Date.now() - _sessionReadyAt;
-+    try {
-+      window.__askchip_last_asr_latency_ms = _lastAsrLatencyMs;
-+    } catch {}
-+    try {
-+      window.dispatchEvent(new CustomEvent('askchip-asr-first-frame', {
-+        detail: { latency_ms: _lastAsrLatencyMs }
-+      }));
-+    } catch {}
-+  }
-+}
++    def _prune_stats_locked(self):
++        cutoff = time.time() - self._STATS_IDLE_MAX_AGE
++        stale = [
++            sid
++            for sid, stats in self._stats.items()
++            if not stats.get("active") and stats.get("_updated", 0.0) < cutoff
++        ]
++        for sid in stale:
++            self._stats.pop(sid, None)
 +
-+function _notifyNoAsr(source, detail){
-+  if (_noAsrNotified) return;
-+  _noAsrNotified = true;
-+  _awaitingFirstAsr = false;
-+  _clearAsrTimeout();
-+  const message = 'We didn’t detect any speech. Please check your microphone or try again.';
-+  showBanner(message);
-+  try {
-+    window.dispatchEvent(new CustomEvent('askchip-voice-retry-request', {
-+      detail: { source, payload: detail ?? null }
-+    }));
-+  } catch {}
-+}
-+
- /* ---------------- UI helpers ---------------- */
++    @staticmethod
++    def _public_stats(stats: Dict[str, object]) -> Dict[str, object]:
++        pub = {k: stats.get(k) for k in ("partials", "finals", "err", "err_count", "provider_errors", "active", "last_event")}
++        for key, default in _CompatManager._blank_stats().items():
++            pub.setdefault(key, default)
++        return pub
  
- function setDot(state){
-   const dot = $('#stateDot'); if (!dot) return;
-   const DOT_CLASSES = {
-     ready: 'dot-ready',
-     listening: 'dot-listening',
-     speaking: 'dot-speaking',
-     thinking: 'dot-thinking',
-   };
-   const nextClass = DOT_CLASSES[state] || 'dot-idle';
-   dot.className = 'dot ' + nextClass;
- }
+     def _api_key(self) -> str:
+         key = _os.getenv("DEEPGRAM_API_KEY", "").strip()
+         if not key:
+             raise RuntimeError("DEEPGRAM_API_KEY not set")
+         return key
  
- function showBanner(msg){ const el=$('#statusText'); if(el) el.textContent = msg || ''; }
- function disableForEnded(){
-   const input = $('#composer');
-   const sendA = $('#composerSend');
-   const sendB = $('#sendBtn');
-   const endBtn= $('#endButton');
-   if (input) input.value = '';
-   [sendA, sendB].forEach(b=>{ if(b) b.disabled = true; });
-   if (endBtn) endBtn.disabled = true;
-   setDot('ready');
- }
- 
- // Optional safety: strip legacy debug stamps like "[KB:0]" if any slip through
- const _KB_TAG_RE = /\s*\[(?:KB|kb)\s*:\s*\d+\]\s*/g;
- function _cleanText(s){ return (s||'').replace(_KB_TAG_RE,' ').trim(); }
- 
- /* ---------------- Rendering of assistant frames ---------------- */
- 
- // Accept WS assistant text frames
- function _isAssistantTextFrame(d){
-   return d && (
-     (d.type === 'assistant_chunk' && (d.text || d.delta || d.content)) ||
-     (d.type === 'assistant_text' && (d.text || d.delta || d.content)) ||
-     (d.type === 'assistant_final' && (d.text || d.delta || d.content))
-   );
- }
- 
- function _renderUserTranscript(d){
-+  _markAsrFrameSeen();
-   try{
-     const transcriptRaw = (
-       d?.channel?.alternatives?.[0]?.transcript ??
-       d?.alternatives?.[0]?.transcript ??
-       ''
-     );
-     const transcript = _cleanText(transcriptRaw);
-     if (!transcript) return;
- 
-     const msgs = $('#chatMessages');
-     if (!msgs) return;
- 
-     let bubble = msgs.lastElementChild;
-     const canReuse = (
-       bubble && bubble.dataset && bubble.dataset.role === 'user' && bubble.dataset.asr === '1'
-     );
-     if (!canReuse){
-       bubble = document.createElement('div');
-       bubble.dataset.role = 'user';
-       bubble.dataset.asr = '1';
-       bubble.className = 'msg user';
-       msgs.appendChild(bubble);
-     } else {
-       bubble.className = 'msg user';
-     }
-@@ -128,68 +195,78 @@ function _dedupeAssistant(d){
-   return true;
- }
- 
- let _lastSuggestionsKey = null;
- 
- function _clearSuggestions(){
-   const wrap = document.getElementById('suggestions');
-   if (!wrap) return;
-   try { wrap.innerHTML = ''; } catch {}
-   _lastSuggestionsKey = null;
- }
- 
- function _handleSuggestionClick(text){
-   if (!window.__askchip_session_started) return;
-   const suggestion = (text || '').trim();
-   if (!suggestion) return;
-   const input = $('#composer');
-   if (input) {
-     try { input.value = suggestion; } catch {}
-   }
-   try { onSend(suggestion); } catch (err) { console.warn('[suggestion click] send failed', err); }
- }
- 
- export function handleAssistantFrame(d){
-   if (!d) return;
-+  const t = d.type;
-+
-+  if (t === 'ready') {
-+    _scheduleAsrWatchdog();
-+  }
-+
-+  if (t === 'no_audio_detected') {
-+    _notifyNoAsr('server', d);
-+    return;
-+  }
- 
-   // Surface server errors to the UI banner
--  if (d.type === 'Error') {
-+  if (t === 'Error') {
-     const msg = `Error: ${(d.code||'')}${d.message ? ' ' + d.message : ''}`.trim();
-     showBanner(msg || 'An error occurred.');
-     return;
-   }
- 
-   // Lightweight state hints (non-invasive)
--  if (d.type === 'assistant_audio') setDot('speaking');
--  if (d.type === 'UtteranceEnd')    setDot('ready');
-+  if (t === 'assistant_audio') setDot('speaking');
-+  if (t === 'UtteranceEnd')    setDot('ready');
- 
--  if (d.type === 'Results' && d.nlu === undefined){
-+  if (t === 'Results' && d.nlu === undefined){
-     _renderUserTranscript(d);
-     return;
-   }
- 
--  if (d.type === 'suggestions'){
-+  if (t === 'suggestions'){
-     const items = Array.isArray(d.items) ? d.items : [];
-     let key = '[]';
-     try { key = JSON.stringify(items ?? []); } catch { key = '[]'; }
-     if (key !== _lastSuggestionsKey){
-       _lastSuggestionsKey = key;
-       try { renderSuggestions(items, _handleSuggestionClick); } catch (err) {
-         console.warn('[handleAssistantFrame] renderSuggestions failed', err);
-       }
-     }
-     return;
-   }
- 
-   if (_isAssistantTextFrame(d)) {
-     if (!_dedupeAssistant(d)) return;
-   }
-   // (other frame types can be handled here as needed)
- }
- 
- /* ---------------- Send (WS-only) ---------------- */
- 
- export async function onSend(overrideText){
-   try{
-     if (!window.__askchip_session_started) return;
-     const input = $('#composer');
-     if (!input && overrideText == null) return;
-@@ -256,31 +333,34 @@ export async function onEnd(){
-     // Politely signal end of stream over WS, then close with code 1000
-     try { sendCloseStream(); } catch {}
-     await new Promise(r => setTimeout(r, 100));
- 
-     try { closeWS(1000, 'user_end'); } catch {}
- 
-     // Rotate the session so the next Start is clean (correct key)
-     try { localStorage.removeItem('chip.sid'); } catch {}
- 
-     // Notify others (bootstrap etc.)
-     try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
- 
-     // Update UI
-     disableForEnded();
-     showBanner('Session ended. Press Start to begin a new one.');
- 
-     // Clear any bootstrap “session started” latch
-     window.__askchip_session_started = false;
- 
-   } finally {
-     ending = false;
-   }
- }
- 
- try {
--  window.addEventListener('askchip-session-ended', () => { _clearSuggestions(); });
-+  window.addEventListener('askchip-session-ended', () => {
-+    _clearSuggestions();
-+    _resetAsrTracking();
-+  });
- } catch {}
- 
- /* ---------------- Expose minimal helpers (optional) ---------------- */
- 
- // (Intentionally minimal public surface)
-diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
-index 18de4632d2e42e8ba1661c4ae2011b1cefe0f0da..d4c26e1c821b4e58329d8dff96ba3a8a4acde547 100644
---- a/tests/test_streaming_ws_fallbacks.py
-+++ b/tests/test_streaming_ws_fallbacks.py
-@@ -1,29 +1,33 @@
-+import asyncio
- import importlib
-+import json
- import types
-+from collections import deque
- 
- from app.services import streaming
-+from app.ws import ws_asgi
- 
- 
- def _test_client():
-     mod = importlib.import_module("app")
-     if hasattr(mod, "create_app"):
-         flask_app = mod.create_app()
-     else:
-         flask_app = mod.app
-     flask_app.config["TESTING"] = True
-     return flask_app.test_client()
- 
- 
- def _csrf_token(client):
-     resp = client.get("/api/v1/csrf")
-     return resp.headers.get("X-CSRF-Token")
- 
- 
- def _stub_config(monkeypatch):
-     monkeypatch.setattr(streaming.db, "get_config", lambda: {})
- 
- 
- def test_short_greeting_preserves_sentence():
-     text = "What should we clarify so I can help?"
-     assert streaming._short_greeting(text) == text
- 
-@@ -681,25 +685,109 @@ def test_nudge_emits_single_chunk(monkeypatch):
-     def fake_make_frames(text, sid, **kwargs):
-         flags.append(kwargs.get("broadcast_immediately"))
-         return "tid-nudge", [
-             {"type": "assistant_chunk", "turn_id": "tid-nudge", "text": "ping", "kb_hits": 0},
-             {"type": "assistant_end", "turn_id": "tid-nudge"},
-         ]
- 
-     class InstantTimer:
-         def __init__(self, delay, func):
-             self.func = func
- 
-         def start(self):
-             self.func()
- 
-         def cancel(self):
+     def _emit(self, kind: str, label: str, **extra):
++        session_id = extra.get("session_id")
++        if session_id:
++            with self._lock:
++                self._prune_stats_locked()
++                reset = label in {"provider_open", "asr_open"}
++                stats = self._ensure_stats_locked(session_id, reset=reset, active=True)
++                stats["last_event"] = label
++                if label == "asr_partial":
++                    stats["partials"] = int(stats.get("partials", 0)) + 1
++                elif label == "asr_final":
++                    stats["finals"] = int(stats.get("finals", 0)) + 1
++                elif label == "asr_error":
++                    stats["err"] = extra.get("error")
++                    stats["err_count"] = int(stats.get("err_count", 0)) + 1
++                    stats["provider_errors"] = int(stats.get("provider_errors", 0)) + 1
++                elif reset:
++                    # Ensure reset clears previous error state
++                    stats.update({
++                        "partials": 0,
++                        "finals": 0,
++                        "err": None,
++                        "err_count": 0,
++                        "provider_errors": 0,
++                    })
++        
+         try:
+             from app.admin_log import emit as admin_emit  # type: ignore
+             admin_emit(kind, label=label, **(extra or {}))
+         except Exception:
              pass
  
-     monkeypatch.setattr(nudges, "make_assistant_frames", fake_make_frames)
-     monkeypatch.setattr(nudges.bus, "broadcast", lambda sid, frame: emitted.append(frame))
-     monkeypatch.setattr(nudges.threading, "Timer", InstantTimer)
+     def _ensure_open_sync(self, session_id: str):
+         with self._lock:
+             if session_id in self._opened or session_id in self._opening:
+                 return
+             # mark as opening under lock so parallel threads don't double-open
+             self._opening.add(session_id)
+         ok = False
+         try:
+             _submit_bg(asr_open(session_id=session_id, api_key=self._api_key(), emit=self._emit), timeout=10)
+             ok = True
+         finally:
+             with self._lock:
+                 self._opening.discard(session_id)
+                 if ok:
+                     self._opened.add(session_id)
  
-     nudges.arm_nudge("sess-nudge")
+     def enqueue(self, session_id: str, item):
+         # Normalize inputs
+         seq = None
+         data = b""
+         if isinstance(item, (bytes, bytearray, memoryview)):
+             data = bytes(item)
+         elif isinstance(item, dict):
+             data = item.get("data") or item.get("bytes") or b""
+             try:
+                 seq = int(item.get("chunk_seq")) if item.get("chunk_seq") is not None else None
+             except Exception:
+                 seq = None
+         else:
+             return
  
-     assert flags == [False]
-     assert sum(1 for fr in emitted if fr.get("type") == "assistant_chunk") == 1
+         # Always operate on the single background loop
+         self._ensure_open_sync(session_id)
+         try:
+             _submit_bg(asr_send_chunk(session_id, data, seq=seq))
+         except Exception as e:
+             self._emit("asr", "asr_error", session_id=session_id, error=f"enqueue_failed:{type(e).__name__}:{e}")
+ 
+     def end(self, session_id: str, wait_for_final: bool = True):
++        with self._lock:
++            self._prune_stats_locked()
++            stats = self._ensure_stats_locked(session_id, active=False)
++            stats["last_event"] = "end"
+         try:
+             _submit_bg(asr_end(session_id, wait_for_final=wait_for_final), timeout=12)
+         finally:
+             with self._lock:
+                 self._opened.discard(session_id)
+ 
++    def stats(self, session_id: str) -> Dict[str, object]:
++        with self._lock:
++            self._prune_stats_locked()
++            stats = self._stats.get(session_id)
++            if not stats:
++                return self._blank_stats().copy()
++            return self._public_stats(stats)
++
++    def stats_all(self) -> Dict[str, object]:
++        with self._lock:
++            self._prune_stats_locked()
++            sessions = {sid: self._public_stats(stats) for sid, stats in self._stats.items()}
++        totals = {
++            "partials": sum(int(s.get("partials", 0)) for s in sessions.values()),
++            "finals": sum(int(s.get("finals", 0)) for s in sessions.values()),
++            "err_count": sum(int(s.get("err_count", 0)) for s in sessions.values()),
++            "provider_errors": sum(int(s.get("provider_errors", 0)) for s in sessions.values()),
++            "err": None,
++            "active": any(bool(s.get("active")) for s in sessions.values()),
++            "last_event": None,
++            "sessions": sessions,
++        }
++        return totals
++
+ 
+ _COMPAT_SINGLETON = _CompatManager()
+ 
+ 
+ def get_manager() -> _CompatManager:
+     return _COMPAT_SINGLETON
+diff --git a/tests/test_streaming_asr_stats.py b/tests/test_streaming_asr_stats.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..e110896e22d79408e1e85bb5e45fe940415bdebe
+--- /dev/null
++++ b/tests/test_streaming_asr_stats.py
+@@ -0,0 +1,72 @@
++from app.asgi_gateway import app as flask_app
++from app.services.streaming_asr import stream_manager as sm
 +
 +
-+def test_ws_no_audio_watchdog_emits_diagnostics(monkeypatch):
-+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
-+    monkeypatch.setenv("WS_NO_AUDIO_DETECT_WINDOW_S", "0.01")
-+    monkeypatch.setenv("WS_NO_AUDIO_NUDGE", "1")
++def _csrf(client):
++    return client.get("/api/v1/auth/csrf").get_json()["csrf"]
 +
-+    admin_events = []
 +
-+    def fake_admin(event, **payload):
-+        admin_events.append((event, payload))
-+
-+    monkeypatch.setattr(ws_asgi, "_admin_emit", fake_admin)
-+
-+    broadcast_frames = []
-+
-+    def fake_broadcast(session_id, frame):
-+        broadcast_frames.append((session_id, frame))
-+
-+    monkeypatch.setattr(ws_asgi.bus, "broadcast", fake_broadcast)
-+
-+    class _FailingDeepgram:
-+        def __init__(self, cfg):
-+            self.cfg = cfg
-+
-+        async def connect(self):
-+            raise RuntimeError("connect_fail")
-+
-+        async def send(self, data):
-+            raise RuntimeError("send_fail")
-+
-+        async def close(self, wait_for_final=True):
-+            return
-+
-+        def events(self):
-+            async def _gen():
-+                if False:  # pragma: no cover - generator stub
-+                    yield None
-+            return _gen()
-+
-+    monkeypatch.setattr(ws_asgi, "DeepgramClient", _FailingDeepgram)
-+
-+    events = deque(
-+        [
-+            {"type": "websocket.receive", "bytes": b"\x00" * 2},
-+            {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
-+            {"type": "websocket.disconnect"},
-+        ]
++def _login(client, email):
++    token = _csrf(client)
++    client.post(
++        "/api/v1/auth/login",
++        json={"email": email},
++        headers={"X-CSRF-Token": token},
 +    )
 +
-+    async def _receive():
-+        if not events:
-+            await asyncio.sleep(0)
-+            return {"type": "websocket.disconnect"}
-+        nxt = events[0]
-+        if nxt.get("type") == "websocket.disconnect":
-+            await asyncio.sleep(0.05)
-+        return events.popleft()
 +
-+    async def _send(msg):
++def test_streaming_status_reports_provider_errors(monkeypatch):
++    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
++
++    mgr = sm._CompatManager()
++    monkeypatch.setattr(sm, "_COMPAT_SINGLETON", mgr, raising=True)
++
++    def _fake_submit_bg(coro, timeout=None):
++        try:
++            coro.close()
++        except Exception:
++            pass
 +        return None
 +
-+    scope = {
-+        "type": "websocket",
-+        "path": "/ws/v1/chat",
-+        "query_string": b"session_id=silent",
-+        "headers": [],
-+    }
++    monkeypatch.setattr(sm, "_submit_bg", _fake_submit_bg, raising=True)
 +
-+    loop = asyncio.new_event_loop()
-+    asyncio.set_event_loop(loop)
-+    try:
-+        loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-+        loop.run_until_complete(asyncio.sleep(0.06))
-+    finally:
-+        asyncio.set_event_loop(None)
-+        loop.close()
++    client = flask_app.test_client()
++    _login(client, "admin@example.com")
 +
-+    assert any(evt == "no_audio_detected" for evt, _ in admin_events)
++    sid = "sess-123"
++    mgr._emit("asr", "provider_open", session_id=sid)
++    mgr._emit("asr", "asr_open", session_id=sid)
++    mgr._emit("asr", "asr_partial", session_id=sid)
++    mgr._emit("asr", "asr_partial", session_id=sid)
++    mgr._emit("asr", "asr_final", session_id=sid)
++    mgr._emit("asr", "asr_error", session_id=sid, error="boom")
 +
-+    no_audio_frames = [fr for _, fr in broadcast_frames if fr.get("type") == "no_audio_detected"]
-+    assert no_audio_frames, "bus should broadcast a no_audio_detected frame"
-+    assert any(fr.get("reason") in ("timeout", "close_stream") for fr in no_audio_frames)
++    stats = mgr.stats(sid)
++    assert stats["partials"] == 2
++    assert stats["finals"] == 1
++    assert stats["provider_errors"] == 1
++    assert stats["err_count"] == 1
++    assert stats["err"] == "boom"
++    assert stats["active"] is True
++
++    mgr.end(sid, wait_for_final=False)
++
++    stats_after_end = mgr.stats(sid)
++    assert stats_after_end["active"] is False
++    assert stats_after_end["last_event"] == "end"
++
++    resp = client.get("/api/v1/admin/diagnostics/streaming_status")
++    assert resp.status_code == 200
++    payload = resp.get_json()
++    assert payload["partials"] == 2
++    assert payload["finals"] == 1
++    assert payload["provider_errors"] == 1
++    assert payload["sessions"][sid]["provider_errors"] == 1
++    assert payload["sessions"][sid]["err"] == "boom"
++    assert payload["sessions"][sid]["active"] is False
++
++    resp_single = client.get(f"/api/v1/admin/diagnostics/streaming_status?sid={sid}")
++    assert resp_single.status_code == 200
++    payload_single = resp_single.get_json()
++    assert payload_single["provider_errors"] == 1
++    assert payload_single["err"] == "boom"

@@ -53,6 +53,7 @@ def streaming_status():
             sid=sid,
             partials=int(s.get("partials", 0)),
             finals=int(s.get("finals", 0)),
+            provider_errors=int(s.get("provider_errors", 0)),
             asr_error=bool(s.get("err")),
             err=s.get("err"),
         ), 200
@@ -64,6 +65,7 @@ def streaming_status():
         finals=int(agg.get("finals", 0)),
         asr_error=agg.get("err_count", 0) > 0,
         err_count=int(agg.get("err_count", 0)),
+        provider_errors=int(agg.get("provider_errors", 0)),
         sessions=agg.get("sessions", {}),
     ), 200
 

@@ -444,10 +444,61 @@ class _CompatManager:
     Uses a SINGLE background asyncio loop so futures are always bound to the same loop.
     Also serializes open() so only ONE Deepgram WS is created per session_id.
     """
+    _STATS_IDLE_MAX_AGE = 900.0  # seconds before inactive sessions are pruned
+
     def __init__(self):
         self._opened = set()
         self._opening = set()
         self._lock = threading.Lock()
+        self._stats: Dict[str, Dict[str, object]] = {}
+
+    @staticmethod
+    def _blank_stats() -> Dict[str, object]:
+        return {
+            "partials": 0,
+            "finals": 0,
+            "err": None,
+            "err_count": 0,
+            "provider_errors": 0,
+            "active": False,
+            "last_event": None,
+        }
+
+    def _ensure_stats_locked(
+        self,
+        session_id: str,
+        *,
+        reset: bool = False,
+        active: Optional[bool] = None,
+    ) -> Dict[str, object]:
+        now = time.time()
+        stats = self._stats.get(session_id)
+        if stats is None:
+            stats = self._blank_stats()
+            self._stats[session_id] = stats
+        if reset:
+            stats.update(self._blank_stats())
+        if active is not None:
+            stats["active"] = bool(active)
+        stats["_updated"] = now
+        return stats
+
+    def _prune_stats_locked(self):
+        cutoff = time.time() - self._STATS_IDLE_MAX_AGE
+        stale = [
+            sid
+            for sid, stats in self._stats.items()
+            if not stats.get("active") and stats.get("_updated", 0.0) < cutoff
+        ]
+        for sid in stale:
+            self._stats.pop(sid, None)
+
+    @staticmethod
+    def _public_stats(stats: Dict[str, object]) -> Dict[str, object]:
+        pub = {k: stats.get(k) for k in ("partials", "finals", "err", "err_count", "provider_errors", "active", "last_event")}
+        for key, default in _CompatManager._blank_stats().items():
+            pub.setdefault(key, default)
+        return pub
 
     def _api_key(self) -> str:
         key = _os.getenv("DEEPGRAM_API_KEY", "").strip()
@@ -456,6 +507,31 @@ class _CompatManager:
         return key
 
     def _emit(self, kind: str, label: str, **extra):
+        session_id = extra.get("session_id")
+        if session_id:
+            with self._lock:
+                self._prune_stats_locked()
+                reset = label in {"provider_open", "asr_open"}
+                stats = self._ensure_stats_locked(session_id, reset=reset, active=True)
+                stats["last_event"] = label
+                if label == "asr_partial":
+                    stats["partials"] = int(stats.get("partials", 0)) + 1
+                elif label == "asr_final":
+                    stats["finals"] = int(stats.get("finals", 0)) + 1
+                elif label == "asr_error":
+                    stats["err"] = extra.get("error")
+                    stats["err_count"] = int(stats.get("err_count", 0)) + 1
+                    stats["provider_errors"] = int(stats.get("provider_errors", 0)) + 1
+                elif reset:
+                    # Ensure reset clears previous error state
+                    stats.update({
+                        "partials": 0,
+                        "finals": 0,
+                        "err": None,
+                        "err_count": 0,
+                        "provider_errors": 0,
+                    })
+        
         try:
             from app.admin_log import emit as admin_emit  # type: ignore
             admin_emit(kind, label=label, **(extra or {}))
@@ -501,11 +577,39 @@ class _CompatManager:
             self._emit("asr", "asr_error", session_id=session_id, error=f"enqueue_failed:{type(e).__name__}:{e}")
 
     def end(self, session_id: str, wait_for_final: bool = True):
+        with self._lock:
+            self._prune_stats_locked()
+            stats = self._ensure_stats_locked(session_id, active=False)
+            stats["last_event"] = "end"
         try:
             _submit_bg(asr_end(session_id, wait_for_final=wait_for_final), timeout=12)
         finally:
             with self._lock:
                 self._opened.discard(session_id)
+
+    def stats(self, session_id: str) -> Dict[str, object]:
+        with self._lock:
+            self._prune_stats_locked()
+            stats = self._stats.get(session_id)
+            if not stats:
+                return self._blank_stats().copy()
+            return self._public_stats(stats)
+
+    def stats_all(self) -> Dict[str, object]:
+        with self._lock:
+            self._prune_stats_locked()
+            sessions = {sid: self._public_stats(stats) for sid, stats in self._stats.items()}
+        totals = {
+            "partials": sum(int(s.get("partials", 0)) for s in sessions.values()),
+            "finals": sum(int(s.get("finals", 0)) for s in sessions.values()),
+            "err_count": sum(int(s.get("err_count", 0)) for s in sessions.values()),
+            "provider_errors": sum(int(s.get("provider_errors", 0)) for s in sessions.values()),
+            "err": None,
+            "active": any(bool(s.get("active")) for s in sessions.values()),
+            "last_event": None,
+            "sessions": sessions,
+        }
+        return totals
 
 
 _COMPAT_SINGLETON = _CompatManager()
