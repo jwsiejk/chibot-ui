@@ -681,6 +681,18 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     # Turn-scoped buffering + state
     buffered_chunks: Deque[bytes] = deque()
     sent_any_audio = [False]
+    no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
+    no_audio_notified = [False]
+    no_audio_turn_id = [0]
+    try:
+        no_audio_window_s = float(
+            os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
+        )
+    except Exception:
+        no_audio_window_s = 10.0
+    if no_audio_window_s < 0:
+        no_audio_window_s = 0.0
+    no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
     asr_ready_evt: asyncio.Event = asyncio.Event()
     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
@@ -697,6 +709,77 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         turn_timing["first_partial"][0] = 0.0
         turn_timing["final"][0] = 0.0
         turn_finish_logged[0] = False
+
+    def _emit_no_audio_alert(reason: str) -> None:
+        if no_audio_notified[0]:
+            return
+        if sent_any_audio[0]:
+            return
+        no_audio_notified[0] = True
+        turn_id = no_audio_turn_id[0] or turn_id_ref[0] or 0
+        since_first_ms = None
+        if mic_first_ts[0]:
+            since_first_ms = int(max(0.0, (time.time() - mic_first_ts[0]) * 1000))
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ws_no_audio_detected",
+                sid=sid,
+                turn_id=turn_id,
+                reason=reason,
+                window_s=no_audio_window_s,
+                mic_chunks=len(mic_chunks),
+                buffered=len(buffered_chunks),
+                since_first_ms=since_first_ms,
+            )
+        if _admin_emit:
+            with contextlib.suppress(Exception):
+                _admin_emit(
+                    "no_audio_detected",
+                    session_id=sid,
+                    turn_id=turn_id,
+                    reason=reason,
+                    window_s=no_audio_window_s,
+                    mic_chunks=len(mic_chunks),
+                    buffered_chunks=len(buffered_chunks),
+                    since_first_chunk_ms=since_first_ms,
+                )
+        if no_audio_broadcast_enabled:
+            frame = {
+                "type": "no_audio_detected",
+                "turn_id": str(turn_id),
+                "window_s": no_audio_window_s,
+                "reason": reason,
+            }
+            if since_first_ms is not None:
+                frame["since_first_chunk_ms"] = since_first_ms
+            with contextlib.suppress(Exception):
+                bus.broadcast(sid, frame)
+
+    def _cancel_no_audio_watch() -> None:
+        task = no_audio_watch_task[0]
+        if task and not task.done():
+            task.cancel()
+        no_audio_watch_task[0] = None
+
+    def _schedule_no_audio_watch(turn_id: int) -> None:
+        if no_audio_window_s <= 0:
+            return
+        _cancel_no_audio_watch()
+        no_audio_notified[0] = False
+        no_audio_turn_id[0] = turn_id
+
+        async def _watch() -> None:
+            try:
+                await asyncio.sleep(no_audio_window_s)
+                if sent_any_audio[0] or no_audio_notified[0]:
+                    return
+                _emit_no_audio_alert("timeout")
+            except asyncio.CancelledError:
+                pass
+            finally:
+                no_audio_watch_task[0] = None
+
+        no_audio_watch_task[0] = asyncio.create_task(_watch())
 
     def _log_turn_finish(
         turn_id: int, reason: str, synthetic: bool, transcript_chars: int
@@ -888,6 +971,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         try:
             await dg.send(data)
             sent_any_audio[0] = True
+            _cancel_no_audio_watch()
             _jlog("ws_audio_forward", sid=sid, bytes=len(data), buffered=from_buffer)
             return True
         except RuntimeError as e:
@@ -1040,6 +1124,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         mic_first_ts[0] = now
                         mic_last_ts[0] = now
                         _reset_turn_metrics(now)
+                        _schedule_no_audio_watch(turn_id_ref[0])
                         with contextlib.suppress(Exception):
                             _jlog(
                                 "turn_start",
@@ -1555,6 +1640,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             pending_final_turns.remove(turn_id)
                                         synthetic_final_turns.add(turn_id)
 
+                            _cancel_no_audio_watch()
+                            if (not sent_any_audio[0]) and not no_audio_notified[0]:
+                                elapsed = None
+                                if mic_first_ts[0]:
+                                    elapsed = time.time() - mic_first_ts[0]
+                                if no_audio_window_s <= 0 or (
+                                    elapsed is not None and elapsed >= no_audio_window_s
+                                ):
+                                    _emit_no_audio_alert("close_stream")
+
                             if synthetic_emitted:
                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
                                 final_seen[0] = False
@@ -1654,6 +1749,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 pass
 
     finally:
+        with contextlib.suppress(Exception):
+            _cancel_no_audio_watch()
         await _remove_active_ws_entry("cleanup")
         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
         with contextlib.suppress(Exception):

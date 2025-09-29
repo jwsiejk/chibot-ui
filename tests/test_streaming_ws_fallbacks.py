@@ -1,7 +1,11 @@
+import asyncio
 import importlib
+import json
 import types
+from collections import deque
 
 from app.services import streaming
+from app.ws import ws_asgi
 
 
 def _test_client():
@@ -703,3 +707,87 @@ def test_nudge_emits_single_chunk(monkeypatch):
 
     assert flags == [False]
     assert sum(1 for fr in emitted if fr.get("type") == "assistant_chunk") == 1
+
+
+def test_ws_no_audio_watchdog_emits_diagnostics(monkeypatch):
+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
+    monkeypatch.setenv("WS_NO_AUDIO_DETECT_WINDOW_S", "0.01")
+    monkeypatch.setenv("WS_NO_AUDIO_NUDGE", "1")
+
+    admin_events = []
+
+    def fake_admin(event, **payload):
+        admin_events.append((event, payload))
+
+    monkeypatch.setattr(ws_asgi, "_admin_emit", fake_admin)
+
+    broadcast_frames = []
+
+    def fake_broadcast(session_id, frame):
+        broadcast_frames.append((session_id, frame))
+
+    monkeypatch.setattr(ws_asgi.bus, "broadcast", fake_broadcast)
+
+    class _FailingDeepgram:
+        def __init__(self, cfg):
+            self.cfg = cfg
+
+        async def connect(self):
+            raise RuntimeError("connect_fail")
+
+        async def send(self, data):
+            raise RuntimeError("send_fail")
+
+        async def close(self, wait_for_final=True):
+            return
+
+        def events(self):
+            async def _gen():
+                if False:  # pragma: no cover - generator stub
+                    yield None
+            return _gen()
+
+    monkeypatch.setattr(ws_asgi, "DeepgramClient", _FailingDeepgram)
+
+    events = deque(
+        [
+            {"type": "websocket.receive", "bytes": b"\x00" * 2},
+            {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
+            {"type": "websocket.disconnect"},
+        ]
+    )
+
+    async def _receive():
+        if not events:
+            await asyncio.sleep(0)
+            return {"type": "websocket.disconnect"}
+        nxt = events[0]
+        if nxt.get("type") == "websocket.disconnect":
+            await asyncio.sleep(0.05)
+        return events.popleft()
+
+    async def _send(msg):
+        return None
+
+    scope = {
+        "type": "websocket",
+        "path": "/ws/v1/chat",
+        "query_string": b"session_id=silent",
+        "headers": [],
+    }
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
+        loop.run_until_complete(asyncio.sleep(0.06))
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+    assert any(evt == "no_audio_detected" for evt, _ in admin_events)
+
+    no_audio_frames = [fr for _, fr in broadcast_frames if fr.get("type") == "no_audio_detected"]
+    assert no_audio_frames, "bus should broadcast a no_audio_detected frame"
+    assert any(fr.get("reason") in ("timeout", "close_stream") for fr in no_audio_frames)

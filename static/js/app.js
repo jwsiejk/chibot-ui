@@ -8,6 +8,72 @@ import { renderSuggestions } from '/static/js/suggestions.js';
 
 const $  = (s)=>document.querySelector(s);
 
+const ASR_TIMEOUT_MS = 10_000;
+let _sessionReadyAt = 0;
+let _awaitingFirstAsr = false;
+let _noAsrTimeout = null;
+let _noAsrNotified = false;
+let _lastAsrLatencyMs = null;
+
+function _clearAsrTimeout(){
+  if (_noAsrTimeout){
+    clearTimeout(_noAsrTimeout);
+    _noAsrTimeout = null;
+  }
+}
+
+function _resetAsrTracking(){
+  _clearAsrTimeout();
+  _awaitingFirstAsr = false;
+  _noAsrNotified = false;
+  _sessionReadyAt = 0;
+  _lastAsrLatencyMs = null;
+}
+
+function _scheduleAsrWatchdog(){
+  _clearAsrTimeout();
+  _awaitingFirstAsr = true;
+  _noAsrNotified = false;
+  _sessionReadyAt = Date.now();
+  _lastAsrLatencyMs = null;
+  _noAsrTimeout = setTimeout(()=>{
+    if (_awaitingFirstAsr){
+      _notifyNoAsr('timeout');
+    }
+  }, ASR_TIMEOUT_MS);
+}
+
+function _markAsrFrameSeen(){
+  if (!_awaitingFirstAsr) return;
+  _awaitingFirstAsr = false;
+  _clearAsrTimeout();
+  if (_sessionReadyAt){
+    _lastAsrLatencyMs = Date.now() - _sessionReadyAt;
+    try {
+      window.__askchip_last_asr_latency_ms = _lastAsrLatencyMs;
+    } catch {}
+    try {
+      window.dispatchEvent(new CustomEvent('askchip-asr-first-frame', {
+        detail: { latency_ms: _lastAsrLatencyMs }
+      }));
+    } catch {}
+  }
+}
+
+function _notifyNoAsr(source, detail){
+  if (_noAsrNotified) return;
+  _noAsrNotified = true;
+  _awaitingFirstAsr = false;
+  _clearAsrTimeout();
+  const message = 'We didn’t detect any speech. Please check your microphone or try again.';
+  showBanner(message);
+  try {
+    window.dispatchEvent(new CustomEvent('askchip-voice-retry-request', {
+      detail: { source, payload: detail ?? null }
+    }));
+  } catch {}
+}
+
 /* ---------------- UI helpers ---------------- */
 
 function setDot(state){
@@ -50,6 +116,7 @@ function _isAssistantTextFrame(d){
 }
 
 function _renderUserTranscript(d){
+  _markAsrFrameSeen();
   try{
     const transcriptRaw = (
       d?.channel?.alternatives?.[0]?.transcript ??
@@ -150,24 +217,34 @@ function _handleSuggestionClick(text){
 
 export function handleAssistantFrame(d){
   if (!d) return;
+  const t = d.type;
+
+  if (t === 'ready') {
+    _scheduleAsrWatchdog();
+  }
+
+  if (t === 'no_audio_detected') {
+    _notifyNoAsr('server', d);
+    return;
+  }
 
   // Surface server errors to the UI banner
-  if (d.type === 'Error') {
+  if (t === 'Error') {
     const msg = `Error: ${(d.code||'')}${d.message ? ' ' + d.message : ''}`.trim();
     showBanner(msg || 'An error occurred.');
     return;
   }
 
   // Lightweight state hints (non-invasive)
-  if (d.type === 'assistant_audio') setDot('speaking');
-  if (d.type === 'UtteranceEnd')    setDot('ready');
+  if (t === 'assistant_audio') setDot('speaking');
+  if (t === 'UtteranceEnd')    setDot('ready');
 
-  if (d.type === 'Results' && d.nlu === undefined){
+  if (t === 'Results' && d.nlu === undefined){
     _renderUserTranscript(d);
     return;
   }
 
-  if (d.type === 'suggestions'){
+  if (t === 'suggestions'){
     const items = Array.isArray(d.items) ? d.items : [];
     let key = '[]';
     try { key = JSON.stringify(items ?? []); } catch { key = '[]'; }
@@ -278,7 +355,10 @@ export async function onEnd(){
 }
 
 try {
-  window.addEventListener('askchip-session-ended', () => { _clearSuggestions(); });
+  window.addEventListener('askchip-session-ended', () => {
+    _clearSuggestions();
+    _resetAsrTracking();
+  });
 } catch {}
 
 /* ---------------- Expose minimal helpers (optional) ---------------- */
