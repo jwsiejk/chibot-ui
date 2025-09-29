@@ -1,212 +1,70 @@
-diff --git a/app/api_v1/admin.py b/app/api_v1/admin.py
-index 8a2652c6ae73a93832fea23029da53acab6559e5..2459a9f8c2f8f574ece07a60cae7d4de6c00ba9f 100644
---- a/app/api_v1/admin.py
-+++ b/app/api_v1/admin.py
-@@ -233,62 +233,64 @@ def diag_stream():
-     return Response(gen(), mimetype="text/event-stream")
- 
- # ----------------- Admin Diagnostics (GET+POST) -----------------
- 
- @bp.route("/diagnostics/vendor_status", methods=["GET", "POST"])
- def _diag_vendor_status():
-     _require_admin()
-     return _no_store(jsonify(_vendor_status_payload())), 200
- 
- @bp.route("/diagnostics/streaming_status", methods=["GET", "POST"])
- def _diag_streaming_status():
-     _require_admin()
-     # Import inside to avoid circular import at module import time
-     from ..services.streaming_asr.stream_manager import get_manager  # type: ignore
- 
-     sid = request.args.get("sid") or request.args.get("session_id")
-     mgr = get_manager()
- 
-     if sid:
-         s = mgr.stats(sid)
-         return _no_store(jsonify(
-             ok=True,
-             sid=sid,
-             partials=int(s.get("partials", 0)),
-             finals=int(s.get("finals", 0)),
-+            provider_errors=int(s.get("provider_errors", 0)),
-             asr_error=bool(s.get("err")),
-             err=s.get("err"),
-         )), 200
- 
-     if hasattr(mgr, "stats_all"):
-         agg = mgr.stats_all()  # type: ignore[attr-defined]
-         return _no_store(jsonify(
-             ok=True,
-             partials=int(agg.get("partials", 0)),
-             finals=int(agg.get("finals", 0)),
-             asr_error=agg.get("err_count", 0) > 0,
-             err_count=int(agg.get("err_count", 0)),
-+            provider_errors=int(agg.get("provider_errors", 0)),
-             sessions=agg.get("sessions", {}),
-         )), 200
- 
-     return _no_store(jsonify(ok=True, partials=0, finals=0, asr_error=False)), 200
- 
- @bp.route("/diagnostics/rate_limits", methods=["GET", "POST"])
- def _diag_rate_limits():
-     _require_admin()
-     return jsonify(ok=True, status2=200), 200
- 
- 
- # ----------------- KB Seed (Phase 8) -----------------
- 
- @bp.post("/kb/seed")
- def kb_seed():
-     _require_admin()
-     from ..services.retrieval import add_document
-     data = request.get_json(silent=True) or {}
-     title = (data.get("title") or "").strip() or "Untitled"
-     body  = (data.get("body") or "").strip()
-     tags  = (data.get("tags") or "").strip()
-     if not body:
-         return jsonify({"ok": False, "error": "body required"}), 400
-     doc_id = add_document(title, body, tags)
-     try:
-diff --git a/app/api_v1/admin_diagnostics.py b/app/api_v1/admin_diagnostics.py
-index cc0cf499e8dabbf49b4061ff95072c8617c90b82..8f874faaa8a6f3fdbdba5f8a4c0be5a5ea822a93 100644
---- a/app/api_v1/admin_diagnostics.py
-+++ b/app/api_v1/admin_diagnostics.py
-@@ -31,47 +31,49 @@ def vendor_status():
-         deepgram=deepgram_ok,
-         elevenlabs=eleven_key_ok and eleven_voice_ok,
-         elevenlabs_key=eleven_key_ok,
-         elevenlabs_voice=eleven_voice_ok,
-     ), 200
- 
- 
- @bp.route("/streaming_status", methods=["GET", "POST"])
- def streaming_status():
-     """
-     Returns ASR streaming counters.
-     - If ?sid=... provided, returns stats for that session id.
-     - Otherwise returns an aggregate across active sessions.
-     Admin UI uses partials/finals/asr_error to drive the checks.
-     """
-     sid = request.args.get("sid") or request.args.get("session_id")
-     mgr = get_manager()
- 
-     if sid:
-         s = mgr.stats(sid)
-         return jsonify(
-             ok=True,
-             sid=sid,
-             partials=int(s.get("partials", 0)),
-             finals=int(s.get("finals", 0)),
-+            provider_errors=int(s.get("provider_errors", 0)),
-             asr_error=bool(s.get("err")),
-             err=s.get("err"),
-         ), 200
- 
-     agg = mgr.stats_all()
-     return jsonify(
-         ok=True,
-         partials=int(agg.get("partials", 0)),
-         finals=int(agg.get("finals", 0)),
-         asr_error=agg.get("err_count", 0) > 0,
-         err_count=int(agg.get("err_count", 0)),
-+        provider_errors=int(agg.get("provider_errors", 0)),
-         sessions=agg.get("sessions", {}),
-     ), 200
- 
- 
- @bp.route("/rate_limits", methods=["GET", "POST"])
- def rate_limits():
-     """
-     Lightweight health for rate limit check in Diagnostics.
-     If you later expose real counters, add them here.
-     """
-     return jsonify(ok=True, status2=200), 200
 diff --git a/app/services/streaming_asr/stream_manager.py b/app/services/streaming_asr/stream_manager.py
-index d61c4a52828f3ed227db3fb058c1088d434b7a40..c03094467273d4cff28f9fffe3f55bad1b077928 100644
+index c03094467273d4cff28f9fffe3f55bad1b077928..22b9ad09988382727fee7653c7473118e9f6329a 100644
 --- a/app/services/streaming_asr/stream_manager.py
 +++ b/app/services/streaming_asr/stream_manager.py
-@@ -422,94 +422,198 @@ async def asr_send_chunk(session_id: str, data: bytes, seq: Optional[int] = None
-     await mgr.send_chunk(data, seq=seq)
+@@ -478,131 +478,144 @@ class _CompatManager:
+             self._stats[session_id] = stats
+         if reset:
+             stats.update(self._blank_stats())
+         if active is not None:
+             stats["active"] = bool(active)
+         stats["_updated"] = now
+         return stats
  
+     def _prune_stats_locked(self):
+         cutoff = time.time() - self._STATS_IDLE_MAX_AGE
+         stale = [
+             sid
+             for sid, stats in self._stats.items()
+             if not stats.get("active") and stats.get("_updated", 0.0) < cutoff
+         ]
+         for sid in stale:
+             self._stats.pop(sid, None)
  
- async def asr_end(session_id: str, wait_for_final: bool = True):
-     with _streams_lock:
-         mgr = _streams.get(session_id)
-     if mgr is None:
-         return
-     try:
-         await mgr.end(wait_for_final=wait_for_final)
-     finally:
-         with _streams_lock:
-             _streams.pop(session_id, None)
+     @staticmethod
+     def _public_stats(stats: Dict[str, object]) -> Dict[str, object]:
+         pub = {k: stats.get(k) for k in ("partials", "finals", "err", "err_count", "provider_errors", "active", "last_event")}
+         for key, default in _CompatManager._blank_stats().items():
+             pub.setdefault(key, default)
+         return pub
  
- 
- # -----------------------------------------------------------------------------
- # Compatibility shim for legacy callers (Flask views call enqueue/end)
- 
- class _CompatManager:
-     """
-     Back-compat manager exposing .enqueue(session_id, item) for legacy endpoints.
-     Accepts either raw bytes or a dict {'data': bytes, 'chunk_seq': int, 'user_msg_id': str}.
-     Uses a SINGLE background asyncio loop so futures are always bound to the same loop.
-     Also serializes open() so only ONE Deepgram WS is created per session_id.
-     """
-+    _STATS_IDLE_MAX_AGE = 900.0  # seconds before inactive sessions are pruned
-+
-     def __init__(self):
-         self._opened = set()
-         self._opening = set()
-         self._lock = threading.Lock()
-+        self._stats: Dict[str, Dict[str, object]] = {}
-+
-+    @staticmethod
-+    def _blank_stats() -> Dict[str, object]:
-+        return {
-+            "partials": 0,
-+            "finals": 0,
-+            "err": None,
-+            "err_count": 0,
-+            "provider_errors": 0,
-+            "active": False,
-+            "last_event": None,
-+        }
-+
-+    def _ensure_stats_locked(
++    def record_event(
 +        self,
 +        session_id: str,
++        label: str,
 +        *,
-+        reset: bool = False,
++        error: Optional[str] = None,
 +        active: Optional[bool] = None,
-+    ) -> Dict[str, object]:
-+        now = time.time()
-+        stats = self._stats.get(session_id)
-+        if stats is None:
-+            stats = self._blank_stats()
-+            self._stats[session_id] = stats
-+        if reset:
-+            stats.update(self._blank_stats())
-+        if active is not None:
-+            stats["active"] = bool(active)
-+        stats["_updated"] = now
-+        return stats
++    ) -> None:
++        """Record an event for a session in a thread-safe manner."""
++        if not session_id:
++            return
 +
-+    def _prune_stats_locked(self):
-+        cutoff = time.time() - self._STATS_IDLE_MAX_AGE
-+        stale = [
-+            sid
-+            for sid, stats in self._stats.items()
-+            if not stats.get("active") and stats.get("_updated", 0.0) < cutoff
-+        ]
-+        for sid in stale:
-+            self._stats.pop(sid, None)
++        reset = label in {"provider_open", "asr_open"}
++        active_state: Optional[bool]
++        if active is None:
++            active_state = True
++        else:
++            active_state = bool(active)
 +
-+    @staticmethod
-+    def _public_stats(stats: Dict[str, object]) -> Dict[str, object]:
-+        pub = {k: stats.get(k) for k in ("partials", "finals", "err", "err_count", "provider_errors", "active", "last_event")}
-+        for key, default in _CompatManager._blank_stats().items():
-+            pub.setdefault(key, default)
-+        return pub
- 
++        with self._lock:
++            self._prune_stats_locked()
++            stats = self._ensure_stats_locked(
++                session_id,
++                reset=reset,
++                active=active_state,
++            )
++            stats["last_event"] = label
++
++            if label == "asr_partial":
++                stats["partials"] = int(stats.get("partials", 0)) + 1
++            elif label == "asr_final":
++                stats["finals"] = int(stats.get("finals", 0)) + 1
++            elif label == "asr_error":
++                stats["err"] = error
++                stats["err_count"] = int(stats.get("err_count", 0)) + 1
++                stats["provider_errors"] = int(stats.get("provider_errors", 0)) + 1
++
      def _api_key(self) -> str:
          key = _os.getenv("DEEPGRAM_API_KEY", "").strip()
          if not key:
@@ -214,31 +72,33 @@ index d61c4a52828f3ed227db3fb058c1088d434b7a40..c03094467273d4cff28f9fffe3f55bad
          return key
  
      def _emit(self, kind: str, label: str, **extra):
-+        session_id = extra.get("session_id")
-+        if session_id:
-+            with self._lock:
-+                self._prune_stats_locked()
-+                reset = label in {"provider_open", "asr_open"}
-+                stats = self._ensure_stats_locked(session_id, reset=reset, active=True)
-+                stats["last_event"] = label
-+                if label == "asr_partial":
-+                    stats["partials"] = int(stats.get("partials", 0)) + 1
-+                elif label == "asr_final":
-+                    stats["finals"] = int(stats.get("finals", 0)) + 1
-+                elif label == "asr_error":
-+                    stats["err"] = extra.get("error")
-+                    stats["err_count"] = int(stats.get("err_count", 0)) + 1
-+                    stats["provider_errors"] = int(stats.get("provider_errors", 0)) + 1
-+                elif reset:
-+                    # Ensure reset clears previous error state
-+                    stats.update({
-+                        "partials": 0,
-+                        "finals": 0,
-+                        "err": None,
-+                        "err_count": 0,
-+                        "provider_errors": 0,
-+                    })
-+        
+         session_id = extra.get("session_id")
+         if session_id:
+-            with self._lock:
+-                self._prune_stats_locked()
+-                reset = label in {"provider_open", "asr_open"}
+-                stats = self._ensure_stats_locked(session_id, reset=reset, active=True)
+-                stats["last_event"] = label
+-                if label == "asr_partial":
+-                    stats["partials"] = int(stats.get("partials", 0)) + 1
+-                elif label == "asr_final":
+-                    stats["finals"] = int(stats.get("finals", 0)) + 1
+-                elif label == "asr_error":
+-                    stats["err"] = extra.get("error")
+-                    stats["err_count"] = int(stats.get("err_count", 0)) + 1
+-                    stats["provider_errors"] = int(stats.get("provider_errors", 0)) + 1
+-                elif reset:
+-                    # Ensure reset clears previous error state
+-                    stats.update({
+-                        "partials": 0,
+-                        "finals": 0,
+-                        "err": None,
+-                        "err_count": 0,
+-                        "provider_errors": 0,
+-                    })
+-        
++            self.record_event(session_id, label, error=extra.get("error"))
++
          try:
              from app.admin_log import emit as admin_emit  # type: ignore
              admin_emit(kind, label=label, **(extra or {}))
@@ -284,121 +144,33 @@ index d61c4a52828f3ed227db3fb058c1088d434b7a40..c03094467273d4cff28f9fffe3f55bad
              self._emit("asr", "asr_error", session_id=session_id, error=f"enqueue_failed:{type(e).__name__}:{e}")
  
      def end(self, session_id: str, wait_for_final: bool = True):
-+        with self._lock:
-+            self._prune_stats_locked()
-+            stats = self._ensure_stats_locked(session_id, active=False)
-+            stats["last_event"] = "end"
+-        with self._lock:
+-            self._prune_stats_locked()
+-            stats = self._ensure_stats_locked(session_id, active=False)
+-            stats["last_event"] = "end"
++        self.record_event(session_id, "end", active=False)
          try:
              _submit_bg(asr_end(session_id, wait_for_final=wait_for_final), timeout=12)
          finally:
              with self._lock:
                  self._opened.discard(session_id)
  
-+    def stats(self, session_id: str) -> Dict[str, object]:
-+        with self._lock:
-+            self._prune_stats_locked()
-+            stats = self._stats.get(session_id)
-+            if not stats:
-+                return self._blank_stats().copy()
-+            return self._public_stats(stats)
-+
-+    def stats_all(self) -> Dict[str, object]:
-+        with self._lock:
-+            self._prune_stats_locked()
-+            sessions = {sid: self._public_stats(stats) for sid, stats in self._stats.items()}
-+        totals = {
-+            "partials": sum(int(s.get("partials", 0)) for s in sessions.values()),
-+            "finals": sum(int(s.get("finals", 0)) for s in sessions.values()),
-+            "err_count": sum(int(s.get("err_count", 0)) for s in sessions.values()),
-+            "provider_errors": sum(int(s.get("provider_errors", 0)) for s in sessions.values()),
-+            "err": None,
-+            "active": any(bool(s.get("active")) for s in sessions.values()),
-+            "last_event": None,
-+            "sessions": sessions,
-+        }
-+        return totals
-+
+     def stats(self, session_id: str) -> Dict[str, object]:
+         with self._lock:
+             self._prune_stats_locked()
+             stats = self._stats.get(session_id)
+             if not stats:
+                 return self._blank_stats().copy()
+             return self._public_stats(stats)
  
- _COMPAT_SINGLETON = _CompatManager()
- 
- 
- def get_manager() -> _CompatManager:
-     return _COMPAT_SINGLETON
-diff --git a/tests/test_streaming_asr_stats.py b/tests/test_streaming_asr_stats.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..e110896e22d79408e1e85bb5e45fe940415bdebe
---- /dev/null
-+++ b/tests/test_streaming_asr_stats.py
-@@ -0,0 +1,72 @@
-+from app.asgi_gateway import app as flask_app
-+from app.services.streaming_asr import stream_manager as sm
-+
-+
-+def _csrf(client):
-+    return client.get("/api/v1/auth/csrf").get_json()["csrf"]
-+
-+
-+def _login(client, email):
-+    token = _csrf(client)
-+    client.post(
-+        "/api/v1/auth/login",
-+        json={"email": email},
-+        headers={"X-CSRF-Token": token},
-+    )
-+
-+
-+def test_streaming_status_reports_provider_errors(monkeypatch):
-+    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
-+
-+    mgr = sm._CompatManager()
-+    monkeypatch.setattr(sm, "_COMPAT_SINGLETON", mgr, raising=True)
-+
-+    def _fake_submit_bg(coro, timeout=None):
-+        try:
-+            coro.close()
-+        except Exception:
-+            pass
-+        return None
-+
-+    monkeypatch.setattr(sm, "_submit_bg", _fake_submit_bg, raising=True)
-+
-+    client = flask_app.test_client()
-+    _login(client, "admin@example.com")
-+
-+    sid = "sess-123"
-+    mgr._emit("asr", "provider_open", session_id=sid)
-+    mgr._emit("asr", "asr_open", session_id=sid)
-+    mgr._emit("asr", "asr_partial", session_id=sid)
-+    mgr._emit("asr", "asr_partial", session_id=sid)
-+    mgr._emit("asr", "asr_final", session_id=sid)
-+    mgr._emit("asr", "asr_error", session_id=sid, error="boom")
-+
-+    stats = mgr.stats(sid)
-+    assert stats["partials"] == 2
-+    assert stats["finals"] == 1
-+    assert stats["provider_errors"] == 1
-+    assert stats["err_count"] == 1
-+    assert stats["err"] == "boom"
-+    assert stats["active"] is True
-+
-+    mgr.end(sid, wait_for_final=False)
-+
-+    stats_after_end = mgr.stats(sid)
-+    assert stats_after_end["active"] is False
-+    assert stats_after_end["last_event"] == "end"
-+
-+    resp = client.get("/api/v1/admin/diagnostics/streaming_status")
-+    assert resp.status_code == 200
-+    payload = resp.get_json()
-+    assert payload["partials"] == 2
-+    assert payload["finals"] == 1
-+    assert payload["provider_errors"] == 1
-+    assert payload["sessions"][sid]["provider_errors"] == 1
-+    assert payload["sessions"][sid]["err"] == "boom"
-+    assert payload["sessions"][sid]["active"] is False
-+
-+    resp_single = client.get(f"/api/v1/admin/diagnostics/streaming_status?sid={sid}")
-+    assert resp_single.status_code == 200
-+    payload_single = resp_single.get_json()
-+    assert payload_single["provider_errors"] == 1
-+    assert payload_single["err"] == "boom"
+     def stats_all(self) -> Dict[str, object]:
+         with self._lock:
+             self._prune_stats_locked()
+             sessions = {sid: self._public_stats(stats) for sid, stats in self._stats.items()}
+         totals = {
+             "partials": sum(int(s.get("partials", 0)) for s in sessions.values()),
+             "finals": sum(int(s.get("finals", 0)) for s in sessions.values()),
+             "err_count": sum(int(s.get("err_count", 0)) for s in sessions.values()),
+             "provider_errors": sum(int(s.get("provider_errors", 0)) for s in sessions.values()),
+             "err": None,
+             "active": any(bool(s.get("active")) for s in sessions.values()),

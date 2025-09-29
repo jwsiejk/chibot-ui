@@ -500,6 +500,43 @@ class _CompatManager:
             pub.setdefault(key, default)
         return pub
 
+    def record_event(
+        self,
+        session_id: str,
+        label: str,
+        *,
+        error: Optional[str] = None,
+        active: Optional[bool] = None,
+    ) -> None:
+        """Record an event for a session in a thread-safe manner."""
+        if not session_id:
+            return
+
+        reset = label in {"provider_open", "asr_open"}
+        active_state: Optional[bool]
+        if active is None:
+            active_state = True
+        else:
+            active_state = bool(active)
+
+        with self._lock:
+            self._prune_stats_locked()
+            stats = self._ensure_stats_locked(
+                session_id,
+                reset=reset,
+                active=active_state,
+            )
+            stats["last_event"] = label
+
+            if label == "asr_partial":
+                stats["partials"] = int(stats.get("partials", 0)) + 1
+            elif label == "asr_final":
+                stats["finals"] = int(stats.get("finals", 0)) + 1
+            elif label == "asr_error":
+                stats["err"] = error
+                stats["err_count"] = int(stats.get("err_count", 0)) + 1
+                stats["provider_errors"] = int(stats.get("provider_errors", 0)) + 1
+
     def _api_key(self) -> str:
         key = _os.getenv("DEEPGRAM_API_KEY", "").strip()
         if not key:
@@ -509,29 +546,8 @@ class _CompatManager:
     def _emit(self, kind: str, label: str, **extra):
         session_id = extra.get("session_id")
         if session_id:
-            with self._lock:
-                self._prune_stats_locked()
-                reset = label in {"provider_open", "asr_open"}
-                stats = self._ensure_stats_locked(session_id, reset=reset, active=True)
-                stats["last_event"] = label
-                if label == "asr_partial":
-                    stats["partials"] = int(stats.get("partials", 0)) + 1
-                elif label == "asr_final":
-                    stats["finals"] = int(stats.get("finals", 0)) + 1
-                elif label == "asr_error":
-                    stats["err"] = extra.get("error")
-                    stats["err_count"] = int(stats.get("err_count", 0)) + 1
-                    stats["provider_errors"] = int(stats.get("provider_errors", 0)) + 1
-                elif reset:
-                    # Ensure reset clears previous error state
-                    stats.update({
-                        "partials": 0,
-                        "finals": 0,
-                        "err": None,
-                        "err_count": 0,
-                        "provider_errors": 0,
-                    })
-        
+            self.record_event(session_id, label, error=extra.get("error"))
+
         try:
             from app.admin_log import emit as admin_emit  # type: ignore
             admin_emit(kind, label=label, **(extra or {}))
@@ -577,10 +593,7 @@ class _CompatManager:
             self._emit("asr", "asr_error", session_id=session_id, error=f"enqueue_failed:{type(e).__name__}:{e}")
 
     def end(self, session_id: str, wait_for_final: bool = True):
-        with self._lock:
-            self._prune_stats_locked()
-            stats = self._ensure_stats_locked(session_id, active=False)
-            stats["last_event"] = "end"
+        self.record_event(session_id, "end", active=False)
         try:
             _submit_bg(asr_end(session_id, wait_for_final=wait_for_final), timeout=12)
         finally:
