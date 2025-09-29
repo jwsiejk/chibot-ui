@@ -1,322 +1,74 @@
-diff --git a/app/api_v1/greet.py b/app/api_v1/greet.py
-index 524898dee6e4afa70444bd5aa8dea093fdbe54ed..dc448a056704f024c9725c7c263ae942651faf84 100644
---- a/app/api_v1/greet.py
-+++ b/app/api_v1/greet.py
-@@ -26,116 +26,129 @@ def _session_id() -> str:
-         pass
-     if not sid:
-         sid = session.get("sid") or "default"
-     try:
-         session["sid"] = sid
-     except Exception:
-         pass
-     return sid
+diff --git a/static/js/app.js b/static/js/app.js
+index 13a654073c056d644a3ed4acb8f57cc6156416d3..720095854a4b1dd34d8983244dd0afab195bffd7 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -81,58 +81,67 @@ function _renderUserTranscript(d){
+     const isFinal = (
+       d?.channel?.is_final ??
+       d?.is_final ??
+       d?.final ??
+       false
+     );
  
- @bp.get("")
- def greet():
-     sid = _session_id()
- 
-     # Allow client to force a fresh greet for this session (e.g., on Start)
-     force_flag = (request.args.get("reset") or request.args.get("force") or "").strip().lower() in ("1", "true", "yes")
- 
-     # Shared, Neon-backed idempotency (works across workers)
-     tid, idempotent = get_or_create_greet_turn(sid, force=force_flag, ttl_sec=DEFAULT_TTL_SEC)
- 
-     have_openai = bool(os.environ.get("OPENAI_API_KEY"))
-     have_eleven = bool(os.environ.get("ELEVENLABS_API_KEY"))
- 
-     audio_scheduled = False
-     note = None
- 
-+    scheduled_frames = []
-+
-     if have_openai:
-         try:
-             from ..services.streaming import make_assistant_frames, schedule_frames
-             greet_meta, _, _ = prepare_turn_metadata("greet", {"source": "greet"})
-             _tid, frames = make_assistant_frames(
-                 "greet",
-                 sid,
-                 meta=greet_meta,
-                 broadcast_immediately=False,
-             )
-             # Prefer the LLM’s chosen turn if it returns one (keep correlation tidy)
-             if isinstance(_tid, str) and _tid:
-                 tid = _tid
-             schedule_frames(sid, frames)
-+            scheduled_frames = frames
-             if have_eleven:
-                 audio_scheduled = True
-         except Exception as e:
-             note = f"llm_error:{e.__class__.__name__}"
-             import traceback as _tb
-             try:
-                 trace = _tb.format_exc()
-             except Exception:
-                 trace = ""
-             try:
-                 fallback_text = "Hi, I’m Chip. How can I help today?"
-                 from ..services.streaming import make_assistant_frames, schedule_frames
-                 fallback_meta, _, _ = prepare_turn_metadata(fallback_text, {"source":"greet_fallback"})
-                 _tid2, frames2 = make_assistant_frames(
-                     fallback_text,
-                     sid,
-                     meta=fallback_meta,
-                     broadcast_immediately=False,
-                 )
-                 if isinstance(_tid2, str) and _tid2:
-                     tid = _tid2
-                 schedule_frames(sid, frames2)
-+                scheduled_frames = frames2
-                 if have_eleven:
-                     audio_scheduled = True
-             except Exception:
-                 pass
-     else:
-         note = "missing_openai_key"
- 
-     payload = {"ok": True, "turn_id": tid, "idempotent": bool(idempotent)}
-     if not audio_scheduled:
-         payload["audio_scheduled"] = False
-         if note:
-             payload["note"] = note
- 
-     try:
-         payload["diag"] = {
-             "have_openai": bool(have_openai),
-             "have_eleven": bool(have_eleven),
-             "pid": os.getpid(),
-         }
-         try:
-             if 'trace' in locals() and note:
-                 payload["diag"]["trace"] = trace
-         except Exception:
-             pass
-     except Exception:
-         pass
- 
-     resp = jsonify(payload)
-     try:
-         resp.headers['X-Worker-PID'] = str(os.getpid())
-         resp.headers['X-OpenAI'] = '1' if have_openai else '0'
-         resp.headers['X-Eleven'] = '1' if have_eleven else '0'
-         resp.headers['X-Idempotent'] = '1' if idempotent else '0'
-         resp.headers['X-Greet-TTL'] = str(DEFAULT_TTL_SEC)
-     except Exception:
-         pass
- 
--    # Always nudge UI awake
-+    state_already_scheduled = any(
-+        isinstance(fr, dict) and fr.get("type") == "state" for fr in scheduled_frames
-+    )
-+    suggestions_already_scheduled = any(
-+        isinstance(fr, dict) and fr.get("type") == "suggestions" for fr in scheduled_frames
-+    )
-+
-+    # Always nudge UI awake (but avoid double-sending frames already scheduled)
-     try:
--        bus.broadcast(sid, {"type": "state", "phase": "ready"})
--        merged = merge_suggestions(hygienic_suggestions(""))
--        if merged:
--            bus.broadcast(sid, {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(merged)})
-+        if not state_already_scheduled:
-+            bus.broadcast(sid, {"type": "state", "phase": "ready"})
-+        if not suggestions_already_scheduled:
-+            merged = merge_suggestions(hygienic_suggestions(""))
-+            if merged:
-+                bus.broadcast(sid, {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(merged)})
-     except Exception:
-         pass
- 
-     try:
-         _admin_emit('greet:resp', label=('greet:resp (repeat)' if idempotent else 'greet:resp'),
-                     session_id=sid, turn_id=tid,
-                     tts_status=db.memory.get('tts_status', {}).get(sid, {}).get(str(tid) if tid else 'greet', {}),
-                     idempotent=bool(idempotent))
-     except Exception:
-         pass
- 
-     return ensure_csrf_headers(resp), 200
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 1e586666117cdbad243e626e55afd7cc0e345a7d..33c3000c9e545c13a3186f370ed7849283eb559b 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -1646,59 +1646,69 @@ def run_ws_greet(session_id: str) -> str:
-         try:
-             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-         except Exception:
-             pass
-         return tid
-     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
-     try:
-         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
-             safe_text = _scrub_debug_stamps(text_for_tts)
-             try:
-                 _jlog(
-                     "tts.pre_schedule",
-                     session_id=session_id,
-                     sid=session_id,
-                     turn_id=tid,
-                     flow="greet",
-                     **_tts_text_markers(safe_text),
-                 )
-             except Exception:
-                 pass
-             schedule_tts_audio(session_id, safe_text, turn_id=tid)
-     except Exception:
-         pass
--    # UI nudges
-+    existing_frame_types = [
-+        fr.get("type")
-+        for fr in frames
-+        if isinstance(fr, dict) and fr.get("type") is not None
-+    ]
-+    state_already_sent = any(ft == "state" for ft in existing_frame_types)
-+    suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
-+
-+    # UI nudges (only emit if the assistant frames didn't already do so)
-     try:
--        bus.broadcast(session_id, {"type": "state", "phase": "ready"})
--        base_suggestions = merge_suggestions(hygienic_suggestions(""))
--        if base_suggestions:
--            bus.broadcast(
--                session_id,
--                {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
--            )
-+        if not state_already_sent:
-+            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-+        if not suggestions_already_sent:
-+            base_suggestions = merge_suggestions(hygienic_suggestions(""))
-+            if base_suggestions:
-+                bus.broadcast(
-+                    session_id,
-+                    {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
-+                )
-     except Exception:
-         pass
-     return tid
- 
- 
- def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Optional[str] = None) -> str:
-     """
-     Produce assistant text for a user turn and schedule both text pacing and TTS.
-     Mirrors HTTP /api_v1/chat behavior for consistency.
-     """
-     base_meta = {"source": "user_ws"}
-     nlu_result = classify_turn(text, meta=base_meta)
-     policy = pick_dialog_policy(nlu_result)
-     meta = {
-         **base_meta,
-         "nlu": nlu_result,
-         "action": policy["action"],
-         "verbosity": policy["verbosity"],
-         "show_suggestions": policy["show_suggestions"],
+     if (isFinal){
+       try { delete bubble.dataset.asr; } catch {}
      }
  
-     tid, frames = make_assistant_frames(text, session_id, meta=meta,
-                                         correlation_user_msg_id=correlation_user_msg_id)
-     if _ws_generation_failed(tid, frames):
-         tid = _allocate_turn_id(force_turn_id=None)
-diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
-index 7317267b7366cb028a9327ea7b2304607d01ea14..3d10587b71c6df619823f7ce284cd64918d05e3e 100644
---- a/tests/test_streaming_ws_fallbacks.py
-+++ b/tests/test_streaming_ws_fallbacks.py
-@@ -106,50 +106,96 @@ def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
-         turn_id = kwargs.get("force_turn_id") or "tid-greet"
-         if action == "ask_clarify":
-             text = fallback_text
-         else:
-             text = "foundation hello"
-         frames = [
-             {"type": "assistant_chunk", "turn_id": turn_id, "text": text, "kb_hits": 0},
-             {"type": "assistant_end", "turn_id": turn_id},
-         ]
-         captured["frames"] = frames
-         captured["action"] = action
-         captured["fallback_text"] = fallback_text
-         return turn_id, frames
+     try { msgs.scrollTop = msgs.scrollHeight; } catch {}
+   }catch{}
+ }
  
-     monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
-     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
-     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
+ function _dedupeAssistant(d){
+   // single-bubble de-dupe; keep only latest revision for same turn
+   try{
+     const msgs = $('#chatMessages');
+     if (!msgs) return true;
+     const last = msgs.lastElementChild;
  
-     tid = streaming.run_ws_greet("session-no-clarify")
+     const raw = (d.text || d.delta || d.content || '');
  
-     assert tid == captured["frames"][0]["turn_id"]
-     assert captured["action"] == "give_brief_answer"
-     assert captured["frames"][0]["text"] != captured["fallback_text"]
+     const text = _cleanText(raw);
+-
+-    if (last && last.dataset && last.dataset.role === 'assistant'){
++    const turnId = d?.turn_id;
++    const hasTurnId = turnId !== undefined && turnId !== null && turnId !== '';
++
++    if (
++      hasTurnId &&
++      last &&
++      last.dataset &&
++      last.dataset.role === 'assistant' &&
++      last.dataset.turnId === String(turnId)
++    ){
+       last.className = 'msg assistant';
+       last.textContent = text;
+       return false; // swallowed
+     }
+     const li = document.createElement('div');
+     li.dataset.role = 'assistant';
++    li.dataset.turnId = String(turnId ?? '');
+     li.className = 'msg assistant';
+     li.textContent = text;
+     msgs.appendChild(li);
+     try { msgs.scrollTop = msgs.scrollHeight; } catch {}
+   }catch{}
+   return true;
+ }
  
+ let _lastSuggestionsKey = null;
  
-+def test_run_ws_greet_emits_single_suggestions_frame(monkeypatch):
-+    _stub_config(monkeypatch)
-+
-+    # Avoid touching shared greet idempotency state
-+    monkeypatch.setattr(
-+        streaming,
-+        "get_or_create_greet_turn",
-+        lambda session_id, force=False, ttl_sec=streaming.DEFAULT_TTL_SEC: ("turn-xyz", False),
-+    )
-+
-+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
-+
-+    emitted = []
-+
-+    def fake_broadcast(session_id, frame):
-+        if isinstance(frame, dict):
-+            emitted.append(frame)
-+
-+    monkeypatch.setattr(streaming.bus, "broadcast", fake_broadcast)
-+
-+    def fake_make_frames(seed_text, session_id, meta=None, **kwargs):
-+        turn_id = kwargs.get("force_turn_id") or "turn-xyz"
-+        frames = [
-+            {"type": "assistant_chunk", "turn_id": turn_id, "text": "Hello!", "kb_hits": 0},
-+            {"type": "state", "phase": "ready"},
-+            {
-+                "type": "suggestions",
-+                "turn_id": turn_id,
-+                "items": streaming.build_suggestion_items(["First", "Second"]),
-+            },
-+            {"type": "assistant_end", "turn_id": turn_id},
-+        ]
-+        if kwargs.get("broadcast_immediately", True):
-+            for fr in frames:
-+                fake_broadcast(session_id, fr)
-+        return turn_id, frames
-+
-+    monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
-+
-+    tid = streaming.run_ws_greet("session-one")
-+
-+    assert tid == "turn-xyz"
-+    suggestion_frames = [fr for fr in emitted if fr.get("type") == "suggestions"]
-+    assert len(suggestion_frames) == 1
-+
-+
- def test_make_assistant_frames_http_allows_legacy(monkeypatch):
-     _stub_config(monkeypatch)
+ function _clearSuggestions(){
+   const wrap = document.getElementById('suggestions');
+   if (!wrap) return;
+   try { wrap.innerHTML = ''; } catch {}
+   _lastSuggestionsKey = null;
+ }
  
-     captured = types.SimpleNamespace(called=False)
- 
-     def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
-         captured.called = True
-         assert isinstance(meta.get("nlu"), dict)
-         assert isinstance(meta.get("dialog_nlu"), dict)
-         assert "action" in meta
-         assert meta["dialog_action"] == meta["action"]
-         assert "verbosity" in meta
-         assert meta["dialog_verbosity"] == meta["verbosity"]
-         assert "show_suggestions" in meta
-         assert meta["dialog_show_suggestions"] == meta["show_suggestions"]
-         assert meta["dialog_policy"]["teacher_move"] == kwargs["policy"]["teacher_move"]
-         assert isinstance(kwargs.get("labels"), dict)
-         assert isinstance(kwargs.get("policy"), dict)
-         return "tid-123", [
-             {"type": "assistant_chunk", "turn_id": "tid-123", "text": "hi", "kb_hits": 0},
-             {"type": "assistant_end", "turn_id": "tid-123"},
-         ]
- 
-     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
-     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
+ function _handleSuggestionClick(text){
+   if (!window.__askchip_session_started) return;
+   const suggestion = (text || '').trim();
+   if (!suggestion) return;
+   const input = $('#composer');
+   if (input) {
+     try { input.value = suggestion; } catch {}
+   }

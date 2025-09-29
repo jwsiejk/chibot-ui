@@ -103,14 +103,23 @@ function _dedupeAssistant(d){
     const raw = (d.text || d.delta || d.content || '');
 
     const text = _cleanText(raw);
+    const turnId = d?.turn_id;
+    const hasTurnId = turnId !== undefined && turnId !== null && turnId !== '';
 
-    if (last && last.dataset && last.dataset.role === 'assistant'){
+    if (
+      hasTurnId &&
+      last &&
+      last.dataset &&
+      last.dataset.role === 'assistant' &&
+      last.dataset.turnId === String(turnId)
+    ){
       last.className = 'msg assistant';
       last.textContent = text;
       return false; // swallowed
     }
     const li = document.createElement('div');
     li.dataset.role = 'assistant';
+    li.dataset.turnId = String(turnId ?? '');
     li.className = 'msg assistant';
     li.textContent = text;
     msgs.appendChild(li);
