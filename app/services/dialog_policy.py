@@ -7,11 +7,16 @@ ALLOWED_MOVES = ("check_understanding","deep_dive","offer_steps","compare","visu
 ALLOWED_TONES = ("brief","empathetic","energetic")
 
 def pick(labels: Dict, cfg: Dict) -> Dict:
+    intent = str((labels or {}).get("intent") or "").strip().lower()
     if not cfg.get("awareness_enabled", True):
-        return {"teacher_move":"offer_steps","tone":"brief"}
+        move, tone = _welcome_move()
+        return {"teacher_move": move, "tone": tone}
     sent = labels.get("sentiment")
     eng  = labels.get("engagement")
-    move, tone = "offer_steps","brief"
+    if intent in {"greet", "idle"}:
+        move, tone = _welcome_move()
+    else:
+        move, tone = "offer_steps","brief"
     if sent == "frustrated":
         move, tone = "summarize_next_actions","brief"
     elif sent == "uncertain":
@@ -25,3 +30,7 @@ def pick(labels: Dict, cfg: Dict) -> Dict:
         if tone not in cfg["policy_tones"]: tone = cfg["policy_tones"][0]
     show_suggestions = move in SUGGESTION_MOVES
     return {"teacher_move": move, "tone": tone, "show_suggestions": show_suggestions}
+
+
+def _welcome_move() -> tuple[str, str]:
+    return "offer_steps", "brief"

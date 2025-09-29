@@ -34,11 +34,14 @@ def pick(nlu_result: Dict[str, Any]) -> Dict[str, Any]:
     verbosity = "brief" if expected_depth == "brief" else "normal"
     show_suggestions = False
 
-    if intent == "greet":
+    if intent in {"greet", "idle"}:
+        action = "offer_steps"
+        verbosity = "brief"
+        show_suggestions = True
         result = {
             "action": action,
             "verbosity": verbosity,
-            "show_suggestions": False,
+            "show_suggestions": True,
             "teacher_move": action,
         }
         return result

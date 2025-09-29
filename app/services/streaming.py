@@ -158,6 +158,8 @@ def _should_use_foundation(seed_text: str) -> bool:
 
 
 _POLICY_SUGGESTION_ACTIONS = frozenset({"ask_clarify", "offer_steps"})
+_WELCOME_MOVE = "offer_steps"
+_WELCOME_INTENTS = {"greet", "idle"}
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -184,6 +186,149 @@ def _policy_action(policy: Optional[Dict[str, Any]]) -> Optional[str]:
         return None
     action = policy.get("action") or policy.get("teacher_move")
     return action if isinstance(action, str) else None
+
+
+def _extract_intent_from_meta(meta: Optional[Dict[str, Any]],
+                              fallback: Optional[str] = None) -> Optional[str]:
+    """Best-effort intent extraction from dialog metadata."""
+    intent: Optional[str] = None
+    source = meta if isinstance(meta, dict) else None
+    if source:
+        for key in (_DIALOG_NLU_KEY, "nlu"):
+            block = source.get(key)
+            if isinstance(block, dict):
+                raw = block.get("intent")
+                if raw is not None:
+                    try:
+                        intent = str(raw or "").strip().lower()
+                    except Exception:
+                        intent = None
+                    else:
+                        if intent:
+                            return intent
+        # Some callers may store intent directly on the meta payload
+        raw_meta_intent = source.get("intent")
+        if raw_meta_intent is not None:
+            try:
+                intent = str(raw_meta_intent or "").strip().lower()
+            except Exception:
+                intent = None
+            else:
+                if intent:
+                    return intent
+    if fallback is not None:
+        try:
+            intent = str(fallback or "").strip().lower()
+        except Exception:
+            intent = None
+    return intent if intent else None
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    try:
+        if isinstance(value, str):
+            txt = value.strip()
+            if not txt:
+                return None
+            return int(float(txt))
+        return int(value)
+    except Exception:
+        return None
+
+
+def _coerce_bool(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        return None
+    try:
+        return bool(value)
+    except Exception:
+        return None
+
+
+def _history_has_user_turn(history: Any) -> Optional[bool]:
+    if history is None:
+        return None
+    entries: Iterable[Any]
+    if isinstance(history, dict):
+        entries = history.values()
+    elif isinstance(history, (list, tuple, set)):
+        entries = history
+    else:
+        return None
+
+    saw_entry = False
+    for item in entries:
+        saw_entry = True
+        role: Optional[str] = None
+        if isinstance(item, dict):
+            role = item.get("role") or item.get("speaker")
+        elif isinstance(item, (list, tuple)) and item:
+            role = item[0]
+        elif isinstance(item, str):
+            role = item.split(":", 1)[0]
+        if isinstance(role, str) and role.strip().lower() == "user":
+            return True
+    if not saw_entry:
+        return False
+    return False
+
+
+def _has_prior_user_turn(meta: Optional[Dict[str, Any]],
+                         *,
+                         default_intent: Optional[str] = None) -> bool:
+    """Infer whether the conversation has previously seen a user turn."""
+    source = meta if isinstance(meta, dict) else {}
+
+    for key in ("has_user_turns", "has_prior_user_turn", "has_prior_user_turns"):
+        if key in source:
+            coerced = _coerce_bool(source.get(key))
+            if coerced is not None:
+                return bool(coerced)
+
+    for key in ("prior_user_turns", "user_turn_count", "turn_index", "user_turn_index"):
+        if key in source:
+            count = _coerce_int(source.get(key))
+            if count is not None:
+                return count > 0
+
+    history = (
+        source.get("dialog_history")
+        or source.get("history")
+        or source.get("messages")
+    )
+    history_result = _history_has_user_turn(history)
+    if history_result is not None:
+        return bool(history_result)
+
+    last_user = source.get("last_user_turn_id")
+    if isinstance(last_user, str) and last_user.strip():
+        return True
+
+    intent = _extract_intent_from_meta(source, fallback=default_intent)
+    if intent in _WELCOME_INTENTS:
+        return False
+
+    # When we cannot confidently infer history, assume prior turns exist to
+    # avoid overriding established conversations.
+    return True
+
+
+def _should_force_welcome_move(meta: Optional[Dict[str, Any]],
+                               *,
+                               is_greet: bool,
+                               intent: Optional[str] = None) -> bool:
+    if is_greet:
+        return True
+    return not _has_prior_user_turn(meta, default_intent=intent)
 
 
 def _resolve_show_suggestions(meta: Dict[str, Any],
@@ -945,6 +1090,8 @@ def _make_foundation_frames(seed_text: str,
 
     frames: List[Dict] = []
     active_teacher_move = policy_action or teacher_move
+    if _should_force_welcome_move(meta, is_greet=is_greet, intent=nlu_result.get('intent')):
+        active_teacher_move = _WELCOME_MOVE
     chunk: Dict[str, Any] = {
         'type': 'assistant_chunk',
         'turn_id': turn_id,
@@ -1178,12 +1325,18 @@ def _make_legacy_frames(seed_text: str,
     frames: List[Dict] = []
 
     active_teacher_move = teacher_move
+    if _should_force_welcome_move(meta, is_greet=is_greet, intent=(labels or {}).get('intent') if isinstance(labels, dict) else None):
+        active_teacher_move = _WELCOME_MOVE
     chunk = {
         'type': 'assistant_chunk',
         'turn_id': turn_id,
         'text': safe_reply,
         'kb_hits': len(kb),
     }
+    if isinstance(labels, dict) and labels.get('intent'):
+        chunk['intent'] = labels.get('intent')
+    if active_teacher_move:
+        chunk['teacher_move'] = active_teacher_move
     if correlation_user_msg_id:
         chunk['correlation_user_msg_id'] = correlation_user_msg_id
     if error_note:

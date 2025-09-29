@@ -124,7 +124,7 @@ def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
     tid = streaming.run_ws_greet("session-no-clarify")
 
     assert tid == captured["frames"][0]["turn_id"]
-    assert captured["action"] == "give_brief_answer"
+    assert captured["action"] == "offer_steps"
     assert captured["frames"][0]["text"] != captured["fallback_text"]
 
 
@@ -172,6 +172,53 @@ def test_run_ws_greet_emits_single_suggestions_frame(monkeypatch):
     assert tid == "turn-xyz"
     suggestion_frames = [fr for fr in emitted if fr.get("type") == "suggestions"]
     assert len(suggestion_frames) == 1
+
+
+def test_make_assistant_frames_greet_advertises_welcome_move(monkeypatch):
+    _stub_config(monkeypatch)
+
+    monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
+    monkeypatch.setattr(streaming, "_should_use_foundation", lambda *a, **k: True)
+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
+    monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
+
+    class FakeStore:
+        def match_examples(self, persona_id, user_text, limit=4):
+            return []
+
+    class FakePersonaManager:
+        def __init__(self, store):
+            self.store = store
+
+        def get_active(self):
+            return {"id": "chip", "config": {}}
+
+    monkeypatch.setattr(streaming, "PersonaStore", lambda: FakeStore())
+    monkeypatch.setattr(streaming, "PersonaManager", FakePersonaManager)
+
+    monkeypatch.setattr(
+        streaming,
+        "build_messages",
+        lambda persona, user_text, dialog_meta, examples: (
+            [{"role": "user", "content": user_text}],
+            dialog_meta.get("teacher_move"),
+            "hash",
+        ),
+    )
+    monkeypatch.setattr(streaming, "_call_foundation_with_retry", lambda *a, **k: "Hello!")
+
+    monkeypatch.setattr(streaming._nlu, "infer", lambda *a, **k: {"intent": "greet", "confidence": 0.9})
+    monkeypatch.setattr(
+        streaming._nlu,
+        "policy",
+        types.SimpleNamespace(decide=lambda *a, **k: {"action": "offer_steps", "teacher_move": "offer_steps"}),
+    )
+
+    _, frames = streaming.make_assistant_frames("greet", "session-greet", meta={"source": "ws_greet"})
+
+    chunk = next(fr for fr in frames if fr.get("type") == "assistant_chunk")
+    assert chunk["teacher_move"] == "offer_steps"
+    assert chunk.get("intent") == "greet"
 
 
 def test_make_assistant_frames_http_allows_legacy(monkeypatch):
