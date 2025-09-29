@@ -1668,15 +1668,25 @@ def run_ws_greet(session_id: str) -> str:
             schedule_tts_audio(session_id, safe_text, turn_id=tid)
     except Exception:
         pass
-    # UI nudges
+    existing_frame_types = [
+        fr.get("type")
+        for fr in frames
+        if isinstance(fr, dict) and fr.get("type") is not None
+    ]
+    state_already_sent = any(ft == "state" for ft in existing_frame_types)
+    suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
+
+    # UI nudges (only emit if the assistant frames didn't already do so)
     try:
-        bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-        base_suggestions = merge_suggestions(hygienic_suggestions(""))
-        if base_suggestions:
-            bus.broadcast(
-                session_id,
-                {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
-            )
+        if not state_already_sent:
+            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+        if not suggestions_already_sent:
+            base_suggestions = merge_suggestions(hygienic_suggestions(""))
+            if base_suggestions:
+                bus.broadcast(
+                    session_id,
+                    {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
+                )
     except Exception:
         pass
     return tid

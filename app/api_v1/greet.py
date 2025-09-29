@@ -48,6 +48,8 @@ def greet():
     audio_scheduled = False
     note = None
 
+    scheduled_frames = []
+
     if have_openai:
         try:
             from ..services.streaming import make_assistant_frames, schedule_frames
@@ -62,6 +64,7 @@ def greet():
             if isinstance(_tid, str) and _tid:
                 tid = _tid
             schedule_frames(sid, frames)
+            scheduled_frames = frames
             if have_eleven:
                 audio_scheduled = True
         except Exception as e:
@@ -84,6 +87,7 @@ def greet():
                 if isinstance(_tid2, str) and _tid2:
                     tid = _tid2
                 schedule_frames(sid, frames2)
+                scheduled_frames = frames2
                 if have_eleven:
                     audio_scheduled = True
             except Exception:
@@ -121,12 +125,21 @@ def greet():
     except Exception:
         pass
 
-    # Always nudge UI awake
+    state_already_scheduled = any(
+        isinstance(fr, dict) and fr.get("type") == "state" for fr in scheduled_frames
+    )
+    suggestions_already_scheduled = any(
+        isinstance(fr, dict) and fr.get("type") == "suggestions" for fr in scheduled_frames
+    )
+
+    # Always nudge UI awake (but avoid double-sending frames already scheduled)
     try:
-        bus.broadcast(sid, {"type": "state", "phase": "ready"})
-        merged = merge_suggestions(hygienic_suggestions(""))
-        if merged:
-            bus.broadcast(sid, {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(merged)})
+        if not state_already_scheduled:
+            bus.broadcast(sid, {"type": "state", "phase": "ready"})
+        if not suggestions_already_scheduled:
+            merged = merge_suggestions(hygienic_suggestions(""))
+            if merged:
+                bus.broadcast(sid, {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(merged)})
     except Exception:
         pass
 

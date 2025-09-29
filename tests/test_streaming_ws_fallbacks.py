@@ -128,6 +128,52 @@ def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
     assert captured["frames"][0]["text"] != captured["fallback_text"]
 
 
+def test_run_ws_greet_emits_single_suggestions_frame(monkeypatch):
+    _stub_config(monkeypatch)
+
+    # Avoid touching shared greet idempotency state
+    monkeypatch.setattr(
+        streaming,
+        "get_or_create_greet_turn",
+        lambda session_id, force=False, ttl_sec=streaming.DEFAULT_TTL_SEC: ("turn-xyz", False),
+    )
+
+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
+
+    emitted = []
+
+    def fake_broadcast(session_id, frame):
+        if isinstance(frame, dict):
+            emitted.append(frame)
+
+    monkeypatch.setattr(streaming.bus, "broadcast", fake_broadcast)
+
+    def fake_make_frames(seed_text, session_id, meta=None, **kwargs):
+        turn_id = kwargs.get("force_turn_id") or "turn-xyz"
+        frames = [
+            {"type": "assistant_chunk", "turn_id": turn_id, "text": "Hello!", "kb_hits": 0},
+            {"type": "state", "phase": "ready"},
+            {
+                "type": "suggestions",
+                "turn_id": turn_id,
+                "items": streaming.build_suggestion_items(["First", "Second"]),
+            },
+            {"type": "assistant_end", "turn_id": turn_id},
+        ]
+        if kwargs.get("broadcast_immediately", True):
+            for fr in frames:
+                fake_broadcast(session_id, fr)
+        return turn_id, frames
+
+    monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
+
+    tid = streaming.run_ws_greet("session-one")
+
+    assert tid == "turn-xyz"
+    suggestion_frames = [fr for fr in emitted if fr.get("type") == "suggestions"]
+    assert len(suggestion_frames) == 1
+
+
 def test_make_assistant_frames_http_allows_legacy(monkeypatch):
     _stub_config(monkeypatch)
 
