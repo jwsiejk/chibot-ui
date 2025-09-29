@@ -1,74 +1,72 @@
-diff --git a/static/js/app.js b/static/js/app.js
-index 13a654073c056d644a3ed4acb8f57cc6156416d3..720095854a4b1dd34d8983244dd0afab195bffd7 100644
---- a/static/js/app.js
-+++ b/static/js/app.js
-@@ -81,58 +81,67 @@ function _renderUserTranscript(d){
-     const isFinal = (
-       d?.channel?.is_final ??
-       d?.is_final ??
-       d?.final ??
-       false
-     );
+diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
+index f205e36f8ec818b9ece0a08cd5079cdb2a354c8c..bcf1b759965742725ad146f77ec132b9625505d2 100644
+--- a/static/js/bootstrap.js
++++ b/static/js/bootstrap.js
+@@ -204,51 +204,67 @@ async function startOnce(){
  
-     if (isFinal){
-       try { delete bubble.dataset.asr; } catch {}
+     // 4) WS-only greet using the SAME session id as WS — fire ASAP so text arrives while
+     //    audio hardware comes online.
+     const sid = getSID();
+     try {
+       configure({ greet: true, reset: 1, session_id: sid });
+     } catch (e) {
+       console.warn('[bootstrap] WS configure failed, cannot greet', e);
+       showBanner('Greet failed to send — check WS configure()');
+       throw e;
      }
  
-     try { msgs.scrollTop = msgs.scrollHeight; } catch {}
-   }catch{}
- }
- 
- function _dedupeAssistant(d){
-   // single-bubble de-dupe; keep only latest revision for same turn
-   try{
-     const msgs = $('#chatMessages');
-     if (!msgs) return true;
-     const last = msgs.lastElementChild;
- 
-     const raw = (d.text || d.delta || d.content || '');
- 
-     const text = _cleanText(raw);
--
--    if (last && last.dataset && last.dataset.role === 'assistant'){
-+    const turnId = d?.turn_id;
-+    const hasTurnId = turnId !== undefined && turnId !== null && turnId !== '';
-+
-+    if (
-+      hasTurnId &&
-+      last &&
-+      last.dataset &&
-+      last.dataset.role === 'assistant' &&
-+      last.dataset.turnId === String(turnId)
-+    ){
-       last.className = 'msg assistant';
-       last.textContent = text;
-       return false; // swallowed
+     // 5) Mic permission + arm echo-aware VAD (voice-first path)
+     let visualizerStream = null;
+     try {
+       visualizerStream = await Visualizer.start();
+     } catch (e) {
+       console.warn('[bootstrap] visualizer init failed', e);
      }
-     const li = document.createElement('div');
-     li.dataset.role = 'assistant';
-+    li.dataset.turnId = String(turnId ?? '');
-     li.className = 'msg assistant';
-     li.textContent = text;
-     msgs.appendChild(li);
-     try { msgs.scrollTop = msgs.scrollHeight; } catch {}
-   }catch{}
-   return true;
- }
  
- let _lastSuggestionsKey = null;
+     try {
+       const stream = await initMic(visualizerStream ?? undefined);
+       await armVAD(stream);         // begins voice turns (one blob per user turn)
+     } catch (e) {
+       console.warn('[bootstrap] mic/VAD init failed', e);
++      showBanner('Microphone unavailable — voice capture disabled.');
++      setStatusText('Voice capture unavailable');
++      try {
++        window.dispatchEvent(new CustomEvent('askchip-voice', {
++          detail: { state: 'idle', label: 'Voice capture unavailable' }
++        }));
++      } catch {}
+       try { Visualizer.stop({ reset: true }); } catch {}
++      _disableButtons();
++      if (endBtn) endBtn.disabled = true;
++      if (startBtn) startBtn.disabled = false;
++      setDot('ready');
++      started = false;
++      try { window.__askchip_session_started = false; } catch {}
++      try { closeWS(1000, 'mic_unavailable'); } catch {}
++      startInFlight = false;
++      return;
+     }
  
- function _clearSuggestions(){
-   const wrap = document.getElementById('suggestions');
-   if (!wrap) return;
-   try { wrap.innerHTML = ''; } catch {}
-   _lastSuggestionsKey = null;
- }
+     // Watchdog: if no assistant frames within 6s after sending WS greet, warn
+     let gotAssistant = false;
+     let markAssistantRemove = false;
+     const markAssistant = (ev) => {
+       const d = ev.detail || {};
+       if (_isAssistantTextFrame(d)) gotAssistant = true;
+       if (markAssistantRemove) {
+         markAssistantRemove = false;
+         try { window.removeEventListener('askchip-ws', markAssistant); } catch {}
+       }
+     };
+     try {
+       window.addEventListener('askchip-ws', markAssistant, { once: true });
+     } catch (err) {
+       markAssistantRemove = true;
+       window.addEventListener('askchip-ws', markAssistant);
+       try { console.warn('[bootstrap] once listener fallback', err); } catch {}
+     }
  
- function _handleSuggestionClick(text){
-   if (!window.__askchip_session_started) return;
-   const suggestion = (text || '').trim();
-   if (!suggestion) return;
-   const input = $('#composer');
-   if (input) {
-     try { input.value = suggestion; } catch {}
-   }
+     setTimeout(() => {
+       if (!gotAssistant) showBanner('No assistant frames after greet — check WS handler/payload.');
+     }, 6000);
+ 

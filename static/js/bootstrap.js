@@ -226,7 +226,23 @@ async function startOnce(){
       await armVAD(stream);         // begins voice turns (one blob per user turn)
     } catch (e) {
       console.warn('[bootstrap] mic/VAD init failed', e);
+      showBanner('Microphone unavailable — voice capture disabled.');
+      setStatusText('Voice capture unavailable');
+      try {
+        window.dispatchEvent(new CustomEvent('askchip-voice', {
+          detail: { state: 'idle', label: 'Voice capture unavailable' }
+        }));
+      } catch {}
       try { Visualizer.stop({ reset: true }); } catch {}
+      _disableButtons();
+      if (endBtn) endBtn.disabled = true;
+      if (startBtn) startBtn.disabled = false;
+      setDot('ready');
+      started = false;
+      try { window.__askchip_session_started = false; } catch {}
+      try { closeWS(1000, 'mic_unavailable'); } catch {}
+      startInFlight = false;
+      return;
     }
 
     // Watchdog: if no assistant frames within 6s after sending WS greet, warn
