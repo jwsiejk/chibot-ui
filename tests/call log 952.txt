@@ -1,0 +1,114 @@
+170.85.73.7:0 - "GET /api/v1/auth/ws-token?session_id=54d94123-9439-4960-85d8-9292223ee092 HTTP/1.1" 200
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] = connection is CONNECTING
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < GET /ws/v1/chat?session_id=54d94123-9439-4960-85d8-9292223ee092 HTTP/1.1
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < host: chibot-ui.onrender.com
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < accept-encoding: gzip, br
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < accept-language: en-US,en;q=0.9
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < cache-control: no-cache
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < cdn-loop: cloudflare; loops=1
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < cf-connecting-ip: 170.85.73.7
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < cf-ipcountry: US
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < cf-ray: 9868841b9ce1151b-EWR
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < cf-visitor: {"scheme":"https"}
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < connection: Upgrade
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < cookie: XSRF-TOKEN=30ba403cb89e1cd7876559628b167be9; session=.eJwNzEsOgyAUBdC9vLFptH74jLoTAvTaoFjIA9KBce91AeecZHzh1dS040uaxt7ZqR-9kwqDfwsplnlWy1O6YREOijrKnNYQYXw6ckQF6coNHbUCJn0SDhviXW2_ErDtr9wYpSa2HzxuQ9f1B56wJ0o.aNoB9w.BrR8LacGwRdqEbnVFHhQIi-54BI
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < origin: https://chibot-ui.onrender.com
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < pragma: no-cache
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < render-cf-start-time-msec: 291
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < render-cf-start-time-sec: 1759117823
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < render-proxy-ttl: 4
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < rndr-id: 98b2e74d-7ec5-4dd2
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < sec-websocket-key: v5RAJpij20BfIiIYRoV/rA==
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < sec-websocket-protocol: bearer, bearer.eyJzaWQiOiI1NGQ5NDEyMy05NDM5LTQ5NjAtODVkOC05MjkyMjIzZWUwOTIiLCJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsImlhdCI6MTc1OTExNzgyMywiZXhwIjoxNzU5MTE4MTIzLCJqdGkiOiJZcWdiYkp6LVJUUk9yTU1WcUMtZW9BIn0.yDQoOMqxOJ9wmSYTH728PqNJMZZn2H0welxyYDOaf-4
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < sec-websocket-version: 13
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < true-client-ip: 170.85.73.7
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < upgrade: websocket
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < x-forwarded-for: 170.85.73.7, 10.226.151.1
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < x-forwarded-proto: https
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < x-render-as-num: 22616
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < x-render-threat-score: 0
+[2025-09-29 03:50:23 +0000] [57] [INFO] 170.85.73.7:0 - "WebSocket /ws/v1/chat?session_id=54d94123-9439-4960-85d8-9292223ee092" [accepted]
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] > HTTP/1.1 101 Switching Protocols
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] > Upgrade: websocket
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] > Connection: Upgrade
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] > Sec-WebSocket-Accept: /t+0JkDkzJNzHJrqwWArWAMvVuk=
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] > Sec-WebSocket-Protocol: bearer
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] > date: Mon, 29 Sep 2025 03:50:23 GMT
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] > server: uvicorn
+[2025-09-29 03:50:23 +0000] [57] [INFO] connection open
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] = connection is OPEN
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] > TEXT '{"type":"ready","session_id":"54d94123-9439-4960-85d8-9292223ee092"}' [68 bytes]
+[2025-09-29 03:50:23 +0000] [57] [DEBUG] < TEXT '{"type":"Configure","session_id":"54d94123-9439...min_voice_diagnostic"}}' [142 bytes]
+{"sid":"pending","enabled":true,"echo_ws":true,"event":"mic_capture_cfg","ts":1759117823.3437033}
+{"sid":"54d94123-9439-4960-85d8-9292223ee092","enabled":true,"echo_ws":true,"event":"mic_capture_cfg","ts":1759117823.3437848}
+{"sid":"54d94123-9439-4960-85d8-9292223ee092","conn_id":"fb76538abd8d488a9d414eb21d904500","client_ip":"170.85.73.7","path":"/ws/v1/chat","query_string":"session_id=54d94123-9439-4960-85d8-9292223ee092","event":"ws_conn_open","ts":1759117823.3440974}
+{"conn_id":"fb76538abd8d488a9d414eb21d904500","sid":"54d94123-9439-4960-85d8-9292223ee092","active":1,"event":"ws_conn_active","ts":1759117823.344134}
+{"sid":"54d94123-9439-4960-85d8-9292223ee092","via":"Configure","event":"ws_greet_recv","ts":1759117823.4564707}
+170.85.73.7:0 - "POST /api/v1/admin/log HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/logs?live=1 HTTP/1.1" 200
+170.85.73.7:0 - "POST /api/v1/admin/log HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+10.225.27.64:57916 - "GET /api/v1/health HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+10.225.27.64:57920 - "GET /api/v1/health HTTP/1.1" 200
+10.225.27.64:57932 - "GET /api/v1/health HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+[2025-09-29 03:50:34 +0000] [57] [DEBUG] > TEXT '{"type":"assistant_chunk","turn_id":"e66b4e4122...:"check_understanding"}' [167 bytes]
+[2025-09-29 03:50:34 +0000] [57] [DEBUG] > TEXT '{"type":"state","phase":"ready"}' [32 bytes]
+[2025-09-29 03:50:34 +0000] [57] [DEBUG] > TEXT '{"type":"suggestions","turn_id":"e66b4e4122ee42... the business value"}]}' [209 bytes]
+[2025-09-29 03:50:34 +0000] [57] [DEBUG] > TEXT '{"type":"assistant_end","turn_id":"e66b4e4122ee420db5cdfb7c0c1aac05"}' [69 bytes]
+170.85.73.7:0 - "POST /api/v1/admin/log HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+[2025-09-29 03:50:35 +0000] [57] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"e66b4e4122...gjc="],"is_last":false}' [11051 bytes]
+[2025-09-29 03:50:35 +0000] [57] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"e66b4e4122...VVVU="],"is_last":true}' [7654 bytes]
+[2025-09-29 03:50:35 +0000] [57] [DEBUG] > TEXT '{"type":"UtteranceEnd","turn_id":"e66b4e4122ee420db5cdfb7c0c1aac05"}' [68 bytes]
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+10.225.27.64:48452 - "GET /api/v1/health HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "POST /api/v1/admin/log HTTP/1.1" 200
+10.225.27.64:48464 - "GET /api/v1/health HTTP/1.1" 200
+[2025-09-29 03:50:43 +0000] [57] [DEBUG] > TEXT '{"type":"keepalive","ts":1759117843394}' [39 bytes]
+[2025-09-29 03:50:43 +0000] [57] [DEBUG] % sending keepalive ping
+[2025-09-29 03:50:43 +0000] [57] [DEBUG] > PING b9 e2 df 11 [binary, 4 bytes]
+[2025-09-29 03:50:43 +0000] [57] [DEBUG] < PONG b9 e2 df 11 [binary, 4 bytes]
+[2025-09-29 03:50:43 +0000] [57] [DEBUG] % received keepalive pong
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+10.225.27.64:48596 - "GET /api/v1/health HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+10.225.27.64:48606 - "GET /api/v1/health HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+[2025-09-29 03:50:55 +0000] [57] [DEBUG] < CLOSE 1000 (OK) [2 bytes]
+[2025-09-29 03:50:55 +0000] [57] [DEBUG] = connection is CLOSING
+[2025-09-29 03:50:55 +0000] [57] [DEBUG] > CLOSE 1000 (OK) [2 bytes]
+[2025-09-29 03:50:55 +0000] [57] [DEBUG] x half-closing TCP connection
+[2025-09-29 03:50:55 +0000] [57] [DEBUG] = connection is CLOSED
+[2025-09-29 03:50:55 +0000] [57] [INFO] connection closed
+{"conn_id":"fb76538abd8d488a9d414eb21d904500","sid":"54d94123-9439-4960-85d8-9292223ee092","code":1000,"reason":"","idle_s":31.588188886642456,"event":"ws_conn_disconnect","ts":1759117855.0445573}
+{"conn_id":"fb76538abd8d488a9d414eb21d904500","sid":"54d94123-9439-4960-85d8-9292223ee092","active":0,"source":"disconnect","event":"ws_conn_close","ts":1759117855.0446074}
+{"conn_id":"fb76538abd8d488a9d414eb21d904500","sid":"54d94123-9439-4960-85d8-9292223ee092","duration":31.700845956802368,"had_disconnect":true,"event":"ws_conn_cleanup","ts":1759117855.0446308}
+170.85.73.7:0 - "POST /api/v1/admin/log HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
