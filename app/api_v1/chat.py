@@ -10,9 +10,9 @@ from ..services.streaming import (
     merge_suggestions,
     build_suggestion_items,
 )
+from ..nlu.classifier import classify as classify_turn  # backwards-compat shim for tests
+from ..dialog.policy import pick as pick_dialog_policy  # backwards-compat shim for tests
 from ..services.greet_idempotency import clear_greet_turn_cache
-from ..nlu.classifier import classify as classify_turn
-from ..dialog.policy import pick as pick_dialog_policy
 from ..middleware.rate_limit import limit, check_now
 from ..ws.bus import bus
 import os, uuid
@@ -120,19 +120,11 @@ def post_chat():
         if isinstance(nested_meta, dict):
             request_meta.update(nested_meta)
         request_meta.setdefault("source", "user_http")
-        nlu_result = classify_turn(text, meta=request_meta)
-        policy = pick_dialog_policy(nlu_result) or {}
-        enriched_meta = {
-            **request_meta,
-            "nlu": nlu_result,
-            "action": policy.get("action"),
-            "verbosity": policy.get("verbosity"),
-            "show_suggestions": policy.get("show_suggestions"),
-        }
+        request_meta.setdefault("channel", "http")
         _provider_tid, frames = make_assistant_frames(
             text,
             sid,
-            meta=enriched_meta,
+            meta=request_meta,
             correlation_user_msg_id=user_msg_id,
             broadcast_immediately=False,
         )
@@ -233,19 +225,11 @@ def chat_entry():
     if isinstance(nested_meta, dict):
         request_meta.update(nested_meta)
     request_meta.setdefault("source", "user_http")
-    nlu_result = classify_turn(text, meta=request_meta)
-    policy = pick_dialog_policy(nlu_result) or {}
-    enriched_meta = {
-        **request_meta,
-        "nlu": nlu_result,
-        "action": policy.get("action"),
-        "verbosity": policy.get("verbosity"),
-        "show_suggestions": policy.get("show_suggestions"),
-    }
+    request_meta.setdefault("channel", "http")
     _provider_tid, frames = make_assistant_frames(
         text,
         sid,
-        meta=enriched_meta,
+        meta=request_meta,
         correlation_user_msg_id=user_msg_id,
         broadcast_immediately=False,
     )

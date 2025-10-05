@@ -22,6 +22,7 @@ from .greet_idempotency import get_or_create_greet_turn, DEFAULT_TTL_SEC
 from ..db import db
 from ..ws.bus import bus
 from ..obs import jlog as _jlog
+from ..obs.nlu_logging import NluLoggingContext, create_context as _create_nlu_context
 from ..personas.store import PersonaManager, PersonaStore
 from ..personas.prompt_builder import build_messages
 from .. import nlu as _nlu
@@ -553,7 +554,9 @@ def _apply_action_shape(action: str,
     return text
 
 
-def _call_foundation_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
+def _call_foundation_llm(messages: List[Dict[str, str]],
+                         cfg: Dict[str, Any],
+                         telemetry: Optional[NluLoggingContext] = None) -> Tuple[str, Dict[str, Any]]:
     client = make_openai_client()
     model = (
         cfg.get("openai_model")
@@ -564,6 +567,27 @@ def _call_foundation_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) ->
     temperature = float(cfg.get("gen_temperature", 0.3))
     top_p = float(cfg.get("gen_top_p", 1.0))
     payload = [dict(m) for m in messages]
+    prompt_tokens_estimate = 0
+    for msg in payload:
+        content = msg.get("content")
+        if isinstance(content, str):
+            prompt_tokens_estimate += len(content.split())
+    cache_status = str(cfg.get("foundation_cache_status") or "unknown")
+    tool_allowlist = cfg.get("tool_allowlist")
+    allowlist_payload: Optional[Iterable[str]] = None
+    if isinstance(tool_allowlist, (list, tuple, set)):
+        allowlist_payload = tool_allowlist
+    elif tool_allowlist is not None:
+        allowlist_payload = [str(tool_allowlist)]
+    if telemetry:
+        telemetry.log_llm_request(
+            model=model,
+            temperature=temperature,
+            top_p=top_p,
+            prompt_tokens=prompt_tokens_estimate,
+            cache_status=cache_status,
+            tool_allowlist=allowlist_payload,
+        )
     resp = client.chat.completions.create(
         model=model,
         messages=payload,
@@ -571,25 +595,59 @@ def _call_foundation_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) ->
         top_p=top_p,
         stream=False,
     )
-    return (resp.choices[0].message.content or "").strip()
+    content = ""
+    try:
+        content = (resp.choices[0].message.content or "").strip()
+    except Exception:
+        content = ""
+    usage = getattr(resp, "usage", None)
+    prompt_tokens = None
+    completion_tokens = None
+    if usage is not None:
+        prompt_tokens = getattr(usage, "prompt_tokens", None)
+        completion_tokens = getattr(usage, "completion_tokens", None)
+        if prompt_tokens is None and isinstance(usage, dict):
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+    finish_reason = None
+    try:
+        finish_reason = resp.choices[0].finish_reason
+    except Exception:
+        finish_reason = None
+    preview = None
+    if content:
+        preview = " ".join(content.split()[:8])
+    info = {
+        "output_tokens": completion_tokens,
+        "prompt_tokens": prompt_tokens,
+        "finish_reason": finish_reason,
+        "preview": preview,
+    }
+    return content, info
 
 
-def _call_foundation_with_retry(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
-    primary = _call_foundation_llm(messages, cfg)
+def _call_foundation_with_retry(messages: List[Dict[str, str]],
+                                cfg: Dict[str, Any],
+                                telemetry: Optional[NluLoggingContext] = None) -> Tuple[str, Dict[str, Any]]:
+    primary, primary_info = _call_foundation_llm(messages, cfg, telemetry=telemetry)
     human = humanize_text(primary)
+    info = dict(primary_info)
+    if human:
+        info.setdefault("preview", " ".join(human.split()[:8]))
     if not human:
-        return human
+        return human, info
     if not sounds_botty(human):
-        return human
+        return human, info
     try:
         strict_msgs = _apply_system_shim(messages, STRICT_SYSTEM_SHIM)
-        strict_reply = _call_foundation_llm(strict_msgs, cfg)
+        strict_reply, strict_info = _call_foundation_llm(strict_msgs, cfg, telemetry=telemetry)
         strict_human = humanize_text(strict_reply)
         if strict_human:
-            return strict_human
+            strict_info.setdefault("preview", " ".join(strict_human.split()[:8]))
+            return strict_human, strict_info
     except Exception:
         pass
-    return human
+    return human, info
 
 
 def _broadcast_frames(session_id: str, frames: List[Dict], turn_id: str) -> None:
@@ -714,14 +772,23 @@ def classify(seed_text: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str,
 def prepare_turn_metadata(seed_text: str,
                           meta: Optional[Dict[str, Any]] = None,
                           *,
-                          cfg: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+                          cfg: Optional[Dict[str, Any]] = None,
+                          telemetry: Optional[NluLoggingContext] = None) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """Ensure dialog metadata is populated for downstream consumers."""
     cfg = cfg or db.get_config()
     incoming_meta = meta if isinstance(meta, dict) else {}
     target_meta = incoming_meta if incoming_meta is meta and isinstance(meta, dict) else dict(incoming_meta)
+    incoming_action = None
+    if isinstance(incoming_meta, dict):
+        incoming_action = incoming_meta.get("action")
 
     labels = classify(seed_text, target_meta)
     dialog_nlu = dict(labels)
+
+    if telemetry:
+        telemetry.log_intent(dialog_nlu)
+        telemetry.log_entities(dialog_nlu.get("entities"))
+        telemetry.log_guardrail(decision="allow")
 
     raw_policy = pick_dialog_policy(dialog_nlu) or {}
     policy = dict(raw_policy)
@@ -762,6 +829,26 @@ def prepare_turn_metadata(seed_text: str,
     target_meta["show_suggestions"] = show_suggestions
     target_meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
     target_meta[_DIALOG_POLICY_KEY] = dict(policy)
+
+    if telemetry:
+        policy_move = policy.get("teacher_move") or policy.get("action")
+        resolved_move = target_meta.get(_DIALOG_ACTION_KEY)
+        override_reason = (
+            incoming_meta.get("policy_override_reason") if isinstance(incoming_meta, dict) else None
+        )
+        if not override_reason:
+            if incoming_action and resolved_move and str(incoming_action) != str(resolved_move):
+                override_reason = "meta_override"
+            elif resolved_move and policy_move and str(resolved_move) != str(policy_move):
+                override_reason = "policy_adjustment"
+            else:
+                override_reason = "policy"
+        telemetry.log_teacher_move(
+            resolved_move=resolved_move,
+            policy_move=policy_move,
+            reason=override_reason,
+        )
+        telemetry.log_toolplan(policy)
 
     return target_meta, dialog_nlu, policy
 
@@ -828,7 +915,9 @@ def make_assistant_frames(seed_text: str,
                           correlation_user_msg_id: Optional[str] = None,
                           *,
                           force_turn_id: Optional[str] = None,
-                          broadcast_immediately: bool = True) -> Tuple[Optional[str], List[Dict]]:
+                          broadcast_immediately: bool = True,
+                          cfg: Optional[Dict[str, Any]] = None,
+                          telemetry: Optional[NluLoggingContext] = None) -> Tuple[Optional[str], List[Dict]]:
     """
     Produce assistant frames for a given user seed text using the configured LLM provider.
     ALWAYS returns a frames list that includes at least:
@@ -836,86 +925,114 @@ def make_assistant_frames(seed_text: str,
         - one 'assistant_end'.
     When broadcast_immediately is True (default) frames are broadcast to the WS bus.
     """
-    cfg = db.get_config()
-    meta, classified_labels, classified_policy = prepare_turn_metadata(seed_text, meta, cfg=cfg)
-    skip_legacy = _should_skip_legacy(meta)
+    cfg = cfg or db.get_config()
+    turn_id = _allocate_turn_id(force_turn_id)
 
-    action = _normalize_action(meta)
-    if isinstance(meta, dict):
-        meta['action'] = action
-        meta[_DIALOG_ACTION_KEY] = action
-
-    try:
-        source = str(meta.get("source", "") or "").strip().lower()
-    except Exception:
-        source = ""
-    try:
-        is_greet = str(seed_text or "").strip().lower() == "greet"
-    except Exception:
-        is_greet = False
-    if not is_greet and source:
-        is_greet = source in {"greet", "ws_greet", "greet_fallback"}
-
-    fallback_line = str(cfg.get("assistant_fallback_line") or "Hi! I’m ready to help.")
-
-    def _cfg_flag(key: str, default: bool) -> bool:
-        val = meta.get(key)
-        if val is None:
-            val = cfg.get(key, default)
-        try:
-            if isinstance(val, str):
-                return val.strip().lower() in ("1", "true", "yes", "on")
-            return bool(val)
-        except Exception:
-            return default
-
-    fallback_on_empty = _cfg_flag("assistant_fallback_on_empty", True)
-    fallback_on_error = _cfg_flag("assistant_fallback_on_error", True)
-    fallback_emit_event = _cfg_flag("assistant_fallback_emit_event", True)
-
-    if _should_use_foundation(seed_text):
-        try:
-            return _make_foundation_frames(
-                seed_text,
-                session_id,
-                meta,
-                cfg,
-                correlation_user_msg_id=correlation_user_msg_id,
-                force_turn_id=force_turn_id,
-                is_greet=is_greet,
-                fallback_line=fallback_line,
-                fallback_on_empty=fallback_on_empty,
-                fallback_on_error=fallback_on_error,
-                fallback_emit_event=fallback_emit_event,
-                action=action,
-                broadcast_immediately=broadcast_immediately,
-            )
-        except Exception as e:
-            try:
-                _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
-            except Exception:
-                pass
-
-    if skip_legacy:
-        return None, []
-
-    return _make_legacy_frames(
-        seed_text,
-        session_id,
-        meta,
-        cfg,
+    context = telemetry or _create_nlu_context(
+        turn_id=turn_id,
+        session_id=session_id,
         correlation_user_msg_id=correlation_user_msg_id,
-        force_turn_id=force_turn_id,
-        is_greet=is_greet,
-        fallback_line=fallback_line,
-        fallback_on_empty=fallback_on_empty,
-        fallback_on_error=fallback_on_error,
-        fallback_emit_event=fallback_emit_event,
-        action=action,
-        labels=classified_labels,
-        policy=classified_policy,
-        broadcast_immediately=broadcast_immediately,
+        meta=meta if isinstance(meta, dict) else {},
+        settings=SETTINGS,
+        cfg=cfg,
     )
+    context.turn_id = str(turn_id)
+
+    context.log_start(seed_text, meta=meta if isinstance(meta, dict) else {})
+
+    try:
+        meta, classified_labels, classified_policy = prepare_turn_metadata(
+            seed_text,
+            meta,
+            cfg=cfg,
+            telemetry=context,
+        )
+        skip_legacy = _should_skip_legacy(meta)
+
+        action = _normalize_action(meta)
+        if isinstance(meta, dict):
+            meta['action'] = action
+            meta[_DIALOG_ACTION_KEY] = action
+
+        try:
+            source = str(meta.get("source", "") or "").strip().lower()
+        except Exception:
+            source = ""
+        try:
+            is_greet = str(seed_text or "").strip().lower() == "greet"
+        except Exception:
+            is_greet = False
+        if not is_greet and source:
+            is_greet = source in {"greet", "ws_greet", "greet_fallback"}
+
+        fallback_line = str(cfg.get("assistant_fallback_line") or "Hi! I’m ready to help.")
+
+        def _cfg_flag(key: str, default: bool) -> bool:
+            val = meta.get(key)
+            if val is None:
+                val = cfg.get(key, default)
+            try:
+                if isinstance(val, str):
+                    return val.strip().lower() in ("1", "true", "yes", "on")
+                return bool(val)
+            except Exception:
+                return default
+
+        fallback_on_empty = _cfg_flag("assistant_fallback_on_empty", True)
+        fallback_on_error = _cfg_flag("assistant_fallback_on_error", True)
+        fallback_emit_event = _cfg_flag("assistant_fallback_emit_event", True)
+
+        if _should_use_foundation(seed_text):
+            try:
+                return _make_foundation_frames(
+                    seed_text,
+                    session_id,
+                    meta,
+                    cfg,
+                    correlation_user_msg_id=correlation_user_msg_id,
+                    turn_id=turn_id,
+                    telemetry=context,
+                    is_greet=is_greet,
+                    fallback_line=fallback_line,
+                    fallback_on_empty=fallback_on_empty,
+                    fallback_on_error=fallback_on_error,
+                    fallback_emit_event=fallback_emit_event,
+                    action=action,
+                    broadcast_immediately=broadcast_immediately,
+                )
+            except Exception as e:
+                context.log_error("foundation_pipeline_error", str(e))
+                try:
+                    _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
+                except Exception:
+                    pass
+
+        if skip_legacy:
+            return None, []
+
+        return _make_legacy_frames(
+            seed_text,
+            session_id,
+            meta,
+            cfg,
+            correlation_user_msg_id=correlation_user_msg_id,
+            turn_id=turn_id,
+            telemetry=context,
+            is_greet=is_greet,
+            fallback_line=fallback_line,
+            fallback_on_empty=fallback_on_empty,
+            fallback_on_error=fallback_on_error,
+            fallback_emit_event=fallback_emit_event,
+            action=action,
+            labels=classified_labels,
+            policy=classified_policy,
+            broadcast_immediately=broadcast_immediately,
+        )
+    except Exception as exc:
+        context.log_error("streaming_pipeline_error", str(exc))
+        raise
+    finally:
+        context.log_done()
 
 
 def _make_foundation_frames(seed_text: str,
@@ -924,7 +1041,9 @@ def _make_foundation_frames(seed_text: str,
                             cfg: Dict[str, Any],
                             *,
                             correlation_user_msg_id: Optional[str],
-                            force_turn_id: Optional[str],
+                            turn_id: Optional[str] = None,
+                            telemetry: Optional[NluLoggingContext] = None,
+                            force_turn_id: Optional[str] = None,
                             is_greet: bool,
                             fallback_line: str,
                             fallback_on_empty: bool,
@@ -932,12 +1051,30 @@ def _make_foundation_frames(seed_text: str,
                             fallback_emit_event: bool,
                             action: Optional[str] = None,
                             broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
+    if turn_id is None:
+        turn_id = _allocate_turn_id(force_turn_id)
+    turn_id = str(turn_id)
+    if telemetry is None:
+        telemetry = _create_nlu_context(
+            turn_id=turn_id,
+            session_id=session_id,
+            correlation_user_msg_id=correlation_user_msg_id,
+            meta=meta,
+            settings=SETTINGS,
+            cfg=cfg,
+        )
+        telemetry.turn_id = turn_id
+        telemetry.log_start(seed_text, meta=meta)
+    else:
+        telemetry.turn_id = turn_id
     store = PersonaStore()
     persona = PersonaManager(store).get_active()
     dialog_meta = dict(meta or {})
 
     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store) or {}
+
+    telemetry.log_entities(nlu_result.get("entities"))
 
     try:
         nlu_meta = dict(nlu_result)
@@ -1012,9 +1149,28 @@ def _make_foundation_frames(seed_text: str,
         examples=examples,
     )
 
+    kb_count = 0
+    try:
+        kb_candidates = meta.get('kb_snippets') if isinstance(meta, dict) else None
+        if isinstance(kb_candidates, (list, tuple)):
+            kb_count = len(kb_candidates)
+    except Exception:
+        kb_count = 0
+    telemetry.log_prompt_summary(messages=messages, prompt_hash=prompt_hash, kb_count=kb_count)
+
     use_llm = normalized_action != "ask_clarify"
+    llm_info: Dict[str, Any] = {}
     if use_llm:
-        reply = _call_foundation_with_retry(messages, cfg)
+        try:
+            foundation_result = _call_foundation_with_retry(messages, cfg, telemetry=telemetry)
+        except Exception as exc:
+            telemetry.log_error("foundation_call_error", str(exc))
+            raise
+        if isinstance(foundation_result, tuple) and len(foundation_result) == 2:
+            reply, llm_info = foundation_result
+        else:
+            reply = foundation_result
+            llm_info = {}
     else:
         reply = _build_clarify_question(seed_text, meta)
 
@@ -1063,6 +1219,23 @@ def _make_foundation_frames(seed_text: str,
         else:
             safe_reply = _LEGACY_WARMUP_LINE
 
+    telemetry.mark_fallback(fallback_fired, fallback_reason)
+
+    if use_llm:
+        preview_text = llm_info.get("preview")
+        if not preview_text:
+            try:
+                preview_text = " ".join((safe_reply or "").split()[:8])
+            except Exception:
+                preview_text = None
+        telemetry.log_llm_response(
+            output_tokens=llm_info.get("output_tokens"),
+            finish_reason=llm_info.get("finish_reason"),
+            preview=preview_text,
+            fallback_fired=fallback_fired,
+            fallback_reason=fallback_reason,
+        )
+
     policy_chips = _collect_policy_chips(policy)
 
     try:
@@ -1077,8 +1250,6 @@ def _make_foundation_frames(seed_text: str,
         )
     except Exception:
         pass
-
-    turn_id = _allocate_turn_id(force_turn_id)
 
     if fallback_fired and fallback_emit_event:
         try:
@@ -1150,7 +1321,9 @@ def _make_legacy_frames(seed_text: str,
                         cfg: Dict[str, Any],
                         *,
                         correlation_user_msg_id: Optional[str],
-                        force_turn_id: Optional[str],
+                        turn_id: Optional[str] = None,
+                        telemetry: Optional[NluLoggingContext] = None,
+                        force_turn_id: Optional[str] = None,
                         is_greet: bool,
                         fallback_line: str,
                         fallback_on_empty: bool,
@@ -1162,10 +1335,28 @@ def _make_legacy_frames(seed_text: str,
                         broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
     persona = _get_persona_for_session(session_id)
 
+    if turn_id is None:
+        turn_id = _allocate_turn_id(force_turn_id)
+    turn_id = str(turn_id)
+    if telemetry is None:
+        telemetry = _create_nlu_context(
+            turn_id=turn_id,
+            session_id=session_id,
+            correlation_user_msg_id=correlation_user_msg_id,
+            meta=meta,
+            settings=SETTINGS,
+            cfg=cfg,
+        )
+        telemetry.turn_id = turn_id
+        telemetry.log_start(seed_text, meta=meta)
+    else:
+        telemetry.turn_id = turn_id
+
     if labels is None:
         labels = classify(seed_text, meta)
     else:
         labels = dict(labels)
+    telemetry.log_entities(labels.get("entities"))
     if policy is None:
         policy = pick_dialog_policy(labels) or {}
     else:
@@ -1244,6 +1435,11 @@ def _make_legacy_frames(seed_text: str,
         kb = []
 
     prompt = _build_prompt(seed_text, persona, kb, teacher_move)
+    try:
+        prompt_hash = hashlib.sha256(prompt.encode('utf-8')).hexdigest()[:12]
+    except Exception:
+        prompt_hash = None
+    telemetry.log_prompt_summary(messages=None, prompt_hash=prompt_hash, kb_count=len(kb))
 
     reply: str
     error_note: Optional[str] = None
@@ -1256,6 +1452,7 @@ def _make_legacy_frames(seed_text: str,
             provider = None
             error_note = "llm_not_available"
             _admin_emit("llm_provider_error", error=e.__class__.__name__)
+            telemetry.log_error("llm_not_available", str(e))
         if provider is not None:
             try:
                 reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
@@ -1263,6 +1460,7 @@ def _make_legacy_frames(seed_text: str,
                 error_note = f"llm_error:{e.__class__.__name__}"
                 reply = _LEGACY_WARMUP_LINE
                 _admin_emit("llm_generate_error", error=e.__class__.__name__)
+                telemetry.log_error("llm_generate_error", str(e))
         else:
             reply = "Hi! I’m ready to help."
     else:
@@ -1312,7 +1510,21 @@ def _make_legacy_frames(seed_text: str,
         else:
             safe_reply = _LEGACY_WARMUP_LINE
 
-    turn_id = _allocate_turn_id(force_turn_id)
+    telemetry.mark_fallback(fallback_fired, fallback_reason)
+
+    if use_llm:
+        preview = None
+        try:
+            preview = " ".join((safe_reply or "").split()[:8])
+        except Exception:
+            preview = None
+        telemetry.log_llm_response(
+            output_tokens=None,
+            finish_reason=error_note,
+            preview=preview,
+            fallback_fired=fallback_fired,
+            fallback_reason=fallback_reason,
+        )
 
     if fallback_fired and fallback_emit_event:
         try:
@@ -1786,7 +1998,7 @@ def run_ws_greet(session_id: str) -> str:
     tid, frames = make_assistant_frames(
         "greet",
         session_id,
-        meta={"source": "ws_greet"},
+        meta={"source": "ws_greet", "channel": "ws"},
         force_turn_id=forced_tid,
     )
     if _ws_generation_failed(tid, frames):
@@ -1850,16 +2062,7 @@ def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Option
     Produce assistant text for a user turn and schedule both text pacing and TTS.
     Mirrors HTTP /api_v1/chat behavior for consistency.
     """
-    base_meta = {"source": "user_ws"}
-    nlu_result = classify_turn(text, meta=base_meta)
-    policy = pick_dialog_policy(nlu_result)
-    meta = {
-        **base_meta,
-        "nlu": nlu_result,
-        "action": policy["action"],
-        "verbosity": policy["verbosity"],
-        "show_suggestions": policy["show_suggestions"],
-    }
+    meta = {"source": "user_ws", "channel": "ws"}
 
     tid, frames = make_assistant_frames(text, session_id, meta=meta,
                                         correlation_user_msg_id=correlation_user_msg_id)

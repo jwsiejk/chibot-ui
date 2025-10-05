@@ -53,7 +53,7 @@ def greet():
     if have_openai:
         try:
             from ..services.streaming import make_assistant_frames, schedule_frames
-            greet_meta, _, _ = prepare_turn_metadata("greet", {"source": "greet"})
+            greet_meta, _, _ = prepare_turn_metadata("greet", {"source": "greet", "channel": "http"})
             _tid, frames = make_assistant_frames(
                 "greet",
                 sid,
@@ -77,7 +77,7 @@ def greet():
             try:
                 fallback_text = "Hi, I’m Chip. How can I help today?"
                 from ..services.streaming import make_assistant_frames, schedule_frames
-                fallback_meta, _, _ = prepare_turn_metadata(fallback_text, {"source":"greet_fallback"})
+                fallback_meta, _, _ = prepare_turn_metadata(fallback_text, {"source":"greet_fallback", "channel": "http"})
                 _tid2, frames2 = make_assistant_frames(
                     fallback_text,
                     sid,
