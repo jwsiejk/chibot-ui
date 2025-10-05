@@ -53,6 +53,7 @@ const state = {
   chunkSendError: null,
   turnTimer: null,
   turnOpen: false,   // track whether a turn is currently open server-side
+  deviceLogged: false,
 };
 
 // ---- Helpers ----------------------------------------------------------------
@@ -60,6 +61,17 @@ const state = {
 function _emitVoiceState(state, detail = {}) {
   try {
     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
+  } catch {}
+}
+
+function _logLifecycle(event, detail = {}, level = 'debug') {
+  const payload = { event, ...(detail && typeof detail === 'object' ? detail : { detail }) };
+  try {
+    const method = (typeof console[level] === 'function') ? level : 'log';
+    console[method]?.('[voice]', event, payload);
+  } catch {}
+  try {
+    window.dispatchEvent(new CustomEvent('askchip-voice-lifecycle', { detail: payload }));
   } catch {}
 }
 
@@ -74,8 +86,12 @@ async function _ensureMic(externalStream = null) {
   let stream = externalStream;
 
   if (!stream || !stream.active) {
-    // Request a clean mono stream with echo/noise controls
-    stream = await navigator.mediaDevices.getUserMedia({
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+      _logLifecycle('mic_perm_denied', { reason: 'mediaDevices_unavailable' }, 'warn');
+      throw new Error('Media devices API unavailable');
+    }
+
+    const constraints = {
       audio: {
         channelCount: 1,
         sampleRate: 48000,
@@ -83,7 +99,21 @@ async function _ensureMic(externalStream = null) {
         noiseSuppression: true,
         autoGainControl: false
       }
-    });
+    };
+
+    _logLifecycle('mic_request_perm', { constraints });
+    try {
+      // Request a clean mono stream with echo/noise controls
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      _logLifecycle('mic_perm_granted');
+    } catch (err) {
+      _logLifecycle('mic_perm_denied', {
+        name: err?.name,
+        message: err?.message,
+        constraints,
+      }, 'warn');
+      throw err;
+    }
   }
 
   // Build WebAudio chain
@@ -102,6 +132,19 @@ async function _ensureMic(externalStream = null) {
   state.source = source;
   state.analyser = analyser;
 
+  if (!state.deviceLogged) {
+    const [track] = stream.getAudioTracks();
+    let settings = {};
+    try { settings = track?.getSettings?.() || {}; } catch {}
+    const detail = {
+      label: (track?.label && track.label.trim()) || settings.label || settings.deviceId || 'unknown',
+      sampleRate: settings.sampleRate ?? ctx?.sampleRate ?? null,
+      channels: settings.channelCount ?? settings.channels ?? ctx?.destination?.channelCount ?? 1,
+    };
+    _logLifecycle('mic_device_selected', detail);
+    state.deviceLogged = true;
+  }
+
   return stream;
 }
 
@@ -109,7 +152,15 @@ function _safeClearTurnTimer() {
   if (state.turnTimer) { clearTimeout(state.turnTimer); state.turnTimer = null; }
 }
 
-function _stopRecorder() {
+function _stopRecorder(detail = null) {
+  const recorder = state.rec;
+  const wasActive = !!recorder && recorder.state !== 'inactive';
+  const payload = Object.assign({
+    active: wasActive,
+    hasRecorder: !!recorder,
+  }, detail || {});
+  _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
+
   try { if (state.rec && state.rec.state !== 'inactive') state.rec.stop(); } catch {}
   state.rec = null;
 }
@@ -126,11 +177,12 @@ function _teardownAudioGraph() {
   state.source = null;
   state.analyser = null;
   state.ctx = null;
+  state.deviceLogged = false;
 }
 
 function _disarm() {
   _safeClearTurnTimer();
-  _stopRecorder();
+  _stopRecorder({ reason: 'manual_disarm' });
   _teardownVADOnly();
   state.turnOpen = false; // ensure local state is clean
   _emitVoiceState('idle');
@@ -155,6 +207,7 @@ async function _arm(stream = null, opts = {}) {
   // Build / rebuild VAD
   _teardownVADOnly();
 
+  const pollMs = opts.pollMs ?? 33;
   const vad = new VAD(
     state.analyser,
     {
@@ -163,7 +216,7 @@ async function _arm(stream = null, opts = {}) {
       stopRms: opts.stopRms ?? 0.010,
       minSpeechMs: opts.minSpeechMs ?? 220,
       minSilenceMs: opts.minSilenceMs ?? 420,
-      pollMs: opts.pollMs ?? 33,
+      pollMs,
       echoBoostStart: opts.echoBoostStart ?? 1.5,
       echoBoostStop: opts.echoBoostStop ?? 1.3,
       echoStateFn: () => {
@@ -179,6 +232,10 @@ async function _arm(stream = null, opts = {}) {
 
   state.vad = vad;
   state.vad.start();
+  _logLifecycle('mic_start', {
+    sampleRate: state.ctx?.sampleRate,
+    pollMs,
+  });
   _emitVoiceState('armed');
 
   return mic;
@@ -301,13 +358,14 @@ function _startRecorder() {
   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
   _safeClearTurnTimer();
   state.turnTimer = setTimeout(() => {
-    try { _onSpeechEndCommitted(); } catch {}
+    try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
   }, limitMs);
 
   return true;
 }
 
 function _onSpeechStartCommitted() {
+  _logLifecycle('vad_speech_start');
   // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
   _bargeIn();
 
@@ -321,9 +379,11 @@ function _onSpeechStartCommitted() {
   _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
 }
 
-function _onSpeechEndCommitted() {
+function _onSpeechEndCommitted(detail = null) {
+  const reason = detail?.reason || 'vad_silence';
+  _logLifecycle('vad_speech_end', { reason });
   _safeClearTurnTimer();
-  _stopRecorder();
+  _stopRecorder({ reason });
   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
 }
 
