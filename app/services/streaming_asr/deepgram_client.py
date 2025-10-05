@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import time
-from typing import AsyncGenerator, Optional, Any, Deque, Tuple
+from typing import AsyncGenerator, Optional, Any, Deque, Tuple, Callable
 from collections import deque
 
 import websockets  # provided by uvicorn[standard]
@@ -303,7 +303,11 @@ class DeepgramClient:
       • Sends {"type": "CloseStream"} and (optionally) waits briefly for final.
     """
 
-    def __init__(self, _cfg: Optional[dict] = None) -> None:
+    def __init__(
+        self,
+        _cfg: Optional[dict] = None,
+        diag_hook: Optional[Callable[..., Any]] = None,
+    ) -> None:
         self._cfg = _cfg or {}
         self._ws = None  # type: ignore
         self._rx_task: Optional[asyncio.Task] = None
@@ -312,6 +316,37 @@ class DeepgramClient:
         self._closing = False
         self._url_tag: Optional[str] = None
         self._dg_id: int = id(self)
+
+        hook_candidate: Optional[Callable[..., Any]] = None
+        if callable(diag_hook):
+            hook_candidate = diag_hook
+        else:
+            try:
+                cfg_hook = self._cfg.get("_diag_hook") if isinstance(self._cfg, dict) else None
+            except Exception:
+                cfg_hook = None
+            if callable(cfg_hook):
+                hook_candidate = cfg_hook
+        self._diag_hook: Optional[Callable[..., Any]] = hook_candidate
+        self._diag_end_emitted: bool = False
+        try:
+            sid_val = None
+            if isinstance(self._cfg, dict):
+                sid_val = self._cfg.get("session_id") or self._cfg.get("sid")
+            self._diag_session_id: Optional[str] = str(sid_val) if sid_val else None
+        except Exception:
+            self._diag_session_id = None
+        try:
+            tag_hint = None
+            if isinstance(self._cfg, dict):
+                for key in ("_url_tag", "dg_url_tag", "url_tag"):
+                    val = self._cfg.get(key)
+                    if val:
+                        tag_hint = str(val)
+                        break
+            self._diag_tag_hint: Optional[str] = tag_hint
+        except Exception:
+            self._diag_tag_hint = None
 
         # TX queue + flushing
         self._tx_queue: Deque[bytes] = deque()
@@ -354,6 +389,31 @@ class DeepgramClient:
 
         # Serialize outbound websocket sends to avoid concurrent writer errors
         self._send_lock = asyncio.Lock()
+
+    def _diag_payload(self, **extra: Any) -> dict:
+        payload: dict[str, Any] = {"provider": "deepgram"}
+        if self._diag_session_id:
+            payload["session_id"] = self._diag_session_id
+        tag = self._url_tag or self._diag_tag_hint
+        if tag:
+            payload["tag"] = tag
+        payload.update(extra)
+        return payload
+
+    def _emit_diag(self, label: str, **extra: Any) -> None:
+        hook = self._diag_hook
+        if not callable(hook):
+            return
+        payload = self._diag_payload(**extra)
+        try:
+            hook(label, **payload)
+        except TypeError:
+            try:
+                hook(label, payload)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _ws_is_open(self, ws: Optional[Any] = None) -> bool:
         """Best-effort detection for whether the websocket is open."""
@@ -426,6 +486,7 @@ class DeepgramClient:
             self._open_evt.set()
         if not self._asr_open_emitted:
             self._asr_open_emitted = True
+            self._emit_diag("asr_open", active=True)
             try:
                 await self._ev_queue.put({"type": "asr_open"})
             except Exception:
@@ -692,12 +753,13 @@ class DeepgramClient:
             return
 
         url = _dg_url(self._cfg)
+        self._emit_diag("provider_open", active=True, url=url)
 
         containerized = False
 
-        # Diagnostic: parse params and emit compact JSON log that shows
-        # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
         try:
+            # Diagnostic: parse params and emit compact JSON log that shows
+            # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
             import urllib.parse as _p
 
             q = dict(_p.parse_qsl(_p.urlsplit(url).query, keep_blank_values=True))
@@ -760,14 +822,75 @@ class DeepgramClient:
         except Exception:
             logger.info("Deepgram connect start sid=%s url=%s", sid, url)
 
-        if DG_TEST_MODE:
-            self._ws = _FakeWSForTests()
-            DG_LAST_URL = url
+        try:
+            if DG_TEST_MODE:
+                self._ws = _FakeWSForTests()
+                DG_LAST_URL = url
+                cfg_payload = _initial_config(self._cfg)
+                DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
+                self._open_evt.set()
+                await self._signal_ready()
+                logger.info("Deepgram test-mode connect sid=%s", sid)
+                if callable(self._jlog):
+                    try:
+                        self._jlog(
+                            "dg_open",
+                            sid=sid,
+                            dg_id=self._dg_id,
+                            url=url,
+                            tag=self._url_tag,
+                            test_mode=True,
+                        )
+                    except Exception:
+                        pass
+                return
+
+            headers = [("Authorization", _auth_header())]
+            try:
+                self._ws = await websockets.connect(
+                    url,
+                    additional_headers=headers,
+                    max_size=None,
+                )
+            except TypeError:
+                self._ws = await websockets.connect(
+                    url,
+                    extra_headers=headers,
+                    max_size=None,
+                )
+
+            # Micro-wait to ensure the underlying socket is actually open
+            await self.wait_socket_open(
+                timeout=float(os.getenv("DG_OPEN_MICRO_WAIT_S", "0.75"))
+            )
+
             cfg_payload = _initial_config(self._cfg)
+            DG_LAST_URL = url
             DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
-            self._open_evt.set()
+            async with self._send_lock:
+                await self._ws.send(json.dumps(cfg_payload))
+            if callable(self._jlog):
+                try:
+                    self._jlog(
+                        "dg_config_sent",
+                        sid=sid,
+                        dg_id=self._dg_id,
+                        tag=self._url_tag,
+                        keys=sorted(cfg_payload.keys()),
+                    )
+                except Exception:
+                    pass
+
             await self._signal_ready()
-            logger.info("Deepgram test-mode connect sid=%s", sid)
+            # Proactively schedule a flush in case audio was queued before/while connecting
+            self._schedule_flush(delay=0.0)
+
+            self._rx_task = asyncio.create_task(self._rx_loop())
+
+            if self._keepalive_interval > 0:
+                self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+
+            logger.info("Deepgram connect ok sid=%s", sid)
             if callable(self._jlog):
                 try:
                     self._jlog(
@@ -776,70 +899,20 @@ class DeepgramClient:
                         dg_id=self._dg_id,
                         url=url,
                         tag=self._url_tag,
-                        test_mode=True,
+                        containerized=containerized,
                     )
                 except Exception:
                     pass
-            return
-
-        headers = [("Authorization", _auth_header())]
-        try:
-            self._ws = await websockets.connect(
-                url,
-                additional_headers=headers,
-                max_size=None,
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._emit_diag(
+                "asr_error",
+                error=f"connect:{exc.__class__.__name__}",
+                detail=_clip_text(str(exc), 200),
+                url=url,
             )
-        except TypeError:
-            self._ws = await websockets.connect(
-                url,
-                extra_headers=headers,
-                max_size=None,
-            )
-
-        # Micro-wait to ensure the underlying socket is actually open
-        await self.wait_socket_open(
-            timeout=float(os.getenv("DG_OPEN_MICRO_WAIT_S", "0.75"))
-        )
-
-        cfg_payload = _initial_config(self._cfg)
-        DG_LAST_URL = url
-        DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
-        async with self._send_lock:
-            await self._ws.send(json.dumps(cfg_payload))
-        if callable(self._jlog):
-            try:
-                self._jlog(
-                    "dg_config_sent",
-                    sid=sid,
-                    dg_id=self._dg_id,
-                    tag=self._url_tag,
-                    keys=sorted(cfg_payload.keys()),
-                )
-            except Exception:
-                pass
-
-        await self._signal_ready()
-        # Proactively schedule a flush in case audio was queued before/while connecting
-        self._schedule_flush(delay=0.0)
-
-        self._rx_task = asyncio.create_task(self._rx_loop())
-
-        if self._keepalive_interval > 0:
-            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
-
-        logger.info("Deepgram connect ok sid=%s", sid)
-        if callable(self._jlog):
-            try:
-                self._jlog(
-                    "dg_open",
-                    sid=sid,
-                    dg_id=self._dg_id,
-                    url=url,
-                    tag=self._url_tag,
-                    containerized=containerized,
-                )
-            except Exception:
-                pass
+            raise
 
     async def close(
         self,
@@ -853,7 +926,12 @@ class DeepgramClient:
         3) Optionally wait for final
         4) Close socket
         """
-        if self._closed or self._closing:
+        if self._closed:
+            if not self._diag_end_emitted:
+                self._emit_diag("end", active=False, had_result=self._had_result())
+                self._diag_end_emitted = True
+            return
+        if self._closing:
             return
         self._closing = True
         sid = self._sid_for_log()
@@ -996,105 +1074,135 @@ class DeepgramClient:
                 except Exception:
                     pass
 
-        logger.info(
-            "dg_writer_drained sid=%s bytes=%s first8_hex=%s queued=%s",
-            sid,
-            flush_bytes,
-            flush_first8,
-            len(self._tx_queue),
-        )
-        if callable(self._jlog):
-            try:
-                self._jlog(
-                    "dg_writer_drained",
-                    sid=sid,
-                    dg_id=self._dg_id,
-                    tag=self._url_tag,
-                    bytes=flush_bytes,
-                    first8_hex=flush_first8,
-                    queued=len(self._tx_queue),
-                    dropped_chunks=dropped_chunks,
-                    dropped_bytes=dropped_bytes,
-                )
-            except Exception:
-                pass
+        drain_exc: Optional[DeepgramDrainTimeoutError] = None
 
-        # Now send CloseStream after we've flushed all audio
         try:
-            ws = self._ws
-            if self._ws_is_open(ws):
-                async with self._send_lock:
-                    if callable(self._jlog):
-                        try:
-                            self._jlog(
-                                "dg_send_close_stream",
-                                sid=sid,
-                                dg_id=self._dg_id,
-                                tag=self._url_tag,
-                                queued=len(self._tx_queue),
-                            )
-                        except Exception:
-                            pass
-                    await ws.send(json.dumps({"type": "CloseStream"}))
-        except Exception:
-            pass
-
-        if wait_for_final:
-            if timeout is None:
-                timeout = self._final_wait_s
-            try:
-                await asyncio.wait_for(self._final_event.wait(), timeout=timeout)
-            except asyncio.TimeoutError:
+            logger.info(
+                "dg_writer_drained sid=%s bytes=%s first8_hex=%s queued=%s",
+                sid,
+                flush_bytes,
+                flush_first8,
+                len(self._tx_queue),
+            )
+            if callable(self._jlog):
                 try:
-                    await self._ev_queue.put(
-                        {"type": "asr_error", "error": f"final_timeout:{timeout}s"}
+                    self._jlog(
+                        "dg_writer_drained",
+                        sid=sid,
+                        dg_id=self._dg_id,
+                        tag=self._url_tag,
+                        bytes=flush_bytes,
+                        first8_hex=flush_first8,
+                        queued=len(self._tx_queue),
+                        dropped_chunks=dropped_chunks,
+                        dropped_bytes=dropped_bytes,
                     )
                 except Exception:
                     pass
 
-        try:
-            ws = self._ws
-            if ws and (self._ws_is_open(ws) or not hasattr(ws, "open")):
-                await ws.close()
-        finally:
-            self._ws = None
-
-        try:
-            task = self._rx_task
-            self._rx_task = None
-            if task:
-                try:
-                    task.cancel()
-                except Exception:
-                    pass
-        finally:
-            self._closed = True
-            self._closing = False
-            await self._stop_keepalive()
-
-        logger.info("Deepgram close complete sid=%s", sid)
-        if callable(self._jlog):
+            # Now send CloseStream after we've flushed all audio
             try:
-                self._jlog(
-                    "dg_close",
-                    sid=sid,
-                    dg_id=self._dg_id,
-                    tag=self._url_tag,
-                    wait_for_final=wait_for_final,
-                    linger_ms=linger_ms,
-                    had_result=self._had_result(),
-                    drain_failed=drain_failed,
-                )
+                ws = self._ws
+                if self._ws_is_open(ws):
+                    async with self._send_lock:
+                        if callable(self._jlog):
+                            try:
+                                self._jlog(
+                                    "dg_send_close_stream",
+                                    sid=sid,
+                                    dg_id=self._dg_id,
+                                    tag=self._url_tag,
+                                    queued=len(self._tx_queue),
+                                )
+                            except Exception:
+                                pass
+                        await ws.send(json.dumps({"type": "CloseStream"}))
             except Exception:
                 pass
 
-        if drain_failed:
-            raise DeepgramDrainTimeoutError(
-                sid,
+            if wait_for_final:
+                if timeout is None:
+                    timeout = self._final_wait_s
+                try:
+                    await asyncio.wait_for(self._final_event.wait(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    err_txt = f"final_timeout:{timeout}s"
+                    self._emit_diag(
+                        "asr_error",
+                        error=err_txt,
+                        final_timeout=timeout,
+                    )
+                    try:
+                        await self._ev_queue.put({"type": "asr_error", "error": err_txt})
+                    except Exception:
+                        pass
+
+            try:
+                ws = self._ws
+                if ws and (self._ws_is_open(ws) or not hasattr(ws, "open")):
+                    await ws.close()
+            finally:
+                self._ws = None
+
+            try:
+                task = self._rx_task
+                self._rx_task = None
+                if task:
+                    try:
+                        task.cancel()
+                    except Exception:
+                        pass
+            finally:
+                self._closed = True
+                self._closing = False
+                await self._stop_keepalive()
+
+            logger.info("Deepgram close complete sid=%s", sid)
+            if callable(self._jlog):
+                try:
+                    self._jlog(
+                        "dg_close",
+                        sid=sid,
+                        dg_id=self._dg_id,
+                        tag=self._url_tag,
+                        wait_for_final=wait_for_final,
+                        linger_ms=linger_ms,
+                        had_result=self._had_result(),
+                        drain_failed=drain_failed,
+                    )
+                except Exception:
+                    pass
+
+            if drain_failed:
+                drain_exc = DeepgramDrainTimeoutError(
+                    sid,
+                    queued_chunks=dropped_chunks,
+                    queued_bytes=dropped_bytes,
+                    wait_timeout=drain_wait_timeout,
+                )
+        finally:
+            if not self._diag_end_emitted:
+                self._emit_diag(
+                    "end",
+                    active=False,
+                    had_result=self._had_result(),
+                    drain_failed=drain_failed,
+                    queued_chunks=dropped_chunks,
+                    queued_bytes=dropped_bytes,
+                    wait_timeout=drain_wait_timeout,
+                )
+                self._diag_end_emitted = True
+
+        if drain_exc:
+            self._emit_diag(
+                "asr_error",
+                error="drain_timeout",
                 queued_chunks=dropped_chunks,
                 queued_bytes=dropped_bytes,
                 wait_timeout=drain_wait_timeout,
+                active=False,
             )
+            raise drain_exc
 
         # -- sending ---------------------------------------------------------------
 
@@ -1241,6 +1349,12 @@ class DeepgramClient:
                         len(text),
                         _clip_text(text),
                     )
+                    self._emit_diag(
+                        "asr_final" if is_final else "asr_partial",
+                        text=text,
+                        chars=len(text),
+                        active=True,
+                    )
                     try:
                         await self._ev_queue.put(
                             {
@@ -1262,6 +1376,12 @@ class DeepgramClient:
                         sid,
                         evt_type,
                         _clip_text(str(msg), 200),
+                    )
+                    self._emit_diag(
+                        "asr_error",
+                        error=msg.get("error") or evt_type,
+                        provider_error=True,
+                        detail=_clip_text(str(msg), 200),
                     )
                     try:
                         await self._ev_queue.put(
@@ -1289,17 +1409,30 @@ class DeepgramClient:
                 self._had_result(),
             )
             if not self._had_result():
+                err_txt = f"recv_closed:{getattr(e, 'code', '')}:{getattr(e, 'reason', '')}"
+                self._emit_diag(
+                    "asr_error",
+                    error=err_txt,
+                    provider_error=True,
+                    code=getattr(e, "code", None),
+                    reason=getattr(e, "reason", ""),
+                )
                 try:
                     await self._ev_queue.put(
                         {
                             "type": "asr_error",
-                            "error": f"recv_closed:{getattr(e, 'code', '')}:{getattr(e, 'reason', '')}",
+                            "error": err_txt,
                         }
                     )
                 except Exception:
                     pass
         except Exception as e:
             logger.exception("Deepgram rx loop error sid=%s", sid)
+            self._emit_diag(
+                "asr_error",
+                error=f"rx:{e.__class__.__name__}",
+                provider_error=True,
+            )
             try:
                 await self._ev_queue.put(
                     {"type": "asr_error", "error": f"rx:{e.__class__.__name__}"}
