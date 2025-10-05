@@ -696,6 +696,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     asr_ready_evt: asyncio.Event = asyncio.Event()
     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
+    ws_frames_in = 0
+    ws_bytes_in = 0
+    backpressure_drop_count = 0
+    backpressure_last_emit = 0.0
+    backpressure_last_queue_len = 0
+    backpressure_emit_interval = 1.0
     turn_connect_started = [False]
 
     # NEW: per-turn mic capture state
@@ -962,6 +968,43 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 return False
         return False
 
+    def _maybe_emit_backpressure(
+        queue_len: int, *, dropped_now: int = 0, force: bool = False
+    ) -> None:
+        nonlocal backpressure_drop_count, backpressure_last_emit, backpressure_last_queue_len
+
+        previous_drop_count = backpressure_drop_count
+        if dropped_now:
+            backpressure_drop_count += dropped_now
+
+        now = time.time()
+        threshold_crossed = (
+            queue_len >= max_buffered_chunks
+            and backpressure_last_queue_len < max_buffered_chunks
+        )
+        should_emit = force or threshold_crossed or dropped_now > 0
+
+        if should_emit:
+            if (
+                force
+                or threshold_crossed
+                or now - backpressure_last_emit >= backpressure_emit_interval
+                or (dropped_now > 0 and previous_drop_count == 0)
+            ):
+                payload = dict(
+                    sid=sid,
+                    queue_len=queue_len,
+                    dropped=backpressure_drop_count,
+                )
+                with contextlib.suppress(Exception):
+                    _jlog("ws_backpressure", **payload)
+                if _admin_emit:
+                    with contextlib.suppress(Exception):
+                        _admin_emit("ws_backpressure", **payload)
+                backpressure_last_emit = now
+
+        backpressure_last_queue_len = queue_len
+
     async def _send_chunk(
         data: bytes, *, from_buffer: bool = False, retry: bool = True
     ) -> bool:
@@ -989,7 +1032,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return False
 
     async def _flush_buffered_chunks() -> None:
-        nonlocal dg
+        nonlocal dg, backpressure_drop_count
         if not buffered_chunks:
             return
         if not _has_deepgram_key() or dg is None:
@@ -1023,6 +1066,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 flushed_bytes=flushed_bytes,
                 remaining=len(buffered_chunks),
             )
+        _maybe_emit_backpressure(len(buffered_chunks))
+        if not buffered_chunks:
+            backpressure_drop_count = 0
 
     try:
         while True:
@@ -1064,6 +1110,24 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 if ev.get("bytes") is not None:
                     now = time.time()
                     chunk = ev.get("bytes") or b""
+                    ws_frames_in += 1
+                    ws_bytes_in += len(chunk)
+                    if ws_frames_in % 20 == 0:
+                        with contextlib.suppress(Exception):
+                            _jlog(
+                                "ws_bin_recv",
+                                sid=sid,
+                                frames_in=ws_frames_in,
+                                bytes_total=ws_bytes_in,
+                            )
+                        if _admin_emit:
+                            with contextlib.suppress(Exception):
+                                _admin_emit(
+                                    "ws_bin_recv",
+                                    sid=sid,
+                                    frames_in=ws_frames_in,
+                                    bytes_total=ws_bytes_in,
+                                )
                     if chunk:
                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
                         if not audio_sig_logged:
@@ -1222,6 +1286,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     # Stage early frames
                     if chunk:
                         buffered_chunks.append(chunk)
+                        dropped_now = 0
+                        if len(buffered_chunks) > max_buffered_chunks:
+                            dropped_now = len(buffered_chunks) - max_buffered_chunks
+                            for _ in range(dropped_now):
+                                if not buffered_chunks:
+                                    break
+                                buffered_chunks.popleft()
+                            _jlog(
+                                "ws_audio_drop", sid=sid, dropped=dropped_now, queued=len(buffered_chunks)
+                            )
+                        _maybe_emit_backpressure(len(buffered_chunks), dropped_now=dropped_now)
 
                     # Ensure provider connection
                     if not turn_connect_started[0] and dg_state == "closed":
@@ -1258,6 +1333,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     try:
                         obj = parse_client_json(ev.get("text") or "")
                         t = obj.get("type")
+                        with contextlib.suppress(Exception):
+                            _jlog("ws_json_recv", sid=sid, type=t)
+                        if _admin_emit:
+                            with contextlib.suppress(Exception):
+                                _admin_emit("ws_json_recv", sid=sid, type=t)
 
                         if t == "KeepAlive":
                             await _ws_send_json(send, make_keepalive_ack())
