@@ -762,7 +762,8 @@ class DeepgramClient:
             # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
             import urllib.parse as _p
 
-            q = dict(_p.parse_qsl(_p.urlsplit(url).query, keep_blank_values=True))
+            parts = _p.urlsplit(url)
+            q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
             self._url_tag = q.get("tag") or None
             transport = (self._cfg or {}).get("_transport", {}) or {}
             containerized = bool(transport.get("containerized_opus"))
@@ -789,8 +790,36 @@ class DeepgramClient:
                     "channels": q.get("channels"),
                 }
 
+            # Build sanitized query string for telemetry without sensitive params
+            sanitized_pairs = []
+            raw_param_keys = {"encoding", "sample_rate", "channels"}
+            for key in sorted(q.keys()):
+                if key is None:
+                    continue
+                key_str = str(key)
+                lower = key_str.lower()
+                if "key" in lower or "token" in lower or "secret" in lower:
+                    continue
+                if containerized and key_str in raw_param_keys:
+                    continue
+                sanitized_pairs.append((key_str, q[key]))
+            sanitized_query = _p.urlencode(sanitized_pairs, doseq=True)
+            sanitized_qs = f"?{sanitized_query}" if sanitized_query else "?"
+            raw_params_absent = all(param not in q for param in raw_param_keys)
+
             # Structured JSON log if _jlog is available (preferred for your admin viewer)
             if callable(self._jlog):
+                try:
+                    self._jlog(
+                        "dg_url_sanitized",
+                        sid=sid,
+                        dg_id=self._dg_id,
+                        qs=sanitized_qs,
+                        containerized_opus=containerized,
+                        raw_params_absent=raw_params_absent,
+                    )
+                except Exception:
+                    pass
                 try:
                     self._jlog(
                         "asr_url",
@@ -822,6 +851,17 @@ class DeepgramClient:
         except Exception:
             logger.info("Deepgram connect start sid=%s url=%s", sid, url)
 
+        start_ts = time.time()
+        if callable(self._jlog):
+            try:
+                self._jlog(
+                    "asr_connect_start",
+                    sid=sid,
+                    dg_id=self._dg_id,
+                )
+            except Exception:
+                pass
+
         try:
             if DG_TEST_MODE:
                 self._ws = _FakeWSForTests()
@@ -840,6 +880,19 @@ class DeepgramClient:
                             url=url,
                             tag=self._url_tag,
                             test_mode=True,
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        elapsed_ms = int((time.time() - start_ts) * 1000)
+                    except Exception:
+                        elapsed_ms = 0
+                    try:
+                        self._jlog(
+                            "asr_connect_ok",
+                            sid=sid,
+                            dg_id=self._dg_id,
+                            elapsed_ms=elapsed_ms,
                         )
                     except Exception:
                         pass
@@ -903,9 +956,37 @@ class DeepgramClient:
                     )
                 except Exception:
                     pass
+                try:
+                    elapsed_ms = int((time.time() - start_ts) * 1000)
+                except Exception:
+                    elapsed_ms = 0
+                try:
+                    self._jlog(
+                        "asr_connect_ok",
+                        sid=sid,
+                        dg_id=self._dg_id,
+                        elapsed_ms=elapsed_ms,
+                    )
+                except Exception:
+                    pass
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if callable(self._jlog):
+                try:
+                    elapsed_ms = int((time.time() - start_ts) * 1000)
+                except Exception:
+                    elapsed_ms = 0
+                try:
+                    self._jlog(
+                        "asr_connect_err",
+                        sid=sid,
+                        dg_id=self._dg_id,
+                        elapsed_ms=elapsed_ms,
+                        code=exc.__class__.__name__,
+                    )
+                except Exception:
+                    pass
             self._emit_diag(
                 "asr_error",
                 error=f"connect:{exc.__class__.__name__}",
