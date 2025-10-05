@@ -1,1 +1,0 @@
-{"stt_mode": "stream", "deepgram": {"encoding": "opus", "interim_results": true, "language": "en", "listen_url": "wss://example.ok/v1/listen", "model": "nova-3", "sample_rate": 48000, "smart_format": true}}
