@@ -1,1 +1,111 @@
-admin-diagnostics] 06:00:02 starting diagnostic for session=54d94123-9439-4960-85d8-9292223ee092 voice.js:71 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'} ws.js:297 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js', version: undefined, flags: undefined, reconnectEnabled: false, sessionStarted: false} ws.js:301 [ws] openWS options= {reconnect: false} reconnect= false admin_console.js:620 [admin-diagnostics] 06:00:02 ready admin_console.js:620 [admin-diagnostics] 06:00:02 {"ts": 1759644002.8441951, "kind": "ping"} admin_console.js:620 [admin-diagnostics] 06:00:02 {"ts": 1759644002.72306, "step": 18, "kind": "ws_scope_arrived", "route": null, "label": "ws_scope_arrived", "path": "/ws/v1/chat"} admin_console.js:620 [admin-diagnostics] 06:00:02 {"ts": 1759644002.723225, "step": 19, "kind": "ws_handshake_enter", "route": null, "label": "ws_handshake_enter", "path": "/ws/v1/chat", "raw_query": "session_id=54d94123-9439-4960-85d8-9292223ee092"} admin_console.js:620 [admin-diagnostics] 06:00:02 {"ts": 1759644002.7236066, "step": 20, "kind": "ws_conn_open", "route": null, "label": "ws_conn_open", "sid": "54d94123-9439-4960-85d8-9292223ee092", "conn_id": "e2116e8ca6b54491b36d1f7403e45c35", "client_ip": "170.85.73.7", "path": "/ws/v1/chat", "query_string": "session_id=54d94123-9439-4960-85d8-9292223ee092"} admin_console.js:620 [admin-diagnostics] 06:00:02 {"ts": 1759644002.7236094, "step": 21, "kind": "ws_conn_active", "route": null, "label": "ws_conn_active", "conn_id": "e2116e8ca6b54491b36d1f7403e45c35", "active": 1} admin_console.js:620 [admin-diagnostics] 06:00:02 {"ts": 1759644002.8373106, "step": 22, "kind": "ws_json_recv", "route": null, "label": "ws_json_recv", "sid": "54d94123-9439-4960-85d8-9292223ee092", "type": "Configure"} admin_console.js:620 [admin-diagnostics] 06:00:02 {"ts": 1759644002.83734, "step": 23, "kind": "greet:reset", "route": "/ws/v1/chat", "label": "greet:reset /ws/v1/chat", "session_id": "54d94123-9439-4960-85d8-9292223ee092"} admin_console.js:620 [admin-diagnostics] 06:00:04 assistant_chunk: 1. admin_console.js:620 [admin-diagnostics] 06:00:04 state admin_console.js:620 [admin-diagnostics] 06:00:04 suggestions admin_console.js:620 [admin-diagnostics] 06:00:04 assistant_end admin_console.js:620 [admin-diagnostics] 06:00:04 assistant_audio chunks=1 admin_console.js:620 [admin-diagnostics] 06:00:04 assistant_audio chunks=1 (last) admin_console.js:620 [admin-diagnostics] 06:00:04 UtteranceEnd admin_console.js:620 [admin-diagnostics] 06:00:04 {"ts": 1759644004.8665001, "step": 26, "kind": "greet:resp", "route": null, "label": "greet:resp", "session_id": "54d94123-9439-4960-85d8-9292223ee092", "turn_id": "11f9dc8829ce47c3bd8ca790c8717c7e", "audio_scheduled": true} voice.js:71 [voice] mic_start {event: 'mic_start', sampleRate: 48000, pollMs: 33} admin_console.js:620 [admin-diagnostics] 06:00:07 {"ts": 1759644008.0495152, "kind": "ping"} voice.js:71 [voice] vad_speech_start {event: 'vad_speech_start'} voice.js:348 [voice] recorder started {mime: 'audio/webm; codecs=opus', timeslice: 150} voice.js:288 [voice] streamed audio chunk {bytes: 2094} voice.js:288 [voice] streamed audio chunk {bytes: 2898} voice.js:288 [voice] streamed audio chunk {bytes: 2898} voice.js:288 [voice] streamed audio chunk {bytes: 2898} voice.js:288 [voice] streamed audio chunk {bytes: 2898} voice.js:288 [voice] streamed audio chunk {bytes: 2898} voice.js:288 [voice] streamed audio chunk {bytes: 2898} voice.js:288 [voice] streamed audio chunk {bytes: 2898} voice.js:71 [voice] vad_speech_end {event: 'vad_speech_end', reason: 'vad_silence'} voice.js:71 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'vad_silence'} voice.js:288 [voice] streamed audio chunk {bytes: 965} voice.js:325 [voice] recorder stopped {bytesSent: 23345, mime: 'audio/webm; codecs=opus'} admin_console.js:620 [admin-diagnostics] 06:00:12 {"ts": 1759644013.1658642, "kind": "ping"} admin_console.js:620 [admin-diagnostics] 06:00:18 {"ts": 1759644018.296251, "kind": "ping"} admin_console.js:620 [admin-diagnostics] 06:00:21 [error] Timed out waiting for ASR final. voice.js:71 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] = connection is CONNECTING
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < GET /ws/v1/chat?session_id=54d94123-9439-4960-85d8-9292223ee092 HTTP/1.1
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < host: chibot-ui.onrender.com
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < accept-encoding: gzip, br
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < accept-language: en-US,en;q=0.9
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < cache-control: no-cache
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < cdn-loop: cloudflare; loops=1
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < cf-connecting-ip: 170.85.73.7
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < cf-ipcountry: US
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < cf-ray: 98a1c0c1fbb3c3ab-EWR
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < cf-visitor: {"scheme":"https"}
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < connection: Upgrade
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < cookie: XSRF-TOKEN=830379b217bacad0e4fdce9aaf0b0689; session=.eJwNzEEOgyAQBdC7zNo0tDZVWPUmZMBPg2IhA6QL493rAd47yPoqwba84UuG5lGNk3aP--TY86LwDIuHZg7KqdesaaAiOcQE6_NeEhrINOkYqFcImYOwc0xXtf5qxLq9SxfUloU_uF2GzvMP4WsoJQ.aOMqVw.dGWalF6804N35KW3uiF-jCKIhFg
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < origin: https://chibot-ui.onrender.com
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < pragma: no-cache
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < render-cf-start-time-msec: 833
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < render-cf-start-time-sec: 1759717995
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < render-proxy-ttl: 4
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < rndr-id: b631ab71-32a6-464e
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < sec-websocket-key: 8m6RmMzvbGVoGClvy/CReA==
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < sec-websocket-protocol: bearer, bearer.eyJzaWQiOiI1NGQ5NDEyMy05NDM5LTQ5NjAtODVkOC05MjkyMjIzZWUwOTIiLCJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsImlhdCI6MTc1OTcxNzk5NSwiZXhwIjoxNzU5NzE4Mjk1LCJqdGkiOiJtWDZrMWwtVEZkYUtaa182QVBzWHFnIn0.n3-m4L_K4IDuxKmOu7bhc7yqS6yHC7QMc-EfMPHxD3k
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < sec-websocket-version: 13
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < true-client-ip: 170.85.73.7
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < upgrade: websocket
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < x-forwarded-for: 170.85.73.7, 10.226.233.1
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < x-forwarded-proto: https
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < x-render-as-num: 22616
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < x-render-threat-score: 0
+[2025-10-06 02:33:15 +0000] [57] [INFO] 170.85.73.7:0 - "WebSocket /ws/v1/chat?session_id=54d94123-9439-4960-85d8-9292223ee092" [accepted]
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] > HTTP/1.1 101 Switching Protocols
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] > Upgrade: websocket
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] > Connection: Upgrade
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] > Sec-WebSocket-Accept: daV7q3yFOV8bo6FM4bi6Po9PZrE=
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] > Sec-WebSocket-Protocol: bearer
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] > date: Mon, 06 Oct 2025 02:33:14 GMT
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] > server: uvicorn
+[2025-10-06 02:33:15 +0000] [57] [INFO] connection open
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] = connection is OPEN
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] > TEXT '{"type":"ready","session_id":"54d94123-9439-4960-85d8-9292223ee092"}' [68 bytes]
+[2025-10-06 02:33:15 +0000] [57] [DEBUG] < TEXT '{"type":"Configure","session_id":"54d94123-9439...min_voice_diagnostic"}}' [142 bytes]
+{"sid":"pending","enabled":true,"echo_ws":true,"event":"mic_capture_cfg","ts":1759717995.8844125}
+{"sid":"54d94123-9439-4960-85d8-9292223ee092","enabled":true,"echo_ws":true,"event":"mic_capture_cfg","ts":1759717995.8844657}
+{"sid":"54d94123-9439-4960-85d8-9292223ee092","conn_id":"72cfbf4c54d34f459931c5a12f7aaf09","client_ip":"170.85.73.7","path":"/ws/v1/chat","query_string":"session_id=54d94123-9439-4960-85d8-9292223ee092","event":"ws_conn_open","ts":1759717995.8847291}
+{"conn_id":"72cfbf4c54d34f459931c5a12f7aaf09","sid":"54d94123-9439-4960-85d8-9292223ee092","active":1,"event":"ws_conn_active","ts":1759717995.884778}
+{"sid":"54d94123-9439-4960-85d8-9292223ee092","type":"Configure","event":"ws_json_recv","ts":1759717995.9980357}
+{"sid":"54d94123-9439-4960-85d8-9292223ee092","via":"Configure","event":"ws_greet_recv","ts":1759717995.9981277}
+170.85.73.7:0 - "POST /api/v1/admin/log HTTP/1.1" 200
+170.85.73.7:0 - "POST /api/v1/admin/log HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/logs?live=1 HTTP/1.1" 200
+170.85.73.7:0 - "GET /favicon.ico HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+10.225.24.19:45476 - "GET /api/v1/health HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+10.225.24.19:45490 - "GET /api/v1/health HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+[2025-10-06 02:33:26 +0000] [57] [DEBUG] > TEXT '{"type":"assistant_chunk","turn_id":"7de6256a2b...er_move":"offer_steps"}' [144 bytes]
+[2025-10-06 02:33:26 +0000] [57] [DEBUG] > TEXT '{"type":"suggestions","turn_id":"7de6256a2b824e... the business value"}]}' [209 bytes]
+[2025-10-06 02:33:26 +0000] [57] [DEBUG] > TEXT '{"type":"assistant_end","turn_id":"7de6256a2b824edc8a6a10339f363c72"}' [69 bytes]
+170.85.73.7:0 - "POST /api/v1/admin/log HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+[2025-10-06 02:33:27 +0000] [57] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"7de6256a2b...qqqqq"],"is_last":true}' [10774 bytes]
+[2025-10-06 02:33:27 +0000] [57] [DEBUG] > TEXT '{"type":"UtteranceEnd","turn_id":"7de6256a2b824edc8a6a10339f363c72"}' [68 bytes]
+[2025-10-06 02:33:27 +0000] [57] [DEBUG] > TEXT '{"type":"state","phase":"ready"}' [32 bytes]
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+10.225.24.19:45934 - "GET /api/v1/health HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "POST /api/v1/admin/log HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+10.225.24.19:45946 - "GET /api/v1/health HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+[2025-10-06 02:33:35 +0000] [57] [DEBUG] > TEXT '{"type":"keepalive","ts":1759718015980}' [39 bytes]
+[2025-10-06 02:33:35 +0000] [57] [DEBUG] % sending keepalive ping
+[2025-10-06 02:33:35 +0000] [57] [DEBUG] > PING 65 fd a4 89 [binary, 4 bytes]
+[2025-10-06 02:33:36 +0000] [57] [DEBUG] < PONG 65 fd a4 89 [binary, 4 bytes]
+[2025-10-06 02:33:36 +0000] [57] [DEBUG] % received keepalive pong
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+10.225.24.19:47952 - "GET /api/v1/health HTTP/1.1" 200
+10.225.24.19:47950 - "GET /api/v1/health HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+[2025-10-06 02:33:43 +0000] [57] [DEBUG] < CLOSE 1000 (OK) [2 bytes]
+[2025-10-06 02:33:43 +0000] [57] [DEBUG] = connection is CLOSING
+[2025-10-06 02:33:43 +0000] [57] [DEBUG] > CLOSE 1000 (OK) [2 bytes]
+[2025-10-06 02:33:43 +0000] [57] [DEBUG] x half-closing TCP connection
+[2025-10-06 02:33:43 +0000] [57] [DEBUG] = connection is CLOSED
+[2025-10-06 02:33:43 +0000] [57] [INFO] connection closed
+{"conn_id":"72cfbf4c54d34f459931c5a12f7aaf09","sid":"54d94123-9439-4960-85d8-9292223ee092","code":1000,"reason":"","idle_s":27.578083753585815,"event":"ws_conn_disconnect","ts":1759718023.576083}
+{"conn_id":"72cfbf4c54d34f459931c5a12f7aaf09","sid":"54d94123-9439-4960-85d8-9292223ee092","active":0,"source":"disconnect","event":"ws_conn_close","ts":1759718023.5761244}
+{"conn_id":"72cfbf4c54d34f459931c5a12f7aaf09","sid":"54d94123-9439-4960-85d8-9292223ee092","duration":27.6916823387146,"had_disconnect":true,"event":"ws_conn_cleanup","ts":1759718023.5761483}
+10.225.24.19:47974 - "GET /api/v1/health HTTP/1.1" 200
+170.85.73.7:0 - "POST /api/v1/admin/log HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
+170.85.73.7:0 - "GET /api/v1/admin/diagnostics/streaming_status HTTP/1.1" 200
