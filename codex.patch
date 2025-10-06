@@ -1,857 +1,211 @@
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index d19b4099f574aed0a63be06b8d7d18c7a1259d85..d7573f5cdbcd51c070681d34987c66b33550f72a 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -1,31 +1,31 @@
- # app/services/streaming.py — Production-grade assistant framing
- # Guarantees assistant_* frames are broadcast even if the LLM provider fails.
- # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
- 
- from __future__ import annotations
--from typing import List, Dict, Tuple, Optional, Any, Iterable
-+from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable
- import base64
- import hashlib
- import threading, time as _t
- import os
- import re
- 
- from .llm_provider import get_provider
- from .awareness import annotate
- from .engagement import score as score_engagement
- from .retrieval import search as kb_search
- from .persona_prompt import build_persona_preamble, format_kb_context
- from .suggestions import hygienic_suggestions
- from .vendor_clients import make_openai_client
- from .nlg.humanize import humanize_text, sounds_botty
- from .greet_idempotency import get_or_create_greet_turn, DEFAULT_TTL_SEC
- from ..db import db
- from ..ws.bus import bus
- from ..obs import jlog as _jlog
- from ..obs.nlu_logging import NluLoggingContext, create_context as _create_nlu_context
- from ..personas.store import PersonaManager, PersonaStore
- from ..personas.prompt_builder import build_messages
- from .. import nlu as _nlu
- from ..nlu.classifier import classify as classify_turn
- from ..dialog.policy import pick as pick_dialog_policy
- from ..config import load_settings
-@@ -1253,52 +1253,50 @@ def _make_foundation_frames(seed_text: str,
- 
-     if fallback_fired and fallback_emit_event:
-         try:
-             _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
-         except Exception:
-             pass
- 
-     _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
- 
-     frames: List[Dict] = []
-     active_teacher_move = policy_action or teacher_move
-     if _should_force_welcome_move(meta, is_greet=is_greet, intent=nlu_result.get('intent')):
-         active_teacher_move = _WELCOME_MOVE
-     chunk: Dict[str, Any] = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': safe_reply,
-         'kb_hits': 0,
-         'intent': nlu_result.get('intent'),
-         'teacher_move': active_teacher_move,
-     }
-     if correlation_user_msg_id:
-         chunk['correlation_user_msg_id'] = correlation_user_msg_id
-     frames.append(chunk)
- 
--    frames.append({'type': 'state', 'phase': 'ready'})
--
-     legacy_suggestions = []
-     try:
-         if cfg.get('suggestions_enabled', True):
-             legacy_suggestions = hygienic_suggestions(safe_reply)
-     except Exception:
-         legacy_suggestions = []
-     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
-     try:
-         _jlog(
-             "chips_emit",
-             sid=session_id,
-             intent=nlu_result.get('intent'),
-             count=len(merged_suggestions),
-             items=merged_suggestions,
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index f910284a556bd6778148fc8e20c9eb68f66d6210..b9ba406e6e0a3399db394ed5206a96b5fcb78b52 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -820,56 +820,60 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         turn_id: int, reason: str, transcript: str = ""
+     ) -> bool:
+         if final_seen[0]:
+             return False
+         final_seen[0] = True
+         payload = make_results(turn_id, transcript=transcript, is_final=True)
+         payload["type"] = "Results"
+         await _ws_send_json(send, payload)
+         utterance_payload = make_utterance_end(turn_id)
+         utterance_payload["type"] = "UtteranceEnd"
+         await _ws_send_json(send, utterance_payload)
+         with contextlib.suppress(Exception):
+             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
+         _log_turn_finish(
+             turn_id,
+             reason=reason,
+             synthetic=True,
+             transcript_chars=len(transcript or ""),
          )
-     except Exception:
-         pass
-     allow_suggestions = bool(meta.get('show_suggestions')) if isinstance(meta, dict) else False
-     should_emit_suggestions = bool(merged_suggestions) and (is_greet or allow_suggestions)
-     if should_emit_suggestions:
-         frames.append(
-             {
-                 'type': 'suggestions',
-                 'turn_id': turn_id,
-                 'items': build_suggestion_items(merged_suggestions),
-@@ -1619,103 +1617,105 @@ def _guess_tts_mime(output_format: str | None) -> str:
- # --- WS TTS scheduling (audio over WS) ---------------------------------------
- def _tts_text_markers(text: str) -> Dict[str, Any]:
-     """Privacy-safe markers for logging text identity."""
-     normalized: str
-     if isinstance(text, str):
-         normalized = text
-     else:
-         normalized = str(text or "")
-     try:
-         encoded = normalized.encode("utf-8")
-     except Exception:
-         encoded = str(normalized).encode("utf-8", "ignore")
-     digest = hashlib.sha256(encoded).hexdigest()
-     return {
-         "text_hash": digest[:16],
-         "text_len": len(normalized),
-     }
+         return True
  
+     async def _ensure_dg_connected() -> bool:
+         nonlocal dg, rx_task, dg_connect_task, dg_state, fallback_detection
  
- def schedule_tts_audio(session_id: str,
-                        text: str,
-                        turn_id: str | None = None,
-                        correlation_user_msg_id: Optional[str] = None,
-                        audio_bytes: Optional[bytes] = None,
-                        chunk_bytes: int = 8192,
--                       delay_ms: int = 0) -> None:
-+                       delay_ms: int = 0,
-+                       on_complete: Optional[Callable[[], None]] = None) -> bool:
-     """Synthesize TTS for `text` and stream as WS frames.
-     Emits frames like:
-         {
-           "type": "assistant_audio",
-           "turn_id": <str or null>,
-           "mime": "<audio mime>",
-           "audio_chunks": ["<base64>", ...],
-           "is_last": <bool>
-         }
-     After the final chunk, an explicit:
-         { "type": "UtteranceEnd", "turn_id": <str or null> }
-     is broadcast to mark audio-complete.
--    Non-blocking: runs in a background thread.
-+    Non-blocking: runs in a background thread. Returns True if audio streaming
-+    was scheduled, False if the request was ignored (e.g., audio disabled).
-     """
-     if not text:
--        return
-+        return False
-     cfg = db.get_config()
-     feature_audio = bool(cfg.get("feature_audio", True))
+         if not _has_deepgram_key():
++            with contextlib.suppress(Exception):
++                _jlog("asr_connect_skip", sid=sid, reason="no_api_key")
+             return False
  
-     # Track TTS lifecycle for admin truth
-     tts_tbl = db.memory.setdefault('tts_status', {})
-     sess_tbl = tts_tbl.setdefault(session_id, {})
-     turn_key = str(turn_id) if turn_id is not None else 'greet'
-     state = sess_tbl.setdefault(turn_key, {'started': False, 'first_chunk': False, 'done': False, 'error': None})
+         if dg_state == "open" and dg is not None:
+             return True
  
-     safe_turn_id = str(turn_id) if turn_id is not None else None
-     text_markers = _tts_text_markers(text)
-     audio_override = audio_bytes is not None
+         if dg_state == "connecting" and dg_connect_task is not None:
++            with contextlib.suppress(Exception):
++                _jlog("asr_connect_wait", sid=sid, reason="existing_task")
+             with contextlib.suppress(Exception):
+                 await dg_connect_task
+             return dg_state == "open" and dg is not None
  
-     def _log(kind: str, **fields: Any) -> None:
-         payload: Dict[str, Any] = {
-             "session_id": session_id,
-             "sid": session_id,
-         }
-         if safe_turn_id is not None:
-             payload["turn_id"] = safe_turn_id
-         if correlation_user_msg_id:
-             payload["correlation_user_msg_id"] = correlation_user_msg_id
-         payload.update(text_markers)
-         payload["audio_override"] = audio_override
-         payload.update(fields)
-         try:
-             _jlog(kind, **payload)
-         except Exception:
-             pass
+         connect_result = {"ok": False}
  
-     state_snapshot = dict(state)
-     level = "warning" if state_snapshot.get('started') or state_snapshot.get('done') else "info"
-     _log("tts.schedule", level=level, state=state_snapshot, feature_audio=feature_audio)
- 
-     if not feature_audio:
--        return
-+        return False
- 
-     def _run():
-         total_audio_bytes = 0
-         chunk_count = 0
-         chunk_bytes_sent = 0
-         canceled = False
-         truncated = False
-         utterance_end_sent = False
-         max_frames = 256  # guardrail
- 
-         def _emit_utterance_end(reason: str) -> None:
-             nonlocal utterance_end_sent
-             _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
+         async def _connect() -> None:
+             nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result, fallback_detection
              try:
-                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
-             except Exception:
-                 pass
-             utterance_end_sent = True
- 
-         audio_payload = audio_bytes
-         try:
-             # Small pacing delay if requested
-             if delay_ms and delay_ms > 0:
-                 _t.sleep(max(0, delay_ms) / 1000.0)
- 
-@@ -1864,51 +1864,58 @@ def schedule_tts_audio(session_id: str,
-                         break
-                 except Exception:
-                     # If a single chunk fails, try to continue; we'll still emit UtteranceEnd.
-                     pass
- 
-             status = "canceled" if canceled else ("truncated" if truncated else "complete")
-             _log(
-                 "tts.chunks.summary",
-                 chunk_count=chunk_count,
-                 bytes_sent=chunk_bytes_sent,
-                 total_bytes=total_audio_bytes,
-                 status=status,
-                 max_frames=max_frames,
-             )
-         finally:
-             # Always mark tts done (admin), and always signal UtteranceEnd if we haven't already.
-             try:
-                 _admin_emit('tts:done', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
-             except Exception:
-                 pass
- 
-             _emit_utterance_end("finalizer")
- 
-             state['done'] = True
- 
-+            if on_complete is not None:
-+                try:
-+                    on_complete()
-+                except Exception:
-+                    pass
-+
-     threading.Thread(target=_run, daemon=True).start()
-+    return True
- 
- 
- def _update_assistant_turn_state(session_id: str,
-                                  frame: Dict[str, Any],
-                                  current_turn_id: Optional[str]) -> Optional[str]:
-     if not isinstance(frame, dict):
-         return current_turn_id
-     ftype = frame.get('type')
-     turn_id = frame.get('turn_id')
-     if ftype in ('assistant_chunk', 'assistant_audio', 'audio_chunk') and turn_id:
-         try:
-             bus.note_assistant_turn(session_id, turn_id)
-         except Exception:
-             pass
-         return turn_id
-     if ftype in ('assistant_end', 'end'):
-         try:
-             bus.note_assistant_turn(session_id, None)
-         except Exception:
-             pass
-         return None
-     return current_turn_id
- 
- 
- def _apply_assistant_turn_state(session_id: str, frames: Iterable[Dict[str, Any]]) -> None:
-@@ -1991,122 +1998,162 @@ def _ws_generation_failed(turn_id: Optional[str], frames: List[Dict[str, Any]])
- 
- def run_ws_greet(session_id: str) -> str:
-     """
-     Produce assistant text for greet, broadcast frames, schedule TTS audio,
-     and nudge UI with state+suggestions. Returns turn_id.
-     """
-     forced_tid, _idempotent = get_or_create_greet_turn(session_id, force=False, ttl_sec=DEFAULT_TTL_SEC)
-     tid, frames = make_assistant_frames(
-         "greet",
-         session_id,
-         meta={"source": "ws_greet", "channel": "ws"},
-         force_turn_id=forced_tid,
-     )
-     if _ws_generation_failed(tid, frames):
-         tid = _allocate_turn_id(forced_tid)
-         frames = _emit_ws_outage(session_id, tid)
-         try:
-             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='greet')
-         except Exception:
-             pass
-         try:
-             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-         except Exception:
-             pass
-         return tid
-+    existing_frame_types = [
-+        fr.get("type")
-+        for fr in frames
-+        if isinstance(fr, dict) and fr.get("type") is not None
-+    ]
-+    state_already_sent = any(ft == "state" for ft in existing_frame_types)
-+    suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
-+
-+    ready_sent = state_already_sent
-+
-+    def _emit_ready_once() -> None:
-+        nonlocal ready_sent
-+        if ready_sent:
-+            return
-+        try:
-+            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-+            ready_sent = True
-+        except Exception:
-+            pass
-+
-+    audio_scheduled = False
-+
-     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
-     try:
-         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
-             safe_text = _scrub_debug_stamps(text_for_tts)
-             try:
-                 _jlog(
-                     "tts.pre_schedule",
-                     session_id=session_id,
-                     sid=session_id,
-                     turn_id=tid,
-                     flow="greet",
-                     **_tts_text_markers(safe_text),
-                 )
-             except Exception:
-                 pass
--            schedule_tts_audio(session_id, safe_text, turn_id=tid)
-+            audio_scheduled = schedule_tts_audio(session_id, safe_text, turn_id=tid, on_complete=_emit_ready_once)
-     except Exception:
-         pass
--    existing_frame_types = [
--        fr.get("type")
--        for fr in frames
--        if isinstance(fr, dict) and fr.get("type") is not None
--    ]
--    state_already_sent = any(ft == "state" for ft in existing_frame_types)
--    suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
- 
-     # UI nudges (only emit if the assistant frames didn't already do so)
-     try:
--        if not state_already_sent:
--            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-+        if not audio_scheduled:
-+            _emit_ready_once()
-         if not suggestions_already_sent:
-             base_suggestions = merge_suggestions(hygienic_suggestions(""))
-             if base_suggestions:
-                 bus.broadcast(
-                     session_id,
-                     {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
-                 )
-     except Exception:
-         pass
-     return tid
- 
- 
- def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Optional[str] = None) -> str:
-     """
-     Produce assistant text for a user turn and schedule both text pacing and TTS.
-     Mirrors HTTP /api_v1/chat behavior for consistency.
-     """
-     meta = {"source": "user_ws", "channel": "ws"}
- 
-     tid, frames = make_assistant_frames(text, session_id, meta=meta,
-                                         correlation_user_msg_id=correlation_user_msg_id)
-     if _ws_generation_failed(tid, frames):
-         tid = _allocate_turn_id(force_turn_id=None)
-         frames = _emit_ws_outage(session_id, tid, correlation_user_msg_id=correlation_user_msg_id)
-         try:
-             _apply_assistant_turn_state(session_id, frames)
-         except Exception:
-             pass
-         try:
-             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='turn')
-         except Exception:
-             pass
-         return tid
-     try:
-         _apply_assistant_turn_state(session_id, frames)
-     except Exception:
-         pass
-+    existing_frame_types = [
-+        fr.get("type")
-+        for fr in frames
-+        if isinstance(fr, dict) and fr.get("type") is not None
-+    ]
-+    ready_sent = any(ft == "state" for ft in existing_frame_types)
-+
-+    def _emit_ready_once() -> None:
-+        nonlocal ready_sent
-+        if ready_sent:
-+            return
-+        try:
-+            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-+            ready_sent = True
-+        except Exception:
-+            pass
-+
-+    audio_scheduled = False
-+
-     # TTS for assistant text
-     try:
-         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
-             safe_text = _scrub_debug_stamps(text_for_tts)
-             try:
-                 payload = {
-                     "session_id": session_id,
-                     "sid": session_id,
-                     "turn_id": tid,
-                     "flow": "user",
-                     **_tts_text_markers(safe_text),
-                 }
-                 if correlation_user_msg_id:
-                     payload["correlation_user_msg_id"] = correlation_user_msg_id
-                 _jlog("tts.pre_schedule", **payload)
-             except Exception:
-                 pass
--            schedule_tts_audio(
-+            audio_scheduled = schedule_tts_audio(
-                 session_id,
-                 safe_text,
-                 turn_id=tid,
-                 correlation_user_msg_id=correlation_user_msg_id,
-+                on_complete=_emit_ready_once,
-             )
-     except Exception:
-         pass
-+    if not audio_scheduled:
-+        try:
-+            _emit_ready_once()
-+        except Exception:
-+            pass
-     return tid
-diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
-index d4c26e1c821b4e58329d8dff96ba3a8a4acde547..a5a55f9865ab2b6e8c42038257c25a6b09690cb5 100644
---- a/tests/test_streaming_ws_fallbacks.py
-+++ b/tests/test_streaming_ws_fallbacks.py
-@@ -59,153 +59,157 @@ def test_make_assistant_frames_ws_skips_legacy(monkeypatch):
- def test_run_ws_greet_uses_foundation_frames(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
- 
-     captured = {"called": 0}
- 
-     def fake_foundation(seed_text, session_id, meta, cfg, **kwargs):
-         captured["called"] += 1
-         captured["seed_text"] = seed_text
-         turn_id = kwargs.get("force_turn_id") or "tid-foundation"
-         frames = [
-             {"type": "assistant_chunk", "turn_id": turn_id, "text": "foundation hello", "kb_hits": 0},
-             {"type": "assistant_end", "turn_id": turn_id},
-         ]
-         captured["frames"] = frames
-         return turn_id, frames
- 
-     monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
- 
-     outage_calls = []
-     monkeypatch.setattr(streaming, "_emit_ws_outage", lambda *a, **k: outage_calls.append((a, k)))
- 
-     tts_texts = []
- 
--    def fake_schedule_tts(session_id, text, turn_id=None, correlation_user_msg_id=None):
-+    def fake_schedule_tts(session_id, text, turn_id=None, correlation_user_msg_id=None, **kwargs):
-         tts_texts.append(text)
-+        on_complete = kwargs.get("on_complete")
-+        if callable(on_complete):
-+            on_complete()
-+        return True
- 
-     monkeypatch.setattr(streaming, "schedule_tts_audio", fake_schedule_tts)
-     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
- 
-     tid = streaming.run_ws_greet("session-foundation")
- 
-     assert captured["called"] == 1
-     assert captured["seed_text"] == "greet"
-     assert tid == captured["frames"][0]["turn_id"]
-     assert not outage_calls
-     assert tts_texts and tts_texts[0] == "foundation hello"
-     assert streaming._WS_PIPELINE_MESSAGE not in captured["frames"][0]["text"]
- 
- 
- def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
- 
-     captured = {}
- 
-     def fake_foundation(seed_text, session_id, meta, cfg, **kwargs):
-         action = kwargs.get("action")
-         fallback_text = streaming._build_clarify_question(seed_text, meta)
-         turn_id = kwargs.get("force_turn_id") or "tid-greet"
-         if action == "ask_clarify":
-             text = fallback_text
-         else:
-             text = "foundation hello"
-         frames = [
-             {"type": "assistant_chunk", "turn_id": turn_id, "text": text, "kb_hits": 0},
-             {"type": "assistant_end", "turn_id": turn_id},
-         ]
-         captured["frames"] = frames
-         captured["action"] = action
-         captured["fallback_text"] = fallback_text
-         return turn_id, frames
- 
-     monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
-     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
--    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
-+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
- 
-     tid = streaming.run_ws_greet("session-no-clarify")
- 
-     assert tid == captured["frames"][0]["turn_id"]
-     assert captured["action"] == "offer_steps"
-     assert captured["frames"][0]["text"] != captured["fallback_text"]
- 
- 
- def test_run_ws_greet_emits_single_suggestions_frame(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     # Avoid touching shared greet idempotency state
-     monkeypatch.setattr(
-         streaming,
-         "get_or_create_greet_turn",
-         lambda session_id, force=False, ttl_sec=streaming.DEFAULT_TTL_SEC: ("turn-xyz", False),
-     )
- 
--    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
-+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
- 
-     emitted = []
- 
-     def fake_broadcast(session_id, frame):
-         if isinstance(frame, dict):
-             emitted.append(frame)
- 
-     monkeypatch.setattr(streaming.bus, "broadcast", fake_broadcast)
- 
-     def fake_make_frames(seed_text, session_id, meta=None, **kwargs):
-         turn_id = kwargs.get("force_turn_id") or "turn-xyz"
-         frames = [
-             {"type": "assistant_chunk", "turn_id": turn_id, "text": "Hello!", "kb_hits": 0},
-             {"type": "state", "phase": "ready"},
-             {
-                 "type": "suggestions",
-                 "turn_id": turn_id,
-                 "items": streaming.build_suggestion_items(["First", "Second"]),
-             },
-             {"type": "assistant_end", "turn_id": turn_id},
-         ]
-         if kwargs.get("broadcast_immediately", True):
-             for fr in frames:
-                 fake_broadcast(session_id, fr)
-         return turn_id, frames
- 
-     monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
- 
-     tid = streaming.run_ws_greet("session-one")
- 
-     assert tid == "turn-xyz"
-     suggestion_frames = [fr for fr in emitted if fr.get("type") == "suggestions"]
-     assert len(suggestion_frames) == 1
- 
- 
- def test_make_assistant_frames_greet_advertises_welcome_move(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
-     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *a, **k: True)
--    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
-+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
-     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
- 
-     class FakeStore:
-         def match_examples(self, persona_id, user_text, limit=4):
-             return []
- 
-     class FakePersonaManager:
-         def __init__(self, store):
-             self.store = store
- 
-         def get_active(self):
-             return {"id": "chip", "config": {}}
- 
-     monkeypatch.setattr(streaming, "PersonaStore", lambda: FakeStore())
-     monkeypatch.setattr(streaming, "PersonaManager", FakePersonaManager)
- 
-     monkeypatch.setattr(
-         streaming,
-         "build_messages",
-         lambda persona, user_text, dialog_meta, examples: (
-             [{"role": "user", "content": user_text}],
-             dialog_meta.get("teacher_move"),
-             "hash",
-         ),
-     )
-@@ -307,101 +311,101 @@ def test_prepare_turn_metadata_injects_fields(monkeypatch):
-     assert prepared["action"]
-     assert prepared["dialog_action"] == prepared["action"]
-     assert prepared["verbosity"] in {"brief", "normal", "medium"}
-     assert prepared["dialog_verbosity"] == prepared["verbosity"]
-     assert prepared["show_suggestions"] is policy["show_suggestions"]
-     assert prepared["dialog_show_suggestions"] is policy["show_suggestions"]
-     assert prepared["dialog_policy"]["show_suggestions"] is policy["show_suggestions"]
-     assert isinstance(labels, dict) and labels.get("intent")
-     assert isinstance(policy, dict)
- 
- 
- def test_run_ws_user_turn_emits_action_metadata_once(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
-     monkeypatch.setattr(streaming, "kb_search", lambda *a, **k: [])
-     monkeypatch.setattr(streaming, "_get_persona_for_session", lambda sid: {"id": "chip"})
- 
-     class DummyProvider:
-         def generate_reply(self, *args, **kwargs):
-             return "Hello!"
- 
-     monkeypatch.setattr(streaming, "get_provider", lambda cfg: DummyProvider())
-     monkeypatch.setattr(streaming, "_broadcast_frames", lambda *a, **k: None)
-     monkeypatch.setattr(streaming, "schedule_frames", lambda *a, **k: None)
--    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
-+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
- 
-     captured = []
- 
-     def fake_admin_emit(event, **payload):
-         captured.append((event, payload))
- 
-     monkeypatch.setattr(streaming, "_admin_emit", fake_admin_emit)
- 
-     monkeypatch.setattr(streaming, "_should_skip_legacy", lambda *_: False)
- 
-     tid = streaming.run_ws_user_turn("session-meta", "Hello there", correlation_user_msg_id="abc123")
- 
-     assert tid
-     assert len(captured) == 1
- 
-     event, payload = captured[0]
-     assert event == "turn_action_metadata"
-     assert payload["turn_id"] == tid
-     assert payload["is_greet"] is False
-     assert payload["nlu"]["intent"] == "broad_topic_help"
-     assert payload["policy"]["action"] == "ask_clarify"
-     assert payload["policy"]["show_suggestions"] is True
- 
- 
- def test_run_ws_user_turn_emits_single_chunk_frame(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     emitted = []
- 
-     def fake_broadcast(session_id, frame):
-         emitted.append(frame)
- 
-     monkeypatch.setattr(streaming.bus, "broadcast", fake_broadcast)
- 
-     def fake_make_frames(text, session_id, meta=None, correlation_user_msg_id=None, **kwargs):
-         frames = [
-             {"type": "assistant_chunk", "turn_id": "turn-1", "text": "Hello there"},
-             {"type": "assistant_end", "turn_id": "turn-1"},
-         ]
-         for fr in frames:
-             fake_broadcast(session_id, fr)
-         return "turn-1", frames
- 
-     monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
- 
-     def fail_schedule_frames(*args, **kwargs):  # pragma: no cover - guard against regressions
-         raise AssertionError("schedule_frames should not run")
- 
-     monkeypatch.setattr(streaming, "schedule_frames", fail_schedule_frames)
--    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
-+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
-     monkeypatch.setattr(streaming, "classify_turn", lambda text, meta=None: {"intent": "test"})
-     monkeypatch.setattr(
-         streaming,
-         "pick_dialog_policy",
-         lambda nlu: {"action": "ask_clarify", "verbosity": "medium", "show_suggestions": True},
-     )
- 
-     tid = streaming.run_ws_user_turn("session-single-chunk", "hello")
- 
-     assert tid == "turn-1"
-     chunk_frames = [fr for fr in emitted if isinstance(fr, dict) and fr.get("type") == "assistant_chunk"]
-     assert len(chunk_frames) == 1
- 
- 
- def test_prepare_turn_metadata_respects_policy_show_suggestions(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     monkeypatch.setattr(
-         streaming,
-         "pick_dialog_policy",
-         lambda labels: {"action": "give_brief_answer", "show_suggestions": False, "teacher_move": "give_brief_answer"},
-     )
- 
-     prepared, _, policy = streaming.prepare_turn_metadata("Need a short answer", {})
- 
-diff --git a/tests/test_ws_two_turn_regression.py b/tests/test_ws_two_turn_regression.py
-index 18347151e5944382a00001fcc7f21a50395261b1..0cc143d0a793cde5f2ab0648b8171292814c9f0b 100644
---- a/tests/test_ws_two_turn_regression.py
-+++ b/tests/test_ws_two_turn_regression.py
-@@ -1,31 +1,33 @@
- import asyncio
- import json
- import time
- from collections import deque
-+from queue import Empty
- 
- import app.services.streaming_asr.deepgram_client as dg_mod
-+import app.services.streaming as streaming
- from app.services.streaming import schedule_frames
- from app.ws import ws_asgi
- from app.ws.bus import bus
- 
- 
- class _FakeDeepgram:
-     """Minimal Deepgram stub for tests with controllable finals."""
- 
-     def __init__(self, _cfg=None):
-         self._queue: asyncio.Queue = asyncio.Queue()
-         self._final_sent = False
-         self._close_calls = 0
- 
-     async def connect(self):
-         # Mirror provider open event to satisfy the relay loop.
-         await self._queue.put({"type": "asr_open"})
- 
-     async def events(self):
-         while True:
-             ev = await self._queue.get()
-             if ev is None:
+                 dg_state = "connecting"
+                 with contextlib.suppress(Exception):
+                     asr_ready_evt.clear()
+ 
+                 if not raw_fallback_disabled() and should_use_raw_fallback(
+                     fallback_detection, stream_stats
+                 ):
+                     if not stream_stats.forced_fallback:
+                         stream_stats.force_fallback()
+                         overrides = coerce_to_raw_config(stream_meta)
+                         for key, value in overrides.items():
+                             if key == "_transport":
+                                 continue
+                             cfg[key] = value
+                         transport.update(overrides.get("_transport", {}))
+                         fallback_detection = RawDetectionSignal(
+@@ -1087,75 +1091,85 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                         conn_id=conn_id,
+                         sid=sid,
+                         code=ev.get("code"),
+                         reason=ev.get("reason"),
+                         idle_s=idle_s,
+                     )
+                 with contextlib.suppress(Exception):
+                     if _admin_emit:
+                         _admin_emit(
+                             "ws_conn_disconnect",
+                             conn_id=conn_id,
+                             sid=sid,
+                             code=ev.get("code"),
+                             reason=ev.get("reason"),
+                             idle_s=idle_s,
+                         )
+                 await _remove_active_ws_entry("disconnect")
+                 last_msg_ts = now
                  break
-             yield ev
  
-     async def send(self, _chunk: bytes):
-@@ -55,50 +57,115 @@ def _run_ws_session(events, sid: str = "default"):
-             return ev
+             if et == "websocket.receive":
+                 last_msg_ts = time.time()
+                 # -------------------- Binary / audio lane --------------------
+                 if ev.get("bytes") is not None:
+                     now = time.time()
+-                    chunk = ev.get("bytes") or b""
++                    frame_bytes = ev.get("bytes")
++                    chunk = frame_bytes or b""
+                     ws_frames_in += 1
+                     ws_bytes_in += len(chunk)
+                     if ws_frames_in % 20 == 0:
+                         with contextlib.suppress(Exception):
+                             _jlog(
+                                 "ws_bin_recv",
+                                 sid=sid,
+                                 frames_in=ws_frames_in,
+                                 bytes_total=ws_bytes_in,
+                             )
+                         if _admin_emit:
+                             with contextlib.suppress(Exception):
+                                 _admin_emit(
+                                     "ws_bin_recv",
+                                     sid=sid,
+                                     frames_in=ws_frames_in,
+                                     bytes_total=ws_bytes_in,
+                                 )
+                     if chunk:
+                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
+                         if not audio_sig_logged:
+                             with contextlib.suppress(Exception):
+                                 _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
+                             audio_sig_logged = True
++                    else:
++                        with contextlib.suppress(Exception):
++                            _jlog(
++                                "ws_audio_chunk_empty",
++                                sid=sid,
++                                bytes=len(frame_bytes or b""),
++                                turn_id=turn_id_ref[0],
++                                buf_empty=buf.is_empty(),
++                            )
  
-     async def _send(msg):
-         sent.append(msg)
+                     raw_chunk = chunk
  
-     scope = {
-         "type": "websocket",
-         "path": "/ws/v1/chat",
-         "query_string": f"session_id={sid}".encode(),
-     }
+                     if buf.is_empty():
+                         # New audio turn
+                         current_assistant_turn = None
+                         try:
+                             current_assistant_turn = bus.current_assistant_turn(sid)
+                         except Exception:
+                             current_assistant_turn = None
+                         confirm_ms = 420
+                         try:
+                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
+                         except Exception:
+                             confirm_ms = 420
  
-     loop = asyncio.new_event_loop()
-     asyncio.set_event_loop(loop)
-     try:
-         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-     except asyncio.CancelledError:
-         pass
-     finally:
-         loop.run_until_complete(asyncio.sleep(0))
-         asyncio.set_event_loop(None)
-         loop.close()
+                         def _on_barge_commit() -> None:
+                             target_turn = current_assistant_turn
+                             try:
+                                 latest = bus.current_assistant_turn(sid)
+                             except Exception:
+                                 latest = None
+                             if latest:
+                                 target_turn = latest
+                             if target_turn:
+@@ -1280,50 +1294,58 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                     )
  
-     return sent
+                     if not _has_deepgram_key():
+                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
+                         continue
  
+                     # Stage early frames
+                     if chunk:
+                         buffered_chunks.append(chunk)
+                         dropped_now = 0
+                         if len(buffered_chunks) > max_buffered_chunks:
+                             dropped_now = len(buffered_chunks) - max_buffered_chunks
+                             for _ in range(dropped_now):
+                                 if not buffered_chunks:
+                                     break
+                                 buffered_chunks.popleft()
+                             _jlog(
+                                 "ws_audio_drop", sid=sid, dropped=dropped_now, queued=len(buffered_chunks)
+                             )
+                         _maybe_emit_backpressure(len(buffered_chunks), dropped_now=dropped_now)
  
-+def test_ready_follows_audio_completion(monkeypatch):
-+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
-+
-+    sid = "s-ready-audio"
-+    prepared_turn_id = "turn-ready"
-+
-+    def fake_make_assistant_frames(seed_text, session_id, meta=None, **kwargs):
-+        frames = [
-+            {"type": "assistant_chunk", "turn_id": prepared_turn_id, "text": "hello", "kb_hits": 0},
-+            {"type": "assistant_end", "turn_id": prepared_turn_id},
-+        ]
-+        if kwargs.get("broadcast_immediately", True):
-+            for frame in frames:
-+                bus.broadcast(session_id, frame)
-+        return prepared_turn_id, frames
-+
-+    def fake_schedule_tts(session_id, text, scheduled_turn_id=None, correlation_user_msg_id=None, **kwargs):
-+        assigned_turn = scheduled_turn_id or prepared_turn_id
-+        audio_frame = {
-+            "type": "assistant_audio",
-+            "turn_id": assigned_turn,
-+            "mime": "audio/mpeg",
-+            "audio_chunks": ["ZmFrZQ=="],
-+            "is_last": True,
-+        }
-+        bus.broadcast(session_id, audio_frame)
-+        bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": assigned_turn})
-+        on_complete = kwargs.get("on_complete")
-+        if callable(on_complete):
-+            on_complete()
-+        return True
-+
-+    monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_assistant_frames)
-+    monkeypatch.setattr(streaming, "schedule_tts_audio", fake_schedule_tts)
-+
-+    q = bus.subscribe(sid)
-+    try:
-+        streaming.run_ws_user_turn(sid, "hello")
-+        frames = []
-+        while True:
-+            try:
-+                frames.append(q.get(timeout=0.2))
-+            except Empty:
-+                break
-+    finally:
-+        bus.unsubscribe(sid, q)
-+        bus.note_assistant_turn(sid, None)
-+        bus._canceled.discard((sid, prepared_turn_id))
-+
-+    ready_indices = [
-+        idx
-+        for idx, frame in enumerate(frames)
-+        if frame.get("type") == "state" and frame.get("phase") == "ready"
-+    ]
-+    assert ready_indices, "Expected ready state frame"
-+    ready_index = ready_indices[-1]
-+    last_audio_index = max(
-+        idx
-+        for idx, frame in enumerate(frames)
-+        if frame.get("type") in {"assistant_audio", "UtteranceEnd"}
-+    )
-+    assert ready_index > last_audio_index, "ready state must follow final audio frame"
-+
-+
- def test_schedule_frames_tracks_current_assistant_turn(monkeypatch):
-     sid = "s-schedule-track"
-     frames = [
-         {"type": "assistant_chunk", "turn_id": "turn-42", "text": "hi"},
-         {"type": "assistant_end", "turn_id": "turn-42"},
-     ]
-     calls = []
-     orig_note = bus.note_assistant_turn
+                     # Ensure provider connection
+                     if not turn_connect_started[0] and dg_state == "closed":
+                         turn_connect_started[0] = True
+                         if dg_connect_task is None:
++                            with contextlib.suppress(Exception):
++                                _jlog(
++                                    "asr_connect_schedule",
++                                    sid=sid,
++                                    turn_id=turn_id_ref[0],
++                                    queued=len(buffered_chunks),
++                                    dg_state=dg_state,
++                                )
+                             dg_connect_task = asyncio.create_task(
+                                 _ensure_dg_connected()
+                             )
+                     elif dg_state == "connecting":
+                         pass
  
-     def _capture_note(sid_arg, tid_arg):
-         calls.append((sid_arg, tid_arg))
-         orig_note(sid_arg, tid_arg)
- 
-     monkeypatch.setattr(bus, "note_assistant_turn", _capture_note)
- 
-     q = bus.subscribe(sid)
-     try:
-         schedule_frames(sid, frames)
-         q.get(timeout=1.0)
-         q.get(timeout=1.0)
-     finally:
-         bus.unsubscribe(sid, q)
-         bus.note_assistant_turn(sid, None)
-         bus._canceled.discard((sid, "turn-42"))
- 
+                     # Flush when ready
+                     if dg is not None:
+                         if not asr_ready_evt.is_set():
+                             try:
+                                 await asyncio.wait_for(
+                                     asr_ready_evt.wait(), timeout=asr_ready_wait_s
+                                 )
+                             except asyncio.TimeoutError:
+                                 _jlog("asr_not_ready_timeout", sid=sid)
+                         if len(buffered_chunks) >= max_buffered_chunks:
+                             await _flush_buffered_chunks()
+                         await _flush_buffered_chunks()
+                     else:
+                         _jlog(
+                             "ws_audio_provider_connecting",
+                             sid=sid,
+                             queued=len(buffered_chunks),
+                         )
+                     continue

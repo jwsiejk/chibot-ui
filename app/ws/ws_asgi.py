@@ -842,12 +842,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         nonlocal dg, rx_task, dg_connect_task, dg_state, fallback_detection
 
         if not _has_deepgram_key():
+            with contextlib.suppress(Exception):
+                _jlog("asr_connect_skip", sid=sid, reason="no_api_key")
             return False
 
         if dg_state == "open" and dg is not None:
             return True
 
         if dg_state == "connecting" and dg_connect_task is not None:
+            with contextlib.suppress(Exception):
+                _jlog("asr_connect_wait", sid=sid, reason="existing_task")
             with contextlib.suppress(Exception):
                 await dg_connect_task
             return dg_state == "open" and dg is not None
@@ -1109,7 +1113,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 # -------------------- Binary / audio lane --------------------
                 if ev.get("bytes") is not None:
                     now = time.time()
-                    chunk = ev.get("bytes") or b""
+                    frame_bytes = ev.get("bytes")
+                    chunk = frame_bytes or b""
                     ws_frames_in += 1
                     ws_bytes_in += len(chunk)
                     if ws_frames_in % 20 == 0:
@@ -1134,6 +1139,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             with contextlib.suppress(Exception):
                                 _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
                             audio_sig_logged = True
+                    else:
+                        with contextlib.suppress(Exception):
+                            _jlog(
+                                "ws_audio_chunk_empty",
+                                sid=sid,
+                                bytes=len(frame_bytes or b""),
+                                turn_id=turn_id_ref[0],
+                                buf_empty=buf.is_empty(),
+                            )
 
                     raw_chunk = chunk
 
@@ -1302,6 +1316,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     if not turn_connect_started[0] and dg_state == "closed":
                         turn_connect_started[0] = True
                         if dg_connect_task is None:
+                            with contextlib.suppress(Exception):
+                                _jlog(
+                                    "asr_connect_schedule",
+                                    sid=sid,
+                                    turn_id=turn_id_ref[0],
+                                    queued=len(buffered_chunks),
+                                    dg_state=dg_state,
+                                )
                             dg_connect_task = asyncio.create_task(
                                 _ensure_dg_connected()
                             )
