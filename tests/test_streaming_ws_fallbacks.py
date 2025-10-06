@@ -81,8 +81,12 @@ def test_run_ws_greet_uses_foundation_frames(monkeypatch):
 
     tts_texts = []
 
-    def fake_schedule_tts(session_id, text, turn_id=None, correlation_user_msg_id=None):
+    def fake_schedule_tts(session_id, text, turn_id=None, correlation_user_msg_id=None, **kwargs):
         tts_texts.append(text)
+        on_complete = kwargs.get("on_complete")
+        if callable(on_complete):
+            on_complete()
+        return True
 
     monkeypatch.setattr(streaming, "schedule_tts_audio", fake_schedule_tts)
     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
@@ -123,7 +127,7 @@ def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
 
     monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
-    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
 
     tid = streaming.run_ws_greet("session-no-clarify")
 
@@ -142,7 +146,7 @@ def test_run_ws_greet_emits_single_suggestions_frame(monkeypatch):
         lambda session_id, force=False, ttl_sec=streaming.DEFAULT_TTL_SEC: ("turn-xyz", False),
     )
 
-    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
 
     emitted = []
 
@@ -183,7 +187,7 @@ def test_make_assistant_frames_greet_advertises_welcome_move(monkeypatch):
 
     monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *a, **k: True)
-    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
 
     class FakeStore:
@@ -329,7 +333,7 @@ def test_run_ws_user_turn_emits_action_metadata_once(monkeypatch):
     monkeypatch.setattr(streaming, "get_provider", lambda cfg: DummyProvider())
     monkeypatch.setattr(streaming, "_broadcast_frames", lambda *a, **k: None)
     monkeypatch.setattr(streaming, "schedule_frames", lambda *a, **k: None)
-    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
 
     captured = []
 
@@ -379,7 +383,7 @@ def test_run_ws_user_turn_emits_single_chunk_frame(monkeypatch):
         raise AssertionError("schedule_frames should not run")
 
     monkeypatch.setattr(streaming, "schedule_frames", fail_schedule_frames)
-    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: None)
+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
     monkeypatch.setattr(streaming, "classify_turn", lambda text, meta=None: {"intent": "test"})
     monkeypatch.setattr(
         streaming,

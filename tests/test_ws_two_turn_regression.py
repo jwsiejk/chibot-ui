@@ -2,8 +2,10 @@ import asyncio
 import json
 import time
 from collections import deque
+from queue import Empty
 
 import app.services.streaming_asr.deepgram_client as dg_mod
+import app.services.streaming as streaming
 from app.services.streaming import schedule_frames
 from app.ws import ws_asgi
 from app.ws.bus import bus
@@ -75,6 +77,71 @@ def _run_ws_session(events, sid: str = "default"):
         loop.close()
 
     return sent
+
+
+def test_ready_follows_audio_completion(monkeypatch):
+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+
+    sid = "s-ready-audio"
+    prepared_turn_id = "turn-ready"
+
+    def fake_make_assistant_frames(seed_text, session_id, meta=None, **kwargs):
+        frames = [
+            {"type": "assistant_chunk", "turn_id": prepared_turn_id, "text": "hello", "kb_hits": 0},
+            {"type": "assistant_end", "turn_id": prepared_turn_id},
+        ]
+        if kwargs.get("broadcast_immediately", True):
+            for frame in frames:
+                bus.broadcast(session_id, frame)
+        return prepared_turn_id, frames
+
+    def fake_schedule_tts(session_id, text, scheduled_turn_id=None, correlation_user_msg_id=None, **kwargs):
+        assigned_turn = scheduled_turn_id or prepared_turn_id
+        audio_frame = {
+            "type": "assistant_audio",
+            "turn_id": assigned_turn,
+            "mime": "audio/mpeg",
+            "audio_chunks": ["ZmFrZQ=="],
+            "is_last": True,
+        }
+        bus.broadcast(session_id, audio_frame)
+        bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": assigned_turn})
+        on_complete = kwargs.get("on_complete")
+        if callable(on_complete):
+            on_complete()
+        return True
+
+    monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_assistant_frames)
+    monkeypatch.setattr(streaming, "schedule_tts_audio", fake_schedule_tts)
+
+    q = bus.subscribe(sid)
+    try:
+        streaming.run_ws_user_turn(sid, "hello")
+        frames = []
+        while True:
+            try:
+                frames.append(q.get(timeout=0.2))
+            except Empty:
+                break
+    finally:
+        bus.unsubscribe(sid, q)
+        bus.note_assistant_turn(sid, None)
+        bus._canceled.discard((sid, prepared_turn_id))
+
+    ready_indices = [
+        idx
+        for idx, frame in enumerate(frames)
+        if frame.get("type") == "state" and frame.get("phase") == "ready"
+    ]
+    assert ready_indices, "Expected ready state frame"
+    ready_index = ready_indices[-1]
+    last_audio_index = max(
+        idx
+        for idx, frame in enumerate(frames)
+        if frame.get("type") in {"assistant_audio", "UtteranceEnd"}
+    )
+    assert ready_index > last_audio_index, "ready state must follow final audio frame"
 
 
 def test_schedule_frames_tracks_current_assistant_turn(monkeypatch):

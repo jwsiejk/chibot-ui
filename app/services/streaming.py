@@ -3,7 +3,7 @@
 # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
 
 from __future__ import annotations
-from typing import List, Dict, Tuple, Optional, Any, Iterable
+from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable
 import base64
 import hashlib
 import threading, time as _t
@@ -1275,8 +1275,6 @@ def _make_foundation_frames(seed_text: str,
         chunk['correlation_user_msg_id'] = correlation_user_msg_id
     frames.append(chunk)
 
-    frames.append({'type': 'state', 'phase': 'ready'})
-
     legacy_suggestions = []
     try:
         if cfg.get('suggestions_enabled', True):
@@ -1641,7 +1639,8 @@ def schedule_tts_audio(session_id: str,
                        correlation_user_msg_id: Optional[str] = None,
                        audio_bytes: Optional[bytes] = None,
                        chunk_bytes: int = 8192,
-                       delay_ms: int = 0) -> None:
+                       delay_ms: int = 0,
+                       on_complete: Optional[Callable[[], None]] = None) -> bool:
     """Synthesize TTS for `text` and stream as WS frames.
     Emits frames like:
         {
@@ -1654,10 +1653,11 @@ def schedule_tts_audio(session_id: str,
     After the final chunk, an explicit:
         { "type": "UtteranceEnd", "turn_id": <str or null> }
     is broadcast to mark audio-complete.
-    Non-blocking: runs in a background thread.
+    Non-blocking: runs in a background thread. Returns True if audio streaming
+    was scheduled, False if the request was ignored (e.g., audio disabled).
     """
     if not text:
-        return
+        return False
     cfg = db.get_config()
     feature_audio = bool(cfg.get("feature_audio", True))
 
@@ -1693,7 +1693,7 @@ def schedule_tts_audio(session_id: str,
     _log("tts.schedule", level=level, state=state_snapshot, feature_audio=feature_audio)
 
     if not feature_audio:
-        return
+        return False
 
     def _run():
         total_audio_bytes = 0
@@ -1886,7 +1886,14 @@ def schedule_tts_audio(session_id: str,
 
             state['done'] = True
 
+            if on_complete is not None:
+                try:
+                    on_complete()
+                except Exception:
+                    pass
+
     threading.Thread(target=_run, daemon=True).start()
+    return True
 
 
 def _update_assistant_turn_state(session_id: str,
@@ -2013,6 +2020,28 @@ def run_ws_greet(session_id: str) -> str:
         except Exception:
             pass
         return tid
+    existing_frame_types = [
+        fr.get("type")
+        for fr in frames
+        if isinstance(fr, dict) and fr.get("type") is not None
+    ]
+    state_already_sent = any(ft == "state" for ft in existing_frame_types)
+    suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
+
+    ready_sent = state_already_sent
+
+    def _emit_ready_once() -> None:
+        nonlocal ready_sent
+        if ready_sent:
+            return
+        try:
+            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+            ready_sent = True
+        except Exception:
+            pass
+
+    audio_scheduled = False
+
     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
     try:
         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
@@ -2030,21 +2059,14 @@ def run_ws_greet(session_id: str) -> str:
                 )
             except Exception:
                 pass
-            schedule_tts_audio(session_id, safe_text, turn_id=tid)
+            audio_scheduled = schedule_tts_audio(session_id, safe_text, turn_id=tid, on_complete=_emit_ready_once)
     except Exception:
         pass
-    existing_frame_types = [
-        fr.get("type")
-        for fr in frames
-        if isinstance(fr, dict) and fr.get("type") is not None
-    ]
-    state_already_sent = any(ft == "state" for ft in existing_frame_types)
-    suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
 
     # UI nudges (only emit if the assistant frames didn't already do so)
     try:
-        if not state_already_sent:
-            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+        if not audio_scheduled:
+            _emit_ready_once()
         if not suggestions_already_sent:
             base_suggestions = merge_suggestions(hygienic_suggestions(""))
             if base_suggestions:
@@ -2082,6 +2104,25 @@ def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Option
         _apply_assistant_turn_state(session_id, frames)
     except Exception:
         pass
+    existing_frame_types = [
+        fr.get("type")
+        for fr in frames
+        if isinstance(fr, dict) and fr.get("type") is not None
+    ]
+    ready_sent = any(ft == "state" for ft in existing_frame_types)
+
+    def _emit_ready_once() -> None:
+        nonlocal ready_sent
+        if ready_sent:
+            return
+        try:
+            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+            ready_sent = True
+        except Exception:
+            pass
+
+    audio_scheduled = False
+
     # TTS for assistant text
     try:
         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
@@ -2101,12 +2142,18 @@ def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Option
                 _jlog("tts.pre_schedule", **payload)
             except Exception:
                 pass
-            schedule_tts_audio(
+            audio_scheduled = schedule_tts_audio(
                 session_id,
                 safe_text,
                 turn_id=tid,
                 correlation_user_msg_id=correlation_user_msg_id,
+                on_complete=_emit_ready_once,
             )
     except Exception:
         pass
+    if not audio_scheduled:
+        try:
+            _emit_ready_once()
+        except Exception:
+            pass
     return tid
