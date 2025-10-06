@@ -1,259 +1,195 @@
-diff --git a/static/js/admin_console.js b/static/js/admin_console.js
-index 26a2c53fda6668c8d96a6a3c2c6271468242361d..3949b1d6155bc1e52f499b0aef3798f0c1cc3015 100644
---- a/static/js/admin_console.js
-+++ b/static/js/admin_console.js
-@@ -1,26 +1,26 @@
--import { openWS, waitWSOpen, closeWS, configure } from './ws.js';
-+import { openWS, waitWSOpen, closeWS, configure } from './ws_module.js';
- import { initMic, armVAD, disarmVAD } from './voice.js';
- import { unlockAudio } from './audio.js';
- import { getSID } from './util/sid.js';
- 
- const STEP_DEFS = [
-   {
-     id: 'ws',
-     title: 'Establish production connection',
-     role: 'system',
-     description: 'Open a live /ws/v1/chat socket with the same bearer subprotocol and CSRF protections the main app uses.',
-   },
-   {
-     id: 'greet',
-     title: 'Chip handshake',
-     role: 'system',
-     description: 'Send a Configure greet frame and wait for Chip to answer so we know the routing path is alive.',
-   },
-   {
-     id: 'user',
-     title: 'Your turn: capture voice sample',
-     role: 'you',
-     description: 'Run the full production microphone + VAD pipeline. When the card lights up, say the diagnostic phrase exactly as written.',
-   },
-   {
-     id: 'asr',
-diff --git a/static/js/app.js b/static/js/app.js
-index 48b6a12731ae54175d4cac3cf17a743ee5a8a9de..296ffea2962433eb98ee3bf1251c91dc045d3f77 100644
---- a/static/js/app.js
-+++ b/static/js/app.js
-@@ -1,27 +1,27 @@
- // /static/js/app.js — chat helpers only (imports constrained by spec)
--import { closeWS, sendCloseStream, sendJSON } from '/static/js/ws.js?v=v20250911b';
-+import { closeWS, sendCloseStream, sendJSON } from './ws_module.js';
- import { getSID } from '/static/js/util/sid.js';
- import { renderSuggestions } from '/static/js/suggestions.js';
- 
- // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
- // Exports: onEnd, onSend, handleAssistantFrame
- 
- const $  = (s)=>document.querySelector(s);
- 
- const ASR_TIMEOUT_MS = 10_000;
- let _sessionReadyAt = 0;
- let _awaitingFirstAsr = false;
- let _noAsrTimeout = null;
- let _noAsrNotified = false;
- let _lastAsrLatencyMs = null;
- 
- function _clearAsrTimeout(){
-   if (_noAsrTimeout){
-     clearTimeout(_noAsrTimeout);
-     _noAsrTimeout = null;
-   }
- }
- 
- function _resetAsrTracking(){
-   _clearAsrTimeout();
-   _awaitingFirstAsr = false;
-diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
-index bcf1b759965742725ad146f77ec132b9625505d2..56d059860dbf92dff9efa04e50bbe06dfd14c6cd 100644
---- a/static/js/bootstrap.js
-+++ b/static/js/bootstrap.js
-@@ -1,27 +1,27 @@
- // bootstrap.js
--import { openWS, waitWSOpen, isOpen, closeWS, configure } from '/static/js/ws.js?v=v20250911b';
-+import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
- import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
- import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
- import { unlockAudio, stopPlayback } from '/static/js/audio.js';
- import { getSID } from '/static/js/util/sid.js';
- import * as App from '/static/js/app.js';
- import * as Visualizer from '/static/js/visualizer.js';
- 
- // /static/js/bootstrap.js — single owner of Start/End/Send + audio unlock + WS→UI wiring
- 
- const $ = (s) => document.querySelector(s);
- 
- let startInFlight = false;
- let started = false;
- 
- // ----- Assistant text de-dupe (turn_id + text) -----
- const _assistantSeen = new Set();
- function _isAssistantTextFrame(d) {
-   const t = d?.type;
-   return t === 'assistant_text' || t === 'assistant_chunk' || t === 'assistant_final' || d?.role === 'assistant';
- }
- function _dedupeAssistant(d) {
-   // tolerate servers that send without turn_id (fallback to "na")
-   const turnId = d?.turn_id ?? 'na';
-   const text   = d?.text ?? d?.delta ?? d?.content ?? '';
-   const key    = `${turnId}::${text}`;
-diff --git a/static/js/diagnostics.js b/static/js/diagnostics.js
-index 0192307a51e4dcf5c30df8855f64f7578ef31ca6..690ec7daab57298a43de7643fa9797b84e87daa0 100644
---- a/static/js/diagnostics.js
-+++ b/static/js/diagnostics.js
-@@ -1,27 +1,27 @@
- // WS-only Diagnostics for Phase 6
--import { openWS, waitWSOpen, closeWS, sendCloseStream } from './ws.js';
-+import { openWS, waitWSOpen, closeWS, sendCloseStream } from './ws_module.js';
- import { initMic, armVAD, disarmVAD } from './voice.js';
- import { getSID } from './util/sid.js';
- 
- const $ = (s)=>document.querySelector(s);
- const logEl = ()=> $('#admin-log');
- const sid = getSID();
- 
- function log(line){
-   const el = logEl(); if(!el) return;
-   el.textContent += line + "\n";
-   el.scrollTop = el.scrollHeight;
- }
- 
- function setKPI(id, val, cls=''){
-   const el = $('#'+id); if(!el) return;
-   el.textContent = val;
-   el.classList.remove('ok','warn','fail');
-   if (cls) el.classList.add(cls);
- }
- 
- async function watchAdminSSE(onEvent){
-   try{
-     const sse = new EventSource('/api/v1/admin/logs', { withCredentials:true });
-     sse.onmessage = (e)=>{
-       try{
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 1f3d142e5e6e82a815684727ffd559deaf4cc181..15fe49250207e6118596a39a55074fb1d142c971 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -1,46 +1,46 @@
- /*
- Citations for context (non-functional):
- :contentReference[oaicite:0]{index=0}
- :contentReference[oaicite:1]{index=1}
- */
- 
- /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
-    Goals satisfied:
-     • Echo-aware VAD (threshold boost while TTS is playing)
-     • Streaming Opus blobs per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
-     • Soft barge-in: pause Chip TTS on committed speech start
-     • Turn timeout (safety), robust errors, clean session end
-     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
- 
-    Notes:
-     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
-     • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
- */
- 
- import { VAD } from './voice/vad.js';
--import { sendAudioChunk, sendCloseStream } from '/static/js/ws.js?v=v20250911b';
-+import { sendAudioChunk, sendCloseStream } from './ws_module.js';
- import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
- 
- // Public API (matches prior usage)
- export async function initMic(stream = null) { return await _ensureMic(stream); }
- export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
- export function disarmVAD() { _disarm(); }
- export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
- export function bargeIn() { _bargeIn(); }         // keeps API parity
- export function setVadBoost(_v) { /* kept for API parity; no-op */ }
- 
- // ---- Internal state ---------------------------------------------------------
- 
- // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
- const REC_MIME = (typeof MediaRecorder !== 'undefined'
-   && typeof MediaRecorder.isTypeSupported === 'function'
-   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
-   ? 'audio/ogg; codecs=opus'
-   : 'audio/webm; codecs=opus';
- 
- const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
- const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
- 
- const state = {
-   stream: null,
-   ctx: null,
-diff --git a/static/js/ws_module.js b/static/js/ws_module.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..c982da4d52084fdfd0e6e86b43839f2e12b04908
---- /dev/null
-+++ b/static/js/ws_module.js
-@@ -0,0 +1,70 @@
-+export const WS_MODULE_VERSION = 'v20250911b';
-+export const WS_MODULE_URL = `/static/js/ws.js?v=${WS_MODULE_VERSION}`;
+diff --git a/scripts/test_packaging.py b/scripts/test_packaging.py
+index b18aa6373fee43be91601538c845be81c65c7f02..6c8f4795e14acd0e67efa7eeb2b0f6da6831657e 100644
+--- a/scripts/test_packaging.py
++++ b/scripts/test_packaging.py
+@@ -1,36 +1,82 @@
+ #!/usr/bin/env python3
+-import os, sys, zipfile
++"""Utility for building the packaging zip used in tests.
 +
-+let cached = null;
++The original implementation executed on import which caused pytest to fail
++with ``SystemExit`` during test collection.  The logic has been wrapped in a
++``main`` function so the module can be imported safely while still supporting
++command line execution.
++"""
 +
-+const wsModulePromise = import(WS_MODULE_URL).then((mod) => {
-+  cached = mod;
-+  return mod;
-+}).catch((err) => {
-+  console.error('[ws_module] failed to load ws.js module', err);
-+  throw err;
-+});
++from __future__ import annotations
 +
-+function moduleReady() {
-+  return cached;
-+}
++import os
++import sys
++import zipfile
++from typing import Iterable
 +
-+export function getWSModule() {
-+  return wsModulePromise;
-+}
+ 
+ INCLUDE_DIRS = [
+     "artifacts",
+     "app",
+     "templates",
+     "static/css",
+     "static/js",
+     "scripts",
+ ]
+ 
+-EXCLUDE_PATTERNS = (".venv","venv","node_modules","site-packages","dist-packages","__pycache__",".pytest_cache")
+-
+-def assert_true(cond, msg):
+-    if not cond:
+-        print("FAIL:", msg); return False
+-    print("PASS:", msg); return True
+-
+-ok = True
+-out = "askchip_release.zip"
+-with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as z:
+-    for root in INCLUDE_DIRS:
+-        if not os.path.exists(root):
+-            continue
+-        for dirpath, dirnames, filenames in os.walk(root):
+-            if any(p in dirpath for p in EXCLUDE_PATTERNS):
 +
-+export function openWS(...args) {
-+  if (moduleReady()) return moduleReady().openWS(...args);
-+  return wsModulePromise.then((mod) => mod.openWS(...args));
-+}
++EXCLUDE_PATTERNS: tuple[str, ...] = (
++    ".venv",
++    "venv",
++    "node_modules",
++    "site-packages",
++    "dist-packages",
++    "__pycache__",
++    ".pytest_cache",
++)
 +
-+export function waitWSOpen(...args) {
-+  if (moduleReady()) return moduleReady().waitWSOpen(...args);
-+  return wsModulePromise.then((mod) => mod.waitWSOpen(...args));
-+}
 +
-+export function isOpen(...args) {
-+  if (moduleReady()) return moduleReady().isOpen(...args);
-+  return false;
-+}
++def _should_skip_path(path: str, patterns: Iterable[str]) -> bool:
++    """Return ``True`` if any of the exclusion patterns appear in ``path``."""
 +
-+export function isConnecting(...args) {
-+  if (moduleReady()) return moduleReady().isConnecting(...args);
-+  return false;
-+}
++    return any(pattern in path for pattern in patterns)
 +
-+export function closeWS(...args) {
-+  if (moduleReady()) return moduleReady().closeWS(...args);
-+  wsModulePromise.then((mod) => { mod.closeWS?.(...args); }).catch(() => {});
-+}
 +
-+export function bufferedAmount(...args) {
-+  if (moduleReady()) return moduleReady().bufferedAmount(...args);
-+  return 0;
-+}
++def _assert_true(condition: bool, message: str) -> bool:
++    """Print an assertion-style message and return ``condition``."""
 +
-+export function configure(...args) {
-+  if (moduleReady()) return moduleReady().configure(...args);
-+  wsModulePromise.then((mod) => { mod.configure?.(...args); }).catch(() => {});
-+}
++    if condition:
++        print("PASS:", message)
++        return True
 +
-+export function sendJSON(...args) {
-+  if (moduleReady()) return moduleReady().sendJSON(...args);
-+  wsModulePromise.then((mod) => { mod.sendJSON?.(...args); }).catch(() => {});
-+}
++    print("FAIL:", message)
++    return False
 +
-+export function sendAudioChunk(...args) {
-+  if (moduleReady()) return moduleReady().sendAudioChunk(...args);
-+  return wsModulePromise.then((mod) => mod.sendAudioChunk(...args));
-+}
 +
-+export function sendCloseStream(...args) {
-+  if (moduleReady()) return moduleReady().sendCloseStream(...args);
-+  wsModulePromise.then((mod) => { mod.sendCloseStream?.(...args); }).catch(() => {});
-+}
++def main() -> int:
++    """Build the release zip and report success."""
++
++    ok = True
++    output_path = "askchip_release.zip"
++    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
++        for root in INCLUDE_DIRS:
++            if not os.path.exists(root):
+                 continue
+-            for fn in filenames:
+-                p = os.path.join(dirpath, fn)
+-                z.write(p, p)
++            for dirpath, _dirnames, filenames in os.walk(root):
++                if _should_skip_path(dirpath, EXCLUDE_PATTERNS):
++                    continue
++                for filename in filenames:
++                    file_path = os.path.join(dirpath, filename)
++                    archive.write(file_path, file_path)
++
++    ok &= _assert_true(
++        os.path.exists(output_path) and os.path.getsize(output_path) > 1024,
++        "Release zip built and >1KB",
++    )
++
++    print("\nRESULT:", "PASS" if ok else "FAIL")
++    return 0 if ok else 1
+ 
+-ok &= assert_true(os.path.exists(out) and os.path.getsize(out) > 1024, "Release zip built and >1KB")
+ 
+-print("\nRESULT:", "PASS" if ok else "FAIL")
+-sys.exit(0 if ok else 1)
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/scripts/test_static.py b/scripts/test_static.py
+index d86fa4238364e8b0f52961ecbc77a6fccbb7a123..bba413a91fa2e29893b9b6b4a679dfe873b580a8 100644
+--- a/scripts/test_static.py
++++ b/scripts/test_static.py
+@@ -1,28 +1,61 @@
+ #!/usr/bin/env python3
+-import os, sys, re, json, glob
++"""Static asset smoke tests used by the continuous integration suite."""
+ 
+-ROOT = "."
++from __future__ import annotations
+ 
+-def assert_true(cond, msg):
+-    if not cond:
+-        print("FAIL:", msg); return False
+-    print("PASS:", msg); return True
++import glob
++import sys
++from pathlib import Path
+ 
+-ok = True
+ 
+-# Ensure ASGI app entrypoint exists
+-ok &= assert_true(os.path.exists("app/asgi_gateway.py"), "ASGI gateway present")
++ROOT = Path(".")
+ 
+-# Ensure index template
+-ok &= assert_true(os.path.exists("templates/index.html"), "index.html present")
+ 
+-# Ensure no obvious secrets committed
+-bad = []
+-for p in glob.glob("app/**/*.py", recursive=True):
+-    txt = open(p, "r", encoding="utf-8", errors="ignore").read()
+-    if "sk_live_" in txt or "aws_secret_access_key" in txt:
+-        bad.append(p)
+-ok &= assert_true(not bad, "No obvious secrets in source")
++def _assert_true(condition: bool, message: str) -> bool:
++    """Print an assertion-style message and return ``condition``."""
+ 
+-print("\nRESULT:", "PASS" if ok else "FAIL")
+-sys.exit(0 if ok else 1)
++    if condition:
++        print("PASS:", message)
++        return True
++
++    print("FAIL:", message)
++    return False
++
++
++def _contains_secret(path: Path) -> bool:
++    """Return ``True`` if the file contains obvious secret tokens."""
++
++    text = path.read_text(encoding="utf-8", errors="ignore")
++    return "sk_live_" in text or "aws_secret_access_key" in text
++
++
++def main() -> int:
++    ok = True
++
++    # Ensure ASGI app entrypoint exists
++    ok &= _assert_true(
++        (ROOT / "app" / "asgi_gateway.py").exists(),
++        "ASGI gateway present",
++    )
++
++    # Ensure index template
++    ok &= _assert_true(
++        (ROOT / "templates" / "index.html").exists(),
++        "index.html present",
++    )
++
++    # Ensure no obvious secrets committed
++    bad: list[Path] = []
++    for path_str in glob.glob("app/**/*.py", recursive=True):
++        path = Path(path_str)
++        if _contains_secret(path):
++            bad.append(path)
++
++    ok &= _assert_true(not bad, "No obvious secrets in source")
++
++    print("\nRESULT:", "PASS" if ok else "FAIL")
++    return 0 if ok else 1
++
++
++if __name__ == "__main__":
++    sys.exit(main())
