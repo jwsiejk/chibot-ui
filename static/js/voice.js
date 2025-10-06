@@ -54,6 +54,9 @@ const state = {
   turnTimer: null,
   turnOpen: false,   // track whether a turn is currently open server-side
   deviceLogged: false,
+  // NEW: min-turn gating
+  recStartedAt: 0,
+  pendingEndTimer: null,
 };
 
 // ---- Helpers ----------------------------------------------------------------
@@ -73,6 +76,13 @@ function _logLifecycle(event, detail = {}, level = 'debug') {
   try {
     window.dispatchEvent(new CustomEvent('askchip-voice-lifecycle', { detail: payload }));
   } catch {}
+}
+
+function _clearPendingEndTimer() {
+  if (state.pendingEndTimer) {
+    try { clearTimeout(state.pendingEndTimer); } catch {}
+    state.pendingEndTimer = null;
+  }
 }
 
 async function _ensureMic(externalStream = null) {
@@ -124,7 +134,7 @@ async function _ensureMic(externalStream = null) {
   const source = ctx.createMediaStreamSource(stream);
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 2048;
-  analyser.smoothingTimeConstant = 0.03;
+  analyser.smoothingTimeConstant = 0.06;          // LESS twitchy (was 0.03)
   source.connect(analyser);
 
   state.stream = stream;
@@ -162,6 +172,7 @@ function _stopRecorder(detail = null) {
   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
 
   try { if (state.rec && state.rec.state !== 'inactive') state.rec.stop(); } catch {}
+  // intentionally keep state.rec reference nullable here; onstop handler handles final close
   state.rec = null;
 }
 
@@ -182,9 +193,11 @@ function _teardownAudioGraph() {
 
 function _disarm() {
   _safeClearTurnTimer();
+  _clearPendingEndTimer();
   _stopRecorder({ reason: 'manual_disarm' });
   _teardownVADOnly();
   state.turnOpen = false; // ensure local state is clean
+  state.recStartedAt = 0;
   _emitVoiceState('idle');
 }
 
@@ -207,18 +220,23 @@ async function _arm(stream = null, opts = {}) {
   // Build / rebuild VAD
   _teardownVADOnly();
 
-  const pollMs = opts.pollMs ?? 33;
+  // Merge runtime globals so admins can tune without rebuilds:
+  let globalVad = {};
+  try { globalVad = (window.__askchip_config && window.__askchip_config.vad) || {}; } catch {}
+  const cfg = { ...globalVad, ...opts };
+
+  const pollMs = cfg.pollMs ?? 33;
   const vad = new VAD(
     state.analyser,
     {
-      // Tunables (admin-configurable via opts or window.__askchip_config)
-      startRms: opts.startRms ?? 0.015,
-      stopRms: opts.stopRms ?? 0.010,
-      minSpeechMs: opts.minSpeechMs ?? 220,
-      minSilenceMs: opts.minSilenceMs ?? 420,
+      // Tunables (admin-configurable via opts or window.__askchip_config.vad)
+      startRms: cfg.startRms ?? 0.012,
+      stopRms:  cfg.stopRms  ?? 0.006,   // LOWER = less twitchy end
+      minSpeechMs: cfg.minSpeechMs ?? 220,
+      minSilenceMs: cfg.minSilenceMs ?? 900, // HIGHER = needs longer quiet
       pollMs,
-      echoBoostStart: opts.echoBoostStart ?? 1.5,
-      echoBoostStop: opts.echoBoostStop ?? 1.3,
+      echoBoostStart: cfg.echoBoostStart ?? 1.5,
+      echoBoostStop:  cfg.echoBoostStop  ?? 1.3,
       echoStateFn: () => {
         // treat "TTS is playing" as echo present
         try { return !!ttsIsPlaying(); } catch { return false; }
@@ -256,6 +274,9 @@ function _startRecorder() {
   state.chunkSendPromise = Promise.resolve();
   state.chunkBytesSent = 0;
   state.chunkSendError = null;
+  _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
+  state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
+
   let recorder;
   try {
     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
@@ -324,7 +345,8 @@ function _startRecorder() {
         try {
           console.debug('[voice] recorder stopped', {
             bytesSent: state.chunkBytesSent,
-            mime: state.rec?.mimeType || REC_MIME,
+            // state.rec may be nulled by _stopRecorder; fall back to selected REC_MIME
+            mime: (state.rec && state.rec.mimeType) || REC_MIME,
           });
         } catch {}
       }
@@ -381,8 +403,25 @@ function _onSpeechStartCommitted() {
 
 function _onSpeechEndCommitted(detail = null) {
   const reason = detail?.reason || 'vad_silence';
+  const now = performance.now ? performance.now() : Date.now();
+  const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
+
+  // If we haven't recorded at least minTurnMs, delay honoring VAD-end.
+  // Only applies while recorder is actually running.
+  if (state.rec && typeof state.rec.state === 'string' && state.rec.state === 'recording') {
+    const elapsed = Math.max(0, now - (state.recStartedAt || now));
+    const wait = Math.max(0, minTurnMs - elapsed);
+    if (wait > 0) {
+      try { console.debug('[voice] delaying VAD end', { waitMs: wait, elapsed }); } catch {}
+      _clearPendingEndTimer();
+      state.pendingEndTimer = setTimeout(() => _onSpeechEndCommitted(detail), wait);
+      return; // do not stop yet
+    }
+  }
+
   _logLifecycle('vad_speech_end', { reason });
   _safeClearTurnTimer();
+  _clearPendingEndTimer();
   _stopRecorder({ reason });
   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
 }
