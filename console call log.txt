@@ -1,52 +1,82 @@
-[admin-diagnostics] 02:33:14 starting diagnostic for session=54d94123-9439-4960-85d8-9292223ee092
-admin_console.js:168 [Violation] 'click' handler took 288ms
-voice.js:71 [voice] mic_request_perm {event: 'mic_request_perm', constraints: {…}}
-voice.js:71 [voice] mic_perm_granted {event: 'mic_perm_granted'}
-voice.js:71 [voice] mic_device_selected {event: 'mic_device_selected', label: 'Microphone Array (Intel® Smart Sound Technology for Digital Microphones)', sampleRate: 48000, channels: 1}
-voice.js:71 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
+admin-diagnostics] 03:11:09 starting diagnostic for session=54d94123-9439-4960-85d8-9292223ee092
+voice.js:74 [voice] mic_request_perm {event: 'mic_request_perm', constraints: {…}}
+voice.js:74 [voice] mic_perm_granted {event: 'mic_perm_granted'}
+voice.js:74 [voice] mic_device_selected {event: 'mic_device_selected', label: 'Microphone Array (Intel® Smart Sound Technology for Digital Microphones)', sampleRate: 48000, channels: 1}
+voice.js:74 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
 ws.js:297 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js', version: undefined, flags: undefined, reconnectEnabled: false, sessionStarted: false}
 ws.js:301 [ws] openWS options= {reconnect: false} reconnect= false
-admin_console.js:620 [admin-diagnostics] 02:33:14 ready
-admin_console.js:620 [admin-diagnostics] 02:33:14 {"ts": 1759717996.0049202, "kind": "ping"}
-admin_console.js:620 [admin-diagnostics] 02:33:14 {"ts": 1759717995.2099857, "step": 1, "kind": "admin_diag", "route": null, "label": "diagnostic_start", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:620 [admin-diagnostics] 02:33:14 {"ts": 1759717995.8842566, "step": 2, "kind": "ws_scope_arrived", "route": null, "label": "ws_scope_arrived", "path": "/ws/v1/chat"}
-admin_console.js:620 [admin-diagnostics] 02:33:14 {"ts": 1759717995.8844378, "step": 3, "kind": "ws_handshake_enter", "route": null, "label": "ws_handshake_enter", "path": "/ws/v1/chat", "raw_query": "session_id=54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:620 [admin-diagnostics] 02:33:14 {"ts": 1759717995.884789, "step": 4, "kind": "ws_conn_open", "route": null, "label": "ws_conn_open", "sid": "54d94123-9439-4960-85d8-9292223ee092", "conn_id": "72cfbf4c54d34f459931c5a12f7aaf09", "client_ip": "170.85.73.7", "path": "/ws/v1/chat", "query_string": "session_id=54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:620 [admin-diagnostics] 02:33:15 {"ts": 1759717995.884791, "step": 5, "kind": "ws_conn_active", "route": null, "label": "ws_conn_active", "conn_id": "72cfbf4c54d34f459931c5a12f7aaf09", "active": 1}
-admin_console.js:620 [admin-diagnostics] 02:33:15 {"ts": 1759717995.9980667, "step": 6, "kind": "ws_json_recv", "route": null, "label": "ws_json_recv", "sid": "54d94123-9439-4960-85d8-9292223ee092", "type": "Configure"}
-admin_console.js:620 [admin-diagnostics] 02:33:15 {"ts": 1759717995.9981232, "step": 7, "kind": "greet:reset", "route": "/ws/v1/chat", "label": "greet:reset /ws/v1/chat", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:620 [admin-diagnostics] 02:33:15 {"ts": 1759717995.9997776, "step": 8, "kind": "admin_diag", "route": null, "label": "step_ws_ok", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:620 [admin-diagnostics] 02:33:15 {"ts": 1759717996.0003512, "step": 9, "kind": "admin_diag", "route": null, "label": "step_greet_sent", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:620 [admin-diagnostics] 02:33:20 {"ts": 1759718001.2648964, "kind": "ping"}
-admin_console.js:620 [admin-diagnostics] 02:33:25 assistant_chunk: 1.
-admin_console.js:620 [admin-diagnostics] 02:33:25 suggestions
-admin_console.js:620 [admin-diagnostics] 02:33:25 assistant_end
-admin_console.js:620 [admin-diagnostics] 02:33:25 {"ts": 1759718006.152111, "step": 10, "kind": "greet:resp", "route": null, "label": "greet:resp", "session_id": "54d94123-9439-4960-85d8-9292223ee092", "turn_id": "7de6256a2b824edc8a6a10339f363c72", "audio_scheduled": true}
-admin_console.js:620 [admin-diagnostics] 02:33:25 {"ts": 1759718006.213883, "step": 11, "kind": "admin_diag", "route": null, "label": "step_greet_ok", "session_id": "54d94123-9439-4960-85d8-9292223ee092", "frame_type": "assistant_chunk"}
-admin_console.js:620 [admin-diagnostics] 02:33:25 {"ts": 1759718006.3546898, "kind": "ping"}
-admin_console.js:620 [admin-diagnostics] 02:33:26 assistant_audio chunks=1 (last)
-admin_console.js:620 [admin-diagnostics] 02:33:26 UtteranceEnd
-admin_console.js:620 [admin-diagnostics] 02:33:26 state
-voice.js:71 [voice] mic_start {event: 'mic_start', sampleRate: 48000, pollMs: 33}
-voice.js:71 [voice] vad_speech_start {event: 'vad_speech_start'}
-voice.js:348 [voice] recorder started {mime: 'audio/webm; codecs=opus', timeslice: 150}
-voice.js:288 [voice] streamed audio chunk {bytes: 2094}
-voice.js:288 [voice] streamed audio chunk {bytes: 2898}
-voice.js:288 [voice] streamed audio chunk {bytes: 2898}
-voice.js:288 [voice] streamed audio chunk {bytes: 2898}
-voice.js:288 [voice] streamed audio chunk {bytes: 2898}
-voice.js:288 [voice] streamed audio chunk {bytes: 2898}
-voice.js:288 [voice] streamed audio chunk {bytes: 2898}
-voice.js:288 [voice] streamed audio chunk {bytes: 2898}
-voice.js:288 [voice] streamed audio chunk {bytes: 2898}
-voice.js:71 [voice] vad_speech_end {event: 'vad_speech_end', reason: 'vad_silence'}
-voice.js:71 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'vad_silence'}
-voice.js:288 [voice] streamed audio chunk {bytes: 2897}
-voice.js:325 [voice] recorder stopped {bytesSent: 28175, mime: 'audio/webm; codecs=opus'}
-admin_console.js:620 [admin-diagnostics] 02:33:30 {"ts": 1759718011.5817974, "step": 12, "kind": "admin_diag", "route": null, "label": "step_user_ok", "session_id": "54d94123-9439-4960-85d8-9292223ee092", "duration_ms": 4065}
-admin_console.js:620 [admin-diagnostics] 02:33:30 {"ts": 1759718011.6386886, "kind": "ping"}
-admin_console.js:620 [admin-diagnostics] 02:33:34 keepalive
-admin_console.js:620 [admin-diagnostics] 02:33:35 {"ts": 1759718016.7409232, "kind": "ping"}
-admin_console.js:620 [admin-diagnostics] 02:33:40 {"ts": 1759718021.8655937, "kind": "ping"}
-admin_console.js:620 [admin-diagnostics] 02:33:42 [error] Timed out waiting for ASR final.
-voice.js:71 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
+admin_console.js:620 [admin-diagnostics] 03:11:09 ready
+admin_console.js:620 [admin-diagnostics] 03:11:09 {"ts": 1759720271.0096772, "kind": "ping"}
+admin_console.js:620 [admin-diagnostics] 03:11:09 {"ts": 1759720270.3058882, "step": 1, "kind": "admin_diag", "route": null, "label": "diagnostic_start", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:620 [admin-diagnostics] 03:11:09 {"ts": 1759720270.8340805, "step": 2, "kind": "ws_scope_arrived", "route": null, "label": "ws_scope_arrived", "path": "/ws/v1/chat"}
+admin_console.js:620 [admin-diagnostics] 03:11:09 {"ts": 1759720270.8342533, "step": 3, "kind": "ws_handshake_enter", "route": null, "label": "ws_handshake_enter", "path": "/ws/v1/chat", "raw_query": "session_id=54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:620 [admin-diagnostics] 03:11:09 {"ts": 1759720270.834616, "step": 4, "kind": "ws_conn_open", "route": null, "label": "ws_conn_open", "sid": "54d94123-9439-4960-85d8-9292223ee092", "conn_id": "ca85559da7c8485a93c297d42d0456d8", "client_ip": "170.85.73.7", "path": "/ws/v1/chat", "query_string": "session_id=54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:620 [admin-diagnostics] 03:11:09 {"ts": 1759720270.8346179, "step": 5, "kind": "ws_conn_active", "route": null, "label": "ws_conn_active", "conn_id": "ca85559da7c8485a93c297d42d0456d8", "active": 1}
+admin_console.js:620 [admin-diagnostics] 03:11:09 {"ts": 1759720270.948109, "step": 6, "kind": "ws_json_recv", "route": null, "label": "ws_json_recv", "sid": "54d94123-9439-4960-85d8-9292223ee092", "type": "Configure"}
+admin_console.js:620 [admin-diagnostics] 03:11:09 {"ts": 1759720270.9481626, "step": 7, "kind": "greet:reset", "route": "/ws/v1/chat", "label": "greet:reset /ws/v1/chat", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:620 [admin-diagnostics] 03:11:09 {"ts": 1759720270.9497757, "step": 8, "kind": "admin_diag", "route": null, "label": "step_ws_ok", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:620 [admin-diagnostics] 03:11:09 {"ts": 1759720270.9511034, "step": 9, "kind": "admin_diag", "route": null, "label": "step_greet_sent", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:620 [admin-diagnostics] 03:11:15 {"ts": 1759720276.0680785, "kind": "ping"}
+admin_console.js:620 [admin-diagnostics] 03:11:20 {"ts": 1759720281.0800266, "kind": "ping"}
+admin_console.js:620 [admin-diagnostics] 03:11:22 assistant_chunk: 1.
+admin_console.js:620 [admin-diagnostics] 03:11:22 suggestions
+admin_console.js:620 [admin-diagnostics] 03:11:22 assistant_end
+admin_console.js:620 [admin-diagnostics] 03:11:22 {"ts": 1759720283.1565492, "step": 10, "kind": "greet:resp", "route": null, "label": "greet:resp", "session_id": "54d94123-9439-4960-85d8-9292223ee092", "turn_id": "c4422d908d4045568275dc48048ab23e", "audio_scheduled": true}
+admin_console.js:620 [admin-diagnostics] 03:11:22 {"ts": 1759720283.2192445, "step": 11, "kind": "admin_diag", "route": null, "label": "step_greet_ok", "session_id": "54d94123-9439-4960-85d8-9292223ee092", "frame_type": "assistant_chunk"}
+admin_console.js:620 [admin-diagnostics] 03:11:22 assistant_audio chunks=1
+admin_console.js:620 [admin-diagnostics] 03:11:22 assistant_audio chunks=1 (last)
+admin_console.js:620 [admin-diagnostics] 03:11:22 UtteranceEnd
+admin_console.js:620 [admin-diagnostics] 03:11:22 state
+voice.js:74 [voice] mic_start {event: 'mic_start', sampleRate: 48000, pollMs: 33}
+admin_console.js:620 [admin-diagnostics] 03:11:25 {"ts": 1759720286.2607331, "kind": "ping"}
+voice.js:74 [voice] vad_speech_start {event: 'vad_speech_start'}
+voice.js:370 [voice] recorder started {mime: 'audio/webm; codecs=opus', timeslice: 150}
+voice.js:309 [voice] streamed audio chunk {bytes: 2094}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+admin_console.js:620 [admin-diagnostics] 03:11:29 keepalive
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+admin_console.js:620 [admin-diagnostics] 03:11:30 {"ts": 1759720291.3870873, "kind": "ping"}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:74 [voice] vad_speech_end {event: 'vad_speech_end', reason: 'vad_silence'}
+voice.js:74 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'vad_silence'}
+voice.js:309 [voice] streamed audio chunk {bytes: 2897}
+voice.js:346 [voice] recorder stopped {bytesSent: 112217, mime: 'audio/webm; codecs=opus'}
+admin_console.js:620 [admin-diagnostics] 03:11:32 {"ts": 1759720293.6603265, "step": 12, "kind": "admin_diag", "route": null, "label": "step_user_ok", "session_id": "54d94123-9439-4960-85d8-9292223ee092", "duration_ms": 9308}
+admin_console.js:620 [admin-diagnostics] 03:11:35 {"ts": 1759720296.5357914, "kind": "ping"}
+admin_console.js:620 [admin-diagnostics] 03:11:40 {"ts": 1759720301.6545856, "kind": "ping"}
+admin_console.js:620 [admin-diagnostics] 03:11:44 [error] Timed out waiting for ASR final.
+voice.js:74 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
