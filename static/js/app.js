@@ -1,5 +1,5 @@
 // /static/js/app.js — chat helpers only (imports constrained by spec)
-import { closeWS, sendCloseStream, sendJSON } from '/static/js/ws.js?v=v20250911b';
+import { closeWS, sendCloseStream, sendJSON } from './ws_module.js';
 import { getSID } from '/static/js/util/sid.js';
 import { renderSuggestions } from '/static/js/suggestions.js';
 

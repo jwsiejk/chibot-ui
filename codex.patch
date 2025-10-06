@@ -1,211 +1,259 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index f910284a556bd6778148fc8e20c9eb68f66d6210..b9ba406e6e0a3399db394ed5206a96b5fcb78b52 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -820,56 +820,60 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         turn_id: int, reason: str, transcript: str = ""
-     ) -> bool:
-         if final_seen[0]:
-             return False
-         final_seen[0] = True
-         payload = make_results(turn_id, transcript=transcript, is_final=True)
-         payload["type"] = "Results"
-         await _ws_send_json(send, payload)
-         utterance_payload = make_utterance_end(turn_id)
-         utterance_payload["type"] = "UtteranceEnd"
-         await _ws_send_json(send, utterance_payload)
-         with contextlib.suppress(Exception):
-             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
-         _log_turn_finish(
-             turn_id,
-             reason=reason,
-             synthetic=True,
-             transcript_chars=len(transcript or ""),
-         )
-         return True
+diff --git a/static/js/admin_console.js b/static/js/admin_console.js
+index 26a2c53fda6668c8d96a6a3c2c6271468242361d..3949b1d6155bc1e52f499b0aef3798f0c1cc3015 100644
+--- a/static/js/admin_console.js
++++ b/static/js/admin_console.js
+@@ -1,26 +1,26 @@
+-import { openWS, waitWSOpen, closeWS, configure } from './ws.js';
++import { openWS, waitWSOpen, closeWS, configure } from './ws_module.js';
+ import { initMic, armVAD, disarmVAD } from './voice.js';
+ import { unlockAudio } from './audio.js';
+ import { getSID } from './util/sid.js';
  
-     async def _ensure_dg_connected() -> bool:
-         nonlocal dg, rx_task, dg_connect_task, dg_state, fallback_detection
+ const STEP_DEFS = [
+   {
+     id: 'ws',
+     title: 'Establish production connection',
+     role: 'system',
+     description: 'Open a live /ws/v1/chat socket with the same bearer subprotocol and CSRF protections the main app uses.',
+   },
+   {
+     id: 'greet',
+     title: 'Chip handshake',
+     role: 'system',
+     description: 'Send a Configure greet frame and wait for Chip to answer so we know the routing path is alive.',
+   },
+   {
+     id: 'user',
+     title: 'Your turn: capture voice sample',
+     role: 'you',
+     description: 'Run the full production microphone + VAD pipeline. When the card lights up, say the diagnostic phrase exactly as written.',
+   },
+   {
+     id: 'asr',
+diff --git a/static/js/app.js b/static/js/app.js
+index 48b6a12731ae54175d4cac3cf17a743ee5a8a9de..296ffea2962433eb98ee3bf1251c91dc045d3f77 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -1,27 +1,27 @@
+ // /static/js/app.js — chat helpers only (imports constrained by spec)
+-import { closeWS, sendCloseStream, sendJSON } from '/static/js/ws.js?v=v20250911b';
++import { closeWS, sendCloseStream, sendJSON } from './ws_module.js';
+ import { getSID } from '/static/js/util/sid.js';
+ import { renderSuggestions } from '/static/js/suggestions.js';
  
-         if not _has_deepgram_key():
-+            with contextlib.suppress(Exception):
-+                _jlog("asr_connect_skip", sid=sid, reason="no_api_key")
-             return False
+ // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
+ // Exports: onEnd, onSend, handleAssistantFrame
  
-         if dg_state == "open" and dg is not None:
-             return True
+ const $  = (s)=>document.querySelector(s);
  
-         if dg_state == "connecting" and dg_connect_task is not None:
-+            with contextlib.suppress(Exception):
-+                _jlog("asr_connect_wait", sid=sid, reason="existing_task")
-             with contextlib.suppress(Exception):
-                 await dg_connect_task
-             return dg_state == "open" and dg is not None
+ const ASR_TIMEOUT_MS = 10_000;
+ let _sessionReadyAt = 0;
+ let _awaitingFirstAsr = false;
+ let _noAsrTimeout = null;
+ let _noAsrNotified = false;
+ let _lastAsrLatencyMs = null;
  
-         connect_result = {"ok": False}
+ function _clearAsrTimeout(){
+   if (_noAsrTimeout){
+     clearTimeout(_noAsrTimeout);
+     _noAsrTimeout = null;
+   }
+ }
  
-         async def _connect() -> None:
-             nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result, fallback_detection
-             try:
-                 dg_state = "connecting"
-                 with contextlib.suppress(Exception):
-                     asr_ready_evt.clear()
+ function _resetAsrTracking(){
+   _clearAsrTimeout();
+   _awaitingFirstAsr = false;
+diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
+index bcf1b759965742725ad146f77ec132b9625505d2..56d059860dbf92dff9efa04e50bbe06dfd14c6cd 100644
+--- a/static/js/bootstrap.js
++++ b/static/js/bootstrap.js
+@@ -1,27 +1,27 @@
+ // bootstrap.js
+-import { openWS, waitWSOpen, isOpen, closeWS, configure } from '/static/js/ws.js?v=v20250911b';
++import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
+ import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
+ import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
+ import { unlockAudio, stopPlayback } from '/static/js/audio.js';
+ import { getSID } from '/static/js/util/sid.js';
+ import * as App from '/static/js/app.js';
+ import * as Visualizer from '/static/js/visualizer.js';
  
-                 if not raw_fallback_disabled() and should_use_raw_fallback(
-                     fallback_detection, stream_stats
-                 ):
-                     if not stream_stats.forced_fallback:
-                         stream_stats.force_fallback()
-                         overrides = coerce_to_raw_config(stream_meta)
-                         for key, value in overrides.items():
-                             if key == "_transport":
-                                 continue
-                             cfg[key] = value
-                         transport.update(overrides.get("_transport", {}))
-                         fallback_detection = RawDetectionSignal(
-@@ -1087,75 +1091,85 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                         conn_id=conn_id,
-                         sid=sid,
-                         code=ev.get("code"),
-                         reason=ev.get("reason"),
-                         idle_s=idle_s,
-                     )
-                 with contextlib.suppress(Exception):
-                     if _admin_emit:
-                         _admin_emit(
-                             "ws_conn_disconnect",
-                             conn_id=conn_id,
-                             sid=sid,
-                             code=ev.get("code"),
-                             reason=ev.get("reason"),
-                             idle_s=idle_s,
-                         )
-                 await _remove_active_ws_entry("disconnect")
-                 last_msg_ts = now
-                 break
+ // /static/js/bootstrap.js — single owner of Start/End/Send + audio unlock + WS→UI wiring
  
-             if et == "websocket.receive":
-                 last_msg_ts = time.time()
-                 # -------------------- Binary / audio lane --------------------
-                 if ev.get("bytes") is not None:
-                     now = time.time()
--                    chunk = ev.get("bytes") or b""
-+                    frame_bytes = ev.get("bytes")
-+                    chunk = frame_bytes or b""
-                     ws_frames_in += 1
-                     ws_bytes_in += len(chunk)
-                     if ws_frames_in % 20 == 0:
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "ws_bin_recv",
-                                 sid=sid,
-                                 frames_in=ws_frames_in,
-                                 bytes_total=ws_bytes_in,
-                             )
-                         if _admin_emit:
-                             with contextlib.suppress(Exception):
-                                 _admin_emit(
-                                     "ws_bin_recv",
-                                     sid=sid,
-                                     frames_in=ws_frames_in,
-                                     bytes_total=ws_bytes_in,
-                                 )
-                     if chunk:
-                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
-                         if not audio_sig_logged:
-                             with contextlib.suppress(Exception):
-                                 _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
-                             audio_sig_logged = True
-+                    else:
-+                        with contextlib.suppress(Exception):
-+                            _jlog(
-+                                "ws_audio_chunk_empty",
-+                                sid=sid,
-+                                bytes=len(frame_bytes or b""),
-+                                turn_id=turn_id_ref[0],
-+                                buf_empty=buf.is_empty(),
-+                            )
+ const $ = (s) => document.querySelector(s);
  
-                     raw_chunk = chunk
+ let startInFlight = false;
+ let started = false;
  
-                     if buf.is_empty():
-                         # New audio turn
-                         current_assistant_turn = None
-                         try:
-                             current_assistant_turn = bus.current_assistant_turn(sid)
-                         except Exception:
-                             current_assistant_turn = None
-                         confirm_ms = 420
-                         try:
-                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
-                         except Exception:
-                             confirm_ms = 420
+ // ----- Assistant text de-dupe (turn_id + text) -----
+ const _assistantSeen = new Set();
+ function _isAssistantTextFrame(d) {
+   const t = d?.type;
+   return t === 'assistant_text' || t === 'assistant_chunk' || t === 'assistant_final' || d?.role === 'assistant';
+ }
+ function _dedupeAssistant(d) {
+   // tolerate servers that send without turn_id (fallback to "na")
+   const turnId = d?.turn_id ?? 'na';
+   const text   = d?.text ?? d?.delta ?? d?.content ?? '';
+   const key    = `${turnId}::${text}`;
+diff --git a/static/js/diagnostics.js b/static/js/diagnostics.js
+index 0192307a51e4dcf5c30df8855f64f7578ef31ca6..690ec7daab57298a43de7643fa9797b84e87daa0 100644
+--- a/static/js/diagnostics.js
++++ b/static/js/diagnostics.js
+@@ -1,27 +1,27 @@
+ // WS-only Diagnostics for Phase 6
+-import { openWS, waitWSOpen, closeWS, sendCloseStream } from './ws.js';
++import { openWS, waitWSOpen, closeWS, sendCloseStream } from './ws_module.js';
+ import { initMic, armVAD, disarmVAD } from './voice.js';
+ import { getSID } from './util/sid.js';
  
-                         def _on_barge_commit() -> None:
-                             target_turn = current_assistant_turn
-                             try:
-                                 latest = bus.current_assistant_turn(sid)
-                             except Exception:
-                                 latest = None
-                             if latest:
-                                 target_turn = latest
-                             if target_turn:
-@@ -1280,50 +1294,58 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                     )
+ const $ = (s)=>document.querySelector(s);
+ const logEl = ()=> $('#admin-log');
+ const sid = getSID();
  
-                     if not _has_deepgram_key():
-                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
-                         continue
+ function log(line){
+   const el = logEl(); if(!el) return;
+   el.textContent += line + "\n";
+   el.scrollTop = el.scrollHeight;
+ }
  
-                     # Stage early frames
-                     if chunk:
-                         buffered_chunks.append(chunk)
-                         dropped_now = 0
-                         if len(buffered_chunks) > max_buffered_chunks:
-                             dropped_now = len(buffered_chunks) - max_buffered_chunks
-                             for _ in range(dropped_now):
-                                 if not buffered_chunks:
-                                     break
-                                 buffered_chunks.popleft()
-                             _jlog(
-                                 "ws_audio_drop", sid=sid, dropped=dropped_now, queued=len(buffered_chunks)
-                             )
-                         _maybe_emit_backpressure(len(buffered_chunks), dropped_now=dropped_now)
+ function setKPI(id, val, cls=''){
+   const el = $('#'+id); if(!el) return;
+   el.textContent = val;
+   el.classList.remove('ok','warn','fail');
+   if (cls) el.classList.add(cls);
+ }
  
-                     # Ensure provider connection
-                     if not turn_connect_started[0] and dg_state == "closed":
-                         turn_connect_started[0] = True
-                         if dg_connect_task is None:
-+                            with contextlib.suppress(Exception):
-+                                _jlog(
-+                                    "asr_connect_schedule",
-+                                    sid=sid,
-+                                    turn_id=turn_id_ref[0],
-+                                    queued=len(buffered_chunks),
-+                                    dg_state=dg_state,
-+                                )
-                             dg_connect_task = asyncio.create_task(
-                                 _ensure_dg_connected()
-                             )
-                     elif dg_state == "connecting":
-                         pass
+ async function watchAdminSSE(onEvent){
+   try{
+     const sse = new EventSource('/api/v1/admin/logs', { withCredentials:true });
+     sse.onmessage = (e)=>{
+       try{
+diff --git a/static/js/voice.js b/static/js/voice.js
+index 1f3d142e5e6e82a815684727ffd559deaf4cc181..15fe49250207e6118596a39a55074fb1d142c971 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -1,46 +1,46 @@
+ /*
+ Citations for context (non-functional):
+ :contentReference[oaicite:0]{index=0}
+ :contentReference[oaicite:1]{index=1}
+ */
  
-                     # Flush when ready
-                     if dg is not None:
-                         if not asr_ready_evt.is_set():
-                             try:
-                                 await asyncio.wait_for(
-                                     asr_ready_evt.wait(), timeout=asr_ready_wait_s
-                                 )
-                             except asyncio.TimeoutError:
-                                 _jlog("asr_not_ready_timeout", sid=sid)
-                         if len(buffered_chunks) >= max_buffered_chunks:
-                             await _flush_buffered_chunks()
-                         await _flush_buffered_chunks()
-                     else:
-                         _jlog(
-                             "ws_audio_provider_connecting",
-                             sid=sid,
-                             queued=len(buffered_chunks),
-                         )
-                     continue
+ /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
+    Goals satisfied:
+     • Echo-aware VAD (threshold boost while TTS is playing)
+     • Streaming Opus blobs per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
+     • Soft barge-in: pause Chip TTS on committed speech start
+     • Turn timeout (safety), robust errors, clean session end
+     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
+ 
+    Notes:
+     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
+     • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
+ */
+ 
+ import { VAD } from './voice/vad.js';
+-import { sendAudioChunk, sendCloseStream } from '/static/js/ws.js?v=v20250911b';
++import { sendAudioChunk, sendCloseStream } from './ws_module.js';
+ import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
+ 
+ // Public API (matches prior usage)
+ export async function initMic(stream = null) { return await _ensureMic(stream); }
+ export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
+ export function disarmVAD() { _disarm(); }
+ export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
+ export function bargeIn() { _bargeIn(); }         // keeps API parity
+ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+ 
+ // ---- Internal state ---------------------------------------------------------
+ 
+ // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   && typeof MediaRecorder.isTypeSupported === 'function'
+   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
+   ? 'audio/ogg; codecs=opus'
+   : 'audio/webm; codecs=opus';
+ 
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+ 
+ const state = {
+   stream: null,
+   ctx: null,
+diff --git a/static/js/ws_module.js b/static/js/ws_module.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..c982da4d52084fdfd0e6e86b43839f2e12b04908
+--- /dev/null
++++ b/static/js/ws_module.js
+@@ -0,0 +1,70 @@
++export const WS_MODULE_VERSION = 'v20250911b';
++export const WS_MODULE_URL = `/static/js/ws.js?v=${WS_MODULE_VERSION}`;
++
++let cached = null;
++
++const wsModulePromise = import(WS_MODULE_URL).then((mod) => {
++  cached = mod;
++  return mod;
++}).catch((err) => {
++  console.error('[ws_module] failed to load ws.js module', err);
++  throw err;
++});
++
++function moduleReady() {
++  return cached;
++}
++
++export function getWSModule() {
++  return wsModulePromise;
++}
++
++export function openWS(...args) {
++  if (moduleReady()) return moduleReady().openWS(...args);
++  return wsModulePromise.then((mod) => mod.openWS(...args));
++}
++
++export function waitWSOpen(...args) {
++  if (moduleReady()) return moduleReady().waitWSOpen(...args);
++  return wsModulePromise.then((mod) => mod.waitWSOpen(...args));
++}
++
++export function isOpen(...args) {
++  if (moduleReady()) return moduleReady().isOpen(...args);
++  return false;
++}
++
++export function isConnecting(...args) {
++  if (moduleReady()) return moduleReady().isConnecting(...args);
++  return false;
++}
++
++export function closeWS(...args) {
++  if (moduleReady()) return moduleReady().closeWS(...args);
++  wsModulePromise.then((mod) => { mod.closeWS?.(...args); }).catch(() => {});
++}
++
++export function bufferedAmount(...args) {
++  if (moduleReady()) return moduleReady().bufferedAmount(...args);
++  return 0;
++}
++
++export function configure(...args) {
++  if (moduleReady()) return moduleReady().configure(...args);
++  wsModulePromise.then((mod) => { mod.configure?.(...args); }).catch(() => {});
++}
++
++export function sendJSON(...args) {
++  if (moduleReady()) return moduleReady().sendJSON(...args);
++  wsModulePromise.then((mod) => { mod.sendJSON?.(...args); }).catch(() => {});
++}
++
++export function sendAudioChunk(...args) {
++  if (moduleReady()) return moduleReady().sendAudioChunk(...args);
++  return wsModulePromise.then((mod) => mod.sendAudioChunk(...args));
++}
++
++export function sendCloseStream(...args) {
++  if (moduleReady()) return moduleReady().sendCloseStream(...args);
++  wsModulePromise.then((mod) => { mod.sendCloseStream?.(...args); }).catch(() => {});
++}

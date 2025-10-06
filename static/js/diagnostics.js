@@ -1,5 +1,5 @@
 // WS-only Diagnostics for Phase 6
-import { openWS, waitWSOpen, closeWS, sendCloseStream } from './ws.js';
+import { openWS, waitWSOpen, closeWS, sendCloseStream } from './ws_module.js';
 import { initMic, armVAD, disarmVAD } from './voice.js';
 import { getSID } from './util/sid.js';
 

@@ -18,7 +18,7 @@ Citations for context (non-functional):
 */
 
 import { VAD } from './voice/vad.js';
-import { sendAudioChunk, sendCloseStream } from '/static/js/ws.js?v=v20250911b';
+import { sendAudioChunk, sendCloseStream } from './ws_module.js';
 import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
 
 // Public API (matches prior usage)

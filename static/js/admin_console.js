@@ -1,4 +1,4 @@
-import { openWS, waitWSOpen, closeWS, configure } from './ws.js';
+import { openWS, waitWSOpen, closeWS, configure } from './ws_module.js';
 import { initMic, armVAD, disarmVAD } from './voice.js';
 import { unlockAudio } from './audio.js';
 import { getSID } from './util/sid.js';
