@@ -1,37 +1,592 @@
+diff --git a/static/css/admin_console.css b/static/css/admin_console.css
+index 0a04cdb6715acfc236f338028a717458475dad5f..770e743dd2326d78e88fd9710076606c0109bcaa 100644
+--- a/static/css/admin_console.css
++++ b/static/css/admin_console.css
+@@ -85,50 +85,61 @@
+   opacity: .55;
+   cursor: not-allowed;
+   box-shadow: none;
+ }
+ 
+ #admin-diagnostics .diag-head .run-meta {
+   font-size: 0.9rem;
+   color: rgba(190, 203, 225, 0.82);
+ }
+ 
+ /* ---------- Conversational Flow quick card (outside diagnostics scope) ---------- */
+ #tab-flow .flow-live-section {
+   margin-top: 18px;
+   display: flex;
+   flex-direction: column;
+   gap: 12px;
+ }
+ 
+ #tab-flow .flow-live-card {
+   background: rgba(16, 21, 34, 0.92);
+   border: 1px solid rgba(32, 37, 51, 0.9);
+   border-radius: 12px;
+   padding: 16px 18px;
+   box-shadow: 0 12px 32px -26px rgba(8, 12, 20, 0.85);
+   color: #d7deeb;
++  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
++}
++
++#tab-flow .flow-live-card[data-ready="true"] {
++  border-color: rgba(90, 176, 255, 0.45);
++  box-shadow: 0 18px 36px -28px rgba(30, 58, 102, 0.75);
++  transform: translateY(-1px);
++}
++
++#tab-flow .flow-live-card[data-ready="false"] {
++  opacity: 0.92;
+ }
+ 
+ #tab-flow .flow-live-header {
+   display: flex;
+   justify-content: space-between;
+   align-items: baseline;
+   gap: 12px;
+   margin-bottom: 12px;
+ }
+ 
+ #tab-flow .flow-live-header h4 {
+   margin: 0;
+   font-size: 15px;
+   font-weight: 600;
+   letter-spacing: 0.01em;
+ }
+ 
+ #tab-flow .flow-live-timestamp {
+   font-size: 12px;
+   color: rgba(173, 184, 204, 0.8);
+   white-space: nowrap;
+ }
+ 
+ #tab-flow .flow-live-list {
+   margin: 0;
+@@ -137,50 +148,86 @@
+   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+   gap: 10px 18px;
+ }
+ 
+ #tab-flow .flow-live-row {
+   display: grid;
+   grid-template-columns: 94px 1fr;
+   gap: 8px;
+   align-items: start;
+ }
+ 
+ #tab-flow .flow-live-row dt {
+   font-size: 11px;
+   text-transform: uppercase;
+   letter-spacing: 0.08em;
+   color: rgba(168, 176, 191, 0.85);
+   margin: 0;
+ }
+ 
+ #tab-flow .flow-live-row dd {
+   margin: 0;
+   font-size: 13px;
+   line-height: 1.4;
+   color: rgba(222, 229, 240, 0.95);
+   word-break: break-word;
++  transition: color 0.18s ease, opacity 0.18s ease;
++}
++
++#tab-flow .flow-live-value[data-empty="true"] {
++  opacity: 0.65;
++}
++
++#tab-flow .flow-live-value[data-decision="allow"],
++#tab-flow .flow-live-value[data-decision="pass"] {
++  color: var(--ac-success, #44d07b);
++}
++
++#tab-flow .flow-live-value[data-decision="block"],
++#tab-flow .flow-live-value[data-decision="fail"],
++#tab-flow .flow-live-value[data-decision="deny"] {
++  color: var(--ac-danger, #ff5a63);
++}
++
++#tab-flow .flow-live-value[data-decision="review"],
++#tab-flow .flow-live-value[data-decision="escalate"] {
++  color: var(--ac-warning, #ffc857);
++}
++
++#tab-flow .flow-live-foot {
++  margin-top: 14px;
++  padding-top: 10px;
++  border-top: 1px solid rgba(32, 37, 51, 0.65);
++  font-size: 12px;
++  color: rgba(173, 184, 204, 0.78);
++  display: flex;
++  justify-content: space-between;
++  gap: 12px;
++}
++
++#tab-flow .flow-live-last {
++  white-space: normal;
+ }
+ 
+ /* ---------- Step list ---------- */
+ #admin-diagnostics .diag-steps {
+   list-style: none;
+   margin: 0;
+   padding: 0;
+   display: flex;
+   flex-direction: column;
+   gap: 18px;
+ }
+ 
+ #admin-diagnostics .diag-step {
+   background: var(--card-bg);
+   border: 1px solid var(--ac-border);
+   border-radius: var(--ac-radius);
+   box-shadow: var(--ac-shadow);
+   padding: 20px 22px;
+   position: relative;
+   transition: border-color 0.18s ease, box-shadow 0.18s ease;
+ }
+ 
+ #admin-diagnostics .diag-step[data-status="active"] {
+   border-color: rgba(138, 187, 255, 0.9);
+   box-shadow: 0 0 0 1px rgba(138, 187, 255, 0.55), 0 28px 50px -34px rgba(27, 73, 128, 0.85);
+diff --git a/static/js/admin_console.js b/static/js/admin_console.js
+index 2986756cc2b3ac74a15764ac41435e9f30800d19..d289cd99ecfcd54e7d5edfde41cf0f83ebf1ddb2 100644
+--- a/static/js/admin_console.js
++++ b/static/js/admin_console.js
+@@ -111,51 +111,52 @@ function renderUI(container) {
+         <pre id="diag-admin-log" class="log-window"></pre>
+       </div>
+       <div class="diag-log">
+         <h3>WebSocket frames (WS→UI)</h3>
+         <pre id="diag-ws-log" class="log-window"></pre>
+       </div>
+     </section>`;
+ 
+   container.innerHTML = header + `<ol class="diag-steps">${steps}</ol>` + logs;
+ }
+ 
+ function bootstrap() {
+   const startBtn = root.querySelector('#diag-start');
+   const runMetaEl = root.querySelector('#diag-run-meta');
+   const adminLogEl = root.querySelector('#diag-admin-log');
+   const wsLogEl = root.querySelector('#diag-ws-log');
+   const speakCard = root.querySelector('#speak-card');
+   const speakStateEl = root.querySelector('#speak-state');
+   const policyNodes = {
+     container: document.getElementById('flow-live-card'),
+     intent: document.getElementById('nlu-intent'),
+     guardrail: document.getElementById('nlu-guardrail'),
+     move: document.getElementById('nlu-move'),
+     toolplan: document.getElementById('nlu-toolplan'),
+     timestamp: document.getElementById('nlu-updated'),
+-  };  
++    lastEvent: document.getElementById('nlu-last-event'),
++  };
+ 
+   const stepMap = new Map();
+   for (const step of STEP_DEFS) {
+     const el = root.querySelector(`[data-step="${step.id}"]`);
+     if (!el) continue;
+     stepMap.set(step.id, {
+       el,
+       statusEl: el.querySelector('.step-status'),
+       liveEl: el.querySelector(`#step-live-${step.id}`),
+     });
+   }
+ 
+   const state = {
+     running: false,
+     sid: null,
+     startBtn,
+     runMetaEl,
+     adminLogEl,
+     wsLogEl,
+     speakCard,
+     speakStateEl,
+     stepMap,
+     wsListener: null,
+     sse: null,
+     asr: { partials: 0, finals: 0, errors: 0 },
+@@ -592,193 +593,265 @@ function startAdminSSE(state, onMatch) {
+ function updateASRStatus(state, { status, partialsDelta = 0, final = false, transcript, message, error = false } = {}) {
+   if (!state.asr) state.asr = { partials: 0, finals: 0, errors: 0 };
+   if (partialsDelta) state.asr.partials += partialsDelta;
+   if (final) state.asr.finals += 1;
+   if (error) state.asr.errors += 1;
+   if (transcript) state.latestTranscript = transcript;
+ 
+   const parts = [];
+   if (state.asr.partials) parts.push(`${state.asr.partials} partial${state.asr.partials === 1 ? '' : 's'}`);
+   if (state.asr.finals) parts.push(`${state.asr.finals} final${state.asr.finals === 1 ? '' : 's'}`);
+   if (state.latestTranscript && (final || state.asr.finals)) parts.push(`Transcript: “${state.latestTranscript}”`);
+ 
+   const detail = parts.length ? parts.join(' • ') : (message || 'Waiting for ASR activity…');
+   const resolvedStatus = status || (error ? 'error' : (state.asr.finals ? 'done' : (state.asr.partials ? 'active' : 'pending')));
+   setStepStatus(state, 'asr', resolvedStatus, detail);
+ }  
+ 
+ function resetPolicySnapshot(state) {
+   if (!state) return;
+   state.policySnapshot = {
+     updatedAt: null,
+     intent: null,
+     guardrail: null,
+     move: null,
+     toolplan: null,
++    lastEvent: null,
+   };
+   renderPolicySnapshot(state);
+ }
+ 
+ function updatePolicySnapshot(state, evt, combinedTag = '') {
+   if (!state?.policyNodes) return;
+   if (!state.policySnapshot) resetPolicySnapshot(state);
+ 
+   const snapshot = state.policySnapshot;
+   const data = extractEventData(evt);
+   let touched = false;
++  const changed = {
++    intent: false,
++    guardrail: false,
++    move: false,
++    toolplan: false,
++  };
+   const lowerCombined = (combinedTag || '').toLowerCase();
+ 
+   const labelCandidate = typeof data.label === 'string' ? data.label : undefined;
+   const eventLabelCandidate = typeof evt.label === 'string' ? evt.label : undefined;
+   const sanitizedDataLabel = sanitizeIntentLabel(labelCandidate);
+   const sanitizedEventLabel = sanitizeIntentLabel(eventLabelCandidate);
+ 
+   const intentValue = firstDefined(
+     data.intent,
+     evt.intent,
+     sanitizedEventLabel,
+     data.name,
+     sanitizedDataLabel
+   );
+   const confidenceValue = firstDefined(
+     data.confidence,
+     evt.confidence,
+     data.score,
+     evt.score,
+     data.probability,
+     evt.probability
+   );
+   if (intentValue) {
+     snapshot.intent = {
+       value: String(intentValue),
+       confidence: normalizeConfidence(confidenceValue),
+     };
+     touched = true;
++    changed.intent = true;
+   }
+ 
+   let guardrailDecision = firstDefined(
+     data.decision,
+     evt.decision,
+     data.outcome,
+     data.status,
+     evt.status,
+     data.guardrail
+   );
+   if (!guardrailDecision && /guardrail/.test(lowerCombined)) {
+     if (lowerCombined.includes('allow')) guardrailDecision = 'allow';
+     else if (lowerCombined.includes('block')) guardrailDecision = 'block';
+     else if (lowerCombined.includes('pass')) guardrailDecision = 'pass';
+     else if (lowerCombined.includes('fail')) guardrailDecision = 'fail';
+   }
+ 
+   const guardrailReason = firstDefined(
+     data.reason,
+     evt.reason,
+     data.detail,
+     data.details,
+     data.rule,
+     data.message
+   );
+   if (guardrailDecision || guardrailReason) {
+     snapshot.guardrail = {
+       decision: guardrailDecision ? String(guardrailDecision) : null,
+       reason: guardrailReason ? String(guardrailReason) : null,
+     };
+     touched = true;
++    changed.guardrail = true;
+   }
+ 
+   let moveValue = firstDefined(
+     data.teacher_move,
+     evt.teacher_move,
+     data.move,
+     evt.move,
+     data.action,
+     evt.action
+   );
+   if (!moveValue && /teacher/.test(lowerCombined)) {
+     const match = lowerCombined.match(/teacher[._-]?move[=: ]?([a-z0-9_]+)/);
+     if (match && match[1]) moveValue = match[1];
+   }
+   if (moveValue) {
+     snapshot.move = { value: String(moveValue) };
+     touched = true;
++    changed.move = true;
+   }
+ 
+   let planValue = firstDefined(
+     data.toolplan,
+     evt.toolplan,
+     data.tool_plan,
+     data.tool_plan_summary,
+     data.plan,
+     evt.plan
+   );
+   if (planValue === undefined && /tool ?plan/.test(lowerCombined)) {
+     const match = lowerCombined.match(/tool ?plan[=: ]?([a-z0-9_]+)/);
+     if (match && match[1]) planValue = match[1];
+   }
+   if (planValue !== undefined) {
+     snapshot.toolplan = { value: planValue };
+     touched = true;
++    changed.toolplan = true;
+   }
+ 
+   if (touched) {
+-    snapshot.updatedAt = new Date();
++    const now = new Date();
++    snapshot.updatedAt = now;
++    snapshot.lastEvent = {
++      summary: buildPolicySummary(evt, combinedTag, snapshot, changed),
++      kind: evt?.kind || null,
++      label: evt?.label || null,
++      updatedAt: now,
++    };
+     renderPolicySnapshot(state);
+   }
+ }
+ 
+ function renderPolicySnapshot(state) {
+   const nodes = state?.policyNodes;
+   if (!nodes) return;
+   const snapshot = state.policySnapshot || {};
+ 
+-  setFlowText(nodes.intent, formatIntentDisplay(snapshot.intent));
+-  setFlowText(nodes.guardrail, formatGuardrailDisplay(snapshot.guardrail));
+-  setFlowText(nodes.move, formatMoveDisplay(snapshot.move));
+-  setFlowText(nodes.toolplan, formatToolplanDisplay(snapshot.toolplan));
++  const intentDisplay = formatIntentDisplay(snapshot.intent);
++  const intentConfidence = formatConfidence(snapshot.intent?.confidence);
++  setFlowValue(nodes.intent, intentDisplay, {
++    title: snapshot.intent?.value
++      ? `Intent: ${snapshot.intent.value}${intentConfidence ? ` (${intentConfidence})` : ''}`
++      : '',
++  });
++
++  const guardrailDisplay = formatGuardrailDisplay(snapshot.guardrail);
++  const guardrailDecision = snapshot.guardrail?.decision;
++  setFlowValue(nodes.guardrail, guardrailDisplay, {
++    title: snapshot.guardrail?.reason || guardrailDecision || '',
++    dataset: {
++      decision: guardrailDecision ? String(guardrailDecision).toLowerCase() : '',
++    },
++  });
++
++  setFlowValue(nodes.move, formatMoveDisplay(snapshot.move));
++  let toolplanTitle = '';
++  if (snapshot.toolplan && snapshot.toolplan.value !== undefined && snapshot.toolplan.value !== null) {
++    try {
++      toolplanTitle = typeof snapshot.toolplan.value === 'string'
++        ? snapshot.toolplan.value
++        : JSON.stringify(snapshot.toolplan.value, null, 2);
++    } catch {
++      toolplanTitle = String(snapshot.toolplan.value);
++    }
++  }
++  setFlowValue(nodes.toolplan, formatToolplanDisplay(snapshot.toolplan), {
++    title: toolplanTitle,
++  });
++
+   if (nodes.timestamp) {
+     nodes.timestamp.textContent = snapshot.updatedAt ? formatTimestamp(snapshot.updatedAt) : '—';
+   }
++
++  if (nodes.lastEvent) {
++    const last = snapshot.lastEvent || null;
++    setFlowValue(nodes.lastEvent, formatLastEventDisplay(last), {
++      isEmpty: !snapshot.updatedAt,
++      emptyText: 'Waiting for policy signal…',
++      title: formatLastEventTitle(last),
++    });
++  }
++
++  if (nodes.container) {
++    nodes.container.dataset.ready = snapshot.updatedAt ? 'true' : 'false';
++  }
+ }
+ 
+ function extractEventData(evt) {
+   if (!evt || typeof evt !== 'object') return {};
+   const merged = {};
+   const sources = [evt.data, evt.payload, evt.details, evt.context];
+   for (const source of sources) {
+     if (!source || typeof source !== 'object') continue;
+     for (const [key, value] of Object.entries(source)) {
+       if (!(key in merged)) merged[key] = value;
+     }
+   }
+   return merged;
+ }
+ 
+-function setFlowText(node, value) {
++function setFlowValue(node, value, options = {}) {
+   if (!node) return;
+-  const display = value === undefined || value === null || value === '' ? '—' : String(value);
+-  node.textContent = display;
++  const { title, dataset, isEmpty, emptyText } = options;
++  const stringValue = value === undefined || value === null ? '' : String(value);
++  const empty = isEmpty ?? stringValue.trim() === '';
++  node.textContent = empty ? (emptyText !== undefined ? emptyText : '—') : stringValue;
++  node.dataset.empty = empty ? 'true' : 'false';
++  if (title !== undefined) {
++    node.title = title || '';
++  }
++  if (dataset && typeof dataset === 'object') {
++    for (const [key, val] of Object.entries(dataset)) {
++      if (!key) continue;
++      if (val === undefined || val === null || val === '') delete node.dataset[key];
++      else node.dataset[key] = String(val);
++    }
++  }
+ }
+ 
+ function firstDefined(...values) {
+   for (const value of values) {
+     if (value === undefined || value === null) continue;
+     if (typeof value === 'string' && !value.trim()) continue;
+     return value;
+   }
+   return undefined;
+ }
+ 
+ function normalizeConfidence(value) {
+   if (value === undefined || value === null || value === '') return null;
+   const num = typeof value === 'number' ? value : Number(value);
+   if (!Number.isFinite(num)) return null;
+   return num;
+ }
+ 
+ function formatConfidence(conf) {
+   const num = normalizeConfidence(conf);
+   if (num === null) return null;
+   if (num <= 1) return `${Math.round(num * 100)}%`;
+   if (num <= 100) return `${Math.round(num)}%`;
+   return `${num}`;
+ }
+@@ -802,54 +875,94 @@ function formatGuardrailDisplay(entry) {
+   if (!entry) return null;
+   const pieces = [];
+   if (entry.decision) pieces.push(entry.decision);
+   if (entry.reason && entry.reason !== entry.decision) pieces.push(entry.reason);
+   return pieces.length ? pieces.join(' — ') : null;
+ }
+ 
+ function formatMoveDisplay(entry) {
+   if (!entry || !entry.value) return null;
+   return entry.value;
+ }
+ 
+ function formatToolplanDisplay(entry) {
+   if (!entry) return null;
+   const value = entry.value;
+   if (value === undefined || value === null) return null;
+   if (typeof value === 'string') return value;
+   try {
+     const json = JSON.stringify(value);
+     return json.length > 160 ? `${json.slice(0, 157)}…` : json;
+   } catch {
+     return String(value);
+   }
+ }
+ 
++function formatLastEventDisplay(entry) {
++  if (!entry) return 'Waiting for policy signal…';
++  return entry.summary || [entry.kind, entry.label].filter(Boolean).join(' • ') || 'Policy signal received';
++}
++
++function formatLastEventTitle(entry) {
++  if (!entry) return '';
++  const pieces = [];
++  if (entry.kind) pieces.push(`kind=${entry.kind}`);
++  if (entry.label) pieces.push(`label=${entry.label}`);
++  if (entry.updatedAt instanceof Date && !Number.isNaN(entry.updatedAt.getTime())) {
++    pieces.push(`@ ${formatTimestamp(entry.updatedAt)}`);
++  }
++  return pieces.join(' • ');
++}
++
+ function formatTimestamp(date) {
+   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '—';
+   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+ }
++
++function buildPolicySummary(evt, combinedTag, snapshot, changed = {}) {
++  const parts = [];
++  const kind = evt?.kind;
++  const label = evt?.label;
++  if (kind) parts.push(kind);
++  if (label && label !== kind) parts.push(label);
++
++  if (changed.intent && snapshot?.intent?.value) {
++    parts.push(`intent=${snapshot.intent.value}`);
++  }
++  if (changed.guardrail && snapshot?.guardrail?.decision) {
++    parts.push(`guardrail=${snapshot.guardrail.decision}`);
++  }
++  if (changed.move && snapshot?.move?.value) {
++    parts.push(`move=${snapshot.move.value}`);
++  }
++  if (changed.toolplan && snapshot?.toolplan && snapshot.toolplan.value !== undefined) {
++    parts.push('toolplan updated');
++  }
++
++  if (!parts.length && combinedTag) parts.push(combinedTag);
++  return parts.join(' • ') || 'Policy signal received';
++}
+   
+ function cleanupRun(state) {
+   try { disarmVAD(); } catch {}
+   try { closeWS(1000, 'admin_diag_end'); } catch {}
+   if (state.wsListener) {
+     window.removeEventListener('askchip-ws', state.wsListener);
+     state.wsListener = null;
+   }
+   if (state.sse) {
+     try { state.sse.close(); } catch {}
+     state.sse = null;
+   }
+   if (state.stopMeter) {
+     try { state.stopMeter(); } catch {}
+     state.stopMeter = null;
+   }
+   state.awaitingGreeting = false;
+   state.awaitingResponse = false;
+   state.responseStarted = false;
+   if (state.greetReject) state.greetReject(new Error('Diagnostic cancelled'));
+   if (state.asrReject) state.asrReject(new Error('Diagnostic cancelled'));
+   if (state.responseReject) state.responseReject(new Error('Diagnostic cancelled'));
+   state.greetResolve = null;
+   state.greetReject = null;
+   state.asrResolve = null;
 diff --git a/templates/admin_console.html b/templates/admin_console.html
-index 5a891d4685a966d7bc3d9825492e0068b1fcdfb4..4bae11a02a8ea44b05ea06bc5d33f43c7665cbba 100644
+index 4bae11a02a8ea44b05ea06bc5d33f43c7665cbba..df0c4dd2c2e55ea4a6d673ceb1b5a6f47efac798 100644
 --- a/templates/admin_console.html
 +++ b/templates/admin_console.html
-@@ -42,65 +42,91 @@
- <button data-tab="diag">Diagnostics</button>
- </div>
- <!-- UX -->
- <section class="panel active" id="tab-ux">
- <h3>User Experience</h3>
- <div class="grid">
- <label>Theme
-         <select id="theme">
- <option>light</option><option>dark</option><option>system</option>
- </select>
- </label>
- <label>Show instruction strip <input id="show_instruction_strip" type="checkbox"/></label>
- <label>Show state dots <input id="show_state_dots" type="checkbox"/></label>
- <label>Suggestions enabled <input id="suggestions_enabled" type="checkbox"/></label>
- <label>Suggestions — max items <input id="suggestions_max_items" min="0" type="number" value="4"/></label>
- <label>Suggestions — max words <input id="suggestions_max_words" min="1" type="number" value="7"/></label>
- <label>Nudge delay (ms) <input id="nudge_delay_ms" type="number" value="4200"/></label>
- <label>Nudge backoff after ignored <input id="nudge_backoff_after_ignored" type="number" value="2"/></label>
- <label>WS ping interval (ms) <input id="ws_ping_interval_ms" type="number" value="15000"/></label>
- <label>WS idle timeout (ms) <input id="ws_idle_timeout_ms" type="number" value="60000"/></label>
- </div>
- <div class="actions" style="margin-top:10px"><button class="btn primary" id="save-ux">Save</button></div>
- </section>
+@@ -65,65 +65,68 @@
  <!-- Flow -->
  <section class="panel" id="tab-flow">
--<h3>Conversational Flow</h3>
--<div class="grid">
-+  <h3>Conversational Flow</h3>
-+  <div class="grid">
+   <h3>Conversational Flow</h3>
+   <div class="grid">
  <label>Teacher move — summarize_next_actions (0..1) <input id="tm_summarize" max="1" min="0" step="0.05" type="number" value="0.6"/></label>
  <label>Teacher move — check_understanding (0..1) <input id="tm_check" max="1" min="0" step="0.05" type="number" value="0.5"/></label>
  <label>Teacher move — visualize (0..1) <input id="tm_visualize" max="1" min="0" step="0.05" type="number" value="0.2"/></label>
@@ -43,36 +598,42 @@ index 5a891d4685a966d7bc3d9825492e0068b1fcdfb4..4bae11a02a8ea44b05ea06bc5d33f43c
  <label>TTS voice ID <input id="tts_voice_id" placeholder="ElevenLabs voice id"/></label>
  <label>TTS output format <input id="tts_output_format" placeholder="mp3_44100_128"/></label>
  <label>TTS model id <input id="tts_model_id" placeholder="eleven_multilingual_v2"/></label>
--</div>
--<div class="actions"><button class="btn primary" id="save-flow">Save</button></div>
-+  </div>
-+  <div class="flow-live-section">
-+    <div class="flow-live-card" id="flow-live-card">
-+      <div class="flow-live-header">
-+        <h4>Live diagnostics</h4>
-+        <span class="flow-live-timestamp" id="nlu-updated">—</span>
+   </div>
+   <div class="flow-live-section">
+     <div class="flow-live-card" id="flow-live-card">
+       <div class="flow-live-header">
+         <h4>Live diagnostics</h4>
+         <span class="flow-live-timestamp" id="nlu-updated">—</span>
+       </div>
+       <dl class="flow-live-list">
+         <div class="flow-live-row">
+           <dt>Intent</dt>
+-          <dd id="nlu-intent">—</dd>
++          <dd class="flow-live-value" id="nlu-intent" data-empty="true">—</dd>
+         </div>
+-        <div class="flow-live-row">
++        <div class="flow-live-row" id="flow-live-guardrail">
+           <dt>Guardrail</dt>
+-          <dd id="nlu-guardrail">—</dd>
++          <dd class="flow-live-value" id="nlu-guardrail" data-empty="true">—</dd>
+         </div>
+         <div class="flow-live-row">
+           <dt>Teacher move</dt>
+-          <dd id="nlu-move">—</dd>
++          <dd class="flow-live-value" id="nlu-move" data-empty="true">—</dd>
+         </div>
+         <div class="flow-live-row">
+           <dt>Tool plan</dt>
+-          <dd id="nlu-toolplan">—</dd>
++          <dd class="flow-live-value" id="nlu-toolplan" data-empty="true">—</dd>
+         </div>
+       </dl>
++      <div class="flow-live-foot">
++        <span class="flow-live-last" id="nlu-last-event">Waiting for policy signal…</span>
 +      </div>
-+      <dl class="flow-live-list">
-+        <div class="flow-live-row">
-+          <dt>Intent</dt>
-+          <dd id="nlu-intent">—</dd>
-+        </div>
-+        <div class="flow-live-row">
-+          <dt>Guardrail</dt>
-+          <dd id="nlu-guardrail">—</dd>
-+        </div>
-+        <div class="flow-live-row">
-+          <dt>Teacher move</dt>
-+          <dd id="nlu-move">—</dd>
-+        </div>
-+        <div class="flow-live-row">
-+          <dt>Tool plan</dt>
-+          <dd id="nlu-toolplan">—</dd>
-+        </div>
-+      </dl>
-+    </div>
-+  </div>
-+  <div class="actions"><button class="btn primary" id="save-flow">Save</button></div>
+     </div>
+   </div>
+   <div class="actions"><button class="btn primary" id="save-flow">Save</button></div>
  </section>
  <!-- Vendor -->
  <section class="panel" id="tab-vendor">
@@ -95,6 +656,3 @@ index 5a891d4685a966d7bc3d9825492e0068b1fcdfb4..4bae11a02a8ea44b05ea06bc5d33f43c
  <label>Max sentences <input id="gen_max_sentences" min="1" type="number" value="4"/></label>
  <label>Target verbosity <select id="gen_target_verbosity">
  <option>short</option><option selected="">medium</option><option>long</option></select>
- </label>
- <label>Persona intensity (Nebraska %) <input id="nebraska_persona" max="1" min="0" step="0.01" type="number" value="0.13"/></label>
- <label>Use persona quotes <input checked="" id="nebraska_quotes_enabled" type="checkbox"/></label>

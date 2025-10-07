@@ -87,21 +87,24 @@
       <dl class="flow-live-list">
         <div class="flow-live-row">
           <dt>Intent</dt>
-          <dd id="nlu-intent">—</dd>
+          <dd class="flow-live-value" id="nlu-intent" data-empty="true">—</dd>
         </div>
-        <div class="flow-live-row">
+        <div class="flow-live-row" id="flow-live-guardrail">
           <dt>Guardrail</dt>
-          <dd id="nlu-guardrail">—</dd>
+          <dd class="flow-live-value" id="nlu-guardrail" data-empty="true">—</dd>
         </div>
         <div class="flow-live-row">
           <dt>Teacher move</dt>
-          <dd id="nlu-move">—</dd>
+          <dd class="flow-live-value" id="nlu-move" data-empty="true">—</dd>
         </div>
         <div class="flow-live-row">
           <dt>Tool plan</dt>
-          <dd id="nlu-toolplan">—</dd>
+          <dd class="flow-live-value" id="nlu-toolplan" data-empty="true">—</dd>
         </div>
       </dl>
+      <div class="flow-live-foot">
+        <span class="flow-live-last" id="nlu-last-event">Waiting for policy signal…</span>
+      </div>
     </div>
   </div>
   <div class="actions"><button class="btn primary" id="save-flow">Save</button></div>

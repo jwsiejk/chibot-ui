@@ -107,6 +107,17 @@
   padding: 16px 18px;
   box-shadow: 0 12px 32px -26px rgba(8, 12, 20, 0.85);
   color: #d7deeb;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+#tab-flow .flow-live-card[data-ready="true"] {
+  border-color: rgba(90, 176, 255, 0.45);
+  box-shadow: 0 18px 36px -28px rgba(30, 58, 102, 0.75);
+  transform: translateY(-1px);
+}
+
+#tab-flow .flow-live-card[data-ready="false"] {
+  opacity: 0.92;
 }
 
 #tab-flow .flow-live-header {
@@ -159,6 +170,42 @@
   line-height: 1.4;
   color: rgba(222, 229, 240, 0.95);
   word-break: break-word;
+  transition: color 0.18s ease, opacity 0.18s ease;
+}
+
+#tab-flow .flow-live-value[data-empty="true"] {
+  opacity: 0.65;
+}
+
+#tab-flow .flow-live-value[data-decision="allow"],
+#tab-flow .flow-live-value[data-decision="pass"] {
+  color: var(--ac-success, #44d07b);
+}
+
+#tab-flow .flow-live-value[data-decision="block"],
+#tab-flow .flow-live-value[data-decision="fail"],
+#tab-flow .flow-live-value[data-decision="deny"] {
+  color: var(--ac-danger, #ff5a63);
+}
+
+#tab-flow .flow-live-value[data-decision="review"],
+#tab-flow .flow-live-value[data-decision="escalate"] {
+  color: var(--ac-warning, #ffc857);
+}
+
+#tab-flow .flow-live-foot {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(32, 37, 51, 0.65);
+  font-size: 12px;
+  color: rgba(173, 184, 204, 0.78);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#tab-flow .flow-live-last {
+  white-space: normal;
 }
 
 /* ---------- Step list ---------- */

@@ -133,7 +133,8 @@ function bootstrap() {
     move: document.getElementById('nlu-move'),
     toolplan: document.getElementById('nlu-toolplan'),
     timestamp: document.getElementById('nlu-updated'),
-  };  
+    lastEvent: document.getElementById('nlu-last-event'),
+  };
 
   const stepMap = new Map();
   for (const step of STEP_DEFS) {
@@ -614,6 +615,7 @@ function resetPolicySnapshot(state) {
     guardrail: null,
     move: null,
     toolplan: null,
+    lastEvent: null,
   };
   renderPolicySnapshot(state);
 }
@@ -625,6 +627,12 @@ function updatePolicySnapshot(state, evt, combinedTag = '') {
   const snapshot = state.policySnapshot;
   const data = extractEventData(evt);
   let touched = false;
+  const changed = {
+    intent: false,
+    guardrail: false,
+    move: false,
+    toolplan: false,
+  };
   const lowerCombined = (combinedTag || '').toLowerCase();
 
   const labelCandidate = typeof data.label === 'string' ? data.label : undefined;
@@ -653,6 +661,7 @@ function updatePolicySnapshot(state, evt, combinedTag = '') {
       confidence: normalizeConfidence(confidenceValue),
     };
     touched = true;
+    changed.intent = true;
   }
 
   let guardrailDecision = firstDefined(
@@ -684,6 +693,7 @@ function updatePolicySnapshot(state, evt, combinedTag = '') {
       reason: guardrailReason ? String(guardrailReason) : null,
     };
     touched = true;
+    changed.guardrail = true;
   }
 
   let moveValue = firstDefined(
@@ -701,6 +711,7 @@ function updatePolicySnapshot(state, evt, combinedTag = '') {
   if (moveValue) {
     snapshot.move = { value: String(moveValue) };
     touched = true;
+    changed.move = true;
   }
 
   let planValue = firstDefined(
@@ -718,10 +729,18 @@ function updatePolicySnapshot(state, evt, combinedTag = '') {
   if (planValue !== undefined) {
     snapshot.toolplan = { value: planValue };
     touched = true;
+    changed.toolplan = true;
   }
 
   if (touched) {
-    snapshot.updatedAt = new Date();
+    const now = new Date();
+    snapshot.updatedAt = now;
+    snapshot.lastEvent = {
+      summary: buildPolicySummary(evt, combinedTag, snapshot, changed),
+      kind: evt?.kind || null,
+      label: evt?.label || null,
+      updatedAt: now,
+    };
     renderPolicySnapshot(state);
   }
 }
@@ -731,12 +750,53 @@ function renderPolicySnapshot(state) {
   if (!nodes) return;
   const snapshot = state.policySnapshot || {};
 
-  setFlowText(nodes.intent, formatIntentDisplay(snapshot.intent));
-  setFlowText(nodes.guardrail, formatGuardrailDisplay(snapshot.guardrail));
-  setFlowText(nodes.move, formatMoveDisplay(snapshot.move));
-  setFlowText(nodes.toolplan, formatToolplanDisplay(snapshot.toolplan));
+  const intentDisplay = formatIntentDisplay(snapshot.intent);
+  const intentConfidence = formatConfidence(snapshot.intent?.confidence);
+  setFlowValue(nodes.intent, intentDisplay, {
+    title: snapshot.intent?.value
+      ? `Intent: ${snapshot.intent.value}${intentConfidence ? ` (${intentConfidence})` : ''}`
+      : '',
+  });
+
+  const guardrailDisplay = formatGuardrailDisplay(snapshot.guardrail);
+  const guardrailDecision = snapshot.guardrail?.decision;
+  setFlowValue(nodes.guardrail, guardrailDisplay, {
+    title: snapshot.guardrail?.reason || guardrailDecision || '',
+    dataset: {
+      decision: guardrailDecision ? String(guardrailDecision).toLowerCase() : '',
+    },
+  });
+
+  setFlowValue(nodes.move, formatMoveDisplay(snapshot.move));
+  let toolplanTitle = '';
+  if (snapshot.toolplan && snapshot.toolplan.value !== undefined && snapshot.toolplan.value !== null) {
+    try {
+      toolplanTitle = typeof snapshot.toolplan.value === 'string'
+        ? snapshot.toolplan.value
+        : JSON.stringify(snapshot.toolplan.value, null, 2);
+    } catch {
+      toolplanTitle = String(snapshot.toolplan.value);
+    }
+  }
+  setFlowValue(nodes.toolplan, formatToolplanDisplay(snapshot.toolplan), {
+    title: toolplanTitle,
+  });
+
   if (nodes.timestamp) {
     nodes.timestamp.textContent = snapshot.updatedAt ? formatTimestamp(snapshot.updatedAt) : '—';
+  }
+
+  if (nodes.lastEvent) {
+    const last = snapshot.lastEvent || null;
+    setFlowValue(nodes.lastEvent, formatLastEventDisplay(last), {
+      isEmpty: !snapshot.updatedAt,
+      emptyText: 'Waiting for policy signal…',
+      title: formatLastEventTitle(last),
+    });
+  }
+
+  if (nodes.container) {
+    nodes.container.dataset.ready = snapshot.updatedAt ? 'true' : 'false';
   }
 }
 
@@ -753,10 +813,23 @@ function extractEventData(evt) {
   return merged;
 }
 
-function setFlowText(node, value) {
+function setFlowValue(node, value, options = {}) {
   if (!node) return;
-  const display = value === undefined || value === null || value === '' ? '—' : String(value);
-  node.textContent = display;
+  const { title, dataset, isEmpty, emptyText } = options;
+  const stringValue = value === undefined || value === null ? '' : String(value);
+  const empty = isEmpty ?? stringValue.trim() === '';
+  node.textContent = empty ? (emptyText !== undefined ? emptyText : '—') : stringValue;
+  node.dataset.empty = empty ? 'true' : 'false';
+  if (title !== undefined) {
+    node.title = title || '';
+  }
+  if (dataset && typeof dataset === 'object') {
+    for (const [key, val] of Object.entries(dataset)) {
+      if (!key) continue;
+      if (val === undefined || val === null || val === '') delete node.dataset[key];
+      else node.dataset[key] = String(val);
+    }
+  }
 }
 
 function firstDefined(...values) {
@@ -824,9 +897,49 @@ function formatToolplanDisplay(entry) {
   }
 }
 
+function formatLastEventDisplay(entry) {
+  if (!entry) return 'Waiting for policy signal…';
+  return entry.summary || [entry.kind, entry.label].filter(Boolean).join(' • ') || 'Policy signal received';
+}
+
+function formatLastEventTitle(entry) {
+  if (!entry) return '';
+  const pieces = [];
+  if (entry.kind) pieces.push(`kind=${entry.kind}`);
+  if (entry.label) pieces.push(`label=${entry.label}`);
+  if (entry.updatedAt instanceof Date && !Number.isNaN(entry.updatedAt.getTime())) {
+    pieces.push(`@ ${formatTimestamp(entry.updatedAt)}`);
+  }
+  return pieces.join(' • ');
+}
+
 function formatTimestamp(date) {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '—';
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function buildPolicySummary(evt, combinedTag, snapshot, changed = {}) {
+  const parts = [];
+  const kind = evt?.kind;
+  const label = evt?.label;
+  if (kind) parts.push(kind);
+  if (label && label !== kind) parts.push(label);
+
+  if (changed.intent && snapshot?.intent?.value) {
+    parts.push(`intent=${snapshot.intent.value}`);
+  }
+  if (changed.guardrail && snapshot?.guardrail?.decision) {
+    parts.push(`guardrail=${snapshot.guardrail.decision}`);
+  }
+  if (changed.move && snapshot?.move?.value) {
+    parts.push(`move=${snapshot.move.value}`);
+  }
+  if (changed.toolplan && snapshot?.toolplan && snapshot.toolplan.value !== undefined) {
+    parts.push('toolplan updated');
+  }
+
+  if (!parts.length && combinedTag) parts.push(combinedTag);
+  return parts.join(' • ') || 'Policy signal received';
 }
   
 function cleanupRun(state) {
