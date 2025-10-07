@@ -795,3 +795,155 @@ def test_ws_no_audio_watchdog_emits_diagnostics(monkeypatch):
     no_audio_frames = [fr for _, fr in broadcast_frames if fr.get("type") == "no_audio_detected"]
     assert no_audio_frames, "bus should broadcast a no_audio_detected frame"
     assert any(fr.get("reason") in ("timeout", "close_stream") for fr in no_audio_frames)
+
+
+def test_ws_emits_nlu_admin_event_before_llm(monkeypatch):
+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
+
+    admin_events = []
+    order = []
+
+    def fake_admin(event, **payload):
+        order.append(("admin", event))
+        admin_events.append((event, payload))
+
+    monkeypatch.setattr(ws_asgi, "_admin_emit", fake_admin)
+
+    final_text = "I need help with Widget"
+    meta_calls = []
+
+    def fake_prepare(text, meta=None, **kwargs):
+        meta_calls.append((text, dict(meta or {})))
+        meta_out = dict(meta or {})
+        meta_out.setdefault("nlu", {})
+        return (
+            meta_out,
+            {
+                "intent": "ask",
+                "confidence": 0.42,
+                "entities": {"product": "Widget"},
+                "products": ["Widget"],
+            },
+            {},
+        )
+
+    monkeypatch.setattr(ws_asgi, "prepare_turn_metadata", fake_prepare)
+
+    llm_calls = []
+
+    def fake_run_ws_user_turn(session_id, text, corr_id=None):
+        llm_calls.append((session_id, text, corr_id))
+        order.append(("llm", text))
+
+    monkeypatch.setattr(ws_asgi, "run_ws_user_turn", fake_run_ws_user_turn)
+
+    async def immediate_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(ws_asgi.asyncio, "to_thread", immediate_to_thread)
+
+    class _ImmediateFinalDeepgram:
+        def __init__(self, cfg):
+            self.cfg = cfg
+            self._queue: asyncio.Queue = asyncio.Queue()
+
+        async def connect(self):
+            await self._queue.put({"type": "asr_open"})
+            await self._queue.put({"type": "user_final", "text": final_text})
+            await self._queue.put(None)
+
+        async def events(self):
+            while True:
+                ev = await self._queue.get()
+                if ev is None:
+                    break
+                yield ev
+
+        async def send(self, _chunk: bytes):
+            return
+
+        async def close(self, wait_for_final=True):
+            return
+
+    monkeypatch.setattr(ws_asgi, "DeepgramClient", _ImmediateFinalDeepgram)
+    monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
+
+    captured_nlu = []
+
+    def fake_emit_nlu(text, session_id):
+        payload = {
+            "event": "nlu",
+            "intent": "ask",
+            "confidence": 0.42,
+            "slots": {
+                "entities": {"product": "Widget"},
+                "products": ["Widget"],
+            },
+            "text": text,
+            "session_id": session_id,
+        }
+        captured_nlu.append(payload)
+        order.append(("admin", "nlu"))
+
+    monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", fake_emit_nlu)
+
+    events = deque(
+        [
+            {"type": "websocket.receive", "bytes": b"\x00\x01"},
+            {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
+            {"type": "websocket.disconnect"},
+        ]
+    )
+
+    async def _receive():
+        if not events:
+            return {"type": "websocket.disconnect"}
+        return events.popleft()
+
+    sent = []
+
+    async def _send(msg):
+        sent.append(msg)
+
+    scope = {
+        "type": "websocket",
+        "path": "/ws/v1/chat",
+        "query_string": b"session_id=test-nlu",
+    }
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
+        loop.run_until_complete(asyncio.sleep(0.05))
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+    assert any(event == "asr:final" for event, _ in admin_events)
+
+    assert captured_nlu == [
+        {
+            "event": "nlu",
+            "intent": "ask",
+            "confidence": 0.42,
+            "slots": {
+                "entities": {"product": "Widget"},
+                "products": ["Widget"],
+            },
+            "text": final_text,
+            "session_id": "test-nlu",
+        }
+    ]
+
+    assert meta_calls == [] or meta_calls[0][1] == {
+        "source": "user_ws",
+        "channel": "ws",
+    }
+
+    assert llm_calls and llm_calls[0][0] == "test-nlu"
+
+    nlu_index = next(i for i, entry in enumerate(order) if entry == ("admin", "nlu"))
+    llm_index = next(i for i, entry in enumerate(order) if entry[0] == "llm")
+    assert nlu_index < llm_index, "nlu admin event should precede llm turn"

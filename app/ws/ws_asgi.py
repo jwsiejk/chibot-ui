@@ -1,6 +1,6 @@
 # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
 from __future__ import annotations
-import asyncio, os, contextlib, time, io, struct, base64, uuid
+import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
 from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
 from collections import deque
 from app.services.audio.container_sniffer import (
@@ -35,7 +35,7 @@ from app.services.greet_idempotency import clear_greet_turn_cache
 from app.metrics import ws_metrics
 
 # NEW: invoke LLM on final transcript
-from app.services.streaming import run_ws_user_turn  # NEW
+from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
 from app.ws.barge import BargeState
 from app.ws.bus import bus
 
@@ -101,6 +101,59 @@ def _dumps(obj) -> str:
     import json as _json
 
     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
+def _emit_admin_nlu_event(text: str, sid: str) -> None:
+    if not text:
+        return
+    admin_cb = globals().get("_admin_emit")
+    if not callable(admin_cb):
+        return
+
+    meta_stub = {"source": "user_ws", "channel": "ws"}
+    dialog_nlu: Dict[str, Any] = {}
+    try:
+        _, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
+        if isinstance(dialog_nlu_raw, dict):
+            dialog_nlu = dict(dialog_nlu_raw)
+    except Exception:
+        dialog_nlu = {}
+
+    def _safe_copy(value: Any) -> Any:
+        try:
+            return copy.deepcopy(value)
+        except Exception:
+            return value
+
+    slots_dict: Dict[str, Any] = {}
+    extra_slots = dialog_nlu.get("slots")
+    if isinstance(extra_slots, dict):
+        try:
+            slots_dict.update(_safe_copy(extra_slots))
+        except Exception:
+            slots_dict.update(extra_slots)
+    entities = dialog_nlu.get("entities")
+    if isinstance(entities, dict):
+        slots_dict.setdefault("entities", _safe_copy(entities))
+    elif isinstance(entities, list):
+        slots_dict.setdefault("entities", _safe_copy(entities))
+    products = dialog_nlu.get("products")
+    if isinstance(products, list):
+        slots_dict.setdefault("products", list(products))
+
+    payload = {
+        "event": "nlu",
+        "intent": dialog_nlu.get("intent"),
+        "confidence": dialog_nlu.get("confidence"),
+        "slots": slots_dict,
+        "text": text,
+        "session_id": sid,
+    }
+
+    try:
+        admin_cb("nlu", **payload)
+    except Exception:
+        pass
 
 
 def _get_session_id(scope) -> str:
@@ -376,6 +429,9 @@ async def _pump_dg_to_client(
                         _admin_emit and _admin_emit("asr:final", session_id=sid)
                     except Exception:
                         pass
+
+                    if text:
+                        _emit_admin_nlu_event(text, sid)
 
                     if text:
 
