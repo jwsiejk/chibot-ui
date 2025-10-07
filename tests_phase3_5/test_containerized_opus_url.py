@@ -20,7 +20,21 @@ def test_containerized_omits_sr_channels(monkeypatch):
     assert "channels=" not in url
     assert "encoding=" not in url
     assert "endpointing=" not in url
+    assert "interim_results=true" in url
     assert "utterance_end_ms=2000" in url
+
+
+def test_containerized_interim_false_drops_utterance_end(monkeypatch):
+    monkeypatch.setenv("DG_TEST_MODE", "1")
+    overrides = {
+        "_transport": {"containerized_opus": True},
+        "interim_results": False,
+    }
+    url = _dg_url(overrides)
+    assert "interim_results=false" in url
+    assert "utterance_end_ms=" not in url
+    assert "sample_rate=" not in url
+    assert "channels=" not in url
 
 def test_non_containerized_includes_sr_channels(monkeypatch):
     monkeypatch.setenv("DG_TEST_MODE", "1")

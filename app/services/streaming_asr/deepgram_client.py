@@ -244,6 +244,12 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             if ch:
                 qd["channels"] = ch
 
+        # Ensure default feature flags are present without overwriting explicit overrides
+        qd.setdefault("interim_results", "true")
+        qd.setdefault("vad_events", "true")
+        qd.setdefault("smart_format", "true")
+        qd.setdefault("punctuate", "true")
+
         # If DG_MODEL env is set and no model present yet, add it (back-compat)
         _env_model = os.getenv("DG_MODEL")
         if _env_model and "model" not in qd:
@@ -260,6 +266,20 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
 
         # Provide a sensible default for utterance_end_ms (2s) unless explicitly overridden
         qd.setdefault("utterance_end_ms", "2000")
+
+        interim_val = qd.get("interim_results")
+        interim_false = False
+        try:
+            if isinstance(interim_val, bool):
+                interim_false = not interim_val
+            elif interim_val is None:
+                interim_false = False
+            else:
+                interim_false = str(interim_val).strip().lower() in {"false", "0"}
+        except Exception:
+            interim_false = False
+        if interim_false:
+            qd.pop("utterance_end_ms", None)
 
         query = _p.urlencode(qd)
         base = _p.urlunsplit(
