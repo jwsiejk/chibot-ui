@@ -172,7 +172,9 @@ function bootstrap() {
     responseReject: null,
     stopMeter: null,
     policyNodes,
-    policySnapshot: null,    
+    policySnapshot: null,
+    asrFinalSatisfied: false,
+    asrTimer: null,
   };
 
   resetView(state);
@@ -293,6 +295,11 @@ function resetView(state) {
   setSpeakState(state, 'idle');
   state.asr = { partials: 0, finals: 0, errors: 0 };
   state.latestTranscript = '';
+  state.asrFinalSatisfied = false;
+  if (state.asrTimer) {
+    clearTimeout(state.asrTimer);
+    state.asrTimer = null;
+  }
   state.awaitingGreeting = false;
   state.awaitingResponse = false;
   state.responseStarted = false;
@@ -339,19 +346,32 @@ function waitForGreeting(state, timeoutMs) {
 
 function waitForASRFinal(state, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    state.asrFinalSatisfied = false;
+    if (state.asrTimer) {
+      clearTimeout(state.asrTimer);
+      state.asrTimer = null;
+    }
+    state.asrTimer = setTimeout(() => {
       state.asrResolve = null;
       state.asrReject = null;
+      state.asrTimer = null;
       reject(new Error('Timed out waiting for ASR final.'));
     }, timeoutMs);
     state.asrResolve = (evt) => {
-      clearTimeout(timer);
+      if (state.asrTimer) {
+        clearTimeout(state.asrTimer);
+        state.asrTimer = null;
+      }
       state.asrResolve = null;
       state.asrReject = null;
+      state.asrFinalSatisfied = true;
       resolve(evt);
     };
     state.asrReject = (err) => {
-      clearTimeout(timer);
+      if (state.asrTimer) {
+        clearTimeout(state.asrTimer);
+        state.asrTimer = null;
+      }
       state.asrResolve = null;
       state.asrReject = null;
       reject(err instanceof Error ? err : new Error(String(err || 'asr error')));
@@ -440,6 +460,17 @@ function waitForUtteranceEndOnce(timeoutMs = 8000) {
   });
 }
 
+function satisfyASRWait(state, payload = { label: 'asr_final' }, { ensureDone = false, message } = {}) {
+  const alreadySatisfied = !!state.asrFinalSatisfied;
+  if (!alreadySatisfied) {
+    state.asrFinalSatisfied = true;
+    if (ensureDone) {
+      updateASRStatus(state, { status: 'done', message });
+    }
+  }
+  state.asrResolve?.(payload);
+}
+
 function handleWSFrame(state, frame) {
   appendLog(state.wsLogEl, `${timestamp()} ${describeFrame(frame)}`);
 
@@ -498,8 +529,13 @@ function handleWSFrame(state, frame) {
 
     if (final) {
       // Resolve the ASR wait even if SSE didn’t fire an asr_final.
-      state.asrResolve?.({ label: 'asr_final', transcript: transcript || '' });
+      satisfyASRWait(state, { label: 'asr_final', transcript: transcript || '' });
     }
+    return;
+  }
+
+  if (frame?.type === 'CloseStream') {
+    satisfyASRWait(state, { label: 'close_stream' }, { ensureDone: true, message: 'ASR stream closed.' });
   }
 }
 
@@ -532,7 +568,7 @@ function maybeHandleASREvent(state, evt, kindTag, labelTag) {
 
   if (tag.includes('final')) {
     updateASRStatus(state, { status: 'done', final: true });
-    state.asrResolve?.(evt);
+    satisfyASRWait(state, evt);
     return true;
   }
 
@@ -969,6 +1005,11 @@ function cleanupRun(state) {
   state.asrReject = null;
   state.responseResolve = null;
   state.responseReject = null;
+  state.asrFinalSatisfied = false;
+  if (state.asrTimer) {
+    clearTimeout(state.asrTimer);
+    state.asrTimer = null;
+  }
 }
 
 function setStepStatus(state, stepId, status, detail) {

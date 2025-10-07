@@ -1,376 +1,401 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index af6a59bc58fceacdf6ed0716579892e426c7e695..696bb204c877805b91950d875c063beb1f331ec8 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -280,50 +280,51 @@ async def _pump_bus_to_client(sid: str, send):
-                         "type": "websocket.send",
-                         "text": _json.dumps(
-                             fr, separators=(",", ":"), ensure_ascii=False
-                         ),
-                     }
-                 )
-             except Exception:
-                 await asyncio.sleep(0.01)
-     except asyncio.CancelledError:
-         pass
-     finally:
-         try:
-             if hasattr(bus, "unsubscribe"):
-                 bus.unsubscribe(sid, q)
-         except Exception:
-             pass
+diff --git a/static/js/admin_console.js b/static/js/admin_console.js
+index d289cd99ecfcd54e7d5edfde41cf0f83ebf1ddb2..25186d4aaeb476abdd23e13bc56790a2a417451a 100644
+--- a/static/js/admin_console.js
++++ b/static/js/admin_console.js
+@@ -150,51 +150,53 @@ function bootstrap() {
+   const state = {
+     running: false,
+     sid: null,
+     startBtn,
+     runMetaEl,
+     adminLogEl,
+     wsLogEl,
+     speakCard,
+     speakStateEl,
+     stepMap,
+     wsListener: null,
+     sse: null,
+     asr: { partials: 0, finals: 0, errors: 0 },
+     latestTranscript: '',
+     awaitingGreeting: false,
+     awaitingResponse: false,
+     responseStarted: false,
+     greetResolve: null,
+     greetReject: null,
+     asrResolve: null,
+     asrReject: null,
+     responseResolve: null,
+     responseReject: null,
+     stopMeter: null,
+     policyNodes,
+-    policySnapshot: null,    
++    policySnapshot: null,
++    asrFinalSatisfied: false,
++    asrTimer: null,
+   };
  
+   resetView(state);
+   if (startBtn) startBtn.addEventListener('click', () => runDiagnostic(state));
+   window.AdminDiagnostics = {
+     run: () => runDiagnostic(state),
+   };
+ }
  
- async def _pump_dg_to_client(
-     dg: DeepgramClient,
-     send,
-     turn_id_ref,
-     final_seen,
-     pending_final_turns,
-     synthetic_final_turns,
-+    completed_llm_turns,
-     sid: str,
-     asr_ready_evt: Optional[asyncio.Event] = None,
-     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
-     stream_stats: Optional[RawStreamStats] = None,
-     turn_timing: Optional[Dict[str, List[float]]] = None,
-     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
- ):
-     """Relay Deepgram events to client and, on final, kick LLM turn."""
-     try:
-         async for ev in dg.events():
-             et = (ev.get("type") or "").lower()
-             if et == "asr_open":
-                 delta_ms = None
-                 now_ts = time.time()
-                 if turn_timing is not None:
-                     try:
-                         holder = turn_timing.setdefault("dg_open", [0.0])
-                         holder[0] = now_ts
-                         start_ts = turn_timing.get("start", [0.0])[0]
-                         if start_ts:
-                             delta_ms = int((now_ts - start_ts) * 1000)
-                     except Exception:
-                         pass
-                 _jlog(
-                     "dg_asr_open",
-@@ -412,66 +413,75 @@ async def _pump_dg_to_client(
-                         try:
-                             first_holder = turn_timing.setdefault(
-                                 "first_partial", [0.0]
-                             )
-                             if not first_holder[0]:
-                                 first_holder[0] = time.time()
-                         except Exception:
-                             pass
-                     if on_turn_finish:
-                         try:
-                             on_turn_finish(
-                                 turn_id_for_event, "provider_final", False, len(text)
-                             )
-                         except Exception:
-                             pass
-                     await _ws_send_json(send, make_utterance_end(turn_id_for_event))
-                     try:
-                         _admin_emit and _admin_emit("asr:final", session_id=sid)
-                     except Exception:
-                         pass
+ async function runDiagnostic(state) {
+   if (!state.startBtn || state.running) return;
+   state.running = true;
+   state.startBtn.disabled = true;
+   resetView(state);
  
-                     if text:
-                         _emit_admin_nlu_event(text, sid)
+   state.sid = getSID();
+   if (state.runMetaEl) state.runMetaEl.textContent = `Session: ${state.sid}`;
+   appendLog(state.adminLogEl, `${timestamp()} starting diagnostic for session=${state.sid}`);
+   logAdminEvent(state, 'diagnostic_start');
  
-                     if text:
--
--                        async def _bg_turn():
--                            try:
--                                await asyncio.to_thread(
--                                    run_ws_user_turn, sid, text, None
-+                        if turn_id_for_event in completed_llm_turns:
-+                            with contextlib.suppress(Exception):
-+                                _jlog(
-+                                    "llm_turn_skip_duplicate",
-+                                    sid=sid,
-+                                    turn_id=turn_id_for_event,
-                                 )
--                            except Exception as e:
--                                with contextlib.suppress(Exception):
--                                    await _ws_send_json(
--                                        send,
--                                        make_error(
--                                            "llm_turn_fail", e.__class__.__name__
--                                        ),
-+                        else:
-+                            completed_llm_turns.add(turn_id_for_event)
-+
-+                            async def _bg_turn():
-+                                try:
-+                                    await asyncio.to_thread(
-+                                        run_ws_user_turn, sid, text, None
-                                     )
-+                                except Exception as e:
-+                                    with contextlib.suppress(Exception):
-+                                        await _ws_send_json(
-+                                            send,
-+                                            make_error(
-+                                                "llm_turn_fail", e.__class__.__name__
-+                                            ),
-+                                        )
+   try {
+     try { await unlockAudio(); } catch {}
  
--                        asyncio.create_task(_bg_turn())
-+                            asyncio.create_task(_bg_turn())
+     setStepStatus(state, 'user', 'pending', 'Requesting microphone permission…');
+     let micStream = null;
+@@ -271,109 +273,127 @@ async function runDiagnostic(state) {
+     logAdminEvent(state, 'diagnostic_complete');
+   } catch (err) {
+     const msg = err?.message || String(err) || 'Unknown diagnostic error';
+     appendLog(state.wsLogEl, `${timestamp()} [error] ${msg}`);
+     const failing = findFirstIncompleteStep(state);
+     setStepStatus(state, failing, 'error', msg);
+     logAdminEvent(state, 'diagnostic_error', { error: msg });
+   } finally {
+     try { closeWS(); } catch(_) {}
  
-             elif et == "asr_error":
-                 if stream_stats is not None:
-                     try:
-                         stream_stats.note_provider_error()
-                     except Exception:
-                         pass
-                 err = _clip_text(str(ev.get("error") or "unknown"), 160)
-                 _jlog("dg_asr_error", sid=sid, turn_id=turn_id_ref[0], error=err)
-                 try:
-                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=err)
-                 except Exception:
-                     pass
-                 await _ws_send_json(send, make_error("asr_error", err))
-     except asyncio.CancelledError:
-         return
-     except Exception as e:
-         with contextlib.suppress(Exception):
-             await _ws_send_json(send, make_error("relay_fail", e.__class__.__name__))
+     cleanupRun(state);
+     state.startBtn.disabled = false;
+     state.running = false;
+   }
+ }
  
+ function resetView(state) {
+   for (const step of STEP_DEFS) {
+     setStepStatus(state, step.id, 'pending', '');
+   }
+   setStepStatus(state, 'asr', 'pending', 'Waiting for speech activity…');
+   setStepStatus(state, 'assistant', 'pending', 'No assistant response yet.');
+   setSpeakState(state, 'idle');
+   state.asr = { partials: 0, finals: 0, errors: 0 };
+   state.latestTranscript = '';
++  state.asrFinalSatisfied = false;
++  if (state.asrTimer) {
++    clearTimeout(state.asrTimer);
++    state.asrTimer = null;
++  }
+   state.awaitingGreeting = false;
+   state.awaitingResponse = false;
+   state.responseStarted = false;
+   if (state.adminLogEl) state.adminLogEl.textContent = '';
+   if (state.wsLogEl) state.wsLogEl.textContent = '';
+   if (state.runMetaEl) state.runMetaEl.textContent = '';
+   resetPolicySnapshot(state);  
+ }
  
- # ------------------------------ main WS impl ------------------------------
+ async function ensureWsOpen(timeoutMs = 8000) {
+   const ws = await openWS({ reconnect: false });
+   await Promise.race([
+     waitWSOpen(),
+     new Promise((_, rej) => setTimeout(() => rej(new Error('WebSocket open timed out')), timeoutMs)),
+   ]);
+   return ws;
+ }
  
+ function waitForGreeting(state, timeoutMs) {
+   return new Promise((resolve, reject) => {
+     state.awaitingGreeting = true;
+     const timer = setTimeout(() => {
+       state.awaitingGreeting = false;
+       state.greetResolve = null;
+       state.greetReject = null;
+       reject(new Error('Chip did not greet within the expected window.'));
+     }, timeoutMs);
+     state.greetResolve = (frame) => {
+       clearTimeout(timer);
+       state.awaitingGreeting = false;
+       state.greetResolve = null;
+       state.greetReject = null;
+       resolve(frame);
+     };
+     state.greetReject = (err) => {
+       clearTimeout(timer);
+       state.awaitingGreeting = false;
+       state.greetResolve = null;
+       state.greetReject = null;
+       reject(err instanceof Error ? err : new Error(String(err || 'greet rejected')));
+     };
+   });
+ }
  
- async def _ws_chat_asgi_impl(scope, receive, send):
-@@ -701,50 +711,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             pass
-         try:
-             if loop.is_closed():
-                 return
-             payload = dict(frame)
-             try:
-                 running = asyncio.get_running_loop()
-             except RuntimeError:
-                 running = None
-             if running is loop:
-                 asyncio.create_task(_ws_send_json(send, payload))
-             else:
-                 loop.call_soon_threadsafe(
-                     asyncio.create_task, _ws_send_json(send, payload)
-                 )
-         except Exception:
-             pass
+ function waitForASRFinal(state, timeoutMs) {
+   return new Promise((resolve, reject) => {
+-    const timer = setTimeout(() => {
++    state.asrFinalSatisfied = false;
++    if (state.asrTimer) {
++      clearTimeout(state.asrTimer);
++      state.asrTimer = null;
++    }
++    state.asrTimer = setTimeout(() => {
+       state.asrResolve = null;
+       state.asrReject = null;
++      state.asrTimer = null;
+       reject(new Error('Timed out waiting for ASR final.'));
+     }, timeoutMs);
+     state.asrResolve = (evt) => {
+-      clearTimeout(timer);
++      if (state.asrTimer) {
++        clearTimeout(state.asrTimer);
++        state.asrTimer = null;
++      }
+       state.asrResolve = null;
+       state.asrReject = null;
++      state.asrFinalSatisfied = true;
+       resolve(evt);
+     };
+     state.asrReject = (err) => {
+-      clearTimeout(timer);
++      if (state.asrTimer) {
++        clearTimeout(state.asrTimer);
++        state.asrTimer = null;
++      }
+       state.asrResolve = null;
+       state.asrReject = null;
+       reject(err instanceof Error ? err : new Error(String(err || 'asr error')));
+     };
+   });
+ }
  
-     buf = TurnBuffer()
-     dg: Optional[DeepgramClient] = None
-     rx_task: Optional[asyncio.Task] = None
-     dg_connect_task: Optional[asyncio.Task] = None
-     dg_state: str = "closed"
-     turn_id_ref = [0]
-     pending_final_turns: Deque[int] = deque()
-+    completed_llm_turns: Set[int] = set()
-     synthetic_final_turns: Set[int] = set()
-     final_seen = [False]
-     asr_seen_partial = [False]
-     turn_timing: Dict[str, List[float]] = {
-         "start": [0.0],
-         "dg_open": [0.0],
-         "first_partial": [0.0],
-         "final": [0.0],
+ function waitForAssistantResponse(state, timeoutMs) {
+   return new Promise((resolve, reject) => {
+     const timer = setTimeout(() => {
+       state.responseResolve = null;
+       state.responseReject = null;
+       state.awaitingResponse = false;
+       reject(new Error('Timed out waiting for Chip to respond.'));
+     }, timeoutMs);
+     state.responseResolve = (info) => {
+       clearTimeout(timer);
+       state.responseResolve = null;
+       state.responseReject = null;
+       state.awaitingResponse = false;
+       resolve(info);
+     };
+     state.responseReject = (err) => {
+       clearTimeout(timer);
+       state.responseResolve = null;
+@@ -418,50 +438,61 @@ function waitForUserTurn(state, timeoutMs) {
+         cleanup();
+         setSpeakState(state, 'error');
+         reject(new Error('Microphone disarmed before any audio was captured.'));
+       }
      }
-     turn_finish_logged = [False]
  
-     # Turn-scoped buffering + state
-     buffered_chunks: Deque[bytes] = deque()
-     sent_any_audio = [False]
-     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
-     no_audio_notified = [False]
-     no_audio_turn_id = [0]
-     try:
-         no_audio_window_s = float(
-             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
-         )
-     except Exception:
-         no_audio_window_s = 10.0
-     if no_audio_window_s < 0:
-         no_audio_window_s = 0.0
-@@ -854,66 +865,74 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         start_ts = turn_timing.get("start", [0.0])[0]
-         dg_open_ts = turn_timing.get("dg_open", [0.0])[0]
-         first_partial_ts = turn_timing.get("first_partial", [0.0])[0]
-         delta_start = int((now_ts - start_ts) * 1000) if start_ts else None
-         delta_open = int((now_ts - dg_open_ts) * 1000) if dg_open_ts else None
-         delta_partial = (
-             int((now_ts - first_partial_ts) * 1000) if first_partial_ts else None
-         )
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "turn_finish",
-                 sid=sid,
-                 turn_id=turn_id,
-                 reason=reason,
-                 synthetic=bool(synthetic),
-                 delta_start_ms=delta_start,
-                 delta_asr_open_ms=delta_open,
-                 delta_first_partial_ms=delta_partial,
-                 transcript_chars=int(transcript_chars),
-             )
+     window.addEventListener('askchip-voice', onVoice);
+   });
+ }
  
-     async def _emit_synthetic_final(
-         turn_id: int, reason: str, transcript: str = ""
-     ) -> bool:
-         if final_seen[0]:
-+            with contextlib.suppress(Exception):
-+                _jlog(
-+                    "ws_synthetic_final_skip_duplicate",
-+                    sid=sid,
-+                    turn_id=turn_id,
-+                    reason=reason,
-+                )
-             return False
-         final_seen[0] = True
-         payload = make_results(turn_id, transcript=transcript, is_final=True)
-         payload["type"] = "Results"
-         await _ws_send_json(send, payload)
-         utterance_payload = make_utterance_end(turn_id)
-         utterance_payload["type"] = "UtteranceEnd"
-         await _ws_send_json(send, utterance_payload)
-         with contextlib.suppress(Exception):
-             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
-         _log_turn_finish(
-             turn_id,
-             reason=reason,
-             synthetic=True,
-             transcript_chars=len(transcript or ""),
-         )
-+        completed_llm_turns.discard(turn_id)
-         return True
+ /** Waits for the next UtteranceEnd once, then resolves. */
+ function waitForUtteranceEndOnce(timeoutMs = 8000) {
+   return new Promise((resolve, reject) => {
+     const onWS = (ev) => {
+       const fr = ev?.detail || {};
+       if (fr.type === 'UtteranceEnd' || fr.label === 'UtteranceEnd') {
+         cleanup(); resolve();
+       }
+     };
+     const timer = setTimeout(() => { cleanup(); reject(new Error('UtteranceEnd timeout')); }, timeoutMs);
+     function cleanup(){ clearTimeout(timer); window.removeEventListener('askchip-ws', onWS); }
+     window.addEventListener('askchip-ws', onWS);
+   });
+ }
  
-     async def _ensure_dg_connected() -> bool:
-         nonlocal dg, rx_task, dg_connect_task, dg_state, fallback_detection
++function satisfyASRWait(state, payload = { label: 'asr_final' }, { ensureDone = false, message } = {}) {
++  const alreadySatisfied = !!state.asrFinalSatisfied;
++  if (!alreadySatisfied) {
++    state.asrFinalSatisfied = true;
++    if (ensureDone) {
++      updateASRStatus(state, { status: 'done', message });
++    }
++  }
++  state.asrResolve?.(payload);
++}
++
+ function handleWSFrame(state, frame) {
+   appendLog(state.wsLogEl, `${timestamp()} ${describeFrame(frame)}`);
  
-         if not _has_deepgram_key():
-             with contextlib.suppress(Exception):
-                 _jlog("asr_connect_skip", sid=sid, reason="no_api_key")
-             return False
+   // Greet resolution
+   if (state.awaitingGreeting && isAssistantFrame(frame)) {
+     state.greetResolve?.(frame);
+     return;
+   }
  
-         if dg_state == "open" and dg is not None:
-             return True
+   // Assistant response tracking
+   if (state.awaitingResponse && isAssistantFrame(frame)) {
+     if (!state.responseStarted) {
+       state.responseStarted = true;
+       setStepStatus(state, 'assistant', 'active', 'Chip is responding…');
+     }
+     if (frame.type === 'assistant_audio') {
+       const chunks = Array.isArray(frame.audio_chunks) ? frame.audio_chunks.length : 0;
+       const summary = frame.is_last
+         ? `Assistant audio completed (${chunks} chunk${chunks === 1 ? '' : 's'}).`
+         : `Assistant audio chunk received (${chunks} chunk${chunks === 1 ? '' : 's'}).`;
+       setStepStatus(state, 'assistant', frame.is_last ? 'done' : 'active', summary);
+       if (frame.is_last) {
+         state.responseResolve?.({ summary, type: frame.type });
+       }
+     } else if (frame.type === 'assistant_end' || frame.type === 'UtteranceEnd') {
+@@ -476,85 +507,90 @@ function handleWSFrame(state, frame) {
+       setStepStatus(state, 'assistant', 'active', summary);
+     }
+   }
  
-         if dg_state == "connecting" and dg_connect_task is not None:
-             with contextlib.suppress(Exception):
-                 _jlog("asr_connect_wait", sid=sid, reason="existing_task")
-             with contextlib.suppress(Exception):
-                 await dg_connect_task
-             return dg_state == "open" and dg is not None
+   // Surface ASR errors that arrive as WS Error frames
+   if (frame?.type === 'Error' && /asr/i.test(String(frame?.label || ''))) {
+     const msg = frame?.message || frame?.error || 'ASR connection error';
+     updateASRStatus(state, { status: 'error', message: msg, error: true });
+   }
  
-         connect_result = {"ok": False}
+   // Transcript frames (Deepgram-like or normalized)
+   if (isTranscriptFrame(frame)) {
+     const final = isTranscriptFinal(frame);
+     const transcript = extractTranscript(frame);
  
-         async def _connect() -> None:
-             nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result, fallback_detection
-             try:
-@@ -959,50 +978,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                             for idx, existing in enumerate(list(mic_chunks)):
-                                 normalized = normalize_pcm_frame(existing, stream_meta)
-                                 if normalized != existing:
-                                     stream_stats.note_jitter_slip()
-                                 mic_chunks[idx] = normalized
+     if (transcript) {
+       state.latestTranscript = transcript;
+       updateASRStatus(state, { transcript, status: final ? 'done' : 'active' });
+     } else if (final) {
+       // Final with no text: treat as silence so we don’t time out.
+       updateASRStatus(state, { status: 'done', message: 'No speech detected (final).' });
+     }
  
-                 cfg["_transport"] = transport
-                 cfg["_jlog"] = _jlog
-                 cfg.setdefault("session_id", sid)
-                 cfg["_url_tag"] = f"{WS_ASGI_BUILD}:{sid}"
-                 _jlog("asr_connect_begin", sid=sid, transport=transport)
-                 client = DeepgramClient(cfg)
-                 dg = client
-                 await client.connect()
-                 dg_state = "open"
-                 connect_result["ok"] = True
-                 turn_id_ref[0] = buf.turn_seq + 1
-                 rx_task = asyncio.create_task(
-                     _pump_dg_to_client(
-                         client,
-                         send,
-                         turn_id_ref,
-                         final_seen,
-                         pending_final_turns,
-                         synthetic_final_turns,
-+                        completed_llm_turns,
-                         sid,
-                         asr_ready_evt,
-                         _flush_buffered_chunks,
-                         stream_stats,
-                         turn_timing,
-                         _log_turn_finish,
-                     )
-                 )
-                 _jlog("asr_connect_ok", sid=sid)
-             except Exception as e:
-                 dg_state = "closed"
-                 dg = None
-                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
-                 with contextlib.suppress(Exception):
-                     await _ws_send_json(
-                         send, make_error("asr_connect_fail", type(e).__name__)
-                     )
-                 with contextlib.suppress(Exception):
-                     _admin_emit and _admin_emit(
-                         "asr:error", session_id=sid, error=f"connect:{type(e).__name__}"
-                     )
-             finally:
-                 dg_connect_task = None
+     if (final) {
+       // Resolve the ASR wait even if SSE didn’t fire an asr_final.
+-      state.asrResolve?.({ label: 'asr_final', transcript: transcript || '' });
++      satisfyASRWait(state, { label: 'asr_final', transcript: transcript || '' });
+     }
++    return;
++  }
++
++  if (frame?.type === 'CloseStream') {
++    satisfyASRWait(state, { label: 'close_stream' }, { ensureDone: true, message: 'ASR stream closed.' });
+   }
+ }
  
-         dg_connect_task = asyncio.create_task(_connect())
-@@ -1225,50 +1245,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                             try:
-                                 latest = bus.current_assistant_turn(sid)
-                             except Exception:
-                                 latest = None
-                             if latest:
-                                 target_turn = latest
-                             if target_turn:
-                                 try:
-                                     bus.cancel_turn(sid, target_turn)
-                                 except Exception:
-                                     pass
-                             try:
-                                 bus.broadcast(sid, {"type": "state", "phase": "ready"})
-                             except Exception:
-                                 pass
+ function handleAdminEvent(state, evt) {
+   if (!evt) return;
+   
+   const kindTag = String(evt.kind || '').toLowerCase();
+   const labelTag = String(evt.label || '').toLowerCase();
  
-                         with contextlib.suppress(Exception):
-                             barge.start(
-                                 confirm_ms=confirm_ms,
-                                 on_commit=_on_barge_commit,
-                                 send_state=_send_barge_state,
-                             )
-                         turn_id_ref[0] = buf.turn_seq + 1
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-+                            completed_llm_turns.discard(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
-                         stream_stats.reset_turn()
-                         turn_connect_started[0] = False
-                         # reset mic capture
-                         mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
-                         _reset_turn_metrics(now)
-                         _schedule_no_audio_watch(turn_id_ref[0])
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "turn_start",
-                                 sid=sid,
-                                 turn_id=turn_id_ref[0],
-                                 first_bytes=len(raw_chunk),
-                             )
-                     # Detect container early using raw bytes
+   maybeHandleASREvent(state, evt, kindTag, labelTag);
+   maybeHandlePolicyEvent(state, evt, kindTag, labelTag);
+ }
  
-                     # Detect container early
-                     try:
-                         if transport.get("container") is None and raw_chunk:
-                             det = sniffer.feed(raw_chunk)
+ function maybeHandleASREvent(state, evt, kindTag, labelTag) {
+   const combined = `${kindTag} ${labelTag}`.trim();
+   const looksLikeASR =
+     /^asr/.test(kindTag) ||
+     /^asr/.test(labelTag) ||
+     /\basr[._-]/.test(kindTag) ||
+     /\basr[._-]/.test(labelTag);
+   if (!looksLikeASR) return false;
+ 
+   const tag = combined || 'asr';
+ 
+   if (tag.includes('error')) {
+     const message = evt.error ? `ASR error: ${evt.error}` : 'ASR error reported.';
+     updateASRStatus(state, { status: 'error', message, error: true });
+     return true;
+   }
+ 
+   if (tag.includes('final')) {
+     updateASRStatus(state, { status: 'done', final: true });
+-    state.asrResolve?.(evt);
++    satisfyASRWait(state, evt);
+     return true;
+   }
+ 
+   if (tag.includes('partial')) {
+     updateASRStatus(state, { status: 'active', partialsDelta: 1 });
+     return true;
+   }
+ 
+   if (tag.includes('start')) {
+     updateASRStatus(state, { status: 'active', message: 'ASR stream started.' });
+     return true;    
+   }
+   
+   return false;
+ }
+ 
+ function maybeHandlePolicyEvent(state, evt, kindTag, labelTag) {
+   if (!state?.policyNodes?.container) return false;
+ 
+   const combined = `${kindTag} ${labelTag}`.trim();
+   const isPolicySignal =
+     /\bnlu/.test(combined) ||
+     /\bllm/.test(combined) ||
+     /guardrail/.test(combined) ||
+     /teacher/.test(combined) ||
+@@ -947,50 +983,55 @@ function cleanupRun(state) {
+   try { closeWS(1000, 'admin_diag_end'); } catch {}
+   if (state.wsListener) {
+     window.removeEventListener('askchip-ws', state.wsListener);
+     state.wsListener = null;
+   }
+   if (state.sse) {
+     try { state.sse.close(); } catch {}
+     state.sse = null;
+   }
+   if (state.stopMeter) {
+     try { state.stopMeter(); } catch {}
+     state.stopMeter = null;
+   }
+   state.awaitingGreeting = false;
+   state.awaitingResponse = false;
+   state.responseStarted = false;
+   if (state.greetReject) state.greetReject(new Error('Diagnostic cancelled'));
+   if (state.asrReject) state.asrReject(new Error('Diagnostic cancelled'));
+   if (state.responseReject) state.responseReject(new Error('Diagnostic cancelled'));
+   state.greetResolve = null;
+   state.greetReject = null;
+   state.asrResolve = null;
+   state.asrReject = null;
+   state.responseResolve = null;
+   state.responseReject = null;
++  state.asrFinalSatisfied = false;
++  if (state.asrTimer) {
++    clearTimeout(state.asrTimer);
++    state.asrTimer = null;
++  }
+ }
+ 
+ function setStepStatus(state, stepId, status, detail) {
+   const entry = state.stepMap.get(stepId);
+   if (!entry) return;
+   if (status) {
+     entry.el.dataset.status = status;
+     if (entry.statusEl) entry.statusEl.textContent = STATUS_LABELS[status] || status;
+   }
+   if (detail !== undefined && entry.liveEl) {
+     entry.liveEl.textContent = detail;
+   }
+ }
+ 
+ function setSpeakState(state, mode) {
+   if (!state.speakCard || !state.speakStateEl) return;
+   state.speakCard.dataset.mode = mode;
+   state.speakStateEl.textContent = SPEAK_LABELS[mode] || SPEAK_LABELS.idle;
+ }
+ 
+ function appendLog(el, line) {
+   if (!el || !line) return;
+   el.textContent = el.textContent ? `${el.textContent}\n${line}` : line;
+   if (el.textContent.length > 14000) {
+     el.textContent = el.textContent.slice(-14000);
