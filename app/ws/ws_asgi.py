@@ -302,6 +302,7 @@ async def _pump_dg_to_client(
     final_seen,
     pending_final_turns,
     synthetic_final_turns,
+    completed_llm_turns,
     sid: str,
     asr_ready_evt: Optional[asyncio.Event] = None,
     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
@@ -434,22 +435,31 @@ async def _pump_dg_to_client(
                         _emit_admin_nlu_event(text, sid)
 
                     if text:
-
-                        async def _bg_turn():
-                            try:
-                                await asyncio.to_thread(
-                                    run_ws_user_turn, sid, text, None
+                        if turn_id_for_event in completed_llm_turns:
+                            with contextlib.suppress(Exception):
+                                _jlog(
+                                    "llm_turn_skip_duplicate",
+                                    sid=sid,
+                                    turn_id=turn_id_for_event,
                                 )
-                            except Exception as e:
-                                with contextlib.suppress(Exception):
-                                    await _ws_send_json(
-                                        send,
-                                        make_error(
-                                            "llm_turn_fail", e.__class__.__name__
-                                        ),
-                                    )
+                        else:
+                            completed_llm_turns.add(turn_id_for_event)
 
-                        asyncio.create_task(_bg_turn())
+                            async def _bg_turn():
+                                try:
+                                    await asyncio.to_thread(
+                                        run_ws_user_turn, sid, text, None
+                                    )
+                                except Exception as e:
+                                    with contextlib.suppress(Exception):
+                                        await _ws_send_json(
+                                            send,
+                                            make_error(
+                                                "llm_turn_fail", e.__class__.__name__
+                                            ),
+                                        )
+
+                            asyncio.create_task(_bg_turn())
 
             elif et == "asr_error":
                 if stream_stats is not None:
@@ -723,6 +733,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     dg_state: str = "closed"
     turn_id_ref = [0]
     pending_final_turns: Deque[int] = deque()
+    completed_llm_turns: Set[int] = set()
     synthetic_final_turns: Set[int] = set()
     final_seen = [False]
     asr_seen_partial = [False]
@@ -876,6 +887,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         turn_id: int, reason: str, transcript: str = ""
     ) -> bool:
         if final_seen[0]:
+            with contextlib.suppress(Exception):
+                _jlog(
+                    "ws_synthetic_final_skip_duplicate",
+                    sid=sid,
+                    turn_id=turn_id,
+                    reason=reason,
+                )
             return False
         final_seen[0] = True
         payload = make_results(turn_id, transcript=transcript, is_final=True)
@@ -892,6 +910,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             synthetic=True,
             transcript_chars=len(transcript or ""),
         )
+        completed_llm_turns.discard(turn_id)
         return True
 
     async def _ensure_dg_connected() -> bool:
@@ -981,6 +1000,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         final_seen,
                         pending_final_turns,
                         synthetic_final_turns,
+                        completed_llm_turns,
                         sid,
                         asr_ready_evt,
                         _flush_buffered_chunks,
@@ -1247,6 +1267,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         turn_id_ref[0] = buf.turn_seq + 1
                         with contextlib.suppress(Exception):
                             pending_final_turns.append(turn_id_ref[0])
+                            completed_llm_turns.discard(turn_id_ref[0])
                         final_seen[0] = False
                         asr_seen_partial[0] = False
                         sent_any_audio[0] = False
