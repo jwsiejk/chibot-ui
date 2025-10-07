@@ -25,6 +25,15 @@ class RedactFilter(logging.Filter):
             pass
         return True
 
+
+def _has_explicit_level(logger: logging.Logger) -> bool:
+    """Return True if logger already has a non-default level set."""
+    root = logging.getLogger()
+    if logger is root:
+        return logger.level != logging.WARNING
+    return logger.level != logging.NOTSET
+
+
 def install():
     lvl = os.environ.get("LOG_REDACT","1")
     if lvl not in ("0","false","no"):
@@ -33,3 +42,12 @@ def install():
         root.addFilter(flt)
         for h in root.handlers:
             h.addFilter(flt)
+
+    if os.environ.get("RENDER") or os.environ.get("RENDER_SERVICE_ID"):
+        # On Render deployments ensure INFO logs surface unless already overridden.
+        root = logging.getLogger()
+        askchip_logger = logging.getLogger("askchip")
+        if not _has_explicit_level(root):
+            root.setLevel(logging.INFO)
+        if not _has_explicit_level(askchip_logger):
+            askchip_logger.setLevel(logging.INFO)
