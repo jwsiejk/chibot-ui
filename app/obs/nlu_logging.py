@@ -8,7 +8,15 @@ import time
 from ..config import Settings, load_settings
 from ..db import db
 from ..security.redaction import redact_pii
-from . import jlog as _jlog
+
+try:
+    from .. import obs as _obs
+except ImportError:  # pragma: no cover - optional dependency
+    _obs = None
+
+_jlog = getattr(_obs, "jlog", None)
+if _jlog is None:
+    from . import jlog as _jlog
 
 
 def _coerce_bool(value: Any) -> bool:

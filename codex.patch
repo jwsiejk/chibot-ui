@@ -1,69 +1,10 @@
-diff --git a/app/config.py b/app/config.py
-index 5d4003242a80ec1a6f5e905b6044cf8e77cd248a..7dc9df710d5fea3988888080083b0790d15b9ba4 100644
---- a/app/config.py
-+++ b/app/config.py
-@@ -1,42 +1,55 @@
- import os
- from dataclasses import dataclass
-+from typing import Optional
-+
-+
-+def _optional_bool_from_env(name: str) -> Optional[bool]:
-+    raw = os.getenv(name)
-+    if raw is None:
-+        return None
-+    lowered = raw.strip().lower()
-+    if lowered in ("1", "true", "yes", "on"):
-+        return True
-+    if lowered in ("0", "false", "no", "off"):
-+        return False
-+    return None
- 
- @dataclass
- class Settings:
-     admin_emails: str = os.getenv("ADMIN_EMAILS", "")
-     database_url: str = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/ask_chip?sslmode=require")
-     openai_api_key: str = os.getenv("OPENAI_API_KEY", "mock-openai-key")
-     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-     openai_stt_language: str = os.getenv("OPENAI_STT_LANGUAGE", "en")
-     elevenlabs_api_key: str = os.getenv("ELEVENLABS_API_KEY", "mock-eleven-key")
-     eleven_voice_id: str = os.getenv("ELEVENLABS_VOICE_ID", "mock-voice")
-     eleven_output_format: str = os.getenv("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128")
-     eleven_output_format_ws: str = os.getenv("ELEVEN_OUTPUT_FORMAT_WS", "mp3_44100_128")
-     email_host: str = os.getenv("EMAIL_HOST", "mock.smtp.local")
-     email_port: int = int(os.getenv("EMAIL_PORT", "587"))
-     email_use_tls: bool = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
-     email_host_user: str = os.getenv("EMAIL_HOST_USER", "mock-user")
-     email_host_password: str = os.getenv("EMAIL_HOST_PASSWORD", "mock-pass")
-     email_from_name: str = os.getenv("EMAIL_FROM_NAME", "Chip")
-     from_email: str = os.getenv("FROM_EMAIL", "chip@example.com")
-     feature_admin_ui: bool = os.getenv("FEATURE_ADMIN_UI", "true").lower() == "true"
-     feature_audio: bool = os.getenv("FEATURE_AUDIO", "true").lower() == "true"
-     feature_tools: bool = os.getenv("FEATURE_TOOLS", "false").lower() == "true"
-     enable_chip_foundation: bool = os.getenv("ENABLE_CHIP_FOUNDATION", "1").strip().lower() not in ("0", "false", "no")
-     enable_policy_chips: bool = os.getenv("ENABLE_POLICY_CHIPS", "1").strip().lower() not in ("0", "false", "no")
--    enable_nlu_logging: bool = os.getenv("ENABLE_NLU_LOGGING", "0").strip().lower() in ("1", "true", "yes", "on")
-+    enable_nlu_logging: Optional[bool] = _optional_bool_from_env("ENABLE_NLU_LOGGING")
-     suggestion_max: int = int(os.getenv("SUGGESTION_MAX", "4"))
-     secret_key: str = os.getenv("SECRET_KEY", "dev-secret")
-     session_type: str = os.getenv("SESSION_TYPE", "filesystem")
-     ws_ping_interval_ms: int = int(os.getenv("WS_PING_INTERVAL_MS", "25000"))
- 
- def load_settings() -> Settings:
-     return Settings()
- 
- 
- import os
- 
- # Usage caps / rate limits (Phase 3)
- MAX_TURN_SEC = int(os.getenv("MAX_TURN_SEC", "30"))
- MAX_SESSION_MIN = int(os.getenv("MAX_SESSION_MIN", "15"))
- RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))  # requests per minute
 diff --git a/app/obs/nlu_logging.py b/app/obs/nlu_logging.py
-index bfb20df9d3e528c403c64ebef6ad961e682ec7f1..e32339fad8cafcc4c27ac5fd33836e93674f9766 100644
+index e32339fad8cafcc4c27ac5fd33836e93674f9766..e9dbb971fd3fb08ca0f10bea9c7f129fbd63d97c 100644
 --- a/app/obs/nlu_logging.py
 +++ b/app/obs/nlu_logging.py
-@@ -3,51 +3,62 @@ from __future__ import annotations
+@@ -1,36 +1,44 @@
+ from __future__ import annotations
+ 
  from dataclasses import dataclass, field
  from typing import Any, Dict, Iterable, List, Optional, Sequence
  
@@ -72,7 +13,16 @@ index bfb20df9d3e528c403c64ebef6ad961e682ec7f1..e32339fad8cafcc4c27ac5fd33836e93
  from ..config import Settings, load_settings
  from ..db import db
  from ..security.redaction import redact_pii
- from . import jlog as _jlog
+-from . import jlog as _jlog
++
++try:
++    from .. import obs as _obs
++except ImportError:  # pragma: no cover - optional dependency
++    _obs = None
++
++_jlog = getattr(_obs, "jlog", None)
++if _jlog is None:
++    from . import jlog as _jlog
  
  
  def _coerce_bool(value: Any) -> bool:
@@ -89,115 +39,12 @@ index bfb20df9d3e528c403c64ebef6ad961e682ec7f1..e32339fad8cafcc4c27ac5fd33836e93
  
  
  def _logging_enabled(settings: Settings, cfg: Dict[str, Any]) -> bool:
--    return bool(getattr(settings, "enable_nlu_logging", False)) and _coerce_bool(cfg.get("nlu_logging_enabled"))
-+    env_toggle = getattr(settings, "enable_nlu_logging", None)
-+    if env_toggle is False:
-+        return False
-+
-+    if "nlu_logging_enabled" not in cfg:
-+        return True
-+
-+    value = cfg.get("nlu_logging_enabled")
-+    if value is None:
-+        return True
-+
-+    return _coerce_bool(value)
+     env_toggle = getattr(settings, "enable_nlu_logging", None)
+     if env_toggle is False:
+         return False
  
+     if "nlu_logging_enabled" not in cfg:
+         return True
  
- def _normalize_alternates(raw: Any) -> List[Dict[str, Any]]:
-     if not raw:
-         return []
-     if isinstance(raw, dict):
-         raw = [raw]
-     cleaned: List[Dict[str, Any]] = []
-     for item in raw:
-         if not isinstance(item, dict):
-             continue
-         intent = item.get("intent")
-         if not intent:
-             continue
-         entry = {"intent": intent}
-         if "confidence" in item:
-             entry["confidence"] = item["confidence"]
-         cleaned.append(entry)
-         if len(cleaned) >= 2:
-             break
-     return cleaned
- 
- 
- def _summarize_messages(messages: Optional[Sequence[Dict[str, Any]]]) -> Dict[str, Any]:
-     if not messages:
-diff --git a/tests/test_nlu_logging.py b/tests/test_nlu_logging.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..c2ba63d1017b622a06c920685a8dc6ad8600da03
---- /dev/null
-+++ b/tests/test_nlu_logging.py
-@@ -0,0 +1,68 @@
-+from __future__ import annotations
-+
-+from typing import Any, Dict, List, Tuple
-+
-+import pytest
-+
-+from app.config import Settings
-+from app.obs import nlu_logging
-+
-+
-+@pytest.fixture
-+def logged_events(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Dict[str, Any]]]:
-+    events: List[Tuple[str, Dict[str, Any]]] = []
-+
-+    def _capture(kind: str, **fields: Any) -> None:
-+        events.append((kind, fields))
-+
-+    monkeypatch.setattr(nlu_logging, "_jlog", _capture)
-+    return events
-+
-+
-+def _make_context(enable_env: Any, cfg: Dict[str, Any]) -> nlu_logging.NluLoggingContext:
-+    settings = Settings(enable_nlu_logging=enable_env)
-+    return nlu_logging.NluLoggingContext(settings=settings, cfg=cfg, turn_id="turn-1")
-+
-+
-+def test_env_unset_config_true_emits(logged_events: List[Tuple[str, Dict[str, Any]]]) -> None:
-+    ctx = _make_context(None, {"nlu_logging_enabled": True})
-+    ctx.log_guardrail(decision="allow")
-+
-+    assert ctx.enabled is True
-+    assert logged_events == [("nlu.guardrail", {"turn_id": "turn-1", "decision": "allow"})]
-+
-+
-+def test_env_true_config_missing_defaults_on(logged_events: List[Tuple[str, Dict[str, Any]]]) -> None:
-+    ctx = _make_context(True, {})
-+    ctx.log_guardrail(decision="deny", reason="policy")
-+
-+    assert ctx.enabled is True
-+    assert logged_events == [
-+        ("nlu.guardrail", {"turn_id": "turn-1", "decision": "deny", "reason": "policy"})
-+    ]
-+
-+
-+def test_env_false_forces_disable(logged_events: List[Tuple[str, Dict[str, Any]]]) -> None:
-+    ctx = _make_context(False, {"nlu_logging_enabled": True})
-+    ctx.log_guardrail(decision="allow")
-+
-+    assert ctx.enabled is False
-+    assert logged_events == []
-+
-+
-+def test_config_false_overrides_env(logged_events: List[Tuple[str, Dict[str, Any]]]) -> None:
-+    ctx = _make_context(True, {"nlu_logging_enabled": False})
-+    ctx.log_guardrail(decision="deny")
-+
-+    assert ctx.enabled is False
-+    assert logged_events == []
-+
-+
-+def test_config_absent_with_env_unset_defaults_on(
-+    logged_events: List[Tuple[str, Dict[str, Any]]]
-+) -> None:
-+    ctx = _make_context(None, {})
-+    ctx.log_guardrail(decision="allow")
-+
-+    assert ctx.enabled is True
-+    assert logged_events == [("nlu.guardrail", {"turn_id": "turn-1", "decision": "allow"})]
+     value = cfg.get("nlu_logging_enabled")
+     if value is None:
