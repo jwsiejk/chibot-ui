@@ -1,160 +1,203 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 089f550b1e3deb9de212e04117fc36133108f833..5bef2030d42ca157ffb2437c5dcc2f66fbf26cc1 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -222,67 +222,87 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
-         env_tag = os.getenv("DG_URL_TAG", "").strip() or None
-         tag = tag_source or env_tag
-         if tag_source and env_tag:
-             tag = f"{env_tag}:{tag_source}"
-         safe_tag = _sanitize_tag(tag)
-         if safe_tag:
-             qd["tag"] = safe_tag
- 
-         # If containerized, remove transport params regardless of how they got here
-         if containerized:
-             for k in ("encoding", "sample_rate", "channels"):
-                 if k in qd:
-                     qd.pop(k, None)
-         else:
-             # Non-containerized path: allow env overrides for raw parameters (no behavior change if unset)
-             enc = os.getenv("DG_RAW_ENCODING")
-             sr = os.getenv("DG_RAW_SAMPLE_RATE")
-             ch = os.getenv("DG_RAW_CHANNELS")
-             if enc:
-                 qd["encoding"] = enc
-             if sr:
-                 qd["sample_rate"] = sr
-             if ch:
-                 qd["channels"] = ch
- 
-+        # Ensure default feature flags are present without overwriting explicit overrides
-+        qd.setdefault("interim_results", "true")
-+        qd.setdefault("vad_events", "true")
-+        qd.setdefault("smart_format", "true")
-+        qd.setdefault("punctuate", "true")
+diff --git a/app/config.py b/app/config.py
+index 5d4003242a80ec1a6f5e905b6044cf8e77cd248a..7dc9df710d5fea3988888080083b0790d15b9ba4 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -1,42 +1,55 @@
+ import os
+ from dataclasses import dataclass
++from typing import Optional
 +
-         # If DG_MODEL env is set and no model present yet, add it (back-compat)
-         _env_model = os.getenv("DG_MODEL")
-         if _env_model and "model" not in qd:
-             qd["model"] = _env_model
- 
-         # If a language env is provided (optional), prefer it if not set
-         _env_lang = os.getenv("DEEPGRAM_LANG")
-         if _env_lang and "language" not in qd:
-             qd["language"] = _env_lang
- 
-         # Ensure some model is present; default to nova-2 if none provided
-         if "model" not in qd:
-             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
- 
-         # Provide a sensible default for utterance_end_ms (2s) unless explicitly overridden
-         qd.setdefault("utterance_end_ms", "2000")
- 
-+        interim_val = qd.get("interim_results")
-+        interim_false = False
-+        try:
-+            if isinstance(interim_val, bool):
-+                interim_false = not interim_val
-+            elif interim_val is None:
-+                interim_false = False
-+            else:
-+                interim_false = str(interim_val).strip().lower() in {"false", "0"}
-+        except Exception:
-+            interim_false = False
-+        if interim_false:
-+            qd.pop("utterance_end_ms", None)
 +
-         query = _p.urlencode(qd)
-         base = _p.urlunsplit(
-             (parts.scheme, parts.netloc, parts.path, query, parts.fragment)
-         )
++def _optional_bool_from_env(name: str) -> Optional[bool]:
++    raw = os.getenv(name)
++    if raw is None:
++        return None
++    lowered = raw.strip().lower()
++    if lowered in ("1", "true", "yes", "on"):
++        return True
++    if lowered in ("0", "false", "no", "off"):
++        return False
++    return None
+ 
+ @dataclass
+ class Settings:
+     admin_emails: str = os.getenv("ADMIN_EMAILS", "")
+     database_url: str = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/ask_chip?sslmode=require")
+     openai_api_key: str = os.getenv("OPENAI_API_KEY", "mock-openai-key")
+     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+     openai_stt_language: str = os.getenv("OPENAI_STT_LANGUAGE", "en")
+     elevenlabs_api_key: str = os.getenv("ELEVENLABS_API_KEY", "mock-eleven-key")
+     eleven_voice_id: str = os.getenv("ELEVENLABS_VOICE_ID", "mock-voice")
+     eleven_output_format: str = os.getenv("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128")
+     eleven_output_format_ws: str = os.getenv("ELEVEN_OUTPUT_FORMAT_WS", "mp3_44100_128")
+     email_host: str = os.getenv("EMAIL_HOST", "mock.smtp.local")
+     email_port: int = int(os.getenv("EMAIL_PORT", "587"))
+     email_use_tls: bool = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
+     email_host_user: str = os.getenv("EMAIL_HOST_USER", "mock-user")
+     email_host_password: str = os.getenv("EMAIL_HOST_PASSWORD", "mock-pass")
+     email_from_name: str = os.getenv("EMAIL_FROM_NAME", "Chip")
+     from_email: str = os.getenv("FROM_EMAIL", "chip@example.com")
+     feature_admin_ui: bool = os.getenv("FEATURE_ADMIN_UI", "true").lower() == "true"
+     feature_audio: bool = os.getenv("FEATURE_AUDIO", "true").lower() == "true"
+     feature_tools: bool = os.getenv("FEATURE_TOOLS", "false").lower() == "true"
+     enable_chip_foundation: bool = os.getenv("ENABLE_CHIP_FOUNDATION", "1").strip().lower() not in ("0", "false", "no")
+     enable_policy_chips: bool = os.getenv("ENABLE_POLICY_CHIPS", "1").strip().lower() not in ("0", "false", "no")
+-    enable_nlu_logging: bool = os.getenv("ENABLE_NLU_LOGGING", "0").strip().lower() in ("1", "true", "yes", "on")
++    enable_nlu_logging: Optional[bool] = _optional_bool_from_env("ENABLE_NLU_LOGGING")
+     suggestion_max: int = int(os.getenv("SUGGESTION_MAX", "4"))
+     secret_key: str = os.getenv("SECRET_KEY", "dev-secret")
+     session_type: str = os.getenv("SESSION_TYPE", "filesystem")
+     ws_ping_interval_ms: int = int(os.getenv("WS_PING_INTERVAL_MS", "25000"))
+ 
+ def load_settings() -> Settings:
+     return Settings()
+ 
+ 
+ import os
+ 
+ # Usage caps / rate limits (Phase 3)
+ MAX_TURN_SEC = int(os.getenv("MAX_TURN_SEC", "30"))
+ MAX_SESSION_MIN = int(os.getenv("MAX_SESSION_MIN", "15"))
+ RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))  # requests per minute
+diff --git a/app/obs/nlu_logging.py b/app/obs/nlu_logging.py
+index bfb20df9d3e528c403c64ebef6ad961e682ec7f1..e32339fad8cafcc4c27ac5fd33836e93674f9766 100644
+--- a/app/obs/nlu_logging.py
++++ b/app/obs/nlu_logging.py
+@@ -3,51 +3,62 @@ from __future__ import annotations
+ from dataclasses import dataclass, field
+ from typing import Any, Dict, Iterable, List, Optional, Sequence
+ 
+ import time
+ 
+ from ..config import Settings, load_settings
+ from ..db import db
+ from ..security.redaction import redact_pii
+ from . import jlog as _jlog
+ 
+ 
+ def _coerce_bool(value: Any) -> bool:
+     if isinstance(value, str):
+         lowered = value.strip().lower()
+         if lowered in {"1", "true", "yes", "on"}:
+             return True
+         if lowered in {"0", "false", "no", "off"}:
+             return False
+     try:
+         return bool(value)
      except Exception:
-         pass
- 
-     return base
+         return False
  
  
- def _auth_header() -> str:
-     key, _ = _api_key_info()
-     return f"Token {key}"
- 
- 
- def _initial_config(overrides: Optional[dict] = None) -> dict:
-     """Build Configure payload with FEATURES ONLY (no audio/transport keys)."""
-     interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
-     features = {
-         "interim_results": interim,
-         "smart_format": True,
-         "punctuate": True,
-         "vad_events": True,
-         # Keep URL-only keys (like utterance_end_ms) out of Configure
-     }
-diff --git a/tests_phase3_5/test_containerized_opus_url.py b/tests_phase3_5/test_containerized_opus_url.py
-index 14f01301435d599d97c289c259d096d1aaadefa9..1fcbb8a7f676b600ffe8010431cd2e6518e5f3a6 100644
---- a/tests_phase3_5/test_containerized_opus_url.py
-+++ b/tests_phase3_5/test_containerized_opus_url.py
-@@ -1,49 +1,63 @@
- from app.services.streaming_asr.deepgram_client import DG_TEST_MODE
- from app.services.streaming_asr.deepgram_client import _dg_url  # if exported
- from app.services.audio.raw_fallback import (
-     DetectionSignal,
-     StreamMeta,
-     StreamStats,
-     coerce_to_raw_config,
-     pad_frame_to_expected,
-     should_use_raw_fallback,
-     silence_frame,
- )
- import pytest
- 
- def test_containerized_omits_sr_channels(monkeypatch):
-     monkeypatch.setenv("DG_TEST_MODE", "1")
-     # Build overrides with containerized flag in _transport
-     overrides = {"_transport": {"containerized_opus": True}}
-     url = _dg_url(overrides)
-     assert "sample_rate=" not in url
-     assert "channels=" not in url
-     assert "encoding=" not in url
-     assert "endpointing=" not in url
-+    assert "interim_results=true" in url
-     assert "utterance_end_ms=2000" in url
- 
+ def _logging_enabled(settings: Settings, cfg: Dict[str, Any]) -> bool:
+-    return bool(getattr(settings, "enable_nlu_logging", False)) and _coerce_bool(cfg.get("nlu_logging_enabled"))
++    env_toggle = getattr(settings, "enable_nlu_logging", None)
++    if env_toggle is False:
++        return False
 +
-+def test_containerized_interim_false_drops_utterance_end(monkeypatch):
-+    monkeypatch.setenv("DG_TEST_MODE", "1")
-+    overrides = {
-+        "_transport": {"containerized_opus": True},
-+        "interim_results": False,
-+    }
-+    url = _dg_url(overrides)
-+    assert "interim_results=false" in url
-+    assert "utterance_end_ms=" not in url
-+    assert "sample_rate=" not in url
-+    assert "channels=" not in url
++    if "nlu_logging_enabled" not in cfg:
++        return True
 +
- def test_non_containerized_includes_sr_channels(monkeypatch):
-     monkeypatch.setenv("DG_TEST_MODE", "1")
-     overrides = {"_transport": {"containerized_opus": False}}
-     url = _dg_url(overrides)
-     assert "sample_rate=48000" in url
-     assert "channels=1" in url
-     assert "endpointing=" not in url
-     assert "utterance_end_ms=2000" in url
++    value = cfg.get("nlu_logging_enabled")
++    if value is None:
++        return True
++
++    return _coerce_bool(value)
  
  
- def test_raw_fallback_url_includes_params(monkeypatch):
-     monkeypatch.setenv("DG_TEST_MODE", "1")
-     meta = StreamMeta(sample_rate=16000, channels=1)
-     overrides = coerce_to_raw_config(meta)
-     url = _dg_url(overrides)
-     assert "encoding=linear16" in url
-     assert "sample_rate=16000" in url
-     assert "channels=1" in url
-     transport = overrides.get("_transport", {})
-     assert transport.get("raw_fallback") is True
-     assert transport.get("normalized_pcm") is True
+ def _normalize_alternates(raw: Any) -> List[Dict[str, Any]]:
+     if not raw:
+         return []
+     if isinstance(raw, dict):
+         raw = [raw]
+     cleaned: List[Dict[str, Any]] = []
+     for item in raw:
+         if not isinstance(item, dict):
+             continue
+         intent = item.get("intent")
+         if not intent:
+             continue
+         entry = {"intent": intent}
+         if "confidence" in item:
+             entry["confidence"] = item["confidence"]
+         cleaned.append(entry)
+         if len(cleaned) >= 2:
+             break
+     return cleaned
  
  
- def test_raw_fallback_guardrail_leniency(monkeypatch):
-     monkeypatch.setenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", "1")
+ def _summarize_messages(messages: Optional[Sequence[Dict[str, Any]]]) -> Dict[str, Any]:
+     if not messages:
+diff --git a/tests/test_nlu_logging.py b/tests/test_nlu_logging.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c2ba63d1017b622a06c920685a8dc6ad8600da03
+--- /dev/null
++++ b/tests/test_nlu_logging.py
+@@ -0,0 +1,68 @@
++from __future__ import annotations
++
++from typing import Any, Dict, List, Tuple
++
++import pytest
++
++from app.config import Settings
++from app.obs import nlu_logging
++
++
++@pytest.fixture
++def logged_events(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Dict[str, Any]]]:
++    events: List[Tuple[str, Dict[str, Any]]] = []
++
++    def _capture(kind: str, **fields: Any) -> None:
++        events.append((kind, fields))
++
++    monkeypatch.setattr(nlu_logging, "_jlog", _capture)
++    return events
++
++
++def _make_context(enable_env: Any, cfg: Dict[str, Any]) -> nlu_logging.NluLoggingContext:
++    settings = Settings(enable_nlu_logging=enable_env)
++    return nlu_logging.NluLoggingContext(settings=settings, cfg=cfg, turn_id="turn-1")
++
++
++def test_env_unset_config_true_emits(logged_events: List[Tuple[str, Dict[str, Any]]]) -> None:
++    ctx = _make_context(None, {"nlu_logging_enabled": True})
++    ctx.log_guardrail(decision="allow")
++
++    assert ctx.enabled is True
++    assert logged_events == [("nlu.guardrail", {"turn_id": "turn-1", "decision": "allow"})]
++
++
++def test_env_true_config_missing_defaults_on(logged_events: List[Tuple[str, Dict[str, Any]]]) -> None:
++    ctx = _make_context(True, {})
++    ctx.log_guardrail(decision="deny", reason="policy")
++
++    assert ctx.enabled is True
++    assert logged_events == [
++        ("nlu.guardrail", {"turn_id": "turn-1", "decision": "deny", "reason": "policy"})
++    ]
++
++
++def test_env_false_forces_disable(logged_events: List[Tuple[str, Dict[str, Any]]]) -> None:
++    ctx = _make_context(False, {"nlu_logging_enabled": True})
++    ctx.log_guardrail(decision="allow")
++
++    assert ctx.enabled is False
++    assert logged_events == []
++
++
++def test_config_false_overrides_env(logged_events: List[Tuple[str, Dict[str, Any]]]) -> None:
++    ctx = _make_context(True, {"nlu_logging_enabled": False})
++    ctx.log_guardrail(decision="deny")
++
++    assert ctx.enabled is False
++    assert logged_events == []
++
++
++def test_config_absent_with_env_unset_defaults_on(
++    logged_events: List[Tuple[str, Dict[str, Any]]]
++) -> None:
++    ctx = _make_context(None, {})
++    ctx.log_guardrail(decision="allow")
++
++    assert ctx.enabled is True
++    assert logged_events == [("nlu.guardrail", {"turn_id": "turn-1", "decision": "allow"})]

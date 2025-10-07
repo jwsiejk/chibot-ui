@@ -25,7 +25,18 @@ def _coerce_bool(value: Any) -> bool:
 
 
 def _logging_enabled(settings: Settings, cfg: Dict[str, Any]) -> bool:
-    return bool(getattr(settings, "enable_nlu_logging", False)) and _coerce_bool(cfg.get("nlu_logging_enabled"))
+    env_toggle = getattr(settings, "enable_nlu_logging", None)
+    if env_toggle is False:
+        return False
+
+    if "nlu_logging_enabled" not in cfg:
+        return True
+
+    value = cfg.get("nlu_logging_enabled")
+    if value is None:
+        return True
+
+    return _coerce_bool(value)
 
 
 def _normalize_alternates(raw: Any) -> List[Dict[str, Any]]:

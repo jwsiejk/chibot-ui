@@ -1,5 +1,18 @@
 import os
 from dataclasses import dataclass
+from typing import Optional
+
+
+def _optional_bool_from_env(name: str) -> Optional[bool]:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    lowered = raw.strip().lower()
+    if lowered in ("1", "true", "yes", "on"):
+        return True
+    if lowered in ("0", "false", "no", "off"):
+        return False
+    return None
 
 @dataclass
 class Settings:
@@ -24,7 +37,7 @@ class Settings:
     feature_tools: bool = os.getenv("FEATURE_TOOLS", "false").lower() == "true"
     enable_chip_foundation: bool = os.getenv("ENABLE_CHIP_FOUNDATION", "1").strip().lower() not in ("0", "false", "no")
     enable_policy_chips: bool = os.getenv("ENABLE_POLICY_CHIPS", "1").strip().lower() not in ("0", "false", "no")
-    enable_nlu_logging: bool = os.getenv("ENABLE_NLU_LOGGING", "0").strip().lower() in ("1", "true", "yes", "on")
+    enable_nlu_logging: Optional[bool] = _optional_bool_from_env("ENABLE_NLU_LOGGING")
     suggestion_max: int = int(os.getenv("SUGGESTION_MAX", "4"))
     secret_key: str = os.getenv("SECRET_KEY", "dev-secret")
     session_type: str = os.getenv("SESSION_TYPE", "filesystem")
