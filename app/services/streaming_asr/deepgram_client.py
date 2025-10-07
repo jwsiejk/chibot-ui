@@ -6,10 +6,27 @@ import logging
 import os
 import re
 import time
+import warnings
 from typing import AsyncGenerator, Optional, Any, Deque, Tuple, Callable
 from collections import deque
 
 import websockets  # provided by uvicorn[standard]
+
+try:
+    from websockets import exceptions as _ws_exceptions  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover - extremely defensive
+    _ws_exceptions = None  # type: ignore[assignment]
+else:
+    _invalid_types = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        for _name in ("InvalidStatus", "InvalidStatusCode"):
+            _cls = getattr(_ws_exceptions, _name, None)
+            if isinstance(_cls, type):
+                _invalid_types.append(_cls)
+    _INVALID_STATUS_TYPES = tuple(_invalid_types)
+if "_INVALID_STATUS_TYPES" not in globals():
+    _INVALID_STATUS_TYPES = ()
 
 try:  # pragma: no cover - exercised indirectly
     _WEBSOCKETS_PROTOCOL = websockets.protocol  # type: ignore[attr-defined]
@@ -42,6 +59,40 @@ def _sanitize_tag(val: Optional[str], *, limit: int = 64) -> Optional[str]:
 
 
 logger = logging.getLogger(__name__)
+
+_DG_KEY_PROBED = False
+
+
+def _mask_key_fragment(raw: str) -> str:
+    try:
+        txt = str(raw)
+    except Exception:
+        return "?"
+    txt = txt.strip()
+    if not txt:
+        return "?"
+    if len(txt) <= 4:
+        return "*" * len(txt)
+    return f"{txt[:2]}…{txt[-2:]}"
+
+
+def _api_key_info() -> tuple[str, int]:
+    key = os.getenv("DEEPGRAM_API_KEY", "")
+    if key is None:
+        key = ""
+    key = str(key).strip()
+    if not key:
+        raise RuntimeError("DEEPGRAM_API_KEY is not set")
+    length = len(key)
+    global _DG_KEY_PROBED
+    if not _DG_KEY_PROBED:
+        _DG_KEY_PROBED = True
+        try:
+            masked = _mask_key_fragment(key)
+            logger.info("Deepgram API key detected len=%s mask=%s", length, masked)
+        except Exception:
+            logger.info("Deepgram API key detected len=%s", length)
+    return key, length
 
 
 class DeepgramDrainTimeoutError(RuntimeError):
@@ -221,9 +272,7 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
 
 
 def _auth_header() -> str:
-    key = os.getenv("DEEPGRAM_API_KEY", "").strip()
-    if not key:
-        raise RuntimeError("DEEPGRAM_API_KEY is not set")
+    key, _ = _api_key_info()
     return f"Token {key}"
 
 
@@ -756,6 +805,7 @@ class DeepgramClient:
         self._emit_diag("provider_open", active=True, url=url)
 
         containerized = False
+        safe_url = url
 
         try:
             # Diagnostic: parse params and emit compact JSON log that shows
@@ -805,6 +855,11 @@ class DeepgramClient:
                 sanitized_pairs.append((key_str, q[key]))
             sanitized_query = _p.urlencode(sanitized_pairs, doseq=True)
             sanitized_qs = f"?{sanitized_query}" if sanitized_query else "?"
+            safe_url = f"{parts.scheme}://{parts.netloc}{parts.path}"
+            if sanitized_query:
+                safe_url = f"{safe_url}?{sanitized_query}"
+            if parts.fragment:
+                safe_url = f"{safe_url}#{parts.fragment}"
             raw_params_absent = all(param not in q for param in raw_param_keys)
 
             # Structured JSON log if _jlog is available (preferred for your admin viewer)
@@ -850,6 +905,30 @@ class DeepgramClient:
             )
         except Exception:
             logger.info("Deepgram connect start sid=%s url=%s", sid, url)
+
+        key_value, key_len = _api_key_info()
+        ws_headers = [("Authorization", f"Token {key_value}")]
+        del key_value
+        subprotocols = None
+        logger.info(
+            "Deepgram connect attempt sid=%s safe_url=%s key_len=%s subprotocols=%s",
+            sid,
+            safe_url,
+            key_len,
+            subprotocols,
+        )
+        if callable(self._jlog):
+            try:
+                self._jlog(
+                    "dg_connect_attempt",
+                    sid=sid,
+                    dg_id=self._dg_id,
+                    safe_url=safe_url,
+                    key_len=key_len,
+                    subprotocols=subprotocols,
+                )
+            except Exception:
+                pass
 
         start_ts = time.time()
         if callable(self._jlog):
@@ -898,17 +977,16 @@ class DeepgramClient:
                         pass
                 return
 
-            headers = [("Authorization", _auth_header())]
             try:
                 self._ws = await websockets.connect(
                     url,
-                    additional_headers=headers,
+                    additional_headers=ws_headers,
                     max_size=None,
                 )
             except TypeError:
                 self._ws = await websockets.connect(
                     url,
-                    extra_headers=headers,
+                    extra_headers=ws_headers,
                     max_size=None,
                 )
 
@@ -972,26 +1050,95 @@ class DeepgramClient:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            diag_extra: dict[str, Any] = {}
+            header_items: list[tuple[str, str]] | None = None
+            status_code: Any = None
+            status_reason: Any = None
+
+            if _INVALID_STATUS_TYPES and isinstance(exc, _INVALID_STATUS_TYPES):
+                response = getattr(exc, "response", None)
+                headers_obj = None
+                if response is not None:
+                    status_code = getattr(response, "status_code", None)
+                    status_reason = getattr(response, "reason_phrase", None)
+                    headers_obj = getattr(response, "headers", None)
+                else:
+                    status_code = getattr(exc, "status_code", None)
+                    status_reason = getattr(exc, "reason_phrase", None)
+                    headers_obj = getattr(exc, "headers", None)
+
+                if headers_obj is not None:
+                    header_iter = None
+                    try:
+                        header_iter = list(headers_obj.items())
+                    except Exception:
+                        try:
+                            header_iter = list(headers_obj.raw_items())  # type: ignore[attr-defined]
+                        except Exception:
+                            header_iter = None
+                    if header_iter is not None:
+                        header_items = [(str(k), str(v)) for k, v in header_iter]
+
+                if status_code is not None:
+                    try:
+                        diag_extra["http_status"] = int(status_code)
+                    except Exception:
+                        diag_extra["http_status"] = status_code
+                if status_reason:
+                    diag_extra["http_reason"] = str(status_reason)
+                if header_items is not None:
+                    diag_extra["http_headers"] = header_items
+
+                logger.warning(
+                    "Deepgram connect invalid status sid=%s status=%s reason=%s headers=%s url=%s",
+                    sid,
+                    diag_extra.get("http_status"),
+                    diag_extra.get("http_reason"),
+                    header_items,
+                    safe_url,
+                )
+                if callable(self._jlog):
+                    try:
+                        self._jlog(
+                            "dg_connect_invalid_status",
+                            sid=sid,
+                            dg_id=self._dg_id,
+                            status=diag_extra.get("http_status"),
+                            reason=diag_extra.get("http_reason"),
+                            headers=header_items,
+                            url=safe_url,
+                        )
+                    except Exception:
+                        pass
+
             if callable(self._jlog):
                 try:
                     elapsed_ms = int((time.time() - start_ts) * 1000)
                 except Exception:
                     elapsed_ms = 0
+                payload = {
+                    "sid": sid,
+                    "dg_id": self._dg_id,
+                    "elapsed_ms": elapsed_ms,
+                    "code": exc.__class__.__name__,
+                }
+                for key, value in diag_extra.items():
+                    if value is not None:
+                        payload[key] = value
                 try:
-                    self._jlog(
-                        "asr_connect_err",
-                        sid=sid,
-                        dg_id=self._dg_id,
-                        elapsed_ms=elapsed_ms,
-                        code=exc.__class__.__name__,
-                    )
+                    self._jlog("asr_connect_err", **payload)
                 except Exception:
                     pass
+
+            diag_payload = {
+                key: value for key, value in diag_extra.items() if value is not None
+            }
             self._emit_diag(
                 "asr_error",
                 error=f"connect:{exc.__class__.__name__}",
                 detail=_clip_text(str(exc), 200),
                 url=url,
+                **diag_payload,
             )
             raise
 

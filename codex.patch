@@ -1,195 +1,564 @@
-diff --git a/scripts/test_packaging.py b/scripts/test_packaging.py
-index b18aa6373fee43be91601538c845be81c65c7f02..6c8f4795e14acd0e67efa7eeb2b0f6da6831657e 100644
---- a/scripts/test_packaging.py
-+++ b/scripts/test_packaging.py
-@@ -1,36 +1,82 @@
- #!/usr/bin/env python3
--import os, sys, zipfile
-+"""Utility for building the packaging zip used in tests.
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index d2241a50f7a3ff1252efe102456ac58a6d7e6275..089f550b1e3deb9de212e04117fc36133108f833 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -1,70 +1,121 @@
+ from __future__ import annotations
+ 
+ import asyncio
+ import json
+ import logging
+ import os
+ import re
+ import time
++import warnings
+ from typing import AsyncGenerator, Optional, Any, Deque, Tuple, Callable
+ from collections import deque
+ 
+ import websockets  # provided by uvicorn[standard]
+ 
++try:
++    from websockets import exceptions as _ws_exceptions  # type: ignore[attr-defined]
++except Exception:  # pragma: no cover - extremely defensive
++    _ws_exceptions = None  # type: ignore[assignment]
++else:
++    _invalid_types = []
++    with warnings.catch_warnings():
++        warnings.simplefilter("ignore", DeprecationWarning)
++        for _name in ("InvalidStatus", "InvalidStatusCode"):
++            _cls = getattr(_ws_exceptions, _name, None)
++            if isinstance(_cls, type):
++                _invalid_types.append(_cls)
++    _INVALID_STATUS_TYPES = tuple(_invalid_types)
++if "_INVALID_STATUS_TYPES" not in globals():
++    _INVALID_STATUS_TYPES = ()
 +
-+The original implementation executed on import which caused pytest to fail
-+with ``SystemExit`` during test collection.  The logic has been wrapped in a
-+``main`` function so the module can be imported safely while still supporting
-+command line execution.
-+"""
+ try:  # pragma: no cover - exercised indirectly
+     _WEBSOCKETS_PROTOCOL = websockets.protocol  # type: ignore[attr-defined]
+ except AttributeError:  # pragma: no cover - older packaging style
+     try:
+         from websockets import protocol as _WEBSOCKETS_PROTOCOL  # type: ignore
+     except Exception:  # pragma: no cover - highly defensive
+         _WEBSOCKETS_PROTOCOL = None  # type: ignore
+ 
+ 
+ # Test-mode and last-observed info for CI assertions
+ DG_TEST_MODE = os.getenv("DG_TEST_MODE", "").strip() == "1"
+ DG_LAST_URL: str | None = None
+ DG_LAST_CONFIG: dict | None = None
+ 
+ _TAG_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.:-]")
+ 
+ 
+ def _sanitize_tag(val: Optional[str], *, limit: int = 64) -> Optional[str]:
+     if not val:
+         return None
+     try:
+         txt = str(val)
+     except Exception:
+         return None
+     txt = _TAG_SANITIZE_RE.sub("_", txt)
+     if not txt:
+         return None
+     return txt[:limit]
+ 
+ 
+ logger = logging.getLogger(__name__)
+ 
++_DG_KEY_PROBED = False
 +
-+from __future__ import annotations
 +
-+import os
-+import sys
-+import zipfile
-+from typing import Iterable
++def _mask_key_fragment(raw: str) -> str:
++    try:
++        txt = str(raw)
++    except Exception:
++        return "?"
++    txt = txt.strip()
++    if not txt:
++        return "?"
++    if len(txt) <= 4:
++        return "*" * len(txt)
++    return f"{txt[:2]}…{txt[-2:]}"
++
++
++def _api_key_info() -> tuple[str, int]:
++    key = os.getenv("DEEPGRAM_API_KEY", "")
++    if key is None:
++        key = ""
++    key = str(key).strip()
++    if not key:
++        raise RuntimeError("DEEPGRAM_API_KEY is not set")
++    length = len(key)
++    global _DG_KEY_PROBED
++    if not _DG_KEY_PROBED:
++        _DG_KEY_PROBED = True
++        try:
++            masked = _mask_key_fragment(key)
++            logger.info("Deepgram API key detected len=%s mask=%s", length, masked)
++        except Exception:
++            logger.info("Deepgram API key detected len=%s", length)
++    return key, length
 +
  
- INCLUDE_DIRS = [
-     "artifacts",
-     "app",
-     "templates",
-     "static/css",
-     "static/js",
-     "scripts",
- ]
+ class DeepgramDrainTimeoutError(RuntimeError):
+     """Raised when the transmit queue fails to drain during close."""
  
--EXCLUDE_PATTERNS = (".venv","venv","node_modules","site-packages","dist-packages","__pycache__",".pytest_cache")
--
--def assert_true(cond, msg):
--    if not cond:
--        print("FAIL:", msg); return False
--    print("PASS:", msg); return True
--
--ok = True
--out = "askchip_release.zip"
--with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as z:
--    for root in INCLUDE_DIRS:
--        if not os.path.exists(root):
--            continue
--        for dirpath, dirnames, filenames in os.walk(root):
--            if any(p in dirpath for p in EXCLUDE_PATTERNS):
-+
-+EXCLUDE_PATTERNS: tuple[str, ...] = (
-+    ".venv",
-+    "venv",
-+    "node_modules",
-+    "site-packages",
-+    "dist-packages",
-+    "__pycache__",
-+    ".pytest_cache",
-+)
-+
-+
-+def _should_skip_path(path: str, patterns: Iterable[str]) -> bool:
-+    """Return ``True`` if any of the exclusion patterns appear in ``path``."""
-+
-+    return any(pattern in path for pattern in patterns)
-+
-+
-+def _assert_true(condition: bool, message: str) -> bool:
-+    """Print an assertion-style message and return ``condition``."""
-+
-+    if condition:
-+        print("PASS:", message)
-+        return True
-+
-+    print("FAIL:", message)
-+    return False
-+
-+
-+def main() -> int:
-+    """Build the release zip and report success."""
-+
-+    ok = True
-+    output_path = "askchip_release.zip"
-+    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-+        for root in INCLUDE_DIRS:
-+            if not os.path.exists(root):
-                 continue
--            for fn in filenames:
--                p = os.path.join(dirpath, fn)
--                z.write(p, p)
-+            for dirpath, _dirnames, filenames in os.walk(root):
-+                if _should_skip_path(dirpath, EXCLUDE_PATTERNS):
-+                    continue
-+                for filename in filenames:
-+                    file_path = os.path.join(dirpath, filename)
-+                    archive.write(file_path, file_path)
-+
-+    ok &= _assert_true(
-+        os.path.exists(output_path) and os.path.getsize(output_path) > 1024,
-+        "Release zip built and >1KB",
-+    )
-+
-+    print("\nRESULT:", "PASS" if ok else "FAIL")
-+    return 0 if ok else 1
+     def __init__(
+         self, sid: str, *, queued_chunks: int, queued_bytes: int, wait_timeout: bool
+     ) -> None:
+         self.sid = sid
+         self.queued_chunks = queued_chunks
+         self.queued_bytes = queued_bytes
+         self.wait_timeout = wait_timeout
+         super().__init__(
+             f"drain_timeout sid={sid} queued_chunks={queued_chunks} queued_bytes={queued_bytes}"
+         )
  
--ok &= assert_true(os.path.exists(out) and os.path.getsize(out) > 1024, "Release zip built and >1KB")
  
--print("\nRESULT:", "PASS" if ok else "FAIL")
--sys.exit(0 if ok else 1)
-+if __name__ == "__main__":
-+    sys.exit(main())
-diff --git a/scripts/test_static.py b/scripts/test_static.py
-index d86fa4238364e8b0f52961ecbc77a6fccbb7a123..bba413a91fa2e29893b9b6b4a679dfe873b580a8 100644
---- a/scripts/test_static.py
-+++ b/scripts/test_static.py
-@@ -1,28 +1,61 @@
- #!/usr/bin/env python3
--import os, sys, re, json, glob
-+"""Static asset smoke tests used by the continuous integration suite."""
+ class _FakeWSForTests:
+     def __init__(self):
+         self.open = True
+         self.sent = []
  
--ROOT = "."
-+from __future__ import annotations
+     async def send(self, data):
+         self.sent.append(data)
  
--def assert_true(cond, msg):
--    if not cond:
--        print("FAIL:", msg); return False
--    print("PASS:", msg); return True
-+import glob
-+import sys
-+from pathlib import Path
+     async def close(self):
+@@ -199,53 +250,51 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
+             qd["model"] = _env_model
  
--ok = True
+         # If a language env is provided (optional), prefer it if not set
+         _env_lang = os.getenv("DEEPGRAM_LANG")
+         if _env_lang and "language" not in qd:
+             qd["language"] = _env_lang
  
--# Ensure ASGI app entrypoint exists
--ok &= assert_true(os.path.exists("app/asgi_gateway.py"), "ASGI gateway present")
-+ROOT = Path(".")
+         # Ensure some model is present; default to nova-2 if none provided
+         if "model" not in qd:
+             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
  
--# Ensure index template
--ok &= assert_true(os.path.exists("templates/index.html"), "index.html present")
+         # Provide a sensible default for utterance_end_ms (2s) unless explicitly overridden
+         qd.setdefault("utterance_end_ms", "2000")
  
--# Ensure no obvious secrets committed
--bad = []
--for p in glob.glob("app/**/*.py", recursive=True):
--    txt = open(p, "r", encoding="utf-8", errors="ignore").read()
--    if "sk_live_" in txt or "aws_secret_access_key" in txt:
--        bad.append(p)
--ok &= assert_true(not bad, "No obvious secrets in source")
-+def _assert_true(condition: bool, message: str) -> bool:
-+    """Print an assertion-style message and return ``condition``."""
+         query = _p.urlencode(qd)
+         base = _p.urlunsplit(
+             (parts.scheme, parts.netloc, parts.path, query, parts.fragment)
+         )
+     except Exception:
+         pass
  
--print("\nRESULT:", "PASS" if ok else "FAIL")
--sys.exit(0 if ok else 1)
-+    if condition:
-+        print("PASS:", message)
-+        return True
+     return base
+ 
+ 
+ def _auth_header() -> str:
+-    key = os.getenv("DEEPGRAM_API_KEY", "").strip()
+-    if not key:
+-        raise RuntimeError("DEEPGRAM_API_KEY is not set")
++    key, _ = _api_key_info()
+     return f"Token {key}"
+ 
+ 
+ def _initial_config(overrides: Optional[dict] = None) -> dict:
+     """Build Configure payload with FEATURES ONLY (no audio/transport keys)."""
+     interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
+     features = {
+         "interim_results": interim,
+         "smart_format": True,
+         "punctuate": True,
+         "vad_events": True,
+         # Keep URL-only keys (like utterance_end_ms) out of Configure
+     }
+ 
+     # Allow simple boolean overrides at top-level OR nested under "features"
+     try:
+         if overrides:
+             # Merge nested features if provided
+             if isinstance(overrides.get("features"), dict):
+                 for k, v in overrides["features"].items():
+                     features[k] = v
+ 
+             # Support legacy boolean overrides at top level
+             for k in ("interim_results", "smart_format", "punctuate", "vad_events"):
+                 if k in overrides and overrides[k] is not None:
+@@ -734,203 +783,232 @@ class DeepgramClient:
+ 
+     async def connect(self) -> None:
+         global DG_LAST_URL, DG_LAST_CONFIG
+         sid = self._sid_for_log()
+         if callable(self._jlog):
+             try:
+                 self._jlog(
+                     "dg_connect_begin",
+                     sid=sid,
+                     dg_id=self._dg_id,
+                     tag=self._url_tag,
+                     already_open=bool(self._ws),
+                     closing=self._closing,
+                     closed=self._closed,
+                 )
+             except Exception:
+                 pass
+         if self._ws:
+             logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
+             return
+ 
+         url = _dg_url(self._cfg)
+         self._emit_diag("provider_open", active=True, url=url)
+ 
+         containerized = False
++        safe_url = url
+ 
+         try:
+             # Diagnostic: parse params and emit compact JSON log that shows
+             # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
+             import urllib.parse as _p
+ 
+             parts = _p.urlsplit(url)
+             q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
+             self._url_tag = q.get("tag") or None
+             transport = (self._cfg or {}).get("_transport", {}) or {}
+             containerized = bool(transport.get("containerized_opus"))
+             url_meta = {
+                 "container": transport.get("container"),
+                 "codec": transport.get("codec"),
+                 "containerized_opus": containerized,
+                 "normalized_pcm": bool(transport.get("normalized_pcm")),
+                 "raw_fallback": bool(transport.get("raw_fallback")),
+                 "omitted_params": None,
+                 "raw_params": None,
+             }
+             if containerized:
+                 # These should be absent in containerized mode
+                 omitted = []
+                 for k in ("encoding", "sample_rate", "channels"):
+                     if k not in q:
+                         omitted.append(k)
+                 url_meta["omitted_params"] = omitted
+             else:
+                 url_meta["raw_params"] = {
+                     "encoding": q.get("encoding"),
+                     "sample_rate": q.get("sample_rate"),
+                     "channels": q.get("channels"),
+                 }
+ 
+             # Build sanitized query string for telemetry without sensitive params
+             sanitized_pairs = []
+             raw_param_keys = {"encoding", "sample_rate", "channels"}
+             for key in sorted(q.keys()):
+                 if key is None:
+                     continue
+                 key_str = str(key)
+                 lower = key_str.lower()
+                 if "key" in lower or "token" in lower or "secret" in lower:
+                     continue
+                 if containerized and key_str in raw_param_keys:
+                     continue
+                 sanitized_pairs.append((key_str, q[key]))
+             sanitized_query = _p.urlencode(sanitized_pairs, doseq=True)
+             sanitized_qs = f"?{sanitized_query}" if sanitized_query else "?"
++            safe_url = f"{parts.scheme}://{parts.netloc}{parts.path}"
++            if sanitized_query:
++                safe_url = f"{safe_url}?{sanitized_query}"
++            if parts.fragment:
++                safe_url = f"{safe_url}#{parts.fragment}"
+             raw_params_absent = all(param not in q for param in raw_param_keys)
+ 
+             # Structured JSON log if _jlog is available (preferred for your admin viewer)
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_url_sanitized",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         qs=sanitized_qs,
+                         containerized_opus=containerized,
+                         raw_params_absent=raw_params_absent,
+                     )
+                 except Exception:
+                     pass
+                 try:
+                     self._jlog(
+                         "asr_url",
+                         dg_id=self._dg_id,
+                         url=url,
+                         container=url_meta.get("container"),
+                         codec=url_meta.get("codec"),
+                         containerized_opus=bool(url_meta.get("containerized_opus")),
+                         normalized_pcm=bool(url_meta.get("normalized_pcm")),
+                         raw_fallback=bool(url_meta.get("raw_fallback")),
+                         omitted_params=url_meta.get("omitted_params"),
+                         raw_params=url_meta.get("raw_params"),
+                     )
+                 except Exception:
+                     pass
+ 
+             # Keep existing human-readable info log
+             logger.info(
+                 "dg_ws_connect sid=%s url=%s containerized_opus=%s normalized_pcm=%s raw_fallback=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
+                 sid,
+                 url,
+                 containerized,
+                 url_meta.get("normalized_pcm"),
+                 url_meta.get("raw_fallback"),
+                 q.get("encoding"),
+                 q.get("sample_rate"),
+                 q.get("channels"),
+             )
+         except Exception:
+             logger.info("Deepgram connect start sid=%s url=%s", sid, url)
+ 
++        key_value, key_len = _api_key_info()
++        ws_headers = [("Authorization", f"Token {key_value}")]
++        del key_value
++        subprotocols = None
++        logger.info(
++            "Deepgram connect attempt sid=%s safe_url=%s key_len=%s subprotocols=%s",
++            sid,
++            safe_url,
++            key_len,
++            subprotocols,
++        )
++        if callable(self._jlog):
++            try:
++                self._jlog(
++                    "dg_connect_attempt",
++                    sid=sid,
++                    dg_id=self._dg_id,
++                    safe_url=safe_url,
++                    key_len=key_len,
++                    subprotocols=subprotocols,
++                )
++            except Exception:
++                pass
 +
-+    print("FAIL:", message)
-+    return False
+         start_ts = time.time()
+         if callable(self._jlog):
+             try:
+                 self._jlog(
+                     "asr_connect_start",
+                     sid=sid,
+                     dg_id=self._dg_id,
+                 )
+             except Exception:
+                 pass
+ 
+         try:
+             if DG_TEST_MODE:
+                 self._ws = _FakeWSForTests()
+                 DG_LAST_URL = url
+                 cfg_payload = _initial_config(self._cfg)
+                 DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
+                 self._open_evt.set()
+                 await self._signal_ready()
+                 logger.info("Deepgram test-mode connect sid=%s", sid)
+                 if callable(self._jlog):
+                     try:
+                         self._jlog(
+                             "dg_open",
+                             sid=sid,
+                             dg_id=self._dg_id,
+                             url=url,
+                             tag=self._url_tag,
+                             test_mode=True,
+                         )
+                     except Exception:
+                         pass
+                     try:
+                         elapsed_ms = int((time.time() - start_ts) * 1000)
+                     except Exception:
+                         elapsed_ms = 0
+                     try:
+                         self._jlog(
+                             "asr_connect_ok",
+                             sid=sid,
+                             dg_id=self._dg_id,
+                             elapsed_ms=elapsed_ms,
+                         )
+                     except Exception:
+                         pass
+                 return
+ 
+-            headers = [("Authorization", _auth_header())]
+             try:
+                 self._ws = await websockets.connect(
+                     url,
+-                    additional_headers=headers,
++                    additional_headers=ws_headers,
+                     max_size=None,
+                 )
+             except TypeError:
+                 self._ws = await websockets.connect(
+                     url,
+-                    extra_headers=headers,
++                    extra_headers=ws_headers,
+                     max_size=None,
+                 )
+ 
+             # Micro-wait to ensure the underlying socket is actually open
+             await self.wait_socket_open(
+                 timeout=float(os.getenv("DG_OPEN_MICRO_WAIT_S", "0.75"))
+             )
+ 
+             cfg_payload = _initial_config(self._cfg)
+             DG_LAST_URL = url
+             DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
+             async with self._send_lock:
+                 await self._ws.send(json.dumps(cfg_payload))
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_config_sent",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         tag=self._url_tag,
+                         keys=sorted(cfg_payload.keys()),
+                     )
+                 except Exception:
+                     pass
+ 
+@@ -950,70 +1028,139 @@ class DeepgramClient:
+                         "dg_open",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         url=url,
+                         tag=self._url_tag,
+                         containerized=containerized,
+                     )
+                 except Exception:
+                     pass
+                 try:
+                     elapsed_ms = int((time.time() - start_ts) * 1000)
+                 except Exception:
+                     elapsed_ms = 0
+                 try:
+                     self._jlog(
+                         "asr_connect_ok",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         elapsed_ms=elapsed_ms,
+                     )
+                 except Exception:
+                     pass
+         except asyncio.CancelledError:
+             raise
+         except Exception as exc:
++            diag_extra: dict[str, Any] = {}
++            header_items: list[tuple[str, str]] | None = None
++            status_code: Any = None
++            status_reason: Any = None
 +
++            if _INVALID_STATUS_TYPES and isinstance(exc, _INVALID_STATUS_TYPES):
++                response = getattr(exc, "response", None)
++                headers_obj = None
++                if response is not None:
++                    status_code = getattr(response, "status_code", None)
++                    status_reason = getattr(response, "reason_phrase", None)
++                    headers_obj = getattr(response, "headers", None)
++                else:
++                    status_code = getattr(exc, "status_code", None)
++                    status_reason = getattr(exc, "reason_phrase", None)
++                    headers_obj = getattr(exc, "headers", None)
 +
-+def _contains_secret(path: Path) -> bool:
-+    """Return ``True`` if the file contains obvious secret tokens."""
++                if headers_obj is not None:
++                    header_iter = None
++                    try:
++                        header_iter = list(headers_obj.items())
++                    except Exception:
++                        try:
++                            header_iter = list(headers_obj.raw_items())  # type: ignore[attr-defined]
++                        except Exception:
++                            header_iter = None
++                    if header_iter is not None:
++                        header_items = [(str(k), str(v)) for k, v in header_iter]
 +
-+    text = path.read_text(encoding="utf-8", errors="ignore")
-+    return "sk_live_" in text or "aws_secret_access_key" in text
++                if status_code is not None:
++                    try:
++                        diag_extra["http_status"] = int(status_code)
++                    except Exception:
++                        diag_extra["http_status"] = status_code
++                if status_reason:
++                    diag_extra["http_reason"] = str(status_reason)
++                if header_items is not None:
++                    diag_extra["http_headers"] = header_items
 +
++                logger.warning(
++                    "Deepgram connect invalid status sid=%s status=%s reason=%s headers=%s url=%s",
++                    sid,
++                    diag_extra.get("http_status"),
++                    diag_extra.get("http_reason"),
++                    header_items,
++                    safe_url,
++                )
++                if callable(self._jlog):
++                    try:
++                        self._jlog(
++                            "dg_connect_invalid_status",
++                            sid=sid,
++                            dg_id=self._dg_id,
++                            status=diag_extra.get("http_status"),
++                            reason=diag_extra.get("http_reason"),
++                            headers=header_items,
++                            url=safe_url,
++                        )
++                    except Exception:
++                        pass
 +
-+def main() -> int:
-+    ok = True
+             if callable(self._jlog):
+                 try:
+                     elapsed_ms = int((time.time() - start_ts) * 1000)
+                 except Exception:
+                     elapsed_ms = 0
++                payload = {
++                    "sid": sid,
++                    "dg_id": self._dg_id,
++                    "elapsed_ms": elapsed_ms,
++                    "code": exc.__class__.__name__,
++                }
++                for key, value in diag_extra.items():
++                    if value is not None:
++                        payload[key] = value
+                 try:
+-                    self._jlog(
+-                        "asr_connect_err",
+-                        sid=sid,
+-                        dg_id=self._dg_id,
+-                        elapsed_ms=elapsed_ms,
+-                        code=exc.__class__.__name__,
+-                    )
++                    self._jlog("asr_connect_err", **payload)
+                 except Exception:
+                     pass
 +
-+    # Ensure ASGI app entrypoint exists
-+    ok &= _assert_true(
-+        (ROOT / "app" / "asgi_gateway.py").exists(),
-+        "ASGI gateway present",
-+    )
-+
-+    # Ensure index template
-+    ok &= _assert_true(
-+        (ROOT / "templates" / "index.html").exists(),
-+        "index.html present",
-+    )
-+
-+    # Ensure no obvious secrets committed
-+    bad: list[Path] = []
-+    for path_str in glob.glob("app/**/*.py", recursive=True):
-+        path = Path(path_str)
-+        if _contains_secret(path):
-+            bad.append(path)
-+
-+    ok &= _assert_true(not bad, "No obvious secrets in source")
-+
-+    print("\nRESULT:", "PASS" if ok else "FAIL")
-+    return 0 if ok else 1
-+
-+
-+if __name__ == "__main__":
-+    sys.exit(main())
++            diag_payload = {
++                key: value for key, value in diag_extra.items() if value is not None
++            }
+             self._emit_diag(
+                 "asr_error",
+                 error=f"connect:{exc.__class__.__name__}",
+                 detail=_clip_text(str(exc), 200),
+                 url=url,
++                **diag_payload,
+             )
+             raise
+ 
+     async def close(
+         self,
+         wait_for_final: bool = True,
+         timeout: Optional[float] = None,
+         linger_ms: Optional[int] = None,
+     ) -> None:
+         """Graceful shutdown:
+         1) Drain queued audio (budget-based retry) BEFORE CloseStream
+         2) Send CloseStream
+         3) Optionally wait for final
+         4) Close socket
+         """
+         if self._closed:
+             if not self._diag_end_emitted:
+                 self._emit_diag("end", active=False, had_result=self._had_result())
+                 self._diag_end_emitted = True
+             return
+         if self._closing:
+             return
+         self._closing = True
+         sid = self._sid_for_log()
+         logger.info(
