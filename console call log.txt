@@ -1,137 +1,131 @@
-[admin-diagnostics] 03:22:57 starting diagnostic for session=54d94123-9439-4960-85d8-9292223ee092
-voice.js:74 [voice] mic_request_perm {event: 'mic_request_perm', constraints: {…}}
-voice.js:74 [voice] mic_perm_granted {event: 'mic_perm_granted'}
-voice.js:74 [voice] mic_device_selected {event: 'mic_device_selected', label: 'Microphone Array (Intel® Smart Sound Technology for Digital Microphones)', sampleRate: 48000, channels: 1}
-voice.js:74 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
-ws.js?v=v20250911b:297 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=v20250911b', version: 'v20250911b', flags: undefined, reconnectEnabled: false, sessionStarted: false}
-ws.js?v=v20250911b:301 [ws] openWS options= {reconnect: false} reconnect= false
-admin_console.js:886 [admin-diagnostics] 03:22:58 ready
-admin_console.js:886 [admin-diagnostics] 03:22:58 {"ts": 1759807378.9379463, "kind": "ping"}
-admin_console.js:572 [Violation] 'message' handler took 311ms
-admin_console.js:886 [admin-diagnostics] 03:22:58 {"ts": 1759807378.2790618, "step": 1, "kind": "admin_diag", "route": null, "label": "diagnostic_start", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:886 [admin-diagnostics] 03:22:58 {"ts": 1759807378.8171372, "step": 2, "kind": "ws_scope_arrived", "route": null, "label": "ws_scope_arrived", "path": "/ws/v1/chat"}
-admin_console.js:886 [admin-diagnostics] 03:22:58 {"ts": 1759807378.8173256, "step": 3, "kind": "ws_handshake_enter", "route": null, "label": "ws_handshake_enter", "path": "/ws/v1/chat", "raw_query": "session_id=54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:886 [admin-diagnostics] 03:22:58 {"ts": 1759807378.8177354, "step": 4, "kind": "ws_conn_open", "route": null, "label": "ws_conn_open", "sid": "54d94123-9439-4960-85d8-9292223ee092", "conn_id": "40bbbe7c66a7406da49a43e562edd227", "client_ip": "170.85.73.7", "path": "/ws/v1/chat", "query_string": "session_id=54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:886 [admin-diagnostics] 03:22:58 {"ts": 1759807378.817737, "step": 5, "kind": "ws_conn_active", "route": null, "label": "ws_conn_active", "conn_id": "40bbbe7c66a7406da49a43e562edd227", "active": 1}
-admin_console.js:886 [admin-diagnostics] 03:22:58 {"ts": 1759807378.930469, "step": 6, "kind": "ws_json_recv", "route": null, "label": "ws_json_recv", "sid": "54d94123-9439-4960-85d8-9292223ee092", "type": "Configure"}
-admin_console.js:886 [admin-diagnostics] 03:22:58 {"ts": 1759807378.9305198, "step": 7, "kind": "greet:reset", "route": "/ws/v1/chat", "label": "greet:reset /ws/v1/chat", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:886 [admin-diagnostics] 03:22:58 {"ts": 1759807378.9327304, "step": 8, "kind": "admin_diag", "route": null, "label": "step_ws_ok", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:886 [admin-diagnostics] 03:22:58 {"ts": 1759807378.9343536, "step": 9, "kind": "admin_diag", "route": null, "label": "step_greet_sent", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-[Violation] Forced reflow while executing JavaScript took 320ms
-admin_console.js:886 [admin-diagnostics] 03:23:03 {"ts": 1759807384.0005686, "kind": "ping"}
-admin_console.js:886 [admin-diagnostics] 03:23:07 assistant_chunk: 1.
-admin_console.js:886 [admin-diagnostics] 03:23:07 suggestions
-admin_console.js:886 [admin-diagnostics] 03:23:07 assistant_end
-admin_console.js:886 [admin-diagnostics] 03:23:08 {"ts": 1759807388.192654, "step": 10, "kind": "greet:resp", "route": null, "label": "greet:resp", "session_id": "54d94123-9439-4960-85d8-9292223ee092", "turn_id": "a184ad4c3aba42179b6f9029c898a29b", "audio_scheduled": true}
-admin_console.js:886 [admin-diagnostics] 03:23:08 {"ts": 1759807388.2543147, "step": 11, "kind": "admin_diag", "route": null, "label": "step_greet_ok", "session_id": "54d94123-9439-4960-85d8-9292223ee092", "frame_type": "assistant_chunk"}
-admin_console.js:886 [admin-diagnostics] 03:23:08 {"ts": 1759807389.0357988, "kind": "ping"}
-admin_console.js:886 [admin-diagnostics] 03:23:08 assistant_audio chunks=1
-admin_console.js:886 [admin-diagnostics] 03:23:08 assistant_audio chunks=1 (last)
-admin_console.js:886 [admin-diagnostics] 03:23:08 UtteranceEnd
-admin_console.js:886 [admin-diagnostics] 03:23:08 state
-voice.js:74 [voice] mic_start {event: 'mic_start', sampleRate: 48000, pollMs: 33}
-voice.js:74 [voice] vad_speech_start {event: 'vad_speech_start'}
-voice.js:370 [voice] recorder started {mime: 'audio/webm; codecs=opus', timeslice: 150}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2094, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2094}
-admin_console.js:886 [admin-diagnostics] 03:23:11 state
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-admin_console.js:886 [admin-diagnostics] 03:23:12 state
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-3admin_console.js:886 [admin-diagnostics] 03:23:12 state
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-admin_console.js:886 [admin-diagnostics] 03:23:12 {"ts": 1759807392.5579357, "step": 12, "kind": "asr:start", "route": null, "label": "asr:start", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-admin_console.js:886 [admin-diagnostics] 03:23:13 Results text="The admin voice"
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-admin_console.js:886 [admin-diagnostics] 03:23:13 {"ts": 1759807393.644771, "step": 13, "kind": "asr:first_partial", "route": null, "label": "asr:first_partial", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-admin_console.js:886 [admin-diagnostics] 03:23:13 {"ts": 1759807394.1875906, "kind": "ping"}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-admin_console.js:886 [admin-diagnostics] 03:23:14 Results text="The admin voice diagnostic chip."
-admin_console.js:886 [admin-diagnostics] 03:23:14 Results final text="The admin voice diagnostic chip."
-admin_console.js:886 [admin-diagnostics] 03:23:14 UtteranceEnd
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-admin_console.js:886 [admin-diagnostics] 03:23:14 {"ts": 1759807394.4939892, "step": 14, "kind": "asr:first_partial", "route": null, "label": "asr:first_partial", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:886 [admin-diagnostics] 03:23:14 {"ts": 1759807394.5542264, "step": 15, "kind": "asr:final", "route": null, "label": "asr:final", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-admin_console.js:886 [admin-diagnostics] 03:23:14 assistant_chunk: What should we clarify so I can help?
-admin_console.js:886 [admin-diagnostics] 03:23:14 suggestions
-admin_console.js:886 [admin-diagnostics] 03:23:14 assistant_end
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-admin_console.js:886 [admin-diagnostics] 03:23:15 Results text="Run the admin"
-admin_console.js:886 [admin-diagnostics] 03:23:15 {"ts": 1759807395.349179, "step": 16, "kind": "asr:first_partial", "route": null, "label": "asr:first_partial", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:886 [admin-diagnostics] 03:23:15 {"ts": 1759807395.3494074, "step": 17, "kind": "ws_bin_recv", "route": null, "label": "ws_bin_recv", "sid": "54d94123-9439-4960-85d8-9292223ee092", "frames_in": 20, "bytes_total": 57156}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-4admin_console.js:886 [admin-diagnostics] 03:23:15 assistant_audio chunks=1
-admin_console.js:886 [admin-diagnostics] 03:23:15 assistant_audio chunks=1 (last)
-admin_console.js:886 [admin-diagnostics] 03:23:15 UtteranceEnd
-admin_console.js:886 [admin-diagnostics] 03:23:15 state
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-admin_console.js:886 [admin-diagnostics] 03:23:15 Results text="Run the admin voice diagnostic"
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-admin_console.js:886 [admin-diagnostics] 03:23:16 Results final text="Run the admin voice diagnostic"
-admin_console.js:886 [admin-diagnostics] 03:23:16 UtteranceEnd
-admin_console.js:886 [admin-diagnostics] 03:23:16 {"ts": 1759807396.3283877, "step": 18, "kind": "asr:first_partial", "route": null, "label": "asr:first_partial", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-admin_console.js:886 [admin-diagnostics] 03:23:16 {"ts": 1759807396.5616095, "step": 19, "kind": "asr:final", "route": null, "label": "asr:final", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 2898}
-voice.js:74 [voice] vad_speech_end {event: 'vad_speech_end', reason: 'vad_silence'}
-voice.js:74 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'vad_silence'}
-ws.js?v=v20250911b:466 [ws] sending audio chunk {bytes: 1931, mime: 'audio/webm;codecs=opus'}
-voice.js:309 [voice] streamed audio chunk {bytes: 1931}
-voice.js:346 [voice] recorder stopped {bytesSent: 82271, mime: 'audio/webm; codecs=opus'}
-admin_console.js:886 [admin-diagnostics] 03:23:16 assistant_chunk: What should we clarify so I can help?
-admin_console.js:886 [admin-diagnostics] 03:23:16 suggestions
-admin_console.js:886 [admin-diagnostics] 03:23:16 assistant_end
-4admin_console.js:886 [admin-diagnostics] 03:23:16 assistant_audio chunks=1
-admin_console.js:886 [admin-diagnostics] 03:23:16 assistant_audio chunks=1 (last)
-admin_console.js:886 [admin-diagnostics] 03:23:16 UtteranceEnd
-admin_console.js:886 [admin-diagnostics] 03:23:16 state
-admin_console.js:886 [admin-diagnostics] 03:23:16 {"ts": 1759807396.9241912, "step": 20, "kind": "ws_json_recv", "route": null, "label": "ws_json_recv", "sid": "54d94123-9439-4960-85d8-9292223ee092", "type": "CloseStream"}
-admin_console.js:886 [admin-diagnostics] 03:23:16 {"ts": 1759807396.9249969, "step": 21, "kind": "admin_diag", "route": null, "label": "step_user_ok", "session_id": "54d94123-9439-4960-85d8-9292223ee092", "duration_ms": 7429}
-admin_console.js:886 [admin-diagnostics] 03:23:18 keepalive
-admin_console.js:886 [admin-diagnostics] 03:23:19 {"ts": 1759807399.365185, "kind": "ping"}
-admin_console.js:886 [admin-diagnostics] 03:23:24 {"ts": 1759807404.482297, "kind": "ping"}
-3admin_console.js:886 [admin-diagnostics] 03:23:24 diagnostic_audio
-admin_console.js:886 [admin-diagnostics] 03:23:28 [error] Timed out waiting for ASR final.
-voice.js:74 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
+[admin-diagnostics] 21:13:57 starting diagnostic for session=54d94123-9439-4960-85d8-9292223ee092
+voice.js:74 [voice] mic_request_perm Object
+voice.js:74 [voice] mic_perm_granted Object
+voice.js:74 [voice] mic_device_selected Object
+voice.js:74 [voice] mic_stop Object
+ws.js?v=v20250911b:297 [ws] openWS build Object
+ws.js?v=v20250911b:301 [ws] openWS options= Object reconnect= false
+admin_console.js:1040 [admin-diagnostics] 21:13:57 ready
+admin_console.js:1040 [admin-diagnostics] 21:13:57 {"ts": 1759871638.112415, "kind": "ping"}
+admin_console.js:1040 [admin-diagnostics] 21:13:57 {"ts": 1759871637.4303749, "step": 1, "kind": "admin_diag", "route": null, "label": "diagnostic_start", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:1040 [admin-diagnostics] 21:13:57 {"ts": 1759871637.992757, "step": 2, "kind": "ws_scope_arrived", "route": null, "label": "ws_scope_arrived", "path": "/ws/v1/chat"}
+admin_console.js:1040 [admin-diagnostics] 21:13:57 {"ts": 1759871637.9929726, "step": 3, "kind": "ws_handshake_enter", "route": null, "label": "ws_handshake_enter", "path": "/ws/v1/chat", "raw_query": "session_id=54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:1040 [admin-diagnostics] 21:13:57 {"ts": 1759871637.994235, "step": 4, "kind": "ws_conn_open", "route": null, "label": "ws_conn_open", "sid": "54d94123-9439-4960-85d8-9292223ee092", "conn_id": "37fec896e9d24b7eb7f2f6473f9687ff", "client_ip": "170.85.73.7", "path": "/ws/v1/chat", "query_string": "session_id=54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:1040 [admin-diagnostics] 21:13:57 {"ts": 1759871637.9942372, "step": 5, "kind": "ws_conn_active", "route": null, "label": "ws_conn_active", "conn_id": "37fec896e9d24b7eb7f2f6473f9687ff", "active": 1}
+admin_console.js:1040 [admin-diagnostics] 21:13:57 {"ts": 1759871638.106852, "step": 6, "kind": "ws_json_recv", "route": null, "label": "ws_json_recv", "sid": "54d94123-9439-4960-85d8-9292223ee092", "type": "Configure"}
+admin_console.js:1040 [admin-diagnostics] 21:13:57 {"ts": 1759871638.1068969, "step": 7, "kind": "greet:reset", "route": "/ws/v1/chat", "label": "greet:reset /ws/v1/chat", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:1040 [admin-diagnostics] 21:13:57 {"ts": 1759871638.1096206, "step": 8, "kind": "admin_diag", "route": null, "label": "step_ws_ok", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:1040 [admin-diagnostics] 21:13:57 {"ts": 1759871638.1104946, "step": 9, "kind": "admin_diag", "route": null, "label": "step_greet_sent", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:1040 [admin-diagnostics] 21:14:03 {"ts": 1759871643.1806502, "kind": "ping"}
+admin_console.js:1040 [admin-diagnostics] 21:14:08 {"ts": 1759871648.3869443, "kind": "ping"}
+admin_console.js:1040 [admin-diagnostics] 21:14:09 assistant_chunk: 1.
+admin_console.js:1040 [admin-diagnostics] 21:14:09 suggestions
+admin_console.js:1040 [admin-diagnostics] 21:14:09 assistant_end
+admin_console.js:1040 [admin-diagnostics] 21:14:09 {"ts": 1759871649.831525, "step": 10, "kind": "greet:resp", "route": null, "label": "greet:resp", "session_id": "54d94123-9439-4960-85d8-9292223ee092", "turn_id": "b58f3dc4fce74e3487eea5c07c0d494a", "audio_scheduled": true}
+admin_console.js:1040 [admin-diagnostics] 21:14:09 {"ts": 1759871649.9298942, "step": 11, "kind": "admin_diag", "route": null, "label": "step_greet_ok", "session_id": "54d94123-9439-4960-85d8-9292223ee092", "frame_type": "assistant_chunk"}
+admin_console.js:1040 [admin-diagnostics] 21:14:10 assistant_audio chunks=1
+admin_console.js:1040 [admin-diagnostics] 21:14:10 assistant_audio chunks=1 (last)
+admin_console.js:1040 [admin-diagnostics] 21:14:10 UtteranceEnd
+admin_console.js:1040 [admin-diagnostics] 21:14:10 state
+voice.js:74 [voice] mic_start Object
+voice.js:74 [voice] vad_speech_start Object
+voice.js:370 [voice] recorder started Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+admin_console.js:1040 [admin-diagnostics] 21:14:12 state
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+admin_console.js:1040 [admin-diagnostics] 21:14:13 state
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+3admin_console.js:1040 [admin-diagnostics] 21:14:13 state
+admin_console.js:1040 [admin-diagnostics] 21:14:13 {"ts": 1759871653.6305935, "kind": "ping"}
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+admin_console.js:1040 [admin-diagnostics] 21:14:13 {"ts": 1759871653.7328753, "step": 12, "kind": "asr:start", "route": null, "label": "asr:start", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+admin_console.js:1040 [admin-diagnostics] 21:14:14 Results text="The admin voice"
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+admin_console.js:1040 [admin-diagnostics] 21:14:14 {"ts": 1759871654.6976871, "step": 13, "kind": "asr:first_partial", "route": null, "label": "asr:first_partial", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+admin_console.js:1040 [admin-diagnostics] 21:14:15 Results text="The admin voice diagnostic chip."
+admin_console.js:1040 [admin-diagnostics] 21:14:15 Results final text="The admin voice diagnostic chip."
+admin_console.js:1040 [admin-diagnostics] 21:14:15 UtteranceEnd
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+admin_console.js:1040 [admin-diagnostics] 21:14:15 {"ts": 1759871655.4819124, "step": 14, "kind": "asr:first_partial", "route": null, "label": "asr:first_partial", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:1040 [admin-diagnostics] 21:14:15 {"ts": 1759871655.5410564, "step": 15, "kind": "asr:final", "route": null, "label": "asr:final", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:1040 [admin-diagnostics] 21:14:15 {"ts": 1759871655.5416298, "step": 16, "kind": "nlu", "route": null, "label": "nlu", "event": "nlu", "intent": "broad_topic_help", "confidence": 0.4, "slots": {"products": []}, "text": "The admin voice diagnostic chip.", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+admin_console.js:1040 [admin-diagnostics] 21:14:15 assistant_chunk: What should we clarify so I can help?
+admin_console.js:1040 [admin-diagnostics] 21:14:15 suggestions
+admin_console.js:1040 [admin-diagnostics] 21:14:15 assistant_end
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+admin_console.js:1040 [admin-diagnostics] 21:14:16 Results text="Run the admin"
+admin_console.js:1040 [admin-diagnostics] 21:14:16 {"ts": 1759871656.3499842, "step": 17, "kind": "asr:first_partial", "route": null, "label": "asr:first_partial", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+admin_console.js:1040 [admin-diagnostics] 21:14:16 {"ts": 1759871656.5305014, "step": 18, "kind": "ws_bin_recv", "route": null, "label": "ws_bin_recv", "sid": "54d94123-9439-4960-85d8-9292223ee092", "frames_in": 20, "bytes_total": 57156}
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+4admin_console.js:1040 [admin-diagnostics] 21:14:16 assistant_audio chunks=1
+admin_console.js:1040 [admin-diagnostics] 21:14:16 assistant_audio chunks=1 (last)
+admin_console.js:1040 [admin-diagnostics] 21:14:16 UtteranceEnd
+admin_console.js:1040 [admin-diagnostics] 21:14:16 state
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+admin_console.js:1040 [admin-diagnostics] 21:14:16 Results text="Run the admin voice diagnostic"
+admin_console.js:1040 [admin-diagnostics] 21:14:17 {"ts": 1759871657.2189233, "step": 19, "kind": "asr:first_partial", "route": null, "label": "asr:first_partial", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+admin_console.js:1040 [admin-diagnostics] 21:14:17 Results final text="Run the admin voice diagnostic"
+admin_console.js:1040 [admin-diagnostics] 21:14:17 UtteranceEnd
+admin_console.js:1040 [admin-diagnostics] 21:14:17 {"ts": 1759871657.583672, "step": 20, "kind": "asr:final", "route": null, "label": "asr:final", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+admin_console.js:1040 [admin-diagnostics] 21:14:17 {"ts": 1759871657.5838404, "step": 21, "kind": "nlu", "route": null, "label": "nlu", "event": "nlu", "intent": "broad_topic_help", "confidence": 0.4, "slots": {"products": []}, "text": "Run the admin voice diagnostic", "session_id": "54d94123-9439-4960-85d8-9292223ee092"}
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+voice.js:74 [voice] vad_speech_end Object
+voice.js:74 [voice] mic_stop Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+voice.js:309 [voice] streamed audio chunk Object
+voice.js:346 [voice] recorder stopped Object
+admin_console.js:1040 [admin-diagnostics] 21:14:17 keepalive
+admin_console.js:1040 [admin-diagnostics] 21:14:18 {"ts": 1759871658.0692072, "step": 22, "kind": "ws_json_recv", "route": null, "label": "ws_json_recv", "sid": "54d94123-9439-4960-85d8-9292223ee092", "type": "CloseStream"}
+admin_console.js:1040 [admin-diagnostics] 21:14:18 {"ts": 1759871658.0699418, "step": 23, "kind": "admin_diag", "route": null, "label": "step_user_ok", "session_id": "54d94123-9439-4960-85d8-9292223ee092", "duration_ms": 6834}
+admin_console.js:1040 [admin-diagnostics] 21:14:18 {"ts": 1759871658.8501065, "kind": "ping"}
+admin_console.js:1040 [admin-diagnostics] 21:14:23 {"ts": 1759871663.9568446, "kind": "ping"}
+3admin_console.js:1040 [admin-diagnostics] 21:14:26 diagnostic_audio
+admin_console.js:1040 [admin-diagnostics] 21:14:28 {"ts": 1759871669.0791209, "kind": "ping"}
+admin_console.js:1040 [admin-diagnostics] 21:14:29 [error] Timed out waiting for ASR final.
+voice.js:74 [voice] mic_stop Object
