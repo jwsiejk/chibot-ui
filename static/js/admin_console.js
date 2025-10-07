@@ -126,6 +126,14 @@ function bootstrap() {
   const wsLogEl = root.querySelector('#diag-ws-log');
   const speakCard = root.querySelector('#speak-card');
   const speakStateEl = root.querySelector('#speak-state');
+  const policyNodes = {
+    container: document.getElementById('flow-live-card'),
+    intent: document.getElementById('nlu-intent'),
+    guardrail: document.getElementById('nlu-guardrail'),
+    move: document.getElementById('nlu-move'),
+    toolplan: document.getElementById('nlu-toolplan'),
+    timestamp: document.getElementById('nlu-updated'),
+  };  
 
   const stepMap = new Map();
   for (const step of STEP_DEFS) {
@@ -162,6 +170,8 @@ function bootstrap() {
     responseResolve: null,
     responseReject: null,
     stopMeter: null,
+    policyNodes,
+    policySnapshot: null,    
   };
 
   resetView(state);
@@ -288,6 +298,7 @@ function resetView(state) {
   if (state.adminLogEl) state.adminLogEl.textContent = '';
   if (state.wsLogEl) state.wsLogEl.textContent = '';
   if (state.runMetaEl) state.runMetaEl.textContent = '';
+  resetPolicySnapshot(state);  
 }
 
 async function ensureWsOpen(timeoutMs = 8000) {
@@ -493,34 +504,66 @@ function handleWSFrame(state, frame) {
 
 function handleAdminEvent(state, evt) {
   if (!evt) return;
+  
+  const kindTag = String(evt.kind || '').toLowerCase();
+  const labelTag = String(evt.label || '').toLowerCase();
 
-  const rawKind = (evt.kind || '').toString();
-  const rawLabel = (evt.label || '').toString();
-  const tag = (rawLabel || rawKind || '').toLowerCase();
+  maybeHandleASREvent(state, evt, kindTag, labelTag);
+  maybeHandlePolicyEvent(state, evt, kindTag, labelTag);
+}
 
-  if (!tag.startsWith('asr')) return;
+function maybeHandleASREvent(state, evt, kindTag, labelTag) {
+  const combined = `${kindTag} ${labelTag}`.trim();
+  const looksLikeASR =
+    /^asr/.test(kindTag) ||
+    /^asr/.test(labelTag) ||
+    /\basr[._-]/.test(kindTag) ||
+    /\basr[._-]/.test(labelTag);
+  if (!looksLikeASR) return false;
+
+  const tag = combined || 'asr';
 
   if (tag.includes('error')) {
     const message = evt.error ? `ASR error: ${evt.error}` : 'ASR error reported.';
     updateASRStatus(state, { status: 'error', message, error: true });
-    // Do not hard-fail; a WS final may still arrive.
-    return;
+    return true;
   }
 
   if (tag.includes('final')) {
     updateASRStatus(state, { status: 'done', final: true });
     state.asrResolve?.(evt);
-    return;
+    return true;
   }
 
   if (tag.includes('partial')) {
     updateASRStatus(state, { status: 'active', partialsDelta: 1 });
-    return;
+    return true;
   }
 
   if (tag.includes('start')) {
     updateASRStatus(state, { status: 'active', message: 'ASR stream started.' });
+    return true;    
   }
+  
+  return false;
+}
+
+function maybeHandlePolicyEvent(state, evt, kindTag, labelTag) {
+  if (!state?.policyNodes?.container) return false;
+
+  const combined = `${kindTag} ${labelTag}`.trim();
+  const isPolicySignal =
+    /\bnlu/.test(combined) ||
+    /\bllm/.test(combined) ||
+    /guardrail/.test(combined) ||
+    /teacher/.test(combined) ||
+    /move/.test(combined) ||
+    /tool ?plan/.test(combined) ||
+    /policy/.test(combined);
+  if (!isPolicySignal) return false;
+
+  updatePolicySnapshot(state, evt, combined);
+  return true;
 }
 
 function startAdminSSE(state, onMatch) {
@@ -561,8 +604,231 @@ function updateASRStatus(state, { status, partialsDelta = 0, final = false, tran
   const detail = parts.length ? parts.join(' • ') : (message || 'Waiting for ASR activity…');
   const resolvedStatus = status || (error ? 'error' : (state.asr.finals ? 'done' : (state.asr.partials ? 'active' : 'pending')));
   setStepStatus(state, 'asr', resolvedStatus, detail);
+}  
+
+function resetPolicySnapshot(state) {
+  if (!state) return;
+  state.policySnapshot = {
+    updatedAt: null,
+    intent: null,
+    guardrail: null,
+    move: null,
+    toolplan: null,
+  };
+  renderPolicySnapshot(state);
 }
 
+function updatePolicySnapshot(state, evt, combinedTag = '') {
+  if (!state?.policyNodes) return;
+  if (!state.policySnapshot) resetPolicySnapshot(state);
+
+  const snapshot = state.policySnapshot;
+  const data = extractEventData(evt);
+  let touched = false;
+  const lowerCombined = (combinedTag || '').toLowerCase();
+
+  const labelCandidate = typeof data.label === 'string' ? data.label : undefined;
+  const eventLabelCandidate = typeof evt.label === 'string' ? evt.label : undefined;
+  const sanitizedDataLabel = sanitizeIntentLabel(labelCandidate);
+  const sanitizedEventLabel = sanitizeIntentLabel(eventLabelCandidate);
+
+  const intentValue = firstDefined(
+    data.intent,
+    evt.intent,
+    sanitizedEventLabel,
+    data.name,
+    sanitizedDataLabel
+  );
+  const confidenceValue = firstDefined(
+    data.confidence,
+    evt.confidence,
+    data.score,
+    evt.score,
+    data.probability,
+    evt.probability
+  );
+  if (intentValue) {
+    snapshot.intent = {
+      value: String(intentValue),
+      confidence: normalizeConfidence(confidenceValue),
+    };
+    touched = true;
+  }
+
+  let guardrailDecision = firstDefined(
+    data.decision,
+    evt.decision,
+    data.outcome,
+    data.status,
+    evt.status,
+    data.guardrail
+  );
+  if (!guardrailDecision && /guardrail/.test(lowerCombined)) {
+    if (lowerCombined.includes('allow')) guardrailDecision = 'allow';
+    else if (lowerCombined.includes('block')) guardrailDecision = 'block';
+    else if (lowerCombined.includes('pass')) guardrailDecision = 'pass';
+    else if (lowerCombined.includes('fail')) guardrailDecision = 'fail';
+  }
+
+  const guardrailReason = firstDefined(
+    data.reason,
+    evt.reason,
+    data.detail,
+    data.details,
+    data.rule,
+    data.message
+  );
+  if (guardrailDecision || guardrailReason) {
+    snapshot.guardrail = {
+      decision: guardrailDecision ? String(guardrailDecision) : null,
+      reason: guardrailReason ? String(guardrailReason) : null,
+    };
+    touched = true;
+  }
+
+  let moveValue = firstDefined(
+    data.teacher_move,
+    evt.teacher_move,
+    data.move,
+    evt.move,
+    data.action,
+    evt.action
+  );
+  if (!moveValue && /teacher/.test(lowerCombined)) {
+    const match = lowerCombined.match(/teacher[._-]?move[=: ]?([a-z0-9_]+)/);
+    if (match && match[1]) moveValue = match[1];
+  }
+  if (moveValue) {
+    snapshot.move = { value: String(moveValue) };
+    touched = true;
+  }
+
+  let planValue = firstDefined(
+    data.toolplan,
+    evt.toolplan,
+    data.tool_plan,
+    data.tool_plan_summary,
+    data.plan,
+    evt.plan
+  );
+  if (planValue === undefined && /tool ?plan/.test(lowerCombined)) {
+    const match = lowerCombined.match(/tool ?plan[=: ]?([a-z0-9_]+)/);
+    if (match && match[1]) planValue = match[1];
+  }
+  if (planValue !== undefined) {
+    snapshot.toolplan = { value: planValue };
+    touched = true;
+  }
+
+  if (touched) {
+    snapshot.updatedAt = new Date();
+    renderPolicySnapshot(state);
+  }
+}
+
+function renderPolicySnapshot(state) {
+  const nodes = state?.policyNodes;
+  if (!nodes) return;
+  const snapshot = state.policySnapshot || {};
+
+  setFlowText(nodes.intent, formatIntentDisplay(snapshot.intent));
+  setFlowText(nodes.guardrail, formatGuardrailDisplay(snapshot.guardrail));
+  setFlowText(nodes.move, formatMoveDisplay(snapshot.move));
+  setFlowText(nodes.toolplan, formatToolplanDisplay(snapshot.toolplan));
+  if (nodes.timestamp) {
+    nodes.timestamp.textContent = snapshot.updatedAt ? formatTimestamp(snapshot.updatedAt) : '—';
+  }
+}
+
+function extractEventData(evt) {
+  if (!evt || typeof evt !== 'object') return {};
+  const merged = {};
+  const sources = [evt.data, evt.payload, evt.details, evt.context];
+  for (const source of sources) {
+    if (!source || typeof source !== 'object') continue;
+    for (const [key, value] of Object.entries(source)) {
+      if (!(key in merged)) merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+function setFlowText(node, value) {
+  if (!node) return;
+  const display = value === undefined || value === null || value === '' ? '—' : String(value);
+  node.textContent = display;
+}
+
+function firstDefined(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'string' && !value.trim()) continue;
+    return value;
+  }
+  return undefined;
+}
+
+function normalizeConfidence(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const num = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(num)) return null;
+  return num;
+}
+
+function formatConfidence(conf) {
+  const num = normalizeConfidence(conf);
+  if (num === null) return null;
+  if (num <= 1) return `${Math.round(num * 100)}%`;
+  if (num <= 100) return `${Math.round(num)}%`;
+  return `${num}`;
+}
+
+function formatIntentDisplay(entry) {
+  if (!entry || !entry.value) return null;
+  const confidence = formatConfidence(entry.confidence);
+  return confidence ? `${entry.value} (${confidence})` : entry.value;
+}
+
+function sanitizeIntentLabel(label) {
+  if (typeof label !== 'string') return undefined;
+  const trimmed = label.trim();
+  if (!trimmed) return undefined;
+  const lower = trimmed.toLowerCase();
+  if (lower === 'nlu.intent' || lower === 'intent' || lower === 'nlu.intent.detect') return undefined;
+  return trimmed;
+}
+
+function formatGuardrailDisplay(entry) {
+  if (!entry) return null;
+  const pieces = [];
+  if (entry.decision) pieces.push(entry.decision);
+  if (entry.reason && entry.reason !== entry.decision) pieces.push(entry.reason);
+  return pieces.length ? pieces.join(' — ') : null;
+}
+
+function formatMoveDisplay(entry) {
+  if (!entry || !entry.value) return null;
+  return entry.value;
+}
+
+function formatToolplanDisplay(entry) {
+  if (!entry) return null;
+  const value = entry.value;
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string') return value;
+  try {
+    const json = JSON.stringify(value);
+    return json.length > 160 ? `${json.slice(0, 157)}…` : json;
+  } catch {
+    return String(value);
+  }
+}
+
+function formatTimestamp(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+  
 function cleanupRun(state) {
   try { disarmVAD(); } catch {}
   try { closeWS(1000, 'admin_diag_end'); } catch {}
