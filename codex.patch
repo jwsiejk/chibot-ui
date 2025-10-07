@@ -1,50 +1,100 @@
-diff --git a/app/obs/nlu_logging.py b/app/obs/nlu_logging.py
-index e32339fad8cafcc4c27ac5fd33836e93674f9766..e9dbb971fd3fb08ca0f10bea9c7f129fbd63d97c 100644
---- a/app/obs/nlu_logging.py
-+++ b/app/obs/nlu_logging.py
-@@ -1,36 +1,44 @@
- from __future__ import annotations
+diff --git a/templates/admin_console.html b/templates/admin_console.html
+index 5a891d4685a966d7bc3d9825492e0068b1fcdfb4..4bae11a02a8ea44b05ea06bc5d33f43c7665cbba 100644
+--- a/templates/admin_console.html
++++ b/templates/admin_console.html
+@@ -42,65 +42,91 @@
+ <button data-tab="diag">Diagnostics</button>
+ </div>
+ <!-- UX -->
+ <section class="panel active" id="tab-ux">
+ <h3>User Experience</h3>
+ <div class="grid">
+ <label>Theme
+         <select id="theme">
+ <option>light</option><option>dark</option><option>system</option>
+ </select>
+ </label>
+ <label>Show instruction strip <input id="show_instruction_strip" type="checkbox"/></label>
+ <label>Show state dots <input id="show_state_dots" type="checkbox"/></label>
+ <label>Suggestions enabled <input id="suggestions_enabled" type="checkbox"/></label>
+ <label>Suggestions — max items <input id="suggestions_max_items" min="0" type="number" value="4"/></label>
+ <label>Suggestions — max words <input id="suggestions_max_words" min="1" type="number" value="7"/></label>
+ <label>Nudge delay (ms) <input id="nudge_delay_ms" type="number" value="4200"/></label>
+ <label>Nudge backoff after ignored <input id="nudge_backoff_after_ignored" type="number" value="2"/></label>
+ <label>WS ping interval (ms) <input id="ws_ping_interval_ms" type="number" value="15000"/></label>
+ <label>WS idle timeout (ms) <input id="ws_idle_timeout_ms" type="number" value="60000"/></label>
+ </div>
+ <div class="actions" style="margin-top:10px"><button class="btn primary" id="save-ux">Save</button></div>
+ </section>
+ <!-- Flow -->
+ <section class="panel" id="tab-flow">
+-<h3>Conversational Flow</h3>
+-<div class="grid">
++  <h3>Conversational Flow</h3>
++  <div class="grid">
+ <label>Teacher move — summarize_next_actions (0..1) <input id="tm_summarize" max="1" min="0" step="0.05" type="number" value="0.6"/></label>
+ <label>Teacher move — check_understanding (0..1) <input id="tm_check" max="1" min="0" step="0.05" type="number" value="0.5"/></label>
+ <label>Teacher move — visualize (0..1) <input id="tm_visualize" max="1" min="0" step="0.05" type="number" value="0.2"/></label>
  
- from dataclasses import dataclass, field
- from typing import Any, Dict, Iterable, List, Optional, Sequence
- 
- import time
- 
- from ..config import Settings, load_settings
- from ..db import db
- from ..security.redaction import redact_pii
--from . import jlog as _jlog
-+
-+try:
-+    from .. import obs as _obs
-+except ImportError:  # pragma: no cover - optional dependency
-+    _obs = None
-+
-+_jlog = getattr(_obs, "jlog", None)
-+if _jlog is None:
-+    from . import jlog as _jlog
- 
- 
- def _coerce_bool(value: Any) -> bool:
-     if isinstance(value, str):
-         lowered = value.strip().lower()
-         if lowered in {"1", "true", "yes", "on"}:
-             return True
-         if lowered in {"0", "false", "no", "off"}:
-             return False
-     try:
-         return bool(value)
-     except Exception:
-         return False
- 
- 
- def _logging_enabled(settings: Settings, cfg: Dict[str, Any]) -> bool:
-     env_toggle = getattr(settings, "enable_nlu_logging", None)
-     if env_toggle is False:
-         return False
- 
-     if "nlu_logging_enabled" not in cfg:
-         return True
- 
-     value = cfg.get("nlu_logging_enabled")
-     if value is None:
+ <label>Enable audio (TTS) <input id="feature_audio" type="checkbox"/></label>
+ <label>Confirm (ms) <input id="confirm_ms" type="number" value="420"/></label>
+ <label>Min speech (ms) <input id="min_speech_ms" type="number" value="220"/></label>
+ <label>Max turn seconds <input id="max_turn_seconds" type="number" value="90"/></label>
+ <label>TTS voice ID <input id="tts_voice_id" placeholder="ElevenLabs voice id"/></label>
+ <label>TTS output format <input id="tts_output_format" placeholder="mp3_44100_128"/></label>
+ <label>TTS model id <input id="tts_model_id" placeholder="eleven_multilingual_v2"/></label>
+-</div>
+-<div class="actions"><button class="btn primary" id="save-flow">Save</button></div>
++  </div>
++  <div class="flow-live-section">
++    <div class="flow-live-card" id="flow-live-card">
++      <div class="flow-live-header">
++        <h4>Live diagnostics</h4>
++        <span class="flow-live-timestamp" id="nlu-updated">—</span>
++      </div>
++      <dl class="flow-live-list">
++        <div class="flow-live-row">
++          <dt>Intent</dt>
++          <dd id="nlu-intent">—</dd>
++        </div>
++        <div class="flow-live-row">
++          <dt>Guardrail</dt>
++          <dd id="nlu-guardrail">—</dd>
++        </div>
++        <div class="flow-live-row">
++          <dt>Teacher move</dt>
++          <dd id="nlu-move">—</dd>
++        </div>
++        <div class="flow-live-row">
++          <dt>Tool plan</dt>
++          <dd id="nlu-toolplan">—</dd>
++        </div>
++      </dl>
++    </div>
++  </div>
++  <div class="actions"><button class="btn primary" id="save-flow">Save</button></div>
+ </section>
+ <!-- Vendor -->
+ <section class="panel" id="tab-vendor">
+ <h3>Vendor — Streaming ASR / VAD</h3>
+ <div class="grid">
+ <label>Deepgram model <input id="dg_model" value="nova-2-general"/></label>
+ <label>Interim results <input checked="" id="dg_partials" type="checkbox"/></label>
+ <label>VAD confirm (ms) <input id="vad_confirm_ms" type="number" value="420"/></label>
+ <label>Echo threshold boost <input id="echo_threshold_boost" type="number" value="12"/></label>
+ </div>
+ <div class="actions"><button class="btn primary" id="save-vendor">Save</button></div>
+ </section>
+ <!-- PTM -->
+ <section class="panel" id="tab-ptm">
+ <h3>PTM Personality (NLP / NLU / NLG)</h3>
+ <div class="grid">
+ <label>OpenAI model <input id="openai_model" value="gpt-4o-mini"/></label>
+ <label>Temperature <input id="gen_temperature" max="2" min="0" step="0.05" type="number" value="0.3"/></label>
+ <label>Top-p <input id="gen_top_p" max="1" min="0" step="0.05" type="number" value="1.0"/></label>
+ <label>Max sentences <input id="gen_max_sentences" min="1" type="number" value="4"/></label>
+ <label>Target verbosity <select id="gen_target_verbosity">
+ <option>short</option><option selected="">medium</option><option>long</option></select>
+ </label>
+ <label>Persona intensity (Nebraska %) <input id="nebraska_persona" max="1" min="0" step="0.01" type="number" value="0.13"/></label>
+ <label>Use persona quotes <input checked="" id="nebraska_quotes_enabled" type="checkbox"/></label>

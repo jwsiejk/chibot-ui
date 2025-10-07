@@ -64,8 +64,8 @@
 </section>
 <!-- Flow -->
 <section class="panel" id="tab-flow">
-<h3>Conversational Flow</h3>
-<div class="grid">
+  <h3>Conversational Flow</h3>
+  <div class="grid">
 <label>Teacher move — summarize_next_actions (0..1) <input id="tm_summarize" max="1" min="0" step="0.05" type="number" value="0.6"/></label>
 <label>Teacher move — check_understanding (0..1) <input id="tm_check" max="1" min="0" step="0.05" type="number" value="0.5"/></label>
 <label>Teacher move — visualize (0..1) <input id="tm_visualize" max="1" min="0" step="0.05" type="number" value="0.2"/></label>
@@ -77,8 +77,34 @@
 <label>TTS voice ID <input id="tts_voice_id" placeholder="ElevenLabs voice id"/></label>
 <label>TTS output format <input id="tts_output_format" placeholder="mp3_44100_128"/></label>
 <label>TTS model id <input id="tts_model_id" placeholder="eleven_multilingual_v2"/></label>
-</div>
-<div class="actions"><button class="btn primary" id="save-flow">Save</button></div>
+  </div>
+  <div class="flow-live-section">
+    <div class="flow-live-card" id="flow-live-card">
+      <div class="flow-live-header">
+        <h4>Live diagnostics</h4>
+        <span class="flow-live-timestamp" id="nlu-updated">—</span>
+      </div>
+      <dl class="flow-live-list">
+        <div class="flow-live-row">
+          <dt>Intent</dt>
+          <dd id="nlu-intent">—</dd>
+        </div>
+        <div class="flow-live-row">
+          <dt>Guardrail</dt>
+          <dd id="nlu-guardrail">—</dd>
+        </div>
+        <div class="flow-live-row">
+          <dt>Teacher move</dt>
+          <dd id="nlu-move">—</dd>
+        </div>
+        <div class="flow-live-row">
+          <dt>Tool plan</dt>
+          <dd id="nlu-toolplan">—</dd>
+        </div>
+      </dl>
+    </div>
+  </div>
+  <div class="actions"><button class="btn primary" id="save-flow">Save</button></div>
 </section>
 <!-- Vendor -->
 <section class="panel" id="tab-vendor">

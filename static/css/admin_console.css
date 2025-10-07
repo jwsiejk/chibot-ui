@@ -92,6 +92,75 @@
   color: rgba(190, 203, 225, 0.82);
 }
 
+/* ---------- Conversational Flow quick card (outside diagnostics scope) ---------- */
+#tab-flow .flow-live-section {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#tab-flow .flow-live-card {
+  background: rgba(16, 21, 34, 0.92);
+  border: 1px solid rgba(32, 37, 51, 0.9);
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: 0 12px 32px -26px rgba(8, 12, 20, 0.85);
+  color: #d7deeb;
+}
+
+#tab-flow .flow-live-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+#tab-flow .flow-live-header h4 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+#tab-flow .flow-live-timestamp {
+  font-size: 12px;
+  color: rgba(173, 184, 204, 0.8);
+  white-space: nowrap;
+}
+
+#tab-flow .flow-live-list {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 18px;
+}
+
+#tab-flow .flow-live-row {
+  display: grid;
+  grid-template-columns: 94px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+#tab-flow .flow-live-row dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(168, 176, 191, 0.85);
+  margin: 0;
+}
+
+#tab-flow .flow-live-row dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: rgba(222, 229, 240, 0.95);
+  word-break: break-word;
+}
+
 /* ---------- Step list ---------- */
 #admin-diagnostics .diag-steps {
   list-style: none;
