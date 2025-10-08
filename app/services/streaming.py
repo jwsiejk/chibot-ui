@@ -10,6 +10,64 @@ import threading, time as _t
 import os
 import re
 import copy
+import random
+
+from ..security_state import get_profile, get_user
+def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
+    # 1) Profile name
+    try:
+        prof = get_profile() or {}
+        name = str(prof.get("name") or "").strip()
+        if name:
+            return name.split()[0]
+    except Exception:
+        pass
+    # 2) Email to first name
+    email = None
+    try:
+        email = (meta or {}).get("email")
+    except Exception:
+        email = None
+    if not email:
+        try:
+            email = get_user() or None
+        except Exception:
+            email = None
+    if isinstance(email, str) and "@" in email:
+        first = email.split("@",1)[0].split(".")[0].replace("_"," ").replace("-", " ").strip()
+        if first:
+            return first.title()
+    return "there"
+
+_GOAL_ASKS = [
+    "what would you like to accomplish today?",
+    "what's the goal for this session?",
+    "what do you want to get done today?",
+    "what should we tackle first?",
+    "what outcome are you aiming for today?",
+]
+
+def _pick_goal_ask(seed: str | None = None) -> str:
+    try:
+        h = int(hashlib.sha1((seed or 'seed').encode('utf-8')).hexdigest(), 16)
+    except Exception:
+        h = 0
+    rng = random.Random(h)
+    return _GOAL_ASKS[rng.randrange(len(_GOAL_ASKS))]
+
+def _personalize_greet(base_line: str, meta: Optional[dict]) -> str:
+    name = _display_name_from_profile_or_email(meta)
+    ask = _pick_goal_ask(((meta or {}).get("session_id") or '') + '::' + ((meta or {}).get("turn_id") or ''))
+    # Prefer a simple, human opener
+    opener = f"Hey {name}, {ask}"
+    if base_line and base_line.strip():
+        # Ensure the opener is first; keep the base line if it adds value (e.g., warming note)
+        # Avoid duplicating similar questions.
+        if base_line.lower().strip().endswith("?"):
+            return opener
+        return opener + "\n\n" + base_line.strip()
+    return opener
+
 
 from .llm_provider import get_provider
 from .awareness import annotate
@@ -115,11 +173,35 @@ def _scrub_debug_stamps(s: str) -> str:
     return _KB_TAG_RE.sub(" ", s).strip()
 
 
+
+_LIST_PREFIX_RE = re.compile(r'^[\s\-\*•\d]+[\.)\-\s]+')
+def _strip_list_prefix(line: str) -> str:
+    line = (line or "").strip()
+    if not line:
+        return line
+    return _LIST_PREFIX_RE.sub('', line).strip()
+
 def _short_greeting(text: str) -> str:
     try:
-        candidate = _collapse_whitespace(text or "Hi there!")
-        if not candidate:
+        raw = _collapse_whitespace(text or "Hi there!")
+        if not raw:
             return "Hi there!"
+        # If the first non-empty line looks like a list item (e.g., "1. ..." or "• ..."),
+        # prefer its content as the greet text.
+        first_line = None
+        for ln in (text or "").splitlines():
+            ln = (ln or "").strip()
+            if ln:
+                first_line = ln
+                break
+        if first_line:
+            stripped = _strip_list_prefix(first_line)
+            if stripped and stripped != first_line:
+                candidate = stripped
+            else:
+                candidate = raw
+        else:
+            candidate = raw
         limited = _limit_sentences(candidate, 1)
         snippet = limited or candidate
         shortened = _truncate_chars(snippet, 160)
@@ -128,37 +210,6 @@ def _short_greeting(text: str) -> str:
     except Exception:
         fallback = (text or "").strip()
         return fallback or "Hi there!"
-
-
-SETTINGS = load_settings()
-ENABLE_CHIP_FOUNDATION = SETTINGS.enable_chip_foundation
-ENABLE_POLICY_CHIPS = SETTINGS.enable_policy_chips
-SUGGESTION_MAX = SETTINGS.suggestion_max
-STRICT_SYSTEM_SHIM = (
-    "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
-    "and never mention being an AI or chatbot."
-)
-
-_WS_SOURCES = {"ws_greet", "user_ws"}
-_WS_PIPELINE_UNAVAILABLE_NOTE = "ws_pipeline_unavailable"
-_WS_PIPELINE_MESSAGE = "I'm still warming up. Please try again in a moment."
-_LEGACY_WARMUP_LINE = "Hi! I’m ready to help. (Model is warming up.)"
-
-_DIALOG_ACTION_KEY = "dialog_action"
-_DIALOG_VERBOSITY_KEY = "dialog_verbosity"
-_DIALOG_SHOW_SUGGESTIONS_KEY = "dialog_show_suggestions"
-_DIALOG_NLU_KEY = "dialog_nlu"
-_DIALOG_POLICY_KEY = "dialog_policy"
-
-_ACTION_ALIASES = {
-    "ask_clarify": "clarify",
-    "check_understanding": "clarify",
-    "give_brief_answer": "high_level",
-    "respond": "high_level",
-    "answer": "high_level",
-}
-
-
 def _normalize_move_name(move: Optional[str]) -> str:
     try:
         return str(move or "").strip().lower()
@@ -1732,6 +1783,13 @@ def _make_foundation_frames(seed_text: str,
 
     telemetry.mark_fallback(fallback_fired, fallback_reason)
 
+# Personalize greet: name + dynamic goal ask
+if is_greet:
+    meta.setdefault("session_id", session_id)
+    meta.setdefault("turn_id", turn_id)
+    safe_reply = _personalize_greet(safe_reply, meta)
+
+
     if use_llm:
         preview_text = llm_info.get("preview")
         if not preview_text:
@@ -2063,6 +2121,13 @@ def _make_legacy_frames(seed_text: str,
             safe_reply = _LEGACY_WARMUP_LINE
 
     telemetry.mark_fallback(fallback_fired, fallback_reason)
+
+# Personalize greet: name + dynamic goal ask
+if is_greet:
+    meta.setdefault("session_id", session_id)
+    meta.setdefault("turn_id", turn_id)
+    safe_reply = _personalize_greet(safe_reply, meta)
+
 
     if use_llm:
         preview = None
