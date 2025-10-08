@@ -1367,12 +1367,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     bus.cancel_turn(sid, target_turn)
                                 except Exception:
                                     pass
-                            try:
-                                set_phase(sid, "ready")
-                                bus.broadcast(sid, {"type": "state", "phase": "ready"})
-                            except Exception:
-                                pass
-
                         with contextlib.suppress(Exception):
                             barge.start(
                                 confirm_ms=confirm_ms,
@@ -1735,6 +1729,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                         elif t == "CloseStream":
                             _jlog("ws_close_stream", sid=sid)
+                            nudges.cancel_idle_timers(sid)
 
                             # Always define this first so later 'if synthetic_emitted' is safe
                             synthetic_emitted = False
