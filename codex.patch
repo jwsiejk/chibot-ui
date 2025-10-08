@@ -1,952 +1,365 @@
-diff --git a/app/personas/prompt_builder.py b/app/personas/prompt_builder.py
-index 1d17ad41c2acdbd55ad31d6ceeb65f31ff7fce15..15f2ae926ee9f4caa79279559e39715dba34ce13 100644
---- a/app/personas/prompt_builder.py
-+++ b/app/personas/prompt_builder.py
-@@ -31,61 +31,223 @@ def _hash_prompt(parts: List[str]) -> str:
-     return h.hexdigest()[:16]
- 
- 
- def _choose_teacher_move(weights: Dict[str, float], dialog_meta: Dict[str, Any]) -> str:
-     """
-     Pick one teacher move.
-       - If dialog_meta declares a move, honor it.
-       - Else sample by weights (fallback to summarize_next_actions).
-     """
-     explicit = (dialog_meta or {}).get("teacher_move")
-     if isinstance(explicit, str) and explicit in TEACHER_MOVES:
-         return explicit
- 
-     # Weighted choice
-     bag: List[str] = []
-     for k in TEACHER_MOVES:
-         try:
-             w = float(weights.get(k, 0.0))
-         except Exception:
-             w = 0.0
-         if w > 0:
-             bag.extend([k] * max(1, int(round(w * 100))))
-     return random.choice(bag) if bag else "summarize_next_actions"
- 
- 
--def _maybe_persona_quote(cfg: Dict[str, Any], intensity: float) -> str:
--    """Return a light persona quote ~intensity fraction of the time."""
-+def _stable_quote_id(text: str, *, bank: Optional[str] = None, candidate_id: Optional[str] = None) -> str:
-+    """Generate a deterministic identifier for a persona quote."""
-+    base: str
-+    if candidate_id:
-+        base = str(candidate_id)
-+    else:
-+        salted = f"{bank or ''}::{text}" if bank else text
-+        base = hashlib.sha1(salted.encode("utf-8", errors="ignore")).hexdigest()
-+    return base[:12]
-+
-+
-+def _normalize_toggle_value(value: Any) -> Optional[Any]:
-+    if value is None:
-+        return None
-+    if isinstance(value, (int, float)):
-+        return float(value)
-+    if isinstance(value, str):
-+        lowered = value.strip().lower()
-+        if lowered in {"", "none"}:
-+            return None
-+        if lowered in {"true", "1", "yes", "on"}:
-+            return True
-+        if lowered in {"false", "0", "no", "off"}:
-+            return False
-+        try:
-+            return float(lowered)
-+        except Exception:
-+            return value.strip()
-+    try:
-+        return bool(value)
-+    except Exception:
-+        return None
-+
-+
-+def _extract_toggle(cfg: Dict[str, Any], name: str) -> Optional[Any]:
-+    candidates = (
-+        name,
-+        f"{name}_level",
-+        f"gen_{name}",
-+        f"allow_{name}",
-+        f"{name}_enabled",
-+    )
-+    for key in candidates:
-+        if key in cfg:
-+            return _normalize_toggle_value(cfg.get(key))
-+    return None
-+
-+
-+def _collect_guardrail_markers(dialog_meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-+    """Capture guardrail-suppressed persona signals from dialog metadata."""
-+    muted: List[str] = []
-+
-+    def _extend(value: Any) -> None:
-+        if value is None:
-+            return
-+        if isinstance(value, str):
-+            val = value.strip()
-+            if val:
-+                muted.append(val)
-+            return
-+        if isinstance(value, (list, tuple, set)):
-+            for item in value:
-+                _extend(item)
-+            return
-+        if isinstance(value, dict):
-+            for key, flag in value.items():
-+                if isinstance(flag, bool) and not flag:
-+                    continue
-+                if flag:
-+                    muted.append(str(key))
-+            return
-+        try:
-+            if bool(value):
-+                muted.append(str(value))
-+        except Exception:
-+            pass
-+
-+    meta = dialog_meta or {}
-+    for key in (
-+        "persona_guardrail_muted",
-+        "persona_guardrail_suppressed",
-+        "guardrail_persona_muted",
-+        "guardrail_persona_suppressed",
-+    ):
-+        _extend(meta.get(key))
-+
-+    guardrail_section = meta.get("guardrail") or meta.get("guardrails")
-+    if isinstance(guardrail_section, dict):
-+        for subkey in ("persona", "persona_muted", "muted"):
-+            _extend(guardrail_section.get(subkey))
-+
-+    return {"muted": sorted({m for m in muted if m})}
-+
-+
-+def _maybe_persona_quote(cfg: Dict[str, Any], intensity: float) -> Tuple[str, Dict[str, Any]]:
-+    """Return a light persona quote ~intensity fraction of the time along with metadata."""
-+    bank_name: Optional[str] = None
-+    enabled = True
-+    candidates: List[Tuple[str, Optional[str]]] = []
-+
-+    quotes_cfg = cfg.get("quotes")
-+    if isinstance(quotes_cfg, dict):
-+        enabled = bool(quotes_cfg.get("enabled", enabled))
-+        bank_name = str(quotes_cfg.get("bank") or quotes_cfg.get("id") or "") or None
-+        raw_candidates = (
-+            quotes_cfg.get("choices")
-+            or quotes_cfg.get("values")
-+            or quotes_cfg.get("samples")
-+            or quotes_cfg.get("quotes")
-+        )
-+        if isinstance(raw_candidates, dict):
-+            for key, value in raw_candidates.items():
-+                text = str(value or "").strip()
-+                if text:
-+                    candidates.append((text, str(key)))
-+        elif isinstance(raw_candidates, (list, tuple)):
-+            for item in raw_candidates:
-+                if isinstance(item, dict):
-+                    text = str(
-+                        item.get("text")
-+                        or item.get("quote")
-+                        or item.get("value")
-+                        or ""
-+                    ).strip()
-+                    qid = item.get("id") or item.get("key") or item.get("uuid")
-+                    if text:
-+                        candidates.append((text, str(qid) if qid is not None else None))
-+                else:
-+                    text = str(item or "").strip()
-+                    if text:
-+                        candidates.append((text, None))
-+
-+    raw_bank = cfg.get("quote_bank")
-+    if isinstance(raw_bank, dict):
-+        for key, value in raw_bank.items():
-+            text = str(value or "").strip()
-+            if text:
-+                candidates.append((text, str(key)))
-+    elif isinstance(raw_bank, (list, tuple)):
-+        for item in raw_bank:
-+            text = str(item or "").strip()
-+            if text:
-+                candidates.append((text, None))
-+    elif isinstance(raw_bank, str) and raw_bank and not bank_name:
-+        bank_name = raw_bank
-+
-+    meta = {
-+        "bank": bank_name,
-+        "enabled": bool(enabled and candidates),
-+        "candidate_count": len(candidates),
-+        "quote_id": None,
-+        "text": "",
-+        "picked": False,
-+    }
-+
-+    if not meta["enabled"]:
-+        return "", meta
-+
-     try:
-         p = max(0.0, min(1.0, float(intensity)))
-         if random.random() <= p:
--            q = cfg.get("quote_bank") or []
--            if isinstance(q, (list, tuple)) and q:
--                return str(random.choice(q))
-+            chosen_text, candidate_id = random.choice(candidates)
-+            meta["picked"] = True
-+            meta["text"] = chosen_text
-+            meta["quote_id"] = _stable_quote_id(
-+                chosen_text,
-+                bank=meta.get("bank"),
-+                candidate_id=candidate_id,
-+            )
-+            return chosen_text, meta
-     except Exception:
-         pass
--    return ""
-+    return "", meta
- 
- 
- def _coerce_str_map(obj: Any) -> Dict[str, Any]:
-     return obj if isinstance(obj, dict) else {}
- 
- 
- def _is_greet(dialog_meta: Optional[Dict[str, Any]]) -> bool:
-     """Robust greet detection across multiple meta fields."""
-     try:
-         meta = dialog_meta or {}
-         src = str(meta.get("source", "")).strip().lower()
-         seed = str(meta.get("seed_text", "")).strip().lower()
-         kind = str(meta.get("turn_kind", "")).strip().lower()
-         intent = str(meta.get("intent", "")).strip().lower()
-         greet_markers = {"greet", "ws_greet", "greet_fallback", "greeting", "welcome"}
-         return (src in greet_markers) or (seed in greet_markers or seed == "greet") \
-             or (kind in greet_markers) or (intent in {"greet", "opening"})
-     except Exception:
-         return False
- 
- 
- def _first_name_from_profile(user_profile: Optional[Dict[str, Any]]) -> str:
-     """Best-effort: prefer first_name; else split 'name'/'full_name' on space; else ''."""
-     try:
-         p = user_profile or {}
-@@ -116,77 +278,77 @@ def build_messages(
-     examples: Optional[List[Dict[str, str]]] = None,
- ) -> Tuple[List[Dict[str, str]], str, str]:
-     """
-     Compose the chat messages for the LLM.
- 
-     Parameters
-     ----------
-     persona: dict
-         {'id','name','intensity','config':{...}} as returned by PersonaManager.get_active()
-     session_summary: str
-         Short rolling summary to keep context tight.
-     user_profile: dict|None
-         Optional profile details to personalize responses.
-     user_text: str
-         The user's current utterance (final transcript).
-     dialog_meta: dict|None
-         Runtime signals (intent, prosody flags, overrides, etc.)
-         Example: {"intent":"flasharray_install", "teacher_move":"offer_steps", "barge_in":True}
-     examples: list|None
-         Optional few-shots to prepend. Each item may have keys:
-         - {"pattern": "<user example>", "assistant": "<ideal assistant reply>"}
-         - or {"user": "...", "assistant": "..."}
- 
-     Returns
-     -------
--    (messages, teacher_move, prompt_hash)
-+    (messages, teacher_move, prompt_hash, persona_trace)
-     """
-     dialog_meta = dialog_meta or {}
-     cfg: Dict[str, Any] = _coerce_str_map(persona.get("config"))
- 
-     # Clamp intensity into [0,1] and default to 0.13 (12–15% persona presence target)
-     try:
-         intensity = float(persona.get("intensity", 0.13))
-     except Exception:
-         intensity = 0.13
-     intensity = max(0.0, min(1.0, intensity))
- 
-     # Persona knobs
-     tone = _coerce_str_map(cfg.get("tone"))
-     style = _coerce_str_map(cfg.get("style_rules"))
-     forbidden = cfg.get("forbidden") or []
-     goals = cfg.get("goals") or []
-     weights = _coerce_str_map(cfg.get("teacher_moves_weights"))
-     lexicon = _coerce_str_map(cfg.get("lexicon"))
-     kb = _coerce_str_map(cfg.get("kb"))
-     llm_instructions: List[str] = list(cfg.get("llm_instructions") or [])
- 
-     # Decide teacher move
-     teacher_move = _choose_teacher_move(weights, dialog_meta)
- 
-     # Optional light persona quote
--    quote = _maybe_persona_quote(cfg, intensity)
-+    quote, quote_meta = _maybe_persona_quote(cfg, intensity)
-     quote_line = f'Persona note: "{quote}"' if quote else ""
- 
-     # ---------- SYSTEM MESSAGE ----------
-     sys_lines: List[str] = []
-     sys_lines.append(f"You are {persona.get('name','Chip')} — a Virtual Partner Technical Manager supporting Trace3 on Pure Storage.")
-     sys_lines.append("Never mention you are an AI or a chatbot. Speak naturally, like you’re in a Zoom-style session.")
-     sys_lines.append("Use contractions, keep sentences short, prefer bullets when helpful, and end with a clear next step.")
-     sys_lines.append(f"Teacher move for this turn: {teacher_move}.")
-     # Persona-configured tone/style/policy
-     if tone:
-         sys_lines.append(
-             f"Tone defaults: default='{tone.get('default','supportive')}', "
-             f"error='{tone.get('error','calm')}', teaching='{tone.get('teaching','encouraging')}'."
-         )
-     if goals:
-         sys_lines.append(f"Goals: {goals}")
-     if style:
-         sys_lines.append(f"Style rules: {style}")
-     if forbidden:
-         sys_lines.append(f"Forbidden: {forbidden}")
-     if kb:
-         sys_lines.append(f"KB policy: {kb}")
-     if lexicon:
-         sys_lines.append(f"Lexicon normalization note (post-STT, pre-LLM): {lexicon}")
- 
-@@ -243,26 +405,39 @@ def build_messages(
-     messages: List[Dict[str, str]] = [
-         {"role": "system", "content": "\n".join(sys_lines)},
-         {"role": "developer", "content": "\n".join(dev_lines)},
-     ]
- 
-     # ---------- FEW-SHOTS (optional, before user) ----------
-     # Accept either {"pattern": "...", "assistant": "..."} or {"user":"...","assistant":"..."}
-     if examples:
-         count = 0
-         for ex in examples:
-             if count >= MAX_FEWSHOTS:
-                 break
-             user_ex = ex.get("user") or ex.get("pattern")
-             asst_ex = ex.get("assistant") or ex.get("assistant_target")
-             if user_ex and asst_ex:
-                 messages.append({"role": "user", "content": str(user_ex)})
-                 messages.append({"role": "assistant", "content": str(asst_ex)})
-                 count += 1
- 
-     # ---------- USER MESSAGE ----------
-     messages.append({"role": "user", "content": str(user_text)})
- 
-     # Hash for telemetry (full message roles/contents)
-     prompt_hash = _hash_prompt([f"{m['role']}:{m['content']}" for m in messages])
- 
--    return messages, teacher_move, prompt_hash
-+    toggles: Dict[str, Any] = {}
-+    for toggle_name in ("humor", "metaphor"):
-+        value = _extract_toggle(cfg, toggle_name)
-+        if value is not None:
-+            toggles[toggle_name] = value
-+
-+    persona_trace = {
-+        "intensity": intensity,
-+        "quote": quote_meta,
-+        "toggles": toggles,
-+        "guardrail": _collect_guardrail_markers(dialog_meta),
-+    }
-+
-+    return messages, teacher_move, prompt_hash, persona_trace
 diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 8fbae2c723f43891f6957d74ac07727435debb33..db131a732f40338554e90946d03453e8d5db7f1b 100644
+index db131a732f40338554e90946d03453e8d5db7f1b..0ce7a79414e66204cc769d72d06a2a718689c958 100644
 --- a/app/services/streaming.py
 +++ b/app/services/streaming.py
-@@ -1001,50 +1001,280 @@ def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
-     raw = policy.get("chips") if isinstance(policy, dict) else None
-     if not raw:
-         return []
-     if isinstance(raw, (list, tuple, set)):
-         chips = list(raw)
-     else:
-         chips = [raw]
-     cap = _suggestion_cap()
-     cleaned: List[str] = []
-     seen = set()
-     for item in chips:
-         text = _normalize_suggestion_item(item)
-         if not text:
+@@ -831,50 +831,117 @@ def merge_suggestions(*lists: Iterable[Any], cap: int = 4) -> List[str]:
+ 
+     seen: List[str] = []
+     seen_set = set()
+     for lst in lists:
+         if not lst:
              continue
-         if len(text) > 50:
-             text = text[:50].rstrip()
-         if not text or text in seen:
-             continue
-         cleaned.append(text)
-         seen.add(text)
-         if len(cleaned) >= cap:
-             break
-     return cleaned
+         for raw in lst:
+             text = _normalize_suggestion_item(raw)
+             if not text:
+                 continue
+             if len(text) > 50:
+                 text = text[:50].rstrip()
+             if not text or text in seen_set:
+                 continue
+             seen.append(text)
+             seen_set.add(text)
+             if len(seen) >= limit:
+                 return seen
+     return seen[:limit]
  
  
-+def _coerce_bool_flag(value: Any) -> Optional[bool]:
-+    if isinstance(value, bool):
-+        return value
-+    if value is None:
-+        return None
-+    if isinstance(value, str):
-+        lowered = value.strip().lower()
-+        if lowered in {"true", "1", "yes", "on"}:
-+            return True
-+        if lowered in {"false", "0", "no", "off"}:
-+            return False
-+        return None
+ def build_suggestion_items(items: List[str]) -> List[Dict[str, str]]:
+     return [{"text": it} for it in items]
+ 
+ 
++def _log_suggestions_made(turn_id: Optional[str],
++                          policy_chips: Optional[Iterable[Any]],
++                          legacy_suggestions: Optional[Iterable[Any]],
++                          merged_suggestions: Optional[Iterable[Any]],
++                          cfg: Optional[Dict[str, Any]]) -> None:
 +    try:
-+        return bool(value)
-+    except Exception:
-+        return None
++        cfg_map: Dict[str, Any]
++        if isinstance(cfg, dict):
++            cfg_map = cfg
++        else:
++            cfg_map = {}
 +
++        def _coerce_limit(value: Any, default: int) -> int:
++            try:
++                if value is None:
++                    return default
++                coerced = int(value)
++                if coerced < 0:
++                    return default
++                return coerced
++            except Exception:
++                return default
 +
-+def _coerce_float(value: Any) -> Optional[float]:
-+    if value is None:
-+        return None
-+    if isinstance(value, (int, float)):
-+        return float(value)
-+    if isinstance(value, str):
-+        stripped = value.strip()
-+        if not stripped:
-+            return None
-+        try:
-+            return float(stripped)
-+        except Exception:
-+            return None
-+    try:
-+        return float(value)  # type: ignore[arg-type]
-+    except Exception:
-+        return None
++        max_items = _coerce_limit(cfg_map.get("suggestions_max_items"), _suggestion_cap())
++        max_words = _coerce_limit(cfg_map.get("suggestions_max_words"), 7)
 +
++        def _display_text(raw: Any) -> str:
++            text = _normalize_suggestion_item(raw)
++            if len(text) > 50:
++                text = text[:50].rstrip()
++            return text
 +
-+def _normalize_toggle_for_log(value: Any) -> Optional[Any]:
-+    if value is None:
-+        return None
-+    if isinstance(value, (int, float)):
-+        return float(value)
-+    if isinstance(value, str):
-+        lowered = value.strip().lower()
-+        if not lowered:
-+            return None
-+        if lowered in {"true", "1", "yes", "on"}:
-+            return True
-+        if lowered in {"false", "0", "no", "off"}:
-+            return False
-+        try:
-+            return float(lowered)
-+        except Exception:
-+            return value.strip()
-+    try:
-+        return bool(value)
-+    except Exception:
-+        return None
++        policy_set = {
++            text
++            for text in (_display_text(item) for item in (policy_chips or []))
++            if text
++        }
++        retrieval_set = {
++            text
++            for text in (_display_text(item) for item in (legacy_suggestions or []))
++            if text
++        }
 +
++        items: List[Dict[str, str]] = []
++        for raw in merged_suggestions or []:
++            text = _display_text(raw)
++            if not text:
++                continue
++            if text in policy_set:
++                source = "policy"
++            elif text in retrieval_set:
++                source = "retrieval"
++            else:
++                source = "retrieval"
++            items.append({"text": text, "source": source})
 +
-+def _extract_toggle_from_cfg(cfg: Optional[Dict[str, Any]], name: str) -> Optional[Any]:
-+    if not isinstance(cfg, dict):
-+        return None
-+    for key in (f"gen_{name}", name, f"{name}_level", f"allow_{name}", f"{name}_enabled"):
-+        if key in cfg:
-+            return cfg.get(key)
-+    features = cfg.get("features") if isinstance(cfg.get("features"), dict) else None
-+    if isinstance(features, dict):
-+        for key in (name, f"{name}_enabled"):
-+            if key in features:
-+                return features.get(key)
-+    return None
-+
-+
-+def _format_toggle_element(name: str, value: Any) -> Optional[str]:
-+    if value is None:
-+        return None
-+    if isinstance(value, (int, float)):
-+        if abs(float(value)) < 1e-6:
-+            return None
-+        return f"{name}:{float(value):.2f}"
-+    if isinstance(value, bool):
-+        return name if value else None
-+    text = str(value).strip()
-+    if not text:
-+        return None
-+    return f"{name}:{text}"
-+
-+
-+def _collect_guardrail_list(meta: Optional[Dict[str, Any]]) -> List[str]:
-+    if not isinstance(meta, dict):
-+        return []
-+
-+    muted: List[str] = []
-+
-+    def _extend(value: Any) -> None:
-+        if value is None:
-+            return
-+        if isinstance(value, str):
-+            val = value.strip()
-+            if val:
-+                muted.append(val)
-+            return
-+        if isinstance(value, (list, tuple, set)):
-+            for item in value:
-+                _extend(item)
-+            return
-+        if isinstance(value, dict):
-+            for key, flag in value.items():
-+                if isinstance(flag, bool) and not flag:
-+                    continue
-+                if flag:
-+                    muted.append(str(key))
-+            return
-+        try:
-+            if bool(value):
-+                muted.append(str(value))
-+        except Exception:
-+            pass
-+
-+    for key in (
-+        "persona_guardrail_muted",
-+        "persona_guardrail_suppressed",
-+        "guardrail_persona_muted",
-+        "guardrail_persona_suppressed",
-+    ):
-+        _extend(meta.get(key))
-+
-+    guardrail_section = meta.get("guardrail") or meta.get("guardrails")
-+    if isinstance(guardrail_section, dict):
-+        for subkey in ("persona", "persona_muted", "muted"):
-+            _extend(guardrail_section.get(subkey))
-+
-+    return sorted({m for m in muted if m})
-+
-+
-+def _summarize_persona_trace(trace: Optional[Dict[str, Any]],
-+                             cfg: Optional[Dict[str, Any]],
-+                             *,
-+                             persona: Optional[Dict[str, Any]] = None,
-+                             meta: Optional[Dict[str, Any]] = None) -> Tuple[float, List[str], List[str]]:
-+    trace = trace or {}
-+    persona_level = _coerce_float(trace.get("intensity"))
-+    if persona_level is None and persona:
-+        persona_level = _coerce_float(persona.get("intensity") or persona.get("nebraska_persona_level"))
-+    if persona_level is None and cfg:
-+        persona_level = _coerce_float(cfg.get("nebraska_persona_level"))
-+    if persona_level is None:
-+        persona_level = 0.0
-+    persona_level = max(0.0, min(1.0, persona_level))
-+
-+    quote_meta = trace.get("quote") or {}
-+    quote_text = str(quote_meta.get("text") or "").strip()
-+    quote_id = quote_meta.get("quote_id")
-+    if not quote_id and quote_text:
-+        bank = quote_meta.get("bank")
-+        salted = f"{bank or ''}::{quote_text}" if bank else quote_text
-+        quote_id = hashlib.sha1(salted.encode("utf-8", errors="ignore")).hexdigest()[:12]
-+
-+    toggles: Dict[str, Any] = {}
-+    if isinstance(trace.get("toggles"), dict):
-+        toggles.update(trace.get("toggles"))
-+    for name in ("humor", "metaphor"):
-+        if name not in toggles:
-+            cfg_value = _extract_toggle_from_cfg(cfg, name)
-+            normalized = _normalize_toggle_for_log(cfg_value)
-+            if normalized is not None:
-+                toggles[name] = normalized
-+
-+    persona_elements: List[str] = []
-+    if quote_text and quote_id:
-+        persona_elements.append(f"quote:{quote_id}")
-+    for name in ("humor", "metaphor"):
-+        formatted = _format_toggle_element(name, toggles.get(name))
-+        if formatted:
-+            persona_elements.append(formatted)
-+
-+    guardrails: List[str] = []
-+    guardrail_meta = trace.get("guardrail") or {}
-+    trace_muted = guardrail_meta.get("muted") if isinstance(guardrail_meta, dict) else None
-+    if isinstance(trace_muted, (list, tuple, set)):
-+        guardrails.extend(str(item) for item in trace_muted if item)
-+    elif trace_muted:
-+        guardrails.append(str(trace_muted))
-+
-+    guardrails.extend(_collect_guardrail_list(meta))
-+
-+    quote_enabled_flag = quote_meta.get("enabled")
-+    candidate_count = quote_meta.get("candidate_count")
-+    try:
-+        candidate_count_val = int(candidate_count)
-+    except Exception:
-+        candidate_count_val = 0
-+    if quote_enabled_flag is False and (candidate_count_val or quote_meta.get("bank")):
-+        guardrails.append("quote")
-+
-+    cfg_quote_enabled = _coerce_bool_flag(cfg.get("nebraska_quotes_enabled")) if isinstance(cfg, dict) else None
-+    if cfg_quote_enabled is False:
-+        guardrails.append("quote")
-+
-+    persona_elements = sorted({elem for elem in persona_elements if elem})
-+    guardrails = sorted({g for g in guardrails if g})
-+
-+    return persona_level, persona_elements, guardrails
-+
-+
-+def _log_persona_applied(turn_id: str,
-+                         trace: Optional[Dict[str, Any]],
-+                         cfg: Optional[Dict[str, Any]],
-+                         *,
-+                         persona: Optional[Dict[str, Any]] = None,
-+                         meta: Optional[Dict[str, Any]] = None) -> None:
-+    try:
-+        persona_level, persona_elements, guardrails = _summarize_persona_trace(
-+            trace,
-+            cfg,
-+            persona=persona,
-+            meta=meta,
-+        )
 +        _jlog(
-+            "persona_applied",
-+            turn_id=str(turn_id),
-+            persona_level=persona_level,
-+            persona_elements=persona_elements,
-+            guardrails_suppressed=guardrails,
++            "suggestions_made",
++            turn_id=str(turn_id) if turn_id is not None else None,
++            items=items,
++            max_items=max_items,
++            max_words_per_item=max_words,
 +        )
 +    except Exception:
 +        pass
 +
 +
- def _should_skip_legacy(meta: Optional[Dict[str, Any]]) -> bool:
-     if not meta:
-         return False
-     if bool(meta.get("skip_legacy_fallback")):
-         return True
-     source = str(meta.get("source", "") or "").strip().lower()
-     if source in _WS_SOURCES:
-         return True
-     return False
- 
- 
- def _allocate_turn_id(force_turn_id: Optional[str]) -> str:
-     if force_turn_id is not None:
-         db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
-         return str(force_turn_id)
-     turn_seq = db.memory.setdefault('turn_seq', 0) + 1
-     db.memory['turn_seq'] = turn_seq
-     return str(turn_seq)
- 
- 
- def make_assistant_frames(seed_text: str,
-                           session_id: str,
-                           meta: Optional[Dict] = None,
-                           correlation_user_msg_id: Optional[str] = None,
-                           *,
-@@ -1166,50 +1396,51 @@ def make_assistant_frames(seed_text: str,
-         context.log_error("streaming_pipeline_error", str(exc))
-         raise
-     finally:
-         context.log_done()
- 
- 
- def _make_foundation_frames(seed_text: str,
-                             session_id: str,
-                             meta: Dict[str, Any],
-                             cfg: Dict[str, Any],
-                             *,
-                             correlation_user_msg_id: Optional[str],
-                             turn_id: Optional[str] = None,
-                             telemetry: Optional[NluLoggingContext] = None,
-                             force_turn_id: Optional[str] = None,
-                             is_greet: bool,
-                             fallback_line: str,
-                             fallback_on_empty: bool,
-                             fallback_on_error: bool,
-                             fallback_emit_event: bool,
-                             action: Optional[str] = None,
-                             broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
-     if turn_id is None:
-         turn_id = _allocate_turn_id(force_turn_id)
-     turn_id = str(turn_id)
-+
-     if telemetry is None:
-         telemetry = _create_nlu_context(
-             turn_id=turn_id,
-             session_id=session_id,
-             correlation_user_msg_id=correlation_user_msg_id,
-             meta=meta,
-             settings=SETTINGS,
-             cfg=cfg,
-         )
-         telemetry.turn_id = turn_id
-         telemetry.log_start(seed_text, meta=meta)
-     else:
-         telemetry.turn_id = turn_id
-     store = PersonaStore()
-     persona = PersonaManager(store).get_active()
-     dialog_meta = dict(meta or {})
- 
-     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
-     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store) or {}
- 
-     telemetry.log_entities(nlu_result.get("entities"))
+ def classify(seed_text: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+     """Run lightweight classifiers and awareness annotators for a user turn."""
+     base_meta = meta or {}
+     labels: Dict[str, Any] = {}
  
      try:
-         nlu_meta = dict(nlu_result)
-     except Exception:
-@@ -1254,57 +1485,65 @@ def _make_foundation_frames(seed_text: str,
-             return None
- 
-     existing_pref = None
-     if isinstance(meta, dict):
-         if "show_suggestions" in meta:
-             existing_pref = _coerce_dialog_flag(meta.get("show_suggestions"))
-         elif _DIALOG_SHOW_SUGGESTIONS_KEY in meta:
-             existing_pref = _coerce_dialog_flag(meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY))
- 
-     if existing_pref is None:
-         show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
-     else:
-         show_suggestions = bool(existing_pref)
- 
-     meta['show_suggestions'] = show_suggestions
-     meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
-     meta[_DIALOG_POLICY_KEY] = dict(policy)
- 
-     prompt_meta = dict(dialog_meta)
-     prompt_meta['intent'] = nlu_result.get('intent')
-     policy_action = _policy_action(policy)
-     if policy_action:
-         prompt_meta['teacher_move'] = policy_action
- 
-     examples = store.match_examples(persona['id'], seed_text)
--    messages, teacher_move, prompt_hash = build_messages(
-+    messages, teacher_move, prompt_hash, persona_trace = build_messages(
-         persona=persona,
-         user_text=seed_text,
-         dialog_meta=prompt_meta,
-         examples=examples,
-     )
- 
-+    _log_persona_applied(
-+        turn_id,
-+        persona_trace,
-+        cfg,
-+        persona=persona,
-+        meta=meta,
-+    )
-+
-     kb_count = 0
-     try:
-         kb_candidates = meta.get('kb_snippets') if isinstance(meta, dict) else None
-         if isinstance(kb_candidates, (list, tuple)):
-             kb_count = len(kb_candidates)
-     except Exception:
-         kb_count = 0
-     telemetry.log_prompt_summary(messages=messages, prompt_hash=prompt_hash, kb_count=kb_count)
- 
-     use_llm = normalized_action != "ask_clarify"
-     llm_info: Dict[str, Any] = {}
-     if use_llm:
-         try:
-             foundation_result = _call_foundation_with_retry(messages, cfg, telemetry=telemetry)
-         except Exception as exc:
-             telemetry.log_error("foundation_call_error", str(exc))
-             raise
-         if isinstance(foundation_result, tuple) and len(foundation_result) == 2:
-             reply, llm_info = foundation_result
-         else:
-             reply = foundation_result
-             llm_info = {}
-     else:
-         reply = _build_clarify_question(seed_text, meta)
- 
-@@ -1462,69 +1701,91 @@ def _make_foundation_frames(seed_text: str,
- 
- 
- def _make_legacy_frames(seed_text: str,
-                         session_id: str,
-                         meta: Dict[str, Any],
-                         cfg: Dict[str, Any],
-                         *,
-                         correlation_user_msg_id: Optional[str],
-                         turn_id: Optional[str] = None,
-                         telemetry: Optional[NluLoggingContext] = None,
-                         force_turn_id: Optional[str] = None,
-                         is_greet: bool,
-                         fallback_line: str,
-                         fallback_on_empty: bool,
-                         fallback_on_error: bool,
-                         fallback_emit_event: bool,
-                         action: Optional[str] = None,
-                         labels: Optional[Dict[str, Any]] = None,
-                         policy: Optional[Dict[str, Any]] = None,
-                         broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
-     persona = _get_persona_for_session(session_id)
- 
-     if turn_id is None:
-         turn_id = _allocate_turn_id(force_turn_id)
-     turn_id = str(turn_id)
-+
-+    persona_trace = {
-+        "intensity": (persona or {}).get("intensity") or (persona or {}).get("nebraska_persona_level"),
-+        "quote": {
-+            "text": "",
-+            "quote_id": None,
-+            "enabled": _coerce_bool_flag((cfg or {}).get("nebraska_quotes_enabled")) if isinstance(cfg, dict) else None,
-+            "picked": False,
-+            "candidate_count": 0,
-+            "bank": None,
-+        },
-+        "toggles": {},
-+        "guardrail": {},
-+    }
-+
-     if telemetry is None:
-         telemetry = _create_nlu_context(
-             turn_id=turn_id,
-             session_id=session_id,
-             correlation_user_msg_id=correlation_user_msg_id,
-             meta=meta,
-             settings=SETTINGS,
-             cfg=cfg,
-         )
-         telemetry.turn_id = turn_id
-         telemetry.log_start(seed_text, meta=meta)
-     else:
-         telemetry.turn_id = turn_id
- 
-     if labels is None:
-         labels = classify(seed_text, meta)
-     else:
-         labels = dict(labels)
-     telemetry.log_entities(labels.get("entities"))
-+    _log_persona_applied(
-+        turn_id,
-+        persona_trace,
-+        cfg,
-+        persona=persona,
-+        meta=meta,
-+    )
-     if policy is None:
-         policy = pick_dialog_policy(labels) or {}
-     else:
-         policy = dict(policy or {})
- 
-     try:
-         if isinstance(meta, dict):
-             meta_nlu = meta.setdefault('nlu', {})
-             meta_nlu.update(labels)
-             dialog_nlu = meta.setdefault(_DIALOG_NLU_KEY, {})
-             try:
-                 dialog_nlu.update(labels)
-             except Exception:
-                 meta[_DIALOG_NLU_KEY] = dict(labels)
+         primary_labels = classify_turn(seed_text, base_meta)
+         if isinstance(primary_labels, dict):
+             labels.update(primary_labels)
      except Exception:
          pass
-     policy_action = _policy_action(policy)
-     teacher_move = policy_action
  
-     provided_action: Optional[str] = None
-     if action is not None:
+     try:
+         awareness = annotate(seed_text, base_meta)
+         if isinstance(awareness, dict):
+             labels.update({k: v for k, v in awareness.items() if k not in labels})
+             # Allow awareness annotators to augment existing labels without
+             # clobbering core classifier outputs like intent/topic.
+             for key, value in awareness.items():
+                 if key not in {"intent", "topic", "expected_depth", "needs_scoping"}:
+                     labels[key] = value
+     except Exception:
+         pass
+ 
+     try:
+@@ -1647,50 +1714,57 @@ def _make_foundation_frames(seed_text: str,
+         fallback_fired=fallback_fired,
+         fallback_reason=fallback_reason,
+         meta=meta,
+         nlu_meta=nlu_result,
+         used_docs_source=kb_source,
+     )
+     chunk: Dict[str, Any] = {
+         'type': 'assistant_chunk',
+         'turn_id': turn_id,
+         'text': safe_reply,
+         'kb_hits': 0,
+         'intent': nlu_result.get('intent'),
+         'teacher_move': active_teacher_move,
+     }
+     if correlation_user_msg_id:
+         chunk['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(chunk)
+ 
+     legacy_suggestions = []
+     try:
+         if cfg.get('suggestions_enabled', True):
+             legacy_suggestions = hygienic_suggestions(safe_reply)
+     except Exception:
+         legacy_suggestions = []
+     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
++    _log_suggestions_made(
++        turn_id=turn_id,
++        policy_chips=policy_chips,
++        legacy_suggestions=legacy_suggestions,
++        merged_suggestions=merged_suggestions,
++        cfg=cfg,
++    )
+     try:
+         _jlog(
+             "chips_emit",
+             sid=session_id,
+             intent=nlu_result.get('intent'),
+             count=len(merged_suggestions),
+             items=merged_suggestions,
+         )
+     except Exception:
+         pass
+     allow_suggestions = bool(meta.get('show_suggestions')) if isinstance(meta, dict) else False
+     should_emit_suggestions = bool(merged_suggestions) and (is_greet or allow_suggestions)
+     if should_emit_suggestions:
+         frames.append(
+             {
+                 'type': 'suggestions',
+                 'turn_id': turn_id,
+                 'items': build_suggestion_items(merged_suggestions),
+             }
+         )
+ 
+     end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
+     if correlation_user_msg_id:
+         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(end_fr)
+@@ -1961,50 +2035,57 @@ def _make_legacy_frames(seed_text: str,
+     )
+     chunk = {
+         'type': 'assistant_chunk',
+         'turn_id': turn_id,
+         'text': safe_reply,
+         'kb_hits': len(kb),
+     }
+     if isinstance(labels, dict) and labels.get('intent'):
+         chunk['intent'] = labels.get('intent')
+     if active_teacher_move:
+         chunk['teacher_move'] = active_teacher_move
+     if correlation_user_msg_id:
+         chunk['correlation_user_msg_id'] = correlation_user_msg_id
+     if error_note:
+         chunk['note'] = error_note
+     frames.append(chunk)
+ 
+     legacy_suggestions: List[Any] = []
+     try:
+         if cfg.get('suggestions_enabled', True):
+             legacy_suggestions = hygienic_suggestions(safe_reply)
+     except Exception:
+         legacy_suggestions = []
+     policy_chips = _collect_policy_chips(policy)
+     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
++    _log_suggestions_made(
++        turn_id=turn_id,
++        policy_chips=policy_chips,
++        legacy_suggestions=legacy_suggestions,
++        merged_suggestions=merged_suggestions,
++        cfg=cfg,
++    )
+     try:
+         intent = labels.get('intent') if isinstance(labels, dict) else None
+         _jlog(
+             "chips_emit",
+             sid=session_id,
+             intent=intent,
+             count=len(merged_suggestions),
+             items=merged_suggestions,
+         )
+     except Exception:
+         pass
+     allow_suggestions = bool(meta.get('show_suggestions')) if isinstance(meta, dict) else False
+     should_emit_suggestions = bool(merged_suggestions) and (is_greet or allow_suggestions)
+     if should_emit_suggestions:
+         frames.append(
+             {
+                 'type': 'suggestions',
+                 'turn_id': turn_id,
+                 'items': build_suggestion_items(merged_suggestions),
+             }
+         )
+ 
+     end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
+     if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
+         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+@@ -2402,55 +2483,57 @@ def _emit_ws_outage(session_id: str,
+         'text': _WS_PIPELINE_MESSAGE,
+         'kb_hits': 0,
+         'note': _WS_PIPELINE_UNAVAILABLE_NOTE,
+     }
+     if correlation_user_msg_id:
+         chunk['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(chunk)
+     end_fr: Dict[str, Any] = {'type': 'assistant_end', 'turn_id': turn_id}
+     if correlation_user_msg_id:
+         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(end_fr)
+     _broadcast_frames(session_id, frames, turn_id)
+     return frames
+ 
+ 
+ def _ws_generation_failed(turn_id: Optional[str], frames: List[Dict[str, Any]]) -> bool:
+     return turn_id is None and not frames
+ 
+ 
+ def run_ws_greet(session_id: str) -> str:
+     """
+     Produce assistant text for greet, broadcast frames, schedule TTS audio,
+     and nudge UI with state+suggestions. Returns turn_id.
+     """
+     forced_tid, _idempotent = get_or_create_greet_turn(session_id, force=False, ttl_sec=DEFAULT_TTL_SEC)
++    cfg = db.get_config()
+     tid, frames = make_assistant_frames(
+         "greet",
+         session_id,
+         meta={"source": "ws_greet", "channel": "ws"},
+         force_turn_id=forced_tid,
++        cfg=cfg,
+     )
+     if _ws_generation_failed(tid, frames):
+         tid = _allocate_turn_id(forced_tid)
+         frames = _emit_ws_outage(session_id, tid)
          try:
-             provided_action = str(action or "").strip().lower()
+             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='greet')
          except Exception:
-             provided_action = None
+             pass
+         try:
+             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+         except Exception:
+             pass
+         return tid
+     existing_frame_types = [
+         fr.get("type")
+         for fr in frames
+         if isinstance(fr, dict) and fr.get("type") is not None
+     ]
+     state_already_sent = any(ft == "state" for ft in existing_frame_types)
+     suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
+ 
+     ready_sent = state_already_sent
+ 
+     def _emit_ready_once() -> None:
+         nonlocal ready_sent
+@@ -2468,51 +2551,59 @@ def run_ws_greet(session_id: str) -> str:
+     try:
+         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
+         if text_for_tts:
+             # Pass scrubbed text to TTS (extra safety)
+             safe_text = _scrub_debug_stamps(text_for_tts)
+             try:
+                 _jlog(
+                     "tts.pre_schedule",
+                     session_id=session_id,
+                     sid=session_id,
+                     turn_id=tid,
+                     flow="greet",
+                     **_tts_text_markers(safe_text),
+                 )
+             except Exception:
+                 pass
+             audio_scheduled = schedule_tts_audio(session_id, safe_text, turn_id=tid, on_complete=_emit_ready_once)
+     except Exception:
+         pass
+ 
+     # UI nudges (only emit if the assistant frames didn't already do so)
+     try:
+         if not audio_scheduled:
+             _emit_ready_once()
+         if not suggestions_already_sent:
+-            base_suggestions = merge_suggestions(hygienic_suggestions(""))
++            greet_legacy = hygienic_suggestions("")
++            base_suggestions = merge_suggestions(greet_legacy)
++            _log_suggestions_made(
++                turn_id=tid,
++                policy_chips=[],
++                legacy_suggestions=greet_legacy,
++                merged_suggestions=base_suggestions,
++                cfg=cfg,
++            )
+             if base_suggestions:
+                 bus.broadcast(
+                     session_id,
+                     {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
+                 )
+     except Exception:
+         pass
+     return tid
+ 
+ 
+ def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Optional[str] = None) -> str:
+     """
+     Produce assistant text for a user turn and schedule both text pacing and TTS.
+     Mirrors HTTP /api_v1/chat behavior for consistency.
+     """
+     meta = {"source": "user_ws", "channel": "ws"}
+ 
+     tid, frames = make_assistant_frames(text, session_id, meta=meta,
+                                         correlation_user_msg_id=correlation_user_msg_id)
+     if _ws_generation_failed(tid, frames):
+         tid = _allocate_turn_id(force_turn_id=None)
+         frames = _emit_ws_outage(session_id, tid, correlation_user_msg_id=correlation_user_msg_id)
+         try:
+             _apply_assistant_turn_state(session_id, frames)
+         except Exception:
 diff --git a/tests/test_streaming_policy_logging.py b/tests/test_streaming_policy_logging.py
-index 91974047178e18b29dee65e8f3df9fec6999e771..4d90df346bcc16ae6dfe3a74c3f8e8b1a14e3a26 100644
+index 4d90df346bcc16ae6dfe3a74c3f8e8b1a14e3a26..86109a8d83ef169d787d473b740fc5245d3c274c 100644
 --- a/tests/test_streaming_policy_logging.py
 +++ b/tests/test_streaming_policy_logging.py
-@@ -30,192 +30,230 @@ class DummyStore:
-     def match_examples(self, persona_id, user_text, limit=4):
-         return []
- 
- 
- class DummyPersonaManager:
-     def __init__(self, store):
-         self.store = store
- 
-     def get_active(self):
-         return {"id": "chip", "name": "Chip", "config": {}}
- 
- 
- def _patch_foundation_dependencies(monkeypatch, *, teacher_move="deep_dive"):
-     monkeypatch.setattr(streaming, "PersonaStore", lambda: DummyStore())
-     monkeypatch.setattr(streaming, "PersonaManager", DummyPersonaManager)
-     monkeypatch.setattr(
-         streaming._nlu,
-         "infer",
-         lambda *a, **k: {"intent": "install", "confidence": 0.91, "tags": {}, "entities": []},
-     )
-     monkeypatch.setattr(
-         streaming._nlu.policy,
-         "decide",
-         lambda *a, **k: {"teacher_move": teacher_move},
-     )
-+    persona_trace = {
-+        "intensity": 0.25,
-+        "quote": {
-+            "text": "Giddy up",
-+            "quote_id": "q-demo",
-+            "enabled": True,
-+            "picked": True,
-+            "candidate_count": 1,
-+            "bank": "nebraska",
-+        },
-+        "toggles": {"humor": 0.2},
-+        "guardrail": {"muted": []},
-+    }
-     monkeypatch.setattr(
-         streaming,
-         "build_messages",
--        lambda **kwargs: ([{"role": "user", "content": kwargs["user_text"]}], teacher_move, "hash1234"),
-+        lambda **kwargs: (
-+            [{"role": "user", "content": kwargs["user_text"]}],
-+            teacher_move,
-+            "hash1234",
-+            persona_trace,
-+        ),
-     )
- 
-     def _fake_foundation(messages, cfg, telemetry=None):
-         return "Foundation response", {"preview": "Foundation", "finish_reason": "stop", "output_tokens": 42}
- 
-     monkeypatch.setattr(streaming, "_call_foundation_with_retry", _fake_foundation)
-     monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: [])
-     monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: [])
- 
- 
- def test_foundation_policy_decision_logs_kb_snippets(monkeypatch):
-     _patch_foundation_dependencies(monkeypatch, teacher_move="deep_dive")
- 
-     telemetry = DummyTelemetry()
-     meta = {
-         "action": "deep_dive",
-         "kb_snippets": [
-             {"id": "doc-1", "text": "Alpha"},
-             "Second document body",
-         ],
-     }
--    cfg = {"suggestions_enabled": False}
-+    cfg = {"suggestions_enabled": False, "nebraska_quotes_enabled": True}
- 
-     captured = []
- 
-     def _capture(event, **fields):
-         captured.append((event, fields))
- 
-     monkeypatch.setattr(streaming, "_jlog", _capture)
- 
-     turn_id, frames = streaming._make_foundation_frames(
-         "hello",
-         "session-1",
-         meta,
-         cfg,
-         correlation_user_msg_id=None,
-         turn_id="10",
-         telemetry=telemetry,
-         is_greet=False,
-         fallback_line="Fallback",
-         fallback_on_empty=True,
-         fallback_on_error=True,
-         fallback_emit_event=False,
-         action="deep_dive",
+@@ -121,50 +121,56 @@ def test_foundation_policy_decision_logs_kb_snippets(monkeypatch):
          broadcast_immediately=False,
      )
  
@@ -965,12 +378,18 @@ index 91974047178e18b29dee65e8f3df9fec6999e771..4d90df346bcc16ae6dfe3a74c3f8e8b1
      hashes = {entry["hash"] for entry in fields["used_docs"]}
      assert all(len(h) == 8 for h in hashes)
  
-+    persona_events = [fields for event, fields in captured if event == "persona_applied"]
-+    assert persona_events
-+    persona_fields = persona_events[0]
-+    assert persona_fields["persona_level"] == pytest.approx(0.25)
-+    assert persona_fields["persona_elements"] == ["humor:0.20", "quote:q-demo"]
-+    assert persona_fields["guardrails_suppressed"] == []
+     persona_events = [fields for event, fields in captured if event == "persona_applied"]
+     assert persona_events
+     persona_fields = persona_events[0]
+     assert persona_fields["persona_level"] == pytest.approx(0.25)
+     assert persona_fields["persona_elements"] == ["humor:0.20", "quote:q-demo"]
+     assert persona_fields["guardrails_suppressed"] == []
+ 
++    suggestions_events = [fields for event, fields in captured if event == "suggestions_made"]
++    assert suggestions_events
++    suggestion_fields = suggestions_events[0]
++    assert suggestion_fields["turn_id"] == "10"
++    assert suggestion_fields["items"] == []
 +
  
  def _patch_legacy_dependencies(monkeypatch, reply_text: str):
@@ -990,27 +409,14 @@ index 91974047178e18b29dee65e8f3df9fec6999e771..4d90df346bcc16ae6dfe3a74c3f8e8b1
  
      telemetry = DummyTelemetry()
      meta = {"action": "offer_steps"}
--    cfg = {"suggestions_enabled": False}
-+    cfg = {"suggestions_enabled": False, "nebraska_persona_level": 0.13, "nebraska_quotes_enabled": False}
+     cfg = {"suggestions_enabled": False, "nebraska_persona_level": 0.13, "nebraska_quotes_enabled": False}
      labels = {"intent": "install", "confidence": 0.5}
      policy = {"teacher_move": "offer_steps"}
  
      captured = []
      monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
  
-     turn_id, frames = streaming._make_legacy_frames(
-         "hi",
-         "session-legacy",
-         meta,
-         cfg,
-         correlation_user_msg_id=None,
-         turn_id="22",
-         telemetry=telemetry,
-         is_greet=False,
-         fallback_line="Fallback",
-         fallback_on_empty=True,
-         fallback_on_error=True,
-         fallback_emit_event=False,
+@@ -184,50 +190,56 @@ def test_legacy_policy_decision_logs_fallback(monkeypatch):
          action="offer_steps",
          labels=labels,
          policy=policy,
@@ -1029,12 +435,18 @@ index 91974047178e18b29dee65e8f3df9fec6999e771..4d90df346bcc16ae6dfe3a74c3f8e8b1
      assert fields["fallback_fired"] is True
      assert fields["fallback_reason"] == "empty"
  
-+    persona_events = [fields for event, fields in captured if event == "persona_applied"]
-+    assert persona_events
-+    persona_fields = persona_events[0]
-+    assert persona_fields["persona_level"] == pytest.approx(0.13)
-+    assert persona_fields["persona_elements"] == []
-+    assert persona_fields["guardrails_suppressed"] == ["quote"]
+     persona_events = [fields for event, fields in captured if event == "persona_applied"]
+     assert persona_events
+     persona_fields = persona_events[0]
+     assert persona_fields["persona_level"] == pytest.approx(0.13)
+     assert persona_fields["persona_elements"] == []
+     assert persona_fields["guardrails_suppressed"] == ["quote"]
+ 
++    suggestions_events = [fields for event, fields in captured if event == "suggestions_made"]
++    assert suggestions_events
++    legacy_fields = suggestions_events[0]
++    assert legacy_fields["turn_id"] == "22"
++    assert legacy_fields["items"] == []
 +
  
  def test_legacy_policy_decision_meta_override(monkeypatch):
@@ -1042,8 +454,7 @@ index 91974047178e18b29dee65e8f3df9fec6999e771..4d90df346bcc16ae6dfe3a74c3f8e8b1
  
      telemetry = DummyTelemetry()
      meta = {"action": "offer_steps"}
--    cfg = {"suggestions_enabled": False}
-+    cfg = {"suggestions_enabled": False, "nebraska_persona_level": 0.13, "nebraska_quotes_enabled": False}
+     cfg = {"suggestions_enabled": False, "nebraska_persona_level": 0.13, "nebraska_quotes_enabled": False}
      labels = {"intent": "install", "confidence": 0.42}
      policy = {"teacher_move": "ask_clarify", "action": "ask_clarify"}
  
@@ -1062,7 +473,7 @@ index 91974047178e18b29dee65e8f3df9fec6999e771..4d90df346bcc16ae6dfe3a74c3f8e8b1
          fallback_line="Fallback",
          fallback_on_empty=True,
          fallback_on_error=True,
-         fallback_emit_event=False,
+@@ -235,25 +247,83 @@ def test_legacy_policy_decision_meta_override(monkeypatch):
          action="offer_steps",
          labels=labels,
          policy=policy,
@@ -1082,213 +493,67 @@ index 91974047178e18b29dee65e8f3df9fec6999e771..4d90df346bcc16ae6dfe3a74c3f8e8b1
      assert fields["policy_move"] == "ask_clarify"
      assert fields["nlu_intent"] == "install"
      assert pytest.approx(fields["nlu_confidence"], rel=1e-6) == 0.42
-+    persona_events = [fields for event, fields in captured if event == "persona_applied"]
-+    assert persona_events
-+    persona_fields = persona_events[0]
-+    assert persona_fields["persona_level"] == pytest.approx(0.13)
-+    assert persona_fields["persona_elements"] == []
-+    assert persona_fields["guardrails_suppressed"] == ["quote"]
-diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
-index a8fa017d8499668492d1e8260fcb08747493962e..e8d23d307f6cc03af45231248bf44d499540ddcb 100644
---- a/tests/test_streaming_ws_fallbacks.py
-+++ b/tests/test_streaming_ws_fallbacks.py
-@@ -1,54 +1,89 @@
- import asyncio
-+import hashlib
- import importlib
- import json
- import types
- from collections import deque
- 
-+import pytest
+     persona_events = [fields for event, fields in captured if event == "persona_applied"]
+     assert persona_events
+     persona_fields = persona_events[0]
+     assert persona_fields["persona_level"] == pytest.approx(0.13)
+     assert persona_fields["persona_elements"] == []
+     assert persona_fields["guardrails_suppressed"] == ["quote"]
 +
-+import app.personas.prompt_builder as prompt_builder
++    suggestions_events = [fields for event, fields in captured if event == "suggestions_made"]
++    assert suggestions_events
++    override_fields = suggestions_events[0]
++    assert override_fields["turn_id"] == "33"
 +
- from app.services import streaming
- from app.ws import ws_asgi
- 
- 
- def _test_client():
-     mod = importlib.import_module("app")
-     if hasattr(mod, "create_app"):
-         flask_app = mod.create_app()
-     else:
-         flask_app = mod.app
-     flask_app.config["TESTING"] = True
-     return flask_app.test_client()
- 
- 
- def _csrf_token(client):
-     resp = client.get("/api/v1/csrf")
-     return resp.headers.get("X-CSRF-Token")
- 
- 
- def _stub_config(monkeypatch):
-     monkeypatch.setattr(streaming.db, "get_config", lambda: {})
- 
- 
-+def test_build_messages_persona_trace(monkeypatch):
-+    persona = {
-+        "id": "chip",
-+        "name": "Chip",
-+        "intensity": 0.5,
-+        "config": {"quote_bank": ["Keep pushing", "Stay curious"], "humor": 0.1},
++
++def test_suggestions_made_classifies_sources(monkeypatch):
++    _patch_foundation_dependencies(monkeypatch, teacher_move="respond")
++
++    telemetry = DummyTelemetry()
++    meta = {"action": "respond"}
++    cfg = {
++        "suggestions_enabled": True,
++        "suggestions_max_items": 3,
++        "suggestions_max_words": 5,
++        "nebraska_quotes_enabled": True,
 +    }
 +
-+    monkeypatch.setattr(prompt_builder.random, "random", lambda: 0.05)
-+    monkeypatch.setattr(prompt_builder.random, "choice", lambda seq: seq[0])
++    policy_items = ["Use GUI", "Check cables"]
++    retrieval_items = ["Check cables", "Consult manual"]
 +
-+    messages, teacher_move, prompt_hash, trace = prompt_builder.build_messages(
-+        persona=persona,
-+        user_text="Let's go",
-+        dialog_meta={"teacher_move": "offer_steps"},
++    monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: policy_items)
++    monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: retrieval_items)
++
++    captured: list[tuple[str, dict]] = []
++    monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
++
++    turn_id, _ = streaming._make_foundation_frames(
++        "Need help",
++        "session-mixed",
++        meta,
++        cfg,
++        correlation_user_msg_id=None,
++        turn_id="44",
++        telemetry=telemetry,
++        is_greet=False,
++        fallback_line="Fallback",
++        fallback_on_empty=True,
++        fallback_on_error=True,
++        fallback_emit_event=False,
++        action="respond",
++        broadcast_immediately=False,
 +    )
 +
-+    assert teacher_move == "offer_steps"
-+    assert messages[-1]["content"] == "Let's go"
-+    assert prompt_hash
-+    assert trace["intensity"] == pytest.approx(0.5)
-+    assert trace["quote"]["text"] == "Keep pushing"
-+    expected_id = hashlib.sha1("Keep pushing".encode("utf-8")).hexdigest()[:12]
-+    assert trace["quote"]["quote_id"] == expected_id
-+    assert trace["quote"]["picked"] is True
-+    assert trace["quote"]["enabled"] is True
-+    assert trace["toggles"]["humor"] == pytest.approx(0.1)
-+    assert trace["guardrail"]["muted"] == []
++    assert turn_id == "44"
 +
-+
- def test_short_greeting_preserves_sentence():
-     text = "What should we clarify so I can help?"
-     assert streaming._short_greeting(text) == text
- 
- 
- def test_make_assistant_frames_ws_skips_legacy(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     legacy_called = False
- 
-     def fake_legacy(*args, **kwargs):  # pragma: no cover - should never be invoked
-         nonlocal legacy_called
-         legacy_called = True
-         return "legacy", [{"type": "assistant_end", "turn_id": "legacy"}]
- 
-     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
-     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
- 
-     tid, frames = streaming.make_assistant_frames(
-         "hello",
-         "session-ws",
-         meta={"source": "user_ws"},
-     )
- 
-     assert tid is None
-@@ -168,88 +203,108 @@ def test_run_ws_greet_emits_single_suggestions_frame(monkeypatch):
-             },
-             {"type": "assistant_end", "turn_id": turn_id},
-         ]
-         if kwargs.get("broadcast_immediately", True):
-             for fr in frames:
-                 fake_broadcast(session_id, fr)
-         return turn_id, frames
- 
-     monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
- 
-     tid = streaming.run_ws_greet("session-one")
- 
-     assert tid == "turn-xyz"
-     suggestion_frames = [fr for fr in emitted if fr.get("type") == "suggestions"]
-     assert len(suggestion_frames) == 1
- 
- 
- def test_make_assistant_frames_greet_advertises_welcome_move(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
-     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *a, **k: True)
-     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
-     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
- 
-+    captured_logs = []
-+    monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured_logs.append((event, fields)))
-+
-     class FakeStore:
-         def match_examples(self, persona_id, user_text, limit=4):
-             return []
- 
-     class FakePersonaManager:
-         def __init__(self, store):
-             self.store = store
- 
-         def get_active(self):
-             return {"id": "chip", "config": {}}
- 
-     monkeypatch.setattr(streaming, "PersonaStore", lambda: FakeStore())
-     monkeypatch.setattr(streaming, "PersonaManager", FakePersonaManager)
- 
-+    persona_trace_stub = {
-+        "intensity": 0.2,
-+        "quote": {"text": "", "quote_id": None, "enabled": True, "picked": False, "candidate_count": 0, "bank": None},
-+        "toggles": {},
-+        "guardrail": {"muted": []},
-+    }
-+
-     monkeypatch.setattr(
-         streaming,
-         "build_messages",
-         lambda persona, user_text, dialog_meta, examples: (
-             [{"role": "user", "content": user_text}],
-             dialog_meta.get("teacher_move"),
-             "hash",
-+            persona_trace_stub,
-         ),
-     )
-     monkeypatch.setattr(streaming, "_call_foundation_with_retry", lambda *a, **k: "Hello!")
- 
-     monkeypatch.setattr(streaming._nlu, "infer", lambda *a, **k: {"intent": "greet", "confidence": 0.9})
-     monkeypatch.setattr(
-         streaming._nlu,
-         "policy",
-         types.SimpleNamespace(decide=lambda *a, **k: {"action": "offer_steps", "teacher_move": "offer_steps"}),
-     )
- 
-     _, frames = streaming.make_assistant_frames("greet", "session-greet", meta={"source": "ws_greet"})
- 
--    chunk = next(fr for fr in frames if fr.get("type") == "assistant_chunk")
-+    chunks = [fr for fr in frames if fr.get("type") == "assistant_chunk"]
-+    assert chunks
-+    chunk = chunks[0]
-     assert chunk["teacher_move"] == "offer_steps"
-     assert chunk.get("intent") == "greet"
- 
-+    persona_events = [fields for event, fields in captured_logs if event == "persona_applied"]
-+    assert persona_events
-+    persona_fields = persona_events[0]
-+    assert persona_fields["persona_level"] == pytest.approx(0.2)
-+    assert persona_fields["persona_elements"] == []
-+    assert persona_fields["guardrails_suppressed"] == []
-+
- 
- def test_make_assistant_frames_http_allows_legacy(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     captured = types.SimpleNamespace(called=False)
- 
-     def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
-         captured.called = True
-         assert isinstance(meta.get("nlu"), dict)
-         assert isinstance(meta.get("dialog_nlu"), dict)
-         assert "action" in meta
-         assert meta["dialog_action"] == meta["action"]
-         assert "verbosity" in meta
-         assert meta["dialog_verbosity"] == meta["verbosity"]
-         assert "show_suggestions" in meta
-         assert meta["dialog_show_suggestions"] == meta["show_suggestions"]
-         assert meta["dialog_policy"]["teacher_move"] == kwargs["policy"]["teacher_move"]
-         assert isinstance(kwargs.get("labels"), dict)
-         assert isinstance(kwargs.get("policy"), dict)
-         return "tid-123", [
-             {"type": "assistant_chunk", "turn_id": "tid-123", "text": "hi", "kb_hits": 0},
-             {"type": "assistant_end", "turn_id": "tid-123"},
-         ]
- 
-     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
++    suggestions_events = [fields for event, fields in captured if event == "suggestions_made"]
++    assert suggestions_events
++    fields = suggestions_events[0]
++    assert fields["turn_id"] == "44"
++    assert fields["max_items"] == 3
++    assert fields["max_words_per_item"] == 5
++    assert fields["items"] == [
++        {"text": "Use GUI", "source": "policy"},
++        {"text": "Check cables", "source": "policy"},
++        {"text": "Consult manual", "source": "retrieval"},
++    ]

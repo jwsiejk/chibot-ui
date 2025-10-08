@@ -853,6 +853,73 @@ def build_suggestion_items(items: List[str]) -> List[Dict[str, str]]:
     return [{"text": it} for it in items]
 
 
+def _log_suggestions_made(turn_id: Optional[str],
+                          policy_chips: Optional[Iterable[Any]],
+                          legacy_suggestions: Optional[Iterable[Any]],
+                          merged_suggestions: Optional[Iterable[Any]],
+                          cfg: Optional[Dict[str, Any]]) -> None:
+    try:
+        cfg_map: Dict[str, Any]
+        if isinstance(cfg, dict):
+            cfg_map = cfg
+        else:
+            cfg_map = {}
+
+        def _coerce_limit(value: Any, default: int) -> int:
+            try:
+                if value is None:
+                    return default
+                coerced = int(value)
+                if coerced < 0:
+                    return default
+                return coerced
+            except Exception:
+                return default
+
+        max_items = _coerce_limit(cfg_map.get("suggestions_max_items"), _suggestion_cap())
+        max_words = _coerce_limit(cfg_map.get("suggestions_max_words"), 7)
+
+        def _display_text(raw: Any) -> str:
+            text = _normalize_suggestion_item(raw)
+            if len(text) > 50:
+                text = text[:50].rstrip()
+            return text
+
+        policy_set = {
+            text
+            for text in (_display_text(item) for item in (policy_chips or []))
+            if text
+        }
+        retrieval_set = {
+            text
+            for text in (_display_text(item) for item in (legacy_suggestions or []))
+            if text
+        }
+
+        items: List[Dict[str, str]] = []
+        for raw in merged_suggestions or []:
+            text = _display_text(raw)
+            if not text:
+                continue
+            if text in policy_set:
+                source = "policy"
+            elif text in retrieval_set:
+                source = "retrieval"
+            else:
+                source = "retrieval"
+            items.append({"text": text, "source": source})
+
+        _jlog(
+            "suggestions_made",
+            turn_id=str(turn_id) if turn_id is not None else None,
+            items=items,
+            max_items=max_items,
+            max_words_per_item=max_words,
+        )
+    except Exception:
+        pass
+
+
 def classify(seed_text: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Run lightweight classifiers and awareness annotators for a user turn."""
     base_meta = meta or {}
@@ -1669,6 +1736,13 @@ def _make_foundation_frames(seed_text: str,
     except Exception:
         legacy_suggestions = []
     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
+    _log_suggestions_made(
+        turn_id=turn_id,
+        policy_chips=policy_chips,
+        legacy_suggestions=legacy_suggestions,
+        merged_suggestions=merged_suggestions,
+        cfg=cfg,
+    )
     try:
         _jlog(
             "chips_emit",
@@ -1983,6 +2057,13 @@ def _make_legacy_frames(seed_text: str,
         legacy_suggestions = []
     policy_chips = _collect_policy_chips(policy)
     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
+    _log_suggestions_made(
+        turn_id=turn_id,
+        policy_chips=policy_chips,
+        legacy_suggestions=legacy_suggestions,
+        merged_suggestions=merged_suggestions,
+        cfg=cfg,
+    )
     try:
         intent = labels.get('intent') if isinstance(labels, dict) else None
         _jlog(
@@ -2424,11 +2505,13 @@ def run_ws_greet(session_id: str) -> str:
     and nudge UI with state+suggestions. Returns turn_id.
     """
     forced_tid, _idempotent = get_or_create_greet_turn(session_id, force=False, ttl_sec=DEFAULT_TTL_SEC)
+    cfg = db.get_config()
     tid, frames = make_assistant_frames(
         "greet",
         session_id,
         meta={"source": "ws_greet", "channel": "ws"},
         force_turn_id=forced_tid,
+        cfg=cfg,
     )
     if _ws_generation_failed(tid, frames):
         tid = _allocate_turn_id(forced_tid)
@@ -2490,7 +2573,15 @@ def run_ws_greet(session_id: str) -> str:
         if not audio_scheduled:
             _emit_ready_once()
         if not suggestions_already_sent:
-            base_suggestions = merge_suggestions(hygienic_suggestions(""))
+            greet_legacy = hygienic_suggestions("")
+            base_suggestions = merge_suggestions(greet_legacy)
+            _log_suggestions_made(
+                turn_id=tid,
+                policy_chips=[],
+                legacy_suggestions=greet_legacy,
+                merged_suggestions=base_suggestions,
+                cfg=cfg,
+            )
             if base_suggestions:
                 bus.broadcast(
                     session_id,

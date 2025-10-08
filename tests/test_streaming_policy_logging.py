@@ -143,6 +143,12 @@ def test_foundation_policy_decision_logs_kb_snippets(monkeypatch):
     assert persona_fields["persona_elements"] == ["humor:0.20", "quote:q-demo"]
     assert persona_fields["guardrails_suppressed"] == []
 
+    suggestions_events = [fields for event, fields in captured if event == "suggestions_made"]
+    assert suggestions_events
+    suggestion_fields = suggestions_events[0]
+    assert suggestion_fields["turn_id"] == "10"
+    assert suggestion_fields["items"] == []
+
 
 def _patch_legacy_dependencies(monkeypatch, reply_text: str):
     monkeypatch.setattr(streaming, "_get_persona_for_session", lambda session_id: {"id": "chip", "name": "Chip"})
@@ -206,6 +212,12 @@ def test_legacy_policy_decision_logs_fallback(monkeypatch):
     assert persona_fields["persona_elements"] == []
     assert persona_fields["guardrails_suppressed"] == ["quote"]
 
+    suggestions_events = [fields for event, fields in captured if event == "suggestions_made"]
+    assert suggestions_events
+    legacy_fields = suggestions_events[0]
+    assert legacy_fields["turn_id"] == "22"
+    assert legacy_fields["items"] == []
+
 
 def test_legacy_policy_decision_meta_override(monkeypatch):
     _patch_legacy_dependencies(monkeypatch, reply_text="All good")
@@ -257,3 +269,61 @@ def test_legacy_policy_decision_meta_override(monkeypatch):
     assert persona_fields["persona_level"] == pytest.approx(0.13)
     assert persona_fields["persona_elements"] == []
     assert persona_fields["guardrails_suppressed"] == ["quote"]
+
+    suggestions_events = [fields for event, fields in captured if event == "suggestions_made"]
+    assert suggestions_events
+    override_fields = suggestions_events[0]
+    assert override_fields["turn_id"] == "33"
+
+
+def test_suggestions_made_classifies_sources(monkeypatch):
+    _patch_foundation_dependencies(monkeypatch, teacher_move="respond")
+
+    telemetry = DummyTelemetry()
+    meta = {"action": "respond"}
+    cfg = {
+        "suggestions_enabled": True,
+        "suggestions_max_items": 3,
+        "suggestions_max_words": 5,
+        "nebraska_quotes_enabled": True,
+    }
+
+    policy_items = ["Use GUI", "Check cables"]
+    retrieval_items = ["Check cables", "Consult manual"]
+
+    monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: policy_items)
+    monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: retrieval_items)
+
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
+
+    turn_id, _ = streaming._make_foundation_frames(
+        "Need help",
+        "session-mixed",
+        meta,
+        cfg,
+        correlation_user_msg_id=None,
+        turn_id="44",
+        telemetry=telemetry,
+        is_greet=False,
+        fallback_line="Fallback",
+        fallback_on_empty=True,
+        fallback_on_error=True,
+        fallback_emit_event=False,
+        action="respond",
+        broadcast_immediately=False,
+    )
+
+    assert turn_id == "44"
+
+    suggestions_events = [fields for event, fields in captured if event == "suggestions_made"]
+    assert suggestions_events
+    fields = suggestions_events[0]
+    assert fields["turn_id"] == "44"
+    assert fields["max_items"] == 3
+    assert fields["max_words_per_item"] == 5
+    assert fields["items"] == [
+        {"text": "Use GUI", "source": "policy"},
+        {"text": "Check cables", "source": "policy"},
+        {"text": "Consult manual", "source": "retrieval"},
+    ]
