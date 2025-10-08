@@ -1,8 +1,13 @@
 import asyncio
+import hashlib
 import importlib
 import json
 import types
 from collections import deque
+
+import pytest
+
+import app.personas.prompt_builder as prompt_builder
 
 from app.services import streaming
 from app.ws import ws_asgi
@@ -25,6 +30,36 @@ def _csrf_token(client):
 
 def _stub_config(monkeypatch):
     monkeypatch.setattr(streaming.db, "get_config", lambda: {})
+
+
+def test_build_messages_persona_trace(monkeypatch):
+    persona = {
+        "id": "chip",
+        "name": "Chip",
+        "intensity": 0.5,
+        "config": {"quote_bank": ["Keep pushing", "Stay curious"], "humor": 0.1},
+    }
+
+    monkeypatch.setattr(prompt_builder.random, "random", lambda: 0.05)
+    monkeypatch.setattr(prompt_builder.random, "choice", lambda seq: seq[0])
+
+    messages, teacher_move, prompt_hash, trace = prompt_builder.build_messages(
+        persona=persona,
+        user_text="Let's go",
+        dialog_meta={"teacher_move": "offer_steps"},
+    )
+
+    assert teacher_move == "offer_steps"
+    assert messages[-1]["content"] == "Let's go"
+    assert prompt_hash
+    assert trace["intensity"] == pytest.approx(0.5)
+    assert trace["quote"]["text"] == "Keep pushing"
+    expected_id = hashlib.sha1("Keep pushing".encode("utf-8")).hexdigest()[:12]
+    assert trace["quote"]["quote_id"] == expected_id
+    assert trace["quote"]["picked"] is True
+    assert trace["quote"]["enabled"] is True
+    assert trace["toggles"]["humor"] == pytest.approx(0.1)
+    assert trace["guardrail"]["muted"] == []
 
 
 def test_short_greeting_preserves_sentence():
@@ -190,6 +225,9 @@ def test_make_assistant_frames_greet_advertises_welcome_move(monkeypatch):
     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
 
+    captured_logs = []
+    monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured_logs.append((event, fields)))
+
     class FakeStore:
         def match_examples(self, persona_id, user_text, limit=4):
             return []
@@ -204,6 +242,13 @@ def test_make_assistant_frames_greet_advertises_welcome_move(monkeypatch):
     monkeypatch.setattr(streaming, "PersonaStore", lambda: FakeStore())
     monkeypatch.setattr(streaming, "PersonaManager", FakePersonaManager)
 
+    persona_trace_stub = {
+        "intensity": 0.2,
+        "quote": {"text": "", "quote_id": None, "enabled": True, "picked": False, "candidate_count": 0, "bank": None},
+        "toggles": {},
+        "guardrail": {"muted": []},
+    }
+
     monkeypatch.setattr(
         streaming,
         "build_messages",
@@ -211,6 +256,7 @@ def test_make_assistant_frames_greet_advertises_welcome_move(monkeypatch):
             [{"role": "user", "content": user_text}],
             dialog_meta.get("teacher_move"),
             "hash",
+            persona_trace_stub,
         ),
     )
     monkeypatch.setattr(streaming, "_call_foundation_with_retry", lambda *a, **k: "Hello!")
@@ -224,9 +270,18 @@ def test_make_assistant_frames_greet_advertises_welcome_move(monkeypatch):
 
     _, frames = streaming.make_assistant_frames("greet", "session-greet", meta={"source": "ws_greet"})
 
-    chunk = next(fr for fr in frames if fr.get("type") == "assistant_chunk")
+    chunks = [fr for fr in frames if fr.get("type") == "assistant_chunk"]
+    assert chunks
+    chunk = chunks[0]
     assert chunk["teacher_move"] == "offer_steps"
     assert chunk.get("intent") == "greet"
+
+    persona_events = [fields for event, fields in captured_logs if event == "persona_applied"]
+    assert persona_events
+    persona_fields = persona_events[0]
+    assert persona_fields["persona_level"] == pytest.approx(0.2)
+    assert persona_fields["persona_elements"] == []
+    assert persona_fields["guardrails_suppressed"] == []
 
 
 def test_make_assistant_frames_http_allows_legacy(monkeypatch):

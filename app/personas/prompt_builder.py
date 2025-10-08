@@ -53,17 +53,179 @@ def _choose_teacher_move(weights: Dict[str, float], dialog_meta: Dict[str, Any])
     return random.choice(bag) if bag else "summarize_next_actions"
 
 
-def _maybe_persona_quote(cfg: Dict[str, Any], intensity: float) -> str:
-    """Return a light persona quote ~intensity fraction of the time."""
+def _stable_quote_id(text: str, *, bank: Optional[str] = None, candidate_id: Optional[str] = None) -> str:
+    """Generate a deterministic identifier for a persona quote."""
+    base: str
+    if candidate_id:
+        base = str(candidate_id)
+    else:
+        salted = f"{bank or ''}::{text}" if bank else text
+        base = hashlib.sha1(salted.encode("utf-8", errors="ignore")).hexdigest()
+    return base[:12]
+
+
+def _normalize_toggle_value(value: Any) -> Optional[Any]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"", "none"}:
+            return None
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+        try:
+            return float(lowered)
+        except Exception:
+            return value.strip()
+    try:
+        return bool(value)
+    except Exception:
+        return None
+
+
+def _extract_toggle(cfg: Dict[str, Any], name: str) -> Optional[Any]:
+    candidates = (
+        name,
+        f"{name}_level",
+        f"gen_{name}",
+        f"allow_{name}",
+        f"{name}_enabled",
+    )
+    for key in candidates:
+        if key in cfg:
+            return _normalize_toggle_value(cfg.get(key))
+    return None
+
+
+def _collect_guardrail_markers(dialog_meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Capture guardrail-suppressed persona signals from dialog metadata."""
+    muted: List[str] = []
+
+    def _extend(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            val = value.strip()
+            if val:
+                muted.append(val)
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                _extend(item)
+            return
+        if isinstance(value, dict):
+            for key, flag in value.items():
+                if isinstance(flag, bool) and not flag:
+                    continue
+                if flag:
+                    muted.append(str(key))
+            return
+        try:
+            if bool(value):
+                muted.append(str(value))
+        except Exception:
+            pass
+
+    meta = dialog_meta or {}
+    for key in (
+        "persona_guardrail_muted",
+        "persona_guardrail_suppressed",
+        "guardrail_persona_muted",
+        "guardrail_persona_suppressed",
+    ):
+        _extend(meta.get(key))
+
+    guardrail_section = meta.get("guardrail") or meta.get("guardrails")
+    if isinstance(guardrail_section, dict):
+        for subkey in ("persona", "persona_muted", "muted"):
+            _extend(guardrail_section.get(subkey))
+
+    return {"muted": sorted({m for m in muted if m})}
+
+
+def _maybe_persona_quote(cfg: Dict[str, Any], intensity: float) -> Tuple[str, Dict[str, Any]]:
+    """Return a light persona quote ~intensity fraction of the time along with metadata."""
+    bank_name: Optional[str] = None
+    enabled = True
+    candidates: List[Tuple[str, Optional[str]]] = []
+
+    quotes_cfg = cfg.get("quotes")
+    if isinstance(quotes_cfg, dict):
+        enabled = bool(quotes_cfg.get("enabled", enabled))
+        bank_name = str(quotes_cfg.get("bank") or quotes_cfg.get("id") or "") or None
+        raw_candidates = (
+            quotes_cfg.get("choices")
+            or quotes_cfg.get("values")
+            or quotes_cfg.get("samples")
+            or quotes_cfg.get("quotes")
+        )
+        if isinstance(raw_candidates, dict):
+            for key, value in raw_candidates.items():
+                text = str(value or "").strip()
+                if text:
+                    candidates.append((text, str(key)))
+        elif isinstance(raw_candidates, (list, tuple)):
+            for item in raw_candidates:
+                if isinstance(item, dict):
+                    text = str(
+                        item.get("text")
+                        or item.get("quote")
+                        or item.get("value")
+                        or ""
+                    ).strip()
+                    qid = item.get("id") or item.get("key") or item.get("uuid")
+                    if text:
+                        candidates.append((text, str(qid) if qid is not None else None))
+                else:
+                    text = str(item or "").strip()
+                    if text:
+                        candidates.append((text, None))
+
+    raw_bank = cfg.get("quote_bank")
+    if isinstance(raw_bank, dict):
+        for key, value in raw_bank.items():
+            text = str(value or "").strip()
+            if text:
+                candidates.append((text, str(key)))
+    elif isinstance(raw_bank, (list, tuple)):
+        for item in raw_bank:
+            text = str(item or "").strip()
+            if text:
+                candidates.append((text, None))
+    elif isinstance(raw_bank, str) and raw_bank and not bank_name:
+        bank_name = raw_bank
+
+    meta = {
+        "bank": bank_name,
+        "enabled": bool(enabled and candidates),
+        "candidate_count": len(candidates),
+        "quote_id": None,
+        "text": "",
+        "picked": False,
+    }
+
+    if not meta["enabled"]:
+        return "", meta
+
     try:
         p = max(0.0, min(1.0, float(intensity)))
         if random.random() <= p:
-            q = cfg.get("quote_bank") or []
-            if isinstance(q, (list, tuple)) and q:
-                return str(random.choice(q))
+            chosen_text, candidate_id = random.choice(candidates)
+            meta["picked"] = True
+            meta["text"] = chosen_text
+            meta["quote_id"] = _stable_quote_id(
+                chosen_text,
+                bank=meta.get("bank"),
+                candidate_id=candidate_id,
+            )
+            return chosen_text, meta
     except Exception:
         pass
-    return ""
+    return "", meta
 
 
 def _coerce_str_map(obj: Any) -> Dict[str, Any]:
@@ -138,7 +300,7 @@ def build_messages(
 
     Returns
     -------
-    (messages, teacher_move, prompt_hash)
+    (messages, teacher_move, prompt_hash, persona_trace)
     """
     dialog_meta = dialog_meta or {}
     cfg: Dict[str, Any] = _coerce_str_map(persona.get("config"))
@@ -164,7 +326,7 @@ def build_messages(
     teacher_move = _choose_teacher_move(weights, dialog_meta)
 
     # Optional light persona quote
-    quote = _maybe_persona_quote(cfg, intensity)
+    quote, quote_meta = _maybe_persona_quote(cfg, intensity)
     quote_line = f'Persona note: "{quote}"' if quote else ""
 
     # ---------- SYSTEM MESSAGE ----------
@@ -265,4 +427,17 @@ def build_messages(
     # Hash for telemetry (full message roles/contents)
     prompt_hash = _hash_prompt([f"{m['role']}:{m['content']}" for m in messages])
 
-    return messages, teacher_move, prompt_hash
+    toggles: Dict[str, Any] = {}
+    for toggle_name in ("humor", "metaphor"):
+        value = _extract_toggle(cfg, toggle_name)
+        if value is not None:
+            toggles[toggle_name] = value
+
+    persona_trace = {
+        "intensity": intensity,
+        "quote": quote_meta,
+        "toggles": toggles,
+        "guardrail": _collect_guardrail_markers(dialog_meta),
+    }
+
+    return messages, teacher_move, prompt_hash, persona_trace

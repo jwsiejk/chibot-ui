@@ -1023,6 +1023,236 @@ def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
     return cleaned
 
 
+def _coerce_bool_flag(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+        return None
+    try:
+        return bool(value)
+    except Exception:
+        return None
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return float(stripped)
+        except Exception:
+            return None
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except Exception:
+        return None
+
+
+def _normalize_toggle_for_log(value: Any) -> Optional[Any]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if not lowered:
+            return None
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+        try:
+            return float(lowered)
+        except Exception:
+            return value.strip()
+    try:
+        return bool(value)
+    except Exception:
+        return None
+
+
+def _extract_toggle_from_cfg(cfg: Optional[Dict[str, Any]], name: str) -> Optional[Any]:
+    if not isinstance(cfg, dict):
+        return None
+    for key in (f"gen_{name}", name, f"{name}_level", f"allow_{name}", f"{name}_enabled"):
+        if key in cfg:
+            return cfg.get(key)
+    features = cfg.get("features") if isinstance(cfg.get("features"), dict) else None
+    if isinstance(features, dict):
+        for key in (name, f"{name}_enabled"):
+            if key in features:
+                return features.get(key)
+    return None
+
+
+def _format_toggle_element(name: str, value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        if abs(float(value)) < 1e-6:
+            return None
+        return f"{name}:{float(value):.2f}"
+    if isinstance(value, bool):
+        return name if value else None
+    text = str(value).strip()
+    if not text:
+        return None
+    return f"{name}:{text}"
+
+
+def _collect_guardrail_list(meta: Optional[Dict[str, Any]]) -> List[str]:
+    if not isinstance(meta, dict):
+        return []
+
+    muted: List[str] = []
+
+    def _extend(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            val = value.strip()
+            if val:
+                muted.append(val)
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                _extend(item)
+            return
+        if isinstance(value, dict):
+            for key, flag in value.items():
+                if isinstance(flag, bool) and not flag:
+                    continue
+                if flag:
+                    muted.append(str(key))
+            return
+        try:
+            if bool(value):
+                muted.append(str(value))
+        except Exception:
+            pass
+
+    for key in (
+        "persona_guardrail_muted",
+        "persona_guardrail_suppressed",
+        "guardrail_persona_muted",
+        "guardrail_persona_suppressed",
+    ):
+        _extend(meta.get(key))
+
+    guardrail_section = meta.get("guardrail") or meta.get("guardrails")
+    if isinstance(guardrail_section, dict):
+        for subkey in ("persona", "persona_muted", "muted"):
+            _extend(guardrail_section.get(subkey))
+
+    return sorted({m for m in muted if m})
+
+
+def _summarize_persona_trace(trace: Optional[Dict[str, Any]],
+                             cfg: Optional[Dict[str, Any]],
+                             *,
+                             persona: Optional[Dict[str, Any]] = None,
+                             meta: Optional[Dict[str, Any]] = None) -> Tuple[float, List[str], List[str]]:
+    trace = trace or {}
+    persona_level = _coerce_float(trace.get("intensity"))
+    if persona_level is None and persona:
+        persona_level = _coerce_float(persona.get("intensity") or persona.get("nebraska_persona_level"))
+    if persona_level is None and cfg:
+        persona_level = _coerce_float(cfg.get("nebraska_persona_level"))
+    if persona_level is None:
+        persona_level = 0.0
+    persona_level = max(0.0, min(1.0, persona_level))
+
+    quote_meta = trace.get("quote") or {}
+    quote_text = str(quote_meta.get("text") or "").strip()
+    quote_id = quote_meta.get("quote_id")
+    if not quote_id and quote_text:
+        bank = quote_meta.get("bank")
+        salted = f"{bank or ''}::{quote_text}" if bank else quote_text
+        quote_id = hashlib.sha1(salted.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+    toggles: Dict[str, Any] = {}
+    if isinstance(trace.get("toggles"), dict):
+        toggles.update(trace.get("toggles"))
+    for name in ("humor", "metaphor"):
+        if name not in toggles:
+            cfg_value = _extract_toggle_from_cfg(cfg, name)
+            normalized = _normalize_toggle_for_log(cfg_value)
+            if normalized is not None:
+                toggles[name] = normalized
+
+    persona_elements: List[str] = []
+    if quote_text and quote_id:
+        persona_elements.append(f"quote:{quote_id}")
+    for name in ("humor", "metaphor"):
+        formatted = _format_toggle_element(name, toggles.get(name))
+        if formatted:
+            persona_elements.append(formatted)
+
+    guardrails: List[str] = []
+    guardrail_meta = trace.get("guardrail") or {}
+    trace_muted = guardrail_meta.get("muted") if isinstance(guardrail_meta, dict) else None
+    if isinstance(trace_muted, (list, tuple, set)):
+        guardrails.extend(str(item) for item in trace_muted if item)
+    elif trace_muted:
+        guardrails.append(str(trace_muted))
+
+    guardrails.extend(_collect_guardrail_list(meta))
+
+    quote_enabled_flag = quote_meta.get("enabled")
+    candidate_count = quote_meta.get("candidate_count")
+    try:
+        candidate_count_val = int(candidate_count)
+    except Exception:
+        candidate_count_val = 0
+    if quote_enabled_flag is False and (candidate_count_val or quote_meta.get("bank")):
+        guardrails.append("quote")
+
+    cfg_quote_enabled = _coerce_bool_flag(cfg.get("nebraska_quotes_enabled")) if isinstance(cfg, dict) else None
+    if cfg_quote_enabled is False:
+        guardrails.append("quote")
+
+    persona_elements = sorted({elem for elem in persona_elements if elem})
+    guardrails = sorted({g for g in guardrails if g})
+
+    return persona_level, persona_elements, guardrails
+
+
+def _log_persona_applied(turn_id: str,
+                         trace: Optional[Dict[str, Any]],
+                         cfg: Optional[Dict[str, Any]],
+                         *,
+                         persona: Optional[Dict[str, Any]] = None,
+                         meta: Optional[Dict[str, Any]] = None) -> None:
+    try:
+        persona_level, persona_elements, guardrails = _summarize_persona_trace(
+            trace,
+            cfg,
+            persona=persona,
+            meta=meta,
+        )
+        _jlog(
+            "persona_applied",
+            turn_id=str(turn_id),
+            persona_level=persona_level,
+            persona_elements=persona_elements,
+            guardrails_suppressed=guardrails,
+        )
+    except Exception:
+        pass
+
+
 def _should_skip_legacy(meta: Optional[Dict[str, Any]]) -> bool:
     if not meta:
         return False
@@ -1188,6 +1418,7 @@ def _make_foundation_frames(seed_text: str,
     if turn_id is None:
         turn_id = _allocate_turn_id(force_turn_id)
     turn_id = str(turn_id)
+
     if telemetry is None:
         telemetry = _create_nlu_context(
             turn_id=turn_id,
@@ -1276,11 +1507,19 @@ def _make_foundation_frames(seed_text: str,
         prompt_meta['teacher_move'] = policy_action
 
     examples = store.match_examples(persona['id'], seed_text)
-    messages, teacher_move, prompt_hash = build_messages(
+    messages, teacher_move, prompt_hash, persona_trace = build_messages(
         persona=persona,
         user_text=seed_text,
         dialog_meta=prompt_meta,
         examples=examples,
+    )
+
+    _log_persona_applied(
+        turn_id,
+        persona_trace,
+        cfg,
+        persona=persona,
+        meta=meta,
     )
 
     kb_count = 0
@@ -1484,6 +1723,21 @@ def _make_legacy_frames(seed_text: str,
     if turn_id is None:
         turn_id = _allocate_turn_id(force_turn_id)
     turn_id = str(turn_id)
+
+    persona_trace = {
+        "intensity": (persona or {}).get("intensity") or (persona or {}).get("nebraska_persona_level"),
+        "quote": {
+            "text": "",
+            "quote_id": None,
+            "enabled": _coerce_bool_flag((cfg or {}).get("nebraska_quotes_enabled")) if isinstance(cfg, dict) else None,
+            "picked": False,
+            "candidate_count": 0,
+            "bank": None,
+        },
+        "toggles": {},
+        "guardrail": {},
+    }
+
     if telemetry is None:
         telemetry = _create_nlu_context(
             turn_id=turn_id,
@@ -1503,6 +1757,13 @@ def _make_legacy_frames(seed_text: str,
     else:
         labels = dict(labels)
     telemetry.log_entities(labels.get("entities"))
+    _log_persona_applied(
+        turn_id,
+        persona_trace,
+        cfg,
+        persona=persona,
+        meta=meta,
+    )
     if policy is None:
         policy = pick_dialog_policy(labels) or {}
     else:

@@ -52,10 +52,28 @@ def _patch_foundation_dependencies(monkeypatch, *, teacher_move="deep_dive"):
         "decide",
         lambda *a, **k: {"teacher_move": teacher_move},
     )
+    persona_trace = {
+        "intensity": 0.25,
+        "quote": {
+            "text": "Giddy up",
+            "quote_id": "q-demo",
+            "enabled": True,
+            "picked": True,
+            "candidate_count": 1,
+            "bank": "nebraska",
+        },
+        "toggles": {"humor": 0.2},
+        "guardrail": {"muted": []},
+    }
     monkeypatch.setattr(
         streaming,
         "build_messages",
-        lambda **kwargs: ([{"role": "user", "content": kwargs["user_text"]}], teacher_move, "hash1234"),
+        lambda **kwargs: (
+            [{"role": "user", "content": kwargs["user_text"]}],
+            teacher_move,
+            "hash1234",
+            persona_trace,
+        ),
     )
 
     def _fake_foundation(messages, cfg, telemetry=None):
@@ -77,7 +95,7 @@ def test_foundation_policy_decision_logs_kb_snippets(monkeypatch):
             "Second document body",
         ],
     }
-    cfg = {"suggestions_enabled": False}
+    cfg = {"suggestions_enabled": False, "nebraska_quotes_enabled": True}
 
     captured = []
 
@@ -118,6 +136,13 @@ def test_foundation_policy_decision_logs_kb_snippets(monkeypatch):
     hashes = {entry["hash"] for entry in fields["used_docs"]}
     assert all(len(h) == 8 for h in hashes)
 
+    persona_events = [fields for event, fields in captured if event == "persona_applied"]
+    assert persona_events
+    persona_fields = persona_events[0]
+    assert persona_fields["persona_level"] == pytest.approx(0.25)
+    assert persona_fields["persona_elements"] == ["humor:0.20", "quote:q-demo"]
+    assert persona_fields["guardrails_suppressed"] == []
+
 
 def _patch_legacy_dependencies(monkeypatch, reply_text: str):
     monkeypatch.setattr(streaming, "_get_persona_for_session", lambda session_id: {"id": "chip", "name": "Chip"})
@@ -136,7 +161,7 @@ def test_legacy_policy_decision_logs_fallback(monkeypatch):
 
     telemetry = DummyTelemetry()
     meta = {"action": "offer_steps"}
-    cfg = {"suggestions_enabled": False}
+    cfg = {"suggestions_enabled": False, "nebraska_persona_level": 0.13, "nebraska_quotes_enabled": False}
     labels = {"intent": "install", "confidence": 0.5}
     policy = {"teacher_move": "offer_steps"}
 
@@ -174,13 +199,20 @@ def test_legacy_policy_decision_logs_fallback(monkeypatch):
     assert fields["fallback_fired"] is True
     assert fields["fallback_reason"] == "empty"
 
+    persona_events = [fields for event, fields in captured if event == "persona_applied"]
+    assert persona_events
+    persona_fields = persona_events[0]
+    assert persona_fields["persona_level"] == pytest.approx(0.13)
+    assert persona_fields["persona_elements"] == []
+    assert persona_fields["guardrails_suppressed"] == ["quote"]
+
 
 def test_legacy_policy_decision_meta_override(monkeypatch):
     _patch_legacy_dependencies(monkeypatch, reply_text="All good")
 
     telemetry = DummyTelemetry()
     meta = {"action": "offer_steps"}
-    cfg = {"suggestions_enabled": False}
+    cfg = {"suggestions_enabled": False, "nebraska_persona_level": 0.13, "nebraska_quotes_enabled": False}
     labels = {"intent": "install", "confidence": 0.42}
     policy = {"teacher_move": "ask_clarify", "action": "ask_clarify"}
 
@@ -219,3 +251,9 @@ def test_legacy_policy_decision_meta_override(monkeypatch):
     assert fields["policy_move"] == "ask_clarify"
     assert fields["nlu_intent"] == "install"
     assert pytest.approx(fields["nlu_confidence"], rel=1e-6) == 0.42
+    persona_events = [fields for event, fields in captured if event == "persona_applied"]
+    assert persona_events
+    persona_fields = persona_events[0]
+    assert persona_fields["persona_level"] == pytest.approx(0.13)
+    assert persona_fields["persona_elements"] == []
+    assert persona_fields["guardrails_suppressed"] == ["quote"]

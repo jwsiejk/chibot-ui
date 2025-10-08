@@ -1,545 +1,1294 @@
+diff --git a/app/personas/prompt_builder.py b/app/personas/prompt_builder.py
+index 1d17ad41c2acdbd55ad31d6ceeb65f31ff7fce15..15f2ae926ee9f4caa79279559e39715dba34ce13 100644
+--- a/app/personas/prompt_builder.py
++++ b/app/personas/prompt_builder.py
+@@ -31,61 +31,223 @@ def _hash_prompt(parts: List[str]) -> str:
+     return h.hexdigest()[:16]
+ 
+ 
+ def _choose_teacher_move(weights: Dict[str, float], dialog_meta: Dict[str, Any]) -> str:
+     """
+     Pick one teacher move.
+       - If dialog_meta declares a move, honor it.
+       - Else sample by weights (fallback to summarize_next_actions).
+     """
+     explicit = (dialog_meta or {}).get("teacher_move")
+     if isinstance(explicit, str) and explicit in TEACHER_MOVES:
+         return explicit
+ 
+     # Weighted choice
+     bag: List[str] = []
+     for k in TEACHER_MOVES:
+         try:
+             w = float(weights.get(k, 0.0))
+         except Exception:
+             w = 0.0
+         if w > 0:
+             bag.extend([k] * max(1, int(round(w * 100))))
+     return random.choice(bag) if bag else "summarize_next_actions"
+ 
+ 
+-def _maybe_persona_quote(cfg: Dict[str, Any], intensity: float) -> str:
+-    """Return a light persona quote ~intensity fraction of the time."""
++def _stable_quote_id(text: str, *, bank: Optional[str] = None, candidate_id: Optional[str] = None) -> str:
++    """Generate a deterministic identifier for a persona quote."""
++    base: str
++    if candidate_id:
++        base = str(candidate_id)
++    else:
++        salted = f"{bank or ''}::{text}" if bank else text
++        base = hashlib.sha1(salted.encode("utf-8", errors="ignore")).hexdigest()
++    return base[:12]
++
++
++def _normalize_toggle_value(value: Any) -> Optional[Any]:
++    if value is None:
++        return None
++    if isinstance(value, (int, float)):
++        return float(value)
++    if isinstance(value, str):
++        lowered = value.strip().lower()
++        if lowered in {"", "none"}:
++            return None
++        if lowered in {"true", "1", "yes", "on"}:
++            return True
++        if lowered in {"false", "0", "no", "off"}:
++            return False
++        try:
++            return float(lowered)
++        except Exception:
++            return value.strip()
++    try:
++        return bool(value)
++    except Exception:
++        return None
++
++
++def _extract_toggle(cfg: Dict[str, Any], name: str) -> Optional[Any]:
++    candidates = (
++        name,
++        f"{name}_level",
++        f"gen_{name}",
++        f"allow_{name}",
++        f"{name}_enabled",
++    )
++    for key in candidates:
++        if key in cfg:
++            return _normalize_toggle_value(cfg.get(key))
++    return None
++
++
++def _collect_guardrail_markers(dialog_meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
++    """Capture guardrail-suppressed persona signals from dialog metadata."""
++    muted: List[str] = []
++
++    def _extend(value: Any) -> None:
++        if value is None:
++            return
++        if isinstance(value, str):
++            val = value.strip()
++            if val:
++                muted.append(val)
++            return
++        if isinstance(value, (list, tuple, set)):
++            for item in value:
++                _extend(item)
++            return
++        if isinstance(value, dict):
++            for key, flag in value.items():
++                if isinstance(flag, bool) and not flag:
++                    continue
++                if flag:
++                    muted.append(str(key))
++            return
++        try:
++            if bool(value):
++                muted.append(str(value))
++        except Exception:
++            pass
++
++    meta = dialog_meta or {}
++    for key in (
++        "persona_guardrail_muted",
++        "persona_guardrail_suppressed",
++        "guardrail_persona_muted",
++        "guardrail_persona_suppressed",
++    ):
++        _extend(meta.get(key))
++
++    guardrail_section = meta.get("guardrail") or meta.get("guardrails")
++    if isinstance(guardrail_section, dict):
++        for subkey in ("persona", "persona_muted", "muted"):
++            _extend(guardrail_section.get(subkey))
++
++    return {"muted": sorted({m for m in muted if m})}
++
++
++def _maybe_persona_quote(cfg: Dict[str, Any], intensity: float) -> Tuple[str, Dict[str, Any]]:
++    """Return a light persona quote ~intensity fraction of the time along with metadata."""
++    bank_name: Optional[str] = None
++    enabled = True
++    candidates: List[Tuple[str, Optional[str]]] = []
++
++    quotes_cfg = cfg.get("quotes")
++    if isinstance(quotes_cfg, dict):
++        enabled = bool(quotes_cfg.get("enabled", enabled))
++        bank_name = str(quotes_cfg.get("bank") or quotes_cfg.get("id") or "") or None
++        raw_candidates = (
++            quotes_cfg.get("choices")
++            or quotes_cfg.get("values")
++            or quotes_cfg.get("samples")
++            or quotes_cfg.get("quotes")
++        )
++        if isinstance(raw_candidates, dict):
++            for key, value in raw_candidates.items():
++                text = str(value or "").strip()
++                if text:
++                    candidates.append((text, str(key)))
++        elif isinstance(raw_candidates, (list, tuple)):
++            for item in raw_candidates:
++                if isinstance(item, dict):
++                    text = str(
++                        item.get("text")
++                        or item.get("quote")
++                        or item.get("value")
++                        or ""
++                    ).strip()
++                    qid = item.get("id") or item.get("key") or item.get("uuid")
++                    if text:
++                        candidates.append((text, str(qid) if qid is not None else None))
++                else:
++                    text = str(item or "").strip()
++                    if text:
++                        candidates.append((text, None))
++
++    raw_bank = cfg.get("quote_bank")
++    if isinstance(raw_bank, dict):
++        for key, value in raw_bank.items():
++            text = str(value or "").strip()
++            if text:
++                candidates.append((text, str(key)))
++    elif isinstance(raw_bank, (list, tuple)):
++        for item in raw_bank:
++            text = str(item or "").strip()
++            if text:
++                candidates.append((text, None))
++    elif isinstance(raw_bank, str) and raw_bank and not bank_name:
++        bank_name = raw_bank
++
++    meta = {
++        "bank": bank_name,
++        "enabled": bool(enabled and candidates),
++        "candidate_count": len(candidates),
++        "quote_id": None,
++        "text": "",
++        "picked": False,
++    }
++
++    if not meta["enabled"]:
++        return "", meta
++
+     try:
+         p = max(0.0, min(1.0, float(intensity)))
+         if random.random() <= p:
+-            q = cfg.get("quote_bank") or []
+-            if isinstance(q, (list, tuple)) and q:
+-                return str(random.choice(q))
++            chosen_text, candidate_id = random.choice(candidates)
++            meta["picked"] = True
++            meta["text"] = chosen_text
++            meta["quote_id"] = _stable_quote_id(
++                chosen_text,
++                bank=meta.get("bank"),
++                candidate_id=candidate_id,
++            )
++            return chosen_text, meta
+     except Exception:
+         pass
+-    return ""
++    return "", meta
+ 
+ 
+ def _coerce_str_map(obj: Any) -> Dict[str, Any]:
+     return obj if isinstance(obj, dict) else {}
+ 
+ 
+ def _is_greet(dialog_meta: Optional[Dict[str, Any]]) -> bool:
+     """Robust greet detection across multiple meta fields."""
+     try:
+         meta = dialog_meta or {}
+         src = str(meta.get("source", "")).strip().lower()
+         seed = str(meta.get("seed_text", "")).strip().lower()
+         kind = str(meta.get("turn_kind", "")).strip().lower()
+         intent = str(meta.get("intent", "")).strip().lower()
+         greet_markers = {"greet", "ws_greet", "greet_fallback", "greeting", "welcome"}
+         return (src in greet_markers) or (seed in greet_markers or seed == "greet") \
+             or (kind in greet_markers) or (intent in {"greet", "opening"})
+     except Exception:
+         return False
+ 
+ 
+ def _first_name_from_profile(user_profile: Optional[Dict[str, Any]]) -> str:
+     """Best-effort: prefer first_name; else split 'name'/'full_name' on space; else ''."""
+     try:
+         p = user_profile or {}
+@@ -116,77 +278,77 @@ def build_messages(
+     examples: Optional[List[Dict[str, str]]] = None,
+ ) -> Tuple[List[Dict[str, str]], str, str]:
+     """
+     Compose the chat messages for the LLM.
+ 
+     Parameters
+     ----------
+     persona: dict
+         {'id','name','intensity','config':{...}} as returned by PersonaManager.get_active()
+     session_summary: str
+         Short rolling summary to keep context tight.
+     user_profile: dict|None
+         Optional profile details to personalize responses.
+     user_text: str
+         The user's current utterance (final transcript).
+     dialog_meta: dict|None
+         Runtime signals (intent, prosody flags, overrides, etc.)
+         Example: {"intent":"flasharray_install", "teacher_move":"offer_steps", "barge_in":True}
+     examples: list|None
+         Optional few-shots to prepend. Each item may have keys:
+         - {"pattern": "<user example>", "assistant": "<ideal assistant reply>"}
+         - or {"user": "...", "assistant": "..."}
+ 
+     Returns
+     -------
+-    (messages, teacher_move, prompt_hash)
++    (messages, teacher_move, prompt_hash, persona_trace)
+     """
+     dialog_meta = dialog_meta or {}
+     cfg: Dict[str, Any] = _coerce_str_map(persona.get("config"))
+ 
+     # Clamp intensity into [0,1] and default to 0.13 (12–15% persona presence target)
+     try:
+         intensity = float(persona.get("intensity", 0.13))
+     except Exception:
+         intensity = 0.13
+     intensity = max(0.0, min(1.0, intensity))
+ 
+     # Persona knobs
+     tone = _coerce_str_map(cfg.get("tone"))
+     style = _coerce_str_map(cfg.get("style_rules"))
+     forbidden = cfg.get("forbidden") or []
+     goals = cfg.get("goals") or []
+     weights = _coerce_str_map(cfg.get("teacher_moves_weights"))
+     lexicon = _coerce_str_map(cfg.get("lexicon"))
+     kb = _coerce_str_map(cfg.get("kb"))
+     llm_instructions: List[str] = list(cfg.get("llm_instructions") or [])
+ 
+     # Decide teacher move
+     teacher_move = _choose_teacher_move(weights, dialog_meta)
+ 
+     # Optional light persona quote
+-    quote = _maybe_persona_quote(cfg, intensity)
++    quote, quote_meta = _maybe_persona_quote(cfg, intensity)
+     quote_line = f'Persona note: "{quote}"' if quote else ""
+ 
+     # ---------- SYSTEM MESSAGE ----------
+     sys_lines: List[str] = []
+     sys_lines.append(f"You are {persona.get('name','Chip')} — a Virtual Partner Technical Manager supporting Trace3 on Pure Storage.")
+     sys_lines.append("Never mention you are an AI or a chatbot. Speak naturally, like you’re in a Zoom-style session.")
+     sys_lines.append("Use contractions, keep sentences short, prefer bullets when helpful, and end with a clear next step.")
+     sys_lines.append(f"Teacher move for this turn: {teacher_move}.")
+     # Persona-configured tone/style/policy
+     if tone:
+         sys_lines.append(
+             f"Tone defaults: default='{tone.get('default','supportive')}', "
+             f"error='{tone.get('error','calm')}', teaching='{tone.get('teaching','encouraging')}'."
+         )
+     if goals:
+         sys_lines.append(f"Goals: {goals}")
+     if style:
+         sys_lines.append(f"Style rules: {style}")
+     if forbidden:
+         sys_lines.append(f"Forbidden: {forbidden}")
+     if kb:
+         sys_lines.append(f"KB policy: {kb}")
+     if lexicon:
+         sys_lines.append(f"Lexicon normalization note (post-STT, pre-LLM): {lexicon}")
+ 
+@@ -243,26 +405,39 @@ def build_messages(
+     messages: List[Dict[str, str]] = [
+         {"role": "system", "content": "\n".join(sys_lines)},
+         {"role": "developer", "content": "\n".join(dev_lines)},
+     ]
+ 
+     # ---------- FEW-SHOTS (optional, before user) ----------
+     # Accept either {"pattern": "...", "assistant": "..."} or {"user":"...","assistant":"..."}
+     if examples:
+         count = 0
+         for ex in examples:
+             if count >= MAX_FEWSHOTS:
+                 break
+             user_ex = ex.get("user") or ex.get("pattern")
+             asst_ex = ex.get("assistant") or ex.get("assistant_target")
+             if user_ex and asst_ex:
+                 messages.append({"role": "user", "content": str(user_ex)})
+                 messages.append({"role": "assistant", "content": str(asst_ex)})
+                 count += 1
+ 
+     # ---------- USER MESSAGE ----------
+     messages.append({"role": "user", "content": str(user_text)})
+ 
+     # Hash for telemetry (full message roles/contents)
+     prompt_hash = _hash_prompt([f"{m['role']}:{m['content']}" for m in messages])
+ 
+-    return messages, teacher_move, prompt_hash
++    toggles: Dict[str, Any] = {}
++    for toggle_name in ("humor", "metaphor"):
++        value = _extract_toggle(cfg, toggle_name)
++        if value is not None:
++            toggles[toggle_name] = value
++
++    persona_trace = {
++        "intensity": intensity,
++        "quote": quote_meta,
++        "toggles": toggles,
++        "guardrail": _collect_guardrail_markers(dialog_meta),
++    }
++
++    return messages, teacher_move, prompt_hash, persona_trace
 diff --git a/app/services/streaming.py b/app/services/streaming.py
-index d7573f5cdbcd51c070681d34987c66b33550f72a..8fbae2c723f43891f6957d74ac07727435debb33 100644
+index 8fbae2c723f43891f6957d74ac07727435debb33..db131a732f40338554e90946d03453e8d5db7f1b 100644
 --- a/app/services/streaming.py
 +++ b/app/services/streaming.py
-@@ -124,50 +124,184 @@ def _short_greeting(text: str) -> str:
-         fallback = (text or "").strip()
-         return fallback or "Hi there!"
+@@ -1001,50 +1001,280 @@ def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
+     raw = policy.get("chips") if isinstance(policy, dict) else None
+     if not raw:
+         return []
+     if isinstance(raw, (list, tuple, set)):
+         chips = list(raw)
+     else:
+         chips = [raw]
+     cap = _suggestion_cap()
+     cleaned: List[str] = []
+     seen = set()
+     for item in chips:
+         text = _normalize_suggestion_item(item)
+         if not text:
+             continue
+         if len(text) > 50:
+             text = text[:50].rstrip()
+         if not text or text in seen:
+             continue
+         cleaned.append(text)
+         seen.add(text)
+         if len(cleaned) >= cap:
+             break
+     return cleaned
  
  
- SETTINGS = load_settings()
- ENABLE_CHIP_FOUNDATION = SETTINGS.enable_chip_foundation
- ENABLE_POLICY_CHIPS = SETTINGS.enable_policy_chips
- SUGGESTION_MAX = SETTINGS.suggestion_max
- STRICT_SYSTEM_SHIM = (
-     "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
-     "and never mention being an AI or chatbot."
- )
- 
- _WS_SOURCES = {"ws_greet", "user_ws"}
- _WS_PIPELINE_UNAVAILABLE_NOTE = "ws_pipeline_unavailable"
- _WS_PIPELINE_MESSAGE = "I'm still warming up. Please try again in a moment."
- _LEGACY_WARMUP_LINE = "Hi! I’m ready to help. (Model is warming up.)"
- 
- _DIALOG_ACTION_KEY = "dialog_action"
- _DIALOG_VERBOSITY_KEY = "dialog_verbosity"
- _DIALOG_SHOW_SUGGESTIONS_KEY = "dialog_show_suggestions"
- _DIALOG_NLU_KEY = "dialog_nlu"
- _DIALOG_POLICY_KEY = "dialog_policy"
- 
- 
-+def _normalize_move_name(move: Optional[str]) -> str:
++def _coerce_bool_flag(value: Any) -> Optional[bool]:
++    if isinstance(value, bool):
++        return value
++    if value is None:
++        return None
++    if isinstance(value, str):
++        lowered = value.strip().lower()
++        if lowered in {"true", "1", "yes", "on"}:
++            return True
++        if lowered in {"false", "0", "no", "off"}:
++            return False
++        return None
 +    try:
-+        return str(move or "").strip().lower()
++        return bool(value)
 +    except Exception:
-+        return ""
++        return None
 +
 +
-+_TEACHER_MOVE_FAMILY = {
-+    "ask_clarify": "clarify",
-+    "clarify": "clarify",
-+    "check_understanding": "clarify",
-+    "offer_steps": "answer",
-+    "respond": "answer",
-+    "compare": "answer",
-+    "visualize": "answer",
-+    "deep_dive": "deep_dive",
-+    "summarize_next_actions": "summarize",
-+    "summarize": "summarize",
-+}
-+
-+
-+def _teacher_move_family(move: Optional[str]) -> str:
-+    normalized = _normalize_move_name(move)
-+    return _TEACHER_MOVE_FAMILY.get(normalized, "answer")
-+
-+
-+def _summarize_used_docs(docs: Optional[Iterable[Any]]) -> List[Dict[str, Any]]:
-+    if not docs:
-+        return []
-+    summary: List[Dict[str, Any]] = []
-+    for idx, item in enumerate(docs):
++def _coerce_float(value: Any) -> Optional[float]:
++    if value is None:
++        return None
++    if isinstance(value, (int, float)):
++        return float(value)
++    if isinstance(value, str):
++        stripped = value.strip()
++        if not stripped:
++            return None
 +        try:
-+            if isinstance(item, (bytes, bytearray)):
-+                raw_bytes = bytes(item)
-+            else:
-+                raw_bytes = str(item).encode("utf-8", "ignore")
++            return float(stripped)
 +        except Exception:
-+            raw_bytes = repr(item).encode("utf-8", "ignore")
-+        digest = hashlib.sha256(raw_bytes).hexdigest()[:8]
-+        entry: Dict[str, Any] = {"idx": idx, "hash": digest, "len": len(raw_bytes)}
-+        if isinstance(item, dict):
-+            for key in ("id", "doc_id", "source", "path", "title"):
-+                value = item.get(key)
-+                if value:
-+                    try:
-+                        entry["tag"] = str(value)[:40]
-+                    except Exception:
-+                        entry["tag"] = repr(value)[:40]
-+                    break
-+        summary.append(entry)
-+    return summary
-+
-+
-+def _log_policy_decision(*,
-+                         session_id: str,
-+                         turn_id: str,
-+                         resolved_move: Optional[str],
-+                         normalized_action: Optional[str],
-+                         policy_move: Optional[str],
-+                         teacher_move_seed: Optional[str],
-+                         fallback_fired: bool,
-+                         fallback_reason: Optional[str],
-+                         meta: Optional[Dict[str, Any]],
-+                         nlu_meta: Optional[Dict[str, Any]],
-+                         used_docs_source: Optional[Iterable[Any]]) -> None:
++            return None
 +    try:
-+        normalized_action_name = _normalize_move_name(normalized_action)
-+        policy_move_name = _normalize_move_name(policy_move)
-+        seed_move_name = _normalize_move_name(teacher_move_seed)
-+        resolved_move_name = _normalize_move_name(resolved_move)
++        return float(value)  # type: ignore[arg-type]
++    except Exception:
++        return None
 +
-+        reason = "policy"
-+        if fallback_fired:
-+            reason = "fallback"
-+        else:
-+            hint = None
-+            if isinstance(meta, dict):
-+                hint_val = meta.get("policy_override_reason")
-+                if isinstance(hint_val, str) and hint_val.strip():
-+                    hint = hint_val.strip().lower()
-+            if hint:
-+                if "fallback" in hint:
-+                    reason = "fallback"
-+                elif "override" in hint:
-+                    reason = "meta_override"
-+                elif hint in {"policy", "meta_override", "fallback"}:
-+                    reason = hint
-+            elif normalized_action_name:
-+                if policy_move_name and normalized_action_name != policy_move_name:
-+                    reason = "meta_override"
-+                elif not policy_move_name:
-+                    reason = "meta_override"
 +
-+        nlu_intent = None
-+        nlu_confidence = None
-+        if isinstance(nlu_meta, dict):
-+            nlu_intent = nlu_meta.get("intent")
-+            confidence_raw = nlu_meta.get("confidence")
-+            if confidence_raw is not None:
-+                if isinstance(confidence_raw, (int, float)):
-+                    nlu_confidence = float(confidence_raw)
-+                else:
-+                    try:
-+                        nlu_confidence = float(str(confidence_raw))
-+                    except Exception:
-+                        nlu_confidence = None
++def _normalize_toggle_for_log(value: Any) -> Optional[Any]:
++    if value is None:
++        return None
++    if isinstance(value, (int, float)):
++        return float(value)
++    if isinstance(value, str):
++        lowered = value.strip().lower()
++        if not lowered:
++            return None
++        if lowered in {"true", "1", "yes", "on"}:
++            return True
++        if lowered in {"false", "0", "no", "off"}:
++            return False
++        try:
++            return float(lowered)
++        except Exception:
++            return value.strip()
++    try:
++        return bool(value)
++    except Exception:
++        return None
 +
-+        used_docs = _summarize_used_docs(used_docs_source)
 +
-+        payload: Dict[str, Any] = {
-+            "sid": session_id,
-+            "turn_id": turn_id,
-+            "teacher_move": resolved_move_name or None,
-+            "teacher_move_family": _teacher_move_family(resolved_move_name),
-+            "reason": reason,
-+            "fallback_fired": bool(fallback_fired),
-+            "fallback_reason": fallback_reason,
-+            "nlu_intent": nlu_intent,
-+            "nlu_confidence": nlu_confidence,
-+        }
-+        if normalized_action_name:
-+            payload["meta_action"] = normalized_action_name
-+        if policy_move_name:
-+            payload["policy_move"] = policy_move_name
-+        if seed_move_name and seed_move_name != resolved_move_name:
-+            payload["persona_move"] = seed_move_name
-+        if used_docs:
-+            payload["used_docs"] = used_docs
++def _extract_toggle_from_cfg(cfg: Optional[Dict[str, Any]], name: str) -> Optional[Any]:
++    if not isinstance(cfg, dict):
++        return None
++    for key in (f"gen_{name}", name, f"{name}_level", f"allow_{name}", f"{name}_enabled"):
++        if key in cfg:
++            return cfg.get(key)
++    features = cfg.get("features") if isinstance(cfg.get("features"), dict) else None
++    if isinstance(features, dict):
++        for key in (name, f"{name}_enabled"):
++            if key in features:
++                return features.get(key)
++    return None
 +
-+        _jlog("policy.decision", **payload)
++
++def _format_toggle_element(name: str, value: Any) -> Optional[str]:
++    if value is None:
++        return None
++    if isinstance(value, (int, float)):
++        if abs(float(value)) < 1e-6:
++            return None
++        return f"{name}:{float(value):.2f}"
++    if isinstance(value, bool):
++        return name if value else None
++    text = str(value).strip()
++    if not text:
++        return None
++    return f"{name}:{text}"
++
++
++def _collect_guardrail_list(meta: Optional[Dict[str, Any]]) -> List[str]:
++    if not isinstance(meta, dict):
++        return []
++
++    muted: List[str] = []
++
++    def _extend(value: Any) -> None:
++        if value is None:
++            return
++        if isinstance(value, str):
++            val = value.strip()
++            if val:
++                muted.append(val)
++            return
++        if isinstance(value, (list, tuple, set)):
++            for item in value:
++                _extend(item)
++            return
++        if isinstance(value, dict):
++            for key, flag in value.items():
++                if isinstance(flag, bool) and not flag:
++                    continue
++                if flag:
++                    muted.append(str(key))
++            return
++        try:
++            if bool(value):
++                muted.append(str(value))
++        except Exception:
++            pass
++
++    for key in (
++        "persona_guardrail_muted",
++        "persona_guardrail_suppressed",
++        "guardrail_persona_muted",
++        "guardrail_persona_suppressed",
++    ):
++        _extend(meta.get(key))
++
++    guardrail_section = meta.get("guardrail") or meta.get("guardrails")
++    if isinstance(guardrail_section, dict):
++        for subkey in ("persona", "persona_muted", "muted"):
++            _extend(guardrail_section.get(subkey))
++
++    return sorted({m for m in muted if m})
++
++
++def _summarize_persona_trace(trace: Optional[Dict[str, Any]],
++                             cfg: Optional[Dict[str, Any]],
++                             *,
++                             persona: Optional[Dict[str, Any]] = None,
++                             meta: Optional[Dict[str, Any]] = None) -> Tuple[float, List[str], List[str]]:
++    trace = trace or {}
++    persona_level = _coerce_float(trace.get("intensity"))
++    if persona_level is None and persona:
++        persona_level = _coerce_float(persona.get("intensity") or persona.get("nebraska_persona_level"))
++    if persona_level is None and cfg:
++        persona_level = _coerce_float(cfg.get("nebraska_persona_level"))
++    if persona_level is None:
++        persona_level = 0.0
++    persona_level = max(0.0, min(1.0, persona_level))
++
++    quote_meta = trace.get("quote") or {}
++    quote_text = str(quote_meta.get("text") or "").strip()
++    quote_id = quote_meta.get("quote_id")
++    if not quote_id and quote_text:
++        bank = quote_meta.get("bank")
++        salted = f"{bank or ''}::{quote_text}" if bank else quote_text
++        quote_id = hashlib.sha1(salted.encode("utf-8", errors="ignore")).hexdigest()[:12]
++
++    toggles: Dict[str, Any] = {}
++    if isinstance(trace.get("toggles"), dict):
++        toggles.update(trace.get("toggles"))
++    for name in ("humor", "metaphor"):
++        if name not in toggles:
++            cfg_value = _extract_toggle_from_cfg(cfg, name)
++            normalized = _normalize_toggle_for_log(cfg_value)
++            if normalized is not None:
++                toggles[name] = normalized
++
++    persona_elements: List[str] = []
++    if quote_text and quote_id:
++        persona_elements.append(f"quote:{quote_id}")
++    for name in ("humor", "metaphor"):
++        formatted = _format_toggle_element(name, toggles.get(name))
++        if formatted:
++            persona_elements.append(formatted)
++
++    guardrails: List[str] = []
++    guardrail_meta = trace.get("guardrail") or {}
++    trace_muted = guardrail_meta.get("muted") if isinstance(guardrail_meta, dict) else None
++    if isinstance(trace_muted, (list, tuple, set)):
++        guardrails.extend(str(item) for item in trace_muted if item)
++    elif trace_muted:
++        guardrails.append(str(trace_muted))
++
++    guardrails.extend(_collect_guardrail_list(meta))
++
++    quote_enabled_flag = quote_meta.get("enabled")
++    candidate_count = quote_meta.get("candidate_count")
++    try:
++        candidate_count_val = int(candidate_count)
++    except Exception:
++        candidate_count_val = 0
++    if quote_enabled_flag is False and (candidate_count_val or quote_meta.get("bank")):
++        guardrails.append("quote")
++
++    cfg_quote_enabled = _coerce_bool_flag(cfg.get("nebraska_quotes_enabled")) if isinstance(cfg, dict) else None
++    if cfg_quote_enabled is False:
++        guardrails.append("quote")
++
++    persona_elements = sorted({elem for elem in persona_elements if elem})
++    guardrails = sorted({g for g in guardrails if g})
++
++    return persona_level, persona_elements, guardrails
++
++
++def _log_persona_applied(turn_id: str,
++                         trace: Optional[Dict[str, Any]],
++                         cfg: Optional[Dict[str, Any]],
++                         *,
++                         persona: Optional[Dict[str, Any]] = None,
++                         meta: Optional[Dict[str, Any]] = None) -> None:
++    try:
++        persona_level, persona_elements, guardrails = _summarize_persona_trace(
++            trace,
++            cfg,
++            persona=persona,
++            meta=meta,
++        )
++        _jlog(
++            "persona_applied",
++            turn_id=str(turn_id),
++            persona_level=persona_level,
++            persona_elements=persona_elements,
++            guardrails_suppressed=guardrails,
++        )
 +    except Exception:
 +        pass
 +
 +
- def _should_use_foundation(seed_text: str) -> bool:
-     if not ENABLE_CHIP_FOUNDATION:
+ def _should_skip_legacy(meta: Optional[Dict[str, Any]]) -> bool:
+     if not meta:
          return False
-     try:
-         normalized = str(seed_text or "").strip().lower()
-     except Exception:
-         return False
-     if not normalized:
-         return False
-     return True
+     if bool(meta.get("skip_legacy_fallback")):
+         return True
+     source = str(meta.get("source", "") or "").strip().lower()
+     if source in _WS_SOURCES:
+         return True
+     return False
  
  
- _POLICY_SUGGESTION_ACTIONS = frozenset({"ask_clarify", "offer_steps"})
- _WELCOME_MOVE = "offer_steps"
- _WELCOME_INTENTS = {"greet", "idle"}
+ def _allocate_turn_id(force_turn_id: Optional[str]) -> str:
+     if force_turn_id is not None:
+         db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
+         return str(force_turn_id)
+     turn_seq = db.memory.setdefault('turn_seq', 0) + 1
+     db.memory['turn_seq'] = turn_seq
+     return str(turn_seq)
  
- _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+ 
+ def make_assistant_frames(seed_text: str,
+                           session_id: str,
+                           meta: Optional[Dict] = None,
+                           correlation_user_msg_id: Optional[str] = None,
+                           *,
+@@ -1166,50 +1396,51 @@ def make_assistant_frames(seed_text: str,
+         context.log_error("streaming_pipeline_error", str(exc))
+         raise
+     finally:
+         context.log_done()
  
  
- def _get_dialog_action(meta: Optional[Dict[str, Any]]) -> Optional[str]:
-     if not isinstance(meta, dict):
-         return None
-     action = meta.get(_DIALOG_ACTION_KEY)
-     if action:
-         return action
-@@ -1241,50 +1375,64 @@ def _make_foundation_frames(seed_text: str,
-     try:
-         _jlog(
-             "turn_telemetry",
-             sid=session_id,
-             intent=nlu_result.get('intent'),
-             confidence=nlu_result.get('confidence'),
-             teacher_move=policy_action or teacher_move,
-             chips=len(policy_chips),
-             prompt_hash=prompt_hash,
+ def _make_foundation_frames(seed_text: str,
+                             session_id: str,
+                             meta: Dict[str, Any],
+                             cfg: Dict[str, Any],
+                             *,
+                             correlation_user_msg_id: Optional[str],
+                             turn_id: Optional[str] = None,
+                             telemetry: Optional[NluLoggingContext] = None,
+                             force_turn_id: Optional[str] = None,
+                             is_greet: bool,
+                             fallback_line: str,
+                             fallback_on_empty: bool,
+                             fallback_on_error: bool,
+                             fallback_emit_event: bool,
+                             action: Optional[str] = None,
+                             broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
+     if turn_id is None:
+         turn_id = _allocate_turn_id(force_turn_id)
+     turn_id = str(turn_id)
++
+     if telemetry is None:
+         telemetry = _create_nlu_context(
+             turn_id=turn_id,
+             session_id=session_id,
+             correlation_user_msg_id=correlation_user_msg_id,
+             meta=meta,
+             settings=SETTINGS,
+             cfg=cfg,
          )
+         telemetry.turn_id = turn_id
+         telemetry.log_start(seed_text, meta=meta)
+     else:
+         telemetry.turn_id = turn_id
+     store = PersonaStore()
+     persona = PersonaManager(store).get_active()
+     dialog_meta = dict(meta or {})
+ 
+     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
+     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store) or {}
+ 
+     telemetry.log_entities(nlu_result.get("entities"))
+ 
+     try:
+         nlu_meta = dict(nlu_result)
+     except Exception:
+@@ -1254,57 +1485,65 @@ def _make_foundation_frames(seed_text: str,
+             return None
+ 
+     existing_pref = None
+     if isinstance(meta, dict):
+         if "show_suggestions" in meta:
+             existing_pref = _coerce_dialog_flag(meta.get("show_suggestions"))
+         elif _DIALOG_SHOW_SUGGESTIONS_KEY in meta:
+             existing_pref = _coerce_dialog_flag(meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY))
+ 
+     if existing_pref is None:
+         show_suggestions = _resolve_show_suggestions(meta, policy, cfg)
+     else:
+         show_suggestions = bool(existing_pref)
+ 
+     meta['show_suggestions'] = show_suggestions
+     meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
+     meta[_DIALOG_POLICY_KEY] = dict(policy)
+ 
+     prompt_meta = dict(dialog_meta)
+     prompt_meta['intent'] = nlu_result.get('intent')
+     policy_action = _policy_action(policy)
+     if policy_action:
+         prompt_meta['teacher_move'] = policy_action
+ 
+     examples = store.match_examples(persona['id'], seed_text)
+-    messages, teacher_move, prompt_hash = build_messages(
++    messages, teacher_move, prompt_hash, persona_trace = build_messages(
+         persona=persona,
+         user_text=seed_text,
+         dialog_meta=prompt_meta,
+         examples=examples,
+     )
+ 
++    _log_persona_applied(
++        turn_id,
++        persona_trace,
++        cfg,
++        persona=persona,
++        meta=meta,
++    )
++
+     kb_count = 0
+     try:
+         kb_candidates = meta.get('kb_snippets') if isinstance(meta, dict) else None
+         if isinstance(kb_candidates, (list, tuple)):
+             kb_count = len(kb_candidates)
+     except Exception:
+         kb_count = 0
+     telemetry.log_prompt_summary(messages=messages, prompt_hash=prompt_hash, kb_count=kb_count)
+ 
+     use_llm = normalized_action != "ask_clarify"
+     llm_info: Dict[str, Any] = {}
+     if use_llm:
+         try:
+             foundation_result = _call_foundation_with_retry(messages, cfg, telemetry=telemetry)
+         except Exception as exc:
+             telemetry.log_error("foundation_call_error", str(exc))
+             raise
+         if isinstance(foundation_result, tuple) and len(foundation_result) == 2:
+             reply, llm_info = foundation_result
+         else:
+             reply = foundation_result
+             llm_info = {}
+     else:
+         reply = _build_clarify_question(seed_text, meta)
+ 
+@@ -1462,69 +1701,91 @@ def _make_foundation_frames(seed_text: str,
+ 
+ 
+ def _make_legacy_frames(seed_text: str,
+                         session_id: str,
+                         meta: Dict[str, Any],
+                         cfg: Dict[str, Any],
+                         *,
+                         correlation_user_msg_id: Optional[str],
+                         turn_id: Optional[str] = None,
+                         telemetry: Optional[NluLoggingContext] = None,
+                         force_turn_id: Optional[str] = None,
+                         is_greet: bool,
+                         fallback_line: str,
+                         fallback_on_empty: bool,
+                         fallback_on_error: bool,
+                         fallback_emit_event: bool,
+                         action: Optional[str] = None,
+                         labels: Optional[Dict[str, Any]] = None,
+                         policy: Optional[Dict[str, Any]] = None,
+                         broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
+     persona = _get_persona_for_session(session_id)
+ 
+     if turn_id is None:
+         turn_id = _allocate_turn_id(force_turn_id)
+     turn_id = str(turn_id)
++
++    persona_trace = {
++        "intensity": (persona or {}).get("intensity") or (persona or {}).get("nebraska_persona_level"),
++        "quote": {
++            "text": "",
++            "quote_id": None,
++            "enabled": _coerce_bool_flag((cfg or {}).get("nebraska_quotes_enabled")) if isinstance(cfg, dict) else None,
++            "picked": False,
++            "candidate_count": 0,
++            "bank": None,
++        },
++        "toggles": {},
++        "guardrail": {},
++    }
++
+     if telemetry is None:
+         telemetry = _create_nlu_context(
+             turn_id=turn_id,
+             session_id=session_id,
+             correlation_user_msg_id=correlation_user_msg_id,
+             meta=meta,
+             settings=SETTINGS,
+             cfg=cfg,
+         )
+         telemetry.turn_id = turn_id
+         telemetry.log_start(seed_text, meta=meta)
+     else:
+         telemetry.turn_id = turn_id
+ 
+     if labels is None:
+         labels = classify(seed_text, meta)
+     else:
+         labels = dict(labels)
+     telemetry.log_entities(labels.get("entities"))
++    _log_persona_applied(
++        turn_id,
++        persona_trace,
++        cfg,
++        persona=persona,
++        meta=meta,
++    )
+     if policy is None:
+         policy = pick_dialog_policy(labels) or {}
+     else:
+         policy = dict(policy or {})
+ 
+     try:
+         if isinstance(meta, dict):
+             meta_nlu = meta.setdefault('nlu', {})
+             meta_nlu.update(labels)
+             dialog_nlu = meta.setdefault(_DIALOG_NLU_KEY, {})
+             try:
+                 dialog_nlu.update(labels)
+             except Exception:
+                 meta[_DIALOG_NLU_KEY] = dict(labels)
      except Exception:
          pass
+     policy_action = _policy_action(policy)
+     teacher_move = policy_action
  
-     if fallback_fired and fallback_emit_event:
+     provided_action: Optional[str] = None
+     if action is not None:
          try:
-             _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
+             provided_action = str(action or "").strip().lower()
          except Exception:
-             pass
- 
-     _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
- 
-     frames: List[Dict] = []
-     active_teacher_move = policy_action or teacher_move
-     if _should_force_welcome_move(meta, is_greet=is_greet, intent=nlu_result.get('intent')):
-         active_teacher_move = _WELCOME_MOVE
-+    kb_source = kb_candidates if 'kb_candidates' in locals() else None
-+    _log_policy_decision(
-+        session_id=session_id,
-+        turn_id=turn_id,
-+        resolved_move=active_teacher_move,
-+        normalized_action=normalized_action,
-+        policy_move=policy_action,
-+        teacher_move_seed=teacher_move,
-+        fallback_fired=fallback_fired,
-+        fallback_reason=fallback_reason,
-+        meta=meta,
-+        nlu_meta=nlu_result,
-+        used_docs_source=kb_source,
-+    )
-     chunk: Dict[str, Any] = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': safe_reply,
-         'kb_hits': 0,
-         'intent': nlu_result.get('intent'),
-         'teacher_move': active_teacher_move,
-     }
-     if correlation_user_msg_id:
-         chunk['correlation_user_msg_id'] = correlation_user_msg_id
-     frames.append(chunk)
- 
-     legacy_suggestions = []
-     try:
-         if cfg.get('suggestions_enabled', True):
-             legacy_suggestions = hygienic_suggestions(safe_reply)
-     except Exception:
-         legacy_suggestions = []
-     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
-     try:
-         _jlog(
-             "chips_emit",
-             sid=session_id,
-             intent=nlu_result.get('intent'),
-             count=len(merged_suggestions),
-@@ -1515,50 +1663,63 @@ def _make_legacy_frames(seed_text: str,
-         try:
-             preview = " ".join((safe_reply or "").split()[:8])
-         except Exception:
-             preview = None
-         telemetry.log_llm_response(
-             output_tokens=None,
-             finish_reason=error_note,
-             preview=preview,
-             fallback_fired=fallback_fired,
-             fallback_reason=fallback_reason,
-         )
- 
-     if fallback_fired and fallback_emit_event:
-         try:
-             _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
-         except Exception:
-             pass
- 
-     _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
- 
-     frames: List[Dict] = []
- 
-     active_teacher_move = teacher_move
-     if _should_force_welcome_move(meta, is_greet=is_greet, intent=(labels or {}).get('intent') if isinstance(labels, dict) else None):
-         active_teacher_move = _WELCOME_MOVE
-+    _log_policy_decision(
-+        session_id=session_id,
-+        turn_id=turn_id,
-+        resolved_move=active_teacher_move,
-+        normalized_action=normalized_action,
-+        policy_move=policy_action,
-+        teacher_move_seed=teacher_move,
-+        fallback_fired=fallback_fired,
-+        fallback_reason=fallback_reason,
-+        meta=meta,
-+        nlu_meta=labels,
-+        used_docs_source=kb,
-+    )
-     chunk = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': safe_reply,
-         'kb_hits': len(kb),
-     }
-     if isinstance(labels, dict) and labels.get('intent'):
-         chunk['intent'] = labels.get('intent')
-     if active_teacher_move:
-         chunk['teacher_move'] = active_teacher_move
-     if correlation_user_msg_id:
-         chunk['correlation_user_msg_id'] = correlation_user_msg_id
-     if error_note:
-         chunk['note'] = error_note
-     frames.append(chunk)
- 
-     legacy_suggestions: List[Any] = []
-     try:
-         if cfg.get('suggestions_enabled', True):
-             legacy_suggestions = hygienic_suggestions(safe_reply)
-     except Exception:
-         legacy_suggestions = []
-     policy_chips = _collect_policy_chips(policy)
-     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
-     try:
+             provided_action = None
 diff --git a/tests/test_streaming_policy_logging.py b/tests/test_streaming_policy_logging.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..91974047178e18b29dee65e8f3df9fec6999e771
---- /dev/null
+index 91974047178e18b29dee65e8f3df9fec6999e771..4d90df346bcc16ae6dfe3a74c3f8e8b1a14e3a26 100644
+--- a/tests/test_streaming_policy_logging.py
 +++ b/tests/test_streaming_policy_logging.py
-@@ -0,0 +1,221 @@
+@@ -30,192 +30,230 @@ class DummyStore:
+     def match_examples(self, persona_id, user_text, limit=4):
+         return []
+ 
+ 
+ class DummyPersonaManager:
+     def __init__(self, store):
+         self.store = store
+ 
+     def get_active(self):
+         return {"id": "chip", "name": "Chip", "config": {}}
+ 
+ 
+ def _patch_foundation_dependencies(monkeypatch, *, teacher_move="deep_dive"):
+     monkeypatch.setattr(streaming, "PersonaStore", lambda: DummyStore())
+     monkeypatch.setattr(streaming, "PersonaManager", DummyPersonaManager)
+     monkeypatch.setattr(
+         streaming._nlu,
+         "infer",
+         lambda *a, **k: {"intent": "install", "confidence": 0.91, "tags": {}, "entities": []},
+     )
+     monkeypatch.setattr(
+         streaming._nlu.policy,
+         "decide",
+         lambda *a, **k: {"teacher_move": teacher_move},
+     )
++    persona_trace = {
++        "intensity": 0.25,
++        "quote": {
++            "text": "Giddy up",
++            "quote_id": "q-demo",
++            "enabled": True,
++            "picked": True,
++            "candidate_count": 1,
++            "bank": "nebraska",
++        },
++        "toggles": {"humor": 0.2},
++        "guardrail": {"muted": []},
++    }
+     monkeypatch.setattr(
+         streaming,
+         "build_messages",
+-        lambda **kwargs: ([{"role": "user", "content": kwargs["user_text"]}], teacher_move, "hash1234"),
++        lambda **kwargs: (
++            [{"role": "user", "content": kwargs["user_text"]}],
++            teacher_move,
++            "hash1234",
++            persona_trace,
++        ),
+     )
+ 
+     def _fake_foundation(messages, cfg, telemetry=None):
+         return "Foundation response", {"preview": "Foundation", "finish_reason": "stop", "output_tokens": 42}
+ 
+     monkeypatch.setattr(streaming, "_call_foundation_with_retry", _fake_foundation)
+     monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: [])
+     monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: [])
+ 
+ 
+ def test_foundation_policy_decision_logs_kb_snippets(monkeypatch):
+     _patch_foundation_dependencies(monkeypatch, teacher_move="deep_dive")
+ 
+     telemetry = DummyTelemetry()
+     meta = {
+         "action": "deep_dive",
+         "kb_snippets": [
+             {"id": "doc-1", "text": "Alpha"},
+             "Second document body",
+         ],
+     }
+-    cfg = {"suggestions_enabled": False}
++    cfg = {"suggestions_enabled": False, "nebraska_quotes_enabled": True}
+ 
+     captured = []
+ 
+     def _capture(event, **fields):
+         captured.append((event, fields))
+ 
+     monkeypatch.setattr(streaming, "_jlog", _capture)
+ 
+     turn_id, frames = streaming._make_foundation_frames(
+         "hello",
+         "session-1",
+         meta,
+         cfg,
+         correlation_user_msg_id=None,
+         turn_id="10",
+         telemetry=telemetry,
+         is_greet=False,
+         fallback_line="Fallback",
+         fallback_on_empty=True,
+         fallback_on_error=True,
+         fallback_emit_event=False,
+         action="deep_dive",
+         broadcast_immediately=False,
+     )
+ 
+     assert turn_id == "10"
+     assert frames and frames[0]["type"] == "assistant_chunk"
+     assert captured
+     policy_events = [fields for event, fields in captured if event == "policy.decision"]
+     assert policy_events
+     fields = policy_events[0]
+     assert fields["teacher_move"] == "deep_dive"
+     assert fields["teacher_move_family"] == "deep_dive"
+     assert fields["reason"] == "policy"
+     assert fields["nlu_intent"] == "install"
+     assert pytest.approx(fields["nlu_confidence"], rel=1e-6) == 0.91
+     assert "used_docs" in fields and len(fields["used_docs"]) == 2
+     hashes = {entry["hash"] for entry in fields["used_docs"]}
+     assert all(len(h) == 8 for h in hashes)
+ 
++    persona_events = [fields for event, fields in captured if event == "persona_applied"]
++    assert persona_events
++    persona_fields = persona_events[0]
++    assert persona_fields["persona_level"] == pytest.approx(0.25)
++    assert persona_fields["persona_elements"] == ["humor:0.20", "quote:q-demo"]
++    assert persona_fields["guardrails_suppressed"] == []
++
+ 
+ def _patch_legacy_dependencies(monkeypatch, reply_text: str):
+     monkeypatch.setattr(streaming, "_get_persona_for_session", lambda session_id: {"id": "chip", "name": "Chip"})
+ 
+     class Provider:
+         def generate_reply(self, prompt, persona=None, teacher_move=None, context=None):
+             return reply_text
+ 
+     monkeypatch.setattr(streaming, "get_provider", lambda cfg: Provider())
+     monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: [])
+     monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: [])
+ 
+ 
+ def test_legacy_policy_decision_logs_fallback(monkeypatch):
+     _patch_legacy_dependencies(monkeypatch, reply_text="")
+ 
+     telemetry = DummyTelemetry()
+     meta = {"action": "offer_steps"}
+-    cfg = {"suggestions_enabled": False}
++    cfg = {"suggestions_enabled": False, "nebraska_persona_level": 0.13, "nebraska_quotes_enabled": False}
+     labels = {"intent": "install", "confidence": 0.5}
+     policy = {"teacher_move": "offer_steps"}
+ 
+     captured = []
+     monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
+ 
+     turn_id, frames = streaming._make_legacy_frames(
+         "hi",
+         "session-legacy",
+         meta,
+         cfg,
+         correlation_user_msg_id=None,
+         turn_id="22",
+         telemetry=telemetry,
+         is_greet=False,
+         fallback_line="Fallback",
+         fallback_on_empty=True,
+         fallback_on_error=True,
+         fallback_emit_event=False,
+         action="offer_steps",
+         labels=labels,
+         policy=policy,
+         broadcast_immediately=False,
+     )
+ 
+     assert turn_id == "22"
+     assert frames and frames[0]["type"] == "assistant_chunk"
+     assert captured
+     policy_events = [fields for event, fields in captured if event == "policy.decision"]
+     assert policy_events
+     fields = policy_events[0]
+     assert fields["teacher_move"] == "offer_steps"
+     assert fields["teacher_move_family"] == "answer"
+     assert fields["reason"] == "fallback"
+     assert fields["fallback_fired"] is True
+     assert fields["fallback_reason"] == "empty"
+ 
++    persona_events = [fields for event, fields in captured if event == "persona_applied"]
++    assert persona_events
++    persona_fields = persona_events[0]
++    assert persona_fields["persona_level"] == pytest.approx(0.13)
++    assert persona_fields["persona_elements"] == []
++    assert persona_fields["guardrails_suppressed"] == ["quote"]
++
+ 
+ def test_legacy_policy_decision_meta_override(monkeypatch):
+     _patch_legacy_dependencies(monkeypatch, reply_text="All good")
+ 
+     telemetry = DummyTelemetry()
+     meta = {"action": "offer_steps"}
+-    cfg = {"suggestions_enabled": False}
++    cfg = {"suggestions_enabled": False, "nebraska_persona_level": 0.13, "nebraska_quotes_enabled": False}
+     labels = {"intent": "install", "confidence": 0.42}
+     policy = {"teacher_move": "ask_clarify", "action": "ask_clarify"}
+ 
+     captured = []
+     monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
+ 
+     turn_id, frames = streaming._make_legacy_frames(
+         "Need help",
+         "session-override",
+         meta,
+         cfg,
+         correlation_user_msg_id=None,
+         turn_id="33",
+         telemetry=telemetry,
+         is_greet=False,
+         fallback_line="Fallback",
+         fallback_on_empty=True,
+         fallback_on_error=True,
+         fallback_emit_event=False,
+         action="offer_steps",
+         labels=labels,
+         policy=policy,
+         broadcast_immediately=False,
+     )
+ 
+     assert turn_id == "33"
+     assert frames and frames[0]["type"] == "assistant_chunk"
+     assert captured
+     policy_events = [fields for event, fields in captured if event == "policy.decision"]
+     assert policy_events
+     fields = policy_events[0]
+     assert fields["teacher_move"] == "ask_clarify"
+     assert fields["teacher_move_family"] == "clarify"
+     assert fields["reason"] == "meta_override"
+     assert fields["meta_action"] == "offer_steps"
+     assert fields["policy_move"] == "ask_clarify"
+     assert fields["nlu_intent"] == "install"
+     assert pytest.approx(fields["nlu_confidence"], rel=1e-6) == 0.42
++    persona_events = [fields for event, fields in captured if event == "persona_applied"]
++    assert persona_events
++    persona_fields = persona_events[0]
++    assert persona_fields["persona_level"] == pytest.approx(0.13)
++    assert persona_fields["persona_elements"] == []
++    assert persona_fields["guardrails_suppressed"] == ["quote"]
+diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
+index a8fa017d8499668492d1e8260fcb08747493962e..e8d23d307f6cc03af45231248bf44d499540ddcb 100644
+--- a/tests/test_streaming_ws_fallbacks.py
++++ b/tests/test_streaming_ws_fallbacks.py
+@@ -1,54 +1,89 @@
+ import asyncio
++import hashlib
+ import importlib
+ import json
+ import types
+ from collections import deque
+ 
 +import pytest
 +
-+from app.services import streaming
++import app.personas.prompt_builder as prompt_builder
 +
-+
-+class DummyTelemetry:
-+    def __init__(self):
-+        self.turn_id = None
-+
-+    def log_start(self, *args, **kwargs):
-+        return None
-+
-+    def log_entities(self, *args, **kwargs):
-+        return None
-+
-+    def log_prompt_summary(self, *args, **kwargs):
-+        return None
-+
-+    def mark_fallback(self, *args, **kwargs):
-+        return None
-+
-+    def log_llm_response(self, *args, **kwargs):
-+        return None
-+
-+    def log_error(self, *args, **kwargs):
-+        return None
-+
-+
-+class DummyStore:
-+    def match_examples(self, persona_id, user_text, limit=4):
-+        return []
-+
-+
-+class DummyPersonaManager:
-+    def __init__(self, store):
-+        self.store = store
-+
-+    def get_active(self):
-+        return {"id": "chip", "name": "Chip", "config": {}}
-+
-+
-+def _patch_foundation_dependencies(monkeypatch, *, teacher_move="deep_dive"):
-+    monkeypatch.setattr(streaming, "PersonaStore", lambda: DummyStore())
-+    monkeypatch.setattr(streaming, "PersonaManager", DummyPersonaManager)
-+    monkeypatch.setattr(
-+        streaming._nlu,
-+        "infer",
-+        lambda *a, **k: {"intent": "install", "confidence": 0.91, "tags": {}, "entities": []},
-+    )
-+    monkeypatch.setattr(
-+        streaming._nlu.policy,
-+        "decide",
-+        lambda *a, **k: {"teacher_move": teacher_move},
-+    )
-+    monkeypatch.setattr(
-+        streaming,
-+        "build_messages",
-+        lambda **kwargs: ([{"role": "user", "content": kwargs["user_text"]}], teacher_move, "hash1234"),
-+    )
-+
-+    def _fake_foundation(messages, cfg, telemetry=None):
-+        return "Foundation response", {"preview": "Foundation", "finish_reason": "stop", "output_tokens": 42}
-+
-+    monkeypatch.setattr(streaming, "_call_foundation_with_retry", _fake_foundation)
-+    monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: [])
-+    monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: [])
-+
-+
-+def test_foundation_policy_decision_logs_kb_snippets(monkeypatch):
-+    _patch_foundation_dependencies(monkeypatch, teacher_move="deep_dive")
-+
-+    telemetry = DummyTelemetry()
-+    meta = {
-+        "action": "deep_dive",
-+        "kb_snippets": [
-+            {"id": "doc-1", "text": "Alpha"},
-+            "Second document body",
-+        ],
+ from app.services import streaming
+ from app.ws import ws_asgi
+ 
+ 
+ def _test_client():
+     mod = importlib.import_module("app")
+     if hasattr(mod, "create_app"):
+         flask_app = mod.create_app()
+     else:
+         flask_app = mod.app
+     flask_app.config["TESTING"] = True
+     return flask_app.test_client()
+ 
+ 
+ def _csrf_token(client):
+     resp = client.get("/api/v1/csrf")
+     return resp.headers.get("X-CSRF-Token")
+ 
+ 
+ def _stub_config(monkeypatch):
+     monkeypatch.setattr(streaming.db, "get_config", lambda: {})
+ 
+ 
++def test_build_messages_persona_trace(monkeypatch):
++    persona = {
++        "id": "chip",
++        "name": "Chip",
++        "intensity": 0.5,
++        "config": {"quote_bank": ["Keep pushing", "Stay curious"], "humor": 0.1},
 +    }
-+    cfg = {"suggestions_enabled": False}
 +
-+    captured = []
++    monkeypatch.setattr(prompt_builder.random, "random", lambda: 0.05)
++    monkeypatch.setattr(prompt_builder.random, "choice", lambda seq: seq[0])
 +
-+    def _capture(event, **fields):
-+        captured.append((event, fields))
-+
-+    monkeypatch.setattr(streaming, "_jlog", _capture)
-+
-+    turn_id, frames = streaming._make_foundation_frames(
-+        "hello",
-+        "session-1",
-+        meta,
-+        cfg,
-+        correlation_user_msg_id=None,
-+        turn_id="10",
-+        telemetry=telemetry,
-+        is_greet=False,
-+        fallback_line="Fallback",
-+        fallback_on_empty=True,
-+        fallback_on_error=True,
-+        fallback_emit_event=False,
-+        action="deep_dive",
-+        broadcast_immediately=False,
++    messages, teacher_move, prompt_hash, trace = prompt_builder.build_messages(
++        persona=persona,
++        user_text="Let's go",
++        dialog_meta={"teacher_move": "offer_steps"},
 +    )
 +
-+    assert turn_id == "10"
-+    assert frames and frames[0]["type"] == "assistant_chunk"
-+    assert captured
-+    policy_events = [fields for event, fields in captured if event == "policy.decision"]
-+    assert policy_events
-+    fields = policy_events[0]
-+    assert fields["teacher_move"] == "deep_dive"
-+    assert fields["teacher_move_family"] == "deep_dive"
-+    assert fields["reason"] == "policy"
-+    assert fields["nlu_intent"] == "install"
-+    assert pytest.approx(fields["nlu_confidence"], rel=1e-6) == 0.91
-+    assert "used_docs" in fields and len(fields["used_docs"]) == 2
-+    hashes = {entry["hash"] for entry in fields["used_docs"]}
-+    assert all(len(h) == 8 for h in hashes)
++    assert teacher_move == "offer_steps"
++    assert messages[-1]["content"] == "Let's go"
++    assert prompt_hash
++    assert trace["intensity"] == pytest.approx(0.5)
++    assert trace["quote"]["text"] == "Keep pushing"
++    expected_id = hashlib.sha1("Keep pushing".encode("utf-8")).hexdigest()[:12]
++    assert trace["quote"]["quote_id"] == expected_id
++    assert trace["quote"]["picked"] is True
++    assert trace["quote"]["enabled"] is True
++    assert trace["toggles"]["humor"] == pytest.approx(0.1)
++    assert trace["guardrail"]["muted"] == []
 +
 +
-+def _patch_legacy_dependencies(monkeypatch, reply_text: str):
-+    monkeypatch.setattr(streaming, "_get_persona_for_session", lambda session_id: {"id": "chip", "name": "Chip"})
+ def test_short_greeting_preserves_sentence():
+     text = "What should we clarify so I can help?"
+     assert streaming._short_greeting(text) == text
+ 
+ 
+ def test_make_assistant_frames_ws_skips_legacy(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     legacy_called = False
+ 
+     def fake_legacy(*args, **kwargs):  # pragma: no cover - should never be invoked
+         nonlocal legacy_called
+         legacy_called = True
+         return "legacy", [{"type": "assistant_end", "turn_id": "legacy"}]
+ 
+     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
+     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
+ 
+     tid, frames = streaming.make_assistant_frames(
+         "hello",
+         "session-ws",
+         meta={"source": "user_ws"},
+     )
+ 
+     assert tid is None
+@@ -168,88 +203,108 @@ def test_run_ws_greet_emits_single_suggestions_frame(monkeypatch):
+             },
+             {"type": "assistant_end", "turn_id": turn_id},
+         ]
+         if kwargs.get("broadcast_immediately", True):
+             for fr in frames:
+                 fake_broadcast(session_id, fr)
+         return turn_id, frames
+ 
+     monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
+ 
+     tid = streaming.run_ws_greet("session-one")
+ 
+     assert tid == "turn-xyz"
+     suggestion_frames = [fr for fr in emitted if fr.get("type") == "suggestions"]
+     assert len(suggestion_frames) == 1
+ 
+ 
+ def test_make_assistant_frames_greet_advertises_welcome_move(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
+     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *a, **k: True)
+     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
+     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
+ 
++    captured_logs = []
++    monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured_logs.append((event, fields)))
 +
-+    class Provider:
-+        def generate_reply(self, prompt, persona=None, teacher_move=None, context=None):
-+            return reply_text
+     class FakeStore:
+         def match_examples(self, persona_id, user_text, limit=4):
+             return []
+ 
+     class FakePersonaManager:
+         def __init__(self, store):
+             self.store = store
+ 
+         def get_active(self):
+             return {"id": "chip", "config": {}}
+ 
+     monkeypatch.setattr(streaming, "PersonaStore", lambda: FakeStore())
+     monkeypatch.setattr(streaming, "PersonaManager", FakePersonaManager)
+ 
++    persona_trace_stub = {
++        "intensity": 0.2,
++        "quote": {"text": "", "quote_id": None, "enabled": True, "picked": False, "candidate_count": 0, "bank": None},
++        "toggles": {},
++        "guardrail": {"muted": []},
++    }
 +
-+    monkeypatch.setattr(streaming, "get_provider", lambda cfg: Provider())
-+    monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: [])
-+    monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: [])
+     monkeypatch.setattr(
+         streaming,
+         "build_messages",
+         lambda persona, user_text, dialog_meta, examples: (
+             [{"role": "user", "content": user_text}],
+             dialog_meta.get("teacher_move"),
+             "hash",
++            persona_trace_stub,
+         ),
+     )
+     monkeypatch.setattr(streaming, "_call_foundation_with_retry", lambda *a, **k: "Hello!")
+ 
+     monkeypatch.setattr(streaming._nlu, "infer", lambda *a, **k: {"intent": "greet", "confidence": 0.9})
+     monkeypatch.setattr(
+         streaming._nlu,
+         "policy",
+         types.SimpleNamespace(decide=lambda *a, **k: {"action": "offer_steps", "teacher_move": "offer_steps"}),
+     )
+ 
+     _, frames = streaming.make_assistant_frames("greet", "session-greet", meta={"source": "ws_greet"})
+ 
+-    chunk = next(fr for fr in frames if fr.get("type") == "assistant_chunk")
++    chunks = [fr for fr in frames if fr.get("type") == "assistant_chunk"]
++    assert chunks
++    chunk = chunks[0]
+     assert chunk["teacher_move"] == "offer_steps"
+     assert chunk.get("intent") == "greet"
+ 
++    persona_events = [fields for event, fields in captured_logs if event == "persona_applied"]
++    assert persona_events
++    persona_fields = persona_events[0]
++    assert persona_fields["persona_level"] == pytest.approx(0.2)
++    assert persona_fields["persona_elements"] == []
++    assert persona_fields["guardrails_suppressed"] == []
 +
-+
-+def test_legacy_policy_decision_logs_fallback(monkeypatch):
-+    _patch_legacy_dependencies(monkeypatch, reply_text="")
-+
-+    telemetry = DummyTelemetry()
-+    meta = {"action": "offer_steps"}
-+    cfg = {"suggestions_enabled": False}
-+    labels = {"intent": "install", "confidence": 0.5}
-+    policy = {"teacher_move": "offer_steps"}
-+
-+    captured = []
-+    monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
-+
-+    turn_id, frames = streaming._make_legacy_frames(
-+        "hi",
-+        "session-legacy",
-+        meta,
-+        cfg,
-+        correlation_user_msg_id=None,
-+        turn_id="22",
-+        telemetry=telemetry,
-+        is_greet=False,
-+        fallback_line="Fallback",
-+        fallback_on_empty=True,
-+        fallback_on_error=True,
-+        fallback_emit_event=False,
-+        action="offer_steps",
-+        labels=labels,
-+        policy=policy,
-+        broadcast_immediately=False,
-+    )
-+
-+    assert turn_id == "22"
-+    assert frames and frames[0]["type"] == "assistant_chunk"
-+    assert captured
-+    policy_events = [fields for event, fields in captured if event == "policy.decision"]
-+    assert policy_events
-+    fields = policy_events[0]
-+    assert fields["teacher_move"] == "offer_steps"
-+    assert fields["teacher_move_family"] == "answer"
-+    assert fields["reason"] == "fallback"
-+    assert fields["fallback_fired"] is True
-+    assert fields["fallback_reason"] == "empty"
-+
-+
-+def test_legacy_policy_decision_meta_override(monkeypatch):
-+    _patch_legacy_dependencies(monkeypatch, reply_text="All good")
-+
-+    telemetry = DummyTelemetry()
-+    meta = {"action": "offer_steps"}
-+    cfg = {"suggestions_enabled": False}
-+    labels = {"intent": "install", "confidence": 0.42}
-+    policy = {"teacher_move": "ask_clarify", "action": "ask_clarify"}
-+
-+    captured = []
-+    monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
-+
-+    turn_id, frames = streaming._make_legacy_frames(
-+        "Need help",
-+        "session-override",
-+        meta,
-+        cfg,
-+        correlation_user_msg_id=None,
-+        turn_id="33",
-+        telemetry=telemetry,
-+        is_greet=False,
-+        fallback_line="Fallback",
-+        fallback_on_empty=True,
-+        fallback_on_error=True,
-+        fallback_emit_event=False,
-+        action="offer_steps",
-+        labels=labels,
-+        policy=policy,
-+        broadcast_immediately=False,
-+    )
-+
-+    assert turn_id == "33"
-+    assert frames and frames[0]["type"] == "assistant_chunk"
-+    assert captured
-+    policy_events = [fields for event, fields in captured if event == "policy.decision"]
-+    assert policy_events
-+    fields = policy_events[0]
-+    assert fields["teacher_move"] == "ask_clarify"
-+    assert fields["teacher_move_family"] == "clarify"
-+    assert fields["reason"] == "meta_override"
-+    assert fields["meta_action"] == "offer_steps"
-+    assert fields["policy_move"] == "ask_clarify"
-+    assert fields["nlu_intent"] == "install"
-+    assert pytest.approx(fields["nlu_confidence"], rel=1e-6) == 0.42
+ 
+ def test_make_assistant_frames_http_allows_legacy(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     captured = types.SimpleNamespace(called=False)
+ 
+     def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
+         captured.called = True
+         assert isinstance(meta.get("nlu"), dict)
+         assert isinstance(meta.get("dialog_nlu"), dict)
+         assert "action" in meta
+         assert meta["dialog_action"] == meta["action"]
+         assert "verbosity" in meta
+         assert meta["dialog_verbosity"] == meta["verbosity"]
+         assert "show_suggestions" in meta
+         assert meta["dialog_show_suggestions"] == meta["show_suggestions"]
+         assert meta["dialog_policy"]["teacher_move"] == kwargs["policy"]["teacher_move"]
+         assert isinstance(kwargs.get("labels"), dict)
+         assert isinstance(kwargs.get("policy"), dict)
+         return "tid-123", [
+             {"type": "assistant_chunk", "turn_id": "tid-123", "text": "hi", "kb_hits": 0},
+             {"type": "assistant_end", "turn_id": "tid-123"},
+         ]
+ 
+     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
