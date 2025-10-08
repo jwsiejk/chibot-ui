@@ -1,8 +1,117 @@
+diff --git a/static/js/app.js b/static/js/app.js
+index f2b449d84bd82fc86a31354b66087f8915fd9f1e..29f2c2063599877f51810f6fddb42e404f267da3 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -211,51 +211,50 @@ function _dedupeAssistant(d){
+     }
+     const li = document.createElement('div');
+     li.dataset.role = 'assistant';
+     li.dataset.turnId = String(turnId ?? '');
+     li.className = 'msg assistant';
+     li.textContent = text;
+     msgs.appendChild(li);
+     try { msgs.scrollTop = msgs.scrollHeight; } catch {}
+   }catch{}
+   return true;
+ }
+ 
+ let _lastSuggestionsKey = null;
+ 
+ function _clearSuggestions(){
+   const wrap = document.getElementById('suggestions');
+   if (!wrap) return;
+   try { wrap.innerHTML = ''; } catch {}
+   _lastSuggestionsKey = null;
+ }
+ 
+ function _handleSuggestionClick(text){
+   if (!window.__askchip_session_started) return;
+   const suggestion = (text || '').trim();
+   if (!suggestion) return;
+-  try { sendJSON({ type: 'activity', kind: 'chip' }); } catch {}
+   const input = $('#composer');
+   if (input) {
+     try { input.value = suggestion; } catch {}
+   }
+   try { onSend(suggestion); } catch (err) { console.warn('[suggestion click] send failed', err); }
+ }
+ 
+ export function handleAssistantFrame(d){
+   if (!d) return;
+   const t = d.type;
+ 
+   if (t === 'ready') {
+     if (!_ttsPlaying) _scheduleAsrWatchdog();
+   }
+ 
+   if (t === 'no_audio_detected') {
+     _notifyNoAsr('server', d);
+     return;
+   }
+ 
+   // Surface server errors to the UI banner
+   if (t === 'Error') {
+     const msg = `Error: ${(d.code||'')}${d.message ? ' ' + d.message : ''}`.trim();
+     showBanner(msg || 'An error occurred.');
+     return;
+@@ -318,52 +317,50 @@ export async function onSend(overrideText){
+         msgs.appendChild(li);
+         optimisticBubble = li;
+         try { msgs.scrollTop = msgs.scrollHeight; } catch {}
+       }
+     }catch{}
+ 
+     // WS send (WS-only turns; replaces legacy HTTP POST)
+     const correlation = (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random()));
+     let sendSucceeded = false;
+     try {
+       // Server expects: type='user_msg' and correlation_user_msg_id
+       sendSucceeded = sendJSON({ type: 'user_msg', text: val, correlation_user_msg_id: correlation, session_id: sid });
+     } catch (e){
+       console.warn('[onSend] WS send failed', e);
+       sendSucceeded = false;
+     }
+ 
+     if (!sendSucceeded){
+       if (optimisticBubble && optimisticBubble.parentElement){
+         try { optimisticBubble.remove(); } catch {}
+       }
+       showBanner('Message failed to send over WebSocket.');
+       return;
+     }
+ 
+-    try { sendJSON({ type: 'activity', kind: 'text' }); } catch {}
+-
+     setDot('thinking');
+ 
+     // Clear composer after send
+     if (input){
+       try { input.value = ''; } catch {}
+     }
+ 
+   } catch (e){
+     console.warn('[onSend] error', e);
+   }
+ }
+ 
+ /* ---------------- End session (graceful) ---------------- */
+ 
+ let ending = false;
+ 
+ export async function onEnd(){
+   if (ending) return;
+   ending = true;
+   try {
+     _clearSuggestions();
+     // Politely signal end of stream over WS, then close with code 1000
+     try { sendCloseStream(); } catch {}
+     await new Promise(r => setTimeout(r, 100));
+ 
 diff --git a/static/js/voice.js b/static/js/voice.js
-index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5eac87f2b8 100644
+index 356fa593ba8b8f6394497271483dce5eac87f2b8..8de05fb9fb5e4d2422b1a5d13e2a6b5cc01a813d 100644
 --- a/static/js/voice.js
 +++ b/static/js/voice.js
-@@ -1,112 +1,156 @@
+@@ -1,156 +1,146 @@
  /*
  Citations for context (non-functional):
  :contentReference[oaicite:0]{index=0}
@@ -23,10 +132,9 @@ index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5e
  */
  
  import { VAD } from './voice/vad.js';
--import { sendAudioChunk, sendCloseStream } from './ws_module.js';
--import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
-+import { sendAudioChunk, sendCloseStream, sendJSON } from './ws_module.js';
-+import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
+-import { sendAudioChunk, sendCloseStream, sendJSON } from './ws_module.js';
++import { sendAudioChunk, sendCloseStream } from './ws_module.js';
+ import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
  
  // Public API (matches prior usage)
  export async function initMic(stream = null) { return await _ensureMic(stream); }
@@ -64,33 +172,33 @@ index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5e
    // NEW: min-turn gating
    recStartedAt: 0,
    pendingEndTimer: null,
-+  ttsPlaying: false,
-+  bargeConfirmTimer: null,
-+  bargeConfirmActive: false,
-+  speechActivitySent: false,
+   ttsPlaying: false,
+   bargeConfirmTimer: null,
+   bargeConfirmActive: false,
+-  speechActivitySent: false,
  };
  
-+const BARGE_CONFIRM_DEFAULT_MS = 420;
-+let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
-+try {
-+  const cfg = window.__askchip_config || {};
-+  if (cfg && typeof cfg.barge_confirm_ms === 'number') {
-+    bargeConfirmMs = cfg.barge_confirm_ms;
-+  }
-+} catch {}
-+bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
-+
-+try {
-+  window.addEventListener('chip-tts', (ev) => {
-+    const detail = ev?.detail || {};
-+    const playing = String(detail.state || '').toLowerCase() === 'playing';
-+    state.ttsPlaying = playing;
-+    if (!playing && !state.bargeConfirmActive && !state.rec) {
-+      state.speechActivitySent = false;
-+    }
-+  });
-+} catch {}
-+
+ const BARGE_CONFIRM_DEFAULT_MS = 420;
+ let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
+ try {
+   const cfg = window.__askchip_config || {};
+   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
+     bargeConfirmMs = cfg.barge_confirm_ms;
+   }
+ } catch {}
+ bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
+ 
+ try {
+   window.addEventListener('chip-tts', (ev) => {
+     const detail = ev?.detail || {};
+     const playing = String(detail.state || '').toLowerCase() === 'playing';
+     state.ttsPlaying = playing;
+-    if (!playing && !state.bargeConfirmActive && !state.rec) {
+-      state.speechActivitySent = false;
+-    }
+   });
+ } catch {}
+ 
  // ---- Helpers ----------------------------------------------------------------
  
  function _emitVoiceState(state, detail = {}) {
@@ -117,25 +225,25 @@ index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5e
    }
  }
  
-+function _clearBargeConfirm(resume = false) {
-+  if (state.bargeConfirmTimer) {
-+    try { clearTimeout(state.bargeConfirmTimer); } catch {}
-+    state.bargeConfirmTimer = null;
-+  }
-+  if (state.bargeConfirmActive) {
-+    state.bargeConfirmActive = false;
-+    if (resume) {
-+      try { resumePlayback(); } catch {}
-+    }
-+  }
-+}
-+
-+function _sendActivity(kind) {
-+  try {
-+    sendJSON({ type: 'activity', kind });
-+  } catch {}
-+}
-+
+ function _clearBargeConfirm(resume = false) {
+   if (state.bargeConfirmTimer) {
+     try { clearTimeout(state.bargeConfirmTimer); } catch {}
+     state.bargeConfirmTimer = null;
+   }
+   if (state.bargeConfirmActive) {
+     state.bargeConfirmActive = false;
+     if (resume) {
+       try { resumePlayback(); } catch {}
+     }
+   }
+ }
+ 
+-function _sendActivity(kind) {
+-  try {
+-    sendJSON({ type: 'activity', kind });
+-  } catch {}
+-}
+-
  async function _ensureMic(externalStream = null) {
    if (state.stream && state.stream.active) return state.stream;
  
@@ -161,17 +269,7 @@ index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5e
          autoGainControl: false
        }
      };
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5eac87f2b8 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -172,59 +216,63 @@ function _stopRecorder(detail = null) {
-   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
- 
-   try { if (state.rec && state.rec.state !== 'inactive') state.rec.stop(); } catch {}
-   // intentionally keep state.rec reference nullable here; onstop handler handles final close
-   state.rec = null;
- }
+@@ -222,51 +212,50 @@ function _stopRecorder(detail = null) {
  
  function _teardownVADOnly() {
    try { state.vad && state.vad.stop(); } catch {}
@@ -191,19 +289,19 @@ index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5e
  function _disarm() {
    _safeClearTurnTimer();
    _clearPendingEndTimer();
-+  _clearBargeConfirm(false);
+   _clearBargeConfirm(false);
    _stopRecorder({ reason: 'manual_disarm' });
    _teardownVADOnly();
    state.turnOpen = false; // ensure local state is clean
    state.recStartedAt = 0;
-+  state.ttsPlaying = false;
-+  state.speechActivitySent = false;
+   state.ttsPlaying = false;
+-  state.speechActivitySent = false;
    _emitVoiceState('idle');
  }
  
  function _bargeIn() {
    // Soft barge-in: pause audio locally
-+  _clearBargeConfirm(false);
+   _clearBargeConfirm(false);
    try { stopPlayback(); } catch {}
    // If a prior ASR turn is somehow still open, politely close it.
    // (Harmless if no turn is open; guarded to avoid duplicate closes.)
@@ -223,17 +321,7 @@ index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5e
  
    // Merge runtime globals so admins can tune without rebuilds:
    let globalVad = {};
-   try { globalVad = (window.__askchip_config && window.__askchip_config.vad) || {}; } catch {}
-   const cfg = { ...globalVad, ...opts };
- 
-   const pollMs = cfg.pollMs ?? 33;
-   const vad = new VAD(
-     state.analyser,
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5eac87f2b8 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -269,50 +317,51 @@ function _startRecorder() {
+@@ -317,51 +306,50 @@ function _startRecorder() {
      console.warn('[voice] MediaRecorder not supported in this browser');
      state.rec = null;
      return false;
@@ -259,7 +347,7 @@ index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5e
    }
  
    state.rec = recorder;
-+  state.speechActivitySent = false;
+-  state.speechActivitySent = false;
  
    state.rec.ondataavailable = (e) => {
      const blob = e.data;
@@ -285,28 +373,7 @@ index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5e
          }
        });
    };
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5eac87f2b8 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -366,73 +415,114 @@ function _startRecorder() {
-     const timeslice = 150; // 150 ms sits comfortably within the 100–200 ms target window
-     state.rec.start(timeslice);
-     state.turnOpen = true; // mark an open ASR turn on the server
-     try {
-       console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice });
-     } catch {}
-   } catch (e) {
-     console.warn('[voice] recorder start failed', e);
-     state.rec = null;
-     state.turnOpen = false;
-     return false;
-   }
- 
-   // Safety timeout to prevent runaway recordings
-   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
-   _safeClearTurnTimer();
-   state.turnTimer = setTimeout(() => {
+@@ -432,97 +420,88 @@ function _startRecorder() {
      try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
    }, limitMs);
  
@@ -315,49 +382,48 @@ index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5e
  
  function _onSpeechStartCommitted() {
    _logLifecycle('vad_speech_start');
--  // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
-+
-+  if (state.ttsPlaying && !state.bargeConfirmActive) {
-+    state.bargeConfirmActive = true;
-+    try { pausePlayback(); } catch {}
-+    state.bargeConfirmTimer = setTimeout(() => {
-+      state.bargeConfirmTimer = null;
-+      if (!state.bargeConfirmActive) return;
-+      if (state.vad && typeof state.vad.isRecording === 'function' && !state.vad.isRecording()) {
-+        state.bargeConfirmActive = false;
-+        try { resumePlayback(); } catch {}
-+        return;
-+      }
-+      state.bargeConfirmActive = false;
-+      _bargeIn();
-+      const started = _startRecorder();
-+      if (started) {
-+        _emitVoiceState('recording');
-+        if (!state.speechActivitySent) {
-+          _sendActivity('speech');
-+          state.speechActivitySent = true;
-+        }
-+        return;
-+      }
-+      console.warn('[voice] recorder unavailable — reverting to typing');
-+      _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
-+    }, bargeConfirmMs);
-+    return;
-+  }
-+
-+  if (state.bargeConfirmActive) {
-+    return;
-+  }
-+
+ 
+   if (state.ttsPlaying && !state.bargeConfirmActive) {
+     state.bargeConfirmActive = true;
+     try { pausePlayback(); } catch {}
+     state.bargeConfirmTimer = setTimeout(() => {
+       state.bargeConfirmTimer = null;
+       if (!state.bargeConfirmActive) return;
+       if (state.vad && typeof state.vad.isRecording === 'function' && !state.vad.isRecording()) {
+         state.bargeConfirmActive = false;
+         try { resumePlayback(); } catch {}
+         return;
+       }
+       state.bargeConfirmActive = false;
+       _bargeIn();
+       const started = _startRecorder();
+       if (started) {
+         _emitVoiceState('recording');
+-        if (!state.speechActivitySent) {
+-          _sendActivity('speech');
+-          state.speechActivitySent = true;
+-        }
+         return;
+       }
+       console.warn('[voice] recorder unavailable — reverting to typing');
+       _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+     }, bargeConfirmMs);
+     return;
+   }
+ 
+   if (state.bargeConfirmActive) {
+     return;
+   }
+ 
    _bargeIn();
  
    const started = _startRecorder();
    if (started) {
      _emitVoiceState('recording');
-+    if (!state.speechActivitySent) {
-+      _sendActivity('speech');
-+      state.speechActivitySent = true;
-+    }
+-    if (!state.speechActivitySent) {
+-      _sendActivity('speech');
+-      state.speechActivitySent = true;
+-    }
      return;
    }
  
@@ -370,10 +436,10 @@ index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5e
    const now = performance.now ? performance.now() : Date.now();
    const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
  
-+  if (state.bargeConfirmActive) {
-+    _clearBargeConfirm(true);
-+  }
-+
+   if (state.bargeConfirmActive) {
+     _clearBargeConfirm(true);
+   }
+ 
    // If we haven't recorded at least minTurnMs, delay honoring VAD-end.
    // Only applies while recorder is actually running.
    if (state.rec && typeof state.rec.state === 'string' && state.rec.state === 'recording') {
@@ -391,7 +457,7 @@ index 15fe49250207e6118596a39a55074fb1d142c971..356fa593ba8b8f6394497271483dce5e
    _safeClearTurnTimer();
    _clearPendingEndTimer();
    _stopRecorder({ reason });
-+  state.speechActivitySent = false;
+-  state.speechActivitySent = false;
    // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
  }
  

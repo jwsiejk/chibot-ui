@@ -233,7 +233,6 @@ function _handleSuggestionClick(text){
   if (!window.__askchip_session_started) return;
   const suggestion = (text || '').trim();
   if (!suggestion) return;
-  try { sendJSON({ type: 'activity', kind: 'chip' }); } catch {}
   const input = $('#composer');
   if (input) {
     try { input.value = suggestion; } catch {}
@@ -339,8 +338,6 @@ export async function onSend(overrideText){
       showBanner('Message failed to send over WebSocket.');
       return;
     }
-
-    try { sendJSON({ type: 'activity', kind: 'text' }); } catch {}
 
     setDot('thinking');
 

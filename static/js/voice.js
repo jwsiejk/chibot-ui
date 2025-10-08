@@ -18,7 +18,7 @@ Citations for context (non-functional):
 */
 
 import { VAD } from './voice/vad.js';
-import { sendAudioChunk, sendCloseStream, sendJSON } from './ws_module.js';
+import { sendAudioChunk, sendCloseStream } from './ws_module.js';
 import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
 
 // Public API (matches prior usage)
@@ -60,7 +60,6 @@ const state = {
   ttsPlaying: false,
   bargeConfirmTimer: null,
   bargeConfirmActive: false,
-  speechActivitySent: false,
 };
 
 const BARGE_CONFIRM_DEFAULT_MS = 420;
@@ -78,9 +77,6 @@ try {
     const detail = ev?.detail || {};
     const playing = String(detail.state || '').toLowerCase() === 'playing';
     state.ttsPlaying = playing;
-    if (!playing && !state.bargeConfirmActive && !state.rec) {
-      state.speechActivitySent = false;
-    }
   });
 } catch {}
 
@@ -121,12 +117,6 @@ function _clearBargeConfirm(resume = false) {
       try { resumePlayback(); } catch {}
     }
   }
-}
-
-function _sendActivity(kind) {
-  try {
-    sendJSON({ type: 'activity', kind });
-  } catch {}
 }
 
 async function _ensureMic(externalStream = null) {
@@ -244,7 +234,6 @@ function _disarm() {
   state.turnOpen = false; // ensure local state is clean
   state.recStartedAt = 0;
   state.ttsPlaying = false;
-  state.speechActivitySent = false;
   _emitVoiceState('idle');
 }
 
@@ -339,7 +328,6 @@ function _startRecorder() {
   }
 
   state.rec = recorder;
-  state.speechActivitySent = false;
 
   state.rec.ondataavailable = (e) => {
     const blob = e.data;
@@ -454,10 +442,6 @@ function _onSpeechStartCommitted() {
       const started = _startRecorder();
       if (started) {
         _emitVoiceState('recording');
-        if (!state.speechActivitySent) {
-          _sendActivity('speech');
-          state.speechActivitySent = true;
-        }
         return;
       }
       console.warn('[voice] recorder unavailable — reverting to typing');
@@ -475,10 +459,6 @@ function _onSpeechStartCommitted() {
   const started = _startRecorder();
   if (started) {
     _emitVoiceState('recording');
-    if (!state.speechActivitySent) {
-      _sendActivity('speech');
-      state.speechActivitySent = true;
-    }
     return;
   }
 
@@ -512,7 +492,6 @@ function _onSpeechEndCommitted(detail = null) {
   _safeClearTurnTimer();
   _clearPendingEndTimer();
   _stopRecorder({ reason });
-  state.speechActivitySent = false;
   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
 }
 
