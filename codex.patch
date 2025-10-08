@@ -1,401 +1,545 @@
-diff --git a/static/js/admin_console.js b/static/js/admin_console.js
-index d289cd99ecfcd54e7d5edfde41cf0f83ebf1ddb2..25186d4aaeb476abdd23e13bc56790a2a417451a 100644
---- a/static/js/admin_console.js
-+++ b/static/js/admin_console.js
-@@ -150,51 +150,53 @@ function bootstrap() {
-   const state = {
-     running: false,
-     sid: null,
-     startBtn,
-     runMetaEl,
-     adminLogEl,
-     wsLogEl,
-     speakCard,
-     speakStateEl,
-     stepMap,
-     wsListener: null,
-     sse: null,
-     asr: { partials: 0, finals: 0, errors: 0 },
-     latestTranscript: '',
-     awaitingGreeting: false,
-     awaitingResponse: false,
-     responseStarted: false,
-     greetResolve: null,
-     greetReject: null,
-     asrResolve: null,
-     asrReject: null,
-     responseResolve: null,
-     responseReject: null,
-     stopMeter: null,
-     policyNodes,
--    policySnapshot: null,    
-+    policySnapshot: null,
-+    asrFinalSatisfied: false,
-+    asrTimer: null,
-   };
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index d7573f5cdbcd51c070681d34987c66b33550f72a..8fbae2c723f43891f6957d74ac07727435debb33 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -124,50 +124,184 @@ def _short_greeting(text: str) -> str:
+         fallback = (text or "").strip()
+         return fallback or "Hi there!"
  
-   resetView(state);
-   if (startBtn) startBtn.addEventListener('click', () => runDiagnostic(state));
-   window.AdminDiagnostics = {
-     run: () => runDiagnostic(state),
-   };
- }
  
- async function runDiagnostic(state) {
-   if (!state.startBtn || state.running) return;
-   state.running = true;
-   state.startBtn.disabled = true;
-   resetView(state);
+ SETTINGS = load_settings()
+ ENABLE_CHIP_FOUNDATION = SETTINGS.enable_chip_foundation
+ ENABLE_POLICY_CHIPS = SETTINGS.enable_policy_chips
+ SUGGESTION_MAX = SETTINGS.suggestion_max
+ STRICT_SYSTEM_SHIM = (
+     "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
+     "and never mention being an AI or chatbot."
+ )
  
-   state.sid = getSID();
-   if (state.runMetaEl) state.runMetaEl.textContent = `Session: ${state.sid}`;
-   appendLog(state.adminLogEl, `${timestamp()} starting diagnostic for session=${state.sid}`);
-   logAdminEvent(state, 'diagnostic_start');
+ _WS_SOURCES = {"ws_greet", "user_ws"}
+ _WS_PIPELINE_UNAVAILABLE_NOTE = "ws_pipeline_unavailable"
+ _WS_PIPELINE_MESSAGE = "I'm still warming up. Please try again in a moment."
+ _LEGACY_WARMUP_LINE = "Hi! I’m ready to help. (Model is warming up.)"
  
-   try {
-     try { await unlockAudio(); } catch {}
+ _DIALOG_ACTION_KEY = "dialog_action"
+ _DIALOG_VERBOSITY_KEY = "dialog_verbosity"
+ _DIALOG_SHOW_SUGGESTIONS_KEY = "dialog_show_suggestions"
+ _DIALOG_NLU_KEY = "dialog_nlu"
+ _DIALOG_POLICY_KEY = "dialog_policy"
  
-     setStepStatus(state, 'user', 'pending', 'Requesting microphone permission…');
-     let micStream = null;
-@@ -271,109 +273,127 @@ async function runDiagnostic(state) {
-     logAdminEvent(state, 'diagnostic_complete');
-   } catch (err) {
-     const msg = err?.message || String(err) || 'Unknown diagnostic error';
-     appendLog(state.wsLogEl, `${timestamp()} [error] ${msg}`);
-     const failing = findFirstIncompleteStep(state);
-     setStepStatus(state, failing, 'error', msg);
-     logAdminEvent(state, 'diagnostic_error', { error: msg });
-   } finally {
-     try { closeWS(); } catch(_) {}
  
-     cleanupRun(state);
-     state.startBtn.disabled = false;
-     state.running = false;
-   }
- }
- 
- function resetView(state) {
-   for (const step of STEP_DEFS) {
-     setStepStatus(state, step.id, 'pending', '');
-   }
-   setStepStatus(state, 'asr', 'pending', 'Waiting for speech activity…');
-   setStepStatus(state, 'assistant', 'pending', 'No assistant response yet.');
-   setSpeakState(state, 'idle');
-   state.asr = { partials: 0, finals: 0, errors: 0 };
-   state.latestTranscript = '';
-+  state.asrFinalSatisfied = false;
-+  if (state.asrTimer) {
-+    clearTimeout(state.asrTimer);
-+    state.asrTimer = null;
-+  }
-   state.awaitingGreeting = false;
-   state.awaitingResponse = false;
-   state.responseStarted = false;
-   if (state.adminLogEl) state.adminLogEl.textContent = '';
-   if (state.wsLogEl) state.wsLogEl.textContent = '';
-   if (state.runMetaEl) state.runMetaEl.textContent = '';
-   resetPolicySnapshot(state);  
- }
- 
- async function ensureWsOpen(timeoutMs = 8000) {
-   const ws = await openWS({ reconnect: false });
-   await Promise.race([
-     waitWSOpen(),
-     new Promise((_, rej) => setTimeout(() => rej(new Error('WebSocket open timed out')), timeoutMs)),
-   ]);
-   return ws;
- }
- 
- function waitForGreeting(state, timeoutMs) {
-   return new Promise((resolve, reject) => {
-     state.awaitingGreeting = true;
-     const timer = setTimeout(() => {
-       state.awaitingGreeting = false;
-       state.greetResolve = null;
-       state.greetReject = null;
-       reject(new Error('Chip did not greet within the expected window.'));
-     }, timeoutMs);
-     state.greetResolve = (frame) => {
-       clearTimeout(timer);
-       state.awaitingGreeting = false;
-       state.greetResolve = null;
-       state.greetReject = null;
-       resolve(frame);
-     };
-     state.greetReject = (err) => {
-       clearTimeout(timer);
-       state.awaitingGreeting = false;
-       state.greetResolve = null;
-       state.greetReject = null;
-       reject(err instanceof Error ? err : new Error(String(err || 'greet rejected')));
-     };
-   });
- }
- 
- function waitForASRFinal(state, timeoutMs) {
-   return new Promise((resolve, reject) => {
--    const timer = setTimeout(() => {
-+    state.asrFinalSatisfied = false;
-+    if (state.asrTimer) {
-+      clearTimeout(state.asrTimer);
-+      state.asrTimer = null;
-+    }
-+    state.asrTimer = setTimeout(() => {
-       state.asrResolve = null;
-       state.asrReject = null;
-+      state.asrTimer = null;
-       reject(new Error('Timed out waiting for ASR final.'));
-     }, timeoutMs);
-     state.asrResolve = (evt) => {
--      clearTimeout(timer);
-+      if (state.asrTimer) {
-+        clearTimeout(state.asrTimer);
-+        state.asrTimer = null;
-+      }
-       state.asrResolve = null;
-       state.asrReject = null;
-+      state.asrFinalSatisfied = true;
-       resolve(evt);
-     };
-     state.asrReject = (err) => {
--      clearTimeout(timer);
-+      if (state.asrTimer) {
-+        clearTimeout(state.asrTimer);
-+        state.asrTimer = null;
-+      }
-       state.asrResolve = null;
-       state.asrReject = null;
-       reject(err instanceof Error ? err : new Error(String(err || 'asr error')));
-     };
-   });
- }
- 
- function waitForAssistantResponse(state, timeoutMs) {
-   return new Promise((resolve, reject) => {
-     const timer = setTimeout(() => {
-       state.responseResolve = null;
-       state.responseReject = null;
-       state.awaitingResponse = false;
-       reject(new Error('Timed out waiting for Chip to respond.'));
-     }, timeoutMs);
-     state.responseResolve = (info) => {
-       clearTimeout(timer);
-       state.responseResolve = null;
-       state.responseReject = null;
-       state.awaitingResponse = false;
-       resolve(info);
-     };
-     state.responseReject = (err) => {
-       clearTimeout(timer);
-       state.responseResolve = null;
-@@ -418,50 +438,61 @@ function waitForUserTurn(state, timeoutMs) {
-         cleanup();
-         setSpeakState(state, 'error');
-         reject(new Error('Microphone disarmed before any audio was captured.'));
-       }
-     }
- 
-     window.addEventListener('askchip-voice', onVoice);
-   });
- }
- 
- /** Waits for the next UtteranceEnd once, then resolves. */
- function waitForUtteranceEndOnce(timeoutMs = 8000) {
-   return new Promise((resolve, reject) => {
-     const onWS = (ev) => {
-       const fr = ev?.detail || {};
-       if (fr.type === 'UtteranceEnd' || fr.label === 'UtteranceEnd') {
-         cleanup(); resolve();
-       }
-     };
-     const timer = setTimeout(() => { cleanup(); reject(new Error('UtteranceEnd timeout')); }, timeoutMs);
-     function cleanup(){ clearTimeout(timer); window.removeEventListener('askchip-ws', onWS); }
-     window.addEventListener('askchip-ws', onWS);
-   });
- }
- 
-+function satisfyASRWait(state, payload = { label: 'asr_final' }, { ensureDone = false, message } = {}) {
-+  const alreadySatisfied = !!state.asrFinalSatisfied;
-+  if (!alreadySatisfied) {
-+    state.asrFinalSatisfied = true;
-+    if (ensureDone) {
-+      updateASRStatus(state, { status: 'done', message });
-+    }
-+  }
-+  state.asrResolve?.(payload);
++def _normalize_move_name(move: Optional[str]) -> str:
++    try:
++        return str(move or "").strip().lower()
++    except Exception:
++        return ""
++
++
++_TEACHER_MOVE_FAMILY = {
++    "ask_clarify": "clarify",
++    "clarify": "clarify",
++    "check_understanding": "clarify",
++    "offer_steps": "answer",
++    "respond": "answer",
++    "compare": "answer",
++    "visualize": "answer",
++    "deep_dive": "deep_dive",
++    "summarize_next_actions": "summarize",
++    "summarize": "summarize",
 +}
 +
- function handleWSFrame(state, frame) {
-   appendLog(state.wsLogEl, `${timestamp()} ${describeFrame(frame)}`);
- 
-   // Greet resolution
-   if (state.awaitingGreeting && isAssistantFrame(frame)) {
-     state.greetResolve?.(frame);
-     return;
-   }
- 
-   // Assistant response tracking
-   if (state.awaitingResponse && isAssistantFrame(frame)) {
-     if (!state.responseStarted) {
-       state.responseStarted = true;
-       setStepStatus(state, 'assistant', 'active', 'Chip is responding…');
-     }
-     if (frame.type === 'assistant_audio') {
-       const chunks = Array.isArray(frame.audio_chunks) ? frame.audio_chunks.length : 0;
-       const summary = frame.is_last
-         ? `Assistant audio completed (${chunks} chunk${chunks === 1 ? '' : 's'}).`
-         : `Assistant audio chunk received (${chunks} chunk${chunks === 1 ? '' : 's'}).`;
-       setStepStatus(state, 'assistant', frame.is_last ? 'done' : 'active', summary);
-       if (frame.is_last) {
-         state.responseResolve?.({ summary, type: frame.type });
-       }
-     } else if (frame.type === 'assistant_end' || frame.type === 'UtteranceEnd') {
-@@ -476,85 +507,90 @@ function handleWSFrame(state, frame) {
-       setStepStatus(state, 'assistant', 'active', summary);
-     }
-   }
- 
-   // Surface ASR errors that arrive as WS Error frames
-   if (frame?.type === 'Error' && /asr/i.test(String(frame?.label || ''))) {
-     const msg = frame?.message || frame?.error || 'ASR connection error';
-     updateASRStatus(state, { status: 'error', message: msg, error: true });
-   }
- 
-   // Transcript frames (Deepgram-like or normalized)
-   if (isTranscriptFrame(frame)) {
-     const final = isTranscriptFinal(frame);
-     const transcript = extractTranscript(frame);
- 
-     if (transcript) {
-       state.latestTranscript = transcript;
-       updateASRStatus(state, { transcript, status: final ? 'done' : 'active' });
-     } else if (final) {
-       // Final with no text: treat as silence so we don’t time out.
-       updateASRStatus(state, { status: 'done', message: 'No speech detected (final).' });
-     }
- 
-     if (final) {
-       // Resolve the ASR wait even if SSE didn’t fire an asr_final.
--      state.asrResolve?.({ label: 'asr_final', transcript: transcript || '' });
-+      satisfyASRWait(state, { label: 'asr_final', transcript: transcript || '' });
-     }
-+    return;
-+  }
 +
-+  if (frame?.type === 'CloseStream') {
-+    satisfyASRWait(state, { label: 'close_stream' }, { ensureDone: true, message: 'ASR stream closed.' });
-   }
- }
++def _teacher_move_family(move: Optional[str]) -> str:
++    normalized = _normalize_move_name(move)
++    return _TEACHER_MOVE_FAMILY.get(normalized, "answer")
++
++
++def _summarize_used_docs(docs: Optional[Iterable[Any]]) -> List[Dict[str, Any]]:
++    if not docs:
++        return []
++    summary: List[Dict[str, Any]] = []
++    for idx, item in enumerate(docs):
++        try:
++            if isinstance(item, (bytes, bytearray)):
++                raw_bytes = bytes(item)
++            else:
++                raw_bytes = str(item).encode("utf-8", "ignore")
++        except Exception:
++            raw_bytes = repr(item).encode("utf-8", "ignore")
++        digest = hashlib.sha256(raw_bytes).hexdigest()[:8]
++        entry: Dict[str, Any] = {"idx": idx, "hash": digest, "len": len(raw_bytes)}
++        if isinstance(item, dict):
++            for key in ("id", "doc_id", "source", "path", "title"):
++                value = item.get(key)
++                if value:
++                    try:
++                        entry["tag"] = str(value)[:40]
++                    except Exception:
++                        entry["tag"] = repr(value)[:40]
++                    break
++        summary.append(entry)
++    return summary
++
++
++def _log_policy_decision(*,
++                         session_id: str,
++                         turn_id: str,
++                         resolved_move: Optional[str],
++                         normalized_action: Optional[str],
++                         policy_move: Optional[str],
++                         teacher_move_seed: Optional[str],
++                         fallback_fired: bool,
++                         fallback_reason: Optional[str],
++                         meta: Optional[Dict[str, Any]],
++                         nlu_meta: Optional[Dict[str, Any]],
++                         used_docs_source: Optional[Iterable[Any]]) -> None:
++    try:
++        normalized_action_name = _normalize_move_name(normalized_action)
++        policy_move_name = _normalize_move_name(policy_move)
++        seed_move_name = _normalize_move_name(teacher_move_seed)
++        resolved_move_name = _normalize_move_name(resolved_move)
++
++        reason = "policy"
++        if fallback_fired:
++            reason = "fallback"
++        else:
++            hint = None
++            if isinstance(meta, dict):
++                hint_val = meta.get("policy_override_reason")
++                if isinstance(hint_val, str) and hint_val.strip():
++                    hint = hint_val.strip().lower()
++            if hint:
++                if "fallback" in hint:
++                    reason = "fallback"
++                elif "override" in hint:
++                    reason = "meta_override"
++                elif hint in {"policy", "meta_override", "fallback"}:
++                    reason = hint
++            elif normalized_action_name:
++                if policy_move_name and normalized_action_name != policy_move_name:
++                    reason = "meta_override"
++                elif not policy_move_name:
++                    reason = "meta_override"
++
++        nlu_intent = None
++        nlu_confidence = None
++        if isinstance(nlu_meta, dict):
++            nlu_intent = nlu_meta.get("intent")
++            confidence_raw = nlu_meta.get("confidence")
++            if confidence_raw is not None:
++                if isinstance(confidence_raw, (int, float)):
++                    nlu_confidence = float(confidence_raw)
++                else:
++                    try:
++                        nlu_confidence = float(str(confidence_raw))
++                    except Exception:
++                        nlu_confidence = None
++
++        used_docs = _summarize_used_docs(used_docs_source)
++
++        payload: Dict[str, Any] = {
++            "sid": session_id,
++            "turn_id": turn_id,
++            "teacher_move": resolved_move_name or None,
++            "teacher_move_family": _teacher_move_family(resolved_move_name),
++            "reason": reason,
++            "fallback_fired": bool(fallback_fired),
++            "fallback_reason": fallback_reason,
++            "nlu_intent": nlu_intent,
++            "nlu_confidence": nlu_confidence,
++        }
++        if normalized_action_name:
++            payload["meta_action"] = normalized_action_name
++        if policy_move_name:
++            payload["policy_move"] = policy_move_name
++        if seed_move_name and seed_move_name != resolved_move_name:
++            payload["persona_move"] = seed_move_name
++        if used_docs:
++            payload["used_docs"] = used_docs
++
++        _jlog("policy.decision", **payload)
++    except Exception:
++        pass
++
++
+ def _should_use_foundation(seed_text: str) -> bool:
+     if not ENABLE_CHIP_FOUNDATION:
+         return False
+     try:
+         normalized = str(seed_text or "").strip().lower()
+     except Exception:
+         return False
+     if not normalized:
+         return False
+     return True
  
- function handleAdminEvent(state, evt) {
-   if (!evt) return;
-   
-   const kindTag = String(evt.kind || '').toLowerCase();
-   const labelTag = String(evt.label || '').toLowerCase();
  
-   maybeHandleASREvent(state, evt, kindTag, labelTag);
-   maybeHandlePolicyEvent(state, evt, kindTag, labelTag);
- }
+ _POLICY_SUGGESTION_ACTIONS = frozenset({"ask_clarify", "offer_steps"})
+ _WELCOME_MOVE = "offer_steps"
+ _WELCOME_INTENTS = {"greet", "idle"}
  
- function maybeHandleASREvent(state, evt, kindTag, labelTag) {
-   const combined = `${kindTag} ${labelTag}`.trim();
-   const looksLikeASR =
-     /^asr/.test(kindTag) ||
-     /^asr/.test(labelTag) ||
-     /\basr[._-]/.test(kindTag) ||
-     /\basr[._-]/.test(labelTag);
-   if (!looksLikeASR) return false;
+ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
  
-   const tag = combined || 'asr';
  
-   if (tag.includes('error')) {
-     const message = evt.error ? `ASR error: ${evt.error}` : 'ASR error reported.';
-     updateASRStatus(state, { status: 'error', message, error: true });
-     return true;
-   }
+ def _get_dialog_action(meta: Optional[Dict[str, Any]]) -> Optional[str]:
+     if not isinstance(meta, dict):
+         return None
+     action = meta.get(_DIALOG_ACTION_KEY)
+     if action:
+         return action
+@@ -1241,50 +1375,64 @@ def _make_foundation_frames(seed_text: str,
+     try:
+         _jlog(
+             "turn_telemetry",
+             sid=session_id,
+             intent=nlu_result.get('intent'),
+             confidence=nlu_result.get('confidence'),
+             teacher_move=policy_action or teacher_move,
+             chips=len(policy_chips),
+             prompt_hash=prompt_hash,
+         )
+     except Exception:
+         pass
  
-   if (tag.includes('final')) {
-     updateASRStatus(state, { status: 'done', final: true });
--    state.asrResolve?.(evt);
-+    satisfyASRWait(state, evt);
-     return true;
-   }
+     if fallback_fired and fallback_emit_event:
+         try:
+             _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
+         except Exception:
+             pass
  
-   if (tag.includes('partial')) {
-     updateASRStatus(state, { status: 'active', partialsDelta: 1 });
-     return true;
-   }
+     _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
  
-   if (tag.includes('start')) {
-     updateASRStatus(state, { status: 'active', message: 'ASR stream started.' });
-     return true;    
-   }
-   
-   return false;
- }
+     frames: List[Dict] = []
+     active_teacher_move = policy_action or teacher_move
+     if _should_force_welcome_move(meta, is_greet=is_greet, intent=nlu_result.get('intent')):
+         active_teacher_move = _WELCOME_MOVE
++    kb_source = kb_candidates if 'kb_candidates' in locals() else None
++    _log_policy_decision(
++        session_id=session_id,
++        turn_id=turn_id,
++        resolved_move=active_teacher_move,
++        normalized_action=normalized_action,
++        policy_move=policy_action,
++        teacher_move_seed=teacher_move,
++        fallback_fired=fallback_fired,
++        fallback_reason=fallback_reason,
++        meta=meta,
++        nlu_meta=nlu_result,
++        used_docs_source=kb_source,
++    )
+     chunk: Dict[str, Any] = {
+         'type': 'assistant_chunk',
+         'turn_id': turn_id,
+         'text': safe_reply,
+         'kb_hits': 0,
+         'intent': nlu_result.get('intent'),
+         'teacher_move': active_teacher_move,
+     }
+     if correlation_user_msg_id:
+         chunk['correlation_user_msg_id'] = correlation_user_msg_id
+     frames.append(chunk)
  
- function maybeHandlePolicyEvent(state, evt, kindTag, labelTag) {
-   if (!state?.policyNodes?.container) return false;
+     legacy_suggestions = []
+     try:
+         if cfg.get('suggestions_enabled', True):
+             legacy_suggestions = hygienic_suggestions(safe_reply)
+     except Exception:
+         legacy_suggestions = []
+     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
+     try:
+         _jlog(
+             "chips_emit",
+             sid=session_id,
+             intent=nlu_result.get('intent'),
+             count=len(merged_suggestions),
+@@ -1515,50 +1663,63 @@ def _make_legacy_frames(seed_text: str,
+         try:
+             preview = " ".join((safe_reply or "").split()[:8])
+         except Exception:
+             preview = None
+         telemetry.log_llm_response(
+             output_tokens=None,
+             finish_reason=error_note,
+             preview=preview,
+             fallback_fired=fallback_fired,
+             fallback_reason=fallback_reason,
+         )
  
-   const combined = `${kindTag} ${labelTag}`.trim();
-   const isPolicySignal =
-     /\bnlu/.test(combined) ||
-     /\bllm/.test(combined) ||
-     /guardrail/.test(combined) ||
-     /teacher/.test(combined) ||
-@@ -947,50 +983,55 @@ function cleanupRun(state) {
-   try { closeWS(1000, 'admin_diag_end'); } catch {}
-   if (state.wsListener) {
-     window.removeEventListener('askchip-ws', state.wsListener);
-     state.wsListener = null;
-   }
-   if (state.sse) {
-     try { state.sse.close(); } catch {}
-     state.sse = null;
-   }
-   if (state.stopMeter) {
-     try { state.stopMeter(); } catch {}
-     state.stopMeter = null;
-   }
-   state.awaitingGreeting = false;
-   state.awaitingResponse = false;
-   state.responseStarted = false;
-   if (state.greetReject) state.greetReject(new Error('Diagnostic cancelled'));
-   if (state.asrReject) state.asrReject(new Error('Diagnostic cancelled'));
-   if (state.responseReject) state.responseReject(new Error('Diagnostic cancelled'));
-   state.greetResolve = null;
-   state.greetReject = null;
-   state.asrResolve = null;
-   state.asrReject = null;
-   state.responseResolve = null;
-   state.responseReject = null;
-+  state.asrFinalSatisfied = false;
-+  if (state.asrTimer) {
-+    clearTimeout(state.asrTimer);
-+    state.asrTimer = null;
-+  }
- }
+     if fallback_fired and fallback_emit_event:
+         try:
+             _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
+         except Exception:
+             pass
  
- function setStepStatus(state, stepId, status, detail) {
-   const entry = state.stepMap.get(stepId);
-   if (!entry) return;
-   if (status) {
-     entry.el.dataset.status = status;
-     if (entry.statusEl) entry.statusEl.textContent = STATUS_LABELS[status] || status;
-   }
-   if (detail !== undefined && entry.liveEl) {
-     entry.liveEl.textContent = detail;
-   }
- }
+     _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
  
- function setSpeakState(state, mode) {
-   if (!state.speakCard || !state.speakStateEl) return;
-   state.speakCard.dataset.mode = mode;
-   state.speakStateEl.textContent = SPEAK_LABELS[mode] || SPEAK_LABELS.idle;
- }
+     frames: List[Dict] = []
  
- function appendLog(el, line) {
-   if (!el || !line) return;
-   el.textContent = el.textContent ? `${el.textContent}\n${line}` : line;
-   if (el.textContent.length > 14000) {
-     el.textContent = el.textContent.slice(-14000);
+     active_teacher_move = teacher_move
+     if _should_force_welcome_move(meta, is_greet=is_greet, intent=(labels or {}).get('intent') if isinstance(labels, dict) else None):
+         active_teacher_move = _WELCOME_MOVE
++    _log_policy_decision(
++        session_id=session_id,
++        turn_id=turn_id,
++        resolved_move=active_teacher_move,
++        normalized_action=normalized_action,
++        policy_move=policy_action,
++        teacher_move_seed=teacher_move,
++        fallback_fired=fallback_fired,
++        fallback_reason=fallback_reason,
++        meta=meta,
++        nlu_meta=labels,
++        used_docs_source=kb,
++    )
+     chunk = {
+         'type': 'assistant_chunk',
+         'turn_id': turn_id,
+         'text': safe_reply,
+         'kb_hits': len(kb),
+     }
+     if isinstance(labels, dict) and labels.get('intent'):
+         chunk['intent'] = labels.get('intent')
+     if active_teacher_move:
+         chunk['teacher_move'] = active_teacher_move
+     if correlation_user_msg_id:
+         chunk['correlation_user_msg_id'] = correlation_user_msg_id
+     if error_note:
+         chunk['note'] = error_note
+     frames.append(chunk)
+ 
+     legacy_suggestions: List[Any] = []
+     try:
+         if cfg.get('suggestions_enabled', True):
+             legacy_suggestions = hygienic_suggestions(safe_reply)
+     except Exception:
+         legacy_suggestions = []
+     policy_chips = _collect_policy_chips(policy)
+     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
+     try:
+diff --git a/tests/test_streaming_policy_logging.py b/tests/test_streaming_policy_logging.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..91974047178e18b29dee65e8f3df9fec6999e771
+--- /dev/null
++++ b/tests/test_streaming_policy_logging.py
+@@ -0,0 +1,221 @@
++import pytest
++
++from app.services import streaming
++
++
++class DummyTelemetry:
++    def __init__(self):
++        self.turn_id = None
++
++    def log_start(self, *args, **kwargs):
++        return None
++
++    def log_entities(self, *args, **kwargs):
++        return None
++
++    def log_prompt_summary(self, *args, **kwargs):
++        return None
++
++    def mark_fallback(self, *args, **kwargs):
++        return None
++
++    def log_llm_response(self, *args, **kwargs):
++        return None
++
++    def log_error(self, *args, **kwargs):
++        return None
++
++
++class DummyStore:
++    def match_examples(self, persona_id, user_text, limit=4):
++        return []
++
++
++class DummyPersonaManager:
++    def __init__(self, store):
++        self.store = store
++
++    def get_active(self):
++        return {"id": "chip", "name": "Chip", "config": {}}
++
++
++def _patch_foundation_dependencies(monkeypatch, *, teacher_move="deep_dive"):
++    monkeypatch.setattr(streaming, "PersonaStore", lambda: DummyStore())
++    monkeypatch.setattr(streaming, "PersonaManager", DummyPersonaManager)
++    monkeypatch.setattr(
++        streaming._nlu,
++        "infer",
++        lambda *a, **k: {"intent": "install", "confidence": 0.91, "tags": {}, "entities": []},
++    )
++    monkeypatch.setattr(
++        streaming._nlu.policy,
++        "decide",
++        lambda *a, **k: {"teacher_move": teacher_move},
++    )
++    monkeypatch.setattr(
++        streaming,
++        "build_messages",
++        lambda **kwargs: ([{"role": "user", "content": kwargs["user_text"]}], teacher_move, "hash1234"),
++    )
++
++    def _fake_foundation(messages, cfg, telemetry=None):
++        return "Foundation response", {"preview": "Foundation", "finish_reason": "stop", "output_tokens": 42}
++
++    monkeypatch.setattr(streaming, "_call_foundation_with_retry", _fake_foundation)
++    monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: [])
++    monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: [])
++
++
++def test_foundation_policy_decision_logs_kb_snippets(monkeypatch):
++    _patch_foundation_dependencies(monkeypatch, teacher_move="deep_dive")
++
++    telemetry = DummyTelemetry()
++    meta = {
++        "action": "deep_dive",
++        "kb_snippets": [
++            {"id": "doc-1", "text": "Alpha"},
++            "Second document body",
++        ],
++    }
++    cfg = {"suggestions_enabled": False}
++
++    captured = []
++
++    def _capture(event, **fields):
++        captured.append((event, fields))
++
++    monkeypatch.setattr(streaming, "_jlog", _capture)
++
++    turn_id, frames = streaming._make_foundation_frames(
++        "hello",
++        "session-1",
++        meta,
++        cfg,
++        correlation_user_msg_id=None,
++        turn_id="10",
++        telemetry=telemetry,
++        is_greet=False,
++        fallback_line="Fallback",
++        fallback_on_empty=True,
++        fallback_on_error=True,
++        fallback_emit_event=False,
++        action="deep_dive",
++        broadcast_immediately=False,
++    )
++
++    assert turn_id == "10"
++    assert frames and frames[0]["type"] == "assistant_chunk"
++    assert captured
++    policy_events = [fields for event, fields in captured if event == "policy.decision"]
++    assert policy_events
++    fields = policy_events[0]
++    assert fields["teacher_move"] == "deep_dive"
++    assert fields["teacher_move_family"] == "deep_dive"
++    assert fields["reason"] == "policy"
++    assert fields["nlu_intent"] == "install"
++    assert pytest.approx(fields["nlu_confidence"], rel=1e-6) == 0.91
++    assert "used_docs" in fields and len(fields["used_docs"]) == 2
++    hashes = {entry["hash"] for entry in fields["used_docs"]}
++    assert all(len(h) == 8 for h in hashes)
++
++
++def _patch_legacy_dependencies(monkeypatch, reply_text: str):
++    monkeypatch.setattr(streaming, "_get_persona_for_session", lambda session_id: {"id": "chip", "name": "Chip"})
++
++    class Provider:
++        def generate_reply(self, prompt, persona=None, teacher_move=None, context=None):
++            return reply_text
++
++    monkeypatch.setattr(streaming, "get_provider", lambda cfg: Provider())
++    monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: [])
++    monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: [])
++
++
++def test_legacy_policy_decision_logs_fallback(monkeypatch):
++    _patch_legacy_dependencies(monkeypatch, reply_text="")
++
++    telemetry = DummyTelemetry()
++    meta = {"action": "offer_steps"}
++    cfg = {"suggestions_enabled": False}
++    labels = {"intent": "install", "confidence": 0.5}
++    policy = {"teacher_move": "offer_steps"}
++
++    captured = []
++    monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
++
++    turn_id, frames = streaming._make_legacy_frames(
++        "hi",
++        "session-legacy",
++        meta,
++        cfg,
++        correlation_user_msg_id=None,
++        turn_id="22",
++        telemetry=telemetry,
++        is_greet=False,
++        fallback_line="Fallback",
++        fallback_on_empty=True,
++        fallback_on_error=True,
++        fallback_emit_event=False,
++        action="offer_steps",
++        labels=labels,
++        policy=policy,
++        broadcast_immediately=False,
++    )
++
++    assert turn_id == "22"
++    assert frames and frames[0]["type"] == "assistant_chunk"
++    assert captured
++    policy_events = [fields for event, fields in captured if event == "policy.decision"]
++    assert policy_events
++    fields = policy_events[0]
++    assert fields["teacher_move"] == "offer_steps"
++    assert fields["teacher_move_family"] == "answer"
++    assert fields["reason"] == "fallback"
++    assert fields["fallback_fired"] is True
++    assert fields["fallback_reason"] == "empty"
++
++
++def test_legacy_policy_decision_meta_override(monkeypatch):
++    _patch_legacy_dependencies(monkeypatch, reply_text="All good")
++
++    telemetry = DummyTelemetry()
++    meta = {"action": "offer_steps"}
++    cfg = {"suggestions_enabled": False}
++    labels = {"intent": "install", "confidence": 0.42}
++    policy = {"teacher_move": "ask_clarify", "action": "ask_clarify"}
++
++    captured = []
++    monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
++
++    turn_id, frames = streaming._make_legacy_frames(
++        "Need help",
++        "session-override",
++        meta,
++        cfg,
++        correlation_user_msg_id=None,
++        turn_id="33",
++        telemetry=telemetry,
++        is_greet=False,
++        fallback_line="Fallback",
++        fallback_on_empty=True,
++        fallback_on_error=True,
++        fallback_emit_event=False,
++        action="offer_steps",
++        labels=labels,
++        policy=policy,
++        broadcast_immediately=False,
++    )
++
++    assert turn_id == "33"
++    assert frames and frames[0]["type"] == "assistant_chunk"
++    assert captured
++    policy_events = [fields for event, fields in captured if event == "policy.decision"]
++    assert policy_events
++    fields = policy_events[0]
++    assert fields["teacher_move"] == "ask_clarify"
++    assert fields["teacher_move_family"] == "clarify"
++    assert fields["reason"] == "meta_override"
++    assert fields["meta_action"] == "offer_steps"
++    assert fields["policy_move"] == "ask_clarify"
++    assert fields["nlu_intent"] == "install"
++    assert pytest.approx(fields["nlu_confidence"], rel=1e-6) == 0.42

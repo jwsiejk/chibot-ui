@@ -146,6 +146,140 @@ _DIALOG_NLU_KEY = "dialog_nlu"
 _DIALOG_POLICY_KEY = "dialog_policy"
 
 
+def _normalize_move_name(move: Optional[str]) -> str:
+    try:
+        return str(move or "").strip().lower()
+    except Exception:
+        return ""
+
+
+_TEACHER_MOVE_FAMILY = {
+    "ask_clarify": "clarify",
+    "clarify": "clarify",
+    "check_understanding": "clarify",
+    "offer_steps": "answer",
+    "respond": "answer",
+    "compare": "answer",
+    "visualize": "answer",
+    "deep_dive": "deep_dive",
+    "summarize_next_actions": "summarize",
+    "summarize": "summarize",
+}
+
+
+def _teacher_move_family(move: Optional[str]) -> str:
+    normalized = _normalize_move_name(move)
+    return _TEACHER_MOVE_FAMILY.get(normalized, "answer")
+
+
+def _summarize_used_docs(docs: Optional[Iterable[Any]]) -> List[Dict[str, Any]]:
+    if not docs:
+        return []
+    summary: List[Dict[str, Any]] = []
+    for idx, item in enumerate(docs):
+        try:
+            if isinstance(item, (bytes, bytearray)):
+                raw_bytes = bytes(item)
+            else:
+                raw_bytes = str(item).encode("utf-8", "ignore")
+        except Exception:
+            raw_bytes = repr(item).encode("utf-8", "ignore")
+        digest = hashlib.sha256(raw_bytes).hexdigest()[:8]
+        entry: Dict[str, Any] = {"idx": idx, "hash": digest, "len": len(raw_bytes)}
+        if isinstance(item, dict):
+            for key in ("id", "doc_id", "source", "path", "title"):
+                value = item.get(key)
+                if value:
+                    try:
+                        entry["tag"] = str(value)[:40]
+                    except Exception:
+                        entry["tag"] = repr(value)[:40]
+                    break
+        summary.append(entry)
+    return summary
+
+
+def _log_policy_decision(*,
+                         session_id: str,
+                         turn_id: str,
+                         resolved_move: Optional[str],
+                         normalized_action: Optional[str],
+                         policy_move: Optional[str],
+                         teacher_move_seed: Optional[str],
+                         fallback_fired: bool,
+                         fallback_reason: Optional[str],
+                         meta: Optional[Dict[str, Any]],
+                         nlu_meta: Optional[Dict[str, Any]],
+                         used_docs_source: Optional[Iterable[Any]]) -> None:
+    try:
+        normalized_action_name = _normalize_move_name(normalized_action)
+        policy_move_name = _normalize_move_name(policy_move)
+        seed_move_name = _normalize_move_name(teacher_move_seed)
+        resolved_move_name = _normalize_move_name(resolved_move)
+
+        reason = "policy"
+        if fallback_fired:
+            reason = "fallback"
+        else:
+            hint = None
+            if isinstance(meta, dict):
+                hint_val = meta.get("policy_override_reason")
+                if isinstance(hint_val, str) and hint_val.strip():
+                    hint = hint_val.strip().lower()
+            if hint:
+                if "fallback" in hint:
+                    reason = "fallback"
+                elif "override" in hint:
+                    reason = "meta_override"
+                elif hint in {"policy", "meta_override", "fallback"}:
+                    reason = hint
+            elif normalized_action_name:
+                if policy_move_name and normalized_action_name != policy_move_name:
+                    reason = "meta_override"
+                elif not policy_move_name:
+                    reason = "meta_override"
+
+        nlu_intent = None
+        nlu_confidence = None
+        if isinstance(nlu_meta, dict):
+            nlu_intent = nlu_meta.get("intent")
+            confidence_raw = nlu_meta.get("confidence")
+            if confidence_raw is not None:
+                if isinstance(confidence_raw, (int, float)):
+                    nlu_confidence = float(confidence_raw)
+                else:
+                    try:
+                        nlu_confidence = float(str(confidence_raw))
+                    except Exception:
+                        nlu_confidence = None
+
+        used_docs = _summarize_used_docs(used_docs_source)
+
+        payload: Dict[str, Any] = {
+            "sid": session_id,
+            "turn_id": turn_id,
+            "teacher_move": resolved_move_name or None,
+            "teacher_move_family": _teacher_move_family(resolved_move_name),
+            "reason": reason,
+            "fallback_fired": bool(fallback_fired),
+            "fallback_reason": fallback_reason,
+            "nlu_intent": nlu_intent,
+            "nlu_confidence": nlu_confidence,
+        }
+        if normalized_action_name:
+            payload["meta_action"] = normalized_action_name
+        if policy_move_name:
+            payload["policy_move"] = policy_move_name
+        if seed_move_name and seed_move_name != resolved_move_name:
+            payload["persona_move"] = seed_move_name
+        if used_docs:
+            payload["used_docs"] = used_docs
+
+        _jlog("policy.decision", **payload)
+    except Exception:
+        pass
+
+
 def _should_use_foundation(seed_text: str) -> bool:
     if not ENABLE_CHIP_FOUNDATION:
         return False
@@ -1263,6 +1397,20 @@ def _make_foundation_frames(seed_text: str,
     active_teacher_move = policy_action or teacher_move
     if _should_force_welcome_move(meta, is_greet=is_greet, intent=nlu_result.get('intent')):
         active_teacher_move = _WELCOME_MOVE
+    kb_source = kb_candidates if 'kb_candidates' in locals() else None
+    _log_policy_decision(
+        session_id=session_id,
+        turn_id=turn_id,
+        resolved_move=active_teacher_move,
+        normalized_action=normalized_action,
+        policy_move=policy_action,
+        teacher_move_seed=teacher_move,
+        fallback_fired=fallback_fired,
+        fallback_reason=fallback_reason,
+        meta=meta,
+        nlu_meta=nlu_result,
+        used_docs_source=kb_source,
+    )
     chunk: Dict[str, Any] = {
         'type': 'assistant_chunk',
         'turn_id': turn_id,
@@ -1537,6 +1685,19 @@ def _make_legacy_frames(seed_text: str,
     active_teacher_move = teacher_move
     if _should_force_welcome_move(meta, is_greet=is_greet, intent=(labels or {}).get('intent') if isinstance(labels, dict) else None):
         active_teacher_move = _WELCOME_MOVE
+    _log_policy_decision(
+        session_id=session_id,
+        turn_id=turn_id,
+        resolved_move=active_teacher_move,
+        normalized_action=normalized_action,
+        policy_move=policy_action,
+        teacher_move_seed=teacher_move,
+        fallback_fired=fallback_fired,
+        fallback_reason=fallback_reason,
+        meta=meta,
+        nlu_meta=labels,
+        used_docs_source=kb,
+    )
     chunk = {
         'type': 'assistant_chunk',
         'turn_id': turn_id,
