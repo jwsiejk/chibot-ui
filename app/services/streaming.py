@@ -1783,13 +1783,11 @@ def _make_foundation_frames(seed_text: str,
 
     telemetry.mark_fallback(fallback_fired, fallback_reason)
 
-# Personalize greet: name + dynamic goal ask
-if is_greet:
-    meta.setdefault("session_id", session_id)
-    meta.setdefault("turn_id", turn_id)
-    safe_reply = _personalize_greet(safe_reply, meta)
-
-
+    # Personalize greet: name + dynamic goal ask
+    if is_greet:
+        meta.setdefault("session_id", session_id)
+        meta.setdefault("turn_id", turn_id)
+        safe_reply = _personalize_greet(safe_reply, meta)
     if use_llm:
         preview_text = llm_info.get("preview")
         if not preview_text:
@@ -2122,12 +2120,11 @@ def _make_legacy_frames(seed_text: str,
 
     telemetry.mark_fallback(fallback_fired, fallback_reason)
 
-# Personalize greet: name + dynamic goal ask
-if is_greet:
-    meta.setdefault("session_id", session_id)
-    meta.setdefault("turn_id", turn_id)
-    safe_reply = _personalize_greet(safe_reply, meta)
-
+    # Personalize greet: name + dynamic goal ask
+    if is_greet:
+        meta.setdefault("session_id", session_id)
+        meta.setdefault("turn_id", turn_id)
+        safe_reply = _personalize_greet(safe_reply, meta)
 
     if use_llm:
         preview = None
