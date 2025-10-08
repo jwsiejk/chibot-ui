@@ -14,6 +14,18 @@ let _awaitingFirstAsr = false;
 let _noAsrTimeout = null;
 let _noAsrNotified = false;
 let _lastAsrLatencyMs = null;
+let _ttsPlaying = false;
+
+try {
+  window.addEventListener('chip-tts', (ev) => {
+    const detail = ev?.detail || {};
+    const playing = String(detail.state || '').toLowerCase() === 'playing';
+    _ttsPlaying = playing;
+    if (playing) {
+      _clearAsrTimeout();
+    }
+  });
+} catch {}
 
 function _clearAsrTimeout(){
   if (_noAsrTimeout){
@@ -37,7 +49,7 @@ function _scheduleAsrWatchdog(){
   _sessionReadyAt = Date.now();
   _lastAsrLatencyMs = null;
   _noAsrTimeout = setTimeout(()=>{
-    if (_awaitingFirstAsr){
+    if (_awaitingFirstAsr && !_ttsPlaying){
       _notifyNoAsr('timeout');
     }
   }, ASR_TIMEOUT_MS);
@@ -65,8 +77,7 @@ function _notifyNoAsr(source, detail){
   _noAsrNotified = true;
   _awaitingFirstAsr = false;
   _clearAsrTimeout();
-  const message = 'We didn’t detect any speech. Please check your microphone or try again.';
-  showBanner(message);
+  if (_ttsPlaying) return;
   try {
     window.dispatchEvent(new CustomEvent('askchip-voice-retry-request', {
       detail: { source, payload: detail ?? null }
@@ -103,6 +114,20 @@ function disableForEnded(){
 // Optional safety: strip legacy debug stamps like "[KB:0]" if any slip through
 const _KB_TAG_RE = /\s*\[(?:KB|kb)\s*:\s*\d+\]\s*/g;
 function _cleanText(s){ return (s||'').replace(_KB_TAG_RE,' ').trim(); }
+
+function _handleSessionEnd(frame){
+  const reason = String(frame?.reason || '').toLowerCase();
+  const message = reason === 'silence_auto_close'
+    ? 'Closing for now—start a new session whenever you’re ready.'
+    : 'Session ended. Press Start to begin a new one.';
+  _resetAsrTracking();
+  disableForEnded();
+  try { _clearSuggestions(); } catch {}
+  showBanner(message);
+  try { window.__askchip_session_started = false; } catch {}
+  try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
+  try { closeWS(1000, reason || 'session_end'); } catch {}
+}
 
 /* ---------------- Rendering of assistant frames ---------------- */
 
@@ -208,6 +233,7 @@ function _handleSuggestionClick(text){
   if (!window.__askchip_session_started) return;
   const suggestion = (text || '').trim();
   if (!suggestion) return;
+  try { sendJSON({ type: 'activity', kind: 'chip' }); } catch {}
   const input = $('#composer');
   if (input) {
     try { input.value = suggestion; } catch {}
@@ -220,7 +246,7 @@ export function handleAssistantFrame(d){
   const t = d.type;
 
   if (t === 'ready') {
-    _scheduleAsrWatchdog();
+    if (!_ttsPlaying) _scheduleAsrWatchdog();
   }
 
   if (t === 'no_audio_detected') {
@@ -232,6 +258,11 @@ export function handleAssistantFrame(d){
   if (t === 'Error') {
     const msg = `Error: ${(d.code||'')}${d.message ? ' ' + d.message : ''}`.trim();
     showBanner(msg || 'An error occurred.');
+    return;
+  }
+
+  if (t === 'session_end') {
+    _handleSessionEnd(d);
     return;
   }
 
@@ -308,6 +339,8 @@ export async function onSend(overrideText){
       showBanner('Message failed to send over WebSocket.');
       return;
     }
+
+    try { sendJSON({ type: 'activity', kind: 'text' }); } catch {}
 
     setDot('thinking');
 

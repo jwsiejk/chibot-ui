@@ -47,6 +47,8 @@ _GOAL_ASKS = [
     "what outcome are you aiming for today?",
 ]
 
+_CHIP_INTRO_RE = re.compile(r"^hey[\s,\-–—]*i['’`]?m\s+chip[.!\s]*$", re.IGNORECASE)
+
 def _pick_goal_ask(seed: str | None = None) -> str:
     try:
         h = int(hashlib.sha1((seed or 'seed').encode('utf-8')).hexdigest(), 16)
@@ -61,11 +63,19 @@ def _personalize_greet(base_line: str, meta: Optional[dict]) -> str:
     # Prefer a simple, human opener
     opener = f"Hey {name}, {ask}"
     if base_line and base_line.strip():
-        # Ensure the opener is first; keep the base line if it adds value (e.g., warming note)
-        # Avoid duplicating similar questions.
-        if base_line.lower().strip().endswith("?"):
-            return opener
-        return opener + "\n\n" + base_line.strip()
+        lines = []
+        for raw in (base_line or "").splitlines():
+            stripped = (raw or "").strip()
+            if not stripped:
+                continue
+            if _CHIP_INTRO_RE.match(stripped):
+                continue
+            lines.append(stripped)
+        if lines:
+            tail = "\n\n".join(lines)
+            if tail.lower().strip().endswith("?"):
+                return opener
+            return opener + "\n\n" + tail
     return opener
 
 
@@ -80,6 +90,7 @@ from .nlg.humanize import humanize_text, sounds_botty
 from .greet_idempotency import get_or_create_greet_turn, DEFAULT_TTL_SEC
 from ..db import db
 from ..ws.bus import bus
+from ..policy import nudges
 from ..obs import jlog as _jlog
 from ..obs.nlu_logging import NluLoggingContext, create_context as _create_nlu_context
 from ..personas.store import PersonaManager, PersonaStore
@@ -2670,6 +2681,7 @@ def run_ws_greet(session_id: str) -> str:
     Produce assistant text for greet, broadcast frames, schedule TTS audio,
     and nudge UI with state+suggestions. Returns turn_id.
     """
+    nudges.cancel_idle_timers(session_id, mark=False)
     forced_tid, _idempotent = get_or_create_greet_turn(session_id, force=False, ttl_sec=DEFAULT_TTL_SEC)
     cfg = db.get_config()
     tid, frames = make_assistant_frames(
@@ -2711,6 +2723,10 @@ def run_ws_greet(session_id: str) -> str:
         except Exception:
             pass
 
+    def _arm_idle_once() -> None:
+        _emit_ready_once()
+        nudges.arm_idle_timers(session_id, reason="greet_idle")
+
     audio_scheduled = False
 
     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
@@ -2730,14 +2746,14 @@ def run_ws_greet(session_id: str) -> str:
                 )
             except Exception:
                 pass
-            audio_scheduled = schedule_tts_audio(session_id, safe_text, turn_id=tid, on_complete=_emit_ready_once)
+            audio_scheduled = schedule_tts_audio(session_id, safe_text, turn_id=tid, on_complete=_arm_idle_once)
     except Exception:
         pass
 
     # UI nudges (only emit if the assistant frames didn't already do so)
     try:
         if not audio_scheduled:
-            _emit_ready_once()
+            _arm_idle_once()
         if not suggestions_already_sent:
             greet_legacy = hygienic_suggestions("")
             base_suggestions = merge_suggestions(greet_legacy)
@@ -2767,6 +2783,7 @@ def run_ws_user_turn(session_id: str,
     Produce assistant text for a user turn and schedule both text pacing and TTS.
     Mirrors HTTP /api_v1/chat behavior for consistency.
     """
+    nudges.cancel_idle_timers(session_id, mark=False)
     meta = {"source": "user_ws", "channel": "ws"}
     if isinstance(meta_overrides, dict):
         for key, value in meta_overrides.items():
@@ -2810,6 +2827,10 @@ def run_ws_user_turn(session_id: str,
         except Exception:
             pass
 
+    def _arm_idle_once() -> None:
+        _emit_ready_once()
+        nudges.arm_idle_timers(session_id, reason="assistant_idle")
+
     audio_scheduled = False
 
     # TTS for assistant text
@@ -2836,13 +2857,16 @@ def run_ws_user_turn(session_id: str,
                 safe_text,
                 turn_id=tid,
                 correlation_user_msg_id=correlation_user_msg_id,
-                on_complete=_emit_ready_once,
+                on_complete=_arm_idle_once,
             )
     except Exception:
         pass
     if not audio_scheduled:
         try:
-            _emit_ready_once()
+            _arm_idle_once()
         except Exception:
-            pass
+            try:
+                _emit_ready_once()
+            except Exception:
+                pass
     return tid

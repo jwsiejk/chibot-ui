@@ -10,8 +10,17 @@ import { ChunkedAudioPlayer } from './audio_player.js';
 
 let _player = null;
 let _el = null;
+let _lastTtsState = 'ended';
 
 const DEFAULT_MIME = 'audio/webm; codecs="opus"';
+
+function _emitTtsState(state) {
+  if (!state || state === _lastTtsState) return;
+  _lastTtsState = state;
+  try {
+    window.dispatchEvent(new CustomEvent('chip-tts', { detail: { state } }));
+  } catch {}
+}
 
 export async function unlockAudio() {
   try {
@@ -33,6 +42,12 @@ function ensureEl() {
   _el = new Audio();
   _el.autoplay = true;
   // _el.playsInline = true; // optional (mobile)
+  try {
+    _el.addEventListener('playing', () => _emitTtsState('playing'));
+    const onEnd = () => _emitTtsState('ended');
+    _el.addEventListener('pause', onEnd);
+    _el.addEventListener('ended', onEnd);
+  } catch {}
   return _el;
 }
 
@@ -89,10 +104,36 @@ export function audioTeardown() {
 
 export function stopPlayback() {
   try { _player?.stop(); } catch {}
+  try { ensureEl().pause(); } catch {}
+  _emitTtsState('ended');
 }
 
 export function isPlaying() {
   try { return !!(_el && !_el.paused); } catch { return false; }
+}
+
+export function pausePlayback() {
+  try {
+    const el = ensureEl();
+    if (!el.paused) {
+      el.pause();
+      _emitTtsState('ended');
+    }
+  } catch {}
+}
+
+export function resumePlayback() {
+  try {
+    const el = ensureEl();
+    if (el.paused) {
+      const rv = el.play();
+      if (rv && typeof rv.then === 'function') {
+        rv.then(() => _emitTtsState('playing')).catch(() => {});
+      } else {
+        _emitTtsState('playing');
+      }
+    }
+  } catch {}
 }
 
 export function setVisemeCallback(_fn) { /* no-op in 2D */ }

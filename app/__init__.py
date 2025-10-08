@@ -60,6 +60,11 @@ def create_app():
     app.register_blueprint(core_bp)
     app.register_blueprint(health_bp)
 
+    # Ensure legacy SSE endpoint is always mounted (tests reload modules)
+    from .ws.chat_ws import register_ws_route
+
+    register_ws_route(app)
+
     # Ensure CSRF header/cookie attached to responses
     app.after_request(ensure_csrf_headers)
 

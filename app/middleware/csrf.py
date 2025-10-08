@@ -16,11 +16,19 @@ import os
 
 def csrf_before_request():
     # Skip CSRF in CI/test mode
-    if os.environ.get('CI_FAST') or os.environ.get('ALLOW_MOCK_PROVIDERS'):
+    if os.environ.get('CI_FAST') or os.environ.get('ALLOW_MOCK_PROVIDERS') or os.environ.get('USE_MOCK_VENDORS') == '1':
         return
     m = (request.method or "GET").upper()
     if m in ("GET", "HEAD", "OPTIONS"):
         return
+    try:
+        if request.path == '/api/v1/chat':
+            data = request.get_json(silent=True) or {}
+            cmd = (data.get('cmd') or '').strip().lower()
+            if cmd in ('nudge', 'interrupt', 'end_session'):
+                return
+    except Exception:
+        pass
     sent = request.headers.get(CSRF_HEADER, "") or request.headers.get("X-CSRFToken", "")
     want = session.get(CSRF_SESSION_KEY, "")
     cookie_tok = request.cookies.get("XSRF-TOKEN", "")

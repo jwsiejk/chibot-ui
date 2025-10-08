@@ -15,6 +15,7 @@ from ..dialog.policy import pick as pick_dialog_policy  # backwards-compat shim 
 from ..services.greet_idempotency import clear_greet_turn_cache
 from ..middleware.rate_limit import limit, check_now
 from ..ws.bus import bus
+from ..policy import nudges
 import os, uuid
 
 bp = Blueprint("chat", __name__)
@@ -64,20 +65,9 @@ def post_chat():
         return jsonify(ok=True, interrupted=True), 200
 
     if cmd == "nudge":
-        from ..session_state import can_nudge, mark_nudge
-        cfg = db.get_config()
-        backoff_after = int(cfg.get("nudge_backoff_after_ignored", 2))
-        if can_nudge(sid, backoff_after):
-            mark_nudge(sid)
-            try:
-                from ..services.suggestions import hygienic_suggestions
-                merged = merge_suggestions(hygienic_suggestions(""))
-                if merged:
-                    bus.broadcast(sid, {"type":"suggestions","turn_id":"nudge","items": build_suggestion_items(merged)})
-            except Exception:
-                pass
-            return jsonify(ok=True, nudged=True), 200
-        return jsonify(ok=True, nudged=False), 200
+        nudges.cancel_idle_timers(sid, mark=False)
+        fired = nudges.trigger_nudge_now(sid)
+        return jsonify(ok=True, nudged=fired), 200
 
     if cmd == "end_session":
         from time import time as _now
@@ -94,7 +84,10 @@ def post_chat():
     # Normal text turn path
     user_msg_id = _get_user_msg_id()
     if not user_msg_id:
-        return jsonify(ok=False, error="missing_idempotency_key", detail="Provide Idempotency-Key header", session_id=sid), 400
+        if os.environ.get("USE_MOCK_VENDORS") == "1" or os.environ.get("ALLOW_MOCK_PROVIDERS"):
+            user_msg_id = uuid.uuid4().hex
+        else:
+            return jsonify(ok=False, error="missing_idempotency_key", detail="Provide Idempotency-Key header", session_id=sid), 400
 
     # Typed chat idempotency store
     idem = db.memory.setdefault("chat_turns", {}).setdefault(sid, {})
@@ -112,6 +105,8 @@ def post_chat():
     # First time this user_msg_id seen for this session: allocate a turn_id
     tid = uuid.uuid4().hex
     idem[user_msg_id] = tid
+
+    nudges.cancel_idle_timers(sid)
 
     # Try to schedule frames; if provider unavailable, still return ok with tid (offline-safe)
     try:

@@ -39,6 +39,7 @@ from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NE
 from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
 from app.ws.barge import BargeState
 from app.ws.bus import bus
+from app.policy import nudges
 
 # Optional admin emitter
 try:
@@ -1617,6 +1618,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 corr=bool(corr),
                             )
 
+                            nudges.cancel_idle_timers(sid)
+
                             dialog_nlu_pre: Dict[str, Any] = {}
                             universal_pre: Dict[str, Any] = {}
                             try:
@@ -1668,6 +1671,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         )
 
                             asyncio.create_task(_bg_user())
+
+                        elif t == "activity":
+                            kind = (obj.get("kind") or "").strip().lower()
+                            if kind in {"speech", "text", "chip"}:
+                                nudges.cancel_idle_timers(sid)
+                            continue
 
                         elif t == "CloseStream":
                             _jlog("ws_close_stream", sid=sid)
