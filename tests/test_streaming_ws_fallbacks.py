@@ -147,7 +147,7 @@ def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
         action = kwargs.get("action")
         fallback_text = streaming._build_clarify_question(seed_text, meta)
         turn_id = kwargs.get("force_turn_id") or "tid-greet"
-        if action == "ask_clarify":
+        if action == "clarify":
             text = fallback_text
         else:
             text = "foundation hello"
@@ -410,7 +410,7 @@ def test_run_ws_user_turn_emits_action_metadata_once(monkeypatch):
     assert payload["turn_id"] == tid
     assert payload["is_greet"] is False
     assert payload["nlu"]["intent"] == "broad_topic_help"
-    assert payload["policy"]["action"] == "ask_clarify"
+    assert payload["policy"]["action"] == "clarify"
     assert payload["policy"]["show_suggestions"] is True
 
 
@@ -444,7 +444,7 @@ def test_run_ws_user_turn_emits_single_chunk_frame(monkeypatch):
     monkeypatch.setattr(
         streaming,
         "pick_dialog_policy",
-        lambda nlu: {"action": "ask_clarify", "verbosity": "medium", "show_suggestions": True},
+        lambda nlu, *_, **__: {"action": "clarify", "verbosity": "medium", "show_suggestions": True},
     )
 
     tid = streaming.run_ws_user_turn("session-single-chunk", "hello")
@@ -460,31 +460,31 @@ def test_prepare_turn_metadata_respects_policy_show_suggestions(monkeypatch):
     monkeypatch.setattr(
         streaming,
         "pick_dialog_policy",
-        lambda labels: {"action": "give_brief_answer", "show_suggestions": False, "teacher_move": "give_brief_answer"},
+        lambda labels, *_, **__: {"action": "high_level", "show_suggestions": False, "teacher_move": "high_level"},
     )
 
     prepared, _, policy = streaming.prepare_turn_metadata("Need a short answer", {})
 
-    assert prepared["action"] == "give_brief_answer"
-    assert prepared["dialog_action"] == "give_brief_answer"
+    assert prepared["action"] == "high_level"
+    assert prepared["dialog_action"] == "high_level"
     assert prepared["show_suggestions"] is False
     assert prepared["dialog_show_suggestions"] is False
     assert policy["show_suggestions"] is False
 
 
-def test_prepare_turn_metadata_enables_suggestions_for_ask_clarify(monkeypatch):
+def test_prepare_turn_metadata_enables_suggestions_for_clarify(monkeypatch):
     _stub_config(monkeypatch)
 
     monkeypatch.setattr(
         streaming,
         "pick_dialog_policy",
-        lambda labels: {"action": "ask_clarify", "show_suggestions": True, "teacher_move": "ask_clarify"},
+        lambda labels, *_, **__: {"action": "clarify", "show_suggestions": True, "teacher_move": "clarify"},
     )
 
     prepared, _, policy = streaming.prepare_turn_metadata("Can you clarify?", {})
 
-    assert prepared["action"] == "ask_clarify"
-    assert prepared["dialog_action"] == "ask_clarify"
+    assert prepared["action"] == "clarify"
+    assert prepared["dialog_action"] == "clarify"
     assert prepared["show_suggestions"] is True
     assert prepared["dialog_show_suggestions"] is True
     assert policy["show_suggestions"] is True
@@ -496,7 +496,7 @@ def test_prepare_turn_metadata_enables_suggestions_for_offer_steps(monkeypatch):
     monkeypatch.setattr(
         streaming,
         "pick_dialog_policy",
-        lambda labels: {"action": "offer_steps", "show_suggestions": True, "teacher_move": "offer_steps"},
+        lambda labels, *_, **__: {"action": "offer_steps", "show_suggestions": True, "teacher_move": "offer_steps"},
     )
 
     prepared, _, policy = streaming.prepare_turn_metadata("Walk me through", {})
@@ -526,8 +526,8 @@ def test_legacy_frames_emit_suggestions_only_when_allowed(monkeypatch):
 
     cfg = {"suggestions_enabled": True}
 
-    deny_meta = {"nlu": {}, "action": "give_brief_answer"}
-    deny_policy = {"teacher_move": "give_brief_answer", "show_suggestions": False}
+    deny_meta = {"nlu": {}, "action": "high_level"}
+    deny_policy = {"teacher_move": "high_level", "show_suggestions": False}
 
     _, deny_frames = streaming._make_legacy_frames(
         "Hello",
@@ -547,8 +547,8 @@ def test_legacy_frames_emit_suggestions_only_when_allowed(monkeypatch):
 
     assert all(fr.get("type") != "suggestions" for fr in deny_frames)
 
-    allow_meta = {"nlu": {}, "action": "ask_clarify"}
-    allow_policy = {"teacher_move": "ask_clarify", "show_suggestions": True}
+    allow_meta = {"nlu": {}, "action": "clarify"}
+    allow_policy = {"teacher_move": "clarify", "show_suggestions": True}
 
     _, allow_frames = streaming._make_legacy_frames(
         "Hello",

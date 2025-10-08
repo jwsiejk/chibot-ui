@@ -1,7 +1,7 @@
 from typing import Dict
 
 DEFAULT_MOVE = "summarize_next_actions"
-SUGGESTION_MOVES = {"ask_clarify", "offer_steps"}
+SUGGESTION_MOVES = {"clarify", "ask_clarify", "offer_steps"}
 
 def decide(nlu: Dict, tags: Dict, persona_id: str, store) -> Dict:
     cfg = store.fetch_intent_config(persona_id, nlu.get("intent","")) or {}

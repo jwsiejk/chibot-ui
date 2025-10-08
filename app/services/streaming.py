@@ -150,6 +150,14 @@ _DIALOG_SHOW_SUGGESTIONS_KEY = "dialog_show_suggestions"
 _DIALOG_NLU_KEY = "dialog_nlu"
 _DIALOG_POLICY_KEY = "dialog_policy"
 
+_ACTION_ALIASES = {
+    "ask_clarify": "clarify",
+    "check_understanding": "clarify",
+    "give_brief_answer": "high_level",
+    "respond": "high_level",
+    "answer": "high_level",
+}
+
 
 def _normalize_move_name(move: Optional[str]) -> str:
     try:
@@ -164,11 +172,12 @@ _TEACHER_MOVE_FAMILY = {
     "check_understanding": "clarify",
     "offer_steps": "answer",
     "respond": "answer",
-    "compare": "answer",
+    "compare": "compare",
     "visualize": "answer",
     "deep_dive": "deep_dive",
     "summarize_next_actions": "summarize",
     "summarize": "summarize",
+    "high_level": "answer",
 }
 
 
@@ -297,7 +306,7 @@ def _should_use_foundation(seed_text: str) -> bool:
     return True
 
 
-_POLICY_SUGGESTION_ACTIONS = frozenset({"ask_clarify", "offer_steps"})
+_POLICY_SUGGESTION_ACTIONS = frozenset({"clarify", "ask_clarify", "offer_steps"})
 _WELCOME_MOVE = "offer_steps"
 _WELCOME_INTENTS = {"greet", "idle"}
 
@@ -530,7 +539,26 @@ def _normalize_action(meta: Optional[Dict[str, Any]], default: str = "respond") 
         normalized = str(action or "").strip().lower()
     except Exception:
         normalized = ""
-    return normalized or default
+    mapped = _ACTION_ALIASES.get(normalized, normalized)
+    if not mapped:
+        mapped = _ACTION_ALIASES.get(default, default)
+    return mapped or default
+
+
+def _extract_session_id(meta: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(meta, dict):
+        return None
+    for key in ("session_id", "sid", "session", "conversation_id"):
+        value = meta.get(key)
+        if value is None:
+            continue
+        try:
+            candidate = str(value or "").strip()
+        except Exception:
+            candidate = ""
+        if candidate:
+            return candidate
+    return None
 
 
 def _dialog_verbosity(meta: Optional[Dict[str, Any]]) -> str:
@@ -684,7 +712,7 @@ def _apply_action_shape(action: str,
     if not text:
         return text
     normalized = (action or "").strip().lower()
-    if normalized == "give_brief_answer":
+    if normalized in {"give_brief_answer", "high_level"}:
         return _format_brief_answer(text, meta)
     if normalized == "offer_steps":
         return _format_offer_steps(text, meta)
@@ -996,11 +1024,6 @@ def prepare_turn_metadata(seed_text: str,
         telemetry.log_entities(dialog_nlu.get("entities"))
         telemetry.log_guardrail(decision="allow")
 
-    raw_policy = pick_dialog_policy(dialog_nlu) or {}
-    policy = dict(raw_policy)
-    if policy.get("action") and "teacher_move" not in policy:
-        policy["teacher_move"] = policy["action"]
-
     if not isinstance(target_meta.get("nlu"), dict):
         target_meta["nlu"] = dict(dialog_nlu)
     else:
@@ -1010,11 +1033,53 @@ def prepare_turn_metadata(seed_text: str,
             target_meta["nlu"] = dict(dialog_nlu)
     target_meta[_DIALOG_NLU_KEY] = dict(dialog_nlu)
 
+    existing_universal = target_meta.get("universal")
+    if isinstance(existing_universal, dict):
+        universal = _ensure_universal_fields(existing_universal)
+    else:
+        try:
+            universal = _interpret_universal(
+                seed_text,
+                meta=target_meta,
+                dialog_nlu=dialog_nlu,
+                config=cfg,
+            )
+        except Exception:
+            universal = _ensure_universal_fields(None)
+    target_meta["universal"] = universal
+
+    session_id = _extract_session_id(target_meta)
+    session_goal = None
+    if session_id:
+        try:
+            session_goal = db.update_session_goal(
+                session_id,
+                phase=universal.get("phase"),
+                depth=universal.get("depth"),
+                delivery_pref=universal.get("delivery_pref"),
+                working_intent=dialog_nlu.get("intent") or universal.get("intent_hint"),
+                entities=universal.get("entities"),
+            )
+        except Exception:
+            session_goal = db.get_session_goal(session_id)
+        if session_goal:
+            target_meta["session_goal"] = copy.deepcopy(session_goal)
+
+    raw_policy = pick_dialog_policy(dialog_nlu, universal, session_goal=session_goal) or {}
+    policy = dict(raw_policy)
+    if policy.get("action") and "teacher_move" not in policy:
+        policy["teacher_move"] = policy["action"]
+
     action = target_meta.get(_DIALOG_ACTION_KEY) or target_meta.get("action")
     if not action:
         action = policy.get("action") or policy.get("teacher_move") or "respond"
-    target_meta["action"] = action
-    target_meta[_DIALOG_ACTION_KEY] = action
+    canonical_action = _ACTION_ALIASES.get(str(action or "").strip().lower(), action)
+    target_meta["action"] = canonical_action
+    target_meta[_DIALOG_ACTION_KEY] = canonical_action
+    if policy.get("frame"):
+        target_meta.setdefault("frame", policy.get("frame"))
+    else:
+        target_meta.setdefault("frame", canonical_action)
 
     policy_verbosity = str(policy.get("verbosity") or "").strip().lower() or None
     if policy_verbosity and policy_verbosity not in {"brief", "normal"}:
@@ -1035,21 +1100,6 @@ def prepare_turn_metadata(seed_text: str,
     target_meta["show_suggestions"] = show_suggestions
     target_meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
     target_meta[_DIALOG_POLICY_KEY] = dict(policy)
-
-    existing_universal = target_meta.get("universal")
-    if isinstance(existing_universal, dict):
-        universal = _ensure_universal_fields(existing_universal)
-    else:
-        try:
-            universal = _interpret_universal(
-                seed_text,
-                meta=target_meta,
-                dialog_nlu=dialog_nlu,
-                config=cfg,
-            )
-        except Exception:
-            universal = _ensure_universal_fields(None)
-    target_meta["universal"] = universal
 
     if telemetry:
         policy_move = policy.get("teacher_move") or policy.get("action")
@@ -1377,6 +1427,10 @@ def make_assistant_frames(seed_text: str,
     When broadcast_immediately is True (default) frames are broadcast to the WS bus.
     """
     cfg = cfg or db.get_config()
+    meta = dict(meta or {})
+    if session_id:
+        meta.setdefault("session_id", session_id)
+        meta.setdefault("sid", session_id)
     turn_id = _allocate_turn_id(force_turn_id)
 
     context = telemetry or _create_nlu_context(
@@ -1618,7 +1672,7 @@ def _make_foundation_frames(seed_text: str,
         kb_count = 0
     telemetry.log_prompt_summary(messages=messages, prompt_hash=prompt_hash, kb_count=kb_count)
 
-    use_llm = normalized_action != "ask_clarify"
+    use_llm = True
     llm_info: Dict[str, Any] = {}
     if use_llm:
         try:
@@ -1631,9 +1685,6 @@ def _make_foundation_frames(seed_text: str,
         else:
             reply = foundation_result
             llm_info = {}
-    else:
-        reply = _build_clarify_question(seed_text, meta)
-
     fallback_fired = False
     fallback_reason: Optional[str] = None
 
@@ -1944,7 +1995,7 @@ def _make_legacy_frames(seed_text: str,
 
     reply: str
     error_note: Optional[str] = None
-    use_llm = normalized_action != "ask_clarify"
+    use_llm = True
 
     if use_llm:
         try:
@@ -1965,7 +2016,7 @@ def _make_legacy_frames(seed_text: str,
         else:
             reply = "Hi! I’m ready to help."
     else:
-        reply = _build_clarify_question(seed_text, meta)
+        reply = _LEGACY_WARMUP_LINE
 
     fallback_fired = False
     fallback_reason: Optional[str] = None

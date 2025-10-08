@@ -5,16 +5,18 @@ import hashlib
 import random
 from typing import Any, Dict, List, Tuple, Optional
 
+from ..nlg.frames import get_frame_instruction
+
 # ----------------------------
 # Constants / knobs (tunable)
 # ----------------------------
 TEACHER_MOVES: Tuple[str, ...] = (
-    "check_understanding",
-    "offer_steps",
-    "summarize_next_actions",
+    "clarify",
+    "high_level",
     "deep_dive",
     "compare",
-    "visualize",
+    "offer_steps",
+    "summarize_next_actions",
 )
 MAX_FEWSHOTS: int = 4  # cap few-shots to keep prompt tight in production
 
@@ -324,6 +326,7 @@ def build_messages(
 
     # Decide teacher move
     teacher_move = _choose_teacher_move(weights, dialog_meta)
+    frame_instruction = get_frame_instruction((dialog_meta or {}).get("frame") or teacher_move)
 
     # Optional light persona quote
     quote, quote_meta = _maybe_persona_quote(cfg, intensity)
@@ -401,6 +404,7 @@ def build_messages(
         "If the user seems uncertain, ask one brief clarifying question, then proceed.",
         "Keep empathy short and professional; do not overemote.",
     ])
+    dev_lines.append(frame_instruction)
 
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": "\n".join(sys_lines)},

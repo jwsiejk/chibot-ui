@@ -1,4 +1,48 @@
 import time, copy
+from typing import Any, Dict, Iterable, Mapping, Optional
+
+
+def _ensure_iterable(value: Any) -> Iterable[Any]:
+    if isinstance(value, (list, tuple, set)):
+        return value
+    if value is None:
+        return []
+    return [value]
+
+
+def _empty_session_goal() -> Dict[str, Any]:
+    return {
+        "phase": None,
+        "depth": None,
+        "delivery_pref": None,
+        "working_intent": None,
+        "entities": {"products": [], "keywords": []},
+        "confirmed": [],
+    }
+
+
+def _normalize_session_goal(goal: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(goal, Mapping):
+        return _empty_session_goal()
+    normalized = _empty_session_goal()
+    for key in ("phase", "depth", "delivery_pref", "working_intent"):
+        if key in goal:
+            normalized[key] = goal.get(key)
+    entities = goal.get("entities")
+    if isinstance(entities, Mapping):
+        for name in ("products", "keywords"):
+            raw_items = entities.get(name)
+            bucket: Dict[str, Any] = normalized["entities"]
+            if isinstance(raw_items, Iterable) and not isinstance(raw_items, (str, bytes)):
+                bucket[name] = [str(item) for item in raw_items if str(item).strip()]
+    confirmed = goal.get("confirmed")
+    if isinstance(confirmed, Iterable) and not isinstance(confirmed, (str, bytes)):
+        normalized["confirmed"] = [str(item) for item in confirmed if str(item).strip()]
+    elif isinstance(confirmed, str) and confirmed.strip():
+        normalized["confirmed"] = [confirmed.strip()]
+    return normalized
+
+
 class DB:
     # P4_PATCH: Neon-like persistence via DAL when DATABASE_URL is set
     _persist = None
@@ -39,7 +83,14 @@ class DB:
                 neon_pg.ensure_schema(); neon_pg.upsert_user(email); neon_pg.ensure_session(sid, email)
         except Exception:
             pass
-        self.memory['sessions'].setdefault(sid,{'email':email,'messages':[],'nudges':0,'persona_id':'chip'})
+        session = self.memory['sessions'].setdefault(
+            sid,
+            {'email':email,'messages':[],'nudges':0,'persona_id':'chip'}
+        )
+        if not isinstance(session.get('goal'), dict):
+            session['goal'] = _empty_session_goal()
+        else:
+            session['goal'] = _normalize_session_goal(session['goal'])
     def add_message(self, sid, role, text):
         try:
             if persist_enabled():
@@ -47,7 +98,15 @@ class DB:
                 neon_pg.add_message(sid, role, text)
         except Exception:
             pass
-        self.memory['sessions'].setdefault(sid,{'email':'user@example.com','messages':[],'nudges':0,'persona_id':'chip'}); self.memory['sessions'][sid]['messages'].append((role,text))
+        session = self.memory['sessions'].setdefault(
+            sid,
+            {'email':'user@example.com','messages':[],'nudges':0,'persona_id':'chip'}
+        )
+        if not isinstance(session.get('goal'), dict):
+            session['goal'] = _empty_session_goal()
+        else:
+            session['goal'] = _normalize_session_goal(session['goal'])
+        self.memory['sessions'][sid]['messages'].append((role,text))
     def get_transcript(self, sid): return "\n".join([f"{r.upper()}: {t}" for r,t in self.memory['sessions'].get(sid,{'messages':[]})['messages']])
     def get_config(self): import copy; return copy.deepcopy(self.memory['configs'])
     def update_config(self, updates):
@@ -61,6 +120,94 @@ class DB:
         return self.get_config()
     def add_email(self,to,subject,body): self.memory['emails'].append({'to':to,'subject':subject,'body':body,'created_at':time.time()})
     def list_emails(self): return list(self.memory['emails'])
+    def get_session_goal(self, sid: str) -> Dict[str, Any]:
+        session = self.memory['sessions'].get(sid, {})
+        goal = session.get('goal') if isinstance(session, dict) else None
+        return copy.deepcopy(_normalize_session_goal(goal))
+
+    def update_session_goal(self,
+                            sid: Optional[str],
+                            *,
+                            phase: Optional[Any] = None,
+                            depth: Optional[Any] = None,
+                            delivery_pref: Optional[Any] = None,
+                            working_intent: Optional[Any] = None,
+                            entities: Optional[Mapping[str, Any]] = None,
+                            confirmed: Optional[Iterable[Any]] = None) -> Dict[str, Any]:
+        if not sid:
+            return _empty_session_goal()
+        session = self.memory['sessions'].setdefault(
+            sid,
+            {'email':'user@example.com','messages':[],'nudges':0,'persona_id':'chip'}
+        )
+        if not isinstance(session.get('goal'), dict):
+            session['goal'] = _empty_session_goal()
+        goal = session['goal']
+
+        def _store_value(key: str, value: Optional[Any]) -> None:
+            if value is not None:
+                goal[key] = value
+                _mark_confirmed(key, value)
+
+        def _mark_confirmed(key: str, value: Optional[Any]) -> None:
+            confirmed_list = goal.setdefault('confirmed', [])
+            if not isinstance(confirmed_list, list):
+                confirmed_list = []
+                goal['confirmed'] = confirmed_list
+            if value and str(value).strip():
+                normalized = key.strip()
+                if normalized and normalized not in confirmed_list:
+                    confirmed_list.append(normalized)
+            else:
+                if key in confirmed_list:
+                    confirmed_list.remove(key)
+
+        if phase is not None:
+            _store_value('phase', phase)
+        if depth is not None:
+            _store_value('depth', depth)
+        if delivery_pref is not None:
+            _store_value('delivery_pref', delivery_pref)
+        if working_intent is not None:
+            _store_value('working_intent', working_intent)
+
+        if entities:
+            dest = goal.setdefault('entities', {"products": [], "keywords": []})
+            if not isinstance(dest, dict):
+                dest = {"products": [], "keywords": []}
+                goal['entities'] = dest
+            for key in entities.keys():
+                raw_items = entities.get(key)
+                if raw_items is None:
+                    continue
+                bucket = dest.setdefault(key, [])
+                if not isinstance(bucket, list):
+                    bucket = list(bucket) if isinstance(bucket, Iterable) else []
+                    dest[key] = bucket
+                seen = {str(item).strip().lower() for item in bucket if str(item).strip()}
+                for item in _ensure_iterable(raw_items):
+                    text = str(item or "").strip()
+                    if not text:
+                        continue
+                    lowered = text.lower()
+                    if lowered in seen:
+                        continue
+                    bucket.append(text)
+                    seen.add(lowered)
+                if bucket:
+                    singular = key[:-1] if key.endswith('s') and len(key) > 1 else key
+                    _mark_confirmed(singular, bucket)
+
+        if confirmed:
+            for item in confirmed:
+                key = str(item or "").strip()
+                if not key:
+                    continue
+                confirmed_list = goal.setdefault('confirmed', [])
+                if key not in confirmed_list:
+                    confirmed_list.append(key)
+
+        return copy.deepcopy(goal)
 db=DB()
 def seed_default_persona():
     db.memory['personas']['chip']={'id':'chip','owner':'system','published':{'version':1,'pack':{'id':'chip'}},'draft':{'version':1,'pack':{'id':'chip'}},'history':[{'version':1,'pack':{'id':'chip'}}],'active':True}

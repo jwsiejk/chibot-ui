@@ -226,7 +226,7 @@ def test_legacy_policy_decision_meta_override(monkeypatch):
     meta = {"action": "offer_steps"}
     cfg = {"suggestions_enabled": False, "nebraska_persona_level": 0.13, "nebraska_quotes_enabled": False}
     labels = {"intent": "install", "confidence": 0.42}
-    policy = {"teacher_move": "ask_clarify", "action": "ask_clarify"}
+    policy = {"teacher_move": "clarify", "action": "clarify"}
 
     captured = []
     monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
@@ -256,11 +256,11 @@ def test_legacy_policy_decision_meta_override(monkeypatch):
     policy_events = [fields for event, fields in captured if event == "policy.decision"]
     assert policy_events
     fields = policy_events[0]
-    assert fields["teacher_move"] == "ask_clarify"
+    assert fields["teacher_move"] == "clarify"
     assert fields["teacher_move_family"] == "clarify"
     assert fields["reason"] == "meta_override"
     assert fields["meta_action"] == "offer_steps"
-    assert fields["policy_move"] == "ask_clarify"
+    assert fields["policy_move"] == "clarify"
     assert fields["nlu_intent"] == "install"
     assert pytest.approx(fields["nlu_confidence"], rel=1e-6) == 0.42
     persona_events = [fields for event, fields in captured if event == "persona_applied"]
