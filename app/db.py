@@ -58,6 +58,7 @@ class DB:
                 'show_instruction_strip': True,'show_state_dots': True,'theme':'light',
                 'suggestions_enabled': True,'suggestions_max_items':4,'suggestions_max_words':7,
                 'nudges_enabled': True,'nudge_delay_ms':4200,'nudge_backoff_after_ignored':2,
+                'silence_guard_ms':1800,
                 'confirm_ms':420,'echo_threshold_boost':1.9,'min_speech_ms':220,'voice_command_hints':True,
                 'language_lock':'en','max_turn_seconds':90,'normalization_table_version':1,
                 'nebraska_persona_level':0.13,'nebraska_quotes_enabled':True,

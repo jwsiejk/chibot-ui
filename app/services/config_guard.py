@@ -6,6 +6,7 @@ SCHEMA = {
     "confirm_ms": {"type":"int", "min": 100, "max": 2000},
     "echo_threshold_boost": {"type":"float", "min": 1.0, "max": 5.0},
     "nudge_delay_ms": {"type":"int", "min": 1000, "max": 10000},
+    "silence_guard_ms": {"type":"int", "min": 500, "max": 5000},
     "suggestions_max_items": {"type":"int", "min": 0, "max": 4},
     "suggestions_max_words": {"type":"int", "min": 1, "max": 7},
     "language_lock": {"type":"str", "enum":["en"]},

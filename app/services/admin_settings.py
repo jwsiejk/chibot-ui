@@ -13,6 +13,7 @@ _settings: Dict[str, Any] = {
     "min_speech_ms": 220,
     "nudge_delay_ms": 4200,
     "nudge_backoff_after_ignored": 2,
+    "silence_guard_ms": 1800,
     "max_turn_seconds": 90,
 
     # Audio feature toggle — default TRUE unless explicitly forced false via env/DB

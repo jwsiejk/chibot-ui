@@ -1,504 +1,1396 @@
-diff --git a/static/js/app.js b/static/js/app.js
-index 30fb83c456d20cdce3777b69d9ec62753b23bccd..4de2db3510c3f7a446c80f9c67a239c94dbfe3f4 100644
---- a/static/js/app.js
-+++ b/static/js/app.js
-@@ -1,67 +1,107 @@
- // /static/js/app.js — chat helpers only (imports constrained by spec)
- import { closeWS, sendCloseStream, sendJSON } from './ws_module.js';
- import { getSID } from '/static/js/util/sid.js';
- import { renderSuggestions } from '/static/js/suggestions.js';
+diff --git a/app/db.py b/app/db.py
+index 66d2db17b9168861c955195c0912eec4b808e0bc..0614b35665457a86a4bb29dda0adf86623901b6d 100644
+--- a/app/db.py
++++ b/app/db.py
+@@ -36,50 +36,51 @@ def _normalize_session_goal(goal: Optional[Mapping[str, Any]]) -> Dict[str, Any]
+             if isinstance(raw_items, Iterable) and not isinstance(raw_items, (str, bytes)):
+                 bucket[name] = [str(item) for item in raw_items if str(item).strip()]
+     confirmed = goal.get("confirmed")
+     if isinstance(confirmed, Iterable) and not isinstance(confirmed, (str, bytes)):
+         normalized["confirmed"] = [str(item) for item in confirmed if str(item).strip()]
+     elif isinstance(confirmed, str) and confirmed.strip():
+         normalized["confirmed"] = [confirmed.strip()]
+     return normalized
  
- // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
- // Exports: onEnd, onSend, handleAssistantFrame
  
- const $  = (s)=>document.querySelector(s);
+ class DB:
+     # P4_PATCH: Neon-like persistence via DAL when DATABASE_URL is set
+     _persist = None
  
- const ASR_TIMEOUT_MS = 10_000;
- let _sessionReadyAt = 0;
- let _awaitingFirstAsr = false;
- let _noAsrTimeout = null;
- let _noAsrNotified = false;
- let _lastAsrLatencyMs = null;
- let _ttsPlaying = false;
-+const _asrTurnState = {
-+  activeId: null,
-+  complete: false,
-+  utteranceEnded: false,
-+};
+     def __init__(self):
+         self.memory={
+             'configs':{
+                 'audio_worklet_enabled': False,
+                 'vad_attack_ms': 12,
+                 'vad_release_ms': 240,
+                 'vad_dbfs_threshold': -42,
+                 'csrf_enforced': bool(__import__('os').environ.get('CSRF_ENFORCED','')).__bool__(),'profile_gate_enabled':False,
+                 'show_instruction_strip': True,'show_state_dots': True,'theme':'light',
+                 'suggestions_enabled': True,'suggestions_max_items':4,'suggestions_max_words':7,
+                 'nudges_enabled': True,'nudge_delay_ms':4200,'nudge_backoff_after_ignored':2,
++                'silence_guard_ms':1800,
+                 'confirm_ms':420,'echo_threshold_boost':1.9,'min_speech_ms':220,'voice_command_hints':True,
+                 'language_lock':'en','max_turn_seconds':90,'normalization_table_version':1,
+                 'nebraska_persona_level':0.13,'nebraska_quotes_enabled':True,
+                 'ws_ping_interval_ms':25000,'ws_idle_timeout_ms':30000,'reconnect_policy':'1_attempt_5s','llm_provider':'auto','openai_model':'gpt-4o-mini','stt_provider':'auto','tts_provider':'auto',
+                 'redact_email_in_logs':True,
+                 'nlu_logging_enabled': True,
+                 'gen_humor': 0.0,
+                 'gen_target_verbosity': 'medium',
+                 'gen_max_sentences': 4,
+                 'gen_top_p': 1.0,
+                 'gen_temperature': 0.3,
+                 'feature_audio': True,
+                 'tts_voice_id': '',
+                 'tts_output_format': 'mp3_44100_128',
+                 'tts_model_id': 'eleven_multilingual_v2'
+             },
+             'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{}
+         }
+     def ensure_session(self, sid, email):
+         try:
+             if persist_enabled():
+                 from .dal import neon_pg
+                 neon_pg.ensure_schema(); neon_pg.upsert_user(email); neon_pg.ensure_session(sid, email)
+         except Exception:
+             pass
+diff --git a/app/policy/nudges.py b/app/policy/nudges.py
+index a6078f908f55cfba51c742a972427d798b6615cd..4f210d88508ba9943fe246b81c25934cc362f68e 100644
+--- a/app/policy/nudges.py
++++ b/app/policy/nudges.py
+@@ -1,137 +1,208 @@
++import logging
++import math
+ import threading
++import time
+ from typing import Callable, Dict, Optional
  
- try {
-   window.addEventListener('chip-tts', (ev) => {
-     const detail = ev?.detail || {};
-     const playing = String(detail.state || '').toLowerCase() === 'playing';
-     _ttsPlaying = playing;
-     if (playing) {
-       _clearAsrTimeout();
-     }
-   });
- } catch {}
+ from ..db import db
+-from ..session_state import mark_user_action, can_nudge, mark_nudge
++from ..session_state import (
++    can_nudge,
++    idle_duration_ms,
++    is_ready_for_nudge,
++    guard_remaining_ms,
++    mark_nudge,
++    mark_user_action,
++    mark_user_activity,
++)
++from ..session_state import silence_guard_satisfied
+ from ..ws.bus import bus
  
- function _clearAsrTimeout(){
-   if (_noAsrTimeout){
-     clearTimeout(_noAsrTimeout);
-     _noAsrTimeout = null;
-   }
- }
+ _LOCK = threading.Lock()
+-_scheduled: Dict[str, Dict[str, threading.Timer]] = {}
++_scheduled: Dict[str, Dict[str, Dict[str, object]]] = {}
  
- function _resetAsrTracking(){
-   _clearAsrTimeout();
-   _awaitingFirstAsr = false;
-   _noAsrNotified = false;
-   _sessionReadyAt = 0;
-   _lastAsrLatencyMs = null;
-+  _resetAsrTurnState();
-+}
+ _SECOND_OFFSET_MS = 10_000
+ _AUTO_OFFSET_MS = 25_000
+ 
++_LOGGER = logging.getLogger(__name__)
 +
-+function _resetAsrTurnState(){
-+  _asrTurnState.activeId = null;
-+  _asrTurnState.complete = false;
-+  _asrTurnState.utteranceEnded = false;
-+}
 +
-+function _ensureActiveAsrTurn(turnId){
-+  if (turnId == null) return;
-+  if (_asrTurnState.activeId !== turnId){
-+    _asrTurnState.activeId = turnId;
-+    _asrTurnState.complete = false;
-+    _asrTurnState.utteranceEnded = false;
-+  }
-+}
+ def _enabled() -> bool:
+     cfg = db.get_config()
+     return bool(cfg.get("nudges_enabled", True))
+-    
 +
-+function _extractAsrTurnId(frame){
-+  return (
-+    frame?.turn_id ??
-+    frame?.channel?.turn_id ??
-+    frame?.turnId ??
-+    frame?.channel?.turnId ??
-+    null
-+  );
-+}
 +
-+function _isAsrFinalFrame(frame){
-+  return !!(
-+    frame?.channel?.is_final ??
-+    frame?.is_final ??
-+    frame?.final ??
-+    false
-+  );
- }
+ def _nudge_delay_ms() -> int:
+     cfg = db.get_config()
+     return int(cfg.get("nudge_delay_ms", 7000))
  
- function _scheduleAsrWatchdog(){
-   _clearAsrTimeout();
-   _awaitingFirstAsr = true;
-   _noAsrNotified = false;
-   _sessionReadyAt = Date.now();
-   _lastAsrLatencyMs = null;
-   _noAsrTimeout = setTimeout(()=>{
-     if (_awaitingFirstAsr && !_ttsPlaying){
-       _notifyNoAsr('timeout');
-     }
-   }, ASR_TIMEOUT_MS);
- }
- 
- function _markAsrFrameSeen(){
-   if (!_awaitingFirstAsr) return;
-   _awaitingFirstAsr = false;
-   _clearAsrTimeout();
-   if (_sessionReadyAt){
-     _lastAsrLatencyMs = Date.now() - _sessionReadyAt;
-     try {
-       window.__askchip_last_asr_latency_ms = _lastAsrLatencyMs;
-     } catch {}
-     try {
-@@ -336,56 +376,79 @@ export function handleAssistantFrame(d){
- 
-   if (t === 'ready') {
-     if (!_ttsPlaying) _scheduleAsrWatchdog();
-   }
- 
-   if (t === 'no_audio_detected') {
-     _notifyNoAsr('server', d);
-     return;
-   }
- 
-   // Surface server errors to the UI banner
-   if (t === 'Error') {
-     const msg = `Error: ${(d.code||'')}${d.message ? ' ' + d.message : ''}`.trim();
-     showBanner(msg || 'An error occurred.');
-     return;
-   }
- 
-   if (t === 'session_end') {
-     _handleSessionEnd(d);
-     return;
-   }
- 
-   // Lightweight state hints (non-invasive)
-   if (t === 'assistant_audio') setDot('speaking');
-   if (t === 'UtteranceEnd') {
-+    const turnId = _extractAsrTurnId(d);
-+    if (turnId != null) _ensureActiveAsrTurn(turnId);
-+    const matchesActive = turnId == null
-+      ? _asrTurnState.activeId == null
-+      : _asrTurnState.activeId === turnId;
-+    if (matchesActive && _asrTurnState.utteranceEnded) {
-+      return;
-+    }
-     _finalizeUserPreview({ resetIgnore: true });
-     setDot('ready');
-+    if (matchesActive) {
-+      _asrTurnState.utteranceEnded = true;
-+    }
-   }
- 
-   if (t === 'Results' && d.nlu === undefined){
-+    const turnId = _extractAsrTurnId(d);
-+    if (turnId != null) _ensureActiveAsrTurn(turnId);
-+    const matchesActive = turnId == null
-+      ? _asrTurnState.activeId == null
-+      : _asrTurnState.activeId === turnId;
-+    const isFinal = _isAsrFinalFrame(d);
-+    if (matchesActive && isFinal && _asrTurnState.complete) {
-+      return;
-+    }
-     _renderUserTranscript(d);
-+    if (matchesActive && isFinal) {
-+      _asrTurnState.complete = true;
-+    }
-     return;
-   }
- 
-   if (t === 'suggestions'){
-     const items = Array.isArray(d.items) ? d.items : [];
-     let key = '[]';
-     try { key = JSON.stringify(items ?? []); } catch { key = '[]'; }
-     if (key !== _lastSuggestionsKey){
-       _lastSuggestionsKey = key;
-       try { renderSuggestions(items, _handleSuggestionClick); } catch (err) {
-         console.warn('[handleAssistantFrame] renderSuggestions failed', err);
-       }
-     }
-     return;
-   }
- 
-   if (_isAssistantTextFrame(d)) {
-     if (!_dedupeAssistant(d)) return;
-   }
-   // (other frame types can be handled here as needed)
- }
- 
- /* ---------------- Send (WS-only) ---------------- */
- 
- export async function onSend(overrideText){
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 8de05fb9fb5e4d2422b1a5d13e2a6b5cc01a813d..ff2b0c1866f7c5d5ca4f9ac1be8c7a5601be3ee7 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -31,50 +31,51 @@ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
- 
- // ---- Internal state ---------------------------------------------------------
- 
- // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
- const REC_MIME = (typeof MediaRecorder !== 'undefined'
-   && typeof MediaRecorder.isTypeSupported === 'function'
-   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
-   ? 'audio/ogg; codecs=opus'
-   : 'audio/webm; codecs=opus';
- 
- const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
- const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
- 
- const state = {
-   stream: null,
-   ctx: null,
-   source: null,
-   analyser: null,
-   vad: null,
-   rec: null,
-   chunkSendPromise: Promise.resolve(),
-   chunkBytesSent: 0,
-   chunkSendError: null,
-   turnTimer: null,
-   turnOpen: false,   // track whether a turn is currently open server-side
-+  turnClosePromise: null,
-   deviceLogged: false,
-   // NEW: min-turn gating
-   recStartedAt: 0,
-   pendingEndTimer: null,
-   ttsPlaying: false,
-   bargeConfirmTimer: null,
-   bargeConfirmActive: false,
- };
- 
- const BARGE_CONFIRM_DEFAULT_MS = 420;
- let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
- try {
-   const cfg = window.__askchip_config || {};
-   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
-     bargeConfirmMs = cfg.barge_confirm_ms;
-   }
- } catch {}
- bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
- 
- try {
-   window.addEventListener('chip-tts', (ev) => {
-     const detail = ev?.detail || {};
-     const playing = String(detail.state || '').toLowerCase() === 'playing';
-     state.ttsPlaying = playing;
-   });
-@@ -174,100 +175,123 @@ async function _ensureMic(externalStream = null) {
-   state.stream = stream;
-   state.ctx = ctx;
-   state.source = source;
-   state.analyser = analyser;
- 
-   if (!state.deviceLogged) {
-     const [track] = stream.getAudioTracks();
-     let settings = {};
-     try { settings = track?.getSettings?.() || {}; } catch {}
-     const detail = {
-       label: (track?.label && track.label.trim()) || settings.label || settings.deviceId || 'unknown',
-       sampleRate: settings.sampleRate ?? ctx?.sampleRate ?? null,
-       channels: settings.channelCount ?? settings.channels ?? ctx?.destination?.channelCount ?? 1,
-     };
-     _logLifecycle('mic_device_selected', detail);
-     state.deviceLogged = true;
-   }
- 
-   return stream;
- }
- 
- function _safeClearTurnTimer() {
-   if (state.turnTimer) { clearTimeout(state.turnTimer); state.turnTimer = null; }
- }
- 
-+function _closeTurnIfOpen() {
-+  if (!state.turnOpen && !state.turnClosePromise) {
-+    return null;
-+  }
-+  if (state.turnClosePromise) {
-+    return state.turnClosePromise;
-+  }
-+  if (!state.turnOpen) {
-+    return null;
-+  }
-+  const closePromise = (async () => {
-+    try {
-+      await sendCloseStream();
-+    } finally {
-+      state.turnOpen = false;
-+      state.turnClosePromise = null;
-+    }
-+  })();
-+  state.turnClosePromise = closePromise;
-+  return closePromise;
-+}
 +
- function _stopRecorder(detail = null) {
-   const recorder = state.rec;
-   const wasActive = !!recorder && recorder.state !== 'inactive';
-   const payload = Object.assign({
-     active: wasActive,
-     hasRecorder: !!recorder,
-   }, detail || {});
-   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
+ def _backoff_max() -> int:
+     cfg = db.get_config()
+     return int(cfg.get("nudge_backoff_after_ignored", 2))
  
-   try { if (state.rec && state.rec.state !== 'inactive') state.rec.stop(); } catch {}
-   // intentionally keep state.rec reference nullable here; onstop handler handles final close
-   state.rec = null;
++
++def _silence_guard_ms() -> int:
++    cfg = db.get_config()
++    try:
++        return int(cfg.get("silence_guard_ms", 1800))
++    except Exception:
++        return 1800
++
++
+ def _timings() -> tuple[int, int, int]:
+     base = max(1000, int(_nudge_delay_ms()))
+     return base, base + _SECOND_OFFSET_MS, base + _AUTO_OFFSET_MS
+ 
+ 
+ def _session_record(session_id: str) -> Dict:
+     return db.memory.setdefault(
+         "sessions",
+         {},
+     ).setdefault(
+         session_id,
+         {
+             "email": "user@example.com",
+             "messages": [],
+             "nudges": 0,
+             "persona_id": "chip",
+         },
+     )
+ 
+ 
+ def _increment_session_nudges(session_id: str) -> None:
+     sess = _session_record(session_id)
+     sess["nudges"] = sess.get("nudges", 0) + 1
+ 
+ 
+ def _schedule_timer(
+     session_id: str,
+     name: str,
+     delay_ms: int,
+     fn: Callable[[], None],
++    *,
++    origin: str = "",
+ ) -> None:
+     delay = max(0, int(delay_ms)) / 1000.0
+ 
+     timer: Optional[threading.Timer] = None
++    armed_at = time.time()
+ 
+     def _run() -> None:
+         nonlocal timer
+         if timer is None:
+             return
+         with _LOCK:
+             timers = _scheduled.get(session_id)
+-            if not timers or timers.get(name) is not timer:
++            entry = timers.get(name) if timers else None
++            current = entry.get("timer") if isinstance(entry, dict) else None
++            if not timers or current is not timer:
+                 return
+         try:
++            elapsed_ms = int((time.time() - armed_at) * 1000)
++            _LOGGER.info(
++                "nudge_fired sid=%s name=%s elapsed_ms=%s origin=%s",
++                session_id,
++                name,
++                elapsed_ms,
++                origin or "",
++            )
+             fn()
+         finally:
+             with _LOCK:
+                 timers = _scheduled.get(session_id)
+-                if timers and timers.get(name) is timer:
++                entry = timers.get(name) if timers else None
++                if timers and isinstance(entry, dict) and entry.get("timer") is timer:
+                     timers.pop(name, None)
+                     if not timers:
+                         _scheduled.pop(session_id, None)
+ 
+     timer = threading.Timer(delay, _run)
+     timer.daemon = True
+ 
+     with _LOCK:
+         timers = _scheduled.setdefault(session_id, {})
+         existing = timers.get(name)
+-        if existing:
++        if isinstance(existing, dict):
++            existing_timer = existing.get("timer")
++        else:
++            existing_timer = existing
++        if isinstance(existing_timer, threading.Timer):
+             try:
+-                existing.cancel()
++                existing_timer.cancel()
+             except Exception:
+                 pass
+-        timers[name] = timer
++        timers[name] = {
++            "timer": timer,
++            "armed_at": armed_at,
++            "delay_ms": int(delay_ms),
++            "origin": origin or "",
++        }
++
++    _LOGGER.info(
++        "nudge_timer_set sid=%s name=%s delay_ms=%s origin=%s",
++        session_id,
++        name,
++        int(delay_ms),
++        origin or "",
++    )
+ 
+     timer.start()
+ 
+ 
+ def cancel_idle_timers(session_id: str, *, source: str = "", mark: bool = True) -> None:
+-    timers: Optional[Dict[str, threading.Timer]] = None
++    timers: Optional[Dict[str, Dict[str, object]]] = None
+     with _LOCK:
+         timers = _scheduled.pop(session_id, None)
+ 
+     if timers:
+-        for timer in timers.values():
++        for entry in list(timers.values()):
++            timer = entry.get("timer") if isinstance(entry, dict) else entry
+             try:
+-                timer.cancel()
++                if isinstance(timer, threading.Timer):
++                    timer.cancel()
+             except Exception:
+                 pass
++        _LOGGER.info(
++            "nudge_timer_cancelled sid=%s reason=%s names=%s",
++            session_id,
++            source or "",
++            sorted(timers.keys()),
++        )
+ 
+     if mark:
+         try:
+             mark_user_action(session_id)
+         except Exception:
+             pass
+ 
++    if source:
++        try:
++            mark_user_activity(session_id)
++        except Exception:
++            pass
++
+ 
+ def _nudge_text(stage: int) -> str:
+     if stage == 1:
+         return "Chip here—just checking in. What should we tackle today?"
+     if stage == 2:
+         return "Still with me? Want a quick start or should I send notes?"
+     return "I'll send over a quick summary and close this session for now."
+ 
+ 
+ def _emit_suggestions(session_id: str, turn_id: Optional[str]) -> None:
+     try:
+         from ..services.suggestions import hygienic_suggestions
+         from ..services.streaming import merge_suggestions, build_suggestion_items
+ 
+         legacy = hygienic_suggestions("")
+         merged = merge_suggestions(legacy, cap=2)
+         if not merged:
+             return
+         bus.broadcast(
+             session_id,
+             {
+                 "type": "suggestions",
+                 "turn_id": turn_id,
+                 "items": build_suggestion_items(merged),
+             },
+@@ -197,84 +268,157 @@ def _emit_auto_close(session_id: str) -> None:
+             },
+         )
+         bus.broadcast(
+             session_id,
+             {
+                 "type": "assistant_end",
+                 "turn_id": None,
+                 "reason": "silence_auto_close",
+             },
+         )
+     else:
+         meta, _, _ = prepare_turn_metadata(
+             text,
+             {"source": "nudge_auto_close", "channel": "ws", "silence_stage": 3},
+         )
+         tid, frames = make_assistant_frames(
+             text,
+             session_id,
+             meta=meta,
+             broadcast_immediately=False,
+         )
+         for fr in frames:
+             if fr.get("type") == "end":
+                 fr["reason"] = "silence_auto_close"
+             bus.broadcast(session_id, fr)
+-       
++
+     bus.broadcast(session_id, {"type": "session_end", "reason": "silence_auto_close"})
+ 
+ 
+ def arm_idle_timers(session_id: str, *, reason: str = "") -> bool:
+     if not session_id:
+         return False
+ 
+     cancel_idle_timers(session_id, mark=False)
+ 
+     if not _enabled():
+         return False
+ 
++    guard_ms = _silence_guard_ms()
++    guard_ready = silence_guard_satisfied(session_id, guard_ms)
++    if not is_ready_for_nudge(session_id, guard_ms):
++        if not guard_ready:
++            remaining = int(guard_remaining_ms(session_id, guard_ms))
++            if remaining > 0:
++                _LOGGER.info(
++                    "nudge_guard_wait sid=%s reason=%s remaining_ms=%s",
++                    session_id,
++                    reason or "guard",
++                    remaining,
++                )
++
++                def _deferred() -> None:
++                    arm_idle_timers(session_id, reason=reason)
++
++                _schedule_timer(
++                    session_id,
++                    "guard",
++                    remaining,
++                    _deferred,
++                    origin=f"{reason or 'guard'}:guard",
++                )
++            return False
++        _LOGGER.info(
++            "nudge_arm_blocked sid=%s reason=%s guard_ms=%s",
++            session_id,
++            reason or "state_guard",
++            guard_ms,
++        )
++        return False
++
+     first_ms, second_ms, auto_ms = _timings()
+ 
++    def _can_fire(stage: str) -> bool:
++        if not _enabled():
++            return False
++        if not is_ready_for_nudge(session_id, guard_ms):
++            _LOGGER.info(
++                "nudge_blocked_state sid=%s stage=%s guard_ms=%s",
++                session_id,
++                stage,
++                guard_ms,
++            )
++            return False
++        try:
++            idle_ms = idle_duration_ms(session_id)
++        except Exception:
++            idle_ms = float("inf")
++        delay_ms = _nudge_delay_ms()
++        if idle_ms < delay_ms:
++            idle_repr = int(idle_ms) if math.isfinite(idle_ms) else "inf"
++            _LOGGER.info(
++                "nudge_blocked_idle sid=%s stage=%s idle_ms=%s delay_ms=%s",
++                session_id,
++                stage,
++                idle_repr,
++                delay_ms,
++            )
++            return False
++        if not silence_guard_satisfied(session_id, guard_ms):
++            _LOGGER.info(
++                "nudge_blocked_guard sid=%s stage=%s guard_ms=%s",
++                session_id,
++                stage,
++                guard_ms,
++            )
++            return False
++        return True
++
+     def stage_one():
++        if not _can_fire("nudge1"):
++            return
+         if not can_nudge(session_id, _backoff_max()):
+             return
+         mark_nudge(session_id)
+         _increment_session_nudges(session_id)
+         _emit_nudge(session_id, 1)
+ 
+     def stage_two():
++        if not _can_fire("nudge2"):
++            return
+         if not can_nudge(session_id, _backoff_max()):
+             return
+         mark_nudge(session_id)
+         _increment_session_nudges(session_id)
+         _emit_nudge(session_id, 2)
+ 
+     def stage_auto():
+         _emit_auto_close(session_id)
+ 
+-    _schedule_timer(session_id, "nudge1", first_ms, stage_one)
+-    _schedule_timer(session_id, "nudge2", second_ms, stage_two)
+-    _schedule_timer(session_id, "auto", auto_ms, stage_auto)
++    _schedule_timer(session_id, "nudge1", first_ms, stage_one, origin=reason or "")
++    _schedule_timer(session_id, "nudge2", second_ms, stage_two, origin=reason or "")
++    _schedule_timer(session_id, "auto", auto_ms, stage_auto, origin=reason or "")
+     return True
+ 
+ 
+ def arm_nudge(session_id: str) -> bool:
+     return arm_idle_timers(session_id)
+ 
+ 
+ def cancel_nudge(session_id: str) -> None:
+     cancel_idle_timers(session_id)
+ 
+ 
+ def trigger_nudge_now(session_id: str, stage: int = 1) -> bool:
+     if stage not in (1, 2):
+         stage = 1
+     if not can_nudge(session_id, _backoff_max()):
+         return False
+     mark_nudge(session_id)
+     _increment_session_nudges(session_id)
+     _emit_nudge(session_id, stage)
+     return True
+ 
++
+ def _cancel_all() -> None:
+     for sid in list(_scheduled.keys()):
+         cancel_idle_timers(sid, mark=False)
+diff --git a/app/services/admin_settings.py b/app/services/admin_settings.py
+index 00f31ae23372b94011bd6e47708773900367e552..b9a4115d0cd856feb7bff73003fd8f361886d335 100644
+--- a/app/services/admin_settings.py
++++ b/app/services/admin_settings.py
+@@ -1,40 +1,41 @@
+ # app/services/admin_settings.py
+ from __future__ import annotations
+ import os, json, threading
+ from typing import Any, Dict
+ 
+ _LOCK = threading.Lock()
+ 
+ # ---------------- In-memory defaults (used as base / fallback) ----------------
+ _settings: Dict[str, Any] = {
+     "confirm_ms": 420,
+     "echo_threshold_boost": 1.9,
+     "language_lock": "en",
+     "min_speech_ms": 220,
+     "nudge_delay_ms": 4200,
+     "nudge_backoff_after_ignored": 2,
++    "silence_guard_ms": 1800,
+     "max_turn_seconds": 90,
+ 
+     # Audio feature toggle — default TRUE unless explicitly forced false via env/DB
+     "feature_audio": (os.environ.get("FEATURE_AUDIO") or "true").lower() == "true",
+ 
+     # TTS runtime tunables (non-secret) – keys remain in env only unless user saves
+     "tts_voice_id": os.environ.get("ELEVENLABS_VOICE_ID", ""),
+     "tts_output_format": os.environ.get("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128"),
+     "tts_model_id": os.environ.get("ELEVEN_MODEL_ID", "eleven_multilingual_v2"),
  }
  
- function _teardownVADOnly() {
-   try { state.vad && state.vad.stop(); } catch {}
-   state.vad = null;
+ # ------------------------- DB helpers (safe best-effort) ----------------------
+ 
+ def _persist_enabled() -> bool:
+     try:
+         from ..db import persist_enabled
+         return bool(persist_enabled())
+     except Exception:
+         return False
+ 
+ def _db_get_settings() -> Dict[str, Any]:
+     """
+     Load admin settings from Neon (admin_settings.value_jsonb where key='settings').
+     Returns {} if not available. Safe to call even if schema is missing.
+     """
+diff --git a/app/services/config_guard.py b/app/services/config_guard.py
+index 192cf76ba79c3ca4d2b5b1e4772acbe6f4158a5f..787f2f7e659bf2a830d276100764427a3302c124 100644
+--- a/app/services/config_guard.py
++++ b/app/services/config_guard.py
+@@ -1,33 +1,34 @@
+ from __future__ import annotations
+ import json, time
+ from typing import Dict, Any
+ 
+ SCHEMA = {
+     "confirm_ms": {"type":"int", "min": 100, "max": 2000},
+     "echo_threshold_boost": {"type":"float", "min": 1.0, "max": 5.0},
+     "nudge_delay_ms": {"type":"int", "min": 1000, "max": 10000},
++    "silence_guard_ms": {"type":"int", "min": 500, "max": 5000},
+     "suggestions_max_items": {"type":"int", "min": 0, "max": 4},
+     "suggestions_max_words": {"type":"int", "min": 1, "max": 7},
+     "language_lock": {"type":"str", "enum":["en"]},
+     "nebraska_persona_level": {"type":"float", "min": 0.0, "max": 1.0}
  }
  
- function _teardownAudioGraph() {
-   try { state.source && state.source.disconnect(); } catch {}
-   try { state.analyser && state.analyser.disconnect(); } catch {}
-   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
-   state.source = null;
-   state.analyser = null;
-   state.ctx = null;
-   state.deviceLogged = false;
- }
+ def validate_config(cfg: Dict[str, Any]) -> Dict[str, str]:
+     errors = {}
+     for k, rule in SCHEMA.items():
+         if k not in cfg:
+             continue
+         v = cfg[k]
+         t = rule["type"]
+         try:
+             if t=="int":
+                 v2 = int(v)
+                 if "min" in rule and v2 < rule["min"]: errors[k]="below min"
+                 if "max" in rule and v2 > rule["max"]: errors[k]="above max"
+             elif t=="float":
+                 v2 = float(v)
+                 if "min" in rule and v2 < rule["min"]: errors[k]="below min"
+                 if "max" in rule and v2 > rule["max"]: errors[k]="above max"
+             elif t=="str":
+                 v2 = str(v)
+                 if "enum" in rule and v2 not in rule["enum"]: errors[k]="invalid value"
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index 079059839b33de69edae5aecece72f23bcc173fd..d85cf02a55a46ba11ff9b3ad5e28310e5f3d40fa 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -1,40 +1,41 @@
+ # app/services/streaming.py — Production-grade assistant framing
+ # Guarantees assistant_* frames are broadcast even if the LLM provider fails.
+ # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
  
- function _disarm() {
-   _safeClearTurnTimer();
-   _clearPendingEndTimer();
-   _clearBargeConfirm(false);
-   _stopRecorder({ reason: 'manual_disarm' });
-   _teardownVADOnly();
-   state.turnOpen = false; // ensure local state is clean
-+  state.turnClosePromise = null;
-   state.recStartedAt = 0;
-   state.ttsPlaying = false;
-   _emitVoiceState('idle');
- }
+ from __future__ import annotations
+ from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable
+ import base64
+ import hashlib
+ import threading, time as _t
+ import os
+ import re
+ import copy
+ import random
  
- function _bargeIn() {
-   // Soft barge-in: pause audio locally
-   _clearBargeConfirm(false);
-   try { stopPlayback(); } catch {}
-   // If a prior ASR turn is somehow still open, politely close it.
-   // (Harmless if no turn is open; guarded to avoid duplicate closes.)
--  if (state.turnOpen) {
--    try { sendCloseStream(); } catch {}
--    state.turnOpen = false;
-+  const pendingClose = _closeTurnIfOpen();
-+  if (pendingClose) {
-+    pendingClose.catch(() => {});
-   }
- }
+ from ..security_state import get_profile, get_user
++from ..session_state import set_phase
+ def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
+     # 1) Profile name
+     try:
+         prof = get_profile() or {}
+         name = str(prof.get("name") or "").strip()
+         if name:
+             return name.split()[0]
+     except Exception:
+         pass
+     # 2) Email to first name
+     email = None
+     try:
+         email = (meta or {}).get("email")
+     except Exception:
+         email = None
+     if not email:
+         try:
+             email = get_user() or None
+         except Exception:
+             email = None
+     if isinstance(email, str) and "@" in email:
+         first = email.split("@",1)[0].split(".")[0].replace("_"," ").replace("-", " ").strip()
+         if first:
+             return first.title()
+     return "there"
+@@ -2696,50 +2697,51 @@ def run_ws_greet(session_id: str) -> str:
+         frames = _emit_ws_outage(session_id, tid)
+         try:
+             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='greet')
+         except Exception:
+             pass
+         try:
+             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+         except Exception:
+             pass
+         return tid
+     existing_frame_types = [
+         fr.get("type")
+         for fr in frames
+         if isinstance(fr, dict) and fr.get("type") is not None
+     ]
+     state_already_sent = any(ft == "state" for ft in existing_frame_types)
+     suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
  
- // ---- VAD wiring -------------------------------------------------------------
+     ready_sent = state_already_sent
  
- async function _arm(stream = null, opts = {}) {
-   const mic = stream || await _ensureMic();
+     def _emit_ready_once() -> None:
+         nonlocal ready_sent
+         if ready_sent:
+             return
+         try:
++            set_phase(session_id, "ready")
+             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+             ready_sent = True
+         except Exception:
+             pass
  
-   // Build / rebuild VAD
-   _teardownVADOnly();
+     def _arm_idle_once() -> None:
+         _emit_ready_once()
+         nudges.arm_idle_timers(session_id, reason="greet_idle")
  
-   // Merge runtime globals so admins can tune without rebuilds:
-   let globalVad = {};
-   try { globalVad = (window.__askchip_config && window.__askchip_config.vad) || {}; } catch {}
-   const cfg = { ...globalVad, ...opts };
+     audio_scheduled = False
  
-   const pollMs = cfg.pollMs ?? 33;
-   const vad = new VAD(
-     state.analyser,
-     {
-       // Tunables (admin-configurable via opts or window.__askchip_config.vad)
-       startRms: cfg.startRms ?? 0.012,
-       stopRms:  cfg.stopRms  ?? 0.006,   // LOWER = less twitchy end
-       minSpeechMs: cfg.minSpeechMs ?? 220,
-       minSilenceMs: cfg.minSilenceMs ?? 900, // HIGHER = needs longer quiet
-@@ -289,50 +313,51 @@ async function _arm(stream = null, opts = {}) {
-   state.vad.start();
-   _logLifecycle('mic_start', {
-     sampleRate: state.ctx?.sampleRate,
-     pollMs,
-   });
-   _emitVoiceState('armed');
+     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
+     try:
+         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
+         if text_for_tts:
+             # Pass scrubbed text to TTS (extra safety)
+             safe_text = _scrub_debug_stamps(text_for_tts)
+             try:
+                 _jlog(
+                     "tts.pre_schedule",
+                     session_id=session_id,
+                     sid=session_id,
+                     turn_id=tid,
+                     flow="greet",
+                     **_tts_text_markers(safe_text),
+@@ -2800,50 +2802,51 @@ def run_ws_user_turn(session_id: str,
+         try:
+             _apply_assistant_turn_state(session_id, frames)
+         except Exception:
+             pass
+         try:
+             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='turn')
+         except Exception:
+             pass
+         return tid
+     try:
+         _apply_assistant_turn_state(session_id, frames)
+     except Exception:
+         pass
+     existing_frame_types = [
+         fr.get("type")
+         for fr in frames
+         if isinstance(fr, dict) and fr.get("type") is not None
+     ]
+     ready_sent = any(ft == "state" for ft in existing_frame_types)
  
-   return mic;
- }
+     def _emit_ready_once() -> None:
+         nonlocal ready_sent
+         if ready_sent:
+             return
+         try:
++            set_phase(session_id, "ready")
+             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+             ready_sent = True
+         except Exception:
+             pass
  
- // ---- Recorder lifecycle -----------------------------------------------------
+     def _arm_idle_once() -> None:
+         _emit_ready_once()
+         nudges.arm_idle_timers(session_id, reason="assistant_idle")
  
- function _startRecorder() {
-   if (!state.stream) return false;
-   if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
+     audio_scheduled = False
  
-   if (typeof MediaRecorder === 'undefined') {
-     console.warn('[voice] MediaRecorder not supported in this browser');
-     state.rec = null;
-     return false;
-   }
+     # TTS for assistant text
+     try:
+         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
+         if text_for_tts:
+             # Pass scrubbed text to TTS (extra safety)
+             safe_text = _scrub_debug_stamps(text_for_tts)
+             try:
+                 payload = {
+                     "session_id": session_id,
+                     "sid": session_id,
+                     "turn_id": tid,
+                     "flow": "user",
+                     **_tts_text_markers(safe_text),
+                 }
+diff --git a/app/session_state.py b/app/session_state.py
+index bd94b0602e962ce21db123de72aae6ab3ae20f45..0651780349943ead77316ebb3777ff140f756e4c 100644
+--- a/app/session_state.py
++++ b/app/session_state.py
+@@ -1,26 +1,119 @@
+ import time
+ from dataclasses import dataclass, field
+-from typing import Dict
++from typing import Dict, Optional
  
-   state.chunkSendPromise = Promise.resolve();
-   state.chunkBytesSent = 0;
-   state.chunkSendError = null;
-+  state.turnClosePromise = null;
-   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
-   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
+ @dataclass
+ class SessionState:
+-    last_user_action_ts: float = field(default_factory=lambda: 0.0)
++    last_user_activity_ts: float = field(default_factory=lambda: 0.0)
++    last_partial_ts: float = field(default_factory=lambda: 0.0)
++    last_utterance_end_ts: float = field(default_factory=lambda: 0.0)
++    asr_stream_open: bool = False
++    recorder_active: bool = False
++    phase: str = ""
+     nudges_sent: int = 0
  
-   let recorder;
-   try {
-     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
-   } catch (primaryErr) {
-     try {
-       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
-     } catch (fallbackErr) {
-       console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
-       state.rec = null;
-       return false;
-     }
-   }
+ _SESS: Dict[str, SessionState] = {}
  
-   state.rec = recorder;
+ def get(sid: str) -> SessionState:
+     st = _SESS.get(sid)
+     if not st:
+         st = SessionState()
+         _SESS[sid] = st
+     return st
  
-   state.rec.ondataavailable = (e) => {
-     const blob = e.data;
-     if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
-       return;
-     }
++def mark_user_activity(sid: str, when: Optional[float] = None) -> None:
++    ts = when if when is not None else time.time()
++    st = get(sid)
++    if ts > st.last_user_activity_ts:
++        st.last_user_activity_ts = ts
++
++
+ def mark_user_action(sid: str):
+-    get(sid).last_user_action_ts = time.time()
++    mark_user_activity(sid)
  
-     // Chain chunk sends to preserve ordering across the WS.
-@@ -366,72 +391,73 @@ function _startRecorder() {
-       }
-     } catch (e) {
-       console.warn('[voice] send audio failed', e);
-       state.chunkSendError = state.chunkSendError || e;
-     } finally {
-       if (state.chunkSendError && !finalDetail) {
-         finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
-       }
-       if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
-         try {
-           console.warn('[voice] recorder stopped with issues', {
-             bytesSent: state.chunkBytesSent,
-             error: state.chunkSendError,
-           });
-         } catch {}
-       } else {
-         try {
-           console.debug('[voice] recorder stopped', {
-             bytesSent: state.chunkBytesSent,
-             // state.rec may be nulled by _stopRecorder; fall back to selected REC_MIME
-             mime: (state.rec && state.rec.mimeType) || REC_MIME,
-           });
-         } catch {}
-       }
-       // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
--      if (state.turnOpen) {
-+      const pendingClose = _closeTurnIfOpen();
-+      if (pendingClose) {
-         try {
--          await sendCloseStream();
-+          await pendingClose;
-         } catch {}
--        state.turnOpen = false;
-       }
-       _emitVoiceState('armed', finalDetail);
-     }
-   };
+ def can_nudge(sid: str, backoff_after: int) -> bool:
+     return get(sid).nudges_sent < backoff_after
  
-   try {
-     // Small timeslice ensures non-empty dataavailable frames while still producing a single turn blob.
-     const timeslice = 150; // 150 ms sits comfortably within the 100–200 ms target window
-     state.rec.start(timeslice);
-     state.turnOpen = true; // mark an open ASR turn on the server
-     try {
-       console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice });
-     } catch {}
-   } catch (e) {
-     console.warn('[voice] recorder start failed', e);
-     state.rec = null;
-     state.turnOpen = false;
-+    state.turnClosePromise = null;
-     return false;
-   }
+ def mark_nudge(sid: str):
+     get(sid).nudges_sent += 1
++
++
++def note_partial(sid: str, when: Optional[float] = None) -> None:
++    ts = when if when is not None else time.time()
++    st = get(sid)
++    st.last_partial_ts = ts
++    if ts > st.last_user_activity_ts:
++        st.last_user_activity_ts = ts
++
++
++def note_utterance_end(sid: str, when: Optional[float] = None) -> None:
++    ts = when if when is not None else time.time()
++    st = get(sid)
++    st.last_utterance_end_ts = ts
++    if ts > st.last_user_activity_ts:
++        st.last_user_activity_ts = ts
++
++
++def set_asr_stream_open(sid: str, is_open: bool) -> None:
++    st = get(sid)
++    st.asr_stream_open = bool(is_open)
++
++
++def set_recorder_active(sid: str, active: bool) -> None:
++    st = get(sid)
++    st.recorder_active = bool(active)
++
++
++def set_phase(sid: str, phase: str) -> None:
++    st = get(sid)
++    st.phase = phase or ""
++
++
++def last_user_activity_ts(sid: str) -> float:
++    return get(sid).last_user_activity_ts
++
++
++def idle_duration_ms(sid: str) -> float:
++    ts = get(sid).last_user_activity_ts
++    if ts <= 0:
++        return float("inf")
++    return max(0.0, (time.time() - ts) * 1000.0)
++
++
++def silence_guard_satisfied(sid: str, guard_ms: int) -> bool:
++    guard = max(0, int(guard_ms))
++    if guard == 0:
++        return True
++    st = get(sid)
++    if st.last_utterance_end_ts <= 0:
++        return True
++    ref = max(st.last_partial_ts, st.last_utterance_end_ts)
++    if ref <= 0:
++        return True
++    return (time.time() - ref) * 1000.0 >= guard
++
++
++def is_ready_for_nudge(sid: str, guard_ms: int) -> bool:
++    st = get(sid)
++    if st.phase and st.phase != "ready":
++        return False
++    if st.recorder_active:
++        return False
++    if st.asr_stream_open:
++        return False
++    return silence_guard_satisfied(sid, guard_ms)
++
++
++def guard_remaining_ms(sid: str, guard_ms: int) -> float:
++    guard = max(0, int(guard_ms))
++    if guard == 0:
++        return 0.0
++    st = get(sid)
++    if st.last_utterance_end_ts <= 0:
++        return 0.0
++    ref = max(st.last_partial_ts, st.last_utterance_end_ts)
++    if ref <= 0:
++        return 0.0
++    elapsed = (time.time() - ref) * 1000.0
++    remaining = guard - elapsed
++    return max(0.0, remaining)
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 221e63a1bad044353b4f61ffb4d03897750bd200..c0c96f39bcec1648ab17c77fed17259d7d688bfc 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -18,50 +18,57 @@ from app.services.audio.raw_fallback import (
+ )
  
-   // Safety timeout to prevent runaway recordings
-   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
-   _safeClearTurnTimer();
-   state.turnTimer = setTimeout(() => {
-     try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
-   }, limitMs);
+ from .schema_v1 import (
+     parse_client_json,
+     make_keepalive_ack,
+     make_results,
+     make_utterance_end,
+     make_error,
+ )
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
  
-   return true;
- }
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
+ from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+ from app.ws.barge import BargeState
+ from app.ws.bus import bus
+ from app.policy import nudges
++from app.session_state import (
++    note_partial,
++    note_utterance_end,
++    set_asr_stream_open,
++    set_phase,
++    set_recorder_active,
++)
  
- function _onSpeechStartCommitted() {
-   _logLifecycle('vad_speech_start');
+ # Optional admin emitter
+ try:
+     from app.api_v1.admin import _emit as _admin_emit
+ except Exception:
+     _admin_emit = None
  
-   if (state.ttsPlaying && !state.bargeConfirmActive) {
-     state.bargeConfirmActive = true;
-     try { pausePlayback(); } catch {}
-     state.bargeConfirmTimer = setTimeout(() => {
-       state.bargeConfirmTimer = null;
-       if (!state.bargeConfirmActive) return;
-       if (state.vad && typeof state.vad.isRecording === 'function' && !state.vad.isRecording()) {
-         state.bargeConfirmActive = false;
-         try { resumePlayback(); } catch {}
+ 
+ ACTIVE_WS: dict[str, dict[str, Any]] = {}
+ ACTIVE_WS_LOCK = asyncio.Lock()
+ 
+ WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
+ try:
+     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
+ except Exception:
+     pass
+ 
+ # ------------------------------ small helpers ------------------------------
+ 
+ 
+ def _client_ip_from_scope(scope) -> str:
+     try:
+         c = scope.get("client") or ()
+         if isinstance(c, (list, tuple)) and c:
+             return str(c[0])
+@@ -375,106 +382,119 @@ async def _pump_dg_to_client(
+                         await on_asr_open_flush()
+                 except Exception:
+                     pass
+                 continue
+ 
+             if et in ("user_partial", "user_final"):
+                 is_final = et == "user_final"
+                 text = (ev.get("text") or "").strip()
+                 turn_id_for_event = turn_id_ref[0]
+                 if is_final:
+                     next_turn_id = None
+                     try:
+                         next_turn_id = pending_final_turns.popleft()
+                     except Exception:
+                         next_turn_id = None
+                     if next_turn_id is None:
+                         try:
+                             next_turn_id = min(synthetic_final_turns)
+                             synthetic_final_turns.discard(next_turn_id)
+                         except Exception:
+                             next_turn_id = turn_id_ref[0]
+                     else:
+                         synthetic_final_turns.discard(next_turn_id)
+                     turn_id_for_event = next_turn_id
+                 if not is_final:
++                    nudges.cancel_idle_timers(sid, source="asr_partial")
+                     try:
+                         asr_seen_partial[0] = True
+                     except Exception:
+                         pass
+                     if turn_timing is not None:
+                         try:
+                             first_holder = turn_timing.setdefault(
+                                 "first_partial", [0.0]
+                             )
+                             if not first_holder[0]:
+                                 first_holder[0] = time.time()
+                         except Exception:
+                             pass
++                    try:
++                        note_partial(sid)
++                    except Exception:
++                        pass
+                 _jlog(
+                     "dg_transcript",
+                     sid=sid,
+                     turn_id=turn_id_for_event,
+                     is_final=is_final,
+                     chars=len(text),
+                     preview=_clip_text(text),
+                 )
+                 try:
+                     if et == "user_partial":
+                         _admin_emit and _admin_emit("asr:first_partial", session_id=sid)
+                 except Exception:
+                     pass
+ 
+                 await _ws_send_json(
+                     send,
+                     make_results(
+                         turn_id_for_event,
+                         transcript=text,
+                         confidence=0.0,
+                         is_final=is_final,
+                     ),
+                 )
+ 
+                 if is_final:
+                     final_seen[0] = True
+                     if turn_timing is not None and text:
+                         try:
+                             first_holder = turn_timing.setdefault(
+                                 "first_partial", [0.0]
+                             )
+                             if not first_holder[0]:
+                                 first_holder[0] = time.time()
+                         except Exception:
+                             pass
+                     if on_turn_finish:
+                         try:
+                             on_turn_finish(
+                                 turn_id_for_event, "provider_final", False, len(text)
+                             )
+                         except Exception:
+                             pass
+                     await _ws_send_json(send, make_utterance_end(turn_id_for_event))
++                    try:
++                        note_utterance_end(sid)
++                    except Exception:
++                        pass
++                    try:
++                        set_recorder_active(sid, False)
++                    except Exception:
++                        pass
+                     try:
+                         _admin_emit and _admin_emit("asr:final", session_id=sid)
+                     except Exception:
+                         pass
+ 
+                     if text:
+                         dialog_nlu_pre: Dict[str, Any] = {}
+                         universal_pre: Dict[str, Any] = {}
+                         meta_stub = {"source": "user_ws", "channel": "ws"}
+                         try:
+                             prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
+                                 text, dict(meta_stub)
+                             )
+                             if isinstance(dialog_nlu_raw, dict):
+                                 dialog_nlu_pre = dict(dialog_nlu_raw)
+                             if isinstance(prepared_meta, dict):
+                                 raw_universal = prepared_meta.get("universal") or {}
+                                 if isinstance(raw_universal, dict):
+                                     universal_pre = _ensure_universal_fields(raw_universal)
+                         except Exception:
+                             dialog_nlu_pre = {}
+                             universal_pre = {}
+ 
+                         _emit_admin_nlu_event(
+                             text,
+@@ -743,50 +763,60 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         except asyncio.CancelledError:
+             pass
+ 
+     ping_task = asyncio.create_task(_ping_loop())
+ 
+     try:
+         await _ws_send_json(send, {"type": "ready", "session_id": sid})
+     except Exception:
+         with contextlib.suppress(Exception):
+             await send(
+                 {
+                     "type": "websocket.close",
+                     "code": 1011,
+                     "reason": "initial_ready_failed",
+                 }
+             )
+         return
+ 
+     cfg: Dict[str, Any] = {}
+     loop = asyncio.get_running_loop()
+     barge = BargeState()
+ 
+     def _send_barge_state(phase: str) -> None:
+         if not phase:
+             return
++        try:
++            set_phase(sid, phase)
++        except Exception:
++            pass
++        if phase == "paused":
++            try:
++                set_recorder_active(sid, True)
++            except Exception:
++                pass
++            nudges.cancel_idle_timers(sid, source="ws_state_paused")
+         frame = {"type": "state", "phase": phase}
+         try:
+             bus.broadcast(sid, frame)
+         except Exception:
+             pass
+         try:
+             if loop.is_closed():
+                 return
+             payload = dict(frame)
+             try:
+                 running = asyncio.get_running_loop()
+             except RuntimeError:
+                 running = None
+             if running is loop:
+                 asyncio.create_task(_ws_send_json(send, payload))
+             else:
+                 loop.call_soon_threadsafe(
+                     asyncio.create_task, _ws_send_json(send, payload)
+                 )
+         except Exception:
+             pass
+ 
+     buf = TurnBuffer()
+     dg: Optional[DeepgramClient] = None
+     rx_task: Optional[asyncio.Task] = None
+@@ -949,50 +979,54 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+     ) -> bool:
+         if final_seen[0]:
+             with contextlib.suppress(Exception):
+                 _jlog(
+                     "ws_synthetic_final_skip_duplicate",
+                     sid=sid,
+                     turn_id=turn_id,
+                     reason=reason,
+                 )
+             return False
+         final_seen[0] = True
+         payload = make_results(turn_id, transcript=transcript, is_final=True)
+         payload["type"] = "Results"
+         await _ws_send_json(send, payload)
+         utterance_payload = make_utterance_end(turn_id)
+         utterance_payload["type"] = "UtteranceEnd"
+         await _ws_send_json(send, utterance_payload)
+         with contextlib.suppress(Exception):
+             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
+         _log_turn_finish(
+             turn_id,
+             reason=reason,
+             synthetic=True,
+             transcript_chars=len(transcript or ""),
+         )
++        with contextlib.suppress(Exception):
++            note_utterance_end(sid)
++        with contextlib.suppress(Exception):
++            set_recorder_active(sid, False)
+         completed_llm_turns.discard(turn_id)
+         return True
+ 
+     async def _ensure_dg_connected() -> bool:
+         nonlocal dg, rx_task, dg_connect_task, dg_state, fallback_detection
+ 
+         if not _has_deepgram_key():
+             with contextlib.suppress(Exception):
+                 _jlog("asr_connect_skip", sid=sid, reason="no_api_key")
+             return False
+ 
+         if dg_state == "open" and dg is not None:
+             return True
+ 
+         if dg_state == "connecting" and dg_connect_task is not None:
+             with contextlib.suppress(Exception):
+                 _jlog("asr_connect_wait", sid=sid, reason="existing_task")
+             with contextlib.suppress(Exception):
+                 await dg_connect_task
+             return dg_state == "open" and dg is not None
+ 
+         connect_result = {"ok": False}
+ 
+         async def _connect() -> None:
+             nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result, fallback_detection
+@@ -1024,89 +1058,103 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                 "raw_fallback_applied",
+                                 sid=sid,
+                                 sample_rate=transport.get("sample_rate"),
+                                 channels=transport.get("channels"),
+                             )
+                         if buffered_chunks:
+                             normalized_buffer: Deque[bytes] = deque()
+                             for existing in list(buffered_chunks):
+                                 normalized = normalize_pcm_frame(existing, stream_meta)
+                                 if normalized != existing:
+                                     stream_stats.note_jitter_slip()
+                                 normalized_buffer.append(normalized)
+                             buffered_chunks.clear()
+                             buffered_chunks.extend(normalized_buffer)
+                         if MIC_CAPTURE and mic_chunks:
+                             for idx, existing in enumerate(list(mic_chunks)):
+                                 normalized = normalize_pcm_frame(existing, stream_meta)
+                                 if normalized != existing:
+                                     stream_stats.note_jitter_slip()
+                                 mic_chunks[idx] = normalized
+ 
+                 cfg["_transport"] = transport
+                 cfg["_jlog"] = _jlog
+                 cfg.setdefault("session_id", sid)
+                 cfg["_url_tag"] = f"{WS_ASGI_BUILD}:{sid}"
++                nudges.cancel_idle_timers(sid, source="asr_connect_begin")
+                 _jlog("asr_connect_begin", sid=sid, transport=transport)
+                 client = DeepgramClient(cfg)
+                 dg = client
+                 await client.connect()
++                nudges.cancel_idle_timers(sid, source="asr_connect_ok")
++                try:
++                    set_asr_stream_open(sid, True)
++                except Exception:
++                    pass
+                 dg_state = "open"
+                 connect_result["ok"] = True
+                 turn_id_ref[0] = buf.turn_seq + 1
+                 rx_task = asyncio.create_task(
+                     _pump_dg_to_client(
+                         client,
+                         send,
+                         turn_id_ref,
+                         final_seen,
+                         pending_final_turns,
+                         synthetic_final_turns,
+                         completed_llm_turns,
+                         sid,
+                         asr_ready_evt,
+                         _flush_buffered_chunks,
+                         stream_stats,
+                         turn_timing,
+                         _log_turn_finish,
+                     )
+                 )
+                 _jlog("asr_connect_ok", sid=sid)
+             except Exception as e:
+                 dg_state = "closed"
+                 dg = None
++                try:
++                    set_asr_stream_open(sid, False)
++                except Exception:
++                    pass
+                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
+                 with contextlib.suppress(Exception):
+                     await _ws_send_json(
+                         send, make_error("asr_connect_fail", type(e).__name__)
+                     )
+                 with contextlib.suppress(Exception):
+                     _admin_emit and _admin_emit(
+                         "asr:error", session_id=sid, error=f"connect:{type(e).__name__}"
+                     )
+             finally:
+                 dg_connect_task = None
++                try:
++                    set_asr_stream_open(sid, dg_state == "open")
++                except Exception:
++                    pass
+ 
+         dg_connect_task = asyncio.create_task(_connect())
+         with contextlib.suppress(Exception):
+             await dg_connect_task
+         return connect_result["ok"]
+ 
+     def _dg_client_ready(client: Optional[DeepgramClient]) -> bool:
+         """Return True if the Deepgram client reports an open websocket."""
+         if client is None:
+             return False
+         try:
+             is_open = getattr(client, "is_open", None)
+             if callable(is_open) and is_open():
+                 return True
+         except Exception:
+             pass
+         evt = getattr(client, "_open_evt", None)
+         if isinstance(evt, asyncio.Event):
+             try:
+                 return evt.is_set()
+             except Exception:
+                 return False
+         return False
+ 
+     def _maybe_emit_backpressure(
+@@ -1267,76 +1315,82 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                 _admin_emit(
+                                     "ws_bin_recv",
+                                     sid=sid,
+                                     frames_in=ws_frames_in,
+                                     bytes_total=ws_bytes_in,
+                                 )
+                     if chunk:
+                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
+                         if not audio_sig_logged:
+                             with contextlib.suppress(Exception):
+                                 _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
+                             audio_sig_logged = True
+                     else:
+                         with contextlib.suppress(Exception):
+                             _jlog(
+                                 "ws_audio_chunk_empty",
+                                 sid=sid,
+                                 bytes=len(frame_bytes or b""),
+                                 turn_id=turn_id_ref[0],
+                                 buf_empty=buf.is_empty(),
+                             )
+ 
+                     raw_chunk = chunk
+ 
+                     if buf.is_empty():
++                        nudges.cancel_idle_timers(sid, source="turn_start")
++                        try:
++                            set_recorder_active(sid, True)
++                        except Exception:
++                            pass
+                         # New audio turn
+                         current_assistant_turn = None
+                         try:
+                             current_assistant_turn = bus.current_assistant_turn(sid)
+                         except Exception:
+                             current_assistant_turn = None
+                         confirm_ms = 420
+                         try:
+                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
+                         except Exception:
+                             confirm_ms = 420
+ 
+                         def _on_barge_commit() -> None:
+                             target_turn = current_assistant_turn
+                             try:
+                                 latest = bus.current_assistant_turn(sid)
+                             except Exception:
+                                 latest = None
+                             if latest:
+                                 target_turn = latest
+                             if target_turn:
+                                 try:
+                                     bus.cancel_turn(sid, target_turn)
+                                 except Exception:
+                                     pass
+                             try:
++                                set_phase(sid, "ready")
+                                 bus.broadcast(sid, {"type": "state", "phase": "ready"})
+                             except Exception:
+                                 pass
+ 
+                         with contextlib.suppress(Exception):
+                             barge.start(
+                                 confirm_ms=confirm_ms,
+                                 on_commit=_on_barge_commit,
+                                 send_state=_send_barge_state,
+                             )
+                         turn_id_ref[0] = buf.turn_seq + 1
+                         with contextlib.suppress(Exception):
+                             pending_final_turns.append(turn_id_ref[0])
+                             completed_llm_turns.discard(turn_id_ref[0])
+                         final_seen[0] = False
+                         asr_seen_partial[0] = False
+                         sent_any_audio[0] = False
+                         buffered_chunks.clear()
+                         stream_stats.reset_turn()
+                         turn_connect_started[0] = False
+                         # reset mic capture
+                         mic_chunks.clear()
+                         mic_first_ts[0] = now
+                         mic_last_ts[0] = now
+                         _reset_turn_metrics(now)
+@@ -1408,50 +1462,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                         sid=sid,
+                                         container=transport.get("container"),
+                                         codec=transport.get("codec"),
+                                         containerized_opus=transport.get(
+                                             "containerized_opus"
+                                         ),
+                                     )
+                     except Exception:
+                         pass
+ 
+                     chunk = stream_stats.observe_frame(raw_chunk)
+ 
+                     buf.append(chunk)
+ 
+                     # capture bytes for diagnostic playback
+                     if MIC_CAPTURE:
+                         mic_chunks.append(chunk)
+                         mic_last_ts[0] = now
+                     _jlog(
+                         "mic_capture_append",
+                         sid=sid,
+                         turn_id=turn_id_ref[0],
+                         chunks=len(mic_chunks),
+                         last_bytes=len(chunk),
+                     )
++                    nudges.cancel_idle_timers(sid, source="mic_capture")
+ 
+                     if not _has_deepgram_key():
+                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
+                         continue
+ 
+                     # Stage early frames
+                     if chunk:
+                         buffered_chunks.append(chunk)
+                         dropped_now = 0
+                         if len(buffered_chunks) > max_buffered_chunks:
+                             dropped_now = len(buffered_chunks) - max_buffered_chunks
+                             for _ in range(dropped_now):
+                                 if not buffered_chunks:
+                                     break
+                                 buffered_chunks.popleft()
+                             _jlog(
+                                 "ws_audio_drop", sid=sid, dropped=dropped_now, queued=len(buffered_chunks)
+                             )
+                         _maybe_emit_backpressure(len(buffered_chunks), dropped_now=dropped_now)
+ 
+                     # Ensure provider connection
+                     if not turn_connect_started[0] and dg_state == "closed":
+                         turn_connect_started[0] = True
+                         if dg_connect_task is None:
+                             with contextlib.suppress(Exception):
+@@ -1842,50 +1897,54 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                             )
+                                         )  # ~300 ms grace
+                                         await dg.close(wait_for_final=True)
+                                     except DeepgramDrainTimeoutError as exc:
+                                         drain_timeout_exc = exc
+                                         _jlog(
+                                             "ws_close_dg_drain_timeout",
+                                             sid=sid,
+                                             queued_chunks=getattr(
+                                                 exc, "queued_chunks", None
+                                             ),
+                                             queued_bytes=getattr(
+                                                 exc, "queued_bytes", None
+                                             ),
+                                             wait_timeout=getattr(
+                                                 exc, "wait_timeout", None
+                                             ),
+                                         )
+                                     except Exception as exc:
+                                         _jlog(
+                                             "ws_close_dg_close_error",
+                                             sid=sid,
+                                             err=type(exc).__name__,
+                                         )
+                                     dg_state = "closed"
++                                    try:
++                                        set_asr_stream_open(sid, False)
++                                    except Exception:
++                                        pass
+                                     _relay_task = rx_task
+                                     rx_task = None
+                                     if _relay_task:
+                                         _relay_task.cancel()
+                                         with contextlib.suppress(
+                                             asyncio.CancelledError, Exception
+                                         ):
+                                             await _relay_task
+                                     dg = None
+                                     with contextlib.suppress(Exception):
+                                         asr_ready_evt.clear()
+                                     if not final_seen[0]:
+                                         synth_reason = "dg_close_no_final"
+                                         if drain_timeout_exc is not None:
+                                             synth_reason = "dg_drain_timeout"
+                                         if await _emit_synthetic_final(
+                                             turn_id, synth_reason
+                                         ):
+                                             synthetic_emitted = True
+                                             with contextlib.suppress(ValueError):
+                                                 pending_final_turns.remove(turn_id)
+                                             synthetic_final_turns.add(turn_id)
+                                     if drain_timeout_exc is not None:
+                                         _jlog(
+                                             "ws_close_dg_drain_timeout_fallback",

@@ -40,6 +40,13 @@ from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal
 from app.ws.barge import BargeState
 from app.ws.bus import bus
 from app.policy import nudges
+from app.session_state import (
+    note_partial,
+    note_utterance_end,
+    set_asr_stream_open,
+    set_phase,
+    set_recorder_active,
+)
 
 # Optional admin emitter
 try:
@@ -397,6 +404,7 @@ async def _pump_dg_to_client(
                         synthetic_final_turns.discard(next_turn_id)
                     turn_id_for_event = next_turn_id
                 if not is_final:
+                    nudges.cancel_idle_timers(sid, source="asr_partial")
                     try:
                         asr_seen_partial[0] = True
                     except Exception:
@@ -410,6 +418,10 @@ async def _pump_dg_to_client(
                                 first_holder[0] = time.time()
                         except Exception:
                             pass
+                    try:
+                        note_partial(sid)
+                    except Exception:
+                        pass
                 _jlog(
                     "dg_transcript",
                     sid=sid,
@@ -453,6 +465,14 @@ async def _pump_dg_to_client(
                         except Exception:
                             pass
                     await _ws_send_json(send, make_utterance_end(turn_id_for_event))
+                    try:
+                        note_utterance_end(sid)
+                    except Exception:
+                        pass
+                    try:
+                        set_recorder_active(sid, False)
+                    except Exception:
+                        pass
                     try:
                         _admin_emit and _admin_emit("asr:final", session_id=sid)
                     except Exception:
@@ -765,6 +785,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     def _send_barge_state(phase: str) -> None:
         if not phase:
             return
+        try:
+            set_phase(sid, phase)
+        except Exception:
+            pass
+        if phase == "paused":
+            try:
+                set_recorder_active(sid, True)
+            except Exception:
+                pass
+            nudges.cancel_idle_timers(sid, source="ws_state_paused")
         frame = {"type": "state", "phase": phase}
         try:
             bus.broadcast(sid, frame)
@@ -971,6 +1001,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             synthetic=True,
             transcript_chars=len(transcript or ""),
         )
+        with contextlib.suppress(Exception):
+            note_utterance_end(sid)
+        with contextlib.suppress(Exception):
+            set_recorder_active(sid, False)
         completed_llm_turns.discard(turn_id)
         return True
 
@@ -1046,10 +1080,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 cfg["_jlog"] = _jlog
                 cfg.setdefault("session_id", sid)
                 cfg["_url_tag"] = f"{WS_ASGI_BUILD}:{sid}"
+                nudges.cancel_idle_timers(sid, source="asr_connect_begin")
                 _jlog("asr_connect_begin", sid=sid, transport=transport)
                 client = DeepgramClient(cfg)
                 dg = client
                 await client.connect()
+                nudges.cancel_idle_timers(sid, source="asr_connect_ok")
+                try:
+                    set_asr_stream_open(sid, True)
+                except Exception:
+                    pass
                 dg_state = "open"
                 connect_result["ok"] = True
                 turn_id_ref[0] = buf.turn_seq + 1
@@ -1074,6 +1114,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             except Exception as e:
                 dg_state = "closed"
                 dg = None
+                try:
+                    set_asr_stream_open(sid, False)
+                except Exception:
+                    pass
                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
                 with contextlib.suppress(Exception):
                     await _ws_send_json(
@@ -1085,6 +1129,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     )
             finally:
                 dg_connect_task = None
+                try:
+                    set_asr_stream_open(sid, dg_state == "open")
+                except Exception:
+                    pass
 
         dg_connect_task = asyncio.create_task(_connect())
         with contextlib.suppress(Exception):
@@ -1289,6 +1337,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     raw_chunk = chunk
 
                     if buf.is_empty():
+                        nudges.cancel_idle_timers(sid, source="turn_start")
+                        try:
+                            set_recorder_active(sid, True)
+                        except Exception:
+                            pass
                         # New audio turn
                         current_assistant_turn = None
                         try:
@@ -1315,6 +1368,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 except Exception:
                                     pass
                             try:
+                                set_phase(sid, "ready")
                                 bus.broadcast(sid, {"type": "state", "phase": "ready"})
                             except Exception:
                                 pass
@@ -1430,6 +1484,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         chunks=len(mic_chunks),
                         last_bytes=len(chunk),
                     )
+                    nudges.cancel_idle_timers(sid, source="mic_capture")
 
                     if not _has_deepgram_key():
                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
@@ -1864,6 +1919,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             err=type(exc).__name__,
                                         )
                                     dg_state = "closed"
+                                    try:
+                                        set_asr_stream_open(sid, False)
+                                    except Exception:
+                                        pass
                                     _relay_task = rx_task
                                     rx_task = None
                                     if _relay_task:
