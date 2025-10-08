@@ -3,7 +3,7 @@
   "confirm_ms": 420,
   "echo_threshold_boost": 1.9,
   "min_speech_ms": 220,
-  "nudge_delay_ms": 4200,
+  "nudge_delay_ms": 7000,
   "suggestions_max_items": 4,
   "suggestions_max_words": 7,
   "nebraska_persona_level": 0.13
