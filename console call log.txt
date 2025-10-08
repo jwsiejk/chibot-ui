@@ -3,13 +3,46 @@ bootstrap.js?v=v20250911b:358 [AskChip] bootstrap loaded
 ws.js?v=v20250911b:297 [ws] openWS build Object
 ws.js?v=v20250911b:301 [ws] openWS options= Object reconnect= true
 debug.js?v=v20250911b:4 [DBG] UI→WS Object
-bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"ready","session_id":"926deaa0-3bd4-4f74-bddb-f3a9b6c982b1"}
+bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"ready","session_id":"78ed79d6-a8d4-4473-a251-c0214e2f7cad"}
 voice.js:96 [voice] mic_device_selected Object
 voice.js:96 [voice] mic_start Object
-bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"assistant_chunk","turn_id":"8da9093c9fdc42389dd97cf08112729a","text":"Hey James, what's the goal for this session?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps"}
-bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"suggestions","turn_id":"8da9093c9fdc42389dd97cf08112729a","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"},{"text":"Explain the business value"}]}
-bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"assistant_end","turn_id":"8da9093c9fdc42389dd97cf08112729a"}
-bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"assistant_audio","turn_id":"8da9093c9fdc42389dd97cf08112729a","mime":"audio/mpeg","audio_chunks":["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
+bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"assistant_chunk","turn_id":"0565b160c9414e8eb274ee2c948f34fd","text":"Hey James, what would you like to accomplish today?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps"}
+bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"suggestions","turn_id":"0565b160c9414e8eb274ee2c948f34fd","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"},{"text":"Explain the business value"}]}
+bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"assistant_end","turn_id":"0565b160c9414e8eb274ee2c948f34fd"}
+bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"assistant_audio","turn_id":"0565b160c9414e8eb274ee2c948f34fd","mime":"audio/mpeg","audio_chunks":["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
+voice.js:96 [voice] vad_speech_start Object
+voice.js:432 [voice] recorder started Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2094)
+voice.js:371 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:371 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:371 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:371 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:371 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:371 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:371 [voice] streamed audio chunk Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:371 [voice] streamed audio chunk Object
+voice.js:96 [voice] vad_speech_end Object
+voice.js:96 [voice] mic_stop Object
+ws.js?v=v20250911b:466 [ws] sending audio chunk Object
+debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(965)
+voice.js:371 [voice] streamed audio chunk Object
+voice.js:408 [voice] recorder stopped Object
+debug.js?v=v20250911b:4 [DBG] UI→WS Object
 voice.js:96 [voice] vad_speech_start Object
 voice.js:432 [voice] recorder started Object
 ws.js?v=v20250911b:466 [ws] sending audio chunk Object
@@ -48,43 +81,10 @@ voice.js:371 [voice] streamed audio chunk Object
 ws.js?v=v20250911b:466 [ws] sending audio chunk Object
 debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:371 [voice] streamed audio chunk Object
-ws.js?v=v20250911b:466 [ws] sending audio chunk Object
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:371 [voice] streamed audio chunk Object
-ws.js?v=v20250911b:466 [ws] sending audio chunk Object
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:371 [voice] streamed audio chunk Object
-ws.js?v=v20250911b:466 [ws] sending audio chunk Object
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:371 [voice] streamed audio chunk Object
-ws.js?v=v20250911b:466 [ws] sending audio chunk Object
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:371 [voice] streamed audio chunk Object
-ws.js?v=v20250911b:466 [ws] sending audio chunk Object
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:371 [voice] streamed audio chunk Object
-ws.js?v=v20250911b:466 [ws] sending audio chunk Object
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:371 [voice] streamed audio chunk Object
-ws.js?v=v20250911b:466 [ws] sending audio chunk Object
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:371 [voice] streamed audio chunk Object
-ws.js?v=v20250911b:466 [ws] sending audio chunk Object
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:371 [voice] streamed audio chunk Object
-ws.js?v=v20250911b:466 [ws] sending audio chunk Object
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:371 [voice] streamed audio chunk Object
-ws.js?v=v20250911b:466 [ws] sending audio chunk Object
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:371 [voice] streamed audio chunk Object
-ws.js?v=v20250911b:466 [ws] sending audio chunk Object
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:371 [voice] streamed audio chunk Object
 voice.js:96 [voice] vad_speech_end Object
 voice.js:96 [voice] mic_stop Object
 ws.js?v=v20250911b:466 [ws] sending audio chunk Object
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(965)
+debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2897)
 voice.js:371 [voice] streamed audio chunk Object
 voice.js:408 [voice] recorder stopped Object
 debug.js?v=v20250911b:4 [DBG] UI→WS Object
