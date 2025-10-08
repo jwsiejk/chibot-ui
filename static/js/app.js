@@ -140,6 +140,93 @@ function _isAssistantTextFrame(d){
   );
 }
 
+const _userPreviewState = {
+  active: false,
+  latestTranscript: '',
+  lastFinalText: '',
+  ignoring: false,
+};
+
+function _ensureUserPreviewEl(){
+  try{
+    let el = document.getElementById('userTranscriptPreview');
+    if (el) return el;
+    const statusRow = document.querySelector('.status-row');
+    if (!statusRow) return null;
+    el = document.createElement('span');
+    el.id = 'userTranscriptPreview';
+    el.className = 'asr-preview';
+    el.setAttribute('aria-live', 'polite');
+    el.style.display = 'none';
+    statusRow.appendChild(el);
+    return el;
+  }catch{}
+  return null;
+}
+
+function _setUserPreview(text){
+  try{
+    const el = _ensureUserPreviewEl();
+    if (!el) return;
+    const next = text || '';
+    el.textContent = next;
+    el.style.display = next ? '' : 'none';
+  }catch{}
+}
+
+function _clearUserPreview(){
+  _setUserPreview('');
+}
+
+function _commitUserPreview(){
+  try{
+    const transcript = _cleanText(_userPreviewState.latestTranscript || '');
+    _userPreviewState.active = false;
+    _userPreviewState.latestTranscript = '';
+    _clearUserPreview();
+    if (!transcript){
+      _userPreviewState.ignoring = true;
+      return;
+    }
+
+    if (_userPreviewState.lastFinalText === transcript){
+      _userPreviewState.ignoring = true;
+      return;
+    }
+
+    const msgs = $('#chatMessages');
+    if (!msgs) return;
+
+    const last = msgs.lastElementChild;
+    if (last && last.dataset && last.dataset.role === 'user' && last.textContent === transcript){
+      _userPreviewState.lastFinalText = transcript;
+      _userPreviewState.ignoring = true;
+      return;
+    }
+
+    const bubble = document.createElement('div');
+    bubble.dataset.role = 'user';
+    bubble.className = 'msg user';
+    bubble.textContent = transcript;
+    msgs.appendChild(bubble);
+    _userPreviewState.lastFinalText = transcript;
+    _userPreviewState.ignoring = true;
+    try { msgs.scrollTop = msgs.scrollHeight; } catch {}
+  }catch{}
+}
+
+function _finalizeUserPreview(opts){
+  const resetIgnore = !!(opts && opts.resetIgnore);
+  if (!_userPreviewState.active && !_userPreviewState.latestTranscript){
+    _userPreviewState.active = false;
+    if (resetIgnore) _userPreviewState.ignoring = false;
+    _clearUserPreview();
+    return;
+  }
+  _commitUserPreview();
+  if (resetIgnore) _userPreviewState.ignoring = false;
+}
+
 function _renderUserTranscript(d){
   _markAsrFrameSeen();
   try{
@@ -149,26 +236,6 @@ function _renderUserTranscript(d){
       ''
     );
     const transcript = _cleanText(transcriptRaw);
-    if (!transcript) return;
-
-    const msgs = $('#chatMessages');
-    if (!msgs) return;
-
-    let bubble = msgs.lastElementChild;
-    const canReuse = (
-      bubble && bubble.dataset && bubble.dataset.role === 'user' && bubble.dataset.asr === '1'
-    );
-    if (!canReuse){
-      bubble = document.createElement('div');
-      bubble.dataset.role = 'user';
-      bubble.dataset.asr = '1';
-      bubble.className = 'msg user';
-      msgs.appendChild(bubble);
-    } else {
-      bubble.className = 'msg user';
-    }
-
-    bubble.textContent = transcript;
 
     const isFinal = (
       d?.channel?.is_final ??
@@ -177,11 +244,34 @@ function _renderUserTranscript(d){
       false
     );
 
-    if (isFinal){
-      try { delete bubble.dataset.asr; } catch {}
+    if (!transcript){
+      if (isFinal){
+        _finalizeUserPreview();
+      } else {
+        _userPreviewState.latestTranscript = '';
+        _userPreviewState.active = true;
+        _setUserPreview('');
+      }
+      return;
     }
 
-    try { msgs.scrollTop = msgs.scrollHeight; } catch {}
+    if (_userPreviewState.ignoring){
+      if (transcript === _userPreviewState.lastFinalText){
+        if (isFinal){
+          _finalizeUserPreview();
+        }
+        return;
+      }
+      _userPreviewState.ignoring = false;
+    }
+
+    _userPreviewState.active = true;
+    _userPreviewState.latestTranscript = transcript;
+    _setUserPreview(transcript);
+
+    if (isFinal){
+      _finalizeUserPreview();
+    }
   }catch{}
 }
 
@@ -267,7 +357,10 @@ export function handleAssistantFrame(d){
 
   // Lightweight state hints (non-invasive)
   if (t === 'assistant_audio') setDot('speaking');
-  if (t === 'UtteranceEnd')    setDot('ready');
+  if (t === 'UtteranceEnd') {
+    _finalizeUserPreview({ resetIgnore: true });
+    setDot('ready');
+  }
 
   if (t === 'Results' && d.nlu === undefined){
     _renderUserTranscript(d);

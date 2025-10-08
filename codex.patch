@@ -1,43 +1,214 @@
 diff --git a/static/js/app.js b/static/js/app.js
-index f2b449d84bd82fc86a31354b66087f8915fd9f1e..29f2c2063599877f51810f6fddb42e404f267da3 100644
+index 29f2c2063599877f51810f6fddb42e404f267da3..30fb83c456d20cdce3777b69d9ec62753b23bccd 100644
 --- a/static/js/app.js
 +++ b/static/js/app.js
-@@ -211,51 +211,50 @@ function _dedupeAssistant(d){
+@@ -118,92 +118,182 @@ function _cleanText(s){ return (s||'').replace(_KB_TAG_RE,' ').trim(); }
+ function _handleSessionEnd(frame){
+   const reason = String(frame?.reason || '').toLowerCase();
+   const message = reason === 'silence_auto_close'
+     ? 'Closing for now—start a new session whenever you’re ready.'
+     : 'Session ended. Press Start to begin a new one.';
+   _resetAsrTracking();
+   disableForEnded();
+   try { _clearSuggestions(); } catch {}
+   showBanner(message);
+   try { window.__askchip_session_started = false; } catch {}
+   try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
+   try { closeWS(1000, reason || 'session_end'); } catch {}
+ }
+ 
+ /* ---------------- Rendering of assistant frames ---------------- */
+ 
+ // Accept WS assistant text frames
+ function _isAssistantTextFrame(d){
+   return d && (
+     (d.type === 'assistant_chunk' && (d.text || d.delta || d.content)) ||
+     (d.type === 'assistant_text' && (d.text || d.delta || d.content)) ||
+     (d.type === 'assistant_final' && (d.text || d.delta || d.content))
+   );
+ }
+ 
++const _userPreviewState = {
++  active: false,
++  latestTranscript: '',
++  lastFinalText: '',
++  ignoring: false,
++};
++
++function _ensureUserPreviewEl(){
++  try{
++    let el = document.getElementById('userTranscriptPreview');
++    if (el) return el;
++    const statusRow = document.querySelector('.status-row');
++    if (!statusRow) return null;
++    el = document.createElement('span');
++    el.id = 'userTranscriptPreview';
++    el.className = 'asr-preview';
++    el.setAttribute('aria-live', 'polite');
++    el.style.display = 'none';
++    statusRow.appendChild(el);
++    return el;
++  }catch{}
++  return null;
++}
++
++function _setUserPreview(text){
++  try{
++    const el = _ensureUserPreviewEl();
++    if (!el) return;
++    const next = text || '';
++    el.textContent = next;
++    el.style.display = next ? '' : 'none';
++  }catch{}
++}
++
++function _clearUserPreview(){
++  _setUserPreview('');
++}
++
++function _commitUserPreview(){
++  try{
++    const transcript = _cleanText(_userPreviewState.latestTranscript || '');
++    _userPreviewState.active = false;
++    _userPreviewState.latestTranscript = '';
++    _clearUserPreview();
++    if (!transcript){
++      _userPreviewState.ignoring = true;
++      return;
++    }
++
++    if (_userPreviewState.lastFinalText === transcript){
++      _userPreviewState.ignoring = true;
++      return;
++    }
++
++    const msgs = $('#chatMessages');
++    if (!msgs) return;
++
++    const last = msgs.lastElementChild;
++    if (last && last.dataset && last.dataset.role === 'user' && last.textContent === transcript){
++      _userPreviewState.lastFinalText = transcript;
++      _userPreviewState.ignoring = true;
++      return;
++    }
++
++    const bubble = document.createElement('div');
++    bubble.dataset.role = 'user';
++    bubble.className = 'msg user';
++    bubble.textContent = transcript;
++    msgs.appendChild(bubble);
++    _userPreviewState.lastFinalText = transcript;
++    _userPreviewState.ignoring = true;
++    try { msgs.scrollTop = msgs.scrollHeight; } catch {}
++  }catch{}
++}
++
++function _finalizeUserPreview(opts){
++  const resetIgnore = !!(opts && opts.resetIgnore);
++  if (!_userPreviewState.active && !_userPreviewState.latestTranscript){
++    _userPreviewState.active = false;
++    if (resetIgnore) _userPreviewState.ignoring = false;
++    _clearUserPreview();
++    return;
++  }
++  _commitUserPreview();
++  if (resetIgnore) _userPreviewState.ignoring = false;
++}
++
+ function _renderUserTranscript(d){
+   _markAsrFrameSeen();
+   try{
+     const transcriptRaw = (
+       d?.channel?.alternatives?.[0]?.transcript ??
+       d?.alternatives?.[0]?.transcript ??
+       ''
+     );
+     const transcript = _cleanText(transcriptRaw);
+-    if (!transcript) return;
+-
+-    const msgs = $('#chatMessages');
+-    if (!msgs) return;
+-
+-    let bubble = msgs.lastElementChild;
+-    const canReuse = (
+-      bubble && bubble.dataset && bubble.dataset.role === 'user' && bubble.dataset.asr === '1'
+-    );
+-    if (!canReuse){
+-      bubble = document.createElement('div');
+-      bubble.dataset.role = 'user';
+-      bubble.dataset.asr = '1';
+-      bubble.className = 'msg user';
+-      msgs.appendChild(bubble);
+-    } else {
+-      bubble.className = 'msg user';
+-    }
+-
+-    bubble.textContent = transcript;
+ 
+     const isFinal = (
+       d?.channel?.is_final ??
+       d?.is_final ??
+       d?.final ??
+       false
+     );
+ 
+-    if (isFinal){
+-      try { delete bubble.dataset.asr; } catch {}
++    if (!transcript){
++      if (isFinal){
++        _finalizeUserPreview();
++      } else {
++        _userPreviewState.latestTranscript = '';
++        _userPreviewState.active = true;
++        _setUserPreview('');
++      }
++      return;
      }
-     const li = document.createElement('div');
-     li.dataset.role = 'assistant';
-     li.dataset.turnId = String(turnId ?? '');
-     li.className = 'msg assistant';
-     li.textContent = text;
-     msgs.appendChild(li);
-     try { msgs.scrollTop = msgs.scrollHeight; } catch {}
+ 
+-    try { msgs.scrollTop = msgs.scrollHeight; } catch {}
++    if (_userPreviewState.ignoring){
++      if (transcript === _userPreviewState.lastFinalText){
++        if (isFinal){
++          _finalizeUserPreview();
++        }
++        return;
++      }
++      _userPreviewState.ignoring = false;
++    }
++
++    _userPreviewState.active = true;
++    _userPreviewState.latestTranscript = transcript;
++    _setUserPreview(transcript);
++
++    if (isFinal){
++      _finalizeUserPreview();
++    }
    }catch{}
-   return true;
  }
  
- let _lastSuggestionsKey = null;
+ function _dedupeAssistant(d){
+   // single-bubble de-dupe; keep only latest revision for same turn
+   try{
+     const msgs = $('#chatMessages');
+     if (!msgs) return true;
+     const last = msgs.lastElementChild;
  
- function _clearSuggestions(){
-   const wrap = document.getElementById('suggestions');
-   if (!wrap) return;
-   try { wrap.innerHTML = ''; } catch {}
-   _lastSuggestionsKey = null;
- }
+     const raw = (d.text || d.delta || d.content || '');
  
- function _handleSuggestionClick(text){
-   if (!window.__askchip_session_started) return;
-   const suggestion = (text || '').trim();
-   if (!suggestion) return;
--  try { sendJSON({ type: 'activity', kind: 'chip' }); } catch {}
-   const input = $('#composer');
-   if (input) {
-     try { input.value = suggestion; } catch {}
-   }
-   try { onSend(suggestion); } catch (err) { console.warn('[suggestion click] send failed', err); }
- }
+     const text = _cleanText(raw);
+     const turnId = d?.turn_id;
+     const hasTurnId = turnId !== undefined && turnId !== null && turnId !== '';
  
- export function handleAssistantFrame(d){
-   if (!d) return;
+     if (
+       hasTurnId &&
+       last &&
+       last.dataset &&
+       last.dataset.role === 'assistant' &&
+       last.dataset.turnId === String(turnId)
+     ){
+       last.className = 'msg assistant';
+       last.textContent = text;
+@@ -245,51 +335,54 @@ export function handleAssistantFrame(d){
    const t = d.type;
  
    if (t === 'ready') {
@@ -54,420 +225,42 @@ index f2b449d84bd82fc86a31354b66087f8915fd9f1e..29f2c2063599877f51810f6fddb42e40
      const msg = `Error: ${(d.code||'')}${d.message ? ' ' + d.message : ''}`.trim();
      showBanner(msg || 'An error occurred.');
      return;
-@@ -318,52 +317,50 @@ export async function onSend(overrideText){
-         msgs.appendChild(li);
-         optimisticBubble = li;
-         try { msgs.scrollTop = msgs.scrollHeight; } catch {}
-       }
-     }catch{}
- 
-     // WS send (WS-only turns; replaces legacy HTTP POST)
-     const correlation = (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random()));
-     let sendSucceeded = false;
-     try {
-       // Server expects: type='user_msg' and correlation_user_msg_id
-       sendSucceeded = sendJSON({ type: 'user_msg', text: val, correlation_user_msg_id: correlation, session_id: sid });
-     } catch (e){
-       console.warn('[onSend] WS send failed', e);
-       sendSucceeded = false;
-     }
- 
-     if (!sendSucceeded){
-       if (optimisticBubble && optimisticBubble.parentElement){
-         try { optimisticBubble.remove(); } catch {}
-       }
-       showBanner('Message failed to send over WebSocket.');
-       return;
-     }
- 
--    try { sendJSON({ type: 'activity', kind: 'text' }); } catch {}
--
-     setDot('thinking');
- 
-     // Clear composer after send
-     if (input){
-       try { input.value = ''; } catch {}
-     }
- 
-   } catch (e){
-     console.warn('[onSend] error', e);
-   }
- }
- 
- /* ---------------- End session (graceful) ---------------- */
- 
- let ending = false;
- 
- export async function onEnd(){
-   if (ending) return;
-   ending = true;
-   try {
-     _clearSuggestions();
-     // Politely signal end of stream over WS, then close with code 1000
-     try { sendCloseStream(); } catch {}
-     await new Promise(r => setTimeout(r, 100));
- 
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 356fa593ba8b8f6394497271483dce5eac87f2b8..8de05fb9fb5e4d2422b1a5d13e2a6b5cc01a813d 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -1,156 +1,146 @@
- /*
- Citations for context (non-functional):
- :contentReference[oaicite:0]{index=0}
- :contentReference[oaicite:1]{index=1}
- */
- 
- /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
-    Goals satisfied:
-     • Echo-aware VAD (threshold boost while TTS is playing)
-     • Streaming Opus blobs per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
-     • Soft barge-in: pause Chip TTS on committed speech start
-     • Turn timeout (safety), robust errors, clean session end
-     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
- 
-    Notes:
-     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
-     • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
- */
- 
- import { VAD } from './voice/vad.js';
--import { sendAudioChunk, sendCloseStream, sendJSON } from './ws_module.js';
-+import { sendAudioChunk, sendCloseStream } from './ws_module.js';
- import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
- 
- // Public API (matches prior usage)
- export async function initMic(stream = null) { return await _ensureMic(stream); }
- export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
- export function disarmVAD() { _disarm(); }
- export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
- export function bargeIn() { _bargeIn(); }         // keeps API parity
- export function setVadBoost(_v) { /* kept for API parity; no-op */ }
- 
- // ---- Internal state ---------------------------------------------------------
- 
- // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
- const REC_MIME = (typeof MediaRecorder !== 'undefined'
-   && typeof MediaRecorder.isTypeSupported === 'function'
-   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
-   ? 'audio/ogg; codecs=opus'
-   : 'audio/webm; codecs=opus';
- 
- const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
- const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
- 
- const state = {
-   stream: null,
-   ctx: null,
-   source: null,
-   analyser: null,
-   vad: null,
-   rec: null,
-   chunkSendPromise: Promise.resolve(),
-   chunkBytesSent: 0,
-   chunkSendError: null,
-   turnTimer: null,
-   turnOpen: false,   // track whether a turn is currently open server-side
-   deviceLogged: false,
-   // NEW: min-turn gating
-   recStartedAt: 0,
-   pendingEndTimer: null,
-   ttsPlaying: false,
-   bargeConfirmTimer: null,
-   bargeConfirmActive: false,
--  speechActivitySent: false,
- };
- 
- const BARGE_CONFIRM_DEFAULT_MS = 420;
- let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
- try {
-   const cfg = window.__askchip_config || {};
-   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
-     bargeConfirmMs = cfg.barge_confirm_ms;
-   }
- } catch {}
- bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
- 
- try {
-   window.addEventListener('chip-tts', (ev) => {
-     const detail = ev?.detail || {};
-     const playing = String(detail.state || '').toLowerCase() === 'playing';
-     state.ttsPlaying = playing;
--    if (!playing && !state.bargeConfirmActive && !state.rec) {
--      state.speechActivitySent = false;
--    }
-   });
- } catch {}
- 
- // ---- Helpers ----------------------------------------------------------------
- 
- function _emitVoiceState(state, detail = {}) {
-   try {
-     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
-   } catch {}
- }
- 
- function _logLifecycle(event, detail = {}, level = 'debug') {
-   const payload = { event, ...(detail && typeof detail === 'object' ? detail : { detail }) };
-   try {
-     const method = (typeof console[level] === 'function') ? level : 'log';
-     console[method]?.('[voice]', event, payload);
-   } catch {}
-   try {
-     window.dispatchEvent(new CustomEvent('askchip-voice-lifecycle', { detail: payload }));
-   } catch {}
- }
- 
- function _clearPendingEndTimer() {
-   if (state.pendingEndTimer) {
-     try { clearTimeout(state.pendingEndTimer); } catch {}
-     state.pendingEndTimer = null;
-   }
- }
- 
- function _clearBargeConfirm(resume = false) {
-   if (state.bargeConfirmTimer) {
-     try { clearTimeout(state.bargeConfirmTimer); } catch {}
-     state.bargeConfirmTimer = null;
-   }
-   if (state.bargeConfirmActive) {
-     state.bargeConfirmActive = false;
-     if (resume) {
-       try { resumePlayback(); } catch {}
-     }
-   }
- }
- 
--function _sendActivity(kind) {
--  try {
--    sendJSON({ type: 'activity', kind });
--  } catch {}
--}
--
- async function _ensureMic(externalStream = null) {
-   if (state.stream && state.stream.active) return state.stream;
- 
-   if (state.stream && !state.stream.active) {
-     _teardownAudioGraph();
-     state.stream = null;
    }
  
-   let stream = externalStream;
- 
-   if (!stream || !stream.active) {
-     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
-       _logLifecycle('mic_perm_denied', { reason: 'mediaDevices_unavailable' }, 'warn');
-       throw new Error('Media devices API unavailable');
-     }
- 
-     const constraints = {
-       audio: {
-         channelCount: 1,
-         sampleRate: 48000,
-         echoCancellation: true,
-         noiseSuppression: true,
-         autoGainControl: false
-       }
-     };
-@@ -222,51 +212,50 @@ function _stopRecorder(detail = null) {
- 
- function _teardownVADOnly() {
-   try { state.vad && state.vad.stop(); } catch {}
-   state.vad = null;
- }
- 
- function _teardownAudioGraph() {
-   try { state.source && state.source.disconnect(); } catch {}
-   try { state.analyser && state.analyser.disconnect(); } catch {}
-   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
-   state.source = null;
-   state.analyser = null;
-   state.ctx = null;
-   state.deviceLogged = false;
- }
- 
- function _disarm() {
-   _safeClearTurnTimer();
-   _clearPendingEndTimer();
-   _clearBargeConfirm(false);
-   _stopRecorder({ reason: 'manual_disarm' });
-   _teardownVADOnly();
-   state.turnOpen = false; // ensure local state is clean
-   state.recStartedAt = 0;
-   state.ttsPlaying = false;
--  state.speechActivitySent = false;
-   _emitVoiceState('idle');
- }
- 
- function _bargeIn() {
-   // Soft barge-in: pause audio locally
-   _clearBargeConfirm(false);
-   try { stopPlayback(); } catch {}
-   // If a prior ASR turn is somehow still open, politely close it.
-   // (Harmless if no turn is open; guarded to avoid duplicate closes.)
-   if (state.turnOpen) {
-     try { sendCloseStream(); } catch {}
-     state.turnOpen = false;
-   }
- }
- 
- // ---- VAD wiring -------------------------------------------------------------
- 
- async function _arm(stream = null, opts = {}) {
-   const mic = stream || await _ensureMic();
- 
-   // Build / rebuild VAD
-   _teardownVADOnly();
- 
-   // Merge runtime globals so admins can tune without rebuilds:
-   let globalVad = {};
-@@ -317,51 +306,50 @@ function _startRecorder() {
-     console.warn('[voice] MediaRecorder not supported in this browser');
-     state.rec = null;
-     return false;
-   }
- 
-   state.chunkSendPromise = Promise.resolve();
-   state.chunkBytesSent = 0;
-   state.chunkSendError = null;
-   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
-   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
- 
-   let recorder;
-   try {
-     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
-   } catch (primaryErr) {
-     try {
-       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
-     } catch (fallbackErr) {
-       console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
-       state.rec = null;
-       return false;
-     }
-   }
- 
-   state.rec = recorder;
--  state.speechActivitySent = false;
- 
-   state.rec.ondataavailable = (e) => {
-     const blob = e.data;
-     if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
-       return;
-     }
- 
-     // Chain chunk sends to preserve ordering across the WS.
-     state.chunkSendPromise = state.chunkSendPromise
-       .catch(() => {}) // allow queue to continue even if a prior chunk failed
-       .then(async () => {
-         try {
-           await sendAudioChunk(blob);
-           state.chunkBytesSent += blob.size;
-           try {
-             console.debug('[voice] streamed audio chunk', { bytes: blob.size });
-           } catch {}
-         } catch (err) {
-           state.chunkSendError = err;
-           try {
-             console.warn('[voice] failed to stream audio chunk', err);
-           } catch {}
-         }
-       });
-   };
-@@ -432,97 +420,88 @@ function _startRecorder() {
-     try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
-   }, limitMs);
- 
-   return true;
- }
- 
- function _onSpeechStartCommitted() {
-   _logLifecycle('vad_speech_start');
- 
-   if (state.ttsPlaying && !state.bargeConfirmActive) {
-     state.bargeConfirmActive = true;
-     try { pausePlayback(); } catch {}
-     state.bargeConfirmTimer = setTimeout(() => {
-       state.bargeConfirmTimer = null;
-       if (!state.bargeConfirmActive) return;
-       if (state.vad && typeof state.vad.isRecording === 'function' && !state.vad.isRecording()) {
-         state.bargeConfirmActive = false;
-         try { resumePlayback(); } catch {}
-         return;
-       }
-       state.bargeConfirmActive = false;
-       _bargeIn();
-       const started = _startRecorder();
-       if (started) {
-         _emitVoiceState('recording');
--        if (!state.speechActivitySent) {
--          _sendActivity('speech');
--          state.speechActivitySent = true;
--        }
-         return;
-       }
-       console.warn('[voice] recorder unavailable — reverting to typing');
-       _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
-     }, bargeConfirmMs);
+   if (t === 'session_end') {
+     _handleSessionEnd(d);
      return;
    }
  
-   if (state.bargeConfirmActive) {
+   // Lightweight state hints (non-invasive)
+   if (t === 'assistant_audio') setDot('speaking');
+-  if (t === 'UtteranceEnd')    setDot('ready');
++  if (t === 'UtteranceEnd') {
++    _finalizeUserPreview({ resetIgnore: true });
++    setDot('ready');
++  }
+ 
+   if (t === 'Results' && d.nlu === undefined){
+     _renderUserTranscript(d);
      return;
    }
  
-   _bargeIn();
- 
-   const started = _startRecorder();
-   if (started) {
-     _emitVoiceState('recording');
--    if (!state.speechActivitySent) {
--      _sendActivity('speech');
--      state.speechActivitySent = true;
--    }
-     return;
-   }
- 
-   console.warn('[voice] recorder unavailable — reverting to typing');
-   _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
- }
- 
- function _onSpeechEndCommitted(detail = null) {
-   const reason = detail?.reason || 'vad_silence';
-   const now = performance.now ? performance.now() : Date.now();
-   const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
- 
-   if (state.bargeConfirmActive) {
-     _clearBargeConfirm(true);
-   }
- 
-   // If we haven't recorded at least minTurnMs, delay honoring VAD-end.
-   // Only applies while recorder is actually running.
-   if (state.rec && typeof state.rec.state === 'string' && state.rec.state === 'recording') {
-     const elapsed = Math.max(0, now - (state.recStartedAt || now));
-     const wait = Math.max(0, minTurnMs - elapsed);
-     if (wait > 0) {
-       try { console.debug('[voice] delaying VAD end', { waitMs: wait, elapsed }); } catch {}
-       _clearPendingEndTimer();
-       state.pendingEndTimer = setTimeout(() => _onSpeechEndCommitted(detail), wait);
-       return; // do not stop yet
+   if (t === 'suggestions'){
+     const items = Array.isArray(d.items) ? d.items : [];
+     let key = '[]';
+     try { key = JSON.stringify(items ?? []); } catch { key = '[]'; }
+     if (key !== _lastSuggestionsKey){
+       _lastSuggestionsKey = key;
+       try { renderSuggestions(items, _handleSuggestionClick); } catch (err) {
+         console.warn('[handleAssistantFrame] renderSuggestions failed', err);
+       }
      }
+     return;
    }
  
-   _logLifecycle('vad_speech_end', { reason });
-   _safeClearTurnTimer();
-   _clearPendingEndTimer();
-   _stopRecorder({ reason });
--  state.speechActivitySent = false;
-   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
+   if (_isAssistantTextFrame(d)) {
+     if (!_dedupeAssistant(d)) return;
+   }
+   // (other frame types can be handled here as needed)
  }
  
- // ---- Utilities --------------------------------------------------------------
- 
- function optsFromGlobal(key, fallback) {
-   // Allow admin-configurable values to seep in (if app exposes them)
-   try {
-     const cfg = window.__askchip_config || {};
-     if (key in cfg) return cfg[key];
-   } catch {}
-   return fallback;
- }
