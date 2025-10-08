@@ -210,6 +210,39 @@ def _short_greeting(text: str) -> str:
     except Exception:
         fallback = (text or "").strip()
         return fallback or "Hi there!"
+
+
+SETTINGS = load_settings()
+ENABLE_CHIP_FOUNDATION = SETTINGS.enable_chip_foundation
+ENABLE_POLICY_CHIPS = SETTINGS.enable_policy_chips
+SUGGESTION_MAX = SETTINGS.suggestion_max
+STRICT_SYSTEM_SHIM = (
+    "Sound like a human Pure Storage expert. Keep openings short, prefer tight bullets when explaining steps, "
+    "and never mention being an AI or chatbot."
+)
+
+_WS_SOURCES = {"ws_greet", "user_ws"}
+_WS_PIPELINE_UNAVAILABLE_NOTE = "ws_pipeline_unavailable"
+_WS_PIPELINE_MESSAGE = "I'm still warming up. Please try again in a moment."
+_LEGACY_WARMUP_LINE = "Hi! I’m ready to help. (Model is warming up.)"
+
+
+_DIALOG_ACTION_KEY = "dialog_action"
+_DIALOG_VERBOSITY_KEY = "dialog_verbosity"
+_DIALOG_SHOW_SUGGESTIONS_KEY = "dialog_show_suggestions"
+_DIALOG_NLU_KEY = "dialog_nlu"
+_DIALOG_POLICY_KEY = "dialog_policy"
+
+
+_ACTION_ALIASES = {
+    "ask_clarify": "clarify",
+    "check_understanding": "clarify",
+    "give_brief_answer": "high_level",
+    "respond": "high_level",
+    "answer": "high_level",
+}
+
+
 def _normalize_move_name(move: Optional[str]) -> str:
     try:
         return str(move or "").strip().lower()
