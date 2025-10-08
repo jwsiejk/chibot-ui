@@ -36,6 +36,7 @@ from app.metrics import ws_metrics
 
 # NEW: invoke LLM on final transcript
 from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
+from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
 from app.ws.barge import BargeState
 from app.ws.bus import bus
 
@@ -103,7 +104,11 @@ def _dumps(obj) -> str:
     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
 
 
-def _emit_admin_nlu_event(text: str, sid: str) -> None:
+def _emit_admin_nlu_event(text: str,
+                          sid: str,
+                          *,
+                          dialog_nlu: Optional[Dict[str, Any]] = None,
+                          universal: Optional[Dict[str, Any]] = None) -> None:
     if not text:
         return
     admin_cb = globals().get("_admin_emit")
@@ -111,13 +116,32 @@ def _emit_admin_nlu_event(text: str, sid: str) -> None:
         return
 
     meta_stub = {"source": "user_ws", "channel": "ws"}
-    dialog_nlu: Dict[str, Any] = {}
+    prepared_meta: Dict[str, Any] = {}
+    computed_dialog: Dict[str, Any] = {}
+    if isinstance(dialog_nlu, dict):
+        computed_dialog = dict(dialog_nlu)
     try:
-        _, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
-        if isinstance(dialog_nlu_raw, dict):
-            dialog_nlu = dict(dialog_nlu_raw)
+        if not computed_dialog:
+            prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
+            if isinstance(dialog_nlu_raw, dict):
+                computed_dialog = dict(dialog_nlu_raw)
+        if universal is None:
+            if not prepared_meta:
+                prepared_meta, _, _ = prepare_turn_metadata(text, dict(meta_stub))
+            raw_universal = {}
+            if isinstance(prepared_meta, dict):
+                raw_universal = prepared_meta.get("universal") or {}
+            if isinstance(raw_universal, dict):
+                universal = _ensure_universal_fields(raw_universal)
     except Exception:
-        dialog_nlu = {}
+        if not isinstance(computed_dialog, dict):
+            computed_dialog = {}
+        if universal is None:
+            universal = None
+
+    dialog_nlu = computed_dialog if isinstance(computed_dialog, dict) else {}
+    if universal is not None and not isinstance(universal, dict):
+        universal = None
 
     def _safe_copy(value: Any) -> Any:
         try:
@@ -149,6 +173,8 @@ def _emit_admin_nlu_event(text: str, sid: str) -> None:
         "text": text,
         "session_id": sid,
     }
+    if isinstance(universal, dict):
+        payload["universal"] = _safe_copy(universal)
 
     try:
         admin_cb("nlu", **payload)
@@ -432,9 +458,39 @@ async def _pump_dg_to_client(
                         pass
 
                     if text:
-                        _emit_admin_nlu_event(text, sid)
+                        dialog_nlu_pre: Dict[str, Any] = {}
+                        universal_pre: Dict[str, Any] = {}
+                        meta_stub = {"source": "user_ws", "channel": "ws"}
+                        try:
+                            prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
+                                text, dict(meta_stub)
+                            )
+                            if isinstance(dialog_nlu_raw, dict):
+                                dialog_nlu_pre = dict(dialog_nlu_raw)
+                            if isinstance(prepared_meta, dict):
+                                raw_universal = prepared_meta.get("universal") or {}
+                                if isinstance(raw_universal, dict):
+                                    universal_pre = _ensure_universal_fields(raw_universal)
+                        except Exception:
+                            dialog_nlu_pre = {}
+                            universal_pre = {}
 
-                    if text:
+                        _emit_admin_nlu_event(
+                            text,
+                            sid,
+                            dialog_nlu=dialog_nlu_pre,
+                            universal=universal_pre,
+                        )
+
+                        meta_overrides: Optional[Dict[str, Any]] = None
+                        if dialog_nlu_pre or universal_pre:
+                            meta_overrides = {}
+                            if dialog_nlu_pre:
+                                meta_overrides["nlu"] = dict(dialog_nlu_pre)
+                                meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
+                            if universal_pre:
+                                meta_overrides["universal"] = dict(universal_pre)
+
                         if turn_id_for_event in completed_llm_turns:
                             with contextlib.suppress(Exception):
                                 _jlog(
@@ -445,10 +501,14 @@ async def _pump_dg_to_client(
                         else:
                             completed_llm_turns.add(turn_id_for_event)
 
-                            async def _bg_turn():
+                            async def _bg_turn(meta_payload=meta_overrides):
                                 try:
                                     await asyncio.to_thread(
-                                        run_ws_user_turn, sid, text, None
+                                        run_ws_user_turn,
+                                        sid,
+                                        text,
+                                        None,
+                                        meta_overrides=meta_payload,
                                     )
                                 except Exception as e:
                                     with contextlib.suppress(Exception):
@@ -1557,10 +1617,46 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 corr=bool(corr),
                             )
 
+                            dialog_nlu_pre: Dict[str, Any] = {}
+                            universal_pre: Dict[str, Any] = {}
+                            try:
+                                prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
+                                    text, {"source": "user_ws", "channel": "ws"}
+                                )
+                                if isinstance(dialog_nlu_raw, dict):
+                                    dialog_nlu_pre = dict(dialog_nlu_raw)
+                                if isinstance(prepared_meta, dict):
+                                    raw_universal = prepared_meta.get("universal") or {}
+                                    if isinstance(raw_universal, dict):
+                                        universal_pre = _ensure_universal_fields(raw_universal)
+                            except Exception:
+                                dialog_nlu_pre = {}
+                                universal_pre = {}
+
+                            _emit_admin_nlu_event(
+                                text,
+                                sid,
+                                dialog_nlu=dialog_nlu_pre,
+                                universal=universal_pre,
+                            )
+
+                            meta_overrides: Optional[Dict[str, Any]] = None
+                            if dialog_nlu_pre or universal_pre:
+                                meta_overrides = {}
+                                if dialog_nlu_pre:
+                                    meta_overrides["nlu"] = dict(dialog_nlu_pre)
+                                    meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
+                                if universal_pre:
+                                    meta_overrides["universal"] = dict(universal_pre)
+
                             async def _bg_user():
                                 try:
                                     await asyncio.to_thread(
-                                        run_ws_user_turn, sid, text, corr
+                                        run_ws_user_turn,
+                                        sid,
+                                        text,
+                                        corr,
+                                        meta_overrides=meta_overrides,
                                     )
                                 except Exception as e:
                                     with contextlib.suppress(Exception):

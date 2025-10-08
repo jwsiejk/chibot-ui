@@ -363,6 +363,7 @@ def test_prepare_turn_metadata_injects_fields(monkeypatch):
     assert prepared is seed_meta
     assert isinstance(prepared.get("nlu"), dict)
     assert isinstance(prepared.get("dialog_nlu"), dict)
+    assert isinstance(prepared.get("universal"), dict)
     assert prepared["action"]
     assert prepared["dialog_action"] == prepared["action"]
     assert prepared["verbosity"] in {"brief", "normal", "medium"}
@@ -887,7 +888,7 @@ def test_ws_emits_nlu_admin_event_before_llm(monkeypatch):
 
     llm_calls = []
 
-    def fake_run_ws_user_turn(session_id, text, corr_id=None):
+    def fake_run_ws_user_turn(session_id, text, corr_id=None, **kwargs):
         llm_calls.append((session_id, text, corr_id))
         order.append(("llm", text))
 
@@ -926,7 +927,7 @@ def test_ws_emits_nlu_admin_event_before_llm(monkeypatch):
 
     captured_nlu = []
 
-    def fake_emit_nlu(text, session_id):
+    def fake_emit_nlu(text, session_id, **kwargs):
         payload = {
             "event": "nlu",
             "intent": "ask",
@@ -938,6 +939,8 @@ def test_ws_emits_nlu_admin_event_before_llm(monkeypatch):
             "text": text,
             "session_id": session_id,
         }
+        if "universal" in kwargs:
+            payload["universal"] = kwargs["universal"]
         captured_nlu.append(payload)
         order.append(("admin", "nlu"))
 
@@ -978,19 +981,19 @@ def test_ws_emits_nlu_admin_event_before_llm(monkeypatch):
 
     assert any(event == "asr:final" for event, _ in admin_events)
 
-    assert captured_nlu == [
-        {
-            "event": "nlu",
-            "intent": "ask",
-            "confidence": 0.42,
-            "slots": {
-                "entities": {"product": "Widget"},
-                "products": ["Widget"],
-            },
-            "text": final_text,
-            "session_id": "test-nlu",
-        }
-    ]
+    assert len(captured_nlu) == 1
+    payload = captured_nlu[0]
+    assert payload["event"] == "nlu"
+    assert payload["intent"] == "ask"
+    assert payload["confidence"] == 0.42
+    assert payload["text"] == final_text
+    assert payload["session_id"] == "test-nlu"
+    assert payload["slots"] == {
+        "entities": {"product": "Widget"},
+        "products": ["Widget"],
+    }
+    assert isinstance(payload.get("universal"), dict)
+    assert payload["universal"].get("user_goal") == "seek_information"
 
     assert meta_calls == [] or meta_calls[0][1] == {
         "source": "user_ws",

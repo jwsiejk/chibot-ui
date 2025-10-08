@@ -1,335 +1,497 @@
+diff --git a/app/nlu/universal_interpreter.py b/app/nlu/universal_interpreter.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..620f4234adf9f213e2529a01a16a84f648f5bd49
+--- /dev/null
++++ b/app/nlu/universal_interpreter.py
+@@ -0,0 +1,342 @@
++"""Lightweight universal interpretation for user turns.
++
++The goal of this module is to normalize every user turn into a common
++set of dialog "knobs" that downstream components can rely on, regardless of
++whether an LLM-based interpreter is available.  The heuristics below favor
++cheap text based signals so that the interpreter can run on every turn.
++"""
++
++from __future__ import annotations
++
++import math
++import re
++from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional
++
++# Canonical field defaults – all consumers can rely on these keys existing.
++_DEFAULT_RESULT: Dict[str, Any] = {
++    "user_goal": "seek_information",
++    "phase": "discover",
++    "depth": "normal",
++    "delivery_pref": "explain",
++    "intent_hint": None,
++    "entities": {"products": [], "keywords": []},
++    "urgency": "normal",
++    "multi_intent": False,
++    "confidence": 0.0,
++    "needs_clarification": False,
++    "out_of_domain": False,
++    "missing": [],
++}
++
++_QUESTION_WORDS = {"who", "what", "where", "when", "why", "how"}
++_URGENCY_KEYWORDS = {"urgent", "asap", "immediately", "right now", "critical", "priority", "emergency"}
++_LOW_URGENCY_KEYWORDS = {"whenever", "no rush", "sometime", "when you can"}
++_STEP_KEYWORDS = {"step", "walk me", "walk-through", "walkthrough", "guide me", "instructions", "setup"}
++_SUMMARY_KEYWORDS = {"quick", "tl;dr", "summary", "brief", "short", "overview"}
++_DEEP_KEYWORDS = {"detailed", "deep", "in depth", "comprehensive", "full"}
++_LIST_KEYWORDS = {"list", "options", "compare", "versus", "vs", "choices"}
++_OUT_OF_DOMAIN_KEYWORDS = {"joke", "weather", "stock", "stocks", "movie", "music", "song", "sports", "game score"}
++_MAYBE_MULTI_SEPARATORS = (" and ", " also ", " plus ", " besides ", " as well as ", " / ", ";")
++
++
++def _baseline_result() -> Dict[str, Any]:
++    """Return a deep copy of the canonical default payload."""
++
++    entities = _DEFAULT_RESULT["entities"]
++    return {
++        "user_goal": _DEFAULT_RESULT["user_goal"],
++        "phase": _DEFAULT_RESULT["phase"],
++        "depth": _DEFAULT_RESULT["depth"],
++        "delivery_pref": _DEFAULT_RESULT["delivery_pref"],
++        "intent_hint": _DEFAULT_RESULT["intent_hint"],
++        "entities": {"products": list(entities.get("products", [])), "keywords": list(entities.get("keywords", []))},
++        "urgency": _DEFAULT_RESULT["urgency"],
++        "multi_intent": _DEFAULT_RESULT["multi_intent"],
++        "confidence": _DEFAULT_RESULT["confidence"],
++        "needs_clarification": _DEFAULT_RESULT["needs_clarification"],
++        "out_of_domain": _DEFAULT_RESULT["out_of_domain"],
++        "missing": list(_DEFAULT_RESULT["missing"]),
++    }
++
++
++def _ensure_iterable(value: Any) -> Iterable[Any]:
++    if isinstance(value, (list, tuple, set)):
++        return list(value)
++    if value is None:
++        return []
++    return [value]
++
++
++def _normalize_entities(raw_entities: Any, products: Iterable[str]) -> Dict[str, List[str]]:
++    products_list = [p for p in _ensure_iterable(products) if isinstance(p, str)]
++    keywords: List[str] = []
++    if isinstance(raw_entities, Mapping):
++        for key, val in raw_entities.items():
++            if isinstance(val, str):
++                keywords.append(val)
++            elif isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
++                for item in val:
++                    if isinstance(item, str):
++                        keywords.append(item)
++            elif val is not None:
++                keywords.append(str(val))
++    elif isinstance(raw_entities, Iterable) and not isinstance(raw_entities, (str, bytes)):
++        for item in raw_entities:
++            if isinstance(item, str):
++                keywords.append(item)
++            elif isinstance(item, Mapping):
++                for val in item.values():
++                    if isinstance(val, str):
++                        keywords.append(val)
++
++    # Deduplicate while preserving order
++    def _dedupe(items: Iterable[str]) -> List[str]:
++        seen = set()
++        out: List[str] = []
++        for item in items:
++            lowered = item.strip()
++            if not lowered:
++                continue
++            lowered_key = lowered.lower()
++            if lowered_key in seen:
++                continue
++            seen.add(lowered_key)
++            out.append(lowered)
++        return out
++
++    return {
++        "products": _dedupe(products_list),
++        "keywords": _dedupe(keywords),
++    }
++
++
++def _word_count(text: str) -> int:
++    return len(re.findall(r"[\w/+]+", text))
++
++
++def _sentence_count(text: str) -> int:
++    segments = re.split(r"[.!?]+", text)
++    return len([seg for seg in segments if seg.strip()])
++
++
++def _contains_any(text: str, needles: Iterable[str]) -> bool:
++    lowered = text.lower()
++    return any(needle in lowered for needle in needles)
++
++
++def _clamp_conf(value: float) -> float:
++    if math.isnan(value) or math.isinf(value):
++        return 0.0
++    return max(0.0, min(1.0, round(value, 4)))
++
++
++def _infer_user_goal(intent: Optional[str]) -> str:
++    mapping = {
++        "greet": "greeting",
++        "how_to_steps": "complete_task",
++        "troubleshoot": "resolve_issue",
++        "compare_options": "compare_options",
++        "sizing_licensing": "plan_capacity",
++    }
++    if intent in mapping:
++        return mapping[intent]
++    return _DEFAULT_RESULT["user_goal"]
++
++
++def _infer_phase(intent: Optional[str], needs_clarification: bool) -> str:
++    if needs_clarification:
++        return "clarify"
++    mapping = {
++        "greet": "opening",
++        "how_to_steps": "execute",
++        "troubleshoot": "diagnose",
++        "compare_options": "evaluate",
++        "sizing_licensing": "plan",
++    }
++    return mapping.get(intent, _DEFAULT_RESULT["phase"])
++
++
++def _infer_delivery_pref(intent: Optional[str], text: str) -> str:
++    lowered = text.lower()
++    if intent == "how_to_steps" or _contains_any(lowered, _STEP_KEYWORDS):
++        return "steps"
++    if _contains_any(lowered, _SUMMARY_KEYWORDS):
++        return "summary"
++    if intent == "compare_options" or _contains_any(lowered, _LIST_KEYWORDS):
++        return "list"
++    return _DEFAULT_RESULT["delivery_pref"]
++
++
++def _infer_depth(intent: Optional[str], expected_depth: Optional[str], text: str) -> str:
++    lowered = text.lower()
++    if expected_depth in {"brief", "normal", "medium"}:
++        if expected_depth == "medium":
++            return "normal"
++        return expected_depth
++    if _contains_any(lowered, _SUMMARY_KEYWORDS):
++        return "brief"
++    if _contains_any(lowered, _DEEP_KEYWORDS) or _word_count(lowered) > 35:
++        return "deep"
++    if intent == "troubleshoot" and _word_count(lowered) >= 20:
++        return "deep"
++    return _DEFAULT_RESULT["depth"]
++
++
++def _detect_multi_intent(text: str) -> bool:
++    lowered = text.lower()
++    if text.count("?") >= 2:
++        return True
++    sentence_count = _sentence_count(text)
++    if sentence_count >= 2 and any(sep in lowered for sep in _MAYBE_MULTI_SEPARATORS):
++        return True
++    return False
++
++
++def _detect_urgency(text: str, meta: Mapping[str, Any]) -> str:
++    lowered = text.lower()
++    if _contains_any(lowered, _URGENCY_KEYWORDS):
++        return "high"
++    tags = meta.get("tags") if isinstance(meta, Mapping) else None
++    if isinstance(tags, Mapping) and tags.get("in_a_hurry"):
++        return "high"
++    if _contains_any(lowered, _LOW_URGENCY_KEYWORDS):
++        return "low"
++    return "normal"
++
++
++def _detect_out_of_domain(text: str, intent: Optional[str]) -> bool:
++    if intent and intent in {"out_of_domain", "oob", "smalltalk"}:
++        return True
++    lowered = text.lower()
++    return _contains_any(lowered, _OUT_OF_DOMAIN_KEYWORDS)
++
++
++def ensure_all_fields(candidate: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
++    """Return a canonical result, filling any missing keys with defaults."""
++
++    base = _baseline_result()
++    if not isinstance(candidate, Mapping):
++        return base
++    for key in list(base.keys()):
++        if key in candidate:
++            base[key] = candidate[key]
++    # Ensure nested dicts are cloned and well formed
++    entities = base.get("entities")
++    if not isinstance(entities, MutableMapping):
++        entities = {"products": [], "keywords": []}
++    else:
++        entities = {
++            "products": list(_ensure_iterable(entities.get("products"))),
++            "keywords": list(_ensure_iterable(entities.get("keywords"))),
++        }
++    base["entities"] = entities
++    missing = base.get("missing")
++    if not isinstance(missing, list):
++        missing = list(_ensure_iterable(missing))
++    base["missing"] = missing
++    base["multi_intent"] = bool(base.get("multi_intent"))
++    base["needs_clarification"] = bool(base.get("needs_clarification"))
++    base["out_of_domain"] = bool(base.get("out_of_domain"))
++    try:
++        base["confidence"] = _clamp_conf(float(base.get("confidence", 0.0)))
++    except Exception:
++        base["confidence"] = 0.0
++    return base
++
++
++def interpret(text: str,
++              *,
++              meta: Optional[Mapping[str, Any]] = None,
++              dialog_nlu: Optional[Mapping[str, Any]] = None,
++              config: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
++    """Return canonical interpretation knobs for the provided user text."""
++
++    text = (text or "").strip()
++    meta = meta or {}
++    if isinstance(dialog_nlu, Mapping):
++        nlu = dict(dialog_nlu)
++    else:
++        nlu = {}
++        if isinstance(meta, Mapping):
++            candidate = meta.get("dialog_nlu") or meta.get("nlu")
++            if isinstance(candidate, Mapping):
++                nlu = dict(candidate)
++
++    result = _baseline_result()
++
++    if not text:
++        result["needs_clarification"] = True
++        result["missing"].append("message")
++        return result
++
++    lowered = text.lower()
++    word_count = _word_count(lowered)
++    intent = nlu.get("intent") if isinstance(nlu, Mapping) else None
++    expected_depth = None
++    if isinstance(nlu, Mapping):
++        expected_depth = nlu.get("expected_depth")
++
++    result["intent_hint"] = intent
++    result["user_goal"] = _infer_user_goal(intent)
++    products = nlu.get("products") if isinstance(nlu, Mapping) else []
++    entities = nlu.get("entities") if isinstance(nlu, Mapping) else {}
++    result["entities"] = _normalize_entities(entities, products)
++
++    # Determine base confidence
++    if isinstance(nlu, Mapping) and isinstance(nlu.get("confidence"), (int, float)):
++        base_conf = float(nlu["confidence"])
++    else:
++        base_conf = 0.35 if text else 0.0
++        if word_count > 4:
++            base_conf += min(0.25, word_count * 0.015)
++        if text.endswith("?"):
++            base_conf += 0.05
++    base_conf = _clamp_conf(base_conf)
++
++    needs_clarification = False
++    if isinstance(nlu, Mapping) and nlu.get("needs_scoping"):
++        needs_clarification = True
++    elif word_count <= 3:
++        needs_clarification = True
++    elif text.endswith("?") and not _contains_any(lowered, {"details", "more info", "explain"}) and word_count < 6:
++        needs_clarification = True
++
++    if needs_clarification:
++        base_conf = _clamp_conf(base_conf * 0.7)
++
++    out_of_domain = _detect_out_of_domain(lowered, intent)
++    if out_of_domain:
++        base_conf = _clamp_conf(base_conf * 0.6)
++
++    result["confidence"] = base_conf
++    result["needs_clarification"] = needs_clarification
++    result["out_of_domain"] = out_of_domain
++    result["phase"] = _infer_phase(intent, needs_clarification)
++    result["delivery_pref"] = _infer_delivery_pref(intent, text)
++    result["depth"] = _infer_depth(intent, expected_depth, text)
++    result["urgency"] = _detect_urgency(text, meta)
++    result["multi_intent"] = _detect_multi_intent(text)
++
++    missing: List[str] = []
++    if needs_clarification:
++        missing.append("details")
++    if intent in {"how_to_steps", "troubleshoot", "sizing_licensing"} and not result["entities"].get("products"):
++        missing.append("product")
++    if intent == "troubleshoot" and word_count < 8:
++        missing.append("issue_detail")
++    if not intent:
++        missing.append("intent")
++
++    result["missing"] = missing
++
++    # Augment keyword entities with question words for extra context
++    if any(lowered.startswith(q + " ") for q in _QUESTION_WORDS):
++        result["entities"].setdefault("keywords", [])
++        if lowered.split(" ", 1)[0] not in result["entities"]["keywords"]:
++            result["entities"]["keywords"].append(lowered.split(" ", 1)[0])
++
++    return ensure_all_fields(result)
++
++
++__all__ = ["interpret", "ensure_all_fields"]
++
 diff --git a/app/services/streaming.py b/app/services/streaming.py
-index db131a732f40338554e90946d03453e8d5db7f1b..0ce7a79414e66204cc769d72d06a2a718689c958 100644
+index 0ce7a79414e66204cc769d72d06a2a718689c958..bab692e07ec4db0c0dea23de05f93cce81c44a52 100644
 --- a/app/services/streaming.py
 +++ b/app/services/streaming.py
-@@ -831,50 +831,117 @@ def merge_suggestions(*lists: Iterable[Any], cap: int = 4) -> List[str]:
+@@ -1,54 +1,59 @@
+ # app/services/streaming.py — Production-grade assistant framing
+ # Guarantees assistant_* frames are broadcast even if the LLM provider fails.
+ # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
  
-     seen: List[str] = []
-     seen_set = set()
-     for lst in lists:
-         if not lst:
-             continue
-         for raw in lst:
-             text = _normalize_suggestion_item(raw)
-             if not text:
-                 continue
-             if len(text) > 50:
-                 text = text[:50].rstrip()
-             if not text or text in seen_set:
-                 continue
-             seen.append(text)
-             seen_set.add(text)
-             if len(seen) >= limit:
-                 return seen
-     return seen[:limit]
+ from __future__ import annotations
+ from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable
+ import base64
+ import hashlib
+ import threading, time as _t
+ import os
+ import re
++import copy
  
+ from .llm_provider import get_provider
+ from .awareness import annotate
+ from .engagement import score as score_engagement
+ from .retrieval import search as kb_search
+ from .persona_prompt import build_persona_preamble, format_kb_context
+ from .suggestions import hygienic_suggestions
+ from .vendor_clients import make_openai_client
+ from .nlg.humanize import humanize_text, sounds_botty
+ from .greet_idempotency import get_or_create_greet_turn, DEFAULT_TTL_SEC
+ from ..db import db
+ from ..ws.bus import bus
+ from ..obs import jlog as _jlog
+ from ..obs.nlu_logging import NluLoggingContext, create_context as _create_nlu_context
+ from ..personas.store import PersonaManager, PersonaStore
+ from ..personas.prompt_builder import build_messages
+ from .. import nlu as _nlu
+ from ..nlu.classifier import classify as classify_turn
++from ..nlu.universal_interpreter import (
++    ensure_all_fields as _ensure_universal_fields,
++    interpret as _interpret_universal,
++)
+ from ..dialog.policy import pick as pick_dialog_policy
+ from ..config import load_settings
  
- def build_suggestion_items(items: List[str]) -> List[Dict[str, str]]:
-     return [{"text": it} for it in items]
- 
- 
-+def _log_suggestions_made(turn_id: Optional[str],
-+                          policy_chips: Optional[Iterable[Any]],
-+                          legacy_suggestions: Optional[Iterable[Any]],
-+                          merged_suggestions: Optional[Iterable[Any]],
-+                          cfg: Optional[Dict[str, Any]]) -> None:
-+    try:
-+        cfg_map: Dict[str, Any]
-+        if isinstance(cfg, dict):
-+            cfg_map = cfg
-+        else:
-+            cfg_map = {}
-+
-+        def _coerce_limit(value: Any, default: int) -> int:
-+            try:
-+                if value is None:
-+                    return default
-+                coerced = int(value)
-+                if coerced < 0:
-+                    return default
-+                return coerced
-+            except Exception:
-+                return default
-+
-+        max_items = _coerce_limit(cfg_map.get("suggestions_max_items"), _suggestion_cap())
-+        max_words = _coerce_limit(cfg_map.get("suggestions_max_words"), 7)
-+
-+        def _display_text(raw: Any) -> str:
-+            text = _normalize_suggestion_item(raw)
-+            if len(text) > 50:
-+                text = text[:50].rstrip()
-+            return text
-+
-+        policy_set = {
-+            text
-+            for text in (_display_text(item) for item in (policy_chips or []))
-+            if text
-+        }
-+        retrieval_set = {
-+            text
-+            for text in (_display_text(item) for item in (legacy_suggestions or []))
-+            if text
-+        }
-+
-+        items: List[Dict[str, str]] = []
-+        for raw in merged_suggestions or []:
-+            text = _display_text(raw)
-+            if not text:
-+                continue
-+            if text in policy_set:
-+                source = "policy"
-+            elif text in retrieval_set:
-+                source = "retrieval"
-+            else:
-+                source = "retrieval"
-+            items.append({"text": text, "source": source})
-+
-+        _jlog(
-+            "suggestions_made",
-+            turn_id=str(turn_id) if turn_id is not None else None,
-+            items=items,
-+            max_items=max_items,
-+            max_words_per_item=max_words,
-+        )
-+    except Exception:
-+        pass
-+
-+
- def classify(seed_text: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-     """Run lightweight classifiers and awareness annotators for a user turn."""
-     base_meta = meta or {}
-     labels: Dict[str, Any] = {}
- 
-     try:
-         primary_labels = classify_turn(seed_text, base_meta)
-         if isinstance(primary_labels, dict):
-             labels.update(primary_labels)
-     except Exception:
+ try:
+     from ..api_v1.admin import _emit as _admin_emit  # SSE to Admin
+ except Exception:
+     def _admin_emit(*a, **k):  # no-op if admin channel absent
          pass
  
-     try:
-         awareness = annotate(seed_text, base_meta)
-         if isinstance(awareness, dict):
-             labels.update({k: v for k, v in awareness.items() if k not in labels})
-             # Allow awareness annotators to augment existing labels without
-             # clobbering core classifier outputs like intent/topic.
-             for key, value in awareness.items():
-                 if key not in {"intent", "topic", "expected_depth", "needs_scoping"}:
-                     labels[key] = value
-     except Exception:
-         pass
  
-     try:
-@@ -1647,50 +1714,57 @@ def _make_foundation_frames(seed_text: str,
-         fallback_fired=fallback_fired,
-         fallback_reason=fallback_reason,
-         meta=meta,
-         nlu_meta=nlu_result,
-         used_docs_source=kb_source,
-     )
-     chunk: Dict[str, Any] = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': safe_reply,
-         'kb_hits': 0,
-         'intent': nlu_result.get('intent'),
-         'teacher_move': active_teacher_move,
-     }
-     if correlation_user_msg_id:
-         chunk['correlation_user_msg_id'] = correlation_user_msg_id
-     frames.append(chunk)
+ def _emit_turn_action_metadata(turn_id: Optional[str],
+                                meta: Optional[Dict[str, Any]],
+                                *,
+                                is_greet: bool) -> None:
+     """Emit structured NLU/policy metadata for admin observers."""
+     if not turn_id or not isinstance(meta, dict):
+         return
  
-     legacy_suggestions = []
-     try:
-         if cfg.get('suggestions_enabled', True):
-             legacy_suggestions = hygienic_suggestions(safe_reply)
-     except Exception:
-         legacy_suggestions = []
-     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
-+    _log_suggestions_made(
-+        turn_id=turn_id,
-+        policy_chips=policy_chips,
-+        legacy_suggestions=legacy_suggestions,
-+        merged_suggestions=merged_suggestions,
-+        cfg=cfg,
-+    )
-     try:
-         _jlog(
-             "chips_emit",
-             sid=session_id,
-             intent=nlu_result.get('intent'),
-             count=len(merged_suggestions),
-             items=merged_suggestions,
+     if isinstance(meta.get(_DIALOG_NLU_KEY), dict):
+         nlu_meta = meta.get(_DIALOG_NLU_KEY) or {}
+     elif isinstance(meta.get("nlu"), dict):
+         nlu_meta = meta.get("nlu") or {}
+     else:
+         nlu_meta = {}
+     policy_payload = {
+@@ -1009,50 +1014,65 @@ def prepare_turn_metadata(seed_text: str,
+     if not action:
+         action = policy.get("action") or policy.get("teacher_move") or "respond"
+     target_meta["action"] = action
+     target_meta[_DIALOG_ACTION_KEY] = action
+ 
+     policy_verbosity = str(policy.get("verbosity") or "").strip().lower() or None
+     if policy_verbosity and policy_verbosity not in {"brief", "normal"}:
+         policy_verbosity = None
+ 
+     if policy_verbosity:
+         target_meta.setdefault(_DIALOG_VERBOSITY_KEY, policy_verbosity)
+         target_meta.setdefault("verbosity", policy_verbosity)
+ 
+     if _DIALOG_VERBOSITY_KEY not in target_meta:
+         target_meta[_DIALOG_VERBOSITY_KEY] = cfg.get("gen_target_verbosity", "medium")
+     if "verbosity" not in target_meta:
+         target_meta["verbosity"] = target_meta[_DIALOG_VERBOSITY_KEY]
+     elif _DIALOG_VERBOSITY_KEY not in target_meta:
+         target_meta[_DIALOG_VERBOSITY_KEY] = target_meta["verbosity"]
+ 
+     show_suggestions = _resolve_show_suggestions(target_meta, policy, cfg)
+     target_meta["show_suggestions"] = show_suggestions
+     target_meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
+     target_meta[_DIALOG_POLICY_KEY] = dict(policy)
+ 
++    existing_universal = target_meta.get("universal")
++    if isinstance(existing_universal, dict):
++        universal = _ensure_universal_fields(existing_universal)
++    else:
++        try:
++            universal = _interpret_universal(
++                seed_text,
++                meta=target_meta,
++                dialog_nlu=dialog_nlu,
++                config=cfg,
++            )
++        except Exception:
++            universal = _ensure_universal_fields(None)
++    target_meta["universal"] = universal
++
+     if telemetry:
+         policy_move = policy.get("teacher_move") or policy.get("action")
+         resolved_move = target_meta.get(_DIALOG_ACTION_KEY)
+         override_reason = (
+             incoming_meta.get("policy_override_reason") if isinstance(incoming_meta, dict) else None
          )
-     except Exception:
-         pass
-     allow_suggestions = bool(meta.get('show_suggestions')) if isinstance(meta, dict) else False
-     should_emit_suggestions = bool(merged_suggestions) and (is_greet or allow_suggestions)
-     if should_emit_suggestions:
-         frames.append(
-             {
-                 'type': 'suggestions',
-                 'turn_id': turn_id,
-                 'items': build_suggestion_items(merged_suggestions),
-             }
+         if not override_reason:
+             if incoming_action and resolved_move and str(incoming_action) != str(resolved_move):
+                 override_reason = "meta_override"
+             elif resolved_move and policy_move and str(resolved_move) != str(policy_move):
+                 override_reason = "policy_adjustment"
+             else:
+                 override_reason = "policy"
+         telemetry.log_teacher_move(
+             resolved_move=resolved_move,
+             policy_move=policy_move,
+             reason=override_reason,
          )
+         telemetry.log_toolplan(policy)
  
-     end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
-     if correlation_user_msg_id:
-         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
-     frames.append(end_fr)
-@@ -1961,50 +2035,57 @@ def _make_legacy_frames(seed_text: str,
-     )
-     chunk = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': safe_reply,
-         'kb_hits': len(kb),
-     }
-     if isinstance(labels, dict) and labels.get('intent'):
-         chunk['intent'] = labels.get('intent')
-     if active_teacher_move:
-         chunk['teacher_move'] = active_teacher_move
-     if correlation_user_msg_id:
-         chunk['correlation_user_msg_id'] = correlation_user_msg_id
-     if error_note:
-         chunk['note'] = error_note
-     frames.append(chunk)
- 
-     legacy_suggestions: List[Any] = []
-     try:
-         if cfg.get('suggestions_enabled', True):
-             legacy_suggestions = hygienic_suggestions(safe_reply)
-     except Exception:
-         legacy_suggestions = []
-     policy_chips = _collect_policy_chips(policy)
-     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
-+    _log_suggestions_made(
-+        turn_id=turn_id,
-+        policy_chips=policy_chips,
-+        legacy_suggestions=legacy_suggestions,
-+        merged_suggestions=merged_suggestions,
-+        cfg=cfg,
-+    )
-     try:
-         intent = labels.get('intent') if isinstance(labels, dict) else None
-         _jlog(
-             "chips_emit",
-             sid=session_id,
-             intent=intent,
-             count=len(merged_suggestions),
-             items=merged_suggestions,
-         )
-     except Exception:
-         pass
-     allow_suggestions = bool(meta.get('show_suggestions')) if isinstance(meta, dict) else False
-     should_emit_suggestions = bool(merged_suggestions) and (is_greet or allow_suggestions)
-     if should_emit_suggestions:
-         frames.append(
-             {
-                 'type': 'suggestions',
-                 'turn_id': turn_id,
-                 'items': build_suggestion_items(merged_suggestions),
-             }
-         )
- 
-     end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
-     if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
-         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
-@@ -2402,55 +2483,57 @@ def _emit_ws_outage(session_id: str,
-         'text': _WS_PIPELINE_MESSAGE,
-         'kb_hits': 0,
-         'note': _WS_PIPELINE_UNAVAILABLE_NOTE,
-     }
-     if correlation_user_msg_id:
-         chunk['correlation_user_msg_id'] = correlation_user_msg_id
-     frames.append(chunk)
-     end_fr: Dict[str, Any] = {'type': 'assistant_end', 'turn_id': turn_id}
-     if correlation_user_msg_id:
-         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
-     frames.append(end_fr)
-     _broadcast_frames(session_id, frames, turn_id)
-     return frames
+     return target_meta, dialog_nlu, policy
  
  
- def _ws_generation_failed(turn_id: Optional[str], frames: List[Dict[str, Any]]) -> bool:
-     return turn_id is None and not frames
- 
- 
- def run_ws_greet(session_id: str) -> str:
-     """
-     Produce assistant text for greet, broadcast frames, schedule TTS audio,
-     and nudge UI with state+suggestions. Returns turn_id.
-     """
-     forced_tid, _idempotent = get_or_create_greet_turn(session_id, force=False, ttl_sec=DEFAULT_TTL_SEC)
-+    cfg = db.get_config()
-     tid, frames = make_assistant_frames(
-         "greet",
-         session_id,
-         meta={"source": "ws_greet", "channel": "ws"},
-         force_turn_id=forced_tid,
-+        cfg=cfg,
-     )
-     if _ws_generation_failed(tid, frames):
-         tid = _allocate_turn_id(forced_tid)
-         frames = _emit_ws_outage(session_id, tid)
-         try:
-             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='greet')
-         except Exception:
-             pass
-         try:
-             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-         except Exception:
-             pass
-         return tid
-     existing_frame_types = [
-         fr.get("type")
-         for fr in frames
-         if isinstance(fr, dict) and fr.get("type") is not None
-     ]
-     state_already_sent = any(ft == "state" for ft in existing_frame_types)
-     suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
- 
-     ready_sent = state_already_sent
- 
-     def _emit_ready_once() -> None:
-         nonlocal ready_sent
-@@ -2468,51 +2551,59 @@ def run_ws_greet(session_id: str) -> str:
-     try:
-         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
-             safe_text = _scrub_debug_stamps(text_for_tts)
-             try:
-                 _jlog(
-                     "tts.pre_schedule",
-                     session_id=session_id,
-                     sid=session_id,
-                     turn_id=tid,
-                     flow="greet",
-                     **_tts_text_markers(safe_text),
-                 )
-             except Exception:
-                 pass
-             audio_scheduled = schedule_tts_audio(session_id, safe_text, turn_id=tid, on_complete=_emit_ready_once)
-     except Exception:
-         pass
+ def prepare_policy_meta(seed_text: str,
+                         meta: Optional[Dict[str, Any]] = None,
+@@ -2570,56 +2590,66 @@ def run_ws_greet(session_id: str) -> str:
  
      # UI nudges (only emit if the assistant frames didn't already do so)
      try:
          if not audio_scheduled:
              _emit_ready_once()
          if not suggestions_already_sent:
--            base_suggestions = merge_suggestions(hygienic_suggestions(""))
-+            greet_legacy = hygienic_suggestions("")
-+            base_suggestions = merge_suggestions(greet_legacy)
-+            _log_suggestions_made(
-+                turn_id=tid,
-+                policy_chips=[],
-+                legacy_suggestions=greet_legacy,
-+                merged_suggestions=base_suggestions,
-+                cfg=cfg,
-+            )
+             greet_legacy = hygienic_suggestions("")
+             base_suggestions = merge_suggestions(greet_legacy)
+             _log_suggestions_made(
+                 turn_id=tid,
+                 policy_chips=[],
+                 legacy_suggestions=greet_legacy,
+                 merged_suggestions=base_suggestions,
+                 cfg=cfg,
+             )
              if base_suggestions:
                  bus.broadcast(
                      session_id,
@@ -340,12 +502,23 @@ index db131a732f40338554e90946d03453e8d5db7f1b..0ce7a79414e66204cc769d72d06a2a71
      return tid
  
  
- def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Optional[str] = None) -> str:
+-def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Optional[str] = None) -> str:
++def run_ws_user_turn(session_id: str,
++                     text: str,
++                     correlation_user_msg_id: Optional[str] = None,
++                     *,
++                     meta_overrides: Optional[Dict[str, Any]] = None) -> str:
      """
      Produce assistant text for a user turn and schedule both text pacing and TTS.
      Mirrors HTTP /api_v1/chat behavior for consistency.
      """
      meta = {"source": "user_ws", "channel": "ws"}
++    if isinstance(meta_overrides, dict):
++        for key, value in meta_overrides.items():
++            try:
++                meta[key] = copy.deepcopy(value)
++            except Exception:
++                meta[key] = value
  
      tid, frames = make_assistant_frames(text, session_id, meta=meta,
                                          correlation_user_msg_id=correlation_user_msg_id)
@@ -355,205 +528,615 @@ index db131a732f40338554e90946d03453e8d5db7f1b..0ce7a79414e66204cc769d72d06a2a71
          try:
              _apply_assistant_turn_state(session_id, frames)
          except Exception:
-diff --git a/tests/test_streaming_policy_logging.py b/tests/test_streaming_policy_logging.py
-index 4d90df346bcc16ae6dfe3a74c3f8e8b1a14e3a26..86109a8d83ef169d787d473b740fc5245d3c274c 100644
---- a/tests/test_streaming_policy_logging.py
-+++ b/tests/test_streaming_policy_logging.py
-@@ -121,50 +121,56 @@ def test_foundation_policy_decision_logs_kb_snippets(monkeypatch):
-         broadcast_immediately=False,
+             pass
+         try:
+             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='turn')
+         except Exception:
+             pass
+         return tid
+     try:
+         _apply_assistant_turn_state(session_id, frames)
+     except Exception:
+         pass
+     existing_frame_types = [
+         fr.get("type")
+         for fr in frames
+         if isinstance(fr, dict) and fr.get("type") is not None
+     ]
+     ready_sent = any(ft == "state" for ft in existing_frame_types)
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 696bb204c877805b91950d875c063beb1f331ec8..d90d1aafa8d63e14ada5d44c535f19b389e932e4 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -14,50 +14,51 @@ from app.services.audio.raw_fallback import (
+     raw_fallback_disabled,
+     coerce_to_raw_config,
+     normalize_pcm_frame,
+     should_use_raw_fallback,
+ )
+ 
+ from .schema_v1 import (
+     parse_client_json,
+     make_keepalive_ack,
+     make_results,
+     make_utterance_end,
+     make_error,
+ )
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
+ 
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
++from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+ from app.ws.barge import BargeState
+ from app.ws.bus import bus
+ 
+ # Optional admin emitter
+ try:
+     from app.api_v1.admin import _emit as _admin_emit
+ except Exception:
+     _admin_emit = None
+ 
+ 
+ ACTIVE_WS: dict[str, dict[str, Any]] = {}
+ ACTIVE_WS_LOCK = asyncio.Lock()
+ 
+ WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
+ try:
+     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
+ except Exception:
+     pass
+ 
+ # ------------------------------ small helpers ------------------------------
+ 
+ 
+ def _client_ip_from_scope(scope) -> str:
+     try:
+         c = scope.get("client") or ()
+@@ -81,96 +82,121 @@ def _jlog(event: str, **fields):
+         import time as _t, json as _json
+ 
+         fields.setdefault("event", event)
+         fields.setdefault("ts", _t.time())
+         print(_json.dumps(fields, separators=(",", ":"), ensure_ascii=False))
+     except Exception:
+         pass
+ 
+ 
+ def _clip_text(txt: str, limit: int = 120) -> str:
+     try:
+         txt = txt or ""
+         if len(txt) <= limit:
+             return txt
+         return txt[:limit] + "…"
+     except Exception:
+         return ""
+ 
+ 
+ def _dumps(obj) -> str:
+     import json as _json
+ 
+     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+ 
+ 
+-def _emit_admin_nlu_event(text: str, sid: str) -> None:
++def _emit_admin_nlu_event(text: str,
++                          sid: str,
++                          *,
++                          dialog_nlu: Optional[Dict[str, Any]] = None,
++                          universal: Optional[Dict[str, Any]] = None) -> None:
+     if not text:
+         return
+     admin_cb = globals().get("_admin_emit")
+     if not callable(admin_cb):
+         return
+ 
+     meta_stub = {"source": "user_ws", "channel": "ws"}
+-    dialog_nlu: Dict[str, Any] = {}
++    prepared_meta: Dict[str, Any] = {}
++    computed_dialog: Dict[str, Any] = {}
++    if isinstance(dialog_nlu, dict):
++        computed_dialog = dict(dialog_nlu)
+     try:
+-        _, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
+-        if isinstance(dialog_nlu_raw, dict):
+-            dialog_nlu = dict(dialog_nlu_raw)
++        if not computed_dialog:
++            prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
++            if isinstance(dialog_nlu_raw, dict):
++                computed_dialog = dict(dialog_nlu_raw)
++        if universal is None:
++            if not prepared_meta:
++                prepared_meta, _, _ = prepare_turn_metadata(text, dict(meta_stub))
++            raw_universal = {}
++            if isinstance(prepared_meta, dict):
++                raw_universal = prepared_meta.get("universal") or {}
++            if isinstance(raw_universal, dict):
++                universal = _ensure_universal_fields(raw_universal)
+     except Exception:
+-        dialog_nlu = {}
++        if not isinstance(computed_dialog, dict):
++            computed_dialog = {}
++        if universal is None:
++            universal = None
++
++    dialog_nlu = computed_dialog if isinstance(computed_dialog, dict) else {}
++    if universal is not None and not isinstance(universal, dict):
++        universal = None
+ 
+     def _safe_copy(value: Any) -> Any:
+         try:
+             return copy.deepcopy(value)
+         except Exception:
+             return value
+ 
+     slots_dict: Dict[str, Any] = {}
+     extra_slots = dialog_nlu.get("slots")
+     if isinstance(extra_slots, dict):
+         try:
+             slots_dict.update(_safe_copy(extra_slots))
+         except Exception:
+             slots_dict.update(extra_slots)
+     entities = dialog_nlu.get("entities")
+     if isinstance(entities, dict):
+         slots_dict.setdefault("entities", _safe_copy(entities))
+     elif isinstance(entities, list):
+         slots_dict.setdefault("entities", _safe_copy(entities))
+     products = dialog_nlu.get("products")
+     if isinstance(products, list):
+         slots_dict.setdefault("products", list(products))
+ 
+     payload = {
+         "event": "nlu",
+         "intent": dialog_nlu.get("intent"),
+         "confidence": dialog_nlu.get("confidence"),
+         "slots": slots_dict,
+         "text": text,
+         "session_id": sid,
+     }
++    if isinstance(universal, dict):
++        payload["universal"] = _safe_copy(universal)
+ 
+     try:
+         admin_cb("nlu", **payload)
+     except Exception:
+         pass
+ 
+ 
+ def _get_session_id(scope) -> str:
+     try:
+         raw = (scope.get("query_string") or b"").decode("utf-8", "ignore")
+         if raw:
+             for pair in raw.split("&"):
+                 if not pair or "=" not in pair:
+                     continue
+                 k, v = pair.split("=", 1)
+                 if k == "session_id":
+                     return v or "default"
+     except Exception:
+         pass
+     return "default"
+ 
+ 
+ def _has_deepgram_key() -> bool:
+     return bool((os.getenv("DEEPGRAM_API_KEY") or "").strip())
+ 
+@@ -410,67 +436,101 @@ async def _pump_dg_to_client(
+                 if is_final:
+                     final_seen[0] = True
+                     if turn_timing is not None and text:
+                         try:
+                             first_holder = turn_timing.setdefault(
+                                 "first_partial", [0.0]
+                             )
+                             if not first_holder[0]:
+                                 first_holder[0] = time.time()
+                         except Exception:
+                             pass
+                     if on_turn_finish:
+                         try:
+                             on_turn_finish(
+                                 turn_id_for_event, "provider_final", False, len(text)
+                             )
+                         except Exception:
+                             pass
+                     await _ws_send_json(send, make_utterance_end(turn_id_for_event))
+                     try:
+                         _admin_emit and _admin_emit("asr:final", session_id=sid)
+                     except Exception:
+                         pass
+ 
+                     if text:
+-                        _emit_admin_nlu_event(text, sid)
++                        dialog_nlu_pre: Dict[str, Any] = {}
++                        universal_pre: Dict[str, Any] = {}
++                        meta_stub = {"source": "user_ws", "channel": "ws"}
++                        try:
++                            prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
++                                text, dict(meta_stub)
++                            )
++                            if isinstance(dialog_nlu_raw, dict):
++                                dialog_nlu_pre = dict(dialog_nlu_raw)
++                            if isinstance(prepared_meta, dict):
++                                raw_universal = prepared_meta.get("universal") or {}
++                                if isinstance(raw_universal, dict):
++                                    universal_pre = _ensure_universal_fields(raw_universal)
++                        except Exception:
++                            dialog_nlu_pre = {}
++                            universal_pre = {}
++
++                        _emit_admin_nlu_event(
++                            text,
++                            sid,
++                            dialog_nlu=dialog_nlu_pre,
++                            universal=universal_pre,
++                        )
++
++                        meta_overrides: Optional[Dict[str, Any]] = None
++                        if dialog_nlu_pre or universal_pre:
++                            meta_overrides = {}
++                            if dialog_nlu_pre:
++                                meta_overrides["nlu"] = dict(dialog_nlu_pre)
++                                meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
++                            if universal_pre:
++                                meta_overrides["universal"] = dict(universal_pre)
+ 
+-                    if text:
+                         if turn_id_for_event in completed_llm_turns:
+                             with contextlib.suppress(Exception):
+                                 _jlog(
+                                     "llm_turn_skip_duplicate",
+                                     sid=sid,
+                                     turn_id=turn_id_for_event,
+                                 )
+                         else:
+                             completed_llm_turns.add(turn_id_for_event)
+ 
+-                            async def _bg_turn():
++                            async def _bg_turn(meta_payload=meta_overrides):
+                                 try:
+                                     await asyncio.to_thread(
+-                                        run_ws_user_turn, sid, text, None
++                                        run_ws_user_turn,
++                                        sid,
++                                        text,
++                                        None,
++                                        meta_overrides=meta_payload,
+                                     )
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+                                         await _ws_send_json(
+                                             send,
+                                             make_error(
+                                                 "llm_turn_fail", e.__class__.__name__
+                                             ),
+                                         )
+ 
+                             asyncio.create_task(_bg_turn())
+ 
+             elif et == "asr_error":
+                 if stream_stats is not None:
+                     try:
+                         stream_stats.note_provider_error()
+                     except Exception:
+                         pass
+                 err = _clip_text(str(ev.get("error") or "unknown"), 160)
+                 _jlog("dg_asr_error", sid=sid, turn_id=turn_id_ref[0], error=err)
+                 try:
+                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=err)
+                 except Exception:
+                     pass
+                 await _ws_send_json(send, make_error("asr_error", err))
+@@ -1535,54 +1595,90 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                             "user_msg",
+                             "User",
+                             "UserText",
+                             "UserMessage",
+                             "UserUtterance",
+                             "UserTextMessage",
+                         ):
+                             text = (obj.get("text") or "").strip()
+                             if not text:
+                                 continue
+                             if len(text) > 8000:
+                                 await _ws_send_json(
+                                     send, make_error("payload_too_large", "user_text")
+                                 )
+                                 continue
+                             corr = obj.get("correlation_user_msg_id") or obj.get(
+                                 "userMsgId"
+                             )
+                             _jlog(
+                                 "ws_user_msg_recv",
+                                 sid=sid,
+                                 text_len=len(text),
+                                 corr=bool(corr),
+                             )
+ 
++                            dialog_nlu_pre: Dict[str, Any] = {}
++                            universal_pre: Dict[str, Any] = {}
++                            try:
++                                prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
++                                    text, {"source": "user_ws", "channel": "ws"}
++                                )
++                                if isinstance(dialog_nlu_raw, dict):
++                                    dialog_nlu_pre = dict(dialog_nlu_raw)
++                                if isinstance(prepared_meta, dict):
++                                    raw_universal = prepared_meta.get("universal") or {}
++                                    if isinstance(raw_universal, dict):
++                                        universal_pre = _ensure_universal_fields(raw_universal)
++                            except Exception:
++                                dialog_nlu_pre = {}
++                                universal_pre = {}
++
++                            _emit_admin_nlu_event(
++                                text,
++                                sid,
++                                dialog_nlu=dialog_nlu_pre,
++                                universal=universal_pre,
++                            )
++
++                            meta_overrides: Optional[Dict[str, Any]] = None
++                            if dialog_nlu_pre or universal_pre:
++                                meta_overrides = {}
++                                if dialog_nlu_pre:
++                                    meta_overrides["nlu"] = dict(dialog_nlu_pre)
++                                    meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
++                                if universal_pre:
++                                    meta_overrides["universal"] = dict(universal_pre)
++
+                             async def _bg_user():
+                                 try:
+                                     await asyncio.to_thread(
+-                                        run_ws_user_turn, sid, text, corr
++                                        run_ws_user_turn,
++                                        sid,
++                                        text,
++                                        corr,
++                                        meta_overrides=meta_overrides,
+                                     )
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+                                         await _ws_send_json(
+                                             send,
+                                             make_error(
+                                                 "user_fail", e.__class__.__name__
+                                             ),
+                                         )
+ 
+                             asyncio.create_task(_bg_user())
+ 
+                         elif t == "CloseStream":
+                             _jlog("ws_close_stream", sid=sid)
+ 
+                             # Always define this first so later 'if synthetic_emitted' is safe
+                             synthetic_emitted = False
+ 
+                             if buf.is_empty():
+                                 # Empty turn closure; synthesize ids + reset final tracking.
+                                 turn_id_ref[0] = buf.turn_seq + 1
+                                 final_seen[0] = False
+                                 _reset_turn_metrics(time.time())
+                                 with contextlib.suppress(Exception):
+                                     _jlog(
+diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
+index e8d23d307f6cc03af45231248bf44d499540ddcb..c6e980c31dac233050b5b9336e132f74a21c01ef 100644
+--- a/tests/test_streaming_ws_fallbacks.py
++++ b/tests/test_streaming_ws_fallbacks.py
+@@ -341,50 +341,51 @@ def test_make_assistant_frames_health_check_allows_legacy(monkeypatch):
+             {"type": "assistant_end", "turn_id": "health"},
+         ]
+ 
+     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
+     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
+ 
+     tid, _ = streaming.make_assistant_frames(
+         "status",
+         "session-health",
+         meta={"source": "health_check"},
      )
  
-     assert turn_id == "10"
-     assert frames and frames[0]["type"] == "assistant_chunk"
-     assert captured
-     policy_events = [fields for event, fields in captured if event == "policy.decision"]
-     assert policy_events
-     fields = policy_events[0]
-     assert fields["teacher_move"] == "deep_dive"
-     assert fields["teacher_move_family"] == "deep_dive"
-     assert fields["reason"] == "policy"
-     assert fields["nlu_intent"] == "install"
-     assert pytest.approx(fields["nlu_confidence"], rel=1e-6) == 0.91
-     assert "used_docs" in fields and len(fields["used_docs"]) == 2
-     hashes = {entry["hash"] for entry in fields["used_docs"]}
-     assert all(len(h) == 8 for h in hashes)
- 
-     persona_events = [fields for event, fields in captured if event == "persona_applied"]
-     assert persona_events
-     persona_fields = persona_events[0]
-     assert persona_fields["persona_level"] == pytest.approx(0.25)
-     assert persona_fields["persona_elements"] == ["humor:0.20", "quote:q-demo"]
-     assert persona_fields["guardrails_suppressed"] == []
- 
-+    suggestions_events = [fields for event, fields in captured if event == "suggestions_made"]
-+    assert suggestions_events
-+    suggestion_fields = suggestions_events[0]
-+    assert suggestion_fields["turn_id"] == "10"
-+    assert suggestion_fields["items"] == []
-+
- 
- def _patch_legacy_dependencies(monkeypatch, reply_text: str):
-     monkeypatch.setattr(streaming, "_get_persona_for_session", lambda session_id: {"id": "chip", "name": "Chip"})
- 
-     class Provider:
-         def generate_reply(self, prompt, persona=None, teacher_move=None, context=None):
-             return reply_text
- 
-     monkeypatch.setattr(streaming, "get_provider", lambda cfg: Provider())
-     monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: [])
-     monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: [])
+     assert tid == "health"
+     assert legacy_calls and legacy_calls[0][0] == "status"
  
  
- def test_legacy_policy_decision_logs_fallback(monkeypatch):
-     _patch_legacy_dependencies(monkeypatch, reply_text="")
+ def test_prepare_turn_metadata_injects_fields(monkeypatch):
+     _stub_config(monkeypatch)
  
-     telemetry = DummyTelemetry()
-     meta = {"action": "offer_steps"}
-     cfg = {"suggestions_enabled": False, "nebraska_persona_level": 0.13, "nebraska_quotes_enabled": False}
-     labels = {"intent": "install", "confidence": 0.5}
-     policy = {"teacher_move": "offer_steps"}
+     seed_meta = {"source": "http_chat"}
+     prepared, labels, policy = streaming.prepare_turn_metadata("How do I deploy?", seed_meta)
  
-     captured = []
-     monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
+     assert prepared is seed_meta
+     assert isinstance(prepared.get("nlu"), dict)
+     assert isinstance(prepared.get("dialog_nlu"), dict)
++    assert isinstance(prepared.get("universal"), dict)
+     assert prepared["action"]
+     assert prepared["dialog_action"] == prepared["action"]
+     assert prepared["verbosity"] in {"brief", "normal", "medium"}
+     assert prepared["dialog_verbosity"] == prepared["verbosity"]
+     assert prepared["show_suggestions"] is policy["show_suggestions"]
+     assert prepared["dialog_show_suggestions"] is policy["show_suggestions"]
+     assert prepared["dialog_policy"]["show_suggestions"] is policy["show_suggestions"]
+     assert isinstance(labels, dict) and labels.get("intent")
+     assert isinstance(policy, dict)
  
-@@ -184,50 +190,56 @@ def test_legacy_policy_decision_logs_fallback(monkeypatch):
-         action="offer_steps",
-         labels=labels,
-         policy=policy,
-         broadcast_immediately=False,
+ 
+ def test_run_ws_user_turn_emits_action_metadata_once(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
+     monkeypatch.setattr(streaming, "kb_search", lambda *a, **k: [])
+     monkeypatch.setattr(streaming, "_get_persona_for_session", lambda sid: {"id": "chip"})
+ 
+     class DummyProvider:
+         def generate_reply(self, *args, **kwargs):
+             return "Hello!"
+ 
+     monkeypatch.setattr(streaming, "get_provider", lambda cfg: DummyProvider())
+     monkeypatch.setattr(streaming, "_broadcast_frames", lambda *a, **k: None)
+     monkeypatch.setattr(streaming, "schedule_frames", lambda *a, **k: None)
+@@ -865,140 +866,142 @@ def test_ws_emits_nlu_admin_event_before_llm(monkeypatch):
+ 
+     monkeypatch.setattr(ws_asgi, "_admin_emit", fake_admin)
+ 
+     final_text = "I need help with Widget"
+     meta_calls = []
+ 
+     def fake_prepare(text, meta=None, **kwargs):
+         meta_calls.append((text, dict(meta or {})))
+         meta_out = dict(meta or {})
+         meta_out.setdefault("nlu", {})
+         return (
+             meta_out,
+             {
+                 "intent": "ask",
+                 "confidence": 0.42,
+                 "entities": {"product": "Widget"},
+                 "products": ["Widget"],
+             },
+             {},
+         )
+ 
+     monkeypatch.setattr(ws_asgi, "prepare_turn_metadata", fake_prepare)
+ 
+     llm_calls = []
+ 
+-    def fake_run_ws_user_turn(session_id, text, corr_id=None):
++    def fake_run_ws_user_turn(session_id, text, corr_id=None, **kwargs):
+         llm_calls.append((session_id, text, corr_id))
+         order.append(("llm", text))
+ 
+     monkeypatch.setattr(ws_asgi, "run_ws_user_turn", fake_run_ws_user_turn)
+ 
+     async def immediate_to_thread(func, *args, **kwargs):
+         return func(*args, **kwargs)
+ 
+     monkeypatch.setattr(ws_asgi.asyncio, "to_thread", immediate_to_thread)
+ 
+     class _ImmediateFinalDeepgram:
+         def __init__(self, cfg):
+             self.cfg = cfg
+             self._queue: asyncio.Queue = asyncio.Queue()
+ 
+         async def connect(self):
+             await self._queue.put({"type": "asr_open"})
+             await self._queue.put({"type": "user_final", "text": final_text})
+             await self._queue.put(None)
+ 
+         async def events(self):
+             while True:
+                 ev = await self._queue.get()
+                 if ev is None:
+                     break
+                 yield ev
+ 
+         async def send(self, _chunk: bytes):
+             return
+ 
+         async def close(self, wait_for_final=True):
+             return
+ 
+     monkeypatch.setattr(ws_asgi, "DeepgramClient", _ImmediateFinalDeepgram)
+     monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
+ 
+     captured_nlu = []
+ 
+-    def fake_emit_nlu(text, session_id):
++    def fake_emit_nlu(text, session_id, **kwargs):
+         payload = {
+             "event": "nlu",
+             "intent": "ask",
+             "confidence": 0.42,
+             "slots": {
+                 "entities": {"product": "Widget"},
+                 "products": ["Widget"],
+             },
+             "text": text,
+             "session_id": session_id,
+         }
++        if "universal" in kwargs:
++            payload["universal"] = kwargs["universal"]
+         captured_nlu.append(payload)
+         order.append(("admin", "nlu"))
+ 
+     monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", fake_emit_nlu)
+ 
+     events = deque(
+         [
+             {"type": "websocket.receive", "bytes": b"\x00\x01"},
+             {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
+             {"type": "websocket.disconnect"},
+         ]
      )
  
-     assert turn_id == "22"
-     assert frames and frames[0]["type"] == "assistant_chunk"
-     assert captured
-     policy_events = [fields for event, fields in captured if event == "policy.decision"]
-     assert policy_events
-     fields = policy_events[0]
-     assert fields["teacher_move"] == "offer_steps"
-     assert fields["teacher_move_family"] == "answer"
-     assert fields["reason"] == "fallback"
-     assert fields["fallback_fired"] is True
-     assert fields["fallback_reason"] == "empty"
+     async def _receive():
+         if not events:
+             return {"type": "websocket.disconnect"}
+         return events.popleft()
  
-     persona_events = [fields for event, fields in captured if event == "persona_applied"]
-     assert persona_events
-     persona_fields = persona_events[0]
-     assert persona_fields["persona_level"] == pytest.approx(0.13)
-     assert persona_fields["persona_elements"] == []
-     assert persona_fields["guardrails_suppressed"] == ["quote"]
+     sent = []
  
-+    suggestions_events = [fields for event, fields in captured if event == "suggestions_made"]
-+    assert suggestions_events
-+    legacy_fields = suggestions_events[0]
-+    assert legacy_fields["turn_id"] == "22"
-+    assert legacy_fields["items"] == []
-+
+     async def _send(msg):
+         sent.append(msg)
  
- def test_legacy_policy_decision_meta_override(monkeypatch):
-     _patch_legacy_dependencies(monkeypatch, reply_text="All good")
+     scope = {
+         "type": "websocket",
+         "path": "/ws/v1/chat",
+         "query_string": b"session_id=test-nlu",
+     }
  
-     telemetry = DummyTelemetry()
-     meta = {"action": "offer_steps"}
-     cfg = {"suggestions_enabled": False, "nebraska_persona_level": 0.13, "nebraska_quotes_enabled": False}
-     labels = {"intent": "install", "confidence": 0.42}
-     policy = {"teacher_move": "ask_clarify", "action": "ask_clarify"}
+     loop = asyncio.new_event_loop()
+     asyncio.set_event_loop(loop)
+     try:
+         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
+         loop.run_until_complete(asyncio.sleep(0.05))
+     finally:
+         asyncio.set_event_loop(None)
+         loop.close()
  
-     captured = []
-     monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
+     assert any(event == "asr:final" for event, _ in admin_events)
  
-     turn_id, frames = streaming._make_legacy_frames(
-         "Need help",
-         "session-override",
-         meta,
-         cfg,
-         correlation_user_msg_id=None,
-         turn_id="33",
-         telemetry=telemetry,
-         is_greet=False,
-         fallback_line="Fallback",
-         fallback_on_empty=True,
-         fallback_on_error=True,
-@@ -235,25 +247,83 @@ def test_legacy_policy_decision_meta_override(monkeypatch):
-         action="offer_steps",
-         labels=labels,
-         policy=policy,
-         broadcast_immediately=False,
-     )
- 
-     assert turn_id == "33"
-     assert frames and frames[0]["type"] == "assistant_chunk"
-     assert captured
-     policy_events = [fields for event, fields in captured if event == "policy.decision"]
-     assert policy_events
-     fields = policy_events[0]
-     assert fields["teacher_move"] == "ask_clarify"
-     assert fields["teacher_move_family"] == "clarify"
-     assert fields["reason"] == "meta_override"
-     assert fields["meta_action"] == "offer_steps"
-     assert fields["policy_move"] == "ask_clarify"
-     assert fields["nlu_intent"] == "install"
-     assert pytest.approx(fields["nlu_confidence"], rel=1e-6) == 0.42
-     persona_events = [fields for event, fields in captured if event == "persona_applied"]
-     assert persona_events
-     persona_fields = persona_events[0]
-     assert persona_fields["persona_level"] == pytest.approx(0.13)
-     assert persona_fields["persona_elements"] == []
-     assert persona_fields["guardrails_suppressed"] == ["quote"]
-+
-+    suggestions_events = [fields for event, fields in captured if event == "suggestions_made"]
-+    assert suggestions_events
-+    override_fields = suggestions_events[0]
-+    assert override_fields["turn_id"] == "33"
-+
-+
-+def test_suggestions_made_classifies_sources(monkeypatch):
-+    _patch_foundation_dependencies(monkeypatch, teacher_move="respond")
-+
-+    telemetry = DummyTelemetry()
-+    meta = {"action": "respond"}
-+    cfg = {
-+        "suggestions_enabled": True,
-+        "suggestions_max_items": 3,
-+        "suggestions_max_words": 5,
-+        "nebraska_quotes_enabled": True,
+-    assert captured_nlu == [
+-        {
+-            "event": "nlu",
+-            "intent": "ask",
+-            "confidence": 0.42,
+-            "slots": {
+-                "entities": {"product": "Widget"},
+-                "products": ["Widget"],
+-            },
+-            "text": final_text,
+-            "session_id": "test-nlu",
+-        }
+-    ]
++    assert len(captured_nlu) == 1
++    payload = captured_nlu[0]
++    assert payload["event"] == "nlu"
++    assert payload["intent"] == "ask"
++    assert payload["confidence"] == 0.42
++    assert payload["text"] == final_text
++    assert payload["session_id"] == "test-nlu"
++    assert payload["slots"] == {
++        "entities": {"product": "Widget"},
++        "products": ["Widget"],
 +    }
-+
-+    policy_items = ["Use GUI", "Check cables"]
-+    retrieval_items = ["Check cables", "Consult manual"]
-+
-+    monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: policy_items)
-+    monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: retrieval_items)
-+
-+    captured: list[tuple[str, dict]] = []
-+    monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
-+
-+    turn_id, _ = streaming._make_foundation_frames(
-+        "Need help",
-+        "session-mixed",
-+        meta,
-+        cfg,
-+        correlation_user_msg_id=None,
-+        turn_id="44",
-+        telemetry=telemetry,
-+        is_greet=False,
-+        fallback_line="Fallback",
-+        fallback_on_empty=True,
-+        fallback_on_error=True,
-+        fallback_emit_event=False,
-+        action="respond",
-+        broadcast_immediately=False,
-+    )
-+
-+    assert turn_id == "44"
-+
-+    suggestions_events = [fields for event, fields in captured if event == "suggestions_made"]
-+    assert suggestions_events
-+    fields = suggestions_events[0]
-+    assert fields["turn_id"] == "44"
-+    assert fields["max_items"] == 3
-+    assert fields["max_words_per_item"] == 5
-+    assert fields["items"] == [
-+        {"text": "Use GUI", "source": "policy"},
-+        {"text": "Check cables", "source": "policy"},
-+        {"text": "Consult manual", "source": "retrieval"},
-+    ]
++    assert isinstance(payload.get("universal"), dict)
++    assert payload["universal"].get("user_goal") == "seek_information"
+ 
+     assert meta_calls == [] or meta_calls[0][1] == {
+         "source": "user_ws",
+         "channel": "ws",
+     }
+ 
+     assert llm_calls and llm_calls[0][0] == "test-nlu"
+ 
+     nlu_index = next(i for i, entry in enumerate(order) if entry == ("admin", "nlu"))
+     llm_index = next(i for i, entry in enumerate(order) if entry[0] == "llm")
+     assert nlu_index < llm_index, "nlu admin event should precede llm turn"

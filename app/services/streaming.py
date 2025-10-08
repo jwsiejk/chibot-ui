@@ -9,6 +9,7 @@ import hashlib
 import threading, time as _t
 import os
 import re
+import copy
 
 from .llm_provider import get_provider
 from .awareness import annotate
@@ -27,6 +28,10 @@ from ..personas.store import PersonaManager, PersonaStore
 from ..personas.prompt_builder import build_messages
 from .. import nlu as _nlu
 from ..nlu.classifier import classify as classify_turn
+from ..nlu.universal_interpreter import (
+    ensure_all_fields as _ensure_universal_fields,
+    interpret as _interpret_universal,
+)
 from ..dialog.policy import pick as pick_dialog_policy
 from ..config import load_settings
 
@@ -1030,6 +1035,21 @@ def prepare_turn_metadata(seed_text: str,
     target_meta["show_suggestions"] = show_suggestions
     target_meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
     target_meta[_DIALOG_POLICY_KEY] = dict(policy)
+
+    existing_universal = target_meta.get("universal")
+    if isinstance(existing_universal, dict):
+        universal = _ensure_universal_fields(existing_universal)
+    else:
+        try:
+            universal = _interpret_universal(
+                seed_text,
+                meta=target_meta,
+                dialog_nlu=dialog_nlu,
+                config=cfg,
+            )
+        except Exception:
+            universal = _ensure_universal_fields(None)
+    target_meta["universal"] = universal
 
     if telemetry:
         policy_move = policy.get("teacher_move") or policy.get("action")
@@ -2592,12 +2612,22 @@ def run_ws_greet(session_id: str) -> str:
     return tid
 
 
-def run_ws_user_turn(session_id: str, text: str, correlation_user_msg_id: Optional[str] = None) -> str:
+def run_ws_user_turn(session_id: str,
+                     text: str,
+                     correlation_user_msg_id: Optional[str] = None,
+                     *,
+                     meta_overrides: Optional[Dict[str, Any]] = None) -> str:
     """
     Produce assistant text for a user turn and schedule both text pacing and TTS.
     Mirrors HTTP /api_v1/chat behavior for consistency.
     """
     meta = {"source": "user_ws", "channel": "ws"}
+    if isinstance(meta_overrides, dict):
+        for key, value in meta_overrides.items():
+            try:
+                meta[key] = copy.deepcopy(value)
+            except Exception:
+                meta[key] = value
 
     tid, frames = make_assistant_frames(text, session_id, meta=meta,
                                         correlation_user_msg_id=correlation_user_msg_id)
