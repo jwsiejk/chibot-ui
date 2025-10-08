@@ -53,6 +53,7 @@ const state = {
   chunkSendError: null,
   turnTimer: null,
   turnOpen: false,   // track whether a turn is currently open server-side
+  turnClosePromise: null,
   deviceLogged: false,
   // NEW: min-turn gating
   recStartedAt: 0,
@@ -196,6 +197,28 @@ function _safeClearTurnTimer() {
   if (state.turnTimer) { clearTimeout(state.turnTimer); state.turnTimer = null; }
 }
 
+function _closeTurnIfOpen() {
+  if (!state.turnOpen && !state.turnClosePromise) {
+    return null;
+  }
+  if (state.turnClosePromise) {
+    return state.turnClosePromise;
+  }
+  if (!state.turnOpen) {
+    return null;
+  }
+  const closePromise = (async () => {
+    try {
+      await sendCloseStream();
+    } finally {
+      state.turnOpen = false;
+      state.turnClosePromise = null;
+    }
+  })();
+  state.turnClosePromise = closePromise;
+  return closePromise;
+}
+
 function _stopRecorder(detail = null) {
   const recorder = state.rec;
   const wasActive = !!recorder && recorder.state !== 'inactive';
@@ -232,6 +255,7 @@ function _disarm() {
   _stopRecorder({ reason: 'manual_disarm' });
   _teardownVADOnly();
   state.turnOpen = false; // ensure local state is clean
+  state.turnClosePromise = null;
   state.recStartedAt = 0;
   state.ttsPlaying = false;
   _emitVoiceState('idle');
@@ -243,9 +267,9 @@ function _bargeIn() {
   try { stopPlayback(); } catch {}
   // If a prior ASR turn is somehow still open, politely close it.
   // (Harmless if no turn is open; guarded to avoid duplicate closes.)
-  if (state.turnOpen) {
-    try { sendCloseStream(); } catch {}
-    state.turnOpen = false;
+  const pendingClose = _closeTurnIfOpen();
+  if (pendingClose) {
+    pendingClose.catch(() => {});
   }
 }
 
@@ -311,6 +335,7 @@ function _startRecorder() {
   state.chunkSendPromise = Promise.resolve();
   state.chunkBytesSent = 0;
   state.chunkSendError = null;
+  state.turnClosePromise = null;
   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
 
@@ -388,11 +413,11 @@ function _startRecorder() {
         } catch {}
       }
       // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
-      if (state.turnOpen) {
+      const pendingClose = _closeTurnIfOpen();
+      if (pendingClose) {
         try {
-          await sendCloseStream();
+          await pendingClose;
         } catch {}
-        state.turnOpen = false;
       }
       _emitVoiceState('armed', finalDetail);
     }
@@ -410,6 +435,7 @@ function _startRecorder() {
     console.warn('[voice] recorder start failed', e);
     state.rec = null;
     state.turnOpen = false;
+    state.turnClosePromise = null;
     return false;
   }
 

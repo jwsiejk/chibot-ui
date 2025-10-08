@@ -15,6 +15,11 @@ let _noAsrTimeout = null;
 let _noAsrNotified = false;
 let _lastAsrLatencyMs = null;
 let _ttsPlaying = false;
+const _asrTurnState = {
+  activeId: null,
+  complete: false,
+  utteranceEnded: false,
+};
 
 try {
   window.addEventListener('chip-tts', (ev) => {
@@ -40,6 +45,41 @@ function _resetAsrTracking(){
   _noAsrNotified = false;
   _sessionReadyAt = 0;
   _lastAsrLatencyMs = null;
+  _resetAsrTurnState();
+}
+
+function _resetAsrTurnState(){
+  _asrTurnState.activeId = null;
+  _asrTurnState.complete = false;
+  _asrTurnState.utteranceEnded = false;
+}
+
+function _ensureActiveAsrTurn(turnId){
+  if (turnId == null) return;
+  if (_asrTurnState.activeId !== turnId){
+    _asrTurnState.activeId = turnId;
+    _asrTurnState.complete = false;
+    _asrTurnState.utteranceEnded = false;
+  }
+}
+
+function _extractAsrTurnId(frame){
+  return (
+    frame?.turn_id ??
+    frame?.channel?.turn_id ??
+    frame?.turnId ??
+    frame?.channel?.turnId ??
+    null
+  );
+}
+
+function _isAsrFinalFrame(frame){
+  return !!(
+    frame?.channel?.is_final ??
+    frame?.is_final ??
+    frame?.final ??
+    false
+  );
 }
 
 function _scheduleAsrWatchdog(){
@@ -358,12 +398,35 @@ export function handleAssistantFrame(d){
   // Lightweight state hints (non-invasive)
   if (t === 'assistant_audio') setDot('speaking');
   if (t === 'UtteranceEnd') {
+    const turnId = _extractAsrTurnId(d);
+    if (turnId != null) _ensureActiveAsrTurn(turnId);
+    const matchesActive = turnId == null
+      ? _asrTurnState.activeId == null
+      : _asrTurnState.activeId === turnId;
+    if (matchesActive && _asrTurnState.utteranceEnded) {
+      return;
+    }
     _finalizeUserPreview({ resetIgnore: true });
     setDot('ready');
+    if (matchesActive) {
+      _asrTurnState.utteranceEnded = true;
+    }
   }
 
   if (t === 'Results' && d.nlu === undefined){
+    const turnId = _extractAsrTurnId(d);
+    if (turnId != null) _ensureActiveAsrTurn(turnId);
+    const matchesActive = turnId == null
+      ? _asrTurnState.activeId == null
+      : _asrTurnState.activeId === turnId;
+    const isFinal = _isAsrFinalFrame(d);
+    if (matchesActive && isFinal && _asrTurnState.complete) {
+      return;
+    }
     _renderUserTranscript(d);
+    if (matchesActive && isFinal) {
+      _asrTurnState.complete = true;
+    }
     return;
   }
 
