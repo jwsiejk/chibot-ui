@@ -1,113 +1,456 @@
+diff --git a/app/policy/nudges.py b/app/policy/nudges.py
+index 4f210d88508ba9943fe246b81c25934cc362f68e..0e88e4fd40385c74591a765ef9c438b92964e4e6 100644
+--- a/app/policy/nudges.py
++++ b/app/policy/nudges.py
+@@ -63,101 +63,111 @@ def _session_record(session_id: str) -> Dict:
+         {
+             "email": "user@example.com",
+             "messages": [],
+             "nudges": 0,
+             "persona_id": "chip",
+         },
+     )
+ 
+ 
+ def _increment_session_nudges(session_id: str) -> None:
+     sess = _session_record(session_id)
+     sess["nudges"] = sess.get("nudges", 0) + 1
+ 
+ 
+ def _schedule_timer(
+     session_id: str,
+     name: str,
+     delay_ms: int,
+     fn: Callable[[], None],
+     *,
+     origin: str = "",
+ ) -> None:
+     delay = max(0, int(delay_ms)) / 1000.0
+ 
+     timer: Optional[threading.Timer] = None
+-    armed_at = time.time()
++    armed_wall = time.time()
++    armed_mono = time.monotonic()
++    nonce = time.monotonic_ns()
+ 
+     def _run() -> None:
+         nonlocal timer
+         if timer is None:
+             return
+         with _LOCK:
+             timers = _scheduled.get(session_id)
+             entry = timers.get(name) if timers else None
+             current = entry.get("timer") if isinstance(entry, dict) else None
+-            if not timers or current is not timer:
++            current_nonce = entry.get("nonce") if isinstance(entry, dict) else None
++            if not timers or current is not timer or current_nonce != nonce:
+                 return
+         try:
+-            elapsed_ms = int((time.time() - armed_at) * 1000)
++            elapsed_ms = int((time.monotonic() - armed_mono) * 1000)
+             _LOGGER.info(
+                 "nudge_fired sid=%s name=%s elapsed_ms=%s origin=%s",
+                 session_id,
+                 name,
+                 elapsed_ms,
+                 origin or "",
+             )
+             fn()
+         finally:
+             with _LOCK:
+                 timers = _scheduled.get(session_id)
+                 entry = timers.get(name) if timers else None
+-                if timers and isinstance(entry, dict) and entry.get("timer") is timer:
++                if (
++                    timers
++                    and isinstance(entry, dict)
++                    and entry.get("timer") is timer
++                    and entry.get("nonce") == nonce
++                ):
+                     timers.pop(name, None)
+                     if not timers:
+                         _scheduled.pop(session_id, None)
+ 
+     timer = threading.Timer(delay, _run)
+     timer.daemon = True
+ 
+     with _LOCK:
+         timers = _scheduled.setdefault(session_id, {})
+         existing = timers.get(name)
+         if isinstance(existing, dict):
+             existing_timer = existing.get("timer")
+         else:
+             existing_timer = existing
+         if isinstance(existing_timer, threading.Timer):
+             try:
+                 existing_timer.cancel()
+             except Exception:
+                 pass
+         timers[name] = {
+             "timer": timer,
+-            "armed_at": armed_at,
++            "armed_at": armed_wall,
++            "armed_mono": armed_mono,
+             "delay_ms": int(delay_ms),
+             "origin": origin or "",
++            "nonce": nonce,
+         }
+ 
+     _LOGGER.info(
+         "nudge_timer_set sid=%s name=%s delay_ms=%s origin=%s",
+         session_id,
+         name,
+         int(delay_ms),
+         origin or "",
+     )
+ 
+     timer.start()
+ 
+ 
+ def cancel_idle_timers(session_id: str, *, source: str = "", mark: bool = True) -> None:
+     timers: Optional[Dict[str, Dict[str, object]]] = None
+     with _LOCK:
+         timers = _scheduled.pop(session_id, None)
+ 
+     if timers:
+         for entry in list(timers.values()):
+             timer = entry.get("timer") if isinstance(entry, dict) else entry
+             try:
+                 if isinstance(timer, threading.Timer):
+                     timer.cancel()
+             except Exception:
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index c0c96f39bcec1648ab17c77fed17259d7d688bfc..f507f6aa8b5aba94e388249822dd7da86f7ee9bd 100644
+index f507f6aa8b5aba94e388249822dd7da86f7ee9bd..fa1a55c415bd88ac12dceecb577578dd8841d3f1 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -1345,56 +1345,50 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                         # New audio turn
-                         current_assistant_turn = None
-                         try:
-                             current_assistant_turn = bus.current_assistant_turn(sid)
-                         except Exception:
-                             current_assistant_turn = None
-                         confirm_ms = 420
-                         try:
-                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
-                         except Exception:
-                             confirm_ms = 420
+@@ -2094,50 +2094,54 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "ws_conn_cleanup",
+                 conn_id=conn_id,
+                 sid=sid,
+                 duration=duration,
+                 had_disconnect=had_disconnect,
+             )
+         with contextlib.suppress(Exception):
+             if _admin_emit:
+                 _admin_emit(
+                     "ws_conn_cleanup",
+                     conn_id=conn_id,
+                     sid=sid,
+                     duration=duration,
+                     had_disconnect=had_disconnect,
+                 )
+         # Clean up safely; never raise in cleanup
+         with contextlib.suppress(Exception):
+             if rx_task:
+                 rx_task.cancel()
+                 await rx_task
+         with contextlib.suppress(Exception):
+             if dg is not None:
+                 await dg.close(wait_for_final=False)
++                try:
++                    set_asr_stream_open(sid, False)
++                except Exception:
++                    pass
+         with contextlib.suppress(Exception):
+             bus_task.cancel()
+             await bus_task
+         with contextlib.suppress(Exception):
+             ping_task.cancel()
+             await ping_task
+         with contextlib.suppress(Exception):
+             await send(
+                 {"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"}
+             )
  
-                         def _on_barge_commit() -> None:
-                             target_turn = current_assistant_turn
-                             try:
-                                 latest = bus.current_assistant_turn(sid)
-                             except Exception:
-                                 latest = None
-                             if latest:
-                                 target_turn = latest
-                             if target_turn:
-                                 try:
-                                     bus.cancel_turn(sid, target_turn)
-                                 except Exception:
-                                     pass
--                            try:
--                                set_phase(sid, "ready")
--                                bus.broadcast(sid, {"type": "state", "phase": "ready"})
--                            except Exception:
--                                pass
--
-                         with contextlib.suppress(Exception):
-                             barge.start(
-                                 confirm_ms=confirm_ms,
-                                 on_commit=_on_barge_commit,
-                                 send_state=_send_barge_state,
-                             )
-                         turn_id_ref[0] = buf.turn_seq + 1
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-                             completed_llm_turns.discard(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
-                         stream_stats.reset_turn()
-                         turn_connect_started[0] = False
-                         # reset mic capture
-                         mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
-                         _reset_turn_metrics(now)
-                         _schedule_no_audio_watch(turn_id_ref[0])
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "turn_start",
-@@ -1713,50 +1707,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                         run_ws_user_turn,
-                                         sid,
-                                         text,
-                                         corr,
-                                         meta_overrides=meta_overrides,
-                                     )
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-                                         await _ws_send_json(
-                                             send,
-                                             make_error(
-                                                 "user_fail", e.__class__.__name__
-                                             ),
-                                         )
  
-                             asyncio.create_task(_bg_user())
+ # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
+ try:
+     from starlette.websockets import WebSocket as _StarletteWebSocket  # noqa
+ except Exception:
+     _StarletteWebSocket = None
  
-                         elif t == "activity":
-                             kind = (obj.get("kind") or "").strip().lower()
-                             if kind in {"speech", "text", "chip"}:
-                                 nudges.cancel_idle_timers(sid)
-                             continue
  
-                         elif t == "CloseStream":
-                             _jlog("ws_close_stream", sid=sid)
-+                            nudges.cancel_idle_timers(sid)
+ async def ws_chat(websocket):
+     """Accept, validate, send ready, then pump frames to keep the connection alive."""
+     _jlog("ws_chat_compat_invoked")
+     await websocket.accept()
+     try:
+         sid = _get_session_id(websocket.scope)
+diff --git a/static/js/voice/vad.js b/static/js/voice/vad.js
+index 5a82604912aae8639df9a3039f7feeae0eb3b283..ac962dc8568dee76bfd3dc092a00fe534448360c 100644
+--- a/static/js/voice/vad.js
++++ b/static/js/voice/vad.js
+@@ -19,94 +19,104 @@
+  */
  
-                             # Always define this first so later 'if synthetic_emitted' is safe
-                             synthetic_emitted = False
+ /** @typedef {{
+  *   onSpeechStart?: ()=>void,
+  *   onSpeechEnd?: ()=>void,
+  * }} VADCallbacks
+  */
  
-                             if buf.is_empty():
-                                 # Empty turn closure; synthesize ids + reset final tracking.
-                                 turn_id_ref[0] = buf.turn_seq + 1
-                                 final_seen[0] = False
-                                 _reset_turn_metrics(time.time())
-                                 with contextlib.suppress(Exception):
-                                     _jlog(
-                                         "turn_start",
-                                         sid=sid,
-                                         turn_id=turn_id_ref[0],
-                                         first_bytes=0,
-                                         empty_turn=True,
-                                     )
+ export class VAD {
+   /**
+    * @param {AnalyserNode} analyser
+    * @param {VADOptions} opts
+    * @param {VADCallbacks} cbs
+    */
+   constructor(analyser, opts, cbs) {
+     this.analyser = analyser;
+     this.opts = Object.assign({
+       startRms: 0.015,       // ~ -36 dBFS
+       stopRms: 0.010,        // ~ -40 dBFS
+       minSpeechMs: 220,
+       minSilenceMs: 420,
+       pollMs: 33,
+       echoBoostStart: 1.5,
+       echoBoostStop: 1.3,
+       echoStateFn: null,
++      cooldownMs: 380,
+     }, opts || {});
+     this.cbs = cbs || {};
+     this._buf = new Float32Array(this.analyser.fftSize || 2048);
+     this._timer = null;
+     this._recording = false;
+     this._aboveSince = 0;
+     this._belowSince = 0;
++    this._cooldownUntil = 0;
+   }
  
-                             # --- Get a turn_id (with guard logs) ---
-                             _jlog(
-                                 "before_close_turn",
-                                 sid=sid,
-                                 next_turn_id=buf.turn_seq + 1,
-                             )
-                             try:
+   _rms() {
+     this.analyser.getFloatTimeDomainData(this._buf);
+     let sum = 0;
+     for (let i = 0; i < this._buf.length; i++) {
+       const v = this._buf[i];
+       sum += v * v;
+     }
+     return Math.sqrt(sum / this._buf.length);
+   }
+ 
+   start() {
+     this.stop(); // idempotent
+     this._aboveSince = 0;
+     this._belowSince = 0;
++    this._cooldownUntil = 0;
+     const { pollMs } = this.opts;
+ 
+     this._timer = setInterval(() => {
+       const rms = this._rms();
+       const now = performance.now();
++      const inCooldown = now < this._cooldownUntil;
+       const echo = this.opts.echoStateFn ? !!this.opts.echoStateFn() : false;
+ 
+       const startR = this.opts.startRms * (echo ? this.opts.echoBoostStart : 1);
+       const stopR  = this.opts.stopRms  * (echo ? this.opts.echoBoostStop  : 1);
+ 
+       if (!this._recording) {
++        if (inCooldown) {
++          this._aboveSince = 0;
++          return;
++        }
+         if (rms >= startR) {
+           if (!this._aboveSince) this._aboveSince = now;
+           if (now - this._aboveSince >= this.opts.minSpeechMs) {
+             this._recording = true;
+             this._belowSince = 0;
+             try { this.cbs.onSpeechStart && this.cbs.onSpeechStart(); } catch {}
+           }
+         } else {
+           this._aboveSince = 0;
+         }
+       } else {
+         if (rms < stopR) {
+           if (!this._belowSince) this._belowSince = now;
+           if (now - this._belowSince >= this.opts.minSilenceMs) {
+             this._recording = false;
+             this._aboveSince = 0;
++            this._cooldownUntil = now + Math.max(0, this.opts.cooldownMs || 0);
+             try { this.cbs.onSpeechEnd && this.cbs.onSpeechEnd(); } catch {}
+           }
+         } else {
+           this._belowSince = 0;
+         }
+       }
+     }, pollMs);
+   }
+ 
+   stop() {
+     if (this._timer) { clearInterval(this._timer); this._timer = null; }
+     this._recording = false;
+     this._aboveSince = 0;
+     this._belowSince = 0;
++    this._cooldownUntil = 0;
+   }
+ 
+   isRecording() { return this._recording; }
+ }
+ 
+diff --git a/static/js/ws.js b/static/js/ws.js
+index 410768efa73ed1c756b81764ab8606c9adebb491..ed7f6aa1c8f868b2460fe60f25e55847d2b630fa 100644
+--- a/static/js/ws.js
++++ b/static/js/ws.js
+@@ -2,50 +2,51 @@
+ // Responsibilities:
+ //   (Patched) Optional reconnect control for diagnostics
+ let __WS_RECONNECT_ENABLED = true;
+ //   • Own a single WebSocket connection per tab to /ws/v1/chat
+ //   • Subprotocol auth (bearer + bearer.<token>)
+ //   • Auto-reconnect with bounded backoff (only if session is active)
+ //   • Helpers: waitWSOpen(), isOpen(), bufferedAmount(), sendJSON/audio, configure()
+ //   • DOM events: 'askchip-ws' (messages), 'askchip-ws-close' (terminal close)
+ 
+ import { playStream, audioEnd, unlockAudio } from './audio.js';
+ import { getSID } from './util/sid.js';
+ 
+ let _ws = null;
+ let _onOpen = [];
+ const _KEEPALIVE_POLL_MS = 1000;
+ const _KEEPALIVE_IDLE_THRESHOLD_MS = 3500;
+ const _KEEPALIVE_RESUME_AFTER_UPLOAD_MS = 750;
+ const _KEEPALIVE_PROVIDER_FALLBACK_MS = 10000;
+ 
+ const _KEEPALIVE_REASON_PROVIDER = 'provider_wait';
+ const _KEEPALIVE_REASON_UPLOAD = 'audio_upload';
+ 
+ const _keepaliveState = {
+   timer: null,
+   lastSentTs: 0,
++  lastReadyAt: 0,
+   providerReady: false,
+   pauseReasons: new Set(),
+   resumeTimers: new Map(),
+   providerGateTimer: null,
+   sawFirstDeepgram: false,
+ };
+ 
+ function _scheduleProviderFallback(){
+   if (_keepaliveState.providerGateTimer){
+     clearTimeout(_keepaliveState.providerGateTimer);
+   }
+   if (!_keepaliveState.pauseReasons.has(_KEEPALIVE_REASON_PROVIDER)){
+     _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
+   }
+   _keepaliveState.providerGateTimer = setTimeout(()=>{
+     _keepaliveState.providerGateTimer = null;
+     if (!_keepaliveState.providerReady){
+       _keepaliveState.providerReady = true;
+     }
+     _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
+   }, _KEEPALIVE_PROVIDER_FALLBACK_MS);
+ }
+ 
+ let _lastUserSendTs = 0;
+ let _gotReady = false;
+@@ -57,50 +58,51 @@ let _reconnectTimer = null;
+ let _backoff = 500;            // start 0.5s
+ const _BACKOFF_MAX = 8000;     // cap 8s
+ const _BACKOFF_RESET_MS = 30000;
+ 
+ export function isOpen(){ return !!(_ws && _ws.readyState === WebSocket.OPEN); }
+ export function isConnecting(){ return !!(_ws && _ws.readyState === WebSocket.CONNECTING); }
+ export function waitWSOpen(){
+   return new Promise(res => {
+     if (isOpen()) return res();
+     _onOpen.push(res);
+   });
+ }
+ function _notifyOpen(){ for (const fn of _onOpen.splice(0)) { try{ fn(); }catch{} } }
+ 
+ export function bufferedAmount(){ return _ws ? _ws.bufferedAmount : 0; }
+ 
+ function _clearKeepaliveTimer(){
+   if (_keepaliveState.timer){
+     clearInterval(_keepaliveState.timer);
+     _keepaliveState.timer = null;
+   }
+ }
+ 
+ function _resetKeepaliveState(scheduleFallback = false){
+   _keepaliveState.lastSentTs = 0;
++  _keepaliveState.lastReadyAt = 0;
+   _keepaliveState.providerReady = false;
+   _keepaliveState.sawFirstDeepgram = false;
+   for (const t of _keepaliveState.resumeTimers.values()){
+     clearTimeout(t);
+   }
+   _keepaliveState.resumeTimers.clear();
+   if (_keepaliveState.providerGateTimer){
+     clearTimeout(_keepaliveState.providerGateTimer);
+     _keepaliveState.providerGateTimer = null;
+   }
+   _keepaliveState.pauseReasons.clear();
+   if (scheduleFallback){
+     _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
+     _scheduleProviderFallback();
+   }
+ }
+ 
+ function _pauseKeepalive(reason){
+   if (!reason) return;
+   const timer = _keepaliveState.resumeTimers.get(reason);
+   if (timer){
+     clearTimeout(timer);
+     _keepaliveState.resumeTimers.delete(reason);
+   }
+   _keepaliveState.pauseReasons.add(reason);
+@@ -150,50 +152,58 @@ function _stopKeepAlive(){
+   _clearKeepaliveTimer();
+   _resetKeepaliveState(false);
+ }
+ 
+ function _handleProviderSignal(obj){
+   const type = (obj && obj.type ? String(obj.type) : '').toLowerCase();
+   const provider = (obj && (obj.provider || obj.service || obj.source || obj.name) ? String(obj.provider || obj.service || obj.source || obj.name) : '').toLowerCase();
+   const state = (obj && (obj.state || obj.status || obj.phase)) ? String(obj.state || obj.status || obj.phase).toLowerCase() : '';
+   const compactType = type.replace(/[^a-z]/g, '');
+   const compactProvider = provider.replace(/[^a-z]/g, '');
+   const typeAsProvider = compactType.replace(/(?:provider)?(?:state|status)$/, '');
+   const vendor = (obj && obj.vendor ? String(obj.vendor) : '').toLowerCase();
+   const compactVendor = vendor.replace(/[^a-z]/g, '');
+ 
+   const looksDeepgram =
+     compactType.includes('deepgram') ||
+     compactProvider === 'deepgram' ||
+     typeAsProvider === 'deepgram' ||
+     compactVendor === 'deepgram';
+   if (looksDeepgram && !_keepaliveState.sawFirstDeepgram){
+     _keepaliveState.sawFirstDeepgram = true;
+     _startKeepAlive();
+   }
+ 
+   const markReady = () => {
++    const now = Date.now();
++    if (
++      _keepaliveState.lastReadyAt &&
++      now - _keepaliveState.lastReadyAt < 800
++    ){
++      return;
++    }
++    _keepaliveState.lastReadyAt = now;
+     if (!_keepaliveState.providerReady){
+       _keepaliveState.providerReady = true;
+     }
+     if (_keepaliveState.providerGateTimer){
+       clearTimeout(_keepaliveState.providerGateTimer);
+       _keepaliveState.providerGateTimer = null;
+     }
+     _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
+   };
+   const markNotReady = () => {
+     if (_keepaliveState.providerReady){
+       _keepaliveState.providerReady = false;
+     }
+     _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
+     _scheduleProviderFallback();
+   };
+ 
+   if (!type) return;
+ 
+   if (compactType === 'asropen' || compactType === 'deepgramopen' || compactType === 'deepgramready'){ markReady(); return; }
+   if (compactType === 'asrclose' || compactType === 'asrclosed' || compactType === 'deepgramclosed' || compactType === 'asrerror'){ markNotReady(); return; }
+ 
+   const providerTargets = ['deepgram', 'asr', 'stt'];
+   const applies = compactProvider ? providerTargets.includes(compactProvider) : false;
+   if (compactType === 'providerstate' || compactType === 'asrproviderstate' || applies || providerTargets.includes(typeAsProvider)){

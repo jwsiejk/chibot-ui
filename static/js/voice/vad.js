@@ -41,6 +41,7 @@ export class VAD {
       echoBoostStart: 1.5,
       echoBoostStop: 1.3,
       echoStateFn: null,
+      cooldownMs: 380,
     }, opts || {});
     this.cbs = cbs || {};
     this._buf = new Float32Array(this.analyser.fftSize || 2048);
@@ -48,6 +49,7 @@ export class VAD {
     this._recording = false;
     this._aboveSince = 0;
     this._belowSince = 0;
+    this._cooldownUntil = 0;
   }
 
   _rms() {
@@ -64,17 +66,23 @@ export class VAD {
     this.stop(); // idempotent
     this._aboveSince = 0;
     this._belowSince = 0;
+    this._cooldownUntil = 0;
     const { pollMs } = this.opts;
 
     this._timer = setInterval(() => {
       const rms = this._rms();
       const now = performance.now();
+      const inCooldown = now < this._cooldownUntil;
       const echo = this.opts.echoStateFn ? !!this.opts.echoStateFn() : false;
 
       const startR = this.opts.startRms * (echo ? this.opts.echoBoostStart : 1);
       const stopR  = this.opts.stopRms  * (echo ? this.opts.echoBoostStop  : 1);
 
       if (!this._recording) {
+        if (inCooldown) {
+          this._aboveSince = 0;
+          return;
+        }
         if (rms >= startR) {
           if (!this._aboveSince) this._aboveSince = now;
           if (now - this._aboveSince >= this.opts.minSpeechMs) {
@@ -91,6 +99,7 @@ export class VAD {
           if (now - this._belowSince >= this.opts.minSilenceMs) {
             this._recording = false;
             this._aboveSince = 0;
+            this._cooldownUntil = now + Math.max(0, this.opts.cooldownMs || 0);
             try { this.cbs.onSpeechEnd && this.cbs.onSpeechEnd(); } catch {}
           }
         } else {
@@ -105,6 +114,7 @@ export class VAD {
     this._recording = false;
     this._aboveSince = 0;
     this._belowSince = 0;
+    this._cooldownUntil = 0;
   }
 
   isRecording() { return this._recording; }

@@ -24,6 +24,7 @@ const _KEEPALIVE_REASON_UPLOAD = 'audio_upload';
 const _keepaliveState = {
   timer: null,
   lastSentTs: 0,
+  lastReadyAt: 0,
   providerReady: false,
   pauseReasons: new Set(),
   resumeTimers: new Map(),
@@ -79,6 +80,7 @@ function _clearKeepaliveTimer(){
 
 function _resetKeepaliveState(scheduleFallback = false){
   _keepaliveState.lastSentTs = 0;
+  _keepaliveState.lastReadyAt = 0;
   _keepaliveState.providerReady = false;
   _keepaliveState.sawFirstDeepgram = false;
   for (const t of _keepaliveState.resumeTimers.values()){
@@ -172,6 +174,14 @@ function _handleProviderSignal(obj){
   }
 
   const markReady = () => {
+    const now = Date.now();
+    if (
+      _keepaliveState.lastReadyAt &&
+      now - _keepaliveState.lastReadyAt < 800
+    ){
+      return;
+    }
+    _keepaliveState.lastReadyAt = now;
     if (!_keepaliveState.providerReady){
       _keepaliveState.providerReady = true;
     }

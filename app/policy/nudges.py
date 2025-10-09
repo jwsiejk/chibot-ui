@@ -85,7 +85,9 @@ def _schedule_timer(
     delay = max(0, int(delay_ms)) / 1000.0
 
     timer: Optional[threading.Timer] = None
-    armed_at = time.time()
+    armed_wall = time.time()
+    armed_mono = time.monotonic()
+    nonce = time.monotonic_ns()
 
     def _run() -> None:
         nonlocal timer
@@ -95,10 +97,11 @@ def _schedule_timer(
             timers = _scheduled.get(session_id)
             entry = timers.get(name) if timers else None
             current = entry.get("timer") if isinstance(entry, dict) else None
-            if not timers or current is not timer:
+            current_nonce = entry.get("nonce") if isinstance(entry, dict) else None
+            if not timers or current is not timer or current_nonce != nonce:
                 return
         try:
-            elapsed_ms = int((time.time() - armed_at) * 1000)
+            elapsed_ms = int((time.monotonic() - armed_mono) * 1000)
             _LOGGER.info(
                 "nudge_fired sid=%s name=%s elapsed_ms=%s origin=%s",
                 session_id,
@@ -111,7 +114,12 @@ def _schedule_timer(
             with _LOCK:
                 timers = _scheduled.get(session_id)
                 entry = timers.get(name) if timers else None
-                if timers and isinstance(entry, dict) and entry.get("timer") is timer:
+                if (
+                    timers
+                    and isinstance(entry, dict)
+                    and entry.get("timer") is timer
+                    and entry.get("nonce") == nonce
+                ):
                     timers.pop(name, None)
                     if not timers:
                         _scheduled.pop(session_id, None)
@@ -133,9 +141,11 @@ def _schedule_timer(
                 pass
         timers[name] = {
             "timer": timer,
-            "armed_at": armed_at,
+            "armed_at": armed_wall,
+            "armed_mono": armed_mono,
             "delay_ms": int(delay_ms),
             "origin": origin or "",
+            "nonce": nonce,
         }
 
     _LOGGER.info(

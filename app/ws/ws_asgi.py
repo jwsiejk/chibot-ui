@@ -2116,6 +2116,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         with contextlib.suppress(Exception):
             if dg is not None:
                 await dg.close(wait_for_final=False)
+                try:
+                    set_asr_stream_open(sid, False)
+                except Exception:
+                    pass
         with contextlib.suppress(Exception):
             bus_task.cancel()
             await bus_task
