@@ -1,162 +1,272 @@
-diff --git a/tests_phase3_5/test_containerized_opus_url.py b/tests_phase3_5/test_containerized_opus_url.py
-index 1fcbb8a7f676b600ffe8010431cd2e6518e5f3a6..54a2df6277a3bdb2a72a2655164a235e9b2d9586 100644
---- a/tests_phase3_5/test_containerized_opus_url.py
-+++ b/tests_phase3_5/test_containerized_opus_url.py
-@@ -1,133 +1,68 @@
- from app.services.streaming_asr.deepgram_client import DG_TEST_MODE
- from app.services.streaming_asr.deepgram_client import _dg_url  # if exported
--from app.services.audio.raw_fallback import (
--    DetectionSignal,
--    StreamMeta,
--    StreamStats,
--    coerce_to_raw_config,
--    pad_frame_to_expected,
--    should_use_raw_fallback,
--    silence_frame,
--)
- import pytest
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 959d2f80c1a361d2a32c891023aa4e63ef548e4e..e43f5081b8efac676565180ca5a3b86506679944 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -106,50 +106,75 @@ def _clip_text(txt: str, limit: int = 120) -> str:
  
- def test_containerized_omits_sr_channels(monkeypatch):
-     monkeypatch.setenv("DG_TEST_MODE", "1")
-     # Build overrides with containerized flag in _transport
-     overrides = {"_transport": {"containerized_opus": True}}
-     url = _dg_url(overrides)
-     assert "sample_rate=" not in url
-     assert "channels=" not in url
-     assert "encoding=" not in url
-     assert "endpointing=" not in url
-     assert "interim_results=true" in url
-     assert "utterance_end_ms=2000" in url
+ def _dumps(obj) -> str:
+     import json as _json
+ 
+     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
  
  
- def test_containerized_interim_false_drops_utterance_end(monkeypatch):
-     monkeypatch.setenv("DG_TEST_MODE", "1")
-     overrides = {
-         "_transport": {"containerized_opus": True},
-         "interim_results": False,
+ def _should_emit_barge_phase(sid: str, phase: str) -> bool:
+     """Return True if the barge phase changed and should be broadcast."""
+     if not phase:
+         return False
+ 
+     try:
+         if not should_emit_phase(sid, phase):
+             with contextlib.suppress(Exception):
+                 set_phase(sid, phase)
+             return False
+         with contextlib.suppress(Exception):
+             set_phase(sid, phase, emitted=True)
+     except Exception:
+         return False
+ 
+     return True
+ 
+ 
++def _broadcast_barge_state_frame(sid: str, phase: str) -> Optional[Dict[str, Any]]:
++    """Broadcast a barge state frame to session subscribers if it changed."""
++    if not phase:
++        return None
++
++    if not _should_emit_barge_phase(sid, phase):
++        return None
++
++    if phase == "paused":
++        try:
++            set_recorder_active(sid, True)
++        except Exception:
++            pass
++        nudges.cancel_idle_timers(sid, source="ws_state_paused")
++
++    frame: Dict[str, Any] = {"type": "state", "phase": phase}
++
++    try:
++        bus.broadcast(sid, frame)
++    except Exception:
++        pass
++
++    return frame
++
++
+ def _emit_admin_nlu_event(text: str,
+                           sid: str,
+                           *,
+                           dialog_nlu: Optional[Dict[str, Any]] = None,
+                           universal: Optional[Dict[str, Any]] = None) -> None:
+     if not text:
+         return
+     admin_cb = globals().get("_admin_emit")
+     if not callable(admin_cb):
+         return
+ 
+     meta_stub = {"source": "user_ws", "channel": "ws"}
+     prepared_meta: Dict[str, Any] = {}
+     computed_dialog: Dict[str, Any] = {}
+     if isinstance(dialog_nlu, dict):
+         computed_dialog = dict(dialog_nlu)
+     try:
+         if not computed_dialog:
+             prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
+             if isinstance(dialog_nlu_raw, dict):
+                 computed_dialog = dict(dialog_nlu_raw)
+         if universal is None:
+             if not prepared_meta:
+                 prepared_meta, _, _ = prepare_turn_metadata(text, dict(meta_stub))
+             raw_universal = {}
+@@ -733,85 +758,54 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 try:
+                     await _ws_send_json(
+                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
+                     )
+                 except Exception:
+                     break
+         except asyncio.CancelledError:
+             pass
+ 
+     ping_task = asyncio.create_task(_ping_loop())
+ 
+     try:
+         await _ws_send_json(send, {"type": "ready", "session_id": sid})
+     except Exception:
+         with contextlib.suppress(Exception):
+             await send(
+                 {
+                     "type": "websocket.close",
+                     "code": 1011,
+                     "reason": "initial_ready_failed",
+                 }
+             )
+         return
+ 
+     cfg: Dict[str, Any] = {}
+-    loop = asyncio.get_running_loop()
+     barge = BargeState()
+ 
+     def _send_barge_state(phase: str) -> None:
+-        if not phase:
+-            return
+-        if not _should_emit_barge_phase(sid, phase):
+-            return
+-        if phase == "paused":
+-            try:
+-                set_recorder_active(sid, True)
+-            except Exception:
+-                pass
+-            nudges.cancel_idle_timers(sid, source="ws_state_paused")
+-        frame = {"type": "state", "phase": phase}
+-        try:
+-            bus.broadcast(sid, frame)
+-        except Exception:
+-            pass
+-        try:
+-            if loop.is_closed():
+-                return
+-            payload = dict(frame)
+-            try:
+-                running = asyncio.get_running_loop()
+-            except RuntimeError:
+-                running = None
+-            if running is loop:
+-                asyncio.create_task(_ws_send_json(send, payload))
+-            else:
+-                loop.call_soon_threadsafe(
+-                    asyncio.create_task, _ws_send_json(send, payload)
+-                )
+-        except Exception:
+-            pass
++        _broadcast_barge_state_frame(sid, phase)
+ 
+     buf = TurnBuffer()
+     dg: Optional[DeepgramClient] = None
+     rx_task: Optional[asyncio.Task] = None
+     dg_connect_task: Optional[asyncio.Task] = None
+     dg_state: str = "closed"
+     turn_id_ref = [0]
+     pending_final_turns: Deque[int] = deque()
+     completed_llm_turns: Set[int] = set()
+     synthetic_final_turns: Set[int] = set()
+     final_seen = [False]
+     asr_seen_partial = [False]
+     turn_timing: Dict[str, List[float]] = {
+         "start": [0.0],
+         "dg_open": [0.0],
+         "first_partial": [0.0],
+         "final": [0.0],
      }
-     url = _dg_url(overrides)
-     assert "interim_results=false" in url
-     assert "utterance_end_ms=" not in url
-     assert "sample_rate=" not in url
-     assert "channels=" not in url
+     turn_finish_logged = [False]
  
- def test_non_containerized_includes_sr_channels(monkeypatch):
-     monkeypatch.setenv("DG_TEST_MODE", "1")
-     overrides = {"_transport": {"containerized_opus": False}}
-     url = _dg_url(overrides)
-     assert "sample_rate=48000" in url
-     assert "channels=1" in url
-     assert "endpointing=" not in url
-     assert "utterance_end_ms=2000" in url
+     # Turn-scoped buffering + state
+     buffered_chunks: Deque[bytes] = deque()
+     sent_any_audio = [False]
+     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
+     no_audio_notified = [False]
+diff --git a/tests/phase3/test_barge_state_phase_dedup.py b/tests/phase3/test_barge_state_phase_dedup.py
+index 4940afdd959a52f9ba2b3c00ee013d85d7c81fd8..48d5ede3be0ee0fdd72a8be3a18f880bd0eb1ed2 100644
+--- a/tests/phase3/test_barge_state_phase_dedup.py
++++ b/tests/phase3/test_barge_state_phase_dedup.py
+@@ -1,31 +1,42 @@
++import asyncio
+ import threading
+ import time
+ import uuid
++from queue import Empty
+ 
++import pytest
++
++from app.session_state import set_phase, set_recorder_active
+ from app.ws.barge import BargeState
+ from app.ws import ws_asgi
++from app.ws.bus import bus
++
++
++@pytest.fixture
++def anyio_backend():
++    return "asyncio"
  
  
--def test_raw_fallback_url_includes_params(monkeypatch):
-+def test_containerized_strips_explicit_audio_params(monkeypatch):
-     monkeypatch.setenv("DG_TEST_MODE", "1")
--    meta = StreamMeta(sample_rate=16000, channels=1)
--    overrides = coerce_to_raw_config(meta)
-+    overrides = {
-+        "encoding": "linear16",
-+        "sample_rate": 16000,
-+        "channels": 2,
-+        "_transport": {"containerized_opus": True},
-+    }
-     url = _dg_url(overrides)
--    assert "encoding=linear16" in url
--    assert "sample_rate=16000" in url
--    assert "channels=1" in url
--    transport = overrides.get("_transport", {})
--    assert transport.get("raw_fallback") is True
--    assert transport.get("normalized_pcm") is True
--
--
--def test_raw_fallback_guardrail_leniency(monkeypatch):
--    monkeypatch.setenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", "1")
--    stats = StreamStats()
--    stats.guardrails.raw_candidate_confirmations = 1
--    stats.guardrails.lenient_prefix_frames = 1
--    stats.guardrails.max_consecutive_decode_errors = 2
--    stats.guardrails.min_errors_for_suspect = 2
--    detection = DetectionSignal(container="webm", codec="opus", containerized=True)
--    stats.note_detection(detection)
--
--    frame = b"\x00" * 640
--    stats.observe_frame(frame)
--    assert not should_use_raw_fallback(detection, stats)
--
--    stats.observe_frame(frame)
--    assert should_use_raw_fallback(detection, stats)
--
--    monkeypatch.delenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", raising=False)
--
--
--def test_raw_fallback_disabled_by_default(monkeypatch):
--    monkeypatch.delenv("CHIBOT_DISABLE_RAW_FALLBACK", raising=False)
--    monkeypatch.delenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", raising=False)
--
--    stats = StreamStats()
--    stats.guardrails.raw_candidate_confirmations = 1
--    detection = DetectionSignal(container="webm", codec="opus", containerized=True)
--    stats.note_detection(detection)
--
--    frame = b"\x00" * 640
--    stats.observe_frame(frame)
--
--    assert not should_use_raw_fallback(detection, stats)
--
--
--def test_raw_fallback_force_enable_respects_disable_flag(monkeypatch):
--    monkeypatch.delenv("CHIBOT_DISABLE_RAW_FALLBACK", raising=False)
--    monkeypatch.setenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", "1")
--
--    stats = StreamStats()
--    stats.guardrails.raw_candidate_confirmations = 1
--    detection = DetectionSignal(container="webm", codec="opus", containerized=True)
--    stats.note_detection(detection)
--
--    frame = b"\x00" * 640
--    stats.observe_frame(frame)
--
--    assert should_use_raw_fallback(detection, stats)
--
--    monkeypatch.setenv("CHIBOT_DISABLE_RAW_FALLBACK", "1")
--    assert not should_use_raw_fallback(detection, stats)
--
--    monkeypatch.delenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", raising=False)
--
-+    assert "encoding=" not in url
-+    assert "sample_rate=" not in url
-+    assert "channels=" not in url
+ def test_barge_state_emits_distinct_phases():
+     sid = f"test-barge-{uuid.uuid4()}"
+     emitted = []
  
--def test_frame_normalization_and_silence():
--    meta = StreamMeta(sample_rate=16000, channels=1)
--    expected = 640
--    padded = pad_frame_to_expected(b"\x01\x02", meta)
--    assert len(padded) == expected
--    assert padded[:2] == b"\x01\x02"
--    assert padded[2:] == b"\x00" * (expected - 2)
+     def capture(phase: str) -> None:
+         if ws_asgi._should_emit_barge_phase(sid, phase):
+             emitted.append(phase)
  
--    silence = silence_frame(meta)
--    assert len(silence) == expected
--    assert set(silence) == {0}
-+def test_containerized_ignores_env_raw_overrides(monkeypatch):
-+    monkeypatch.setenv("DG_TEST_MODE", "1")
-+    monkeypatch.setenv("DG_RAW_ENCODING", "linear16")
-+    monkeypatch.setenv("DG_RAW_SAMPLE_RATE", "16000")
-+    monkeypatch.setenv("DG_RAW_CHANNELS", "2")
-+    overrides = {"_transport": {"containerized_opus": True}}
-+    url = _dg_url(overrides)
-+    assert "encoding=" not in url
-+    assert "sample_rate=" not in url
-+    assert "channels=" not in url
+     barge = BargeState()
  
--    stats = StreamStats(meta=meta)
--    stats.force_fallback()
--    normalized = stats.observe_frame(b"\x01\x02")
--    assert len(normalized) == expected
--    assert stats.normalized_frames == 1
-+    # Clean up for future tests
-+    monkeypatch.delenv("DG_RAW_ENCODING", raising=False)
-+    monkeypatch.delenv("DG_RAW_SAMPLE_RATE", raising=False)
-+    monkeypatch.delenv("DG_RAW_CHANNELS", raising=False)
+     assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
+     barge.cancel(capture)
+     barge.cancel(capture)
+ 
+     assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
+     barge.commit(capture)
+     barge.commit(capture)
+ 
+     assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
+     barge.cancel(capture)
+     barge.cancel(capture)
+ 
+     assert emitted == [
+@@ -46,25 +57,57 @@ def test_barge_commit_waits_for_ready_gate():
+         if ws_asgi._should_emit_barge_phase(sid, phase):
+             phases.append(phase)
+ 
+     ready_evt = threading.Event()
+ 
+     def on_commit():
+         phases.append("commit")
+         return ready_evt.wait
+ 
+     barge = BargeState()
+ 
+     assert barge.start(confirm_ms=500, on_commit=on_commit, send_state=capture) is True
+ 
+     worker = threading.Thread(target=barge.commit, args=(capture,))
+     worker.daemon = True
+     worker.start()
+ 
+     time.sleep(0.05)
+     assert "ready" not in phases
+ 
+     ready_evt.set()
+     worker.join(timeout=1.0)
+ 
+     assert not worker.is_alive()
+     assert phases[-1] == "ready"
++
++
++@pytest.mark.anyio
++async def test_barge_state_single_broadcast_for_client():
++    sid = f"test-barge-subscriber-{uuid.uuid4()}"
++    barge = BargeState()
++    frames = []
++    q = bus.subscribe(sid)
++
++    def capture(phase: str) -> None:
++        ws_asgi._broadcast_barge_state_frame(sid, phase)
++
++    try:
++        assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture)
++        barge.commit(capture)
++
++        # allow any background tasks to process
++        await asyncio.sleep(0)
++
++        while True:
++            try:
++                frames.append(q.get_nowait())
++            except Empty:
++                break
++    finally:
++        bus.unsubscribe(sid, q)
++        set_recorder_active(sid, False)
++        set_phase(sid, "", emitted=True)
++
++    state_phases = [fr.get("phase") for fr in frames if fr.get("type") == "state"]
++
++    assert state_phases == ["paused", "ready"]

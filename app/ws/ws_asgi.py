@@ -128,6 +128,31 @@ def _should_emit_barge_phase(sid: str, phase: str) -> bool:
     return True
 
 
+def _broadcast_barge_state_frame(sid: str, phase: str) -> Optional[Dict[str, Any]]:
+    """Broadcast a barge state frame to session subscribers if it changed."""
+    if not phase:
+        return None
+
+    if not _should_emit_barge_phase(sid, phase):
+        return None
+
+    if phase == "paused":
+        try:
+            set_recorder_active(sid, True)
+        except Exception:
+            pass
+        nudges.cancel_idle_timers(sid, source="ws_state_paused")
+
+    frame: Dict[str, Any] = {"type": "state", "phase": phase}
+
+    try:
+        bus.broadcast(sid, frame)
+    except Exception:
+        pass
+
+    return frame
+
+
 def _emit_admin_nlu_event(text: str,
                           sid: str,
                           *,
@@ -755,41 +780,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return
 
     cfg: Dict[str, Any] = {}
-    loop = asyncio.get_running_loop()
     barge = BargeState()
 
     def _send_barge_state(phase: str) -> None:
-        if not phase:
-            return
-        if not _should_emit_barge_phase(sid, phase):
-            return
-        if phase == "paused":
-            try:
-                set_recorder_active(sid, True)
-            except Exception:
-                pass
-            nudges.cancel_idle_timers(sid, source="ws_state_paused")
-        frame = {"type": "state", "phase": phase}
-        try:
-            bus.broadcast(sid, frame)
-        except Exception:
-            pass
-        try:
-            if loop.is_closed():
-                return
-            payload = dict(frame)
-            try:
-                running = asyncio.get_running_loop()
-            except RuntimeError:
-                running = None
-            if running is loop:
-                asyncio.create_task(_ws_send_json(send, payload))
-            else:
-                loop.call_soon_threadsafe(
-                    asyncio.create_task, _ws_send_json(send, payload)
-                )
-        except Exception:
-            pass
+        _broadcast_barge_state_frame(sid, phase)
 
     buf = TurnBuffer()
     dg: Optional[DeepgramClient] = None
