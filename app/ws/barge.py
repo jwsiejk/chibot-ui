@@ -55,6 +55,7 @@ class BargeState:
         """Commit interrupt immediately; call on_commit, set ready."""
         with self._lock:
             on_commit = self._on_commit
+            self._on_commit = None            
             self._paused = False
             t = self._timer
             self._timer = None
@@ -62,11 +63,34 @@ class BargeState:
             if t: t.cancel()
         except Exception:
             pass
+        wait_token = None            
         if on_commit:
             try:
-                on_commit()
+                wait_token = on_commit()
             except Exception:
-                pass
+                wait_token = None
+
+        def _await_ready(token):
+            if token is None:
+                return
+            if isinstance(token, (list, tuple, set)):
+                for part in token:
+                    _await_ready(part)
+                return
+            wait_fn = getattr(token, "wait", None)
+            if callable(wait_fn):
+                try:
+                    wait_fn()
+                except Exception:
+                    pass
+                return
+            if callable(token):
+                try:
+                    token()
+                except Exception:
+                    pass
+
+        _await_ready(wait_token)
         try:
             send_state("ready")
         except Exception:
