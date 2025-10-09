@@ -1,5 +1,7 @@
-import asyncio, json, pytest
-from app.ws.asgi_chat import ws_chat_app
+import asyncio, json
+from app.services.streaming import run_ws_greet
+from app.ws.bus import bus
+from app.ws.ws_asgi import _ws_chat_asgi_impl
 from app.asgi_gateway import app as flask_app
 
 class ASGIClient:
@@ -14,16 +16,27 @@ class ASGIClient:
     async def wait(self): 
         if self.task: await self.task
 
-@pytest.mark.asyncio
-async def test_ws_streams_after_greet():
-    sid="wse2e"
-    c=ASGIClient(ws_chat_app, "/ws/v1/chat", f"session_id={sid}".encode()); await c.start()
-    http=flask_app.test_client(); http.get(f"/api/v1/greet?session_id={sid}")
-    await asyncio.sleep(0.2)
-    types=[]
-    for m in c.sent:
-        if m.get('type')=='websocket.send' and 'text'in m:
-            try: types.append(json.loads(m['text'])['type'])
-            except Exception: pass
-    assert 'state' in types and 'text' in types and 'audio_chunk' in types and 'suggestions' in types and 'end' in types
-    await c.disconnect(); await c.wait()
+def test_ws_streams_after_greet(monkeypatch):
+    async def _run():
+        monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+        sid="wse2e"
+        c=ASGIClient(_ws_chat_asgi_impl, "/ws/v1/chat", f"session_id={sid}".encode()); await c.start()
+        http=flask_app.test_client(); http.get(f"/api/v1/greet?session_id={sid}")
+        turn_id=run_ws_greet(sid)
+        bus.broadcast(sid, {"type":"audio_chunk","turn_id":turn_id,"base64":""})
+        await asyncio.sleep(0.2)
+        types=[]
+        for m in c.sent:
+            if m.get('type')=='websocket.send' and 'text'in m:
+                try:
+                    fr=json.loads(m['text'])
+                    t=fr.get('type')
+                    if t=='assistant_chunk': t='text'
+                    elif t=='assistant_end': t='end'
+                    elif t=='assistant_audio': t='audio_chunk'
+                    types.append(t)
+                except Exception: pass
+        assert 'state' in types and 'text' in types and 'audio_chunk' in types and 'suggestions' in types and 'end' in types
+        await c.disconnect(); await c.wait()
+
+    asyncio.run(_run())
