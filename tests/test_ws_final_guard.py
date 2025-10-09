@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections import deque
 
 from app.ws import ws_asgi
 
@@ -130,3 +131,117 @@ def test_provider_final_waits_for_guard_window(monkeypatch):
         loop.close()
 
     assert llm_calls, "LLM turn should still run after guarded final"
+
+
+def test_late_audio_after_final_emits_single_pair(monkeypatch):
+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
+    monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
+
+    monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
+    monkeypatch.setattr(ws_asgi, "_admin_emit", None)
+    monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
+
+    async def immediate_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(ws_asgi.asyncio, "to_thread", immediate_to_thread)
+
+    def fake_prepare(text, meta=None, **kwargs):
+        return {}, {}, {}
+
+    monkeypatch.setattr(ws_asgi, "prepare_turn_metadata", fake_prepare)
+
+    llm_calls = []
+
+    def fake_run_ws_user_turn(session_id, text, corr_id=None, **kwargs):
+        llm_calls.append((session_id, text))
+
+    monkeypatch.setattr(ws_asgi, "run_ws_user_turn", fake_run_ws_user_turn)
+
+    class _LateAudioDeepgram:
+        instances = []
+
+        def __init__(self, cfg):
+            self.cfg = cfg
+            self._queue: asyncio.Queue = asyncio.Queue()
+            self._final_sent = False
+            _LateAudioDeepgram.instances.append(self)
+
+        async def connect(self):
+            await self._queue.put({"type": "asr_open"})
+
+        async def events(self):
+            while True:
+                ev = await self._queue.get()
+                if ev is None:
+                    break
+                yield ev
+
+        async def send(self, _chunk: bytes):
+            if not self._final_sent:
+                self._final_sent = True
+                await self._queue.put({"type": "user_final", "text": "turn-one"})
+
+        async def close(self, wait_for_final=True):
+            await self._queue.put(None)
+
+    monkeypatch.setattr(ws_asgi, "DeepgramClient", _LateAudioDeepgram)
+
+    sent = []
+
+    async def _send(message):
+        sent.append(message)
+
+    events = deque(
+        [
+            {"type": "websocket.receive", "bytes": b"\x00\x01"},
+            {"type": "websocket.receive", "bytes": b"\x02\x03", "_delay": 0.05},
+            {
+                "type": "websocket.receive",
+                "text": json.dumps({"type": "CloseStream"}),
+                "_delay": 0.05,
+            },
+            {"type": "websocket.disconnect"},
+        ]
+    )
+
+    async def _receive():
+        if not events:
+            return {"type": "websocket.disconnect"}
+        ev = events.popleft()
+        delay = ev.pop("_delay", 0)
+        if delay:
+            await asyncio.sleep(delay)
+        return ev
+
+    scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        main_task = loop.create_task(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
+        loop.run_until_complete(main_task)
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+    payloads = _json_payloads(sent)
+
+    finals_by_turn = {}
+    ends_by_turn = {}
+    for payload in payloads:
+        if payload.get("type") == "Results" and (payload.get("channel") or {}).get(
+            "is_final"
+        ):
+            turn_id = payload.get("turn_id")
+            finals_by_turn[turn_id] = finals_by_turn.get(turn_id, 0) + 1
+        elif payload.get("type") == "UtteranceEnd":
+            turn_id = payload.get("turn_id")
+            ends_by_turn[turn_id] = ends_by_turn.get(turn_id, 0) + 1
+
+    assert finals_by_turn, "Expected at least one final result"
+    assert finals_by_turn == ends_by_turn
+    assert all(count == 1 for count in finals_by_turn.values())
+    assert all(count == 1 for count in ends_by_turn.values())
+    assert llm_calls, "LLM turn should be invoked for final results"

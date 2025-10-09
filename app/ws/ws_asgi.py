@@ -1544,6 +1544,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                     raw_chunk = chunk
 
+                    if final_seen[0]:
+                        previous_turn_id = turn_id_ref[0]
+                        removed_pending = 0
+                        while True:
+                            try:
+                                pending_final_turns.remove(previous_turn_id)
+                                removed_pending += 1
+                            except ValueError:
+                                break
+                        synthetic_final_turns.discard(previous_turn_id)
+                        _clear_pending_user_final("late_audio")
+                        _cancel_no_audio_watch()
+                        buffered_before = len(buffered_chunks)
+                        mic_before = len(mic_chunks)
+                        closed_turn_id = None
+                        if not buf.is_empty():
+                            try:
+                                closed_turn_id, _ = buf.close_turn()
+                                turn_id_ref[0] = closed_turn_id
+                            except Exception:
+                                closed_turn_id = None
+                        else:
+                            turn_id_ref[0] = buf.turn_seq
+                        buffered_chunks.clear()
+                        try:
+                            stream_stats.reset_turn()
+                        except Exception:
+                            pass
+                        mic_chunks.clear()
+                        mic_first_ts[0] = now
+                        mic_last_ts[0] = now
+                        sent_any_audio[0] = False
+                        asr_seen_partial[0] = False
+                        turn_connect_started[0] = False
+                        final_seen[0] = False
+                        _reset_turn_metrics(now)
+                        with contextlib.suppress(Exception):
+                            _jlog(
+                                "late_audio_after_final",
+                                sid=sid,
+                                turn_id=previous_turn_id,
+                                removed_pending=removed_pending,
+                                closed_turn_id=closed_turn_id,
+                                buffered_before=buffered_before,
+                                mic_before=mic_before,
+                            )
+
                     pending_final_payload = pending_user_final.get("payload")
                     if buf.is_empty() and not pending_final_payload:
                         nudges.cancel_idle_timers(sid, source="turn_start")
