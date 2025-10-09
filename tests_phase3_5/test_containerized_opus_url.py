@@ -1,14 +1,5 @@
 from app.services.streaming_asr.deepgram_client import DG_TEST_MODE
 from app.services.streaming_asr.deepgram_client import _dg_url  # if exported
-from app.services.audio.raw_fallback import (
-    DetectionSignal,
-    StreamMeta,
-    StreamStats,
-    coerce_to_raw_config,
-    pad_frame_to_expected,
-    should_use_raw_fallback,
-    silence_frame,
-)
 import pytest
 
 def test_containerized_omits_sr_channels(monkeypatch):
@@ -46,88 +37,32 @@ def test_non_containerized_includes_sr_channels(monkeypatch):
     assert "utterance_end_ms=2000" in url
 
 
-def test_raw_fallback_url_includes_params(monkeypatch):
+def test_containerized_strips_explicit_audio_params(monkeypatch):
     monkeypatch.setenv("DG_TEST_MODE", "1")
-    meta = StreamMeta(sample_rate=16000, channels=1)
-    overrides = coerce_to_raw_config(meta)
+    overrides = {
+        "encoding": "linear16",
+        "sample_rate": 16000,
+        "channels": 2,
+        "_transport": {"containerized_opus": True},
+    }
     url = _dg_url(overrides)
-    assert "encoding=linear16" in url
-    assert "sample_rate=16000" in url
-    assert "channels=1" in url
-    transport = overrides.get("_transport", {})
-    assert transport.get("raw_fallback") is True
-    assert transport.get("normalized_pcm") is True
+    assert "encoding=" not in url
+    assert "sample_rate=" not in url
+    assert "channels=" not in url
 
 
-def test_raw_fallback_guardrail_leniency(monkeypatch):
-    monkeypatch.setenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", "1")
-    stats = StreamStats()
-    stats.guardrails.raw_candidate_confirmations = 1
-    stats.guardrails.lenient_prefix_frames = 1
-    stats.guardrails.max_consecutive_decode_errors = 2
-    stats.guardrails.min_errors_for_suspect = 2
-    detection = DetectionSignal(container="webm", codec="opus", containerized=True)
-    stats.note_detection(detection)
+def test_containerized_ignores_env_raw_overrides(monkeypatch):
+    monkeypatch.setenv("DG_TEST_MODE", "1")
+    monkeypatch.setenv("DG_RAW_ENCODING", "linear16")
+    monkeypatch.setenv("DG_RAW_SAMPLE_RATE", "16000")
+    monkeypatch.setenv("DG_RAW_CHANNELS", "2")
+    overrides = {"_transport": {"containerized_opus": True}}
+    url = _dg_url(overrides)
+    assert "encoding=" not in url
+    assert "sample_rate=" not in url
+    assert "channels=" not in url
 
-    frame = b"\x00" * 640
-    stats.observe_frame(frame)
-    assert not should_use_raw_fallback(detection, stats)
-
-    stats.observe_frame(frame)
-    assert should_use_raw_fallback(detection, stats)
-
-    monkeypatch.delenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", raising=False)
-
-
-def test_raw_fallback_disabled_by_default(monkeypatch):
-    monkeypatch.delenv("CHIBOT_DISABLE_RAW_FALLBACK", raising=False)
-    monkeypatch.delenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", raising=False)
-
-    stats = StreamStats()
-    stats.guardrails.raw_candidate_confirmations = 1
-    detection = DetectionSignal(container="webm", codec="opus", containerized=True)
-    stats.note_detection(detection)
-
-    frame = b"\x00" * 640
-    stats.observe_frame(frame)
-
-    assert not should_use_raw_fallback(detection, stats)
-
-
-def test_raw_fallback_force_enable_respects_disable_flag(monkeypatch):
-    monkeypatch.delenv("CHIBOT_DISABLE_RAW_FALLBACK", raising=False)
-    monkeypatch.setenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", "1")
-
-    stats = StreamStats()
-    stats.guardrails.raw_candidate_confirmations = 1
-    detection = DetectionSignal(container="webm", codec="opus", containerized=True)
-    stats.note_detection(detection)
-
-    frame = b"\x00" * 640
-    stats.observe_frame(frame)
-
-    assert should_use_raw_fallback(detection, stats)
-
-    monkeypatch.setenv("CHIBOT_DISABLE_RAW_FALLBACK", "1")
-    assert not should_use_raw_fallback(detection, stats)
-
-    monkeypatch.delenv("CHIBOT_FORCE_ENABLE_RAW_FALLBACK", raising=False)
-
-
-def test_frame_normalization_and_silence():
-    meta = StreamMeta(sample_rate=16000, channels=1)
-    expected = 640
-    padded = pad_frame_to_expected(b"\x01\x02", meta)
-    assert len(padded) == expected
-    assert padded[:2] == b"\x01\x02"
-    assert padded[2:] == b"\x00" * (expected - 2)
-
-    silence = silence_frame(meta)
-    assert len(silence) == expected
-    assert set(silence) == {0}
-
-    stats = StreamStats(meta=meta)
-    stats.force_fallback()
-    normalized = stats.observe_frame(b"\x01\x02")
-    assert len(normalized) == expected
-    assert stats.normalized_frames == 1
+    # Clean up for future tests
+    monkeypatch.delenv("DG_RAW_ENCODING", raising=False)
+    monkeypatch.delenv("DG_RAW_SAMPLE_RATE", raising=False)
+    monkeypatch.delenv("DG_RAW_CHANNELS", raising=False)
