@@ -2684,7 +2684,73 @@ def schedule_tts_audio(session_id: str,
     if not feature_audio:
         return False
 
+    desired_mime = _guess_tts_mime(cfg.get('tts_output_format'))
+
+    audio_payload = audio_bytes
+    provider_label: Optional[str] = None
+
+    if audio_payload is None:
+        try:
+            from app.services.tts_provider import get_tts_provider
+
+            provider = get_tts_provider(cfg or {})
+            provider_label = getattr(provider, "name", None) or getattr(type(provider), "__name__", "unknown")
+            _log("tts.provider_selected", provider=provider_label, override=False)
+        except Exception as e:
+            state['error'] = str(e)
+            _log("tts.provider.error", error=str(e))
+            try:
+                _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
+            except Exception:
+                pass
+            return False
+
+        try:
+            synth_started_at = _t.time()
+            _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=False)
+            audio_payload, _vis = provider.synth(_scrub_debug_stamps(text))
+            state['started'] = True
+            synth_duration_ms = int((_t.time() - synth_started_at) * 1000)
+            total_audio_bytes = len(audio_payload or b"")
+            _log(
+                "tts.synth.done",
+                desired_mime=desired_mime,
+                chunk_bytes=chunk_bytes,
+                dur_ms=synth_duration_ms,
+                audio_bytes=total_audio_bytes,
+                override=False,
+            )
+        except Exception as e:
+            state['error'] = str(e)
+            _log("tts.synth.error", error=str(e), override=False)
+            try:
+                _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
+            except Exception:
+                pass
+            return False
+    else:
+        provider_label = "prebaked"
+        _log("tts.provider_selected", provider=provider_label, override=True)
+        _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=True)
+        total_audio_bytes = len(audio_payload or b"")
+        state['started'] = True
+        _log(
+            "tts.synth.done",
+            desired_mime=desired_mime,
+            chunk_bytes=chunk_bytes,
+            dur_ms=0,
+            audio_bytes=total_audio_bytes,
+            override=True,
+        )
+
+    if not audio_payload:
+        state['error'] = 'empty_audio'
+        _log("tts.synth.error", error='empty_audio', override=audio_override)
+        return False
+
     completion_event = _prepare_tts_completion_event(session_id, turn_key)
+
+    payload_for_stream = audio_payload
 
     def _run():
         total_audio_bytes = 0
@@ -2704,95 +2770,21 @@ def schedule_tts_audio(session_id: str,
                 pass
             utterance_end_sent = True
 
-        audio_payload = audio_bytes
+        stream_payload = audio_bytes if audio_override else payload_for_stream
         try:
             # Small pacing delay if requested
             if delay_ms and delay_ms > 0:
                 _t.sleep(max(0, delay_ms) / 1000.0)
 
-            # Determine desired MIME from configured output format
-            desired_mime = _guess_tts_mime(cfg.get('tts_output_format'))
+            total_audio_bytes = len(stream_payload or b"")
 
-            if audio_payload is None:
-                # Pick provider (vendor only)
-                from app.services.tts_provider import get_tts_provider
-                provider = get_tts_provider(cfg or {})
-                provider_label = getattr(provider, "name", None) or getattr(type(provider), "__name__", "unknown")
-                _log("tts.provider_selected", provider=provider_label, override=False)
-
-                # Synthesize
-                try:
-                    # Re-scrub here as a safety net in case any upstream callers missed it
-                    synth_started_at = _t.time()
-                    _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=False)
-                    audio_payload, _vis = provider.synth(_scrub_debug_stamps(text))
-                    state['started'] = True
-                    total_audio_bytes = len(audio_payload or b"")
-                    synth_duration_ms = int((_t.time() - synth_started_at) * 1000)
-                    _log(
-                        "tts.synth.done",
-                        desired_mime=desired_mime,
-                        chunk_bytes=chunk_bytes,
-                        dur_ms=synth_duration_ms,
-                        audio_bytes=total_audio_bytes,
-                        override=False,
-                    )
-                    try:
-                        _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
-                    except Exception:
-                        pass
-                except Exception as e:
-                    state['error'] = str(e)
-                    _log("tts.synth.error", error=str(e), override=False)
-                    try:
-                        _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
-                    except Exception:
-                        pass
-                    # Even on error, signal end-of-utterance so clients can clean up gracefully
-                    _log(
-                        "tts.chunks.summary",
-                        chunk_count=chunk_count,
-                        bytes_sent=chunk_bytes_sent,
-                        total_bytes=total_audio_bytes,
-                        status="synth_error",
-                        max_frames=max_frames,
-                    )
-                    _emit_utterance_end("synth_error")
-                    return
-            else:
-                _log("tts.provider_selected", provider="prebaked", override=True)
-                _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=True)
-                state['started'] = True
-                total_audio_bytes = len(audio_payload or b"")
-                _log(
-                    "tts.synth.done",
-                    desired_mime=desired_mime,
-                    chunk_bytes=chunk_bytes,
-                    dur_ms=0,
-                    audio_bytes=total_audio_bytes,
-                    override=True,
-                )
-                try:
-                    _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
-                except Exception:
-                    pass
-
-            if audio_payload is None:
-                state['error'] = 'empty_audio'
-                _log("tts.synth.error", error='empty_audio', override=audio_override)
-                _log(
-                    "tts.chunks.summary",
-                    chunk_count=chunk_count,
-                    bytes_sent=chunk_bytes_sent,
-                    total_bytes=total_audio_bytes,
-                    status="synth_error",
-                    max_frames=max_frames,
-                )
-                _emit_utterance_end("empty_audio")
-                return
+            try:
+                _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
+            except Exception:
+                pass
 
             # Chunk and broadcast
-            mv = memoryview(audio_payload)
+            mv = memoryview(stream_payload)
             idx = 0
             first_sent = False
 
@@ -3054,6 +3046,7 @@ def run_ws_greet(session_id: str) -> str:
     suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
 
     ready_sent = state_already_sent
+    idle_armed = False
 
     def _emit_ready_once() -> None:
         nonlocal ready_sent
@@ -3070,6 +3063,10 @@ def run_ws_greet(session_id: str) -> str:
             pass
 
     def _arm_idle_once() -> None:
+        nonlocal idle_armed
+        if idle_armed:
+            return
+        idle_armed = True
         _emit_ready_once()
         nudges.arm_idle_timers(session_id, reason="greet_idle")
 
@@ -3093,6 +3090,20 @@ def run_ws_greet(session_id: str) -> str:
             except Exception:
                 pass
             audio_scheduled = schedule_tts_audio(session_id, safe_text, turn_id=tid, on_complete=_arm_idle_once)
+            if not audio_scheduled:
+                try:
+                    _jlog(
+                        "tts.greet_audio_skipped",
+                        session_id=session_id,
+                        sid=session_id,
+                        turn_id=tid,
+                        flow="greet",
+                        reason="schedule_failed",
+                        **_tts_text_markers(safe_text),
+                    )
+                except Exception:
+                    pass
+                _arm_idle_once()
     except Exception:
         pass
 

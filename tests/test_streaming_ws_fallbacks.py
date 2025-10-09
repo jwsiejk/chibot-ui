@@ -173,6 +173,63 @@ def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
     assert captured["frames"][0]["text"] != captured["fallback_text"]
 
 
+def test_run_ws_greet_surfaces_tts_failure(monkeypatch):
+    _stub_config(monkeypatch)
+
+    from tests.tts_stub_provider import RaisingTTSProvider
+
+    monkeypatch.setattr(streaming, "should_emit_phase", lambda *_: True)
+    monkeypatch.setattr(streaming, "set_phase", lambda *a, **k: None)
+    monkeypatch.setattr(streaming.nudges, "cancel_idle_timers", lambda *a, **k: None)
+
+    idle_calls = []
+
+    def _capture_idle(session_id, reason=""):
+        idle_calls.append((session_id, reason))
+
+    monkeypatch.setattr(streaming.nudges, "arm_idle_timers", _capture_idle)
+
+    broadcast_frames = []
+
+    def _capture_broadcast(session_id, frame):
+        if isinstance(frame, dict):
+            broadcast_frames.append(frame)
+
+    monkeypatch.setattr(streaming.bus, "broadcast", _capture_broadcast)
+
+    monkeypatch.setattr(
+        streaming,
+        "get_or_create_greet_turn",
+        lambda session_id, force=False, ttl_sec=streaming.DEFAULT_TTL_SEC: ("turn-tts-fail", False),
+    )
+
+    def _make_frames(seed_text, session_id, meta=None, **kwargs):
+        turn_id = kwargs.get("force_turn_id") or "turn-tts-fail"
+        frames = [
+            {"type": "assistant_chunk", "turn_id": turn_id, "text": "Hello", "kb_hits": 0},
+            {"type": "assistant_end", "turn_id": turn_id},
+        ]
+        streaming._broadcast_frames(session_id, frames, turn_id)
+        return turn_id, frames
+
+    monkeypatch.setattr(streaming, "make_assistant_frames", _make_frames)
+    monkeypatch.setattr(
+        "app.services.tts_provider.get_tts_provider",
+        lambda cfg: RaisingTTSProvider(),
+    )
+
+    tid = streaming.run_ws_greet("session-tts-fail")
+    assert tid == "turn-tts-fail"
+
+    audio_frames = [fr for fr in broadcast_frames if fr.get("type") == "assistant_audio"]
+    assert not audio_frames, "assistant_audio frames should be absent when TTS fails"
+
+    ready_frames = [fr for fr in broadcast_frames if fr.get("type") == "state" and fr.get("phase") == "ready"]
+    assert ready_frames, "ready state should be emitted as the audio fallback indicator"
+
+    assert idle_calls, "Idle timers should arm immediately when audio is skipped"
+
+
 def test_run_ws_greet_emits_single_suggestions_frame(monkeypatch):
     _stub_config(monkeypatch)
 

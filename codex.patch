@@ -1,329 +1,471 @@
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 13fa502f60464ccc94eb703c28c134be06722851..2b1504553e3fb221bbd8b74f077ab1bec720e889 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -137,56 +137,53 @@ function _ensureWSListener() {
-     } else if (type === 'Results') {
-       const channelFinal = detail?.channel?.is_final === true;
-       const payloadFinal = detail?.is_final === true;
-       isFinal = channelFinal || payloadFinal;
-     }
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index 11b16b9b99ddab889adb6b5b0493fafa0a4403a4..05142e29da044a44775056b58ad563554078b14d 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -2662,159 +2662,151 @@ def schedule_tts_audio(session_id: str,
  
-     if (!isFinal || state.finalized) {
-       return;
-     }
+     def _log(kind: str, **fields: Any) -> None:
+         payload: Dict[str, Any] = {
+             "session_id": session_id,
+             "sid": session_id,
+         }
+         if safe_turn_id is not None:
+             payload["turn_id"] = safe_turn_id
+         if correlation_user_msg_id:
+             payload["correlation_user_msg_id"] = correlation_user_msg_id
+         payload.update(text_markers)
+         payload["audio_override"] = audio_override
+         payload.update(fields)
+         try:
+             _jlog(kind, **payload)
+         except Exception:
+             pass
  
-     _applyPostFinalHold('ws_final');
+     state_snapshot = dict(state)
+     level = "warning" if state_snapshot.get('started') or state_snapshot.get('done') else "info"
+     _log("tts.schedule", level=level, state=state_snapshot, feature_audio=feature_audio)
  
-     const recorder = state.rec;
-     const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state !== 'inactive');
-     if (!isRecording) {
-       return;
-     }
+     if not feature_audio:
+         return False
  
-     try {
-       _stopRecorder({ reason: 'server_final' });
-     } catch (err) {
-       try { console.warn('[voice] failed to stop recorder on server final', err); } catch {}
-     }
- 
-     try {
--      const pending = _closeTurnIfOpen();
--      if (pending) {
--        await pending;
--      }
-+      await Promise.resolve(state.chunkSendPromise).catch(() => {});
-     } catch (err) {
--      try { console.warn('[voice] failed to close turn on server final', err); } catch {}
-+      try { console.warn('[voice] chunk send did not settle after server final', err); } catch {}
-     }
-   };
- 
-   try { window.addEventListener('askchip-ws', handler); } catch {}
-   state.wsListener = handler;
- }
- 
- function _removeWSListener() {
-   if (!state.wsListener || typeof window === 'undefined') {
-     return;
-   }
-   try { window.removeEventListener('askchip-ws', state.wsListener); } catch {}
-   state.wsListener = null;
- }
- 
- async function _ensureMic(externalStream = null) {
-   if (state.stream && state.stream.active) return state.stream;
- 
-   if (state.stream && !state.stream.active) {
-     _teardownAudioGraph();
-     state.stream = null;
-   }
- 
-   let stream = externalStream;
- 
-@@ -655,25 +652,33 @@ function optsFromGlobal(key, fallback) {
- 
- function _applyPostFinalHold(source = 'unknown') {
-   const rawHold = Number(optsFromGlobal('post_final_hold_ms', 600));
-   const holdMs = Number.isFinite(rawHold) ? Math.max(0, rawHold) : 0;
-   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-     ? performance.now()
-     : Date.now();
-   const targetUntil = now + holdMs;
-   const previousUntil = state.postFinalHoldUntil || 0;
-   const nextUntil = Math.max(targetUntil, previousUntil);
-   const wasFinalized = !!state.finalized;
- 
-   state.finalized = true;
-   state.postFinalHoldUntil = nextUntil;
- 
-   if (!wasFinalized || nextUntil !== previousUntil) {
-     _logLifecycle('post_final_hold_applied', {
-       holdMs,
-       holdUntil: nextUntil,
-       source,
-     });
-   }
- 
-   return nextUntil;
- }
++    desired_mime = _guess_tts_mime(cfg.get('tts_output_format'))
 +
-+export const __TEST_ONLY__ = {
-+  state,
-+  startRecorder: _startRecorder,
-+  stopRecorder: _stopRecorder,
-+  ensureWSListener: _ensureWSListener,
-+  closeTurnIfOpen: _closeTurnIfOpen,
-+};
-diff --git a/tests/js/test-loader.mjs b/tests/js/test-loader.mjs
++    audio_payload = audio_bytes
++    provider_label: Optional[str] = None
++
++    if audio_payload is None:
++        try:
++            from app.services.tts_provider import get_tts_provider
++
++            provider = get_tts_provider(cfg or {})
++            provider_label = getattr(provider, "name", None) or getattr(type(provider), "__name__", "unknown")
++            _log("tts.provider_selected", provider=provider_label, override=False)
++        except Exception as e:
++            state['error'] = str(e)
++            _log("tts.provider.error", error=str(e))
++            try:
++                _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
++            except Exception:
++                pass
++            return False
++
++        try:
++            synth_started_at = _t.time()
++            _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=False)
++            audio_payload, _vis = provider.synth(_scrub_debug_stamps(text))
++            state['started'] = True
++            synth_duration_ms = int((_t.time() - synth_started_at) * 1000)
++            total_audio_bytes = len(audio_payload or b"")
++            _log(
++                "tts.synth.done",
++                desired_mime=desired_mime,
++                chunk_bytes=chunk_bytes,
++                dur_ms=synth_duration_ms,
++                audio_bytes=total_audio_bytes,
++                override=False,
++            )
++        except Exception as e:
++            state['error'] = str(e)
++            _log("tts.synth.error", error=str(e), override=False)
++            try:
++                _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
++            except Exception:
++                pass
++            return False
++    else:
++        provider_label = "prebaked"
++        _log("tts.provider_selected", provider=provider_label, override=True)
++        _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=True)
++        total_audio_bytes = len(audio_payload or b"")
++        state['started'] = True
++        _log(
++            "tts.synth.done",
++            desired_mime=desired_mime,
++            chunk_bytes=chunk_bytes,
++            dur_ms=0,
++            audio_bytes=total_audio_bytes,
++            override=True,
++        )
++
++    if not audio_payload:
++        state['error'] = 'empty_audio'
++        _log("tts.synth.error", error='empty_audio', override=audio_override)
++        return False
++
+     completion_event = _prepare_tts_completion_event(session_id, turn_key)
+ 
++    payload_for_stream = audio_payload
++
+     def _run():
+         total_audio_bytes = 0
+         chunk_count = 0
+         chunk_bytes_sent = 0
+         canceled = False
+         truncated = False
+         utterance_end_sent = False
+         max_frames = 256  # guardrail
+ 
+         def _emit_utterance_end(reason: str) -> None:
+             nonlocal utterance_end_sent
+             _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
+             try:
+                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
+             except Exception:
+                 pass
+             utterance_end_sent = True
+ 
+-        audio_payload = audio_bytes
++        stream_payload = audio_bytes if audio_override else payload_for_stream
+         try:
+             # Small pacing delay if requested
+             if delay_ms and delay_ms > 0:
+                 _t.sleep(max(0, delay_ms) / 1000.0)
+ 
+-            # Determine desired MIME from configured output format
+-            desired_mime = _guess_tts_mime(cfg.get('tts_output_format'))
+-
+-            if audio_payload is None:
+-                # Pick provider (vendor only)
+-                from app.services.tts_provider import get_tts_provider
+-                provider = get_tts_provider(cfg or {})
+-                provider_label = getattr(provider, "name", None) or getattr(type(provider), "__name__", "unknown")
+-                _log("tts.provider_selected", provider=provider_label, override=False)
++            total_audio_bytes = len(stream_payload or b"")
+ 
+-                # Synthesize
+-                try:
+-                    # Re-scrub here as a safety net in case any upstream callers missed it
+-                    synth_started_at = _t.time()
+-                    _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=False)
+-                    audio_payload, _vis = provider.synth(_scrub_debug_stamps(text))
+-                    state['started'] = True
+-                    total_audio_bytes = len(audio_payload or b"")
+-                    synth_duration_ms = int((_t.time() - synth_started_at) * 1000)
+-                    _log(
+-                        "tts.synth.done",
+-                        desired_mime=desired_mime,
+-                        chunk_bytes=chunk_bytes,
+-                        dur_ms=synth_duration_ms,
+-                        audio_bytes=total_audio_bytes,
+-                        override=False,
+-                    )
+-                    try:
+-                        _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
+-                    except Exception:
+-                        pass
+-                except Exception as e:
+-                    state['error'] = str(e)
+-                    _log("tts.synth.error", error=str(e), override=False)
+-                    try:
+-                        _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
+-                    except Exception:
+-                        pass
+-                    # Even on error, signal end-of-utterance so clients can clean up gracefully
+-                    _log(
+-                        "tts.chunks.summary",
+-                        chunk_count=chunk_count,
+-                        bytes_sent=chunk_bytes_sent,
+-                        total_bytes=total_audio_bytes,
+-                        status="synth_error",
+-                        max_frames=max_frames,
+-                    )
+-                    _emit_utterance_end("synth_error")
+-                    return
+-            else:
+-                _log("tts.provider_selected", provider="prebaked", override=True)
+-                _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=True)
+-                state['started'] = True
+-                total_audio_bytes = len(audio_payload or b"")
+-                _log(
+-                    "tts.synth.done",
+-                    desired_mime=desired_mime,
+-                    chunk_bytes=chunk_bytes,
+-                    dur_ms=0,
+-                    audio_bytes=total_audio_bytes,
+-                    override=True,
+-                )
+-                try:
+-                    _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
+-                except Exception:
+-                    pass
+-
+-            if audio_payload is None:
+-                state['error'] = 'empty_audio'
+-                _log("tts.synth.error", error='empty_audio', override=audio_override)
+-                _log(
+-                    "tts.chunks.summary",
+-                    chunk_count=chunk_count,
+-                    bytes_sent=chunk_bytes_sent,
+-                    total_bytes=total_audio_bytes,
+-                    status="synth_error",
+-                    max_frames=max_frames,
+-                )
+-                _emit_utterance_end("empty_audio")
+-                return
++            try:
++                _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
++            except Exception:
++                pass
+ 
+             # Chunk and broadcast
+-            mv = memoryview(audio_payload)
++            mv = memoryview(stream_payload)
+             idx = 0
+             first_sent = False
+ 
+             while idx < len(mv):
+                 # stop early if canceled
+                 try:
+                     from ..ws.bus import bus as _bus_ref
+                     if _bus_ref.is_canceled(session_id, safe_turn_id):
+                         canceled = True
+                         _log(
+                             "tts.chunks.cancelled",
+                             chunk_count=chunk_count,
+                             bytes_sent=chunk_bytes_sent,
+                             total_bytes=total_audio_bytes,
+                         )
+                         break
+                 except Exception:
+                     pass
+ 
+                 next_idx = idx + int(chunk_bytes)
+                 part = bytes(mv[idx: next_idx])
+                 idx = next_idx
+                 chunk_len = len(part)
+ 
+                 try:
+@@ -3032,89 +3024,108 @@ def run_ws_greet(session_id: str) -> str:
+         meta={"source": "ws_greet", "channel": "ws"},
+         force_turn_id=forced_tid,
+         cfg=cfg,
+     )
+     if _ws_generation_failed(tid, frames):
+         tid = _allocate_turn_id(forced_tid)
+         frames = _emit_ws_outage(session_id, tid)
+         try:
+             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='greet')
+         except Exception:
+             pass
+         try:
+             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+         except Exception:
+             pass
+         return tid
+     existing_frame_types = [
+         fr.get("type")
+         for fr in frames
+         if isinstance(fr, dict) and fr.get("type") is not None
+     ]
+     state_already_sent = any(ft == "state" for ft in existing_frame_types)
+     suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
+ 
+     ready_sent = state_already_sent
++    idle_armed = False
+ 
+     def _emit_ready_once() -> None:
+         nonlocal ready_sent
+         if ready_sent:
+             return
+         try:
+             if should_emit_phase(session_id, "ready"):
+                 set_phase(session_id, "ready", emitted=True)
+                 bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+             else:
+                 set_phase(session_id, "ready")
+             ready_sent = True
+         except Exception:
+             pass
+ 
+     def _arm_idle_once() -> None:
++        nonlocal idle_armed
++        if idle_armed:
++            return
++        idle_armed = True
+         _emit_ready_once()
+         nudges.arm_idle_timers(session_id, reason="greet_idle")
+ 
+     audio_scheduled = False
+ 
+     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
+     try:
+         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
+         if text_for_tts:
+             # Pass scrubbed text to TTS (extra safety)
+             safe_text = _scrub_debug_stamps(text_for_tts)
+             try:
+                 _jlog(
+                     "tts.pre_schedule",
+                     session_id=session_id,
+                     sid=session_id,
+                     turn_id=tid,
+                     flow="greet",
+                     **_tts_text_markers(safe_text),
+                 )
+             except Exception:
+                 pass
+             audio_scheduled = schedule_tts_audio(session_id, safe_text, turn_id=tid, on_complete=_arm_idle_once)
++            if not audio_scheduled:
++                try:
++                    _jlog(
++                        "tts.greet_audio_skipped",
++                        session_id=session_id,
++                        sid=session_id,
++                        turn_id=tid,
++                        flow="greet",
++                        reason="schedule_failed",
++                        **_tts_text_markers(safe_text),
++                    )
++                except Exception:
++                    pass
++                _arm_idle_once()
+     except Exception:
+         pass
+ 
+     # UI nudges (only emit if the assistant frames didn't already do so)
+     try:
+         if not audio_scheduled:
+             _arm_idle_once()
+         if not suggestions_already_sent:
+             greet_legacy = hygienic_suggestions("")
+             base_suggestions = merge_suggestions(greet_legacy)
+             _log_suggestions_made(
+                 turn_id=tid,
+                 policy_chips=[],
+                 legacy_suggestions=greet_legacy,
+                 merged_suggestions=base_suggestions,
+                 cfg=cfg,
+             )
+             if base_suggestions:
+                 bus.broadcast(
+                     session_id,
+                     {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
+                 )
+     except Exception:
+         pass
+     return tid
+diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
+index 664aa7fb27d0d9f0027983a3c00e6680c1b29418..0d5f4fd7ce0b0a885d2b97d89bc79a9171c386c4 100644
+--- a/tests/test_streaming_ws_fallbacks.py
++++ b/tests/test_streaming_ws_fallbacks.py
+@@ -151,50 +151,107 @@ def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
+         turn_id = kwargs.get("force_turn_id") or "tid-greet"
+         if action == "clarify":
+             text = fallback_text
+         else:
+             text = "foundation hello"
+         frames = [
+             {"type": "assistant_chunk", "turn_id": turn_id, "text": text, "kb_hits": 0},
+             {"type": "assistant_end", "turn_id": turn_id},
+         ]
+         captured["frames"] = frames
+         captured["action"] = action
+         captured["fallback_text"] = fallback_text
+         return turn_id, frames
+ 
+     monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
+     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
+     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
+ 
+     tid = streaming.run_ws_greet("session-no-clarify")
+ 
+     assert tid == captured["frames"][0]["turn_id"]
+     assert captured["action"] == "offer_steps"
+     assert captured["frames"][0]["text"] != captured["fallback_text"]
+ 
+ 
++def test_run_ws_greet_surfaces_tts_failure(monkeypatch):
++    _stub_config(monkeypatch)
++
++    from tests.tts_stub_provider import RaisingTTSProvider
++
++    monkeypatch.setattr(streaming, "should_emit_phase", lambda *_: True)
++    monkeypatch.setattr(streaming, "set_phase", lambda *a, **k: None)
++    monkeypatch.setattr(streaming.nudges, "cancel_idle_timers", lambda *a, **k: None)
++
++    idle_calls = []
++
++    def _capture_idle(session_id, reason=""):
++        idle_calls.append((session_id, reason))
++
++    monkeypatch.setattr(streaming.nudges, "arm_idle_timers", _capture_idle)
++
++    broadcast_frames = []
++
++    def _capture_broadcast(session_id, frame):
++        if isinstance(frame, dict):
++            broadcast_frames.append(frame)
++
++    monkeypatch.setattr(streaming.bus, "broadcast", _capture_broadcast)
++
++    monkeypatch.setattr(
++        streaming,
++        "get_or_create_greet_turn",
++        lambda session_id, force=False, ttl_sec=streaming.DEFAULT_TTL_SEC: ("turn-tts-fail", False),
++    )
++
++    def _make_frames(seed_text, session_id, meta=None, **kwargs):
++        turn_id = kwargs.get("force_turn_id") or "turn-tts-fail"
++        frames = [
++            {"type": "assistant_chunk", "turn_id": turn_id, "text": "Hello", "kb_hits": 0},
++            {"type": "assistant_end", "turn_id": turn_id},
++        ]
++        streaming._broadcast_frames(session_id, frames, turn_id)
++        return turn_id, frames
++
++    monkeypatch.setattr(streaming, "make_assistant_frames", _make_frames)
++    monkeypatch.setattr(
++        "app.services.tts_provider.get_tts_provider",
++        lambda cfg: RaisingTTSProvider(),
++    )
++
++    tid = streaming.run_ws_greet("session-tts-fail")
++    assert tid == "turn-tts-fail"
++
++    audio_frames = [fr for fr in broadcast_frames if fr.get("type") == "assistant_audio"]
++    assert not audio_frames, "assistant_audio frames should be absent when TTS fails"
++
++    ready_frames = [fr for fr in broadcast_frames if fr.get("type") == "state" and fr.get("phase") == "ready"]
++    assert ready_frames, "ready state should be emitted as the audio fallback indicator"
++
++    assert idle_calls, "Idle timers should arm immediately when audio is skipped"
++
++
+ def test_run_ws_greet_emits_single_suggestions_frame(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     # Avoid touching shared greet idempotency state
+     monkeypatch.setattr(
+         streaming,
+         "get_or_create_greet_turn",
+         lambda session_id, force=False, ttl_sec=streaming.DEFAULT_TTL_SEC: ("turn-xyz", False),
+     )
+ 
+     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
+ 
+     emitted = []
+ 
+     def fake_broadcast(session_id, frame):
+         if isinstance(frame, dict):
+             emitted.append(frame)
+ 
+     monkeypatch.setattr(streaming.bus, "broadcast", fake_broadcast)
+ 
+     def fake_make_frames(seed_text, session_id, meta=None, **kwargs):
+         turn_id = kwargs.get("force_turn_id") or "turn-xyz"
+         frames = [
+             {"type": "assistant_chunk", "turn_id": turn_id, "text": "Hello!", "kb_hits": 0},
+             {"type": "state", "phase": "ready"},
+diff --git a/tests/tts_stub_provider.py b/tests/tts_stub_provider.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..66086af21d3a461bd5149abc3609b74701d7147a
+index 0000000000000000000000000000000000000000..6da6c4924847e6d3e4f756c5ff8818f51f5e760b
 --- /dev/null
-+++ b/tests/js/test-loader.mjs
-@@ -0,0 +1,12 @@
-+import path from 'node:path';
-+import { pathToFileURL } from 'node:url';
++++ b/tests/tts_stub_provider.py
+@@ -0,0 +1,7 @@
++class RaisingTTSProvider:
++    """Test double that raises during synthesis."""
 +
-+const STUB_SPEC = '/static/js/ws.js?v=v20250911b';
-+const STUB_URL = pathToFileURL(path.resolve('./tests/js/ws_stub.mjs')).href;
++    name = "raising_tts_stub"
 +
-+export async function resolve(specifier, context, defaultResolve) {
-+  if (specifier === STUB_SPEC) {
-+    return { url: STUB_URL, shortCircuit: true };
-+  }
-+  return defaultResolve(specifier, context, defaultResolve);
-+}
-diff --git a/tests/js/voice-order.test.mjs b/tests/js/voice-order.test.mjs
-new file mode 100644
-index 0000000000000000000000000000000000000000..fc5cc5dbd7659dce3dfd88d2bbc337ec7bf310b1
---- /dev/null
-+++ b/tests/js/voice-order.test.mjs
-@@ -0,0 +1,158 @@
-+import test from 'node:test';
-+import assert from 'node:assert/strict';
-+
-+const listenerMap = new Map();
-+
-+class TestCustomEvent {
-+  constructor(type, init = {}) {
-+    this.type = type;
-+    this.detail = init.detail;
-+  }
-+}
-+
-+globalThis.CustomEvent = TestCustomEvent;
-+
-+const windowStub = {
-+  __askchip_config: {},
-+  addEventListener(type, handler) {
-+    if (!listenerMap.has(type)) listenerMap.set(type, new Set());
-+    listenerMap.get(type).add(handler);
-+  },
-+  removeEventListener(type, handler) {
-+    const set = listenerMap.get(type);
-+    if (!set) return;
-+    set.delete(handler);
-+    if (set.size === 0) listenerMap.delete(type);
-+  },
-+  dispatchEvent(event) {
-+    const set = listenerMap.get(event.type);
-+    if (!set) return true;
-+    for (const handler of Array.from(set)) {
-+      handler(event);
-+    }
-+    return true;
-+  },
-+};
-+
-+windowStub.CustomEvent = TestCustomEvent;
-+windowStub.dispatchEvent = windowStub.dispatchEvent.bind(windowStub);
-+
-+globalThis.window = windowStub;
-+
-+globalThis.performance = {
-+  now: () => Date.now(),
-+};
-+
-+Object.defineProperty(globalThis, 'navigator', {
-+  value: { mediaDevices: {} },
-+  configurable: true,
-+  writable: true,
-+});
-+
-+globalThis.__TEST_WS_HOOKS = {};
-+
-+class FakeRecorder {
-+  constructor() {
-+    this.state = 'inactive';
-+    this.mimeType = 'audio/ogg; codecs=opus';
-+    this.ondataavailable = null;
-+    this.onstop = null;
-+    this.stopCalled = false;
-+    FakeRecorder.instances.push(this);
-+  }
-+
-+  start() {
-+    this.state = 'recording';
-+  }
-+
-+  stop() {
-+    this.state = 'inactive';
-+    this.stopCalled = true;
-+  }
-+}
-+
-+FakeRecorder.instances = [];
-+
-+globalThis.MediaRecorder = FakeRecorder;
-+
-+test('final audio chunk drains before CloseStream and recorder can re-arm', async () => {
-+  const voice = await import('../../static/js/voice.js');
-+  const hooks = voice.__TEST_ONLY__;
-+
-+  hooks.state.stream = { active: true };
-+  hooks.state.turnOpen = false;
-+  hooks.state.turnClosePromise = null;
-+  hooks.state.chunkSendPromise = Promise.resolve();
-+
-+  const started = hooks.startRecorder();
-+  assert.equal(started, true, 'recorder should start with fake stream');
-+
-+  const recorder = FakeRecorder.instances.at(-1);
-+  assert.ok(recorder, 'fake recorder instance should exist');
-+  assert.equal(recorder.state, 'recording');
-+  assert.ok(typeof recorder.onstop === 'function', 'onstop handler should be assigned');
-+
-+  const events = [];
-+  let closeResolve;
-+  const closeSeen = new Promise((resolve, reject) => {
-+    const timer = setTimeout(() => reject(new Error('CloseStream not observed before timeout')), 100);
-+    closeResolve = () => {
-+      clearTimeout(timer);
-+      resolve();
-+    };
-+  });
-+
-+  globalThis.__TEST_WS_HOOKS = {
-+    onSendCloseStream: () => {
-+      events.push('closeStream');
-+      if (closeResolve) closeResolve();
-+    },
-+  };
-+
-+  let chunkResolve;
-+  hooks.state.chunkSendPromise = new Promise((resolve) => {
-+    chunkResolve = resolve;
-+  });
-+
-+  const handler = hooks.state.wsListener;
-+  assert.ok(typeof handler === 'function', 'WS listener should be registered');
-+
-+  const handlerPromise = handler({ detail: { type: 'UtteranceEnd' } });
-+  assert.equal(recorder.stopCalled, true, 'server final should stop recorder');
-+
-+  const onstopPromise = recorder.onstop();
-+  assert.ok(onstopPromise instanceof Promise, 'onstop handler should return a promise');
-+
-+  events.push('chunkResolved');
-+  chunkResolve();
-+
-+  await handlerPromise;
-+  await onstopPromise;
-+  await closeSeen;
-+
-+  assert.deepEqual(events, ['chunkResolved', 'closeStream'], 'CloseStream must follow the final chunk resolution');
-+  assert.equal(hooks.state.turnOpen, false, 'turn flag should reset after CloseStream');
-+  assert.equal(hooks.state.turnClosePromise, null, 'turn close promise should clear after CloseStream');
-+  if (hooks.state.turnTimer) {
-+    clearTimeout(hooks.state.turnTimer);
-+    hooks.state.turnTimer = null;
-+  }
-+
-+  FakeRecorder.instances = [];
-+  hooks.state.rec = null;
-+  hooks.state.chunkSendPromise = Promise.resolve();
-+
-+  const restarted = hooks.startRecorder();
-+  assert.equal(restarted, true, 'recorder should re-arm after CloseStream');
-+
-+  const restartedRecorder = FakeRecorder.instances.at(-1);
-+  globalThis.__TEST_WS_HOOKS = {};
-+  hooks.stopRecorder({ reason: 'test_cleanup' });
-+  if (restartedRecorder && typeof restartedRecorder.onstop === 'function') {
-+    await restartedRecorder.onstop();
-+  }
-+  if (hooks.state.turnTimer) {
-+    clearTimeout(hooks.state.turnTimer);
-+    hooks.state.turnTimer = null;
-+  }
-+});
-diff --git a/tests/js/ws_stub.mjs b/tests/js/ws_stub.mjs
-new file mode 100644
-index 0000000000000000000000000000000000000000..c4f250db3fd70bbf5dd0352d14ffde4533664bc4
---- /dev/null
-+++ b/tests/js/ws_stub.mjs
-@@ -0,0 +1,22 @@
-+function hooks() {
-+  return globalThis.__TEST_WS_HOOKS || {};
-+}
-+
-+export function openWS() { return undefined; }
-+export function waitWSOpen() { return Promise.resolve(); }
-+export function isOpen() { return true; }
-+export function isConnecting() { return false; }
-+export function closeWS() { return Promise.resolve(); }
-+export function bufferedAmount() { return 0; }
-+export function configure() { return undefined; }
-+export function sendJSON() { return undefined; }
-+export function sendAudioChunk(...args) {
-+  const fn = hooks().onSendAudioChunk;
-+  const result = fn ? fn(...args) : undefined;
-+  return Promise.resolve(result);
-+}
-+export function sendCloseStream(...args) {
-+  const fn = hooks().onSendCloseStream;
-+  const result = fn ? fn(...args) : undefined;
-+  return Promise.resolve(result);
-+}
-diff --git a/tests/test_voice_ws_frontend.py b/tests/test_voice_ws_frontend.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..0fa5129c0d4f292db1c3fc3e4b22719643c4275a
---- /dev/null
-+++ b/tests/test_voice_ws_frontend.py
-@@ -0,0 +1,16 @@
-+import subprocess
-+from pathlib import Path
-+
-+
-+def test_voice_final_chunk_before_close():
-+    repo_root = Path(__file__).resolve().parents[1]
-+    loader = repo_root / 'tests' / 'js' / 'test-loader.mjs'
-+    spec = repo_root / 'tests' / 'js' / 'voice-order.test.mjs'
-+    cmd = [
-+        'node',
-+        '--loader',
-+        str(loader),
-+        '--test',
-+        str(spec),
-+    ]
-+    subprocess.run(cmd, check=True, cwd=repo_root)
++    def synth(self, text):
++        raise RuntimeError("stub_tts_failure")
