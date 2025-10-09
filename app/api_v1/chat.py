@@ -15,6 +15,7 @@ from ..dialog.policy import pick as pick_dialog_policy  # backwards-compat shim 
 from ..services.greet_idempotency import clear_greet_turn_cache
 from ..middleware.rate_limit import limit, check_now
 from ..ws.bus import bus
+from ..session_state import set_phase, should_emit_phase
 from ..policy import nudges
 import os, uuid
 
@@ -59,7 +60,11 @@ def post_chat():
         except Exception:
             pass
         try:
-            bus.broadcast(sid, {"type":"state","phase":"ready"})
+            if should_emit_phase(sid, "ready"):
+                set_phase(sid, "ready", emitted=True)
+                bus.broadcast(sid, {"type":"state","phase":"ready"})
+            else:
+                set_phase(sid, "ready")
         except Exception:
             pass
         return jsonify(ok=True, interrupted=True), 200
@@ -179,7 +184,11 @@ def chat_entry():
             pass
         # signal ready state
         try:
-            bus.broadcast(sid, {"type":"state","phase":"ready"})
+            if should_emit_phase(sid, "ready"):
+                set_phase(sid, "ready", emitted=True)
+                bus.broadcast(sid, {"type":"state","phase":"ready"})
+            else:
+                set_phase(sid, "ready")
         except Exception:
             pass
         return jsonify({"ok": True, "interrupted": True})

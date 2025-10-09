@@ -10,6 +10,7 @@ class SessionState:
     asr_stream_open: bool = False
     recorder_active: bool = False
     phase: str = ""
+    last_phase: str = ""
     nudges_sent: int = 0
 
 _SESS: Dict[str, SessionState] = {}
@@ -64,9 +65,18 @@ def set_recorder_active(sid: str, active: bool) -> None:
     st.recorder_active = bool(active)
 
 
-def set_phase(sid: str, phase: str) -> None:
+def set_phase(sid: str, phase: str, emitted: bool = False) -> None:
     st = get(sid)
-    st.phase = phase or ""
+    normalized = phase or ""
+    st.phase = normalized
+    if emitted:
+        st.last_phase = normalized
+
+
+def should_emit_phase(sid: str, phase: str) -> bool:
+    st = get(sid)
+    normalized = phase or ""
+    return normalized != st.last_phase
 
 
 def last_user_activity_ts(sid: str) -> float:

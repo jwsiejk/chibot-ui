@@ -3,6 +3,7 @@ import hashlib
 import importlib
 import json
 import types
+import uuid
 from collections import deque
 
 import pytest
@@ -11,6 +12,7 @@ import app.personas.prompt_builder as prompt_builder
 
 from app.services import streaming
 from app.ws import ws_asgi
+from app.session_state import set_phase
 
 
 def _test_client():
@@ -215,6 +217,47 @@ def test_run_ws_greet_emits_single_suggestions_frame(monkeypatch):
     assert tid == "turn-xyz"
     suggestion_frames = [fr for fr in emitted if fr.get("type") == "suggestions"]
     assert len(suggestion_frames) == 1
+
+
+def test_run_ws_greet_skips_duplicate_ready(monkeypatch):
+    _stub_config(monkeypatch)
+
+    monkeypatch.setattr(
+        streaming,
+        "get_or_create_greet_turn",
+        lambda session_id, force=False, ttl_sec=streaming.DEFAULT_TTL_SEC: ("turn-dupe", False),
+    )
+
+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
+
+    emitted = []
+
+    def fake_broadcast(session_id, frame):
+        if isinstance(frame, dict):
+            emitted.append(frame)
+
+    monkeypatch.setattr(streaming.bus, "broadcast", fake_broadcast)
+
+    def fake_make_frames(seed_text, session_id, meta=None, **kwargs):
+        turn_id = kwargs.get("force_turn_id") or "turn-dupe"
+        frames = [
+            {"type": "assistant_chunk", "turn_id": turn_id, "text": "Hello!", "kb_hits": 0},
+            {"type": "assistant_end", "turn_id": turn_id},
+        ]
+        if kwargs.get("broadcast_immediately", True):
+            for fr in frames:
+                fake_broadcast(session_id, fr)
+        return turn_id, frames
+
+    monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
+
+    sid = f"session-ready-{uuid.uuid4()}"
+    set_phase(sid, "ready", emitted=True)
+
+    streaming.run_ws_greet(sid)
+
+    ready_frames = [fr for fr in emitted if fr.get("type") == "state" and fr.get("phase") == "ready"]
+    assert ready_frames == []
 
 
 def test_make_assistant_frames_greet_advertises_welcome_move(monkeypatch):
@@ -743,11 +786,13 @@ def test_nudge_emits_single_chunk(monkeypatch):
     flags = []
 
     def fake_make_frames(text, sid, **kwargs):
-        flags.append(kwargs.get("broadcast_immediately"))
-        return "tid-nudge", [
-            {"type": "assistant_chunk", "turn_id": "tid-nudge", "text": "ping", "kb_hits": 0},
-            {"type": "assistant_end", "turn_id": "tid-nudge"},
-        ]
+        if not flags:
+            flags.append(kwargs.get("broadcast_immediately"))
+            return "tid-nudge", [
+                {"type": "assistant_chunk", "turn_id": "tid-nudge", "text": "ping", "kb_hits": 0},
+                {"type": "assistant_end", "turn_id": "tid-nudge"},
+            ]
+        return "tid-nudge", [{"type": "assistant_end", "turn_id": "tid-nudge"}]
 
     class InstantTimer:
         def __init__(self, delay, func):
@@ -759,7 +804,7 @@ def test_nudge_emits_single_chunk(monkeypatch):
         def cancel(self):
             pass
 
-    monkeypatch.setattr(nudges, "make_assistant_frames", fake_make_frames)
+    monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
     monkeypatch.setattr(nudges.bus, "broadcast", lambda sid, frame: emitted.append(frame))
     monkeypatch.setattr(nudges.threading, "Timer", InstantTimer)
 

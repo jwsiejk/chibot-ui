@@ -1,343 +1,854 @@
-diff --git a/static/js/voice.js b/static/js/voice.js
-index ff2b0c1866f7c5d5ca4f9ac1be8c7a5601be3ee7..3ccaeee7d4a9f18cc3d0c69c2fc25d0be0eebadb 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -26,50 +26,52 @@ export async function initMic(stream = null) { return await _ensureMic(stream);
- export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
- export function disarmVAD() { _disarm(); }
- export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
- export function bargeIn() { _bargeIn(); }         // keeps API parity
- export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+diff --git a/app/api_v1/chat.py b/app/api_v1/chat.py
+index b74b34456b1fb361cdfb932373a38d954e321d6c..bfbf0819b6196a34e74f9a7c6c81c954f2d30394 100644
+--- a/app/api_v1/chat.py
++++ b/app/api_v1/chat.py
+@@ -1,87 +1,92 @@
  
- // ---- Internal state ---------------------------------------------------------
+ import base64
+ from flask import Blueprint, jsonify, request, session
+ from ..db import db
+ from ..security_state import get_user
+ from ..services.mailer import send_transcript
+ from ..services.streaming import (
+     make_assistant_frames,
+     schedule_frames,
+     merge_suggestions,
+     build_suggestion_items,
+ )
+ from ..nlu.classifier import classify as classify_turn  # backwards-compat shim for tests
+ from ..dialog.policy import pick as pick_dialog_policy  # backwards-compat shim for tests
+ from ..services.greet_idempotency import clear_greet_turn_cache
+ from ..middleware.rate_limit import limit, check_now
+ from ..ws.bus import bus
++from ..session_state import set_phase, should_emit_phase
+ from ..policy import nudges
+ import os, uuid
  
- // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
- const REC_MIME = (typeof MediaRecorder !== 'undefined'
-   && typeof MediaRecorder.isTypeSupported === 'function'
-   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
-   ? 'audio/ogg; codecs=opus'
-   : 'audio/webm; codecs=opus';
+ bp = Blueprint("chat", __name__)
+ _TTS_MEMO = {}
  
- const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
- const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+ # Phase 1/2: map Idempotency-Key header to user_msg_id for correlation
+ def _get_user_msg_id():
+     return (request.headers.get('Idempotency-Key') or request.headers.get('X-User-Msg-Id') or '').strip()
  
- const state = {
-   stream: null,
-   ctx: null,
-   source: null,
-   analyser: null,
-   vad: null,
-   rec: null,
-+  finalized: false,
-+  wsListener: null,
-   chunkSendPromise: Promise.resolve(),
-   chunkBytesSent: 0,
-   chunkSendError: null,
-   turnTimer: null,
-   turnOpen: false,   // track whether a turn is currently open server-side
-   turnClosePromise: null,
-   deviceLogged: false,
-   // NEW: min-turn gating
-   recStartedAt: 0,
-   pendingEndTimer: null,
-   ttsPlaying: false,
-   bargeConfirmTimer: null,
-   bargeConfirmActive: false,
- };
+ @bp.before_request
+ def _chat_rl_guard():
+     # Rate-limit guard: skip for control commands
+     data = request.get_json(silent=True) or {}
+     cmd = (data.get('cmd') or '').strip().lower()
+     if cmd in ('nudge','interrupt','end_session'):
+         return None
+     rv = check_now('chat')
+     return rv
  
- const BARGE_CONFIRM_DEFAULT_MS = 420;
- let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
- try {
-   const cfg = window.__askchip_config || {};
-   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
-     bargeConfirmMs = cfg.barge_confirm_ms;
-   }
- } catch {}
- bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
+ @limit("chat")
+ @bp.post("")
+ def post_chat():
+     # Unified chat entrypoint used by the UI
+     data = request.get_json(silent=True) or {}
+     cmd = (data.get("cmd") or "").strip().lower()
+     text = (data.get("text") or "").strip()
  
-@@ -98,50 +100,107 @@ function _logLifecycle(event, detail = {}, level = 'debug') {
-   try {
-     window.dispatchEvent(new CustomEvent('askchip-voice-lifecycle', { detail: payload }));
-   } catch {}
- }
+     # Establish session/user
+     email = (session.get("user") or {}).get("email") or (get_user() or "")
+     sid = (data.get("session_id") or data.get("sid") or request.args.get("session_id") or session.get("sid") or "default")
+     try:
+         session["sid"] = sid
+     except Exception:
+         pass
  
- function _clearPendingEndTimer() {
-   if (state.pendingEndTimer) {
-     try { clearTimeout(state.pendingEndTimer); } catch {}
-     state.pendingEndTimer = null;
-   }
- }
+     # Commands that do not require idempotency
+     if cmd == "interrupt":
+         tid = (data.get("turn_id") or "").strip()
+         try:
+             bus.cancel_turn(sid, tid)
+         except Exception:
+             pass
+         try:
+-            bus.broadcast(sid, {"type":"state","phase":"ready"})
++            if should_emit_phase(sid, "ready"):
++                set_phase(sid, "ready", emitted=True)
++                bus.broadcast(sid, {"type":"state","phase":"ready"})
++            else:
++                set_phase(sid, "ready")
+         except Exception:
+             pass
+         return jsonify(ok=True, interrupted=True), 200
  
- function _clearBargeConfirm(resume = false) {
-   if (state.bargeConfirmTimer) {
-     try { clearTimeout(state.bargeConfirmTimer); } catch {}
-     state.bargeConfirmTimer = null;
-   }
-   if (state.bargeConfirmActive) {
-     state.bargeConfirmActive = false;
-     if (resume) {
-       try { resumePlayback(); } catch {}
-     }
-   }
- }
+     if cmd == "nudge":
+         nudges.cancel_idle_timers(sid, mark=False)
+         fired = nudges.trigger_nudge_now(sid)
+         return jsonify(ok=True, nudged=fired), 200
  
-+function _ensureWSListener() {
-+  if (state.wsListener || typeof window === 'undefined') {
-+    return;
-+  }
-+  const handler = async (ev) => {
-+    const detail = ev?.detail || {};
-+    const type = detail?.type;
+     if cmd == "end_session":
+         from time import time as _now
+         to_email = (session.get("user") or {}).get("email")
+         emailed = False
+         if to_email:
+             try:
+                 emailed = bool(send_transcript(db=db, session_id=sid, ended_at=_now(), to_email=to_email))
+             except Exception:
+                 emailed = False
+         clear_greet_turn_cache(sid)
+         return jsonify(ok=True, emailed=emailed), 200
+ 
+     # Normal text turn path
+     user_msg_id = _get_user_msg_id()
+     if not user_msg_id:
+         if os.environ.get("USE_MOCK_VENDORS") == "1" or os.environ.get("ALLOW_MOCK_PROVIDERS"):
+@@ -157,51 +162,55 @@ def tts_with_visemes():
+         from ..api_v1.admin import _emit
+         _emit('tts', chars=len(text))
+     except Exception:
+         pass
+     return jsonify({"ok": True, "audio_b64": a, "visemes": v})
+ 
+ @bp.post("/")
+ def chat_entry():
+     data = request.get_json(silent=True) or {}
+     sid = (data.get("session_id") or "").strip() or (request.args.get("session_id") or "").strip()
+     cmd = (data.get("cmd") or "").strip().lower()
+     text = (data.get("text") or "").strip()
+     user_msg_id = request.headers.get("Idempotency-Key") or data.get("user_msg_id")
+     if not sid:
+         return jsonify({"ok": False, "error": "missing_session_id"}), 400
+ 
+     # Commands
+     if cmd == "interrupt":
+         tid = (data.get("turn_id") or "").strip()
+         try:
+             bus.cancel_turn(sid, tid)
+         except Exception:
+             pass
+         # signal ready state
+         try:
+-            bus.broadcast(sid, {"type":"state","phase":"ready"})
++            if should_emit_phase(sid, "ready"):
++                set_phase(sid, "ready", emitted=True)
++                bus.broadcast(sid, {"type":"state","phase":"ready"})
++            else:
++                set_phase(sid, "ready")
+         except Exception:
+             pass
+         return jsonify({"ok": True, "interrupted": True})
+ 
+     if cmd == "nudge":
+         from ..session_state import can_nudge, mark_nudge
+         cfg = db.get_config()
+         backoff_after = int(cfg.get("nudge_backoff_after_ignored", 2))
+         if can_nudge(sid, backoff_after):
+             mark_nudge(sid)
+             try:
+                 from ..services.suggestions import hygienic_suggestions
+                 merged = merge_suggestions(hygienic_suggestions(""))
+                 if merged:
+                     bus.broadcast(sid, {"type":"suggestions","turn_id":"nudge","items": build_suggestion_items(merged)})
+             except Exception:
+                 pass
+             return jsonify({"ok": True, "nudged": True})
+         return jsonify({"ok": True, "nudged": False})
+ 
+     if cmd == "end_session":
+         # Send transcript to the logged-in user
+         to_email = session.get("email")
+         emailed = False
+         if to_email:
+diff --git a/app/api_v1/greet.py b/app/api_v1/greet.py
+index b0b861d9ee678d6741c4e793d467878531404b71..79fb9d73a7d41de1dd0753f6cb542fb1ef4a47dd 100644
+--- a/app/api_v1/greet.py
++++ b/app/api_v1/greet.py
+@@ -1,32 +1,33 @@
+ # app/api_v1/greet.py — Production-optimal greet (Neon-backed idempotency)
+ from __future__ import annotations
+ import os, time
+ from flask import Blueprint, jsonify, request, session
+ 
+ from ..db import db
+ from ..ws.bus import bus
++from ..session_state import set_phase, should_emit_phase
+ from ..services.suggestions import hygienic_suggestions
+ from ..services.streaming import merge_suggestions, build_suggestion_items, prepare_turn_metadata
+ from ..middleware.csrf import ensure_csrf_headers
+ from ..services.greet_idempotency import get_or_create_greet_turn, DEFAULT_TTL_SEC
+ 
+ try:
+     from ..api_v1.admin import _emit as _admin_emit  # type: ignore
+ except Exception:
+     def _admin_emit(*a, **k):  # no-op
+         pass
+ 
+ bp = Blueprint("greet", __name__)
+ 
+ def _session_id() -> str:
+     sid = (request.args.get("session_id") or request.headers.get("X-Session-Id") or "").strip()
+     try:
+         db.memory.setdefault('sessions', {}).setdefault(sid or "default", {'persona_id': 'chip'})
+     except Exception:
+         pass
+     if not sid:
+         sid = session.get("sid") or "default"
+     try:
+         session["sid"] = sid
+     except Exception:
+         pass
+@@ -113,42 +114,46 @@ def greet():
+         except Exception:
+             pass
+     except Exception:
+         pass
+ 
+     resp = jsonify(payload)
+     try:
+         resp.headers['X-Worker-PID'] = str(os.getpid())
+         resp.headers['X-OpenAI'] = '1' if have_openai else '0'
+         resp.headers['X-Eleven'] = '1' if have_eleven else '0'
+         resp.headers['X-Idempotent'] = '1' if idempotent else '0'
+         resp.headers['X-Greet-TTL'] = str(DEFAULT_TTL_SEC)
+     except Exception:
+         pass
+ 
+     state_already_scheduled = any(
+         isinstance(fr, dict) and fr.get("type") == "state" for fr in scheduled_frames
+     )
+     suggestions_already_scheduled = any(
+         isinstance(fr, dict) and fr.get("type") == "suggestions" for fr in scheduled_frames
+     )
+ 
+     # Always nudge UI awake (but avoid double-sending frames already scheduled)
+     try:
+         if not state_already_scheduled:
+-            bus.broadcast(sid, {"type": "state", "phase": "ready"})
++            if should_emit_phase(sid, "ready"):
++                set_phase(sid, "ready", emitted=True)
++                bus.broadcast(sid, {"type": "state", "phase": "ready"})
++            else:
++                set_phase(sid, "ready")
+         if not suggestions_already_scheduled:
+             merged = merge_suggestions(hygienic_suggestions(""))
+             if merged:
+                 bus.broadcast(sid, {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(merged)})
+     except Exception:
+         pass
+ 
+     try:
+         _admin_emit('greet:resp', label=('greet:resp (repeat)' if idempotent else 'greet:resp'),
+                     session_id=sid, turn_id=tid,
+                     tts_status=db.memory.get('tts_status', {}).get(sid, {}).get(str(tid) if tid else 'greet', {}),
+                     idempotent=bool(idempotent))
+     except Exception:
+         pass
+ 
+     return ensure_csrf_headers(resp), 200
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index 104cf375f25d87f184f3a0355ceccec454b6c11f..652174a20cb2391dd183335a6705d2e3fae3d7d2 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -1,41 +1,41 @@
+ # app/services/streaming.py — Production-grade assistant framing
+ # Guarantees assistant_* frames are broadcast even if the LLM provider fails.
+ # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
+ 
+ from __future__ import annotations
+ from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable, Mapping
+ import base64
+ import hashlib
+ import threading, time as _t
+ import os
+ import re
+ import copy
+ import random
+ 
+ from ..security_state import get_profile, get_user
+-from ..session_state import note_utterance_end, set_phase
++from ..session_state import note_utterance_end, set_phase, should_emit_phase
+ def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
+     # 1) Profile name
+     try:
+         prof = get_profile() or {}
+         name = str(prof.get("name") or "").strip()
+         if name:
+             return name.split()[0]
+     except Exception:
+         pass
+     # 2) Email to first name
+     email = None
+     try:
+         email = (meta or {}).get("email")
+     except Exception:
+         email = None
+     if not email:
+         try:
+             email = get_user() or None
+         except Exception:
+             email = None
+     if isinstance(email, str) and "@" in email:
+         first = email.split("@",1)[0].split(".")[0].replace("_"," ").replace("-", " ").strip()
+         if first:
+             return first.title()
+     return "there"
+@@ -2933,52 +2933,55 @@ def run_ws_greet(session_id: str) -> str:
+         frames = _emit_ws_outage(session_id, tid)
+         try:
+             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='greet')
+         except Exception:
+             pass
+         try:
+             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+         except Exception:
+             pass
+         return tid
+     existing_frame_types = [
+         fr.get("type")
+         for fr in frames
+         if isinstance(fr, dict) and fr.get("type") is not None
+     ]
+     state_already_sent = any(ft == "state" for ft in existing_frame_types)
+     suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
+ 
+     ready_sent = state_already_sent
+ 
+     def _emit_ready_once() -> None:
+         nonlocal ready_sent
+         if ready_sent:
+             return
+         try:
+-            set_phase(session_id, "ready")
+-            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
++            if should_emit_phase(session_id, "ready"):
++                set_phase(session_id, "ready", emitted=True)
++                bus.broadcast(session_id, {"type": "state", "phase": "ready"})
++            else:
++                set_phase(session_id, "ready")
+             ready_sent = True
+         except Exception:
+             pass
+ 
+     def _arm_idle_once() -> None:
+         _emit_ready_once()
+         nudges.arm_idle_timers(session_id, reason="greet_idle")
+ 
+     audio_scheduled = False
+ 
+     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
+     try:
+         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
+         if text_for_tts:
+             # Pass scrubbed text to TTS (extra safety)
+             safe_text = _scrub_debug_stamps(text_for_tts)
+             try:
+                 _jlog(
+                     "tts.pre_schedule",
+                     session_id=session_id,
+                     sid=session_id,
+                     turn_id=tid,
+                     flow="greet",
+                     **_tts_text_markers(safe_text),
+                 )
+@@ -3038,52 +3041,55 @@ def run_ws_user_turn(session_id: str,
+         try:
+             _apply_assistant_turn_state(session_id, frames)
+         except Exception:
+             pass
+         try:
+             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='turn')
+         except Exception:
+             pass
+         return tid
+     try:
+         _apply_assistant_turn_state(session_id, frames)
+     except Exception:
+         pass
+     existing_frame_types = [
+         fr.get("type")
+         for fr in frames
+         if isinstance(fr, dict) and fr.get("type") is not None
+     ]
+     ready_sent = any(ft == "state" for ft in existing_frame_types)
+ 
+     def _emit_ready_once() -> None:
+         nonlocal ready_sent
+         if ready_sent:
+             return
+         try:
+-            set_phase(session_id, "ready")
+-            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
++            if should_emit_phase(session_id, "ready"):
++                set_phase(session_id, "ready", emitted=True)
++                bus.broadcast(session_id, {"type": "state", "phase": "ready"})
++            else:
++                set_phase(session_id, "ready")
+             ready_sent = True
+         except Exception:
+             pass
+ 
+     def _arm_idle_once() -> None:
+         _emit_ready_once()
+         nudges.arm_idle_timers(session_id, reason="assistant_idle")
+ 
+     audio_scheduled = False
+ 
+     # TTS for assistant text
+     try:
+         first_chunk_frame = next((fr for fr in frames if fr.get("type") == "assistant_chunk"), None)
+         text_for_tts = first_chunk_frame.get("text") if isinstance(first_chunk_frame, dict) else ""
+         if text_for_tts:
+             # Pass scrubbed text to TTS (extra safety)
+             safe_text = _scrub_debug_stamps(text_for_tts)
+             try:
+                 payload = {
+                     "session_id": session_id,
+                     "sid": session_id,
+                     "turn_id": tid,
+                     "flow": "user",
+                     **_tts_text_markers(safe_text),
+                 }
+diff --git a/app/session_state.py b/app/session_state.py
+index 0651780349943ead77316ebb3777ff140f756e4c..3e3e7201122578a146f7d3513d5c6a485fb23c2c 100644
+--- a/app/session_state.py
++++ b/app/session_state.py
+@@ -1,37 +1,38 @@
+ import time
+ from dataclasses import dataclass, field
+ from typing import Dict, Optional
+ 
+ @dataclass
+ class SessionState:
+     last_user_activity_ts: float = field(default_factory=lambda: 0.0)
+     last_partial_ts: float = field(default_factory=lambda: 0.0)
+     last_utterance_end_ts: float = field(default_factory=lambda: 0.0)
+     asr_stream_open: bool = False
+     recorder_active: bool = False
+     phase: str = ""
++    last_phase: str = ""
+     nudges_sent: int = 0
+ 
+ _SESS: Dict[str, SessionState] = {}
+ 
+ def get(sid: str) -> SessionState:
+     st = _SESS.get(sid)
+     if not st:
+         st = SessionState()
+         _SESS[sid] = st
+     return st
+ 
+ def mark_user_activity(sid: str, when: Optional[float] = None) -> None:
+     ts = when if when is not None else time.time()
+     st = get(sid)
+     if ts > st.last_user_activity_ts:
+         st.last_user_activity_ts = ts
+ 
+ 
+ def mark_user_action(sid: str):
+     mark_user_activity(sid)
+ 
+ def can_nudge(sid: str, backoff_after: int) -> bool:
+     return get(sid).nudges_sent < backoff_after
+ 
+ def mark_nudge(sid: str):
+@@ -42,53 +43,62 @@ def note_partial(sid: str, when: Optional[float] = None) -> None:
+     ts = when if when is not None else time.time()
+     st = get(sid)
+     st.last_partial_ts = ts
+     if ts > st.last_user_activity_ts:
+         st.last_user_activity_ts = ts
+ 
+ 
+ def note_utterance_end(sid: str, when: Optional[float] = None) -> None:
+     ts = when if when is not None else time.time()
+     st = get(sid)
+     st.last_utterance_end_ts = ts
+     if ts > st.last_user_activity_ts:
+         st.last_user_activity_ts = ts
+ 
+ 
+ def set_asr_stream_open(sid: str, is_open: bool) -> None:
+     st = get(sid)
+     st.asr_stream_open = bool(is_open)
+ 
+ 
+ def set_recorder_active(sid: str, active: bool) -> None:
+     st = get(sid)
+     st.recorder_active = bool(active)
+ 
+ 
+-def set_phase(sid: str, phase: str) -> None:
++def set_phase(sid: str, phase: str, emitted: bool = False) -> None:
+     st = get(sid)
+-    st.phase = phase or ""
++    normalized = phase or ""
++    st.phase = normalized
++    if emitted:
++        st.last_phase = normalized
 +
-+    let isFinal = false;
-+    if (type === 'UtteranceEnd') {
-+      isFinal = true;
-+    } else if (type === 'Results') {
-+      const channelFinal = detail?.channel?.is_final === true;
-+      const payloadFinal = detail?.is_final === true;
-+      isFinal = channelFinal || payloadFinal;
-+    }
 +
-+    if (!isFinal || state.finalized) {
-+      return;
-+    }
++def should_emit_phase(sid: str, phase: str) -> bool:
++    st = get(sid)
++    normalized = phase or ""
++    return normalized != st.last_phase
+ 
+ 
+ def last_user_activity_ts(sid: str) -> float:
+     return get(sid).last_user_activity_ts
+ 
+ 
+ def idle_duration_ms(sid: str) -> float:
+     ts = get(sid).last_user_activity_ts
+     if ts <= 0:
+         return float("inf")
+     return max(0.0, (time.time() - ts) * 1000.0)
+ 
+ 
+ def silence_guard_satisfied(sid: str, guard_ms: int) -> bool:
+     guard = max(0, int(guard_ms))
+     if guard == 0:
+         return True
+     st = get(sid)
+     if st.last_utterance_end_ts <= 0:
+         return True
+     ref = max(st.last_partial_ts, st.last_utterance_end_ts)
+     if ref <= 0:
+         return True
+     return (time.time() - ref) * 1000.0 >= guard
+ 
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 265e36a4bc896f097ec167136bab39e602c83f93..fcd66d39ee30b3a7ca6197424d2e5d9b8c0c9e4c 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -23,56 +23,56 @@ from .schema_v1 import (
+     make_results,
+     make_utterance_end,
+     make_error,
+ )
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
+ 
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import (
+     run_ws_user_turn,
+     prepare_turn_metadata,
+     summarize_policy_metadata,
+ )  # NEW
+ from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+ from app.ws.barge import BargeState
+ from app.ws.bus import bus
+ from app.policy import nudges
+ from app.session_state import (
+-    get as get_session_state,
+     note_partial,
+     note_utterance_end,
+     set_asr_stream_open,
+     set_phase,
+     set_recorder_active,
++    should_emit_phase,
+ )
+ 
+ # Optional admin emitter
+ try:
+     from app.api_v1.admin import _emit as _admin_emit
+ except Exception:
+     _admin_emit = None
+ 
+ 
+ ACTIVE_WS: dict[str, dict[str, Any]] = {}
+ ACTIVE_WS_LOCK = asyncio.Lock()
+ 
+ WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
+ try:
+     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
+ except Exception:
+     pass
+ 
+ # ------------------------------ small helpers ------------------------------
+ 
+ 
+ def _client_ip_from_scope(scope) -> str:
+     try:
+         c = scope.get("client") or ()
+         if isinstance(c, (list, tuple)) and c:
+@@ -101,60 +101,59 @@ def _jlog(event: str, **fields):
+         pass
+ 
+ 
+ def _clip_text(txt: str, limit: int = 120) -> str:
+     try:
+         txt = txt or ""
+         if len(txt) <= limit:
+             return txt
+         return txt[:limit] + "…"
+     except Exception:
+         return ""
+ 
+ 
+ def _dumps(obj) -> str:
+     import json as _json
+ 
+     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+ 
+ 
+ def _should_emit_barge_phase(sid: str, phase: str) -> bool:
+     """Return True if the barge phase changed and should be broadcast."""
+     if not phase:
+         return False
+ 
+     try:
+-        st = get_session_state(sid)
++        if not should_emit_phase(sid, phase):
++            with contextlib.suppress(Exception):
++                set_phase(sid, phase)
++            return False
++        with contextlib.suppress(Exception):
++            set_phase(sid, phase, emitted=True)
+     except Exception:
+-        st = None
+-
+-    if st and st.phase == phase:
+         return False
+ 
+-    with contextlib.suppress(Exception):
+-        set_phase(sid, phase)
+-
+     return True
+ 
+ 
+ def _emit_admin_nlu_event(text: str,
+                           sid: str,
+                           *,
+                           dialog_nlu: Optional[Dict[str, Any]] = None,
+                           universal: Optional[Dict[str, Any]] = None) -> None:
+     if not text:
+         return
+     admin_cb = globals().get("_admin_emit")
+     if not callable(admin_cb):
+         return
+ 
+     meta_stub = {"source": "user_ws", "channel": "ws"}
+     prepared_meta: Dict[str, Any] = {}
+     computed_dialog: Dict[str, Any] = {}
+     if isinstance(dialog_nlu, dict):
+         computed_dialog = dict(dialog_nlu)
+     try:
+         if not computed_dialog:
+             prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
+             if isinstance(dialog_nlu_raw, dict):
+                 computed_dialog = dict(dialog_nlu_raw)
+         if universal is None:
+diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
+index d78bb77d5f5c6d440eb7b6478136cac020a1d484..981eb11f8226a3c568ed755dfbf43201f1336aba 100644
+--- a/tests/test_streaming_ws_fallbacks.py
++++ b/tests/test_streaming_ws_fallbacks.py
+@@ -1,38 +1,40 @@
+ import asyncio
+ import hashlib
+ import importlib
+ import json
+ import types
++import uuid
+ from collections import deque
+ 
+ import pytest
+ 
+ import app.personas.prompt_builder as prompt_builder
+ 
+ from app.services import streaming
+ from app.ws import ws_asgi
++from app.session_state import set_phase
+ 
+ 
+ def _test_client():
+     mod = importlib.import_module("app")
+     if hasattr(mod, "create_app"):
+         flask_app = mod.create_app()
+     else:
+         flask_app = mod.app
+     flask_app.config["TESTING"] = True
+     return flask_app.test_client()
+ 
+ 
+ def _csrf_token(client):
+     resp = client.get("/api/v1/csrf")
+     return resp.headers.get("X-CSRF-Token")
+ 
+ 
+ def _stub_config(monkeypatch):
+     monkeypatch.setattr(streaming.db, "get_config", lambda: {})
+ 
+ 
+ def test_build_messages_persona_trace(monkeypatch):
+     persona = {
+         "id": "chip",
+         "name": "Chip",
+@@ -195,50 +197,91 @@ def test_run_ws_greet_emits_single_suggestions_frame(monkeypatch):
+         turn_id = kwargs.get("force_turn_id") or "turn-xyz"
+         frames = [
+             {"type": "assistant_chunk", "turn_id": turn_id, "text": "Hello!", "kb_hits": 0},
+             {"type": "state", "phase": "ready"},
+             {
+                 "type": "suggestions",
+                 "turn_id": turn_id,
+                 "items": streaming.build_suggestion_items(["First", "Second"]),
+             },
+             {"type": "assistant_end", "turn_id": turn_id},
+         ]
+         if kwargs.get("broadcast_immediately", True):
+             for fr in frames:
+                 fake_broadcast(session_id, fr)
+         return turn_id, frames
+ 
+     monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
+ 
+     tid = streaming.run_ws_greet("session-one")
+ 
+     assert tid == "turn-xyz"
+     suggestion_frames = [fr for fr in emitted if fr.get("type") == "suggestions"]
+     assert len(suggestion_frames) == 1
+ 
+ 
++def test_run_ws_greet_skips_duplicate_ready(monkeypatch):
++    _stub_config(monkeypatch)
 +
-+    state.finalized = true;
++    monkeypatch.setattr(
++        streaming,
++        "get_or_create_greet_turn",
++        lambda session_id, force=False, ttl_sec=streaming.DEFAULT_TTL_SEC: ("turn-dupe", False),
++    )
 +
-+    const recorder = state.rec;
-+    const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state !== 'inactive');
-+    if (!isRecording) {
-+      return;
-+    }
++    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
 +
-+    try {
-+      _stopRecorder({ reason: 'server_final' });
-+    } catch (err) {
-+      try { console.warn('[voice] failed to stop recorder on server final', err); } catch {}
-+    }
++    emitted = []
 +
-+    try {
-+      const pending = _closeTurnIfOpen();
-+      if (pending) {
-+        await pending;
-+      }
-+    } catch (err) {
-+      try { console.warn('[voice] failed to close turn on server final', err); } catch {}
-+    }
-+  };
++    def fake_broadcast(session_id, frame):
++        if isinstance(frame, dict):
++            emitted.append(frame)
 +
-+  try { window.addEventListener('askchip-ws', handler); } catch {}
-+  state.wsListener = handler;
-+}
++    monkeypatch.setattr(streaming.bus, "broadcast", fake_broadcast)
 +
-+function _removeWSListener() {
-+  if (!state.wsListener || typeof window === 'undefined') {
-+    return;
-+  }
-+  try { window.removeEventListener('askchip-ws', state.wsListener); } catch {}
-+  state.wsListener = null;
-+}
++    def fake_make_frames(seed_text, session_id, meta=None, **kwargs):
++        turn_id = kwargs.get("force_turn_id") or "turn-dupe"
++        frames = [
++            {"type": "assistant_chunk", "turn_id": turn_id, "text": "Hello!", "kb_hits": 0},
++            {"type": "assistant_end", "turn_id": turn_id},
++        ]
++        if kwargs.get("broadcast_immediately", True):
++            for fr in frames:
++                fake_broadcast(session_id, fr)
++        return turn_id, frames
 +
- async function _ensureMic(externalStream = null) {
-   if (state.stream && state.stream.active) return state.stream;
- 
-   if (state.stream && !state.stream.active) {
-     _teardownAudioGraph();
-     state.stream = null;
-   }
- 
-   let stream = externalStream;
- 
-   if (!stream || !stream.active) {
-     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
-       _logLifecycle('mic_perm_denied', { reason: 'mediaDevices_unavailable' }, 'warn');
-       throw new Error('Media devices API unavailable');
-     }
- 
-     const constraints = {
-       audio: {
-         channelCount: 1,
-         sampleRate: 48000,
-         echoCancellation: true,
-         noiseSuppression: true,
-         autoGainControl: false
-       }
-     };
-@@ -206,80 +265,103 @@ function _closeTurnIfOpen() {
-   }
-   if (!state.turnOpen) {
-     return null;
-   }
-   const closePromise = (async () => {
-     try {
-       await sendCloseStream();
-     } finally {
-       state.turnOpen = false;
-       state.turnClosePromise = null;
-     }
-   })();
-   state.turnClosePromise = closePromise;
-   return closePromise;
- }
- 
- function _stopRecorder(detail = null) {
-   const recorder = state.rec;
-   const wasActive = !!recorder && recorder.state !== 'inactive';
-   const payload = Object.assign({
-     active: wasActive,
-     hasRecorder: !!recorder,
-   }, detail || {});
-   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
- 
--  try { if (state.rec && state.rec.state !== 'inactive') state.rec.stop(); } catch {}
-+  if (detail?.reason === 'server_final') {
-+    state.finalized = true;
-+  } else if (state.finalized) {
-+    if (!recorder || recorder.state === 'inactive') {
-+      state.rec = null;
-+      return;
-+    }
-+  }
++    monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
 +
-+  if (!recorder) {
-+    state.rec = null;
-+    return;
-+  }
++    sid = f"session-ready-{uuid.uuid4()}"
++    set_phase(sid, "ready", emitted=True)
 +
-+  if (recorder.state === 'inactive') {
-+    state.rec = null;
-+    return;
-+  }
++    streaming.run_ws_greet(sid)
 +
-+  try { recorder.stop(); } catch {}
-   // intentionally keep state.rec reference nullable here; onstop handler handles final close
-   state.rec = null;
- }
++    ready_frames = [fr for fr in emitted if fr.get("type") == "state" and fr.get("phase") == "ready"]
++    assert ready_frames == []
++
++
+ def test_make_assistant_frames_greet_advertises_welcome_move(monkeypatch):
+     _stub_config(monkeypatch)
  
- function _teardownVADOnly() {
-   try { state.vad && state.vad.stop(); } catch {}
-   state.vad = null;
- }
+     monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
+     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *a, **k: True)
+     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
+     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
  
- function _teardownAudioGraph() {
-   try { state.source && state.source.disconnect(); } catch {}
-   try { state.analyser && state.analyser.disconnect(); } catch {}
-   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
-   state.source = null;
-   state.analyser = null;
-   state.ctx = null;
-   state.deviceLogged = false;
-+  state.finalized = false;
-+  _removeWSListener();
- }
+     captured_logs = []
+     monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured_logs.append((event, fields)))
  
- function _disarm() {
-   _safeClearTurnTimer();
-   _clearPendingEndTimer();
-   _clearBargeConfirm(false);
-   _stopRecorder({ reason: 'manual_disarm' });
-   _teardownVADOnly();
-   state.turnOpen = false; // ensure local state is clean
-   state.turnClosePromise = null;
-   state.recStartedAt = 0;
-   state.ttsPlaying = false;
-+  state.finalized = false;
-+  _removeWSListener();
-   _emitVoiceState('idle');
- }
+     class FakeStore:
+         def match_examples(self, persona_id, user_text, limit=4):
+             return []
  
- function _bargeIn() {
-   // Soft barge-in: pause audio locally
-   _clearBargeConfirm(false);
-   try { stopPlayback(); } catch {}
-   // If a prior ASR turn is somehow still open, politely close it.
-   // (Harmless if no turn is open; guarded to avoid duplicate closes.)
-   const pendingClose = _closeTurnIfOpen();
-   if (pendingClose) {
-     pendingClose.catch(() => {});
-   }
- }
+     class FakePersonaManager:
+         def __init__(self, store):
+             self.store = store
  
- // ---- VAD wiring -------------------------------------------------------------
+         def get_active(self):
+             return {"id": "chip", "config": {}}
  
- async function _arm(stream = null, opts = {}) {
-   const mic = stream || await _ensureMic();
+     monkeypatch.setattr(streaming, "PersonaStore", lambda: FakeStore())
+     monkeypatch.setattr(streaming, "PersonaManager", FakePersonaManager)
  
-   // Build / rebuild VAD
-   _teardownVADOnly();
+@@ -721,67 +764,69 @@ def test_greet_emits_single_chunk(monkeypatch):
+     def fake_schedule(session_id, frames, **kwargs):
+         emitted.extend(frames)
  
-   // Merge runtime globals so admins can tune without rebuilds:
-   let globalVad = {};
-@@ -316,67 +398,72 @@ async function _arm(stream = null, opts = {}) {
-     pollMs,
-   });
-   _emitVoiceState('armed');
+     monkeypatch.setattr(streaming, "prepare_turn_metadata", fake_prepare)
+     monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
+     monkeypatch.setattr(streaming, "schedule_frames", fake_schedule)
  
-   return mic;
- }
+     client = _test_client()
  
- // ---- Recorder lifecycle -----------------------------------------------------
+     resp = client.get("/api/v1/greet?session_id=sess-greet")
  
- function _startRecorder() {
-   if (!state.stream) return false;
-   if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
+     assert resp.status_code == 200
+     assert flags == [False]
+     assert sum(1 for fr in emitted if fr.get("type") == "assistant_chunk") == 1
  
-   if (typeof MediaRecorder === 'undefined') {
-     console.warn('[voice] MediaRecorder not supported in this browser');
-     state.rec = null;
-     return false;
-   }
  
-   state.chunkSendPromise = Promise.resolve();
-   state.chunkBytesSent = 0;
-   state.chunkSendError = null;
-   state.turnClosePromise = null;
-   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
-   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
-+  state.finalized = false;
-+  _ensureWSListener();
+ def test_nudge_emits_single_chunk(monkeypatch):
+     _stub_config(monkeypatch)
  
-   let recorder;
-   try {
-     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
-   } catch (primaryErr) {
-     try {
-       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
-     } catch (fallbackErr) {
-       console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
-       state.rec = null;
-       return false;
-     }
-   }
+     import app.policy.nudges as nudges
  
-   state.rec = recorder;
+     emitted = []
+     flags = []
  
-   state.rec.ondataavailable = (e) => {
-+    if (state.finalized) {
-+      return;
-+    }
-     const blob = e.data;
-     if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
-       return;
-     }
+     def fake_make_frames(text, sid, **kwargs):
+-        flags.append(kwargs.get("broadcast_immediately"))
+-        return "tid-nudge", [
+-            {"type": "assistant_chunk", "turn_id": "tid-nudge", "text": "ping", "kb_hits": 0},
+-            {"type": "assistant_end", "turn_id": "tid-nudge"},
+-        ]
++        if not flags:
++            flags.append(kwargs.get("broadcast_immediately"))
++            return "tid-nudge", [
++                {"type": "assistant_chunk", "turn_id": "tid-nudge", "text": "ping", "kb_hits": 0},
++                {"type": "assistant_end", "turn_id": "tid-nudge"},
++            ]
++        return "tid-nudge", [{"type": "assistant_end", "turn_id": "tid-nudge"}]
  
-     // Chain chunk sends to preserve ordering across the WS.
-     state.chunkSendPromise = state.chunkSendPromise
-       .catch(() => {}) // allow queue to continue even if a prior chunk failed
-       .then(async () => {
-         try {
-           await sendAudioChunk(blob);
-           state.chunkBytesSent += blob.size;
-           try {
-             console.debug('[voice] streamed audio chunk', { bytes: blob.size });
-           } catch {}
-         } catch (err) {
-           state.chunkSendError = err;
-           try {
-             console.warn('[voice] failed to stream audio chunk', err);
-           } catch {}
-         }
-       });
-   };
+     class InstantTimer:
+         def __init__(self, delay, func):
+             self.func = func
  
-   state.rec.onstop = async () => {
+         def start(self):
+             self.func()
+ 
+         def cancel(self):
+             pass
+ 
+-    monkeypatch.setattr(nudges, "make_assistant_frames", fake_make_frames)
++    monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_frames)
+     monkeypatch.setattr(nudges.bus, "broadcast", lambda sid, frame: emitted.append(frame))
+     monkeypatch.setattr(nudges.threading, "Timer", InstantTimer)
+ 
+     nudges.arm_nudge("sess-nudge")
+ 
+     assert flags == [False]
+     assert sum(1 for fr in emitted if fr.get("type") == "assistant_chunk") == 1
+ 
+ 
+ def test_ws_no_audio_watchdog_emits_diagnostics(monkeypatch):
+     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
+     monkeypatch.setenv("WS_NO_AUDIO_DETECT_WINDOW_S", "0.01")
+     monkeypatch.setenv("WS_NO_AUDIO_NUDGE", "1")
+ 
+     admin_events = []
+ 
+     def fake_admin(event, **payload):
+         admin_events.append((event, payload))
+ 
+     monkeypatch.setattr(ws_asgi, "_admin_emit", fake_admin)
+ 
+     broadcast_frames = []
+ 
+     def fake_broadcast(session_id, frame):

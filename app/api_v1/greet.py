@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request, session
 
 from ..db import db
 from ..ws.bus import bus
+from ..session_state import set_phase, should_emit_phase
 from ..services.suggestions import hygienic_suggestions
 from ..services.streaming import merge_suggestions, build_suggestion_items, prepare_turn_metadata
 from ..middleware.csrf import ensure_csrf_headers
@@ -135,7 +136,11 @@ def greet():
     # Always nudge UI awake (but avoid double-sending frames already scheduled)
     try:
         if not state_already_scheduled:
-            bus.broadcast(sid, {"type": "state", "phase": "ready"})
+            if should_emit_phase(sid, "ready"):
+                set_phase(sid, "ready", emitted=True)
+                bus.broadcast(sid, {"type": "state", "phase": "ready"})
+            else:
+                set_phase(sid, "ready")
         if not suggestions_already_scheduled:
             merged = merge_suggestions(hygienic_suggestions(""))
             if merged:

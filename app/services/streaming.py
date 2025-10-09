@@ -13,7 +13,7 @@ import copy
 import random
 
 from ..security_state import get_profile, get_user
-from ..session_state import note_utterance_end, set_phase
+from ..session_state import note_utterance_end, set_phase, should_emit_phase
 def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
     # 1) Profile name
     try:
@@ -2955,8 +2955,11 @@ def run_ws_greet(session_id: str) -> str:
         if ready_sent:
             return
         try:
-            set_phase(session_id, "ready")
-            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+            if should_emit_phase(session_id, "ready"):
+                set_phase(session_id, "ready", emitted=True)
+                bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+            else:
+                set_phase(session_id, "ready")
             ready_sent = True
         except Exception:
             pass
@@ -3060,8 +3063,11 @@ def run_ws_user_turn(session_id: str,
         if ready_sent:
             return
         try:
-            set_phase(session_id, "ready")
-            bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+            if should_emit_phase(session_id, "ready"):
+                set_phase(session_id, "ready", emitted=True)
+                bus.broadcast(session_id, {"type": "state", "phase": "ready"})
+            else:
+                set_phase(session_id, "ready")
             ready_sent = True
         except Exception:
             pass

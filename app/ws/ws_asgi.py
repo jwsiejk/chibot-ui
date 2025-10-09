@@ -45,12 +45,12 @@ from app.ws.barge import BargeState
 from app.ws.bus import bus
 from app.policy import nudges
 from app.session_state import (
-    get as get_session_state,
     note_partial,
     note_utterance_end,
     set_asr_stream_open,
     set_phase,
     set_recorder_active,
+    should_emit_phase,
 )
 
 # Optional admin emitter
@@ -123,15 +123,14 @@ def _should_emit_barge_phase(sid: str, phase: str) -> bool:
         return False
 
     try:
-        st = get_session_state(sid)
+        if not should_emit_phase(sid, phase):
+            with contextlib.suppress(Exception):
+                set_phase(sid, phase)
+            return False
+        with contextlib.suppress(Exception):
+            set_phase(sid, phase, emitted=True)
     except Exception:
-        st = None
-
-    if st and st.phase == phase:
         return False
-
-    with contextlib.suppress(Exception):
-        set_phase(sid, phase)
 
     return True
 
