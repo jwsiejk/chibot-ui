@@ -401,6 +401,7 @@ async def _pump_dg_to_client(
     sid: str,
     asr_ready_evt: Optional[asyncio.Event] = None,
     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
+    schedule_user_final: Optional[Callable[[int, str], Awaitable[None]]] = None,
     stream_stats: Optional[RawStreamStats] = None,
     turn_timing: Optional[Dict[str, List[float]]] = None,
     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
@@ -497,116 +498,22 @@ async def _pump_dg_to_client(
                 except Exception:
                     pass
 
-                await _ws_send_json(
-                    send,
-                    make_results(
-                        turn_id_for_event,
-                        transcript=text,
-                        confidence=0.0,
-                        is_final=is_final,
-                    ),
-                )
-
-                if is_final:
-                    final_seen[0] = True
-                    if turn_timing is not None and text:
+                if not is_final:
+                    await _ws_send_json(
+                        send,
+                        make_results(
+                            turn_id_for_event,
+                            transcript=text,
+                            confidence=0.0,
+                            is_final=False,
+                        ),
+                    )
+                else:
+                    if schedule_user_final is not None:
                         try:
-                            first_holder = turn_timing.setdefault(
-                                "first_partial", [0.0]
-                            )
-                            if not first_holder[0]:
-                                first_holder[0] = time.time()
+                            await schedule_user_final(turn_id_for_event, text)
                         except Exception:
                             pass
-                    if on_turn_finish:
-                        try:
-                            on_turn_finish(
-                                turn_id_for_event, "provider_final", False, len(text)
-                            )
-                        except Exception:
-                            pass
-                    await _ws_send_json(send, make_utterance_end(turn_id_for_event))
-                    try:
-                        note_utterance_end(sid)
-                    except Exception:
-                        pass
-                    try:
-                        set_recorder_active(sid, False)
-                    except Exception:
-                        pass
-                    try:
-                        _admin_emit and _admin_emit("asr:final", session_id=sid)
-                    except Exception:
-                        pass
-
-                    if text:
-                        dialog_nlu_pre: Dict[str, Any] = {}
-                        universal_pre: Dict[str, Any] = {}
-                        policy_pre: Dict[str, Any] = {}
-                        prepared_meta: Dict[str, Any] = {}
-                        meta_stub = {"source": "user_ws", "channel": "ws"}
-                        try:
-                            prepared_meta_raw, dialog_nlu_raw, policy_raw = prepare_turn_metadata(
-                                text, dict(meta_stub)
-                            )
-                            if isinstance(prepared_meta_raw, dict):
-                                prepared_meta = dict(prepared_meta_raw)
-                                raw_universal = prepared_meta.get("universal") or {}
-                                if isinstance(raw_universal, dict):
-                                    universal_pre = _ensure_universal_fields(raw_universal)
-                            if isinstance(dialog_nlu_raw, dict):
-                                dialog_nlu_pre = dict(dialog_nlu_raw)
-                            if isinstance(policy_raw, dict):
-                                policy_pre = dict(policy_raw)
-                        except Exception:
-                            prepared_meta = {}
-                            dialog_nlu_pre = {}
-                            universal_pre = {}
-                            policy_pre = {}
-
-                        _emit_admin_nlu_event(
-                            text,
-                            sid,
-                            dialog_nlu=dialog_nlu_pre,
-                            universal=universal_pre,
-                        )
-
-                        meta_overrides = _build_meta_overrides(
-                            prepared_meta,
-                            dialog_nlu_pre,
-                            universal_pre,
-                            policy_pre,
-                        )
-
-                        if turn_id_for_event in completed_llm_turns:
-                            with contextlib.suppress(Exception):
-                                _jlog(
-                                    "llm_turn_skip_duplicate",
-                                    sid=sid,
-                                    turn_id=turn_id_for_event,
-                                )
-                        else:
-                            completed_llm_turns.add(turn_id_for_event)
-
-                            async def _bg_turn(meta_payload=meta_overrides):
-                                try:
-                                    await asyncio.to_thread(
-                                        run_ws_user_turn,
-                                        sid,
-                                        text,
-                                        None,
-                                        meta_overrides=meta_payload,
-                                    )
-                                except Exception as e:
-                                    with contextlib.suppress(Exception):
-                                        await _ws_send_json(
-                                            send,
-                                            make_error(
-                                                "llm_turn_fail", e.__class__.__name__
-                                            ),
-                                        )
-
-                            asyncio.create_task(_bg_turn())
 
             elif et == "asr_error":
                 if stream_stats is not None:
@@ -933,6 +840,239 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     mic_first_ts = [0.0]
     mic_last_ts = [0.0]
 
+    # Deferred provider final guard state
+    pending_user_final: Dict[str, Any] = {"payload": None, "ts": 0.0}
+    pending_user_final_task: List[Optional[asyncio.Task]] = [None]
+
+    def _resolve_final_guard_window_s() -> float:
+        guard_candidates: List[int] = []
+        try:
+            cfg_val = int(cfg.get("utterance_end_ms") or 0)
+            if cfg_val > 0:
+                guard_candidates.append(cfg_val)
+        except Exception:
+            pass
+        try:
+            env_val = int(os.getenv("WS_FINAL_GUARD_MS", "0") or 0)
+            if env_val > 0:
+                guard_candidates.append(env_val)
+        except Exception:
+            pass
+        if not guard_candidates:
+            return 0.0
+        try:
+            return max(guard_candidates) / 1000.0
+        except Exception:
+            return 0.0
+
+    def _cancel_pending_user_final_task(reason: str = "cancel") -> None:
+        task = pending_user_final_task[0]
+        if task and not task.done():
+            payload = pending_user_final.get("payload")
+            with contextlib.suppress(Exception):
+                _jlog(
+                    "ws_final_guard_cancel",
+                    sid=sid,
+                    turn_id=(payload or (None,))[0],
+                    reason=reason,
+                )
+            task.cancel()
+        pending_user_final_task[0] = None
+
+    def _clear_pending_user_final(reason: str = "clear") -> None:
+        payload = pending_user_final.get("payload")
+        _cancel_pending_user_final_task(reason)
+        pending_user_final["payload"] = None
+        pending_user_final["ts"] = 0.0
+        if payload:
+            with contextlib.suppress(Exception):
+                _jlog(
+                    "ws_final_guard_cleared",
+                    sid=sid,
+                    turn_id=payload[0],
+                    reason=reason,
+                )
+
+    async def _emit_user_final_payload(turn_id_for_event: int, text: str) -> None:
+        if final_seen[0]:
+            with contextlib.suppress(Exception):
+                _jlog(
+                    "ws_final_guard_skip_duplicate",
+                    sid=sid,
+                    turn_id=turn_id_for_event,
+                )
+            return
+
+        final_seen[0] = True
+        pending_user_final["payload"] = None
+        pending_user_final["ts"] = 0.0
+
+        if turn_timing is not None and text:
+            try:
+                first_holder = turn_timing.setdefault("first_partial", [0.0])
+                if not first_holder[0]:
+                    first_holder[0] = time.time()
+            except Exception:
+                pass
+
+        await _ws_send_json(
+            send,
+            make_results(
+                turn_id_for_event,
+                transcript=text,
+                confidence=0.0,
+                is_final=True,
+            ),
+        )
+
+        with contextlib.suppress(Exception):
+            _log_turn_finish(turn_id_for_event, "provider_final", False, len(text))
+
+        await _ws_send_json(send, make_utterance_end(turn_id_for_event))
+
+        try:
+            note_utterance_end(sid)
+        except Exception:
+            pass
+        try:
+            set_recorder_active(sid, False)
+        except Exception:
+            pass
+        try:
+            _admin_emit and _admin_emit("asr:final", session_id=sid)
+        except Exception:
+            pass
+
+        if text:
+            dialog_nlu_pre: Dict[str, Any] = {}
+            universal_pre: Dict[str, Any] = {}
+            policy_pre: Dict[str, Any] = {}
+            prepared_meta: Dict[str, Any] = {}
+            meta_stub = {"source": "user_ws", "channel": "ws"}
+            try:
+                prepared_meta_raw, dialog_nlu_raw, policy_raw = prepare_turn_metadata(
+                    text, dict(meta_stub)
+                )
+                if isinstance(prepared_meta_raw, dict):
+                    prepared_meta = dict(prepared_meta_raw)
+                    raw_universal = prepared_meta.get("universal") or {}
+                    if isinstance(raw_universal, dict):
+                        universal_pre = _ensure_universal_fields(raw_universal)
+                if isinstance(dialog_nlu_raw, dict):
+                    dialog_nlu_pre = dict(dialog_nlu_raw)
+                if isinstance(policy_raw, dict):
+                    policy_pre = dict(policy_raw)
+            except Exception:
+                prepared_meta = {}
+                dialog_nlu_pre = {}
+                universal_pre = {}
+                policy_pre = {}
+
+            _emit_admin_nlu_event(
+                text,
+                sid,
+                dialog_nlu=dialog_nlu_pre,
+                universal=universal_pre,
+            )
+
+            meta_overrides = _build_meta_overrides(
+                prepared_meta,
+                dialog_nlu_pre,
+                universal_pre,
+                policy_pre,
+            )
+
+            if turn_id_for_event in completed_llm_turns:
+                with contextlib.suppress(Exception):
+                    _jlog(
+                        "llm_turn_skip_duplicate",
+                        sid=sid,
+                        turn_id=turn_id_for_event,
+                    )
+            else:
+                completed_llm_turns.add(turn_id_for_event)
+
+                async def _bg_turn(meta_payload=meta_overrides):
+                    try:
+                        await asyncio.to_thread(
+                            run_ws_user_turn,
+                            sid,
+                            text,
+                            None,
+                            meta_overrides=meta_payload,
+                        )
+                    except Exception as e:
+                        with contextlib.suppress(Exception):
+                            await _ws_send_json(
+                                send,
+                                make_error("llm_turn_fail", e.__class__.__name__),
+                            )
+
+                asyncio.create_task(_bg_turn())
+
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ws_final_guard_emit",
+                sid=sid,
+                turn_id=turn_id_for_event,
+                guard_wait_s=_resolve_final_guard_window_s(),
+            )
+
+    def _schedule_pending_user_final_guard(reason: str) -> None:
+        payload = pending_user_final.get("payload")
+        if not payload:
+            return
+
+        guard_window_s = _resolve_final_guard_window_s()
+
+        _cancel_pending_user_final_task(f"{reason}:reschedule")
+
+        async def _wait_and_emit() -> None:
+            try:
+                guard_s = _resolve_final_guard_window_s()
+                if guard_s <= 0:
+                    await _emit_user_final_payload(*payload)
+                    return
+                while True:
+                    guard_s = _resolve_final_guard_window_s()
+                    if guard_s <= 0:
+                        break
+                    last_ts = mic_last_ts[0]
+                    if last_ts <= 0:
+                        remaining = guard_s
+                    else:
+                        elapsed = max(0.0, time.time() - last_ts)
+                        remaining = guard_s - elapsed
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(max(0.05, remaining / 2), 0.25))
+                current = pending_user_final.get("payload")
+                if not current:
+                    return
+                await _emit_user_final_payload(*current)
+            except asyncio.CancelledError:
+                raise
+            finally:
+                if pending_user_final_task[0] is asyncio.current_task():
+                    pending_user_final_task[0] = None
+
+        pending_user_final_task[0] = asyncio.create_task(_wait_and_emit())
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ws_final_guard_schedule",
+                sid=sid,
+                turn_id=payload[0],
+                guard_s=guard_window_s,
+                reason=reason,
+            )
+
+    async def _handle_provider_final(turn_id_for_event: int, text: str) -> None:
+        if final_seen[0]:
+            return
+        pending_user_final["payload"] = (turn_id_for_event, text)
+        pending_user_final["ts"] = time.time()
+        _schedule_pending_user_final_guard("provider_final")
+
     def _reset_turn_metrics(start_ts: float) -> None:
         turn_timing["start"][0] = start_ts
         turn_timing["dg_open"][0] = 0.0
@@ -1043,6 +1183,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     async def _emit_synthetic_final(
         turn_id: int, reason: str, transcript: str = ""
     ) -> bool:
+        _clear_pending_user_final("synthetic_final")
         if final_seen[0]:
             with contextlib.suppress(Exception):
                 _jlog(
@@ -1171,6 +1312,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         sid,
                         asr_ready_evt,
                         _flush_buffered_chunks,
+                        _handle_provider_final,
                         stream_stats,
                         turn_timing,
                         _log_turn_finish,
@@ -1402,7 +1544,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                     raw_chunk = chunk
 
-                    if buf.is_empty():
+                    pending_final_payload = pending_user_final.get("payload")
+                    if buf.is_empty() and not pending_final_payload:
                         nudges.cancel_idle_timers(sid, source="turn_start")
                         try:
                             set_recorder_active(sid, True)
@@ -1534,9 +1677,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     buf.append(chunk)
 
                     # capture bytes for diagnostic playback
+                    mic_last_ts[0] = now
                     if MIC_CAPTURE:
                         mic_chunks.append(chunk)
-                        mic_last_ts[0] = now
                     _jlog(
                         "mic_capture_append",
                         sid=sid,
@@ -1545,6 +1688,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         last_bytes=len(chunk),
                     )
                     nudges.cancel_idle_timers(sid, source="mic_capture")
+
+                    if pending_user_final.get("payload"):
+                        _schedule_pending_user_final_guard("audio")
 
                     if not _has_deepgram_key():
                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
@@ -2158,6 +2304,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 pass
 
     finally:
+        with contextlib.suppress(Exception):
+            _clear_pending_user_final("shutdown")
         with contextlib.suppress(Exception):
             _cancel_no_audio_watch()
         await _remove_active_ws_entry("cleanup")
