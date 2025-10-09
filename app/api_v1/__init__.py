@@ -5,6 +5,7 @@ from .profile import bp as profile_bp
 from .greet import bp as greet_bp
 from .chat import bp as chat_bp
 from .voice import bp as voice_bp
+from .diag import bp as diag_bp
 from .metrics import bp as metrics_bp
 
 def create_v1_blueprint():
@@ -15,5 +16,6 @@ def create_v1_blueprint():
     bp.register_blueprint(greet_bp, url_prefix="/greet")
     bp.register_blueprint(chat_bp, url_prefix="/chat")
     bp.register_blueprint(voice_bp, url_prefix="/voice")
+    bp.register_blueprint(diag_bp, url_prefix="")
     bp.register_blueprint(metrics_bp, url_prefix="")
     return bp

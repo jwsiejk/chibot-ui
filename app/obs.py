@@ -4,6 +4,12 @@ from __future__ import annotations
 import json, logging, os, time, traceback
 from contextlib import contextmanager
 
+try:
+    from app.admin_log import emit as _admin_emit
+except Exception:
+    def _admin_emit(*a, **k):
+        pass
+
 _log = logging.getLogger("askchip")
 
 # Read once; env-driven
@@ -58,8 +64,7 @@ def jlog(kind: str, **fields):
 
     # SSE mirror
     try:
-        from app.api_v1.admin import _emit
-        _emit(kind, **base)
+        _admin_emit(kind, **base)
     except Exception:
         pass
 

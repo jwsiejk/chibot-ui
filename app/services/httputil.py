@@ -4,9 +4,10 @@ from typing import Dict, Optional
 from ..obs.metrics import observe, inc
 
 try:
-    from app.api_v1.admin import _emit as _admin_emit
+    from app.admin_log import emit as _admin_emit
 except Exception:
-    def _admin_emit(*a, **k): pass
+    def _admin_emit(*a, **k):
+        pass
 
 class CircuitOpenError(Exception):
     pass

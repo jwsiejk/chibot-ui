@@ -3,6 +3,12 @@ from __future__ import annotations
 import json, logging, os, time, traceback
 from contextlib import contextmanager
 
+try:
+    from app.admin_log import emit as _admin_emit
+except Exception:
+    def _admin_emit(*a, **k):
+        pass
+
 _log = logging.getLogger("askchip")
 REDACT_EMAIL = (os.environ.get("REDACT_EMAIL_IN_LOGS","true").lower() in ("1","true","yes","on"))
 
@@ -33,8 +39,7 @@ def jlog(kind: str, **fields):
     except Exception:
         _log.info(f'{{"ts":{_ts()},"kind":"{kind}","error":"json_dump_failed"}}')
     try:
-        from app.api_v1.admin import _emit
-        _emit(kind, **base)
+        _admin_emit(kind, **base)
     except Exception:
         pass
 

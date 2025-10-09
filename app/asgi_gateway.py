@@ -25,9 +25,10 @@ print(">>> asgi_gateway loaded, using _ws_chat_asgi_impl from:", getattr(_ws_cha
 
 # Optional admin log emitter
 try:
-    from app.api_v1.admin import _emit as _admin_emit
+    from app.admin_log import emit as _admin_emit
 except Exception:
-    def _admin_emit(*a, **k): pass
+    def _admin_emit(*a, **k):
+        pass
 
 # Build the Flask WSGI app
 flask_app = create_app()

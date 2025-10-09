@@ -1,7 +1,8 @@
 import threading, time
 from queue import Queue
+
 try:
-    from app.api_v1.admin import _emit
+    from app.admin_log import emit as _emit
 except Exception:
     def _emit(*a, **k):
         pass
