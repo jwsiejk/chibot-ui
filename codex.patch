@@ -1,158 +1,75 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index fcd66d39ee30b3a7ca6197424d2e5d9b8c0c9e4c..b621f6401e4fb0b6c0c782f99e3552f8752de90b 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -17,50 +17,52 @@ from app.services.audio.raw_fallback import (
-     should_use_raw_fallback,
- )
+diff --git a/tests/phase3/test_barge_state_phase_dedup.py b/tests/phase3/test_barge_state_phase_dedup.py
+index fbf87e41643590e67116d7559064b2e17adc28cb..4940afdd959a52f9ba2b3c00ee013d85d7c81fd8 100644
+--- a/tests/phase3/test_barge_state_phase_dedup.py
++++ b/tests/phase3/test_barge_state_phase_dedup.py
+@@ -1,36 +1,70 @@
++import threading
++import time
+ import uuid
  
- from .schema_v1 import (
-     parse_client_json,
-     make_keepalive_ack,
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
- 
- # NEW: invoke LLM on final transcript
- from app.services.streaming import (
-     run_ws_user_turn,
-     prepare_turn_metadata,
-     summarize_policy_metadata,
-+    wait_for_tts_completion,
-+    wait_for_listen_ready,
- )  # NEW
- from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
  from app.ws.barge import BargeState
- from app.ws.bus import bus
- from app.policy import nudges
- from app.session_state import (
-     note_partial,
-     note_utterance_end,
-     set_asr_stream_open,
-     set_phase,
-     set_recorder_active,
-     should_emit_phase,
- )
- 
- # Optional admin emitter
- try:
-     from app.api_v1.admin import _emit as _admin_emit
- except Exception:
-     _admin_emit = None
+ from app.ws import ws_asgi
  
  
- ACTIVE_WS: dict[str, dict[str, Any]] = {}
- ACTIVE_WS_LOCK = asyncio.Lock()
+ def test_barge_state_emits_distinct_phases():
+     sid = f"test-barge-{uuid.uuid4()}"
+     emitted = []
  
- WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index fcd66d39ee30b3a7ca6197424d2e5d9b8c0c9e4c..b621f6401e4fb0b6c0c782f99e3552f8752de90b 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1605,63 +1607,93 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 removed_pending=removed_pending,
-                                 closed_turn_id=closed_turn_id,
-                                 buffered_before=buffered_before,
-                                 mic_before=mic_before,
-                             )
+     def capture(phase: str) -> None:
+         if ws_asgi._should_emit_barge_phase(sid, phase):
+             emitted.append(phase)
  
-                     pending_final_payload = pending_user_final.get("payload")
-                     if buf.is_empty() and not pending_final_payload:
-                         nudges.cancel_idle_timers(sid, source="turn_start")
-                         try:
-                             set_recorder_active(sid, True)
-                         except Exception:
-                             pass
-                         # New audio turn
-                         current_assistant_turn = None
-                         try:
-                             current_assistant_turn = bus.current_assistant_turn(sid)
-                         except Exception:
-                             current_assistant_turn = None
-                         confirm_ms = 420
-                         try:
-                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
-                         except Exception:
-                             confirm_ms = 420
+     barge = BargeState()
  
--                        def _on_barge_commit() -> None:
-+                        def _on_barge_commit():
-                             target_turn = current_assistant_turn
-                             try:
-                                 latest = bus.current_assistant_turn(sid)
-                             except Exception:
-                                 latest = None
-                             if latest:
-                                 target_turn = latest
--                            if target_turn:
+     assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
+     barge.cancel(capture)
+     barge.cancel(capture)
+ 
+     assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
+     barge.commit(capture)
+     barge.commit(capture)
+ 
+     assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
+     barge.cancel(capture)
+     barge.cancel(capture)
+ 
+     assert emitted == [
+         "paused",
+         "assistant_speaking",
+         "paused",
+         "ready",
+         "paused",
+         "assistant_speaking",
+     ]
 +
-+                            wait_turn = target_turn
-+                            if wait_turn:
-+                                try:
-+                                    bus.cancel_turn(sid, wait_turn)
-+                                except Exception:
-+                                    pass
 +
-+                            try:
-+                                wait_timeout = float(cfg.get("tts_cancel_wait_s", 3.0) or 0.0)
-+                            except Exception:
-+                                wait_timeout = 3.0
-+                            try:
-+                                listen_timeout = float(cfg.get("barge_listen_ready_wait_s", 1.0) or 0.0)
-+                            except Exception:
-+                                listen_timeout = 1.0
++def test_barge_commit_waits_for_ready_gate():
++    sid = f"test-barge-wait-{uuid.uuid4()}"
++    phases = []
 +
-+                            def _wait_ready() -> None:
-                                 try:
--                                    bus.cancel_turn(sid, target_turn)
-+                                    wait_for_tts_completion(
-+                                        sid,
-+                                        wait_turn,
-+                                        timeout=None if wait_timeout <= 0 else wait_timeout,
-+                                    )
-                                 except Exception:
-                                     pass
-+                                try:
-+                                    wait_for_listen_ready(
-+                                        sid,
-+                                        timeout=max(0.0, listen_timeout),
-+                                    )
-+                                except Exception:
-+                                    pass
++    def capture(phase: str) -> None:
++        if ws_asgi._should_emit_barge_phase(sid, phase):
++            phases.append(phase)
 +
-+                            return _wait_ready
-                         with contextlib.suppress(Exception):
-                             barge.start(
-                                 confirm_ms=confirm_ms,
-                                 on_commit=_on_barge_commit,
-                                 send_state=_send_barge_state,
-                             )
-                         turn_id_ref[0] = buf.turn_seq + 1
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-                             completed_llm_turns.discard(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
-                         stream_stats.reset_turn()
-                         turn_connect_started[0] = False
-                         # reset mic capture
-                         mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
-                         _reset_turn_metrics(now)
-                         _schedule_no_audio_watch(turn_id_ref[0])
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "turn_start",
++    ready_evt = threading.Event()
++
++    def on_commit():
++        phases.append("commit")
++        return ready_evt.wait
++
++    barge = BargeState()
++
++    assert barge.start(confirm_ms=500, on_commit=on_commit, send_state=capture) is True
++
++    worker = threading.Thread(target=barge.commit, args=(capture,))
++    worker.daemon = True
++    worker.start()
++
++    time.sleep(0.05)
++    assert "ready" not in phases
++
++    ready_evt.set()
++    worker.join(timeout=1.0)
++
++    assert not worker.is_alive()
++    assert phases[-1] == "ready"
