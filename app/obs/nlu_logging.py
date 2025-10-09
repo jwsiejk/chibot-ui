@@ -194,6 +194,30 @@ class NluLoggingContext:
             reason=reason,
         )
 
+    def log_planner_decision(
+        self,
+        *,
+        confidence: Optional[float],
+        band: Optional[str],
+        teacher_move: Optional[str],
+        top_features: Optional[Sequence[str]] = None,
+    ) -> None:
+        if not self.enabled:
+            return
+        features = None
+        if top_features:
+            try:
+                features = list(top_features)[:5]
+            except Exception:
+                features = [str(top_features)]
+        self._emit(
+            "planner.decision",
+            confidence=confidence,
+            band=band,
+            teacher_move=teacher_move,
+            features=features,
+        )
+
     def log_toolplan(self, plan: Optional[Dict[str, Any]]) -> None:
         if not self.enabled:
             return

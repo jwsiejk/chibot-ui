@@ -3,7 +3,7 @@
 # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
 
 from __future__ import annotations
-from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable
+from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable, Mapping
 import base64
 import hashlib
 import threading, time as _t
@@ -1104,6 +1104,69 @@ def classify(seed_text: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str,
     return labels
 
 
+def _planner_feature_summary(
+    dialog_nlu: Optional[Mapping[str, Any]], universal: Optional[Mapping[str, Any]]
+) -> List[str]:
+    candidates: List[Tuple[str, float]] = []
+
+    def _add(label: Optional[str], weight: float) -> None:
+        if not label:
+            return
+        candidates.append((str(label), weight))
+
+    nlu = dialog_nlu or {}
+    uni = universal or {}
+
+    intent = nlu.get("intent") if isinstance(nlu, Mapping) else None
+    if intent:
+        _add(f"intent:{intent}", 1.0)
+
+    topic = nlu.get("topic") if isinstance(nlu, Mapping) else None
+    if topic:
+        _add(f"topic:{topic}", 0.75)
+
+    if isinstance(uni, Mapping) and uni.get("needs_clarification"):
+        _add("needs_clarification", 0.9)
+
+    missing: Iterable[Any] = []
+    if isinstance(uni, Mapping):
+        raw_missing = uni.get("missing")
+        if isinstance(raw_missing, (list, tuple, set)):
+            missing = raw_missing
+        elif raw_missing:
+            missing = [raw_missing]
+    for idx, item in enumerate(missing):
+        text = str(item).strip()
+        if not text:
+            continue
+        _add(f"missing:{text}", max(0.5, 0.85 - idx * 0.05))
+
+    if isinstance(uni, Mapping) and uni.get("multi_intent"):
+        _add("multi_intent", 0.6)
+
+    if isinstance(uni, Mapping) and uni.get("out_of_domain"):
+        _add("out_of_domain", 0.6)
+
+    if isinstance(uni, Mapping):
+        depth = str(uni.get("depth") or "").strip()
+        if depth and depth not in {"normal"}:
+            _add(f"depth:{depth}", 0.5)
+
+        delivery = str(uni.get("delivery_pref") or "").strip()
+        if delivery and delivery not in {"explain"}:
+            _add(f"delivery:{delivery}", 0.5)
+
+        urgency = str(uni.get("urgency") or "").strip()
+        if urgency and urgency not in {"normal"}:
+            _add(f"urgency:{urgency}", 0.45)
+
+    if not candidates:
+        return []
+
+    sorted_features = sorted(candidates, key=lambda item: item[1], reverse=True)
+    return [label for label, _ in sorted_features[:5]]
+
+
 def prepare_turn_metadata(seed_text: str,
                           meta: Optional[Dict[str, Any]] = None,
                           *,
@@ -1170,6 +1233,21 @@ def prepare_turn_metadata(seed_text: str,
     policy = dict(raw_policy)
     if policy.get("action") and "teacher_move" not in policy:
         policy["teacher_move"] = policy["action"]
+
+    if telemetry:
+        confidence_value: Optional[float]
+        try:
+            confidence_raw = universal.get("confidence") if isinstance(universal, Mapping) else None
+            confidence_value = float(confidence_raw) if isinstance(confidence_raw, (int, float)) else None
+        except Exception:
+            confidence_value = None
+        planner_features = _planner_feature_summary(dialog_nlu, universal)
+        telemetry.log_planner_decision(
+            confidence=confidence_value,
+            band=policy.get("confidence_band"),
+            teacher_move=policy.get("teacher_move") or policy.get("action"),
+            top_features=planner_features or None,
+        )
 
     action = target_meta.get(_DIALOG_ACTION_KEY) or target_meta.get("action")
     if not action:

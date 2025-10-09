@@ -1,115 +1,94 @@
-diff --git a/app/policy/nudges.py b/app/policy/nudges.py
-index 0e88e4fd40385c74591a765ef9c438b92964e4e6..0b85f87d5f8ab406f63bddd3f3434a07f2f0c6ff 100644
---- a/app/policy/nudges.py
-+++ b/app/policy/nudges.py
-@@ -282,50 +282,96 @@ def _emit_auto_close(session_id: str) -> None:
-             {
-                 "type": "assistant_end",
-                 "turn_id": None,
-                 "reason": "silence_auto_close",
-             },
-         )
-     else:
-         meta, _, _ = prepare_turn_metadata(
-             text,
-             {"source": "nudge_auto_close", "channel": "ws", "silence_stage": 3},
-         )
-         tid, frames = make_assistant_frames(
-             text,
-             session_id,
-             meta=meta,
-             broadcast_immediately=False,
-         )
-         for fr in frames:
-             if fr.get("type") == "end":
-                 fr["reason"] = "silence_auto_close"
-             bus.broadcast(session_id, fr)
+diff --git a/app/obs/nlu_logging.py b/app/obs/nlu_logging.py
+index e9dbb971fd3fb08ca0f10bea9c7f129fbd63d97c..8eddd37bc93c6ea63c56782370f5f0f3ffdc1af0 100644
+--- a/app/obs/nlu_logging.py
++++ b/app/obs/nlu_logging.py
+@@ -172,50 +172,74 @@ class NluLoggingContext:
+         for key, value in entities.items():
+             try:
+                 cleaned[key] = redact_pii(value if isinstance(value, str) else str(value))
+             except Exception:
+                 cleaned[key] = "[redacted]"
+         if cleaned:
+             self._emit("nlu.entities", entities=cleaned)
  
-     bus.broadcast(session_id, {"type": "session_end", "reason": "silence_auto_close"})
+     def log_guardrail(self, *, decision: str = "allow", reason: Optional[str] = None) -> None:
+         self._emit("nlu.guardrail", decision=decision, reason=reason)
  
+     def log_teacher_move(
+         self,
+         *,
+         resolved_move: Optional[str],
+         policy_move: Optional[str],
+         reason: Optional[str] = None,
+     ) -> None:
+         self._emit(
+             "nlu.teacher_move",
+             resolved_move=resolved_move,
+             policy_move=policy_move,
+             reason=reason,
+         )
  
-+def run_after_silence(session_id: str,
-+                      callback: Callable[[], None],
-+                      *,
-+                      reason: str = "",
-+                      guard_ms: Optional[int] = None) -> bool:
-+    """Invoke ``callback`` after the configured silence guard elapses."""
-+    if not session_id or not callable(callback):
-+        return False
-+
-+    guard = _silence_guard_ms() if guard_ms is None else max(0, int(guard_ms))
-+    if guard <= 0 or silence_guard_satisfied(session_id, guard):
-+        try:
-+            callback()
-+        except Exception:
-+            pass
-+        return True
-+
-+    remaining = int(guard_remaining_ms(session_id, guard))
-+    if remaining <= 0:
-+        remaining = guard or 0
-+    if remaining <= 0:
-+        try:
-+            callback()
-+        except Exception:
-+            pass
-+        return True
-+
-+    def _deferred() -> None:
-+        if silence_guard_satisfied(session_id, guard):
-+            try:
-+                callback()
-+            except Exception:
-+                pass
++    def log_planner_decision(
++        self,
++        *,
++        confidence: Optional[float],
++        band: Optional[str],
++        teacher_move: Optional[str],
++        top_features: Optional[Sequence[str]] = None,
++    ) -> None:
++        if not self.enabled:
 +            return
-+        run_after_silence(session_id, callback, reason=reason, guard_ms=guard)
++        features = None
++        if top_features:
++            try:
++                features = list(top_features)[:5]
++            except Exception:
++                features = [str(top_features)]
++        self._emit(
++            "planner.decision",
++            confidence=confidence,
++            band=band,
++            teacher_move=teacher_move,
++            features=features,
++        )
 +
-+    _schedule_timer(
-+        session_id,
-+        "post_audio_silence",
-+        remaining,
-+        _deferred,
-+        origin=f"{reason or 'silence'}:wait",
-+    )
-+    return True
-+
-+
- def arm_idle_timers(session_id: str, *, reason: str = "") -> bool:
-     if not session_id:
-         return False
+     def log_toolplan(self, plan: Optional[Dict[str, Any]]) -> None:
+         if not self.enabled:
+             return
+         tool = None
+         payload = None
+         if isinstance(plan, dict):
+             tool = plan.get("tool")
+             payload = plan.get("tool_payload")
+             if isinstance(payload, dict):
+                 payload = {k: payload[k] for k in list(payload)[:5]}
+             elif payload is not None:
+                 payload = str(payload)
+         self._emit("nlu.toolplan", tool=tool, payload=payload)
  
-     cancel_idle_timers(session_id, mark=False)
- 
-     if not _enabled():
-         return False
- 
-     guard_ms = _silence_guard_ms()
-     guard_ready = silence_guard_satisfied(session_id, guard_ms)
-     if not is_ready_for_nudge(session_id, guard_ms):
-         if not guard_ready:
-             remaining = int(guard_remaining_ms(session_id, guard_ms))
-             if remaining > 0:
-                 _LOGGER.info(
-                     "nudge_guard_wait sid=%s reason=%s remaining_ms=%s",
-                     session_id,
-                     reason or "guard",
-                     remaining,
-                 )
- 
-                 def _deferred() -> None:
-                     arm_idle_timers(session_id, reason=reason)
- 
+     def log_prompt_summary(
+         self,
+         *,
+         messages: Optional[Sequence[Dict[str, Any]]] = None,
+         prompt_hash: Optional[str] = None,
+         kb_count: int = 0,
+     ) -> None:
+         if not self.enabled:
+             return
+         summary = _summarize_messages(messages)
+         summary["kb_count"] = int(kb_count)
 diff --git a/app/services/streaming.py b/app/services/streaming.py
-index e3cb2fdf68162d70460fa241496adf5498efdc9d..f29201f7559a255ccde1fd3064413c9497e3c58a 100644
+index f29201f7559a255ccde1fd3064413c9497e3c58a..104cf375f25d87f184f3a0355ceccec454b6c11f 100644
 --- a/app/services/streaming.py
 +++ b/app/services/streaming.py
-@@ -1,41 +1,41 @@
+@@ -1,31 +1,31 @@
  # app/services/streaming.py — Production-grade assistant framing
  # Guarantees assistant_* frames are broadcast even if the LLM provider fails.
  # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
  
  from __future__ import annotations
- from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable
+-from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable
++from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable, Mapping
  import base64
  import hashlib
  import threading, time as _t
@@ -119,8 +98,7 @@ index e3cb2fdf68162d70460fa241496adf5498efdc9d..f29201f7559a255ccde1fd3064413c94
  import random
  
  from ..security_state import get_profile, get_user
--from ..session_state import set_phase
-+from ..session_state import note_utterance_end, set_phase
+ from ..session_state import note_utterance_end, set_phase
  def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
      # 1) Profile name
      try:
@@ -136,406 +114,183 @@ index e3cb2fdf68162d70460fa241496adf5498efdc9d..f29201f7559a255ccde1fd3064413c94
          email = (meta or {}).get("email")
      except Exception:
          email = None
-     if not email:
-         try:
-             email = get_user() or None
-         except Exception:
-             email = None
-     if isinstance(email, str) and "@" in email:
-         first = email.split("@",1)[0].split(".")[0].replace("_"," ").replace("-", " ").strip()
-         if first:
-             return first.title()
-     return "there"
-@@ -2080,50 +2080,55 @@ def _make_legacy_frames(seed_text: str,
-             settings=SETTINGS,
-             cfg=cfg,
-         )
-         telemetry.turn_id = turn_id
-         telemetry.log_start(seed_text, meta=meta)
-     else:
-         telemetry.turn_id = turn_id
- 
-     if labels is None:
-         labels = classify(seed_text, meta)
-     else:
-         labels = dict(labels)
-     telemetry.log_entities(labels.get("entities"))
-     _log_persona_applied(
-         turn_id,
-         persona_trace,
-         cfg,
-         persona=persona,
-         meta=meta,
-     )
-     if policy is None:
-         policy = pick_dialog_policy(labels) or {}
-     else:
-         policy = dict(policy or {})
- 
-+    policy_summary = summarize_policy_metadata(policy)
-+    if policy_summary and isinstance(meta, dict):
-+        for key, value in policy_summary.items():
-+            meta.setdefault(key, value)
-+
-     try:
-         if isinstance(meta, dict):
-             meta_nlu = meta.setdefault('nlu', {})
-             meta_nlu.update(labels)
-             dialog_nlu = meta.setdefault(_DIALOG_NLU_KEY, {})
-             try:
-                 dialog_nlu.update(labels)
-             except Exception:
-                 meta[_DIALOG_NLU_KEY] = dict(labels)
+@@ -1082,50 +1082,113 @@ def classify(seed_text: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str,
+         engagement = score_engagement(seed_text, base_meta)
+         if isinstance(engagement, dict):
+             for key, value in engagement.items():
+                 if key not in labels:
+                     labels[key] = value
      except Exception:
          pass
-     policy_action = _policy_action(policy)
-     teacher_move = policy_action
  
-     provided_action: Optional[str] = None
-     if action is not None:
-         try:
-             provided_action = str(action or "").strip().lower()
-         except Exception:
-             provided_action = None
-     normalized_action = provided_action or _normalize_action(meta)
-     if not provided_action and policy_action and not normalized_action:
-         normalized_action = str(policy_action or "").strip().lower() or normalized_action
-     if isinstance(meta, dict):
-         if normalized_action:
-@@ -2307,50 +2312,67 @@ def _make_legacy_frames(seed_text: str,
-     if _should_force_welcome_move(meta, is_greet=is_greet, intent=(labels or {}).get('intent') if isinstance(labels, dict) else None):
-         active_teacher_move = _WELCOME_MOVE
-     _log_policy_decision(
-         session_id=session_id,
-         turn_id=turn_id,
-         resolved_move=active_teacher_move,
-         normalized_action=normalized_action,
-         policy_move=policy_action,
-         teacher_move_seed=teacher_move,
-         fallback_fired=fallback_fired,
-         fallback_reason=fallback_reason,
-         meta=meta,
-         nlu_meta=labels,
-         used_docs_source=kb,
-     )
-     chunk = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': safe_reply,
-         'kb_hits': len(kb),
-     }
-     if isinstance(labels, dict) and labels.get('intent'):
-         chunk['intent'] = labels.get('intent')
-     if active_teacher_move:
-         chunk['teacher_move'] = active_teacher_move
-+    if policy_summary:
-+        band = policy_summary.get('planner_confidence_band') or policy_summary.get('policy_confidence_band')
-+        if band:
-+            chunk['planner_confidence_band'] = band
-+        policy_band = policy_summary.get('policy_confidence_band')
-+        if policy_band and policy_band != band:
-+            chunk['policy_confidence_band'] = policy_band
-+        chips = policy_summary.get('policy_chips')
-+        if chips:
-+            chunk['policy_chips'] = chips
-+    if isinstance(meta, dict):
-+        clarify_variant = meta.get('clarify_variant')
-+        clarifier_style = meta.get('clarifier_style')
-+        if clarifier_style:
-+            chunk['clarifier_style'] = clarifier_style
-+        if clarify_variant:
-+            chunk['clarify_variant'] = clarify_variant
-     if correlation_user_msg_id:
-         chunk['correlation_user_msg_id'] = correlation_user_msg_id
-     if error_note:
-         chunk['note'] = error_note
-     frames.append(chunk)
+     if "intent" not in labels:
+         text = (seed_text or "").strip().lower()
+         if not text:
+             labels["intent"] = "idle"
+         elif text == "greet":
+             labels["intent"] = "greet"
+         elif seed_text.endswith("?") if isinstance(seed_text, str) else False:
+             labels["intent"] = "broad_topic_help"
+         else:
+             labels["intent"] = "broad_topic_help"
  
-     legacy_suggestions: List[Any] = []
-     try:
-         if cfg.get('suggestions_enabled', True):
-             legacy_suggestions = hygienic_suggestions(safe_reply)
-     except Exception:
-         legacy_suggestions = []
-     policy_chips = _collect_policy_chips(policy)
-     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
-     _log_suggestions_made(
-         turn_id=turn_id,
-         policy_chips=policy_chips,
-         legacy_suggestions=legacy_suggestions,
-         merged_suggestions=merged_suggestions,
-         cfg=cfg,
-     )
-     try:
-         intent = labels.get('intent') if isinstance(labels, dict) else None
-         _jlog(
-             "chips_emit",
-@@ -2407,51 +2429,54 @@ def _guess_tts_mime(output_format: str | None) -> str:
- def _tts_text_markers(text: str) -> Dict[str, Any]:
-     """Privacy-safe markers for logging text identity."""
-     normalized: str
-     if isinstance(text, str):
-         normalized = text
-     else:
-         normalized = str(text or "")
-     try:
-         encoded = normalized.encode("utf-8")
-     except Exception:
-         encoded = str(normalized).encode("utf-8", "ignore")
-     digest = hashlib.sha256(encoded).hexdigest()
-     return {
-         "text_hash": digest[:16],
-         "text_len": len(normalized),
-     }
+     if "confidence" not in labels:
+         labels["confidence"] = 0.0 if not (seed_text or "").strip() else 0.5
+ 
+     return labels
  
  
- def schedule_tts_audio(session_id: str,
-                        text: str,
-                        turn_id: str | None = None,
-                        correlation_user_msg_id: Optional[str] = None,
-                        audio_bytes: Optional[bytes] = None,
-                        chunk_bytes: int = 8192,
-                        delay_ms: int = 0,
--                       on_complete: Optional[Callable[[], None]] = None) -> bool:
-+                       on_complete: Optional[Callable[[], None]] = None,
-+                       *,
-+                       on_post_silence: Optional[Callable[[], None]] = None,
-+                       post_silence_origin: Optional[str] = None) -> bool:
-     """Synthesize TTS for `text` and stream as WS frames.
-     Emits frames like:
-         {
-           "type": "assistant_audio",
-           "turn_id": <str or null>,
-           "mime": "<audio mime>",
-           "audio_chunks": ["<base64>", ...],
-           "is_last": <bool>
-         }
-     After the final chunk, an explicit:
-         { "type": "UtteranceEnd", "turn_id": <str or null> }
-     is broadcast to mark audio-complete.
-     Non-blocking: runs in a background thread. Returns True if audio streaming
-     was scheduled, False if the request was ignored (e.g., audio disabled).
-     """
-     if not text:
-         return False
-     cfg = db.get_config()
-     feature_audio = bool(cfg.get("feature_audio", True))
- 
-     # Track TTS lifecycle for admin truth
-     tts_tbl = db.memory.setdefault('tts_status', {})
-     sess_tbl = tts_tbl.setdefault(session_id, {})
-     turn_key = str(turn_id) if turn_id is not None else 'greet'
-     state = sess_tbl.setdefault(turn_key, {'started': False, 'first_chunk': False, 'done': False, 'error': None})
-@@ -2610,99 +2635,124 @@ def schedule_tts_audio(session_id: str,
-                 except Exception:
-                     pass
- 
-                 next_idx = idx + int(chunk_bytes)
-                 part = bytes(mv[idx: next_idx])
-                 idx = next_idx
-                 chunk_len = len(part)
- 
-                 try:
-                     b64 = base64.b64encode(part).decode("ascii")
-                     fr = {
-                         "type": "assistant_audio",
-                         "turn_id": safe_turn_id,
-                         "mime": desired_mime,
-                         "audio_chunks": [b64],
-                         "is_last": (idx >= len(mv)),
-                     }
-                     if correlation_user_msg_id:
-                         fr["correlation_user_msg_id"] = correlation_user_msg_id
- 
-                     bus.broadcast(session_id, fr)
- 
-                     if not first_sent:
-                         first_sent = True
-                         state['first_chunk'] = True
-+                        try:
-+                            nudges.cancel_idle_timers(
-+                                session_id,
-+                                source="assistant_audio_start",
-+                                mark=False,
-+                            )
-+                        except Exception:
-+                            pass
-                         try:
-                             _admin_emit('tts:first_chunk', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
-                         except Exception:
-                             pass
- 
-                     chunk_count += 1
-                     chunk_bytes_sent += chunk_len
-                     if chunk_count >= max_frames:
-                         # Safety cut: end stream explicitly if we truncated
-                         truncated = True
-                         _log(
-                             "tts.chunks.truncated",
-                             chunk_count=chunk_count,
-                             bytes_sent=chunk_bytes_sent,
-                             total_bytes=total_audio_bytes,
-                             max_frames=max_frames,
-                         )
-                         _emit_utterance_end("truncated_guard")
-                         break
-                 except Exception:
-                     # If a single chunk fails, try to continue; we'll still emit UtteranceEnd.
-                     pass
- 
-             status = "canceled" if canceled else ("truncated" if truncated else "complete")
-             _log(
-                 "tts.chunks.summary",
-                 chunk_count=chunk_count,
-                 bytes_sent=chunk_bytes_sent,
-                 total_bytes=total_audio_bytes,
-                 status=status,
-                 max_frames=max_frames,
-             )
-         finally:
-             # Always mark tts done (admin), and always signal UtteranceEnd if we haven't already.
-             try:
-                 _admin_emit('tts:done', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
-             except Exception:
-                 pass
- 
-             _emit_utterance_end("finalizer")
-+            try:
-+                note_utterance_end(session_id)
-+            except Exception:
-+                pass
- 
-             state['done'] = True
- 
-             if on_complete is not None:
-                 try:
-                     on_complete()
-                 except Exception:
-                     pass
- 
-+            if on_post_silence is not None:
-+                try:
-+                    nudges.run_after_silence(
-+                        session_id,
-+                        on_post_silence,
-+                        reason=post_silence_origin or "assistant_audio",
-+                    )
-+                except Exception:
-+                    try:
-+                        on_post_silence()
-+                    except Exception:
-+                        pass
++def _planner_feature_summary(
++    dialog_nlu: Optional[Mapping[str, Any]], universal: Optional[Mapping[str, Any]]
++) -> List[str]:
++    candidates: List[Tuple[str, float]] = []
 +
-     threading.Thread(target=_run, daemon=True).start()
-     return True
++    def _add(label: Optional[str], weight: float) -> None:
++        if not label:
++            return
++        candidates.append((str(label), weight))
++
++    nlu = dialog_nlu or {}
++    uni = universal or {}
++
++    intent = nlu.get("intent") if isinstance(nlu, Mapping) else None
++    if intent:
++        _add(f"intent:{intent}", 1.0)
++
++    topic = nlu.get("topic") if isinstance(nlu, Mapping) else None
++    if topic:
++        _add(f"topic:{topic}", 0.75)
++
++    if isinstance(uni, Mapping) and uni.get("needs_clarification"):
++        _add("needs_clarification", 0.9)
++
++    missing: Iterable[Any] = []
++    if isinstance(uni, Mapping):
++        raw_missing = uni.get("missing")
++        if isinstance(raw_missing, (list, tuple, set)):
++            missing = raw_missing
++        elif raw_missing:
++            missing = [raw_missing]
++    for idx, item in enumerate(missing):
++        text = str(item).strip()
++        if not text:
++            continue
++        _add(f"missing:{text}", max(0.5, 0.85 - idx * 0.05))
++
++    if isinstance(uni, Mapping) and uni.get("multi_intent"):
++        _add("multi_intent", 0.6)
++
++    if isinstance(uni, Mapping) and uni.get("out_of_domain"):
++        _add("out_of_domain", 0.6)
++
++    if isinstance(uni, Mapping):
++        depth = str(uni.get("depth") or "").strip()
++        if depth and depth not in {"normal"}:
++            _add(f"depth:{depth}", 0.5)
++
++        delivery = str(uni.get("delivery_pref") or "").strip()
++        if delivery and delivery not in {"explain"}:
++            _add(f"delivery:{delivery}", 0.5)
++
++        urgency = str(uni.get("urgency") or "").strip()
++        if urgency and urgency not in {"normal"}:
++            _add(f"urgency:{urgency}", 0.45)
++
++    if not candidates:
++        return []
++
++    sorted_features = sorted(candidates, key=lambda item: item[1], reverse=True)
++    return [label for label, _ in sorted_features[:5]]
++
++
+ def prepare_turn_metadata(seed_text: str,
+                           meta: Optional[Dict[str, Any]] = None,
+                           *,
+                           cfg: Optional[Dict[str, Any]] = None,
+                           telemetry: Optional[NluLoggingContext] = None) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+     """Ensure dialog metadata is populated for downstream consumers."""
+     cfg = cfg or db.get_config()
+     incoming_meta = meta if isinstance(meta, dict) else {}
+     target_meta = incoming_meta if incoming_meta is meta and isinstance(meta, dict) else dict(incoming_meta)
+     incoming_action = None
+     if isinstance(incoming_meta, dict):
+         incoming_action = incoming_meta.get("action")
  
+     labels = classify(seed_text, target_meta)
+     dialog_nlu = dict(labels)
  
- def _update_assistant_turn_state(session_id: str,
-                                  frame: Dict[str, Any],
-                                  current_turn_id: Optional[str]) -> Optional[str]:
-     if not isinstance(frame, dict):
-         return current_turn_id
-     ftype = frame.get('type')
-     turn_id = frame.get('turn_id')
-     if ftype in ('assistant_chunk', 'assistant_audio', 'audio_chunk') and turn_id:
+     if telemetry:
+         telemetry.log_intent(dialog_nlu)
+         telemetry.log_entities(dialog_nlu.get("entities"))
+         telemetry.log_guardrail(decision="allow")
+ 
+     if not isinstance(target_meta.get("nlu"), dict):
+         target_meta["nlu"] = dict(dialog_nlu)
+     else:
          try:
-             bus.note_assistant_turn(session_id, turn_id)
-         except Exception:
-             pass
-         return turn_id
-     if ftype in ('assistant_end', 'end'):
+@@ -1149,50 +1212,65 @@ def prepare_turn_metadata(seed_text: str,
+             universal = _ensure_universal_fields(None)
+     target_meta["universal"] = universal
+ 
+     session_id = _extract_session_id(target_meta)
+     session_goal = None
+     if session_id:
          try:
-             bus.note_assistant_turn(session_id, None)
-         except Exception:
-             pass
-         return None
-     return current_turn_id
- 
-@@ -2924,60 +2974,83 @@ def run_ws_user_turn(session_id: str,
-         fr.get("type")
-         for fr in frames
-         if isinstance(fr, dict) and fr.get("type") is not None
-     ]
-     ready_sent = any(ft == "state" for ft in existing_frame_types)
- 
-     def _emit_ready_once() -> None:
-         nonlocal ready_sent
-         if ready_sent:
-             return
-         try:
-             set_phase(session_id, "ready")
-             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-             ready_sent = True
-         except Exception:
-             pass
- 
-     def _arm_idle_once() -> None:
-         _emit_ready_once()
-         nudges.arm_idle_timers(session_id, reason="assistant_idle")
- 
-     audio_scheduled = False
- 
-     # TTS for assistant text
-     try:
--        text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-+        first_chunk_frame = next((fr for fr in frames if fr.get("type") == "assistant_chunk"), None)
-+        text_for_tts = first_chunk_frame.get("text") if isinstance(first_chunk_frame, dict) else ""
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
-             safe_text = _scrub_debug_stamps(text_for_tts)
-             try:
-                 payload = {
-                     "session_id": session_id,
-                     "sid": session_id,
-                     "turn_id": tid,
-                     "flow": "user",
-                     **_tts_text_markers(safe_text),
-                 }
-                 if correlation_user_msg_id:
-                     payload["correlation_user_msg_id"] = correlation_user_msg_id
-                 _jlog("tts.pre_schedule", **payload)
-             except Exception:
-                 pass
-+            clarifier_band = ""
-+            teacher_move = ""
-+            clarify_variant = ""
-+            if isinstance(first_chunk_frame, dict):
-+                clarifier_band = str(
-+                    first_chunk_frame.get("planner_confidence_band")
-+                    or first_chunk_frame.get("policy_confidence_band")
-+                    or ""
-+                ).strip().lower()
-+                teacher_move = str(first_chunk_frame.get("teacher_move") or "").strip().lower()
-+                clarify_variant = str(first_chunk_frame.get("clarify_variant") or "").strip().lower()
-+            is_clarifier_audio = clarifier_band in {"medium", "low"} and (
-+                bool(clarify_variant) or teacher_move == "clarify"
-+            )
-+            schedule_kwargs: Dict[str, Any] = {
-+                "turn_id": tid,
-+                "correlation_user_msg_id": correlation_user_msg_id,
-+            }
-+            if is_clarifier_audio:
-+                schedule_kwargs["chunk_bytes"] = 4096
-+                schedule_kwargs["on_post_silence"] = _arm_idle_once
-+                schedule_kwargs["post_silence_origin"] = "clarifier_idle"
-+            else:
-+                schedule_kwargs["on_complete"] = _arm_idle_once
-             audio_scheduled = schedule_tts_audio(
+             session_goal = db.update_session_goal(
                  session_id,
-                 safe_text,
--                turn_id=tid,
--                correlation_user_msg_id=correlation_user_msg_id,
--                on_complete=_arm_idle_once,
-+                **schedule_kwargs,
+                 phase=universal.get("phase"),
+                 depth=universal.get("depth"),
+                 delivery_pref=universal.get("delivery_pref"),
+                 working_intent=dialog_nlu.get("intent") or universal.get("intent_hint"),
+                 entities=universal.get("entities"),
              )
-     except Exception:
-         pass
-     if not audio_scheduled:
-         try:
-             _arm_idle_once()
          except Exception:
-             try:
-                 _emit_ready_once()
-             except Exception:
-                 pass
-     return tid
+             session_goal = db.get_session_goal(session_id)
+         if session_goal:
+             target_meta["session_goal"] = copy.deepcopy(session_goal)
+ 
+     raw_policy = pick_dialog_policy(dialog_nlu, universal, session_goal=session_goal) or {}
+     policy = dict(raw_policy)
+     if policy.get("action") and "teacher_move" not in policy:
+         policy["teacher_move"] = policy["action"]
+ 
++    if telemetry:
++        confidence_value: Optional[float]
++        try:
++            confidence_raw = universal.get("confidence") if isinstance(universal, Mapping) else None
++            confidence_value = float(confidence_raw) if isinstance(confidence_raw, (int, float)) else None
++        except Exception:
++            confidence_value = None
++        planner_features = _planner_feature_summary(dialog_nlu, universal)
++        telemetry.log_planner_decision(
++            confidence=confidence_value,
++            band=policy.get("confidence_band"),
++            teacher_move=policy.get("teacher_move") or policy.get("action"),
++            top_features=planner_features or None,
++        )
++
+     action = target_meta.get(_DIALOG_ACTION_KEY) or target_meta.get("action")
+     if not action:
+         action = policy.get("action") or policy.get("teacher_move") or "respond"
+     canonical_action = _ACTION_ALIASES.get(str(action or "").strip().lower(), action)
+     target_meta["action"] = canonical_action
+     target_meta[_DIALOG_ACTION_KEY] = canonical_action
+     if policy.get("frame"):
+         target_meta.setdefault("frame", policy.get("frame"))
+     else:
+         target_meta.setdefault("frame", canonical_action)
+ 
+     policy_verbosity = str(policy.get("verbosity") or "").strip().lower() or None
+     if policy_verbosity and policy_verbosity not in {"brief", "normal"}:
+         policy_verbosity = None
+ 
+     if policy_verbosity:
+         target_meta.setdefault(_DIALOG_VERBOSITY_KEY, policy_verbosity)
+         target_meta.setdefault("verbosity", policy_verbosity)
+ 
+     if _DIALOG_VERBOSITY_KEY not in target_meta:
+         target_meta[_DIALOG_VERBOSITY_KEY] = cfg.get("gen_target_verbosity", "medium")
+     if "verbosity" not in target_meta:
+         target_meta["verbosity"] = target_meta[_DIALOG_VERBOSITY_KEY]
+     elif _DIALOG_VERBOSITY_KEY not in target_meta:
+         target_meta[_DIALOG_VERBOSITY_KEY] = target_meta["verbosity"]
