@@ -48,6 +48,8 @@ const state = {
   analyser: null,
   vad: null,
   rec: null,
+  finalized: false,
+  wsListener: null,
   chunkSendPromise: Promise.resolve(),
   chunkBytesSent: 0,
   chunkSendError: null,
@@ -118,6 +120,63 @@ function _clearBargeConfirm(resume = false) {
       try { resumePlayback(); } catch {}
     }
   }
+}
+
+function _ensureWSListener() {
+  if (state.wsListener || typeof window === 'undefined') {
+    return;
+  }
+  const handler = async (ev) => {
+    const detail = ev?.detail || {};
+    const type = detail?.type;
+
+    let isFinal = false;
+    if (type === 'UtteranceEnd') {
+      isFinal = true;
+    } else if (type === 'Results') {
+      const channelFinal = detail?.channel?.is_final === true;
+      const payloadFinal = detail?.is_final === true;
+      isFinal = channelFinal || payloadFinal;
+    }
+
+    if (!isFinal || state.finalized) {
+      return;
+    }
+
+    state.finalized = true;
+
+    const recorder = state.rec;
+    const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state !== 'inactive');
+    if (!isRecording) {
+      return;
+    }
+
+    try {
+      _stopRecorder({ reason: 'server_final' });
+    } catch (err) {
+      try { console.warn('[voice] failed to stop recorder on server final', err); } catch {}
+    }
+
+    try {
+      const pending = _closeTurnIfOpen();
+      if (pending) {
+        await pending;
+      }
+    } catch (err) {
+      try { console.warn('[voice] failed to close turn on server final', err); } catch {}
+    }
+  };
+
+  try { window.addEventListener('askchip-ws', handler); } catch {}
+  state.wsListener = handler;
+}
+
+function _removeWSListener() {
+  if (!state.wsListener || typeof window === 'undefined') {
+    return;
+  }
+  try { window.removeEventListener('askchip-ws', state.wsListener); } catch {}
+  state.wsListener = null;
 }
 
 async function _ensureMic(externalStream = null) {
@@ -228,7 +287,26 @@ function _stopRecorder(detail = null) {
   }, detail || {});
   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
 
-  try { if (state.rec && state.rec.state !== 'inactive') state.rec.stop(); } catch {}
+  if (detail?.reason === 'server_final') {
+    state.finalized = true;
+  } else if (state.finalized) {
+    if (!recorder || recorder.state === 'inactive') {
+      state.rec = null;
+      return;
+    }
+  }
+
+  if (!recorder) {
+    state.rec = null;
+    return;
+  }
+
+  if (recorder.state === 'inactive') {
+    state.rec = null;
+    return;
+  }
+
+  try { recorder.stop(); } catch {}
   // intentionally keep state.rec reference nullable here; onstop handler handles final close
   state.rec = null;
 }
@@ -246,6 +324,8 @@ function _teardownAudioGraph() {
   state.analyser = null;
   state.ctx = null;
   state.deviceLogged = false;
+  state.finalized = false;
+  _removeWSListener();
 }
 
 function _disarm() {
@@ -258,6 +338,8 @@ function _disarm() {
   state.turnClosePromise = null;
   state.recStartedAt = 0;
   state.ttsPlaying = false;
+  state.finalized = false;
+  _removeWSListener();
   _emitVoiceState('idle');
 }
 
@@ -338,6 +420,8 @@ function _startRecorder() {
   state.turnClosePromise = null;
   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
+  state.finalized = false;
+  _ensureWSListener();
 
   let recorder;
   try {
@@ -355,6 +439,9 @@ function _startRecorder() {
   state.rec = recorder;
 
   state.rec.ondataavailable = (e) => {
+    if (state.finalized) {
+      return;
+    }
     const blob = e.data;
     if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
       return;
