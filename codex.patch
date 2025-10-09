@@ -1,101 +1,22 @@
 diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 11b16b9b99ddab889adb6b5b0493fafa0a4403a4..05142e29da044a44775056b58ad563554078b14d 100644
+index 05142e29da044a44775056b58ad563554078b14d..6ad76dcbcdb1db4f2f75867c4f73e7d4f506596c 100644
 --- a/app/services/streaming.py
 +++ b/app/services/streaming.py
-@@ -2662,159 +2662,151 @@ def schedule_tts_audio(session_id: str,
+@@ -2741,50 +2741,53 @@ def schedule_tts_audio(session_id: str,
+             dur_ms=0,
+             audio_bytes=total_audio_bytes,
+             override=True,
+         )
  
-     def _log(kind: str, **fields: Any) -> None:
-         payload: Dict[str, Any] = {
-             "session_id": session_id,
-             "sid": session_id,
-         }
-         if safe_turn_id is not None:
-             payload["turn_id"] = safe_turn_id
-         if correlation_user_msg_id:
-             payload["correlation_user_msg_id"] = correlation_user_msg_id
-         payload.update(text_markers)
-         payload["audio_override"] = audio_override
-         payload.update(fields)
-         try:
-             _jlog(kind, **payload)
-         except Exception:
-             pass
- 
-     state_snapshot = dict(state)
-     level = "warning" if state_snapshot.get('started') or state_snapshot.get('done') else "info"
-     _log("tts.schedule", level=level, state=state_snapshot, feature_audio=feature_audio)
- 
-     if not feature_audio:
+     if not audio_payload:
+         state['error'] = 'empty_audio'
+         _log("tts.synth.error", error='empty_audio', override=audio_override)
          return False
  
-+    desired_mime = _guess_tts_mime(cfg.get('tts_output_format'))
-+
-+    audio_payload = audio_bytes
-+    provider_label: Optional[str] = None
-+
-+    if audio_payload is None:
-+        try:
-+            from app.services.tts_provider import get_tts_provider
-+
-+            provider = get_tts_provider(cfg or {})
-+            provider_label = getattr(provider, "name", None) or getattr(type(provider), "__name__", "unknown")
-+            _log("tts.provider_selected", provider=provider_label, override=False)
-+        except Exception as e:
-+            state['error'] = str(e)
-+            _log("tts.provider.error", error=str(e))
-+            try:
-+                _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
-+            except Exception:
-+                pass
-+            return False
-+
-+        try:
-+            synth_started_at = _t.time()
-+            _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=False)
-+            audio_payload, _vis = provider.synth(_scrub_debug_stamps(text))
-+            state['started'] = True
-+            synth_duration_ms = int((_t.time() - synth_started_at) * 1000)
-+            total_audio_bytes = len(audio_payload or b"")
-+            _log(
-+                "tts.synth.done",
-+                desired_mime=desired_mime,
-+                chunk_bytes=chunk_bytes,
-+                dur_ms=synth_duration_ms,
-+                audio_bytes=total_audio_bytes,
-+                override=False,
-+            )
-+        except Exception as e:
-+            state['error'] = str(e)
-+            _log("tts.synth.error", error=str(e), override=False)
-+            try:
-+                _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
-+            except Exception:
-+                pass
-+            return False
-+    else:
-+        provider_label = "prebaked"
-+        _log("tts.provider_selected", provider=provider_label, override=True)
-+        _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=True)
-+        total_audio_bytes = len(audio_payload or b"")
-+        state['started'] = True
-+        _log(
-+            "tts.synth.done",
-+            desired_mime=desired_mime,
-+            chunk_bytes=chunk_bytes,
-+            dur_ms=0,
-+            audio_bytes=total_audio_bytes,
-+            override=True,
-+        )
-+
-+    if not audio_payload:
-+        state['error'] = 'empty_audio'
-+        _log("tts.synth.error", error='empty_audio', override=audio_override)
-+        return False
-+
      completion_event = _prepare_tts_completion_event(session_id, turn_key)
  
-+    payload_for_stream = audio_payload
-+
+     payload_for_stream = audio_payload
+ 
      def _run():
          total_audio_bytes = 0
          chunk_count = 0
@@ -107,6 +28,9 @@ index 11b16b9b99ddab889adb6b5b0493fafa0a4403a4..05142e29da044a44775056b58ad56355
  
          def _emit_utterance_end(reason: str) -> None:
              nonlocal utterance_end_sent
++            if utterance_end_sent:
++                _log("tts.utterance_end.skip", reason=reason, already_sent=True)
++                return
              _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
              try:
                  bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
@@ -114,358 +38,122 @@ index 11b16b9b99ddab889adb6b5b0493fafa0a4403a4..05142e29da044a44775056b58ad56355
                  pass
              utterance_end_sent = True
  
--        audio_payload = audio_bytes
-+        stream_payload = audio_bytes if audio_override else payload_for_stream
+         stream_payload = audio_bytes if audio_override else payload_for_stream
          try:
              # Small pacing delay if requested
              if delay_ms and delay_ms > 0:
                  _t.sleep(max(0, delay_ms) / 1000.0)
  
--            # Determine desired MIME from configured output format
--            desired_mime = _guess_tts_mime(cfg.get('tts_output_format'))
--
--            if audio_payload is None:
--                # Pick provider (vendor only)
--                from app.services.tts_provider import get_tts_provider
--                provider = get_tts_provider(cfg or {})
--                provider_label = getattr(provider, "name", None) or getattr(type(provider), "__name__", "unknown")
--                _log("tts.provider_selected", provider=provider_label, override=False)
-+            total_audio_bytes = len(stream_payload or b"")
+             total_audio_bytes = len(stream_payload or b"")
  
--                # Synthesize
--                try:
--                    # Re-scrub here as a safety net in case any upstream callers missed it
--                    synth_started_at = _t.time()
--                    _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=False)
--                    audio_payload, _vis = provider.synth(_scrub_debug_stamps(text))
--                    state['started'] = True
--                    total_audio_bytes = len(audio_payload or b"")
--                    synth_duration_ms = int((_t.time() - synth_started_at) * 1000)
--                    _log(
--                        "tts.synth.done",
--                        desired_mime=desired_mime,
--                        chunk_bytes=chunk_bytes,
--                        dur_ms=synth_duration_ms,
--                        audio_bytes=total_audio_bytes,
--                        override=False,
--                    )
--                    try:
--                        _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
--                    except Exception:
--                        pass
--                except Exception as e:
--                    state['error'] = str(e)
--                    _log("tts.synth.error", error=str(e), override=False)
--                    try:
--                        _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
--                    except Exception:
--                        pass
--                    # Even on error, signal end-of-utterance so clients can clean up gracefully
--                    _log(
--                        "tts.chunks.summary",
--                        chunk_count=chunk_count,
--                        bytes_sent=chunk_bytes_sent,
--                        total_bytes=total_audio_bytes,
--                        status="synth_error",
--                        max_frames=max_frames,
--                    )
--                    _emit_utterance_end("synth_error")
--                    return
--            else:
--                _log("tts.provider_selected", provider="prebaked", override=True)
--                _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=True)
--                state['started'] = True
--                total_audio_bytes = len(audio_payload or b"")
--                _log(
--                    "tts.synth.done",
--                    desired_mime=desired_mime,
--                    chunk_bytes=chunk_bytes,
--                    dur_ms=0,
--                    audio_bytes=total_audio_bytes,
--                    override=True,
--                )
--                try:
--                    _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
--                except Exception:
--                    pass
--
--            if audio_payload is None:
--                state['error'] = 'empty_audio'
--                _log("tts.synth.error", error='empty_audio', override=audio_override)
--                _log(
--                    "tts.chunks.summary",
--                    chunk_count=chunk_count,
--                    bytes_sent=chunk_bytes_sent,
--                    total_bytes=total_audio_bytes,
--                    status="synth_error",
--                    max_frames=max_frames,
--                )
--                _emit_utterance_end("empty_audio")
--                return
-+            try:
-+                _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
-+            except Exception:
-+                pass
+             try:
+                 _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
+             except Exception:
+                 pass
  
              # Chunk and broadcast
--            mv = memoryview(audio_payload)
-+            mv = memoryview(stream_payload)
+             mv = memoryview(stream_payload)
              idx = 0
              first_sent = False
  
-             while idx < len(mv):
-                 # stop early if canceled
-                 try:
-                     from ..ws.bus import bus as _bus_ref
-                     if _bus_ref.is_canceled(session_id, safe_turn_id):
-                         canceled = True
-                         _log(
-                             "tts.chunks.cancelled",
-                             chunk_count=chunk_count,
-                             bytes_sent=chunk_bytes_sent,
-                             total_bytes=total_audio_bytes,
-                         )
-                         break
-                 except Exception:
-                     pass
- 
-                 next_idx = idx + int(chunk_bytes)
-                 part = bytes(mv[idx: next_idx])
-                 idx = next_idx
-                 chunk_len = len(part)
- 
-                 try:
-@@ -3032,89 +3024,108 @@ def run_ws_greet(session_id: str) -> str:
-         meta={"source": "ws_greet", "channel": "ws"},
-         force_turn_id=forced_tid,
-         cfg=cfg,
-     )
-     if _ws_generation_failed(tid, frames):
-         tid = _allocate_turn_id(forced_tid)
-         frames = _emit_ws_outage(session_id, tid)
-         try:
-             _admin_emit('ws_pipeline_outage', session_id=session_id, phase='greet')
-         except Exception:
-             pass
-         try:
-             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-         except Exception:
-             pass
-         return tid
-     existing_frame_types = [
-         fr.get("type")
-         for fr in frames
-         if isinstance(fr, dict) and fr.get("type") is not None
+diff --git a/tests/test_ws_two_turn_regression.py b/tests/test_ws_two_turn_regression.py
+index 0cc143d0a793cde5f2ab0648b8171292814c9f0b..fe82717d528b553a92bab4acef30b9847d7c41b9 100644
+--- a/tests/test_ws_two_turn_regression.py
++++ b/tests/test_ws_two_turn_regression.py
+@@ -151,50 +151,96 @@ def test_schedule_frames_tracks_current_assistant_turn(monkeypatch):
+         {"type": "assistant_end", "turn_id": "turn-42"},
      ]
-     state_already_sent = any(ft == "state" for ft in existing_frame_types)
-     suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
+     calls = []
+     orig_note = bus.note_assistant_turn
  
-     ready_sent = state_already_sent
-+    idle_armed = False
+     def _capture_note(sid_arg, tid_arg):
+         calls.append((sid_arg, tid_arg))
+         orig_note(sid_arg, tid_arg)
  
-     def _emit_ready_once() -> None:
-         nonlocal ready_sent
-         if ready_sent:
-             return
-         try:
-             if should_emit_phase(session_id, "ready"):
-                 set_phase(session_id, "ready", emitted=True)
-                 bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-             else:
-                 set_phase(session_id, "ready")
-             ready_sent = True
-         except Exception:
-             pass
+     monkeypatch.setattr(bus, "note_assistant_turn", _capture_note)
  
-     def _arm_idle_once() -> None:
-+        nonlocal idle_armed
-+        if idle_armed:
-+            return
-+        idle_armed = True
-         _emit_ready_once()
-         nudges.arm_idle_timers(session_id, reason="greet_idle")
- 
-     audio_scheduled = False
- 
-     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
+     q = bus.subscribe(sid)
      try:
-         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
-             safe_text = _scrub_debug_stamps(text_for_tts)
-             try:
-                 _jlog(
-                     "tts.pre_schedule",
-                     session_id=session_id,
-                     sid=session_id,
-                     turn_id=tid,
-                     flow="greet",
-                     **_tts_text_markers(safe_text),
-                 )
-             except Exception:
-                 pass
-             audio_scheduled = schedule_tts_audio(session_id, safe_text, turn_id=tid, on_complete=_arm_idle_once)
-+            if not audio_scheduled:
-+                try:
-+                    _jlog(
-+                        "tts.greet_audio_skipped",
-+                        session_id=session_id,
-+                        sid=session_id,
-+                        turn_id=tid,
-+                        flow="greet",
-+                        reason="schedule_failed",
-+                        **_tts_text_markers(safe_text),
-+                    )
-+                except Exception:
-+                    pass
-+                _arm_idle_once()
-     except Exception:
-         pass
+         schedule_frames(sid, frames)
+         q.get(timeout=1.0)
+         q.get(timeout=1.0)
+     finally:
+         bus.unsubscribe(sid, q)
+         bus.note_assistant_turn(sid, None)
+         bus._canceled.discard((sid, "turn-42"))
  
-     # UI nudges (only emit if the assistant frames didn't already do so)
-     try:
-         if not audio_scheduled:
-             _arm_idle_once()
-         if not suggestions_already_sent:
-             greet_legacy = hygienic_suggestions("")
-             base_suggestions = merge_suggestions(greet_legacy)
-             _log_suggestions_made(
-                 turn_id=tid,
-                 policy_chips=[],
-                 legacy_suggestions=greet_legacy,
-                 merged_suggestions=base_suggestions,
-                 cfg=cfg,
-             )
-             if base_suggestions:
-                 bus.broadcast(
-                     session_id,
-                     {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
-                 )
-     except Exception:
-         pass
-     return tid
-diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
-index 664aa7fb27d0d9f0027983a3c00e6680c1b29418..0d5f4fd7ce0b0a885d2b97d89bc79a9171c386c4 100644
---- a/tests/test_streaming_ws_fallbacks.py
-+++ b/tests/test_streaming_ws_fallbacks.py
-@@ -151,50 +151,107 @@ def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
-         turn_id = kwargs.get("force_turn_id") or "tid-greet"
-         if action == "clarify":
-             text = fallback_text
-         else:
-             text = "foundation hello"
-         frames = [
-             {"type": "assistant_chunk", "turn_id": turn_id, "text": text, "kb_hits": 0},
-             {"type": "assistant_end", "turn_id": turn_id},
-         ]
-         captured["frames"] = frames
-         captured["action"] = action
-         captured["fallback_text"] = fallback_text
-         return turn_id, frames
- 
-     monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
-     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
-     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
- 
-     tid = streaming.run_ws_greet("session-no-clarify")
- 
-     assert tid == captured["frames"][0]["turn_id"]
-     assert captured["action"] == "offer_steps"
-     assert captured["frames"][0]["text"] != captured["fallback_text"]
+     assert (sid, "turn-42") in calls
+     assert (sid, None) in calls
  
  
-+def test_run_ws_greet_surfaces_tts_failure(monkeypatch):
-+    _stub_config(monkeypatch)
++def test_schedule_tts_audio_truncation_emits_single_utterance_end(monkeypatch):
++    sid = "s-tts-truncation"
++    turn_id = "turn-truncate"
 +
-+    from tests.tts_stub_provider import RaisingTTSProvider
++    # Capture structured logs to confirm duplicate suppression fires.
++    logs = []
 +
-+    monkeypatch.setattr(streaming, "should_emit_phase", lambda *_: True)
-+    monkeypatch.setattr(streaming, "set_phase", lambda *a, **k: None)
-+    monkeypatch.setattr(streaming.nudges, "cancel_idle_timers", lambda *a, **k: None)
++    def _capture_log(kind, **fields):
++        logs.append((kind, fields))
 +
-+    idle_calls = []
++    monkeypatch.setattr(streaming, "_jlog", _capture_log)
 +
-+    def _capture_idle(session_id, reason=""):
-+        idle_calls.append((session_id, reason))
++    q = bus.subscribe(sid)
++    try:
++        # Force the guard by exceeding the max frame count with 1-byte chunks.
++        audio_bytes = b"a" * 300
++        scheduled = streaming.schedule_tts_audio(
++            sid,
++            "hello",
++            turn_id=turn_id,
++            audio_bytes=audio_bytes,
++            chunk_bytes=1,
++        )
++        assert scheduled, "TTS scheduling should succeed for override payloads"
 +
-+    monkeypatch.setattr(streaming.nudges, "arm_idle_timers", _capture_idle)
++        frames = []
++        idle_streak = 0
++        deadline = time.time() + 5
++        while time.time() < deadline and idle_streak < 3:
++            try:
++                frames.append(q.get(timeout=0.1))
++                idle_streak = 0
++            except Empty:
++                idle_streak += 1
 +
-+    broadcast_frames = []
++        utterance_ends = [fr for fr in frames if fr.get("type") == "UtteranceEnd"]
++        assert len(utterance_ends) == 1, f"expected single UtteranceEnd, saw {len(utterance_ends)}"
 +
-+    def _capture_broadcast(session_id, frame):
-+        if isinstance(frame, dict):
-+            broadcast_frames.append(frame)
-+
-+    monkeypatch.setattr(streaming.bus, "broadcast", _capture_broadcast)
-+
-+    monkeypatch.setattr(
-+        streaming,
-+        "get_or_create_greet_turn",
-+        lambda session_id, force=False, ttl_sec=streaming.DEFAULT_TTL_SEC: ("turn-tts-fail", False),
-+    )
-+
-+    def _make_frames(seed_text, session_id, meta=None, **kwargs):
-+        turn_id = kwargs.get("force_turn_id") or "turn-tts-fail"
-+        frames = [
-+            {"type": "assistant_chunk", "turn_id": turn_id, "text": "Hello", "kb_hits": 0},
-+            {"type": "assistant_end", "turn_id": turn_id},
-+        ]
-+        streaming._broadcast_frames(session_id, frames, turn_id)
-+        return turn_id, frames
-+
-+    monkeypatch.setattr(streaming, "make_assistant_frames", _make_frames)
-+    monkeypatch.setattr(
-+        "app.services.tts_provider.get_tts_provider",
-+        lambda cfg: RaisingTTSProvider(),
-+    )
-+
-+    tid = streaming.run_ws_greet("session-tts-fail")
-+    assert tid == "turn-tts-fail"
-+
-+    audio_frames = [fr for fr in broadcast_frames if fr.get("type") == "assistant_audio"]
-+    assert not audio_frames, "assistant_audio frames should be absent when TTS fails"
-+
-+    ready_frames = [fr for fr in broadcast_frames if fr.get("type") == "state" and fr.get("phase") == "ready"]
-+    assert ready_frames, "ready state should be emitted as the audio fallback indicator"
-+
-+    assert idle_calls, "Idle timers should arm immediately when audio is skipped"
++        skip_logs = [kind for kind, payload in logs if kind == "tts.utterance_end.skip"]
++        assert skip_logs, "expected duplicate suppression log"
++    finally:
++        bus.unsubscribe(sid, q)
++        bus.note_assistant_turn(sid, None)
++        bus._canceled.discard((sid, turn_id))
 +
 +
- def test_run_ws_greet_emits_single_suggestions_frame(monkeypatch):
-     _stub_config(monkeypatch)
+ def test_ws_barge_commit_cancels_turn(monkeypatch):
+     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
  
-     # Avoid touching shared greet idempotency state
-     monkeypatch.setattr(
-         streaming,
-         "get_or_create_greet_turn",
-         lambda session_id, force=False, ttl_sec=streaming.DEFAULT_TTL_SEC: ("turn-xyz", False),
-     )
+     sid = "s-barge-commit"
+     bus.note_assistant_turn(sid, "turn-commit")
  
-     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
+     cancel_calls = []
+     orig_cancel = bus.cancel_turn
  
-     emitted = []
+     def _capture_cancel(sid_arg, tid_arg):
+         cancel_calls.append((sid_arg, tid_arg))
+         orig_cancel(sid_arg, tid_arg)
  
-     def fake_broadcast(session_id, frame):
-         if isinstance(frame, dict):
-             emitted.append(frame)
+     monkeypatch.setattr(bus, "cancel_turn", _capture_cancel)
  
-     monkeypatch.setattr(streaming.bus, "broadcast", fake_broadcast)
+     start_results = []
+     orig_start = ws_asgi.BargeState.start
  
-     def fake_make_frames(seed_text, session_id, meta=None, **kwargs):
-         turn_id = kwargs.get("force_turn_id") or "turn-xyz"
-         frames = [
-             {"type": "assistant_chunk", "turn_id": turn_id, "text": "Hello!", "kb_hits": 0},
-             {"type": "state", "phase": "ready"},
-diff --git a/tests/tts_stub_provider.py b/tests/tts_stub_provider.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..6da6c4924847e6d3e4f756c5ff8818f51f5e760b
---- /dev/null
-+++ b/tests/tts_stub_provider.py
-@@ -0,0 +1,7 @@
-+class RaisingTTSProvider:
-+    """Test double that raises during synthesis."""
-+
-+    name = "raising_tts_stub"
-+
-+    def synth(self, text):
-+        raise RuntimeError("stub_tts_failure")
+     def _capture_start(self, *args, **kwargs):
+         result = orig_start(self, *args, **kwargs)
+         start_results.append(result)
+         return result
+ 
+     monkeypatch.setattr(ws_asgi.BargeState, "start", _capture_start)

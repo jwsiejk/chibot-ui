@@ -173,6 +173,52 @@ def test_schedule_frames_tracks_current_assistant_turn(monkeypatch):
     assert (sid, None) in calls
 
 
+def test_schedule_tts_audio_truncation_emits_single_utterance_end(monkeypatch):
+    sid = "s-tts-truncation"
+    turn_id = "turn-truncate"
+
+    # Capture structured logs to confirm duplicate suppression fires.
+    logs = []
+
+    def _capture_log(kind, **fields):
+        logs.append((kind, fields))
+
+    monkeypatch.setattr(streaming, "_jlog", _capture_log)
+
+    q = bus.subscribe(sid)
+    try:
+        # Force the guard by exceeding the max frame count with 1-byte chunks.
+        audio_bytes = b"a" * 300
+        scheduled = streaming.schedule_tts_audio(
+            sid,
+            "hello",
+            turn_id=turn_id,
+            audio_bytes=audio_bytes,
+            chunk_bytes=1,
+        )
+        assert scheduled, "TTS scheduling should succeed for override payloads"
+
+        frames = []
+        idle_streak = 0
+        deadline = time.time() + 5
+        while time.time() < deadline and idle_streak < 3:
+            try:
+                frames.append(q.get(timeout=0.1))
+                idle_streak = 0
+            except Empty:
+                idle_streak += 1
+
+        utterance_ends = [fr for fr in frames if fr.get("type") == "UtteranceEnd"]
+        assert len(utterance_ends) == 1, f"expected single UtteranceEnd, saw {len(utterance_ends)}"
+
+        skip_logs = [kind for kind, payload in logs if kind == "tts.utterance_end.skip"]
+        assert skip_logs, "expected duplicate suppression log"
+    finally:
+        bus.unsubscribe(sid, q)
+        bus.note_assistant_turn(sid, None)
+        bus._canceled.discard((sid, turn_id))
+
+
 def test_ws_barge_commit_cancels_turn(monkeypatch):
     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)

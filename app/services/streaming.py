@@ -2763,6 +2763,9 @@ def schedule_tts_audio(session_id: str,
 
         def _emit_utterance_end(reason: str) -> None:
             nonlocal utterance_end_sent
+            if utterance_end_sent:
+                _log("tts.utterance_end.skip", reason=reason, already_sent=True)
+                return
             _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
             try:
                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
