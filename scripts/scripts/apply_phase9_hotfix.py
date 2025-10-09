@@ -180,9 +180,9 @@ def main():
     print(\"[Phase 9] Files patched:\")
     for c in CHANGES:
         print(\"  -\", c)
-    print(\"\\nNext:\") 
-    print(\"  git add -A && git status\") 
-    print(\"  (verify diffs, then commit)\\n\") 
+    print(\"\\nNext:\")
+    print(\"  git add -A && git status\")
+    print(\"  (verify diffs, then commit)\\n\")
 
 if __name__ == \"__main__\":
     main()

@@ -306,7 +306,7 @@ function resetView(state) {
   if (state.adminLogEl) state.adminLogEl.textContent = '';
   if (state.wsLogEl) state.wsLogEl.textContent = '';
   if (state.runMetaEl) state.runMetaEl.textContent = '';
-  resetPolicySnapshot(state);  
+  resetPolicySnapshot(state);
 }
 
 async function ensureWsOpen(timeoutMs = 8000) {
@@ -541,7 +541,7 @@ function handleWSFrame(state, frame) {
 
 function handleAdminEvent(state, evt) {
   if (!evt) return;
-  
+
   const kindTag = String(evt.kind || '').toLowerCase();
   const labelTag = String(evt.label || '').toLowerCase();
 
@@ -579,9 +579,9 @@ function maybeHandleASREvent(state, evt, kindTag, labelTag) {
 
   if (tag.includes('start')) {
     updateASRStatus(state, { status: 'active', message: 'ASR stream started.' });
-    return true;    
+    return true;
   }
-  
+
   return false;
 }
 
@@ -641,7 +641,7 @@ function updateASRStatus(state, { status, partialsDelta = 0, final = false, tran
   const detail = parts.length ? parts.join(' • ') : (message || 'Waiting for ASR activity…');
   const resolvedStatus = status || (error ? 'error' : (state.asr.finals ? 'done' : (state.asr.partials ? 'active' : 'pending')));
   setStepStatus(state, 'asr', resolvedStatus, detail);
-}  
+}
 
 function resetPolicySnapshot(state) {
   if (!state) return;
@@ -977,7 +977,7 @@ function buildPolicySummary(evt, combinedTag, snapshot, changed = {}) {
   if (!parts.length && combinedTag) parts.push(combinedTag);
   return parts.join(' • ') || 'Policy signal received';
 }
-  
+
 function cleanupRun(state) {
   try { disarmVAD(); } catch {}
   try { closeWS(1000, 'admin_diag_end'); } catch {}

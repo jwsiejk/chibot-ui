@@ -3,7 +3,7 @@ import os, re, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
-def read(p): 
+def read(p):
     return pathlib.Path(p).read_text(encoding="utf-8", errors="ignore")
 
 def test_no_legacy_routes_strings():
@@ -11,10 +11,10 @@ def test_no_legacy_routes_strings():
     for p in list(ROOT.glob("**/*.py")) + list(ROOT.glob("static/**/*.js")) + list(ROOT.glob("templates/**/*.html")):
         s = read(p)
         # Disallow explicit legacy patterns
-        if "/api/v1/greet" in s: 
+        if "/api/v1/greet" in s:
             bad.append(str(p))
         # Any /api/ or /ws/ that isn't v1*
-        if re.search(r"/(api|ws)/(?!v1\\b)", s): 
+        if re.search(r"/(api|ws)/(?!v1\\b)", s):
             bad.append(str(p))
     assert not bad, "Found non-v1 route strings in: " + ", ".join(sorted(set(bad)))
 

@@ -34,7 +34,7 @@ def clear_greet_turn_cache(session_id: str) -> None:
             tbl.pop(sid, None)
     except Exception:
         pass
-        
+
 def get_or_create_greet_turn(session_id: str, *, force: bool=False, ttl_sec: int=DEFAULT_TTL_SEC) -> Tuple[str, bool]:
     """Return the greet turn identifier for the provided session.
 

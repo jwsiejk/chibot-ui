@@ -3,7 +3,7 @@ import os, sys, subprocess
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ok=True
-def A(c,m): 
+def A(c,m):
   global ok; print(("PASS" if c else "FAIL")+": "+m); ok = ok and c
 
 # Providers exist

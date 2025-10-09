@@ -25,12 +25,12 @@
     </div>
     <div id="profileMsg" class="msgline"></div>
   </section>
-  
+
   <script type="module" src="/static/js/auth_gate.js"></script>
   <script type="module">
     import { prefillProfile, saveProfile } from '/static/js/auth_gate.js';
     document.addEventListener('DOMContentLoaded', async ()=>{
-      await prefillProfile(); 
+      await prefillProfile();
       document.getElementById('profileSave').addEventListener('click', saveProfile);
     });
   </script>

@@ -1,225 +1,511 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 6d9f809ba1a3b20b7adb24871c67ab527f48e33a..265e36a4bc896f097ec167136bab39e602c83f93 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -23,50 +23,51 @@ from .schema_v1 import (
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
+diff --git a/app/services/greet_idempotency.py b/app/services/greet_idempotency.py
+index 31d188fd9f86e9a8c78e87436d2398088a3ee73f..d38345dc6dbfa3e4be0e2c85b22cad99aa4d7783 100644
+--- a/app/services/greet_idempotency.py
++++ b/app/services/greet_idempotency.py
+@@ -12,51 +12,51 @@ def _now() -> float:
+         return 0.0
  
- # NEW: invoke LLM on final transcript
- from app.services.streaming import (
-     run_ws_user_turn,
-     prepare_turn_metadata,
-     summarize_policy_metadata,
- )  # NEW
- from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
- from app.ws.barge import BargeState
- from app.ws.bus import bus
- from app.policy import nudges
- from app.session_state import (
-+    get as get_session_state,
-     note_partial,
-     note_utterance_end,
-     set_asr_stream_open,
-     set_phase,
-     set_recorder_active,
- )
+ def _get_mem_table():
+     mem = getattr(db, "memory", None)
+     if isinstance(mem, dict):
+         return mem.setdefault("greet_turns_mem", {})
+     if not hasattr(_get_mem_table, "_tbl"):
+         _get_mem_table._tbl = {}
+     return _get_mem_table._tbl  # type: ignore[attr-defined]
  
- # Optional admin emitter
- try:
-     from app.api_v1.admin import _emit as _admin_emit
- except Exception:
-     _admin_emit = None
- 
- 
- ACTIVE_WS: dict[str, dict[str, Any]] = {}
- ACTIVE_WS_LOCK = asyncio.Lock()
- 
- WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
- try:
-     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
- except Exception:
-     pass
- 
- # ------------------------------ small helpers ------------------------------
- 
-@@ -94,50 +95,69 @@ def _jlog(event: str, **fields):
-         import time as _t, json as _json
- 
-         fields.setdefault("event", event)
-         fields.setdefault("ts", _t.time())
-         print(_json.dumps(fields, separators=(",", ":"), ensure_ascii=False))
+ def clear_greet_turn_cache(session_id: str) -> None:
+     """Clear cached greet turn metadata for the given session identifier."""
+     sid = (session_id or "default").strip() or "default"
+     try:
+         mem = getattr(db, "memory", None)
+         if isinstance(mem, dict):
+             mem.setdefault("greet_turns", {}).pop(sid, None)
      except Exception:
          pass
- 
- 
- def _clip_text(txt: str, limit: int = 120) -> str:
      try:
-         txt = txt or ""
-         if len(txt) <= limit:
-             return txt
-         return txt[:limit] + "…"
+         tbl = _get_mem_table()
+         if isinstance(tbl, dict):
+             tbl.pop(sid, None)
      except Exception:
-         return ""
+         pass
+-        
++
+ def get_or_create_greet_turn(session_id: str, *, force: bool=False, ttl_sec: int=DEFAULT_TTL_SEC) -> Tuple[str, bool]:
+     """Return the greet turn identifier for the provided session.
  
+     Returns (turn_id, idempotent). Works in two modes:
+     1) Neon/DAL mode (preferred): uses db.sql_one / db.sql against table greet_turns.
+     2) Dev/in-memory mode: falls back to db.memory['greet_turns_mem'] with TTL.
+     """
+     sid = (session_id or "default").strip() or "default"
  
- def _dumps(obj) -> str:
-     import json as _json
+     # --- Mode 1: Neon / DAL available ---
+     if hasattr(db, "sql_one") and hasattr(db, "sql"):
+         if not force:
+             row = db.sql_one("""
+                 SELECT turn_id
+                 FROM greet_turns
+                 WHERE session_id = %(sid)s AND expires_at > now()
+                 LIMIT 1
+             """, {"sid": sid})
+             if row and row.get("turn_id"):
+                 return str(row["turn_id"]), True
  
-     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+         new_tid = uuid.uuid4().hex
+         db.sql(
+             """
+             INSERT INTO greet_turns (session_id, turn_id, created_at, expires_at)
+diff --git a/app/tests/test_ui_routes_and_markup.py b/app/tests/test_ui_routes_and_markup.py
+index 3a05650a8bf715225e732feec17393cfb001befd..4afaf7e9d341e4f5054dc376864f5bb4126ee725 100644
+--- a/app/tests/test_ui_routes_and_markup.py
++++ b/app/tests/test_ui_routes_and_markup.py
+@@ -1,31 +1,31 @@
  
+ import os, re, pathlib
  
-+def _should_emit_barge_phase(sid: str, phase: str) -> bool:
-+    """Return True if the barge phase changed and should be broadcast."""
-+    if not phase:
-+        return False
-+
-+    try:
-+        st = get_session_state(sid)
-+    except Exception:
-+        st = None
-+
-+    if st and st.phase == phase:
-+        return False
-+
-+    with contextlib.suppress(Exception):
-+        set_phase(sid, phase)
-+
-+    return True
-+
-+
- def _emit_admin_nlu_event(text: str,
-                           sid: str,
-                           *,
-                           dialog_nlu: Optional[Dict[str, Any]] = None,
-                           universal: Optional[Dict[str, Any]] = None) -> None:
-     if not text:
-         return
-     admin_cb = globals().get("_admin_emit")
-     if not callable(admin_cb):
-         return
+ ROOT = pathlib.Path(__file__).resolve().parents[1]
  
-     meta_stub = {"source": "user_ws", "channel": "ws"}
-     prepared_meta: Dict[str, Any] = {}
-     computed_dialog: Dict[str, Any] = {}
-     if isinstance(dialog_nlu, dict):
-         computed_dialog = dict(dialog_nlu)
-     try:
-         if not computed_dialog:
-             prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
-             if isinstance(dialog_nlu_raw, dict):
-                 computed_dialog = dict(dialog_nlu_raw)
-         if universal is None:
-             if not prepared_meta:
-                 prepared_meta, _, _ = prepare_turn_metadata(text, dict(meta_stub))
-             raw_universal = {}
-@@ -736,54 +756,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         except asyncio.CancelledError:
-             pass
+-def read(p): 
++def read(p):
+     return pathlib.Path(p).read_text(encoding="utf-8", errors="ignore")
  
-     ping_task = asyncio.create_task(_ping_loop())
+ def test_no_legacy_routes_strings():
+     bad=[]
+     for p in list(ROOT.glob("**/*.py")) + list(ROOT.glob("static/**/*.js")) + list(ROOT.glob("templates/**/*.html")):
+         s = read(p)
+         # Disallow explicit legacy patterns
+-        if "/api/v1/greet" in s: 
++        if "/api/v1/greet" in s:
+             bad.append(str(p))
+         # Any /api/ or /ws/ that isn't v1*
+-        if re.search(r"/(api|ws)/(?!v1\\b)", s): 
++        if re.search(r"/(api|ws)/(?!v1\\b)", s):
+             bad.append(str(p))
+     assert not bad, "Found non-v1 route strings in: " + ", ".join(sorted(set(bad)))
  
-     try:
-         await _ws_send_json(send, {"type": "ready", "session_id": sid})
-     except Exception:
-         with contextlib.suppress(Exception):
-             await send(
-                 {
-                     "type": "websocket.close",
-                     "code": 1011,
-                     "reason": "initial_ready_failed",
-                 }
-             )
-         return
+ def test_index_has_css_and_js():
+     idx = ROOT / "templates" / "index.html"
+     s = read(idx)
+     assert "static/css/app.css" in s
+     assert "static/js/app.js" in s
+     # quick sanity: composer + start button exist
+     assert 'id="btn_start"' in s and 'id="composer_input"' in s
  
-     cfg: Dict[str, Any] = {}
-     loop = asyncio.get_running_loop()
-     barge = BargeState()
+ def test_app_js_ws_v1():
+     s = read(ROOT / "static" / "js" / "app.js")
+     assert "/ws/v1/chat" in s
+diff --git a/scripts/phase7_1_checks.py b/scripts/phase7_1_checks.py
+index a942030f411fdfb29539db6d99e84f53557e1343..eeb62347b4e3fcba2ee31c8bc216fe0c1f5fffef 100644
+--- a/scripts/phase7_1_checks.py
++++ b/scripts/phase7_1_checks.py
+@@ -1,30 +1,30 @@
+ #!/usr/bin/env python3
+ import os, sys, subprocess
+ from pathlib import Path
+ ROOT = Path(__file__).resolve().parents[1]
+ ok=True
+-def A(c,m): 
++def A(c,m):
+   global ok; print(("PASS" if c else "FAIL")+": "+m); ok = ok and c
  
-     def _send_barge_state(phase: str) -> None:
-         if not phase:
-             return
--        try:
--            set_phase(sid, phase)
--        except Exception:
--            pass
-+        if not _should_emit_barge_phase(sid, phase):
-+            return
-         if phase == "paused":
-             try:
-                 set_recorder_active(sid, True)
-             except Exception:
-                 pass
-             nudges.cancel_idle_timers(sid, source="ws_state_paused")
-         frame = {"type": "state", "phase": phase}
-         try:
-             bus.broadcast(sid, frame)
-         except Exception:
-             pass
-         try:
-             if loop.is_closed():
-                 return
-             payload = dict(frame)
-             try:
-                 running = asyncio.get_running_loop()
-             except RuntimeError:
-                 running = None
-             if running is loop:
-                 asyncio.create_task(_ws_send_json(send, payload))
-             else:
-                 loop.call_soon_threadsafe(
-                     asyncio.create_task, _ws_send_json(send, payload)
-                 )
-diff --git a/tests/phase3/test_barge_state_phase_dedup.py b/tests/phase3/test_barge_state_phase_dedup.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..fbf87e41643590e67116d7559064b2e17adc28cb
---- /dev/null
-+++ b/tests/phase3/test_barge_state_phase_dedup.py
-@@ -0,0 +1,36 @@
-+import uuid
+ # Providers exist
+ A((ROOT/"app/services/tts_provider.py").exists(), "tts_provider exists")
+ A((ROOT/"app/services/stt_provider.py").exists(), "stt_provider exists")
+ A((ROOT/"app/services/providers/elevenlabs_tts.py").exists(), "elevenlabs tts provider exists")
+ A((ROOT/"app/services/providers/whisper_stt.py").exists(), "whisper stt provider exists")
+ 
+ # Endpoints wire providers (static check)
+ voice = (ROOT/"app/api_v1/voice.py").read_text(encoding="utf-8", errors="ignore")
+ A("get_stt_provider" in voice, "voice stt endpoint uses stt_provider")
+ chat = (ROOT/"app/api_v1/chat.py").read_text(encoding="utf-8", errors="ignore")
+ A("get_tts_provider" in chat, "chat tts endpoint uses tts_provider")
+ 
+ # Config keys present
+ db = (ROOT/"app/db.py").read_text(encoding="utf-8", errors="ignore")
+ A("'stt_provider'" in db and "'tts_provider'" in db, "config contains stt_provider/tts_provider")
+ 
+ # linter
+ p = subprocess.run([sys.executable, str(ROOT/"scripts/route_linter.py")], capture_output=True, text=True, cwd=str(ROOT))
+ print(p.stdout); A(p.returncode==0, "route linter passes")
+ 
+ print("\nRESULT:", "PASS" if ok else "FAIL")
+ sys.exit(0 if ok else 1)
+diff --git a/scripts/phase8_checks.py b/scripts/phase8_checks.py
+index a077567ff0601558229e65ce77fe6d3f863f4fb8..e8dbf850fe8db260c756fe7573800a815ca996e1 100644
+--- a/scripts/phase8_checks.py
++++ b/scripts/phase8_checks.py
+@@ -1,31 +1,31 @@
+ #!/usr/bin/env python3
+ import os, sys, subprocess
+ from pathlib import Path
+ ROOT = Path(__file__).resolve().parents[1]
+ ok=True
+-def A(c,m): 
++def A(c,m):
+   global ok; print(("PASS" if c else "FAIL")+": "+m); ok = ok and c
+ 
+ # Retrieval presence
+ retrieval = (ROOT/"app/services/retrieval.py").read_text(encoding="utf-8", errors="ignore") if (ROOT/"app/services/retrieval.py").exists() else ""
+ A(("def add_document" in retrieval) or ("def add_doc" in retrieval), "retrieval service exposes add_document/search")
+ A(("def search" in retrieval), "retrieval service exposes add_document/search")
+ 
+ # KB passed into provider context (static check)
+ streaming = (ROOT/"app/services/streaming.py").read_text(encoding="utf-8", errors="ignore")
+ A("'kb': kb" in streaming and "build_persona_preamble" in streaming, "KB passed into provider context")
+ 
+ # Mock provider emits KB count tag (string-based)
+ mock = (ROOT/"app/services/providers/mock_provider.py").read_text(encoding="utf-8", errors="ignore")
+ A("KB:" in mock, "mock provider emits KB count tag")
+ 
+ # OpenAI stub emits KB count tag (string-based check in provider doc block)
+ openai = (ROOT/"app/services/providers/openai_provider.py").read_text(encoding="utf-8", errors="ignore")
+ A("KB:" in openai, "openai stub emits KB count tag")
+ 
+ # TTS supports mp3 (string)
+ eleven = (ROOT/"app/services/providers/elevenlabs_tts.py").read_text(encoding="utf-8", errors="ignore")
+ A("mp3" in eleven.lower(), "TTS provider supports mp3 output format")
+ 
+ # Reuse prior phase checks and linter
+ for script in ("phase6_checks.py","phase7_checks.py","phase7_1_checks.py","route_linter.py"):
+diff --git a/scripts/scripts/apply_phase9_hotfix.py b/scripts/scripts/apply_phase9_hotfix.py
+index ee4744c36c8345f7215e3dc24abe477a391f41da..cf6246ee27e9120f183bef3384e7b79bcdb53378 100644
+--- a/scripts/scripts/apply_phase9_hotfix.py
++++ b/scripts/scripts/apply_phase9_hotfix.py
+@@ -158,31 +158,31 @@ def patch_mailer():
+             "        db.add_email(to_email, subject, body)\n"
+             "    except Exception:\n"
+             "        pass\n"
+             "    try:\n"
+             "        queue_transcript_email(session_id=session_id, ended_at=str(ended_at), to_email=to_email, subject=subject, body=body)\n"
+             "    except Exception:\n"
+             "        pass\n"
+             "    return True\n"
+         )
+     write(p, s)
+ 
+ def main():
+     # sanity
+     if not (APP.exists() and (APP/'asgi_gateway.py').exists()):
+         print(\"[!] Run this from your backend repo root (must contain app/asgi_gateway.py)\")
+         sys.exit(1)
+     patch_asgi_gateway()
+     patch_chat_ws()
+     patch_rate_limit()
+     patch_greet()
+     patch_voice()
+     patch_mailer()
+     print(\"[Phase 9] Files patched:\")
+     for c in CHANGES:
+         print(\"  -\", c)
+-    print(\"\\nNext:\") 
+-    print(\"  git add -A && git status\") 
+-    print(\"  (verify diffs, then commit)\\n\") 
++    print(\"\\nNext:\")
++    print(\"  git add -A && git status\")
++    print(\"  (verify diffs, then commit)\\n\")
+ 
+ if __name__ == \"__main__\":
+     main()
+diff --git a/static/js/admin_console.js b/static/js/admin_console.js
+index 25186d4aaeb476abdd23e13bc56790a2a417451a..4a5b28306a2b5a0274fadbda2389869e46840ec3 100644
+--- a/static/js/admin_console.js
++++ b/static/js/admin_console.js
+@@ -284,51 +284,51 @@ async function runDiagnostic(state) {
+     state.startBtn.disabled = false;
+     state.running = false;
+   }
+ }
+ 
+ function resetView(state) {
+   for (const step of STEP_DEFS) {
+     setStepStatus(state, step.id, 'pending', '');
+   }
+   setStepStatus(state, 'asr', 'pending', 'Waiting for speech activity…');
+   setStepStatus(state, 'assistant', 'pending', 'No assistant response yet.');
+   setSpeakState(state, 'idle');
+   state.asr = { partials: 0, finals: 0, errors: 0 };
+   state.latestTranscript = '';
+   state.asrFinalSatisfied = false;
+   if (state.asrTimer) {
+     clearTimeout(state.asrTimer);
+     state.asrTimer = null;
+   }
+   state.awaitingGreeting = false;
+   state.awaitingResponse = false;
+   state.responseStarted = false;
+   if (state.adminLogEl) state.adminLogEl.textContent = '';
+   if (state.wsLogEl) state.wsLogEl.textContent = '';
+   if (state.runMetaEl) state.runMetaEl.textContent = '';
+-  resetPolicySnapshot(state);  
++  resetPolicySnapshot(state);
+ }
+ 
+ async function ensureWsOpen(timeoutMs = 8000) {
+   const ws = await openWS({ reconnect: false });
+   await Promise.race([
+     waitWSOpen(),
+     new Promise((_, rej) => setTimeout(() => rej(new Error('WebSocket open timed out')), timeoutMs)),
+   ]);
+   return ws;
+ }
+ 
+ function waitForGreeting(state, timeoutMs) {
+   return new Promise((resolve, reject) => {
+     state.awaitingGreeting = true;
+     const timer = setTimeout(() => {
+       state.awaitingGreeting = false;
+       state.greetResolve = null;
+       state.greetReject = null;
+       reject(new Error('Chip did not greet within the expected window.'));
+     }, timeoutMs);
+     state.greetResolve = (frame) => {
+       clearTimeout(timer);
+       state.awaitingGreeting = false;
+       state.greetResolve = null;
+       state.greetReject = null;
+@@ -519,91 +519,91 @@ function handleWSFrame(state, frame) {
+     const final = isTranscriptFinal(frame);
+     const transcript = extractTranscript(frame);
+ 
+     if (transcript) {
+       state.latestTranscript = transcript;
+       updateASRStatus(state, { transcript, status: final ? 'done' : 'active' });
+     } else if (final) {
+       // Final with no text: treat as silence so we don’t time out.
+       updateASRStatus(state, { status: 'done', message: 'No speech detected (final).' });
+     }
+ 
+     if (final) {
+       // Resolve the ASR wait even if SSE didn’t fire an asr_final.
+       satisfyASRWait(state, { label: 'asr_final', transcript: transcript || '' });
+     }
+     return;
+   }
+ 
+   if (frame?.type === 'CloseStream') {
+     satisfyASRWait(state, { label: 'close_stream' }, { ensureDone: true, message: 'ASR stream closed.' });
+   }
+ }
+ 
+ function handleAdminEvent(state, evt) {
+   if (!evt) return;
+-  
 +
-+from app.ws.barge import BargeState
-+from app.ws import ws_asgi
+   const kindTag = String(evt.kind || '').toLowerCase();
+   const labelTag = String(evt.label || '').toLowerCase();
+ 
+   maybeHandleASREvent(state, evt, kindTag, labelTag);
+   maybeHandlePolicyEvent(state, evt, kindTag, labelTag);
+ }
+ 
+ function maybeHandleASREvent(state, evt, kindTag, labelTag) {
+   const combined = `${kindTag} ${labelTag}`.trim();
+   const looksLikeASR =
+     /^asr/.test(kindTag) ||
+     /^asr/.test(labelTag) ||
+     /\basr[._-]/.test(kindTag) ||
+     /\basr[._-]/.test(labelTag);
+   if (!looksLikeASR) return false;
+ 
+   const tag = combined || 'asr';
+ 
+   if (tag.includes('error')) {
+     const message = evt.error ? `ASR error: ${evt.error}` : 'ASR error reported.';
+     updateASRStatus(state, { status: 'error', message, error: true });
+     return true;
+   }
+ 
+   if (tag.includes('final')) {
+     updateASRStatus(state, { status: 'done', final: true });
+     satisfyASRWait(state, evt);
+     return true;
+   }
+ 
+   if (tag.includes('partial')) {
+     updateASRStatus(state, { status: 'active', partialsDelta: 1 });
+     return true;
+   }
+ 
+   if (tag.includes('start')) {
+     updateASRStatus(state, { status: 'active', message: 'ASR stream started.' });
+-    return true;    
++    return true;
+   }
+-  
 +
+   return false;
+ }
+ 
+ function maybeHandlePolicyEvent(state, evt, kindTag, labelTag) {
+   if (!state?.policyNodes?.container) return false;
+ 
+   const combined = `${kindTag} ${labelTag}`.trim();
+   const isPolicySignal =
+     /\bnlu/.test(combined) ||
+     /\bllm/.test(combined) ||
+     /guardrail/.test(combined) ||
+     /teacher/.test(combined) ||
+     /move/.test(combined) ||
+     /tool ?plan/.test(combined) ||
+     /policy/.test(combined);
+   if (!isPolicySignal) return false;
+ 
+   updatePolicySnapshot(state, evt, combined);
+   return true;
+ }
+ 
+ function startAdminSSE(state, onMatch) {
+   try {
+     const es = new EventSource('/api/v1/admin/logs?live=1', { withCredentials: true });
+     es.onmessage = (ev) => {
+@@ -619,51 +619,51 @@ function startAdminSSE(state, onMatch) {
+     es.onerror = () => {
+       appendLog(state.adminLogEl, `${timestamp()} [error] SSE connection problem (check network/auth).`);
+     };
+     return es;
+   } catch (err) {
+     appendLog(state.adminLogEl, `${timestamp()} [error] Failed to open SSE: ${err?.message || err}`);
+     return null;
+   }
+ }
+ 
+ function updateASRStatus(state, { status, partialsDelta = 0, final = false, transcript, message, error = false } = {}) {
+   if (!state.asr) state.asr = { partials: 0, finals: 0, errors: 0 };
+   if (partialsDelta) state.asr.partials += partialsDelta;
+   if (final) state.asr.finals += 1;
+   if (error) state.asr.errors += 1;
+   if (transcript) state.latestTranscript = transcript;
+ 
+   const parts = [];
+   if (state.asr.partials) parts.push(`${state.asr.partials} partial${state.asr.partials === 1 ? '' : 's'}`);
+   if (state.asr.finals) parts.push(`${state.asr.finals} final${state.asr.finals === 1 ? '' : 's'}`);
+   if (state.latestTranscript && (final || state.asr.finals)) parts.push(`Transcript: “${state.latestTranscript}”`);
+ 
+   const detail = parts.length ? parts.join(' • ') : (message || 'Waiting for ASR activity…');
+   const resolvedStatus = status || (error ? 'error' : (state.asr.finals ? 'done' : (state.asr.partials ? 'active' : 'pending')));
+   setStepStatus(state, 'asr', resolvedStatus, detail);
+-}  
++}
+ 
+ function resetPolicySnapshot(state) {
+   if (!state) return;
+   state.policySnapshot = {
+     updatedAt: null,
+     intent: null,
+     guardrail: null,
+     move: null,
+     toolplan: null,
+     lastEvent: null,
+   };
+   renderPolicySnapshot(state);
+ }
+ 
+ function updatePolicySnapshot(state, evt, combinedTag = '') {
+   if (!state?.policyNodes) return;
+   if (!state.policySnapshot) resetPolicySnapshot(state);
+ 
+   const snapshot = state.policySnapshot;
+   const data = extractEventData(evt);
+   let touched = false;
+   const changed = {
+     intent: false,
+     guardrail: false,
+     move: false,
+@@ -955,51 +955,51 @@ function formatTimestamp(date) {
+ }
+ 
+ function buildPolicySummary(evt, combinedTag, snapshot, changed = {}) {
+   const parts = [];
+   const kind = evt?.kind;
+   const label = evt?.label;
+   if (kind) parts.push(kind);
+   if (label && label !== kind) parts.push(label);
+ 
+   if (changed.intent && snapshot?.intent?.value) {
+     parts.push(`intent=${snapshot.intent.value}`);
+   }
+   if (changed.guardrail && snapshot?.guardrail?.decision) {
+     parts.push(`guardrail=${snapshot.guardrail.decision}`);
+   }
+   if (changed.move && snapshot?.move?.value) {
+     parts.push(`move=${snapshot.move.value}`);
+   }
+   if (changed.toolplan && snapshot?.toolplan && snapshot.toolplan.value !== undefined) {
+     parts.push('toolplan updated');
+   }
+ 
+   if (!parts.length && combinedTag) parts.push(combinedTag);
+   return parts.join(' • ') || 'Policy signal received';
+ }
+-  
 +
-+def test_barge_state_emits_distinct_phases():
-+    sid = f"test-barge-{uuid.uuid4()}"
-+    emitted = []
+ function cleanupRun(state) {
+   try { disarmVAD(); } catch {}
+   try { closeWS(1000, 'admin_diag_end'); } catch {}
+   if (state.wsListener) {
+     window.removeEventListener('askchip-ws', state.wsListener);
+     state.wsListener = null;
+   }
+   if (state.sse) {
+     try { state.sse.close(); } catch {}
+     state.sse = null;
+   }
+   if (state.stopMeter) {
+     try { state.stopMeter(); } catch {}
+     state.stopMeter = null;
+   }
+   state.awaitingGreeting = false;
+   state.awaitingResponse = false;
+   state.responseStarted = false;
+   if (state.greetReject) state.greetReject(new Error('Diagnostic cancelled'));
+   if (state.asrReject) state.asrReject(new Error('Diagnostic cancelled'));
+   if (state.responseReject) state.responseReject(new Error('Diagnostic cancelled'));
+   state.greetResolve = null;
+   state.greetReject = null;
+   state.asrResolve = null;
+   state.asrReject = null;
+diff --git a/templates/profile.html b/templates/profile.html
+index 193ad23010c058147f21431c87b3d3c8a8df8e34..6d259666ad773d74d5e1cd9fa5a9eb9f30d662ff 100644
+--- a/templates/profile.html
++++ b/templates/profile.html
+@@ -3,38 +3,38 @@
+ <head>
+   <meta charset="utf-8" />
+   <meta name="viewport" content="width=device-width, initial-scale=1" />
+   <title>AskChip — Profile</title>
+   <link rel="stylesheet" href="/static/css/app.css" />
+ </head>
+ <body class="page">
+   <header class="toolbar">
+     <a href="/" class="brand">⟵ Back</a>
+     <h1>Profile</h1>
+   </header>
+   <section class="card">
+     <div class="grid">
+       <label>Name<input id="prof_name"/></label>
+       <label>Email<input id="prof_email" disabled/></label>
+       <label>Role<input id="prof_role"/></label>
+       <label>Region<input id="prof_region"/></label>
+       <label>Company<input id="prof_company"/></label>
+     </div>
+     <div class="actions">
+       <button id="profileSave" class="primary">Save</button>
+       <a class="ghost" href="/">Cancel</a>
+     </div>
+     <div id="profileMsg" class="msgline"></div>
+   </section>
+-  
 +
-+    def capture(phase: str) -> None:
-+        if ws_asgi._should_emit_barge_phase(sid, phase):
-+            emitted.append(phase)
-+
-+    barge = BargeState()
-+
-+    assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
-+    barge.cancel(capture)
-+    barge.cancel(capture)
-+
-+    assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
-+    barge.commit(capture)
-+    barge.commit(capture)
-+
-+    assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
-+    barge.cancel(capture)
-+    barge.cancel(capture)
-+
-+    assert emitted == [
-+        "paused",
-+        "assistant_speaking",
-+        "paused",
-+        "ready",
-+        "paused",
-+        "assistant_speaking",
-+    ]
+   <script type="module" src="/static/js/auth_gate.js"></script>
+   <script type="module">
+     import { prefillProfile, saveProfile } from '/static/js/auth_gate.js';
+     document.addEventListener('DOMContentLoaded', async ()=>{
+-      await prefillProfile(); 
++      await prefillProfile();
+       document.getElementById('profileSave').addEventListener('click', saveProfile);
+     });
+   </script>
+   <script type="module" src="/static/js/bootstrap.js"></script>
+   <script type="module" src="/static/js/auth_gate.js"></script>
+ </body>
+ </html>
