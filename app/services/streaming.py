@@ -13,7 +13,7 @@ import copy
 import random
 
 from ..security_state import get_profile, get_user
-from ..session_state import set_phase
+from ..session_state import note_utterance_end, set_phase
 def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
     # 1) Profile name
     try:
@@ -2102,6 +2102,11 @@ def _make_legacy_frames(seed_text: str,
     else:
         policy = dict(policy or {})
 
+    policy_summary = summarize_policy_metadata(policy)
+    if policy_summary and isinstance(meta, dict):
+        for key, value in policy_summary.items():
+            meta.setdefault(key, value)
+
     try:
         if isinstance(meta, dict):
             meta_nlu = meta.setdefault('nlu', {})
@@ -2329,6 +2334,23 @@ def _make_legacy_frames(seed_text: str,
         chunk['intent'] = labels.get('intent')
     if active_teacher_move:
         chunk['teacher_move'] = active_teacher_move
+    if policy_summary:
+        band = policy_summary.get('planner_confidence_band') or policy_summary.get('policy_confidence_band')
+        if band:
+            chunk['planner_confidence_band'] = band
+        policy_band = policy_summary.get('policy_confidence_band')
+        if policy_band and policy_band != band:
+            chunk['policy_confidence_band'] = policy_band
+        chips = policy_summary.get('policy_chips')
+        if chips:
+            chunk['policy_chips'] = chips
+    if isinstance(meta, dict):
+        clarify_variant = meta.get('clarify_variant')
+        clarifier_style = meta.get('clarifier_style')
+        if clarifier_style:
+            chunk['clarifier_style'] = clarifier_style
+        if clarify_variant:
+            chunk['clarify_variant'] = clarify_variant
     if correlation_user_msg_id:
         chunk['correlation_user_msg_id'] = correlation_user_msg_id
     if error_note:
@@ -2429,7 +2451,10 @@ def schedule_tts_audio(session_id: str,
                        audio_bytes: Optional[bytes] = None,
                        chunk_bytes: int = 8192,
                        delay_ms: int = 0,
-                       on_complete: Optional[Callable[[], None]] = None) -> bool:
+                       on_complete: Optional[Callable[[], None]] = None,
+                       *,
+                       on_post_silence: Optional[Callable[[], None]] = None,
+                       post_silence_origin: Optional[str] = None) -> bool:
     """Synthesize TTS for `text` and stream as WS frames.
     Emits frames like:
         {
@@ -2633,6 +2658,14 @@ def schedule_tts_audio(session_id: str,
                         first_sent = True
                         state['first_chunk'] = True
                         try:
+                            nudges.cancel_idle_timers(
+                                session_id,
+                                source="assistant_audio_start",
+                                mark=False,
+                            )
+                        except Exception:
+                            pass
+                        try:
                             _admin_emit('tts:first_chunk', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
                         except Exception:
                             pass
@@ -2672,6 +2705,10 @@ def schedule_tts_audio(session_id: str,
                 pass
 
             _emit_utterance_end("finalizer")
+            try:
+                note_utterance_end(session_id)
+            except Exception:
+                pass
 
             state['done'] = True
 
@@ -2680,6 +2717,19 @@ def schedule_tts_audio(session_id: str,
                     on_complete()
                 except Exception:
                     pass
+
+            if on_post_silence is not None:
+                try:
+                    nudges.run_after_silence(
+                        session_id,
+                        on_post_silence,
+                        reason=post_silence_origin or "assistant_audio",
+                    )
+                except Exception:
+                    try:
+                        on_post_silence()
+                    except Exception:
+                        pass
 
     threading.Thread(target=_run, daemon=True).start()
     return True
@@ -2946,7 +2996,8 @@ def run_ws_user_turn(session_id: str,
 
     # TTS for assistant text
     try:
-        text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
+        first_chunk_frame = next((fr for fr in frames if fr.get("type") == "assistant_chunk"), None)
+        text_for_tts = first_chunk_frame.get("text") if isinstance(first_chunk_frame, dict) else ""
         if text_for_tts:
             # Pass scrubbed text to TTS (extra safety)
             safe_text = _scrub_debug_stamps(text_for_tts)
@@ -2963,12 +3014,34 @@ def run_ws_user_turn(session_id: str,
                 _jlog("tts.pre_schedule", **payload)
             except Exception:
                 pass
+            clarifier_band = ""
+            teacher_move = ""
+            clarify_variant = ""
+            if isinstance(first_chunk_frame, dict):
+                clarifier_band = str(
+                    first_chunk_frame.get("planner_confidence_band")
+                    or first_chunk_frame.get("policy_confidence_band")
+                    or ""
+                ).strip().lower()
+                teacher_move = str(first_chunk_frame.get("teacher_move") or "").strip().lower()
+                clarify_variant = str(first_chunk_frame.get("clarify_variant") or "").strip().lower()
+            is_clarifier_audio = clarifier_band in {"medium", "low"} and (
+                bool(clarify_variant) or teacher_move == "clarify"
+            )
+            schedule_kwargs: Dict[str, Any] = {
+                "turn_id": tid,
+                "correlation_user_msg_id": correlation_user_msg_id,
+            }
+            if is_clarifier_audio:
+                schedule_kwargs["chunk_bytes"] = 4096
+                schedule_kwargs["on_post_silence"] = _arm_idle_once
+                schedule_kwargs["post_silence_origin"] = "clarifier_idle"
+            else:
+                schedule_kwargs["on_complete"] = _arm_idle_once
             audio_scheduled = schedule_tts_audio(
                 session_id,
                 safe_text,
-                turn_id=tid,
-                correlation_user_msg_id=correlation_user_msg_id,
-                on_complete=_arm_idle_once,
+                **schedule_kwargs,
             )
     except Exception:
         pass

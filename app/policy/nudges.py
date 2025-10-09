@@ -304,6 +304,52 @@ def _emit_auto_close(session_id: str) -> None:
     bus.broadcast(session_id, {"type": "session_end", "reason": "silence_auto_close"})
 
 
+def run_after_silence(session_id: str,
+                      callback: Callable[[], None],
+                      *,
+                      reason: str = "",
+                      guard_ms: Optional[int] = None) -> bool:
+    """Invoke ``callback`` after the configured silence guard elapses."""
+    if not session_id or not callable(callback):
+        return False
+
+    guard = _silence_guard_ms() if guard_ms is None else max(0, int(guard_ms))
+    if guard <= 0 or silence_guard_satisfied(session_id, guard):
+        try:
+            callback()
+        except Exception:
+            pass
+        return True
+
+    remaining = int(guard_remaining_ms(session_id, guard))
+    if remaining <= 0:
+        remaining = guard or 0
+    if remaining <= 0:
+        try:
+            callback()
+        except Exception:
+            pass
+        return True
+
+    def _deferred() -> None:
+        if silence_guard_satisfied(session_id, guard):
+            try:
+                callback()
+            except Exception:
+                pass
+            return
+        run_after_silence(session_id, callback, reason=reason, guard_ms=guard)
+
+    _schedule_timer(
+        session_id,
+        "post_audio_silence",
+        remaining,
+        _deferred,
+        origin=f"{reason or 'silence'}:wait",
+    )
+    return True
+
+
 def arm_idle_timers(session_id: str, *, reason: str = "") -> bool:
     if not session_id:
         return False
