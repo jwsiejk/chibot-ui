@@ -1,169 +1,150 @@
-diff --git a/app/__init__.py b/app/__init__.py
-index 8bb77e6cefe4427061da914c5a88f4d29cfa87e0..c5519ad7f856d1e1e6ed1f70860122ee819242ab 100644
---- a/app/__init__.py
-+++ b/app/__init__.py
-@@ -38,55 +38,50 @@ def admin_console():
-     from .utils.admin import is_admin_email
-     from .security_state import get_user
-     from flask import abort, render_template as _rt, session as _sess, request as _req
-     email = (_sess.get("user") or {}).get("email") or _sess.get("email") or _req.headers.get("X-User-Email") or (get_user() or "")
-     if not is_admin_email((email or "").strip().lower()):
-         abort(403)
-     return _rt("admin_console.html")
- def create_app():
-     app = Flask(
-         __name__,
-         static_folder="../static",
-         static_url_path="/static",
-         template_folder="../templates",
-     )
-     app.config["JSON_SORT_KEYS"] = False
-     if os.environ.get("CI_FAST"):
-         app.config["TESTING"] = True
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index 5bef2030d42ca157ffb2437c5dcc2f66fbf26cc1..2594ed2034728292d122493fcf8a2b20bce8fd14 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -815,132 +815,124 @@ class DeepgramClient:
+                     closing=self._closing,
+                     closed=self._closed,
+                 )
+             except Exception:
+                 pass
+         if self._ws:
+             logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
+             return
  
-     app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+         url = _dg_url(self._cfg)
+         self._emit_diag("provider_open", active=True, url=url)
  
-     # v1-only API + core + health
-     app.register_blueprint(create_v1_blueprint(), url_prefix="/api/v1")
-     app.register_blueprint(core_bp)
-     app.register_blueprint(health_bp)
+         containerized = False
+         safe_url = url
  
--    # Ensure legacy SSE endpoint is always mounted (tests reload modules)
--    from .ws.chat_ws import register_ws_route
--
--    register_ws_route(app)
--
-     # Ensure CSRF header/cookie attached to responses
-     app.after_request(ensure_csrf_headers)
+         try:
+             # Diagnostic: parse params and emit compact JSON log that shows
+             # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
+             import urllib.parse as _p
  
-     # Middleware
-     app.before_request(csrf_before_request)
-     rate_limit_register(app)
+             parts = _p.urlsplit(url)
+             q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
+             self._url_tag = q.get("tag") or None
+             transport = (self._cfg or {}).get("_transport", {}) or {}
+             containerized = bool(transport.get("containerized_opus"))
++            audio_param_keys = {"encoding", "sample_rate", "channels"}
+             url_meta = {
+                 "container": transport.get("container"),
+                 "codec": transport.get("codec"),
+                 "containerized_opus": containerized,
+-                "normalized_pcm": bool(transport.get("normalized_pcm")),
+-                "raw_fallback": bool(transport.get("raw_fallback")),
+                 "omitted_params": None,
+-                "raw_params": None,
++                "audio_params": None,
+             }
+             if containerized:
+                 # These should be absent in containerized mode
+-                omitted = []
+-                for k in ("encoding", "sample_rate", "channels"):
+-                    if k not in q:
+-                        omitted.append(k)
++                omitted = [key for key in audio_param_keys if key not in q]
+                 url_meta["omitted_params"] = omitted
+             else:
+-                url_meta["raw_params"] = {
+-                    "encoding": q.get("encoding"),
+-                    "sample_rate": q.get("sample_rate"),
+-                    "channels": q.get("channels"),
++                sent_params = {
++                    key: q.get(key)
++                    for key in audio_param_keys
++                    if key in q
+                 }
++                url_meta["audio_params"] = sent_params or None
  
-     make_csrf_route(app)
+             # Build sanitized query string for telemetry without sensitive params
+             sanitized_pairs = []
+-            raw_param_keys = {"encoding", "sample_rate", "channels"}
+             for key in sorted(q.keys()):
+                 if key is None:
+                     continue
+                 key_str = str(key)
+                 lower = key_str.lower()
+                 if "key" in lower or "token" in lower or "secret" in lower:
+                     continue
+-                if containerized and key_str in raw_param_keys:
++                if containerized and key_str in audio_param_keys:
+                     continue
+                 sanitized_pairs.append((key_str, q[key]))
+             sanitized_query = _p.urlencode(sanitized_pairs, doseq=True)
+             sanitized_qs = f"?{sanitized_query}" if sanitized_query else "?"
+             safe_url = f"{parts.scheme}://{parts.netloc}{parts.path}"
+             if sanitized_query:
+                 safe_url = f"{safe_url}?{sanitized_query}"
+             if parts.fragment:
+                 safe_url = f"{safe_url}#{parts.fragment}"
+-            raw_params_absent = all(param not in q for param in raw_param_keys)
++            audio_params_absent = all(param not in q for param in audio_param_keys)
  
-     @app.after_request
-     def maybe_allow_cors(resp):
-         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
-         if allow:
-             origins = [o.strip() for o in allow.split(",") if o.strip()]
-             ori = request.headers.get("Origin", "")
-             if ori in origins:
-                 resp.headers["Access-Control-Allow-Origin"] = ori
-                 resp.headers["Vary"] = "Origin"
-                 resp.headers["Access-Control-Allow-Credentials"] = "true"
-                 resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token"
-                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-         return resp
+             # Structured JSON log if _jlog is available (preferred for your admin viewer)
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_url_sanitized",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         qs=sanitized_qs,
+                         containerized_opus=containerized,
+-                        raw_params_absent=raw_params_absent,
++                        audio_params_absent=audio_params_absent,
+                     )
+                 except Exception:
+                     pass
+                 try:
+                     self._jlog(
+                         "asr_url",
+                         dg_id=self._dg_id,
+                         url=url,
+                         container=url_meta.get("container"),
+                         codec=url_meta.get("codec"),
+                         containerized_opus=bool(url_meta.get("containerized_opus")),
+-                        normalized_pcm=bool(url_meta.get("normalized_pcm")),
+-                        raw_fallback=bool(url_meta.get("raw_fallback")),
+                         omitted_params=url_meta.get("omitted_params"),
+-                        raw_params=url_meta.get("raw_params"),
++                        audio_params=url_meta.get("audio_params"),
+                     )
+                 except Exception:
+                     pass
  
-     @app.route("/<path:_>", methods=["OPTIONS"])
-     def _cors_preflight(_):
-diff --git a/app/ws/chat_ws.py b/app/ws/chat_ws.py
-index ab5868abbb08f7ef18e5ceb7db47e873b598a04c..dd6d888a5e3960a722e297756f3a010456bb5d31 100644
---- a/app/ws/chat_ws.py
-+++ b/app/ws/chat_ws.py
-@@ -1,96 +1,12 @@
--# app/ws/chat_ws.py — SSE bridge for /ws/v1/chat (legacy stream)
--# Notes:
--# • Sends initial "ready" plus state:ready for UI compatibility
--# • Heartbeat every ~5s (event: heartbeat + ping line)
--# • KeepAliveAck every ~4s so clients see activity
--# • Pushes state:ready after assistant_end
--# • Closes after ~1.8s idle once any frames have been sent (kept from original)
-+"""Legacy SSE bridge removed.
+             # Keep existing human-readable info log
+             logger.info(
+-                "dg_ws_connect sid=%s url=%s containerized_opus=%s normalized_pcm=%s raw_fallback=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
++                "dg_ws_connect sid=%s url=%s containerized_opus=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
+                 sid,
+                 url,
+                 containerized,
+-                url_meta.get("normalized_pcm"),
+-                url_meta.get("raw_fallback"),
+                 q.get("encoding"),
+                 q.get("sample_rate"),
+                 q.get("channels"),
+             )
+         except Exception:
+             logger.info("Deepgram connect start sid=%s url=%s", sid, url)
  
--from flask import Response, request, stream_with_context
--import json, time
--from queue import Empty
--from ..ws.bus import bus
-+This module previously exposed a Flask route that mirrored WebSocket
-+traffic over Server-Sent Events. The project now relies solely on the
-+native WebSocket implementation, so the helper remains only as a stub
-+for older imports.
-+"""
- 
--def _sse_event(data: dict, event: str | None = None):
--    """Yield a single SSE event with optional event name."""
--    if event:
--        yield f"event: {event}\n"
--    # compact JSON to reduce buffering
--    yield "data: " + json.dumps(data, separators=(',', ':')) + "\n\n"
- 
- def register_ws_route(app):
--    @app.route('/ws/v1/chat', methods=['GET'])
--    def ws_sse_stream():
--        sid = request.args.get('session_id') or 'default'
--        q = bus.subscribe(sid)
--
--        @stream_with_context
--        def stream():
--            last_hb = 0.0
--            last_keep = 0.0
--            sent_any = False
--            last_send = time.time()
--
--            # Initial connect signals (keep both for compatibility)
--            yield from _sse_event({"type": "ready", "session_id": sid})
--            yield from _sse_event({"type": "state", "phase": "ready", "session_id": sid})
--            # Initial heartbeat/ping
--            now = time.time()
--            yield from _sse_event({"ts": now, "kind": "heartbeat", "msg": "ok"}, event="heartbeat")
--            yield from _sse_event({"ts": now, "kind": "ping"})
--
--            try:
--                while True:
--                    now = time.time()
--
--                    # Heartbeat every ~5s (plus legacy ping line)
--                    if now - last_hb > 5.0:
--                        yield from _sse_event({"ts": now, "kind": "heartbeat", "msg": "ok"}, event="heartbeat")
--                        yield from _sse_event({"ts": now, "kind": "ping"})
--                        last_hb = now
--
--                    # KeepAliveAck every ~4s so clients see activity
--                    if now - last_keep > 4.0:
--                        yield from _sse_event({"type": "KeepAliveAck"})
--                        last_keep = now
--
--                    # Drain bus with short timeout to allow heartbeats
--                    try:
--                        fr = q.get(timeout=0.25)
--                    except Empty:
--                        # If we have sent any frames and idle for >1.8s, close stream
--                        if sent_any and (time.time() - last_send) > 1.8:
--                            break
--                        continue
--
--                    # Forward the frame
--                    t = fr.get("type")
--                    yield from _sse_event(fr)
--                    sent_any = True
--                    last_send = time.time()
--
--                    # After assistant_end, nudge UI back to ready
--                    if t == "assistant_end":
--                        yield from _sse_event({"type": "state", "phase": "ready", "session_id": sid})
--                        sent_any = True
--                        last_send = time.time()
--
--            except GeneratorExit:
--                # client disconnected
--                pass
--            except Exception:
--                # swallow to keep SSE robust
--                pass
--            finally:
--                try:
--                    # Unsubscribe if bus provides an unsubscribe API
--                    if hasattr(bus, "unsubscribe"):
--                        bus.unsubscribe(sid, q)
--                except Exception:
--                    pass
--
--        resp = Response(stream(), mimetype="text/event-stream")
--        # Recommended headers for SSE behind proxies
--        resp.headers['Cache-Control'] = 'no-cache'
--        resp.headers['X-Accel-Buffering'] = 'no'
--        return resp
-+    """Retained for backwards compatibility; no SSE route is registered."""
-+    return None
+         key_value, key_len = _api_key_info()
+         ws_headers = [("Authorization", f"Token {key_value}")]
+         del key_value
+         subprotocols = None
+         logger.info(
+             "Deepgram connect attempt sid=%s safe_url=%s key_len=%s subprotocols=%s",
+             sid,
+             safe_url,
+             key_len,
+             subprotocols,
+         )
+         if callable(self._jlog):
+             try:
+                 self._jlog(
+                     "dg_connect_attempt",
+                     sid=sid,
+                     dg_id=self._dg_id,
+                     safe_url=safe_url,

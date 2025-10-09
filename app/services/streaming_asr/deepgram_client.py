@@ -837,32 +837,28 @@ class DeepgramClient:
             self._url_tag = q.get("tag") or None
             transport = (self._cfg or {}).get("_transport", {}) or {}
             containerized = bool(transport.get("containerized_opus"))
+            audio_param_keys = {"encoding", "sample_rate", "channels"}
             url_meta = {
                 "container": transport.get("container"),
                 "codec": transport.get("codec"),
                 "containerized_opus": containerized,
-                "normalized_pcm": bool(transport.get("normalized_pcm")),
-                "raw_fallback": bool(transport.get("raw_fallback")),
                 "omitted_params": None,
-                "raw_params": None,
+                "audio_params": None,
             }
             if containerized:
                 # These should be absent in containerized mode
-                omitted = []
-                for k in ("encoding", "sample_rate", "channels"):
-                    if k not in q:
-                        omitted.append(k)
+                omitted = [key for key in audio_param_keys if key not in q]
                 url_meta["omitted_params"] = omitted
             else:
-                url_meta["raw_params"] = {
-                    "encoding": q.get("encoding"),
-                    "sample_rate": q.get("sample_rate"),
-                    "channels": q.get("channels"),
+                sent_params = {
+                    key: q.get(key)
+                    for key in audio_param_keys
+                    if key in q
                 }
+                url_meta["audio_params"] = sent_params or None
 
             # Build sanitized query string for telemetry without sensitive params
             sanitized_pairs = []
-            raw_param_keys = {"encoding", "sample_rate", "channels"}
             for key in sorted(q.keys()):
                 if key is None:
                     continue
@@ -870,7 +866,7 @@ class DeepgramClient:
                 lower = key_str.lower()
                 if "key" in lower or "token" in lower or "secret" in lower:
                     continue
-                if containerized and key_str in raw_param_keys:
+                if containerized and key_str in audio_param_keys:
                     continue
                 sanitized_pairs.append((key_str, q[key]))
             sanitized_query = _p.urlencode(sanitized_pairs, doseq=True)
@@ -880,7 +876,7 @@ class DeepgramClient:
                 safe_url = f"{safe_url}?{sanitized_query}"
             if parts.fragment:
                 safe_url = f"{safe_url}#{parts.fragment}"
-            raw_params_absent = all(param not in q for param in raw_param_keys)
+            audio_params_absent = all(param not in q for param in audio_param_keys)
 
             # Structured JSON log if _jlog is available (preferred for your admin viewer)
             if callable(self._jlog):
@@ -891,7 +887,7 @@ class DeepgramClient:
                         dg_id=self._dg_id,
                         qs=sanitized_qs,
                         containerized_opus=containerized,
-                        raw_params_absent=raw_params_absent,
+                        audio_params_absent=audio_params_absent,
                     )
                 except Exception:
                     pass
@@ -903,22 +899,18 @@ class DeepgramClient:
                         container=url_meta.get("container"),
                         codec=url_meta.get("codec"),
                         containerized_opus=bool(url_meta.get("containerized_opus")),
-                        normalized_pcm=bool(url_meta.get("normalized_pcm")),
-                        raw_fallback=bool(url_meta.get("raw_fallback")),
                         omitted_params=url_meta.get("omitted_params"),
-                        raw_params=url_meta.get("raw_params"),
+                        audio_params=url_meta.get("audio_params"),
                     )
                 except Exception:
                     pass
 
             # Keep existing human-readable info log
             logger.info(
-                "dg_ws_connect sid=%s url=%s containerized_opus=%s normalized_pcm=%s raw_fallback=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
+                "dg_ws_connect sid=%s url=%s containerized_opus=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
                 sid,
                 url,
                 containerized,
-                url_meta.get("normalized_pcm"),
-                url_meta.get("raw_fallback"),
                 q.get("encoding"),
                 q.get("sample_rate"),
                 q.get("channels"),
