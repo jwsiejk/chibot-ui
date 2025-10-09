@@ -159,12 +159,9 @@ function _ensureWSListener() {
     }
 
     try {
-      const pending = _closeTurnIfOpen();
-      if (pending) {
-        await pending;
-      }
+      await Promise.resolve(state.chunkSendPromise).catch(() => {});
     } catch (err) {
-      try { console.warn('[voice] failed to close turn on server final', err); } catch {}
+      try { console.warn('[voice] chunk send did not settle after server final', err); } catch {}
     }
   };
 
@@ -677,3 +674,11 @@ function _applyPostFinalHold(source = 'unknown') {
 
   return nextUntil;
 }
+
+export const __TEST_ONLY__ = {
+  state,
+  startRecorder: _startRecorder,
+  stopRecorder: _stopRecorder,
+  ensureWSListener: _ensureWSListener,
+  closeTurnIfOpen: _closeTurnIfOpen,
+};

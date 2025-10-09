@@ -1,75 +1,8 @@
 diff --git a/static/js/voice.js b/static/js/voice.js
-index 3ccaeee7d4a9f18cc3d0c69c2fc25d0be0eebadb..13fa502f60464ccc94eb703c28c134be06722851 100644
+index 13fa502f60464ccc94eb703c28c134be06722851..2b1504553e3fb221bbd8b74f077ab1bec720e889 100644
 --- a/static/js/voice.js
 +++ b/static/js/voice.js
-@@ -27,50 +27,51 @@ export async function armVAD(stream = null, opts = {}) { return await _arm(strea
- export function disarmVAD() { _disarm(); }
- export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
- export function bargeIn() { _bargeIn(); }         // keeps API parity
- export function setVadBoost(_v) { /* kept for API parity; no-op */ }
- 
- // ---- Internal state ---------------------------------------------------------
- 
- // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
- const REC_MIME = (typeof MediaRecorder !== 'undefined'
-   && typeof MediaRecorder.isTypeSupported === 'function'
-   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
-   ? 'audio/ogg; codecs=opus'
-   : 'audio/webm; codecs=opus';
- 
- const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
- const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
- 
- const state = {
-   stream: null,
-   ctx: null,
-   source: null,
-   analyser: null,
-   vad: null,
-   rec: null,
-   finalized: false,
-+  postFinalHoldUntil: 0,
-   wsListener: null,
-   chunkSendPromise: Promise.resolve(),
-   chunkBytesSent: 0,
-   chunkSendError: null,
-   turnTimer: null,
-   turnOpen: false,   // track whether a turn is currently open server-side
-   turnClosePromise: null,
-   deviceLogged: false,
-   // NEW: min-turn gating
-   recStartedAt: 0,
-   pendingEndTimer: null,
-   ttsPlaying: false,
-   bargeConfirmTimer: null,
-   bargeConfirmActive: false,
- };
- 
- const BARGE_CONFIRM_DEFAULT_MS = 420;
- let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
- try {
-   const cfg = window.__askchip_config || {};
-   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
-     bargeConfirmMs = cfg.barge_confirm_ms;
-   }
- } catch {}
- bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
-@@ -121,51 +122,51 @@ function _clearBargeConfirm(resume = false) {
-     }
-   }
- }
- 
- function _ensureWSListener() {
-   if (state.wsListener || typeof window === 'undefined') {
-     return;
-   }
-   const handler = async (ev) => {
-     const detail = ev?.detail || {};
-     const type = detail?.type;
- 
-     let isFinal = false;
-     if (type === 'UtteranceEnd') {
-       isFinal = true;
+@@ -137,56 +137,53 @@ function _ensureWSListener() {
      } else if (type === 'Results') {
        const channelFinal = detail?.channel?.is_final === true;
        const payloadFinal = detail?.is_final === true;
@@ -80,8 +13,7 @@ index 3ccaeee7d4a9f18cc3d0c69c2fc25d0be0eebadb..13fa502f60464ccc94eb703c28c134be
        return;
      }
  
--    state.finalized = true;
-+    _applyPostFinalHold('ws_final');
+     _applyPostFinalHold('ws_final');
  
      const recorder = state.rec;
      const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state !== 'inactive');
@@ -96,303 +28,302 @@ index 3ccaeee7d4a9f18cc3d0c69c2fc25d0be0eebadb..13fa502f60464ccc94eb703c28c134be
      }
  
      try {
-       const pending = _closeTurnIfOpen();
-       if (pending) {
-         await pending;
-       }
+-      const pending = _closeTurnIfOpen();
+-      if (pending) {
+-        await pending;
+-      }
++      await Promise.resolve(state.chunkSendPromise).catch(() => {});
      } catch (err) {
-       try { console.warn('[voice] failed to close turn on server final', err); } catch {}
+-      try { console.warn('[voice] failed to close turn on server final', err); } catch {}
++      try { console.warn('[voice] chunk send did not settle after server final', err); } catch {}
      }
    };
  
    try { window.addEventListener('askchip-ws', handler); } catch {}
    state.wsListener = handler;
-@@ -266,101 +267,103 @@ function _closeTurnIfOpen() {
-   if (!state.turnOpen) {
-     return null;
-   }
-   const closePromise = (async () => {
-     try {
-       await sendCloseStream();
-     } finally {
-       state.turnOpen = false;
-       state.turnClosePromise = null;
-     }
-   })();
-   state.turnClosePromise = closePromise;
-   return closePromise;
  }
  
- function _stopRecorder(detail = null) {
-   const recorder = state.rec;
-   const wasActive = !!recorder && recorder.state !== 'inactive';
-   const payload = Object.assign({
-     active: wasActive,
-     hasRecorder: !!recorder,
-   }, detail || {});
-   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
- 
-   if (detail?.reason === 'server_final') {
--    state.finalized = true;
-+    _applyPostFinalHold('stop_recorder');
-   } else if (state.finalized) {
-     if (!recorder || recorder.state === 'inactive') {
-       state.rec = null;
-       return;
-     }
-   }
- 
-   if (!recorder) {
-     state.rec = null;
+ function _removeWSListener() {
+   if (!state.wsListener || typeof window === 'undefined') {
      return;
    }
+   try { window.removeEventListener('askchip-ws', state.wsListener); } catch {}
+   state.wsListener = null;
+ }
  
-   if (recorder.state === 'inactive') {
-     state.rec = null;
-     return;
+ async function _ensureMic(externalStream = null) {
+   if (state.stream && state.stream.active) return state.stream;
+ 
+   if (state.stream && !state.stream.active) {
+     _teardownAudioGraph();
+     state.stream = null;
    }
  
-   try { recorder.stop(); } catch {}
-   // intentionally keep state.rec reference nullable here; onstop handler handles final close
-   state.rec = null;
- }
+   let stream = externalStream;
  
- function _teardownVADOnly() {
-   try { state.vad && state.vad.stop(); } catch {}
-   state.vad = null;
- }
+@@ -655,25 +652,33 @@ function optsFromGlobal(key, fallback) {
  
- function _teardownAudioGraph() {
-   try { state.source && state.source.disconnect(); } catch {}
-   try { state.analyser && state.analyser.disconnect(); } catch {}
-   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
-   state.source = null;
-   state.analyser = null;
-   state.ctx = null;
-   state.deviceLogged = false;
-   state.finalized = false;
-+  state.postFinalHoldUntil = 0;
-   _removeWSListener();
- }
+ function _applyPostFinalHold(source = 'unknown') {
+   const rawHold = Number(optsFromGlobal('post_final_hold_ms', 600));
+   const holdMs = Number.isFinite(rawHold) ? Math.max(0, rawHold) : 0;
+   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+     ? performance.now()
+     : Date.now();
+   const targetUntil = now + holdMs;
+   const previousUntil = state.postFinalHoldUntil || 0;
+   const nextUntil = Math.max(targetUntil, previousUntil);
+   const wasFinalized = !!state.finalized;
  
- function _disarm() {
-   _safeClearTurnTimer();
-   _clearPendingEndTimer();
-   _clearBargeConfirm(false);
-   _stopRecorder({ reason: 'manual_disarm' });
-   _teardownVADOnly();
-   state.turnOpen = false; // ensure local state is clean
-   state.turnClosePromise = null;
-   state.recStartedAt = 0;
-   state.ttsPlaying = false;
-   state.finalized = false;
-+  state.postFinalHoldUntil = 0;
-   _removeWSListener();
-   _emitVoiceState('idle');
- }
+   state.finalized = true;
+   state.postFinalHoldUntil = nextUntil;
  
- function _bargeIn() {
-   // Soft barge-in: pause audio locally
-   _clearBargeConfirm(false);
-   try { stopPlayback(); } catch {}
-   // If a prior ASR turn is somehow still open, politely close it.
-   // (Harmless if no turn is open; guarded to avoid duplicate closes.)
-   const pendingClose = _closeTurnIfOpen();
-   if (pendingClose) {
-     pendingClose.catch(() => {});
-   }
- }
- 
- // ---- VAD wiring -------------------------------------------------------------
- 
- async function _arm(stream = null, opts = {}) {
-   const mic = stream || await _ensureMic();
- 
-   // Build / rebuild VAD
-   _teardownVADOnly();
- 
-   // Merge runtime globals so admins can tune without rebuilds:
-@@ -399,50 +402,51 @@ async function _arm(stream = null, opts = {}) {
-   });
-   _emitVoiceState('armed');
- 
-   return mic;
- }
- 
- // ---- Recorder lifecycle -----------------------------------------------------
- 
- function _startRecorder() {
-   if (!state.stream) return false;
-   if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
- 
-   if (typeof MediaRecorder === 'undefined') {
-     console.warn('[voice] MediaRecorder not supported in this browser');
-     state.rec = null;
-     return false;
+   if (!wasFinalized || nextUntil !== previousUntil) {
+     _logLifecycle('post_final_hold_applied', {
+       holdMs,
+       holdUntil: nextUntil,
+       source,
+     });
    }
  
-   state.chunkSendPromise = Promise.resolve();
-   state.chunkBytesSent = 0;
-   state.chunkSendError = null;
-   state.turnClosePromise = null;
-   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
-   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
-   state.finalized = false;
-+  state.postFinalHoldUntil = 0;
-   _ensureWSListener();
- 
-   let recorder;
-   try {
-     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
-   } catch (primaryErr) {
-     try {
-       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
-     } catch (fallbackErr) {
-       console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
-       state.rec = null;
-       return false;
-     }
-   }
- 
-   state.rec = recorder;
- 
-   state.rec.ondataavailable = (e) => {
-     if (state.finalized) {
-       return;
-     }
-     const blob = e.data;
-     if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
-       return;
-     }
-@@ -517,50 +521,80 @@ function _startRecorder() {
-     state.turnOpen = true; // mark an open ASR turn on the server
-     try {
-       console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice });
-     } catch {}
-   } catch (e) {
-     console.warn('[voice] recorder start failed', e);
-     state.rec = null;
-     state.turnOpen = false;
-     state.turnClosePromise = null;
-     return false;
-   }
- 
-   // Safety timeout to prevent runaway recordings
-   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
-   _safeClearTurnTimer();
-   state.turnTimer = setTimeout(() => {
-     try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
-   }, limitMs);
- 
-   return true;
+   return nextUntil;
  }
- 
- function _onSpeechStartCommitted() {
-   _logLifecycle('vad_speech_start');
- 
-+  const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-+    ? performance.now()
-+    : Date.now();
-+  const holdUntil = state.postFinalHoldUntil || 0;
 +
-+  if (state.finalized) {
-+    if (now < holdUntil) {
-+      _logLifecycle('vad_speech_start_suppressed', {
-+        reason: 'post_final_hold_finalized',
-+        holdUntil,
-+        now,
-+      });
-+      return;
-+    }
-+    state.finalized = false;
++export const __TEST_ONLY__ = {
++  state,
++  startRecorder: _startRecorder,
++  stopRecorder: _stopRecorder,
++  ensureWSListener: _ensureWSListener,
++  closeTurnIfOpen: _closeTurnIfOpen,
++};
+diff --git a/tests/js/test-loader.mjs b/tests/js/test-loader.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..66086af21d3a461bd5149abc3609b74701d7147a
+--- /dev/null
++++ b/tests/js/test-loader.mjs
+@@ -0,0 +1,12 @@
++import path from 'node:path';
++import { pathToFileURL } from 'node:url';
++
++const STUB_SPEC = '/static/js/ws.js?v=v20250911b';
++const STUB_URL = pathToFileURL(path.resolve('./tests/js/ws_stub.mjs')).href;
++
++export async function resolve(specifier, context, defaultResolve) {
++  if (specifier === STUB_SPEC) {
++    return { url: STUB_URL, shortCircuit: true };
 +  }
-+
-+  if (now < holdUntil) {
-+    _logLifecycle('vad_speech_start_suppressed', {
-+      reason: 'post_final_hold',
-+      holdUntil,
-+      now,
-+    });
-+    return;
-+  }
-+
-+  if (state.postFinalHoldUntil) {
-+    state.postFinalHoldUntil = 0;
-+  }
-+
-   if (state.ttsPlaying && !state.bargeConfirmActive) {
-     state.bargeConfirmActive = true;
-     try { pausePlayback(); } catch {}
-     state.bargeConfirmTimer = setTimeout(() => {
-       state.bargeConfirmTimer = null;
-       if (!state.bargeConfirmActive) return;
-       if (state.vad && typeof state.vad.isRecording === 'function' && !state.vad.isRecording()) {
-         state.bargeConfirmActive = false;
-         try { resumePlayback(); } catch {}
-         return;
-       }
-       state.bargeConfirmActive = false;
-       _bargeIn();
-       const started = _startRecorder();
-       if (started) {
-         _emitVoiceState('recording');
-         return;
-       }
-       console.warn('[voice] recorder unavailable — reverting to typing');
-       _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
-     }, bargeConfirmMs);
-     return;
-   }
- 
-   if (state.bargeConfirmActive) {
-@@ -596,25 +630,50 @@ function _onSpeechEndCommitted(detail = null) {
-     if (wait > 0) {
-       try { console.debug('[voice] delaying VAD end', { waitMs: wait, elapsed }); } catch {}
-       _clearPendingEndTimer();
-       state.pendingEndTimer = setTimeout(() => _onSpeechEndCommitted(detail), wait);
-       return; // do not stop yet
-     }
-   }
- 
-   _logLifecycle('vad_speech_end', { reason });
-   _safeClearTurnTimer();
-   _clearPendingEndTimer();
-   _stopRecorder({ reason });
-   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
- }
- 
- // ---- Utilities --------------------------------------------------------------
- 
- function optsFromGlobal(key, fallback) {
-   // Allow admin-configurable values to seep in (if app exposes them)
-   try {
-     const cfg = window.__askchip_config || {};
-     if (key in cfg) return cfg[key];
-   } catch {}
-   return fallback;
- }
-+
-+function _applyPostFinalHold(source = 'unknown') {
-+  const rawHold = Number(optsFromGlobal('post_final_hold_ms', 600));
-+  const holdMs = Number.isFinite(rawHold) ? Math.max(0, rawHold) : 0;
-+  const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-+    ? performance.now()
-+    : Date.now();
-+  const targetUntil = now + holdMs;
-+  const previousUntil = state.postFinalHoldUntil || 0;
-+  const nextUntil = Math.max(targetUntil, previousUntil);
-+  const wasFinalized = !!state.finalized;
-+
-+  state.finalized = true;
-+  state.postFinalHoldUntil = nextUntil;
-+
-+  if (!wasFinalized || nextUntil !== previousUntil) {
-+    _logLifecycle('post_final_hold_applied', {
-+      holdMs,
-+      holdUntil: nextUntil,
-+      source,
-+    });
-+  }
-+
-+  return nextUntil;
++  return defaultResolve(specifier, context, defaultResolve);
 +}
+diff --git a/tests/js/voice-order.test.mjs b/tests/js/voice-order.test.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..fc5cc5dbd7659dce3dfd88d2bbc337ec7bf310b1
+--- /dev/null
++++ b/tests/js/voice-order.test.mjs
+@@ -0,0 +1,158 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++
++const listenerMap = new Map();
++
++class TestCustomEvent {
++  constructor(type, init = {}) {
++    this.type = type;
++    this.detail = init.detail;
++  }
++}
++
++globalThis.CustomEvent = TestCustomEvent;
++
++const windowStub = {
++  __askchip_config: {},
++  addEventListener(type, handler) {
++    if (!listenerMap.has(type)) listenerMap.set(type, new Set());
++    listenerMap.get(type).add(handler);
++  },
++  removeEventListener(type, handler) {
++    const set = listenerMap.get(type);
++    if (!set) return;
++    set.delete(handler);
++    if (set.size === 0) listenerMap.delete(type);
++  },
++  dispatchEvent(event) {
++    const set = listenerMap.get(event.type);
++    if (!set) return true;
++    for (const handler of Array.from(set)) {
++      handler(event);
++    }
++    return true;
++  },
++};
++
++windowStub.CustomEvent = TestCustomEvent;
++windowStub.dispatchEvent = windowStub.dispatchEvent.bind(windowStub);
++
++globalThis.window = windowStub;
++
++globalThis.performance = {
++  now: () => Date.now(),
++};
++
++Object.defineProperty(globalThis, 'navigator', {
++  value: { mediaDevices: {} },
++  configurable: true,
++  writable: true,
++});
++
++globalThis.__TEST_WS_HOOKS = {};
++
++class FakeRecorder {
++  constructor() {
++    this.state = 'inactive';
++    this.mimeType = 'audio/ogg; codecs=opus';
++    this.ondataavailable = null;
++    this.onstop = null;
++    this.stopCalled = false;
++    FakeRecorder.instances.push(this);
++  }
++
++  start() {
++    this.state = 'recording';
++  }
++
++  stop() {
++    this.state = 'inactive';
++    this.stopCalled = true;
++  }
++}
++
++FakeRecorder.instances = [];
++
++globalThis.MediaRecorder = FakeRecorder;
++
++test('final audio chunk drains before CloseStream and recorder can re-arm', async () => {
++  const voice = await import('../../static/js/voice.js');
++  const hooks = voice.__TEST_ONLY__;
++
++  hooks.state.stream = { active: true };
++  hooks.state.turnOpen = false;
++  hooks.state.turnClosePromise = null;
++  hooks.state.chunkSendPromise = Promise.resolve();
++
++  const started = hooks.startRecorder();
++  assert.equal(started, true, 'recorder should start with fake stream');
++
++  const recorder = FakeRecorder.instances.at(-1);
++  assert.ok(recorder, 'fake recorder instance should exist');
++  assert.equal(recorder.state, 'recording');
++  assert.ok(typeof recorder.onstop === 'function', 'onstop handler should be assigned');
++
++  const events = [];
++  let closeResolve;
++  const closeSeen = new Promise((resolve, reject) => {
++    const timer = setTimeout(() => reject(new Error('CloseStream not observed before timeout')), 100);
++    closeResolve = () => {
++      clearTimeout(timer);
++      resolve();
++    };
++  });
++
++  globalThis.__TEST_WS_HOOKS = {
++    onSendCloseStream: () => {
++      events.push('closeStream');
++      if (closeResolve) closeResolve();
++    },
++  };
++
++  let chunkResolve;
++  hooks.state.chunkSendPromise = new Promise((resolve) => {
++    chunkResolve = resolve;
++  });
++
++  const handler = hooks.state.wsListener;
++  assert.ok(typeof handler === 'function', 'WS listener should be registered');
++
++  const handlerPromise = handler({ detail: { type: 'UtteranceEnd' } });
++  assert.equal(recorder.stopCalled, true, 'server final should stop recorder');
++
++  const onstopPromise = recorder.onstop();
++  assert.ok(onstopPromise instanceof Promise, 'onstop handler should return a promise');
++
++  events.push('chunkResolved');
++  chunkResolve();
++
++  await handlerPromise;
++  await onstopPromise;
++  await closeSeen;
++
++  assert.deepEqual(events, ['chunkResolved', 'closeStream'], 'CloseStream must follow the final chunk resolution');
++  assert.equal(hooks.state.turnOpen, false, 'turn flag should reset after CloseStream');
++  assert.equal(hooks.state.turnClosePromise, null, 'turn close promise should clear after CloseStream');
++  if (hooks.state.turnTimer) {
++    clearTimeout(hooks.state.turnTimer);
++    hooks.state.turnTimer = null;
++  }
++
++  FakeRecorder.instances = [];
++  hooks.state.rec = null;
++  hooks.state.chunkSendPromise = Promise.resolve();
++
++  const restarted = hooks.startRecorder();
++  assert.equal(restarted, true, 'recorder should re-arm after CloseStream');
++
++  const restartedRecorder = FakeRecorder.instances.at(-1);
++  globalThis.__TEST_WS_HOOKS = {};
++  hooks.stopRecorder({ reason: 'test_cleanup' });
++  if (restartedRecorder && typeof restartedRecorder.onstop === 'function') {
++    await restartedRecorder.onstop();
++  }
++  if (hooks.state.turnTimer) {
++    clearTimeout(hooks.state.turnTimer);
++    hooks.state.turnTimer = null;
++  }
++});
+diff --git a/tests/js/ws_stub.mjs b/tests/js/ws_stub.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..c4f250db3fd70bbf5dd0352d14ffde4533664bc4
+--- /dev/null
++++ b/tests/js/ws_stub.mjs
+@@ -0,0 +1,22 @@
++function hooks() {
++  return globalThis.__TEST_WS_HOOKS || {};
++}
++
++export function openWS() { return undefined; }
++export function waitWSOpen() { return Promise.resolve(); }
++export function isOpen() { return true; }
++export function isConnecting() { return false; }
++export function closeWS() { return Promise.resolve(); }
++export function bufferedAmount() { return 0; }
++export function configure() { return undefined; }
++export function sendJSON() { return undefined; }
++export function sendAudioChunk(...args) {
++  const fn = hooks().onSendAudioChunk;
++  const result = fn ? fn(...args) : undefined;
++  return Promise.resolve(result);
++}
++export function sendCloseStream(...args) {
++  const fn = hooks().onSendCloseStream;
++  const result = fn ? fn(...args) : undefined;
++  return Promise.resolve(result);
++}
+diff --git a/tests/test_voice_ws_frontend.py b/tests/test_voice_ws_frontend.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0fa5129c0d4f292db1c3fc3e4b22719643c4275a
+--- /dev/null
++++ b/tests/test_voice_ws_frontend.py
+@@ -0,0 +1,16 @@
++import subprocess
++from pathlib import Path
++
++
++def test_voice_final_chunk_before_close():
++    repo_root = Path(__file__).resolve().parents[1]
++    loader = repo_root / 'tests' / 'js' / 'test-loader.mjs'
++    spec = repo_root / 'tests' / 'js' / 'voice-order.test.mjs'
++    cmd = [
++        'node',
++        '--loader',
++        str(loader),
++        '--test',
++        str(spec),
++    ]
++    subprocess.run(cmd, check=True, cwd=repo_root)
