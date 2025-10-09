@@ -7,15 +7,6 @@ from app.services.audio.container_sniffer import (
     AudioContainerSniffer,
     coerce_detection_from_meta,
 )
-from app.services.audio.raw_fallback import (
-    DetectionSignal as RawDetectionSignal,
-    StreamMeta as RawStreamMeta,
-    StreamStats as RawStreamStats,
-    raw_fallback_disabled,
-    coerce_to_raw_config,
-    normalize_pcm_frame,
-    should_use_raw_fallback,
-)
 
 from .schema_v1 import (
     parse_client_json,
@@ -423,7 +414,6 @@ async def _pump_dg_to_client(
     asr_ready_evt: Optional[asyncio.Event] = None,
     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
     schedule_user_final: Optional[Callable[[int, str], Awaitable[None]]] = None,
-    stream_stats: Optional[RawStreamStats] = None,
     turn_timing: Optional[Dict[str, List[float]]] = None,
     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
 ):
@@ -537,11 +527,6 @@ async def _pump_dg_to_client(
                             pass
 
             elif et == "asr_error":
-                if stream_stats is not None:
-                    try:
-                        stream_stats.note_provider_error()
-                    except Exception:
-                        pass
                 err = _clip_text(str(ev.get("error") or "unknown"), 160)
                 _jlog("dg_asr_error", sid=sid, turn_id=turn_id_ref[0], error=err)
                 try:
@@ -569,9 +554,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         "features": [],
     }
     sniffer = AudioContainerSniffer()
-    stream_meta = RawStreamMeta()
-    stream_stats = RawStreamStats(meta=stream_meta)
-    fallback_detection: Optional[RawDetectionSignal] = None
     audio_sig_logged = False
 
     MIC_CAPTURE = _env_truth("MIC_CAPTURE", False)
@@ -1235,7 +1217,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return True
 
     async def _ensure_dg_connected() -> bool:
-        nonlocal dg, rx_task, dg_connect_task, dg_state, fallback_detection
+        nonlocal dg, rx_task, dg_connect_task, dg_state
 
         if not _has_deepgram_key():
             with contextlib.suppress(Exception):
@@ -1255,52 +1237,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         connect_result = {"ok": False}
 
         async def _connect() -> None:
-            nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result, fallback_detection
+            nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
             try:
                 dg_state = "connecting"
                 with contextlib.suppress(Exception):
                     asr_ready_evt.clear()
-
-                if not raw_fallback_disabled() and should_use_raw_fallback(
-                    fallback_detection, stream_stats
-                ):
-                    if not stream_stats.forced_fallback:
-                        stream_stats.force_fallback()
-                        overrides = coerce_to_raw_config(stream_meta)
-                        for key, value in overrides.items():
-                            if key == "_transport":
-                                continue
-                            cfg[key] = value
-                        transport.update(overrides.get("_transport", {}))
-                        fallback_detection = RawDetectionSignal(
-                            container="raw",
-                            codec="pcm",
-                            containerized=False,
-                            source="raw_fallback",
-                        )
-                        stream_stats.note_detection(fallback_detection)
-                        with contextlib.suppress(Exception):
-                            _jlog(
-                                "raw_fallback_applied",
-                                sid=sid,
-                                sample_rate=transport.get("sample_rate"),
-                                channels=transport.get("channels"),
-                            )
-                        if buffered_chunks:
-                            normalized_buffer: Deque[bytes] = deque()
-                            for existing in list(buffered_chunks):
-                                normalized = normalize_pcm_frame(existing, stream_meta)
-                                if normalized != existing:
-                                    stream_stats.note_jitter_slip()
-                                normalized_buffer.append(normalized)
-                            buffered_chunks.clear()
-                            buffered_chunks.extend(normalized_buffer)
-                        if MIC_CAPTURE and mic_chunks:
-                            for idx, existing in enumerate(list(mic_chunks)):
-                                normalized = normalize_pcm_frame(existing, stream_meta)
-                                if normalized != existing:
-                                    stream_stats.note_jitter_slip()
-                                mic_chunks[idx] = normalized
 
                 cfg["_transport"] = transport
                 cfg["_jlog"] = _jlog
@@ -1332,7 +1273,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         asr_ready_evt,
                         _flush_buffered_chunks,
                         _handle_provider_final,
-                        stream_stats,
                         turn_timing,
                         _log_turn_finish,
                     )
@@ -1587,10 +1527,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         else:
                             turn_id_ref[0] = buf.turn_seq
                         buffered_chunks.clear()
-                        try:
-                            stream_stats.reset_turn()
-                        except Exception:
-                            pass
                         mic_chunks.clear()
                         mic_first_ts[0] = now
                         mic_last_ts[0] = now
@@ -1686,7 +1622,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         asr_seen_partial[0] = False
                         sent_any_audio[0] = False
                         buffered_chunks.clear()
-                        stream_stats.reset_turn()
                         turn_connect_started[0] = False
                         # reset mic capture
                         mic_chunks.clear()
@@ -1716,14 +1651,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 transport["container"] = container
                                 transport["codec"] = codec
                                 transport["containerized_opus"] = containerized
-                                fallback_detection = RawDetectionSignal(
-                                    container=container,
-                                    codec=codec,
-                                    containerized=containerized,
-                                    source="sniffer",
-                                )
-                                stream_stats.note_detection(fallback_detection)
-                                stream_meta.encoding = "opus"
                                 _jlog(
                                     "sniffer_detect",
                                     sid=sid,
@@ -1748,14 +1675,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     transport["container"] = container
                                     transport["codec"] = codec
                                     transport["containerized_opus"] = containerized
-                                    fallback_detection = RawDetectionSignal(
-                                        container=container,
-                                        codec=codec,
-                                        containerized=containerized,
-                                        source="mime",
-                                    )
-                                    stream_stats.note_detection(fallback_detection)
-                                    stream_meta.encoding = "opus"
                                     _jlog(
                                         "sniffer_detect",
                                         sid=sid,
@@ -1768,7 +1687,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     except Exception:
                         pass
 
-                    chunk = stream_stats.observe_frame(raw_chunk)
+                    chunk = raw_chunk
 
                     buf.append(chunk)
 
@@ -1895,16 +1814,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                         elif t == "Configure":
                             cfg.update(obj or {})
-                            stream_meta.apply_config(obj or {})
                             enc_lower = (obj.get("encoding") or "").strip().lower()
                             if enc_lower == "pcm":
-                                fallback_detection = RawDetectionSignal(
-                                    container="raw",
-                                    codec="pcm",
-                                    containerized=False,
-                                    source="configure",
-                                )
-                                stream_stats.note_detection(fallback_detection)
+                                transport["container"] = "raw"
+                                transport["codec"] = "pcm"
+                                transport["containerized_opus"] = False
                             if obj.get("reset"):
                                 with contextlib.suppress(Exception):
                                     clear_greet_turn_cache(sid)
