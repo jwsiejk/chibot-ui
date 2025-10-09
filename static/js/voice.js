@@ -49,6 +49,7 @@ const state = {
   vad: null,
   rec: null,
   finalized: false,
+  postFinalHoldUntil: 0,
   wsListener: null,
   chunkSendPromise: Promise.resolve(),
   chunkBytesSent: 0,
@@ -143,7 +144,7 @@ function _ensureWSListener() {
       return;
     }
 
-    state.finalized = true;
+    _applyPostFinalHold('ws_final');
 
     const recorder = state.rec;
     const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state !== 'inactive');
@@ -288,7 +289,7 @@ function _stopRecorder(detail = null) {
   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
 
   if (detail?.reason === 'server_final') {
-    state.finalized = true;
+    _applyPostFinalHold('stop_recorder');
   } else if (state.finalized) {
     if (!recorder || recorder.state === 'inactive') {
       state.rec = null;
@@ -325,6 +326,7 @@ function _teardownAudioGraph() {
   state.ctx = null;
   state.deviceLogged = false;
   state.finalized = false;
+  state.postFinalHoldUntil = 0;
   _removeWSListener();
 }
 
@@ -339,6 +341,7 @@ function _disarm() {
   state.recStartedAt = 0;
   state.ttsPlaying = false;
   state.finalized = false;
+  state.postFinalHoldUntil = 0;
   _removeWSListener();
   _emitVoiceState('idle');
 }
@@ -421,6 +424,7 @@ function _startRecorder() {
   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
   state.finalized = false;
+  state.postFinalHoldUntil = 0;
   _ensureWSListener();
 
   let recorder;
@@ -539,6 +543,36 @@ function _startRecorder() {
 function _onSpeechStartCommitted() {
   _logLifecycle('vad_speech_start');
 
+  const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+    ? performance.now()
+    : Date.now();
+  const holdUntil = state.postFinalHoldUntil || 0;
+
+  if (state.finalized) {
+    if (now < holdUntil) {
+      _logLifecycle('vad_speech_start_suppressed', {
+        reason: 'post_final_hold_finalized',
+        holdUntil,
+        now,
+      });
+      return;
+    }
+    state.finalized = false;
+  }
+
+  if (now < holdUntil) {
+    _logLifecycle('vad_speech_start_suppressed', {
+      reason: 'post_final_hold',
+      holdUntil,
+      now,
+    });
+    return;
+  }
+
+  if (state.postFinalHoldUntil) {
+    state.postFinalHoldUntil = 0;
+  }
+
   if (state.ttsPlaying && !state.bargeConfirmActive) {
     state.bargeConfirmActive = true;
     try { pausePlayback(); } catch {}
@@ -617,4 +651,29 @@ function optsFromGlobal(key, fallback) {
     if (key in cfg) return cfg[key];
   } catch {}
   return fallback;
+}
+
+function _applyPostFinalHold(source = 'unknown') {
+  const rawHold = Number(optsFromGlobal('post_final_hold_ms', 600));
+  const holdMs = Number.isFinite(rawHold) ? Math.max(0, rawHold) : 0;
+  const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+    ? performance.now()
+    : Date.now();
+  const targetUntil = now + holdMs;
+  const previousUntil = state.postFinalHoldUntil || 0;
+  const nextUntil = Math.max(targetUntil, previousUntil);
+  const wasFinalized = !!state.finalized;
+
+  state.finalized = true;
+  state.postFinalHoldUntil = nextUntil;
+
+  if (!wasFinalized || nextUntil !== previousUntil) {
+    _logLifecycle('post_final_hold_applied', {
+      holdMs,
+      holdUntil: nextUntil,
+      source,
+    });
+  }
+
+  return nextUntil;
 }

@@ -1,399 +1,398 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 2594ed2034728292d122493fcf8a2b20bce8fd14..caaba52242a2f5a63f3e8196854885a3768027be 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -149,50 +149,52 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
-     Audio transport parameters must be in the URL query for Deepgram's v1/listen.
-     For **containerized Opus** (OGG/WebM), we must NOT send encoding, sample_rate, or channels.
-     """
-     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
+diff --git a/static/js/voice.js b/static/js/voice.js
+index 3ccaeee7d4a9f18cc3d0c69c2fc25d0be0eebadb..13fa502f60464ccc94eb703c28c134be06722851 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -27,50 +27,51 @@ export async function armVAD(stream = null, opts = {}) { return await _arm(strea
+ export function disarmVAD() { _disarm(); }
+ export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
+ export function bargeIn() { _bargeIn(); }         // keeps API parity
+ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
  
-     # Detect containerized Opus from overrides (nested under _transport)
-     containerized = False
-     try:
-         if overrides and isinstance(overrides.get("_transport"), dict):
-             containerized = bool(overrides["_transport"].get("containerized_opus"))
-     except Exception:
-         containerized = False
+ // ---- Internal state ---------------------------------------------------------
  
-     # Append conservative defaults ONLY when not containerized
-     if (not containerized) and ("encoding=" not in base):
-         sep = "&" if "?" in base else "?"
-         base = (
-             base
-             + sep
-             # RAW defaults; safe for legacy raw paths. If truly containerized, these will be stripped below.
-             + "encoding=opus&sample_rate=48000&channels=1"
-             + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true"
-         )
+ // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   && typeof MediaRecorder.isTypeSupported === 'function'
+   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
+   ? 'audio/ogg; codecs=opus'
+   : 'audio/webm; codecs=opus';
  
-     # Apply overrides into query string and clean up for containerized
-+    effective_utterance_end_ms = 0
-+
-     try:
-         import urllib.parse as _p
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
  
-         parts = _p.urlsplit(base)
-         q = _p.parse_qsl(parts.query, keep_blank_values=True)
-         qd = {k: v for k, v in q}
+ const state = {
+   stream: null,
+   ctx: null,
+   source: null,
+   analyser: null,
+   vad: null,
+   rec: null,
+   finalized: false,
++  postFinalHoldUntil: 0,
+   wsListener: null,
+   chunkSendPromise: Promise.resolve(),
+   chunkBytesSent: 0,
+   chunkSendError: null,
+   turnTimer: null,
+   turnOpen: false,   // track whether a turn is currently open server-side
+   turnClosePromise: null,
+   deviceLogged: false,
+   // NEW: min-turn gating
+   recStartedAt: 0,
+   pendingEndTimer: null,
+   ttsPlaying: false,
+   bargeConfirmTimer: null,
+   bargeConfirmActive: false,
+ };
  
-         def _fmt(v):
-             if isinstance(v, bool):
-                 return "true" if v else "false"
-             if isinstance(v, int):
-                 return str(int(v))
-             return str(v)
+ const BARGE_CONFIRM_DEFAULT_MS = 420;
+ let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
+ try {
+   const cfg = window.__askchip_config || {};
+   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
+     bargeConfirmMs = cfg.barge_confirm_ms;
+   }
+ } catch {}
+ bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
+@@ -121,51 +122,51 @@ function _clearBargeConfirm(resume = false) {
+     }
+   }
+ }
  
-         tag_source: Optional[str] = None
+ function _ensureWSListener() {
+   if (state.wsListener || typeof window === 'undefined') {
+     return;
+   }
+   const handler = async (ev) => {
+     const detail = ev?.detail || {};
+     const type = detail?.type;
  
-         # Allow top-level overrides (model, language, etc.)
-         if overrides:
-             for k in (
-                 "encoding",
-                 "sample_rate",
-                 "channels",
-                 "interim_results",
-                 "smart_format",
-                 "punctuate",
-@@ -258,58 +260,74 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
-         # If a language env is provided (optional), prefer it if not set
-         _env_lang = os.getenv("DEEPGRAM_LANG")
-         if _env_lang and "language" not in qd:
-             qd["language"] = _env_lang
- 
-         # Ensure some model is present; default to nova-2 if none provided
-         if "model" not in qd:
-             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
- 
-         # Provide a sensible default for utterance_end_ms (2s) unless explicitly overridden
-         qd.setdefault("utterance_end_ms", "2000")
- 
-         interim_val = qd.get("interim_results")
-         interim_false = False
-         try:
-             if isinstance(interim_val, bool):
-                 interim_false = not interim_val
-             elif interim_val is None:
-                 interim_false = False
-             else:
-                 interim_false = str(interim_val).strip().lower() in {"false", "0"}
-         except Exception:
-             interim_false = False
-         if interim_false:
-             qd.pop("utterance_end_ms", None)
-+            effective_utterance_end_ms = 0
-+        else:
-+            try:
-+                val = qd.get("utterance_end_ms")
-+                if val is not None:
-+                    effective_utterance_end_ms = int(str(val))
-+            except Exception:
-+                effective_utterance_end_ms = 0
- 
-         query = _p.urlencode(qd)
-         base = _p.urlunsplit(
-             (parts.scheme, parts.netloc, parts.path, query, parts.fragment)
-         )
-     except Exception:
-         pass
- 
-+    if isinstance(overrides, dict):
-+        try:
-+            overrides["_effective_utterance_end_ms"] = int(
-+                effective_utterance_end_ms or 0
-+            )
-+        except Exception:
-+            overrides["_effective_utterance_end_ms"] = 0
-+
-     return base
- 
- 
- def _auth_header() -> str:
-     key, _ = _api_key_info()
-     return f"Token {key}"
- 
- 
- def _initial_config(overrides: Optional[dict] = None) -> dict:
-     """Build Configure payload with FEATURES ONLY (no audio/transport keys)."""
-     interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
-     features = {
-         "interim_results": interim,
-         "smart_format": True,
-         "punctuate": True,
-         "vad_events": True,
-         # Keep URL-only keys (like utterance_end_ms) out of Configure
+     let isFinal = false;
+     if (type === 'UtteranceEnd') {
+       isFinal = true;
+     } else if (type === 'Results') {
+       const channelFinal = detail?.channel?.is_final === true;
+       const payloadFinal = detail?.is_final === true;
+       isFinal = channelFinal || payloadFinal;
      }
  
-     # Allow simple boolean overrides at top-level OR nested under "features"
-     try:
-         if overrides:
-             # Merge nested features if provided
-             if isinstance(overrides.get("features"), dict):
-                 for k, v in overrides["features"].items():
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index e43f5081b8efac676565180ca5a3b86506679944..4ebbdb9c3d276f8e184a246a60968af4eaeb1868 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -819,50 +819,56 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     if no_audio_window_s < 0:
-         no_audio_window_s = 0.0
-     no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
-     asr_ready_evt: asyncio.Event = asyncio.Event()
-     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
-     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
-     ws_frames_in = 0
-     ws_bytes_in = 0
-     backpressure_drop_count = 0
-     backpressure_last_emit = 0.0
-     backpressure_last_queue_len = 0
-     backpressure_emit_interval = 1.0
-     turn_connect_started = [False]
+     if (!isFinal || state.finalized) {
+       return;
+     }
  
-     # NEW: per-turn mic capture state
-     mic_chunks: List[bytes] = []
-     mic_first_ts = [0.0]
-     mic_last_ts = [0.0]
+-    state.finalized = true;
++    _applyPostFinalHold('ws_final');
  
-     # Deferred provider final guard state
-     pending_user_final: Dict[str, Any] = {"payload": None, "ts": 0.0}
-     pending_user_final_task: List[Optional[asyncio.Task]] = [None]
+     const recorder = state.rec;
+     const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state !== 'inactive');
+     if (!isRecording) {
+       return;
+     }
  
-     def _resolve_final_guard_window_s() -> float:
-         guard_candidates: List[int] = []
-+        try:
-+            eff_val = int(cfg.get("_effective_utterance_end_ms") or 0)
-+            if eff_val > 0:
-+                guard_candidates.append(eff_val)
-+        except Exception:
-+            pass
-         try:
-             cfg_val = int(cfg.get("utterance_end_ms") or 0)
-             if cfg_val > 0:
-                 guard_candidates.append(cfg_val)
-         except Exception:
-             pass
-         try:
-             env_val = int(os.getenv("WS_FINAL_GUARD_MS", "0") or 0)
-             if env_val > 0:
-                 guard_candidates.append(env_val)
-         except Exception:
-             pass
-         if not guard_candidates:
-             return 0.0
-         try:
-             return max(guard_candidates) / 1000.0
-         except Exception:
-             return 0.0
+     try {
+       _stopRecorder({ reason: 'server_final' });
+     } catch (err) {
+       try { console.warn('[voice] failed to stop recorder on server final', err); } catch {}
+     }
  
-     def _cancel_pending_user_final_task(reason: str = "cancel") -> None:
-         task = pending_user_final_task[0]
-         if task and not task.done():
-             payload = pending_user_final.get("payload")
-             with contextlib.suppress(Exception):
-                 _jlog(
-diff --git a/tests/test_ws_final_guard.py b/tests/test_ws_final_guard.py
-index e9a51c2d9c7f566bdd112357a1093c3f01f7b5cf..4d6ce68a3e1de8c696566c1773dd6c2b2ed71543 100644
---- a/tests/test_ws_final_guard.py
-+++ b/tests/test_ws_final_guard.py
-@@ -1,29 +1,30 @@
- import asyncio
- import json
- from collections import deque
+     try {
+       const pending = _closeTurnIfOpen();
+       if (pending) {
+         await pending;
+       }
+     } catch (err) {
+       try { console.warn('[voice] failed to close turn on server final', err); } catch {}
+     }
+   };
  
-+from app.services.streaming_asr import deepgram_client
- from app.ws import ws_asgi
+   try { window.addEventListener('askchip-ws', handler); } catch {}
+   state.wsListener = handler;
+@@ -266,101 +267,103 @@ function _closeTurnIfOpen() {
+   if (!state.turnOpen) {
+     return null;
+   }
+   const closePromise = (async () => {
+     try {
+       await sendCloseStream();
+     } finally {
+       state.turnOpen = false;
+       state.turnClosePromise = null;
+     }
+   })();
+   state.turnClosePromise = closePromise;
+   return closePromise;
+ }
  
+ function _stopRecorder(detail = null) {
+   const recorder = state.rec;
+   const wasActive = !!recorder && recorder.state !== 'inactive';
+   const payload = Object.assign({
+     active: wasActive,
+     hasRecorder: !!recorder,
+   }, detail || {});
+   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
  
- def _json_payloads(messages):
-     out = []
-     for msg in messages:
-         if msg.get("type") != "websocket.send":
-             continue
-         text = msg.get("text")
-         if not text:
-             continue
-         try:
-             out.append(json.loads(text))
-         except Exception:
-             continue
-     return out
+   if (detail?.reason === 'server_final') {
+-    state.finalized = true;
++    _applyPostFinalHold('stop_recorder');
+   } else if (state.finalized) {
+     if (!recorder || recorder.state === 'inactive') {
+       state.rec = null;
+       return;
+     }
+   }
  
+   if (!recorder) {
+     state.rec = null;
+     return;
+   }
  
- def test_provider_final_waits_for_guard_window(monkeypatch):
-     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
-     monkeypatch.setenv("WS_FINAL_GUARD_MS", "200")
+   if (recorder.state === 'inactive') {
+     state.rec = null;
+     return;
+   }
  
-     monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
-     monkeypatch.setattr(ws_asgi, "_admin_emit", None)
-@@ -111,50 +112,170 @@ def test_provider_final_waits_for_guard_window(monkeypatch):
-         ]
-         assert not finals_before, "Final results should wait for guard window"
-         assert not any(p.get("type") == "UtteranceEnd" for p in payloads_before)
+   try { recorder.stop(); } catch {}
+   // intentionally keep state.rec reference nullable here; onstop handler handles final close
+   state.rec = null;
+ }
  
-         loop.run_until_complete(asyncio.sleep(0.3))
-         new_payloads = _json_payloads(sent[before_len:])
-         finals_after = [
-             p
-             for p in new_payloads
-             if p.get("type") == "Results"
-             and (p.get("channel") or {}).get("is_final")
-         ]
-         utter_after = [p for p in new_payloads if p.get("type") == "UtteranceEnd"]
-         assert len(finals_after) == 1, "Provider final should emit once after guard"
-         assert len(utter_after) == 1, "UtteranceEnd should follow provider final"
+ function _teardownVADOnly() {
+   try { state.vad && state.vad.stop(); } catch {}
+   state.vad = null;
+ }
  
-         loop.run_until_complete(events.put({"type": "websocket.disconnect"}))
-         loop.run_until_complete(main_task)
-     finally:
-         asyncio.set_event_loop(None)
-         loop.close()
+ function _teardownAudioGraph() {
+   try { state.source && state.source.disconnect(); } catch {}
+   try { state.analyser && state.analyser.disconnect(); } catch {}
+   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
+   state.source = null;
+   state.analyser = null;
+   state.ctx = null;
+   state.deviceLogged = false;
+   state.finalized = false;
++  state.postFinalHoldUntil = 0;
+   _removeWSListener();
+ }
  
-     assert llm_calls, "LLM turn should still run after guarded final"
+ function _disarm() {
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   _clearBargeConfirm(false);
+   _stopRecorder({ reason: 'manual_disarm' });
+   _teardownVADOnly();
+   state.turnOpen = false; // ensure local state is clean
+   state.turnClosePromise = null;
+   state.recStartedAt = 0;
+   state.ttsPlaying = false;
+   state.finalized = false;
++  state.postFinalHoldUntil = 0;
+   _removeWSListener();
+   _emitVoiceState('idle');
+ }
  
+ function _bargeIn() {
+   // Soft barge-in: pause audio locally
+   _clearBargeConfirm(false);
+   try { stopPlayback(); } catch {}
+   // If a prior ASR turn is somehow still open, politely close it.
+   // (Harmless if no turn is open; guarded to avoid duplicate closes.)
+   const pendingClose = _closeTurnIfOpen();
+   if (pendingClose) {
+     pendingClose.catch(() => {});
+   }
+ }
  
-+def test_default_guard_waits_for_deepgram_default(monkeypatch):
-+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
-+    monkeypatch.delenv("WS_FINAL_GUARD_MS", raising=False)
-+
-+    monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
-+    monkeypatch.setattr(ws_asgi, "_admin_emit", None)
-+    monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
-+
-+    async def immediate_to_thread(func, *args, **kwargs):
-+        return func(*args, **kwargs)
-+
-+    monkeypatch.setattr(ws_asgi.asyncio, "to_thread", immediate_to_thread)
-+
-+    def fake_prepare(text, meta=None, **kwargs):
-+        return {}, {}, {}
-+
-+    monkeypatch.setattr(ws_asgi, "prepare_turn_metadata", fake_prepare)
-+
-+    llm_calls = []
-+
-+    def fake_run_ws_user_turn(session_id, text, corr_id=None, **kwargs):
-+        llm_calls.append((session_id, text))
-+
-+    monkeypatch.setattr(ws_asgi, "run_ws_user_turn", fake_run_ws_user_turn)
-+
-+    class _DefaultGuardDeepgram:
-+        instances = []
-+
-+        def __init__(self, cfg):
-+            self.cfg = cfg
-+            self._queue: asyncio.Queue = asyncio.Queue()
-+            self._final_sent = False
-+            self.guard_ms = 0
-+            _DefaultGuardDeepgram.instances.append(self)
-+
-+        async def connect(self):
-+            deepgram_client._dg_url(self.cfg)
-+            self.guard_ms = int(self.cfg.get("_effective_utterance_end_ms") or 0)
-+            await self._queue.put({"type": "asr_open"})
-+
-+        async def events(self):
-+            while True:
-+                ev = await self._queue.get()
-+                if ev is None:
-+                    break
-+                yield ev
-+
-+        async def send(self, chunk: bytes):
-+            if not self._final_sent:
-+                await self._queue.put({"type": "user_final", "text": "hello default"})
-+                self._final_sent = True
-+
-+        async def close(self, wait_for_final=True):
-+            await self._queue.put(None)
-+
-+    monkeypatch.setattr(ws_asgi, "DeepgramClient", _DefaultGuardDeepgram)
-+
-+    sent = []
-+
-+    async def _send(message):
-+        sent.append(message)
-+
-+    scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
-+
-+    loop = asyncio.new_event_loop()
-+    asyncio.set_event_loop(loop)
-+    try:
-+        events: asyncio.Queue = asyncio.Queue()
-+        events.put_nowait({"type": "websocket.receive", "bytes": b"\x00\x01"})
-+        events.put_nowait(
-+            {"type": "websocket.receive", "bytes": b"\x02\x03", "_delay": 0.05}
-+        )
-+
-+        async def _receive():
-+            ev = await events.get()
-+            delay = ev.pop("_delay", 0)
-+            if delay:
-+                await asyncio.sleep(delay)
-+            return ev
-+
-+        main_task = loop.create_task(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-+
-+        loop.run_until_complete(asyncio.sleep(1.5))
-+        interim_payloads = _json_payloads(sent)
-+        interim_finals = [
-+            p
-+            for p in interim_payloads
-+            if p.get("type") == "Results"
-+            and (p.get("channel") or {}).get("is_final")
-+        ]
-+        assert not interim_finals, "Final results should wait for default guard"
-+
-+        before_len = len(sent)
-+
-+        loop.run_until_complete(asyncio.sleep(1.0))
-+        new_payloads = _json_payloads(sent[before_len:])
-+        finals_after = [
-+            p
-+            for p in new_payloads
-+            if p.get("type") == "Results"
-+            and (p.get("channel") or {}).get("is_final")
-+        ]
-+        utter_after = [p for p in new_payloads if p.get("type") == "UtteranceEnd"]
-+        assert len(finals_after) == 1, "Provider final should emit once after guard"
-+        assert len(utter_after) == 1, "UtteranceEnd should follow provider final"
-+
-+        loop.run_until_complete(events.put({"type": "websocket.disconnect"}))
-+        loop.run_until_complete(main_task)
-+    finally:
-+        asyncio.set_event_loop(None)
-+        loop.close()
-+
-+    assert llm_calls, "LLM turn should still run after guarded final"
-+    assert _DefaultGuardDeepgram.instances, "Deepgram client should be instantiated"
-+    assert (
-+        _DefaultGuardDeepgram.instances[0].guard_ms == 2000
-+    ), "Default guard should use Deepgram default"
-+
-+
- def test_late_audio_after_final_emits_single_pair(monkeypatch):
-     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
-     monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
+ // ---- VAD wiring -------------------------------------------------------------
  
-     monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
-     monkeypatch.setattr(ws_asgi, "_admin_emit", None)
-     monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
+ async function _arm(stream = null, opts = {}) {
+   const mic = stream || await _ensureMic();
  
-     async def immediate_to_thread(func, *args, **kwargs):
-         return func(*args, **kwargs)
+   // Build / rebuild VAD
+   _teardownVADOnly();
  
-     monkeypatch.setattr(ws_asgi.asyncio, "to_thread", immediate_to_thread)
+   // Merge runtime globals so admins can tune without rebuilds:
+@@ -399,50 +402,51 @@ async function _arm(stream = null, opts = {}) {
+   });
+   _emitVoiceState('armed');
  
-     def fake_prepare(text, meta=None, **kwargs):
-         return {}, {}, {}
+   return mic;
+ }
  
-     monkeypatch.setattr(ws_asgi, "prepare_turn_metadata", fake_prepare)
+ // ---- Recorder lifecycle -----------------------------------------------------
  
-     llm_calls = []
+ function _startRecorder() {
+   if (!state.stream) return false;
+   if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
  
-     def fake_run_ws_user_turn(session_id, text, corr_id=None, **kwargs):
-         llm_calls.append((session_id, text))
+   if (typeof MediaRecorder === 'undefined') {
+     console.warn('[voice] MediaRecorder not supported in this browser');
+     state.rec = null;
+     return false;
+   }
  
-     monkeypatch.setattr(ws_asgi, "run_ws_user_turn", fake_run_ws_user_turn)
+   state.chunkSendPromise = Promise.resolve();
+   state.chunkBytesSent = 0;
+   state.chunkSendError = null;
+   state.turnClosePromise = null;
+   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
+   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
+   state.finalized = false;
++  state.postFinalHoldUntil = 0;
+   _ensureWSListener();
+ 
+   let recorder;
+   try {
+     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
+   } catch (primaryErr) {
+     try {
+       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
+     } catch (fallbackErr) {
+       console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
+       state.rec = null;
+       return false;
+     }
+   }
+ 
+   state.rec = recorder;
+ 
+   state.rec.ondataavailable = (e) => {
+     if (state.finalized) {
+       return;
+     }
+     const blob = e.data;
+     if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
+       return;
+     }
+@@ -517,50 +521,80 @@ function _startRecorder() {
+     state.turnOpen = true; // mark an open ASR turn on the server
+     try {
+       console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice });
+     } catch {}
+   } catch (e) {
+     console.warn('[voice] recorder start failed', e);
+     state.rec = null;
+     state.turnOpen = false;
+     state.turnClosePromise = null;
+     return false;
+   }
+ 
+   // Safety timeout to prevent runaway recordings
+   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
+   _safeClearTurnTimer();
+   state.turnTimer = setTimeout(() => {
+     try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
+   }, limitMs);
+ 
+   return true;
+ }
+ 
+ function _onSpeechStartCommitted() {
+   _logLifecycle('vad_speech_start');
+ 
++  const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
++    ? performance.now()
++    : Date.now();
++  const holdUntil = state.postFinalHoldUntil || 0;
++
++  if (state.finalized) {
++    if (now < holdUntil) {
++      _logLifecycle('vad_speech_start_suppressed', {
++        reason: 'post_final_hold_finalized',
++        holdUntil,
++        now,
++      });
++      return;
++    }
++    state.finalized = false;
++  }
++
++  if (now < holdUntil) {
++    _logLifecycle('vad_speech_start_suppressed', {
++      reason: 'post_final_hold',
++      holdUntil,
++      now,
++    });
++    return;
++  }
++
++  if (state.postFinalHoldUntil) {
++    state.postFinalHoldUntil = 0;
++  }
++
+   if (state.ttsPlaying && !state.bargeConfirmActive) {
+     state.bargeConfirmActive = true;
+     try { pausePlayback(); } catch {}
+     state.bargeConfirmTimer = setTimeout(() => {
+       state.bargeConfirmTimer = null;
+       if (!state.bargeConfirmActive) return;
+       if (state.vad && typeof state.vad.isRecording === 'function' && !state.vad.isRecording()) {
+         state.bargeConfirmActive = false;
+         try { resumePlayback(); } catch {}
+         return;
+       }
+       state.bargeConfirmActive = false;
+       _bargeIn();
+       const started = _startRecorder();
+       if (started) {
+         _emitVoiceState('recording');
+         return;
+       }
+       console.warn('[voice] recorder unavailable — reverting to typing');
+       _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+     }, bargeConfirmMs);
+     return;
+   }
+ 
+   if (state.bargeConfirmActive) {
+@@ -596,25 +630,50 @@ function _onSpeechEndCommitted(detail = null) {
+     if (wait > 0) {
+       try { console.debug('[voice] delaying VAD end', { waitMs: wait, elapsed }); } catch {}
+       _clearPendingEndTimer();
+       state.pendingEndTimer = setTimeout(() => _onSpeechEndCommitted(detail), wait);
+       return; // do not stop yet
+     }
+   }
+ 
+   _logLifecycle('vad_speech_end', { reason });
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   _stopRecorder({ reason });
+   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
+ }
+ 
+ // ---- Utilities --------------------------------------------------------------
+ 
+ function optsFromGlobal(key, fallback) {
+   // Allow admin-configurable values to seep in (if app exposes them)
+   try {
+     const cfg = window.__askchip_config || {};
+     if (key in cfg) return cfg[key];
+   } catch {}
+   return fallback;
+ }
++
++function _applyPostFinalHold(source = 'unknown') {
++  const rawHold = Number(optsFromGlobal('post_final_hold_ms', 600));
++  const holdMs = Number.isFinite(rawHold) ? Math.max(0, rawHold) : 0;
++  const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
++    ? performance.now()
++    : Date.now();
++  const targetUntil = now + holdMs;
++  const previousUntil = state.postFinalHoldUntil || 0;
++  const nextUntil = Math.max(targetUntil, previousUntil);
++  const wasFinalized = !!state.finalized;
++
++  state.finalized = true;
++  state.postFinalHoldUntil = nextUntil;
++
++  if (!wasFinalized || nextUntil !== previousUntil) {
++    _logLifecycle('post_final_hold_applied', {
++      holdMs,
++      holdUntil: nextUntil,
++      source,
++    });
++  }
++
++  return nextUntil;
++}
