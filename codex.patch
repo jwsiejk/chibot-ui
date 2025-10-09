@@ -1,363 +1,543 @@
-diff --git a/app/dialog/policy.py b/app/dialog/policy.py
-index bf478f60202fa570ae403ef7d29a182b36cae2d0..afd1a38f78accd578cd7524055224b11bfc08ff7 100644
---- a/app/dialog/policy.py
-+++ b/app/dialog/policy.py
-@@ -1,34 +1,47 @@
- """Policy heuristics that map interpreter output to dialog frames."""
- 
- from __future__ import annotations
- 
- from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
- 
- from ..nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
- 
- _CLARIFY_THRESHOLD = 0.45
-+_PLANNER_HYSTERESIS = 0.05
-+
-+_BAND_ORDER = {"low": 0, "medium": 1, "high": 2}
-+_DEFAULT_PLANNER_THRESHOLDS = {
-+    "low": 0.0,
-+    "medium": _CLARIFY_THRESHOLD,
-+    "high": 0.75,
-+}
-+
-+_BAND_CHIPS = {
-+    "medium": ["Share more context", "What are you solving?", "Show an example"],
-+    "low": ["Ask a question", "Explain how it works", "Project advice"],
-+}
- _SUGGESTION_ACTIONS = {"clarify", "offer_steps"}
- 
- _MISSING_CHIP_LIBRARY = {
-     "details": "Add more detail",
-     "intent": "Tell me your goal",
-     "product": "Name the product",
-     "issue_detail": "Describe the issue",
-     "message": "Repeat the request",
- }
- 
- _DEFAULT_CHIPS = ["Share more context", "What are you solving?", "Show an example"]
- 
- 
- def _coerce_float(raw: Any, default: float = 0.0) -> float:
-     try:
-         return float(raw)
-     except Exception:
-         return float(default)
- 
- 
- def _normalize_str(value: Any) -> str:
-     try:
-         return str(value or "").strip().lower()
-     except Exception:
-         return ""
-@@ -63,61 +76,63 @@ def _missing_for_clarify(universal: Mapping[str, Any], goal: Optional[Mapping[st
-     raw_missing = universal.get("missing") if isinstance(universal, Mapping) else None
-     missing: List[str] = []
-     if isinstance(raw_missing, Iterable) and not isinstance(raw_missing, (str, bytes)):
-         for item in raw_missing:
-             text = _normalize_str(item)
-             if text:
-                 missing.append(text)
-     elif isinstance(raw_missing, str):
-         normalized = _normalize_str(raw_missing)
-         if normalized:
-             missing.append(normalized)
- 
-     confirmed = {m.lower() for m in _confirmed_set(goal)}
-     filtered: List[str] = []
-     for key in missing:
-         if key in confirmed:
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index d85cf02a55a46ba11ff9b3ad5e28310e5f3d40fa..b7e8d919001dbc9690853a806d097acfbc28230c 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -1234,50 +1234,76 @@ def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
+     raw = policy.get("chips") if isinstance(policy, dict) else None
+     if not raw:
+         return []
+     if isinstance(raw, (list, tuple, set)):
+         chips = list(raw)
+     else:
+         chips = [raw]
+     cap = _suggestion_cap()
+     cleaned: List[str] = []
+     seen = set()
+     for item in chips:
+         text = _normalize_suggestion_item(item)
+         if not text:
              continue
-         if key == "product" and _has_goal_entity(goal, "products"):
+         if len(text) > 50:
+             text = text[:50].rstrip()
+         if not text or text in seen:
              continue
-         if key == "intent" and _normalize_str(goal.get("working_intent")):
-             continue
-         filtered.append(key)
-     return filtered
- 
- 
--def _chips_from_missing(missing: Sequence[str]) -> List[str]:
-+def _chips_from_missing(missing: Sequence[str], fallback: Optional[Sequence[str]] = None) -> List[str]:
-     chips: List[str] = []
-     for key in missing:
-         choice = _MISSING_CHIP_LIBRARY.get(key)
-         if choice and choice not in chips:
-             chips.append(choice)
-         if len(chips) >= 3:
+         cleaned.append(text)
+         seen.add(text)
+         if len(cleaned) >= cap:
              break
-     if chips:
-         return chips
--    return list(_DEFAULT_CHIPS[:3])
-+    if fallback is None:
-+        fallback = _DEFAULT_CHIPS
-+    return list(fallback[:3])
+     return cleaned
  
  
- def _is_unknown_field(value: Any) -> bool:
-     normalized = _normalize_str(value)
-     if not normalized:
-         return True
-     return normalized in {"unknown", "undetermined"}
- 
- 
- def _resolve_delivery_frame(universal: Mapping[str, Any],
-                             nlu_result: Mapping[str, Any],
-                             missing: Sequence[str]) -> str:
-     delivery = _normalize_str(universal.get("delivery_pref"))
-     if delivery == "summary":
-         return "summarize_next_actions"
-     if delivery == "steps":
-         return "offer_steps"
-     if delivery in {"list", "compare"}:
-         return "compare"
- 
-     if bool(nlu_result.get("wants_list")):
-         return "compare"
- 
-     user_goal = _normalize_str(universal.get("user_goal"))
-     depth = _normalize_str(universal.get("depth"))
-@@ -133,76 +148,228 @@ def _resolve_delivery_frame(universal: Mapping[str, Any],
- 
-     if depth == "deep":
-         return "deep_dive"
-     return "high_level"
- 
- 
- def pick(nlu_result: Dict[str, Any],
-          universal_result: Optional[Dict[str, Any]] = None,
-          *,
-          session_goal: Optional[Dict[str, Any]] = None,
-          clarify_threshold: float = _CLARIFY_THRESHOLD) -> Dict[str, Any]:
-     """Select a dialog frame based on interpreter output."""
- 
-     nlu_result = nlu_result or {}
-     universal = _ensure_universal_fields(universal_result)
-     goal = session_goal or {}
- 
-     confidence = _coerce_float(universal.get("confidence"), default=0.0)
-     intent = _normalize_str(nlu_result.get("intent"))
-     is_greet = intent in {"greet", "idle"}
-     needs_clarification = bool(universal.get("needs_clarification"))
-     missing = _missing_for_clarify(universal, goal)
-     if is_greet:
-         missing = []
- 
--    should_clarify = (
--        needs_clarification
--        or confidence < clarify_threshold
--        or any(_is_unknown_field(universal.get(field)) for field in ("phase", "depth", "delivery_pref"))
-+    thresholds = _resolve_planner_thresholds(universal, goal, clarify_threshold)
-+    last_band = _extract_last_band(goal)
-+    confidence_band = _select_band(confidence, thresholds, last_band)
++def summarize_policy_metadata(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
++    """Extract lightweight policy hints for downstream consumers."""
++    summary: Dict[str, Any] = {}
++    chips = _collect_policy_chips(policy)
++    if chips:
++        summary["policy_chips"] = chips
 +
-+    unknown_fields = any(
-+        _is_unknown_field(universal.get(field)) for field in ("phase", "depth", "delivery_pref")
++    band: Optional[str] = None
++    if isinstance(policy, dict):
++        raw_band = policy.get("confidence_band")
++        if isinstance(raw_band, str) and raw_band.strip():
++            band = raw_band.strip()
++        else:
++            goal_meta = policy.get("goal_metadata")
++            if isinstance(goal_meta, dict):
++                goal_band = goal_meta.get("planner_confidence_band") or goal_meta.get(
++                    "confidence_band"
++                )
++                if isinstance(goal_band, str) and goal_band.strip():
++                    band = goal_band.strip()
++    if band:
++        summary["policy_confidence_band"] = band
++        summary.setdefault("planner_confidence_band", band)
++    return summary
++
++
+ def _coerce_bool_flag(value: Any) -> Optional[bool]:
+     if isinstance(value, bool):
+         return value
+     if value is None:
+         return None
+     if isinstance(value, str):
+         lowered = value.strip().lower()
+         if lowered in {"true", "1", "yes", "on"}:
+             return True
+         if lowered in {"false", "0", "no", "off"}:
+             return False
+         return None
+     try:
+         return bool(value)
+     except Exception:
+         return None
+ 
+ 
+ def _coerce_float(value: Any) -> Optional[float]:
+     if value is None:
+         return None
+     if isinstance(value, (int, float)):
+         return float(value)
+     if isinstance(value, str):
+         stripped = value.strip()
+@@ -1520,56 +1546,91 @@ def make_assistant_frames(seed_text: str,
+     ALWAYS returns a frames list that includes at least:
+         - one 'assistant_chunk' (with either model text OR a safe fallback), and
+         - one 'assistant_end'.
+     When broadcast_immediately is True (default) frames are broadcast to the WS bus.
+     """
+     cfg = cfg or db.get_config()
+     meta = dict(meta or {})
+     if session_id:
+         meta.setdefault("session_id", session_id)
+         meta.setdefault("sid", session_id)
+     turn_id = _allocate_turn_id(force_turn_id)
+ 
+     context = telemetry or _create_nlu_context(
+         turn_id=turn_id,
+         session_id=session_id,
+         correlation_user_msg_id=correlation_user_msg_id,
+         meta=meta if isinstance(meta, dict) else {},
+         settings=SETTINGS,
+         cfg=cfg,
      )
--    if is_greet:
--        should_clarify = False
+     context.turn_id = str(turn_id)
+ 
+     context.log_start(seed_text, meta=meta if isinstance(meta, dict) else {})
+ 
+     try:
+-        meta, classified_labels, classified_policy = prepare_turn_metadata(
+-            seed_text,
+-            meta,
+-            cfg=cfg,
+-            telemetry=context,
+-        )
++        classified_labels: Dict[str, Any]
++        classified_policy: Dict[str, Any]
++        skip_prepare = False
++        existing_policy: Optional[Dict[str, Any]] = None
++        existing_labels: Optional[Dict[str, Any]] = None
 +
-+    if missing:
-+        confidence_band = "medium"
-+    elif needs_clarification or unknown_fields:
-+        confidence_band = "low"
- 
-     action: str
-+    frame_name: str
-     chips: List[str] = []
-     frame_meta: Dict[str, Any] = {}
- 
--    if should_clarify:
-+    if is_greet:
-+        confidence_band = "high"
++        if isinstance(meta, dict):
++            raw_policy = meta.get(_DIALOG_POLICY_KEY) or meta.get("policy")
++            if isinstance(raw_policy, dict):
++                existing_policy = dict(raw_policy)
++            raw_labels = meta.get(_DIALOG_NLU_KEY)
++            if not isinstance(raw_labels, dict):
++                raw_labels = meta.get("nlu") if isinstance(meta.get("nlu"), dict) else None
++            if isinstance(raw_labels, dict):
++                existing_labels = dict(raw_labels)
++            if existing_policy is not None and existing_labels is not None:
++                skip_prepare = True
++                meta[_DIALOG_POLICY_KEY] = dict(existing_policy)
++                if isinstance(meta.get("nlu"), dict):
++                    try:
++                        meta["nlu"].update(existing_labels)
++                    except Exception:
++                        meta["nlu"] = dict(existing_labels)
++                else:
++                    meta["nlu"] = dict(existing_labels)
++                meta[_DIALOG_NLU_KEY] = dict(existing_labels)
 +
-+    clarify_variant: Optional[str] = None
-+
-+    if confidence_band == "high" and not (needs_clarification or unknown_fields or missing):
-+        action = _resolve_delivery_frame(universal, nlu_result, missing)
-+        frame_name = action
-+    else:
-+        if missing:
-+            confidence_band = "medium"
-+        elif confidence_band not in {"medium", "low"}:
-+            confidence_band = "low"
-         action = "clarify"
--        chips = _chips_from_missing(missing)
-+        frame_name = "clarify"
-+        clarify_variant = "specific" if confidence_band == "medium" else "high_level"
-+        chips = _chips_for_band(confidence_band, missing)
-         frame_meta["clarify_targets"] = missing or ["details"]
--    else:
--        action = _resolve_delivery_frame(universal, nlu_result, missing)
--        if action == "clarify":
--            chips = _chips_from_missing(missing)
--            frame_meta["clarify_targets"] = missing or ["details"]
-+        frame_meta["clarify_variant"] = clarify_variant
++        if not skip_prepare:
++            meta, classified_labels, classified_policy = prepare_turn_metadata(
++                seed_text,
++                meta,
++                cfg=cfg,
++                telemetry=context,
++            )
++        else:
++            classified_labels = dict(existing_labels or {})
++            classified_policy = dict(existing_policy or {})
++            if context:
++                context.log_intent(classified_labels)
++                context.log_entities(classified_labels.get("entities"))
++                context.log_guardrail(decision="allow")
+         skip_legacy = _should_skip_legacy(meta)
  
-     if is_greet:
-         action = "offer_steps"
-+        frame_name = action
-         chips = []
-         frame_meta = {}
+         action = _normalize_action(meta)
+         if isinstance(meta, dict):
+             meta['action'] = action
+             meta[_DIALOG_ACTION_KEY] = action
  
-     depth_value = _normalize_str(universal.get("depth"))
-     if is_greet:
-         depth_value = "brief"
-     verbosity = "brief" if action == "clarify" or depth_value == "brief" else "normal"
+         try:
+             source = str(meta.get("source", "") or "").strip().lower()
+         except Exception:
+             source = ""
+         try:
+             is_greet = str(seed_text or "").strip().lower() == "greet"
+         except Exception:
+             is_greet = False
+         if not is_greet and source:
+             is_greet = source in {"greet", "ws_greet", "greet_fallback"}
  
-     show_suggestions = action in _SUGGESTION_ACTIONS or bool(chips)
+         fallback_line = str(cfg.get("assistant_fallback_line") or "Hi! I’m ready to help.")
  
-+    goal_metadata = _update_goal_band(goal, confidence_band)
-+
-+    teacher_move = action
-+
-     result: Dict[str, Any] = {
-         "action": action,
--        "teacher_move": action,
--        "frame": action,
-+        "teacher_move": teacher_move,
-+        "frame": frame_name,
-         "verbosity": verbosity,
-         "show_suggestions": bool(show_suggestions),
-+        "confidence_band": confidence_band,
+         def _cfg_flag(key: str, default: bool) -> bool:
+             val = meta.get(key)
+             if val is None:
+                 val = cfg.get(key, default)
+             try:
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index fa1a55c415bd88ac12dceecb577578dd8841d3f1..62cadcd075a9e067a88a1e31c252794d29ebe55b 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -13,51 +13,55 @@ from app.services.audio.raw_fallback import (
+     StreamStats as RawStreamStats,
+     raw_fallback_disabled,
+     coerce_to_raw_config,
+     normalize_pcm_frame,
+     should_use_raw_fallback,
+ )
+ 
+ from .schema_v1 import (
+     parse_client_json,
+     make_keepalive_ack,
+     make_results,
+     make_utterance_end,
+     make_error,
+ )
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
+ 
+ # NEW: invoke LLM on final transcript
+-from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
++from app.services.streaming import (
++    run_ws_user_turn,
++    prepare_turn_metadata,
++    summarize_policy_metadata,
++)  # NEW
+ from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+ from app.ws.barge import BargeState
+ from app.ws.bus import bus
+ from app.policy import nudges
+ from app.session_state import (
+     note_partial,
+     note_utterance_end,
+     set_asr_stream_open,
+     set_phase,
+     set_recorder_active,
+ )
+ 
+ # Optional admin emitter
+ try:
+     from app.api_v1.admin import _emit as _admin_emit
+ except Exception:
+     _admin_emit = None
+ 
+ 
+ ACTIVE_WS: dict[str, dict[str, Any]] = {}
+ ACTIVE_WS_LOCK = asyncio.Lock()
+ 
+ WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
+ try:
+     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
+@@ -168,50 +172,107 @@ def _emit_admin_nlu_event(text: str,
+     if isinstance(entities, dict):
+         slots_dict.setdefault("entities", _safe_copy(entities))
+     elif isinstance(entities, list):
+         slots_dict.setdefault("entities", _safe_copy(entities))
+     products = dialog_nlu.get("products")
+     if isinstance(products, list):
+         slots_dict.setdefault("products", list(products))
+ 
+     payload = {
+         "event": "nlu",
+         "intent": dialog_nlu.get("intent"),
+         "confidence": dialog_nlu.get("confidence"),
+         "slots": slots_dict,
+         "text": text,
+         "session_id": sid,
      }
-+    if clarify_variant:
-+        result["clarify_variant"] = clarify_variant
-     if chips:
-         result["chips"] = chips
-     if frame_meta:
-         result.update(frame_meta)
-+    if goal_metadata is not None:
-+        result["goal_metadata"] = goal_metadata
+     if isinstance(universal, dict):
+         payload["universal"] = _safe_copy(universal)
  
-     return result
+     try:
+         admin_cb("nlu", **payload)
+     except Exception:
+         pass
  
  
--__all__ = ["pick"]
-+def _normalize_band(value: Any) -> Optional[str]:
-+    if not value:
-+        return None
-+    try:
-+        band = str(value).strip().lower()
-+    except Exception:
-+        return None
-+    return band if band in _BAND_ORDER else None
++def _build_meta_overrides(prepared_meta: Optional[Dict[str, Any]],
++                          dialog_nlu: Optional[Dict[str, Any]],
++                          universal: Optional[Dict[str, Any]],
++                          policy: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
++    base = prepared_meta if isinstance(prepared_meta, dict) else {}
++    overrides: Dict[str, Any] = {}
 +
-+
-+def _ensure_thresholds(raw: Mapping[str, Any],
-+                       *,
-+                       fallback_medium: float) -> Dict[str, float]:
-+    thresholds: Dict[str, float] = {}
-+    for key in ("low", "medium", "high"):
-+        if key in raw:
-+            thresholds[key] = _coerce_float(raw.get(key), default=_DEFAULT_PLANNER_THRESHOLDS.get(key, 0.0))
-+    if "medium" not in thresholds:
-+        thresholds["medium"] = float(fallback_medium)
-+    if "high" not in thresholds:
-+        thresholds["high"] = max(
-+            thresholds["medium"] + 0.2,
-+            _DEFAULT_PLANNER_THRESHOLDS.get("high", thresholds["medium"] + 0.2),
-+        )
-+    if "low" not in thresholds:
-+        thresholds["low"] = _DEFAULT_PLANNER_THRESHOLDS.get("low", 0.0)
-+
-+    # Clamp and enforce ordering
-+    thresholds["low"] = max(0.0, min(1.0, thresholds["low"]))
-+    thresholds["medium"] = max(thresholds["low"], min(1.0, thresholds["medium"]))
-+    thresholds["high"] = max(thresholds["medium"], min(1.0, thresholds["high"]))
-+    return thresholds
-+
-+
-+def _resolve_planner_thresholds(universal: Mapping[str, Any],
-+                                goal: Optional[Mapping[str, Any]],
-+                                fallback_medium: float) -> Dict[str, float]:
-+    def _candidate_mappings(container: Optional[Mapping[str, Any]]) -> Iterable[Mapping[str, Any]]:
-+        if not isinstance(container, Mapping):
++    def _set(key: str, value: Any) -> None:
++        if value is None:
 +            return
-+        direct = container.get("planner_thresholds")
-+        if isinstance(direct, Mapping):
-+            yield direct
-+        alt = container.get("planner_confidence_thresholds")
-+        if isinstance(alt, Mapping):
-+            yield alt
-+        metadata = container.get("metadata") if isinstance(container.get("metadata"), Mapping) else None
-+        if isinstance(metadata, Mapping):
-+            direct_meta = metadata.get("planner_thresholds")
-+            if isinstance(direct_meta, Mapping):
-+                yield direct_meta
-+            alt_meta = metadata.get("planner_confidence_thresholds")
-+            if isinstance(alt_meta, Mapping):
-+                yield alt_meta
-+        return
-+
-+    for mapping in _candidate_mappings(goal):
 +        try:
-+            return _ensure_thresholds(mapping, fallback_medium=fallback_medium)
++            overrides[key] = copy.deepcopy(value)
 +        except Exception:
-+            continue
-+    for mapping in _candidate_mappings(universal):
-+        try:
-+            return _ensure_thresholds(mapping, fallback_medium=fallback_medium)
-+        except Exception:
-+            continue
++            overrides[key] = value
 +
-+    return _ensure_thresholds(_DEFAULT_PLANNER_THRESHOLDS, fallback_medium=fallback_medium)
++    if isinstance(dialog_nlu, dict) and dialog_nlu:
++        _set("nlu", dialog_nlu)
++        _set("dialog_nlu", dialog_nlu)
++    else:
++        if isinstance(base.get("nlu"), dict):
++            _set("nlu", base["nlu"])
++        if isinstance(base.get("dialog_nlu"), dict):
++            _set("dialog_nlu", base["dialog_nlu"])
 +
++    if isinstance(universal, dict) and universal:
++        _set("universal", universal)
++    elif isinstance(base.get("universal"), dict):
++        _set("universal", base["universal"])
 +
-+def _extract_last_band(goal: Optional[Mapping[str, Any]]) -> Optional[str]:
-+    if not isinstance(goal, Mapping):
-+        return None
-+    for source in (goal.get("metadata") if isinstance(goal.get("metadata"), Mapping) else None, goal):
-+        if not isinstance(source, Mapping):
-+            continue
-+        band = source.get("planner_confidence_band") or source.get("confidence_band")
-+        normalized = _normalize_band(band)
-+        if normalized:
-+            return normalized
-+    return None
++    for key in (
++        "action",
++        "dialog_action",
++        "frame",
++        "show_suggestions",
++        "dialog_show_suggestions",
++        "dialog_verbosity",
++        "verbosity",
++        "policy_chips",
++        "policy_confidence_band",
++        "planner_confidence_band",
++    ):
++        if key in base:
++            _set(key, base[key])
 +
++    policy_obj: Optional[Dict[str, Any]] = policy if isinstance(policy, dict) else None
++    if policy_obj is None and isinstance(base.get("dialog_policy"), dict):
++        policy_obj = base["dialog_policy"]
 +
-+def _select_band(confidence: float,
-+                 thresholds: Mapping[str, float],
-+                 last_band: Optional[str]) -> str:
-+    high = float(thresholds.get("high", _DEFAULT_PLANNER_THRESHOLDS["high"]))
-+    medium = float(thresholds.get("medium", _DEFAULT_PLANNER_THRESHOLDS["medium"]))
++    if policy_obj is not None:
++        _set("dialog_policy", policy_obj)
++        summary = summarize_policy_metadata(policy_obj)
++        for key, value in summary.items():
++            _set(key, value)
 +
-+    if last_band == "high" and confidence >= high - _PLANNER_HYSTERESIS:
-+        return "high"
-+    if last_band == "medium":
-+        if confidence >= high + _PLANNER_HYSTERESIS:
-+            return "high"
-+        if confidence < max(0.0, medium - _PLANNER_HYSTERESIS):
-+            return "low"
-+        return "medium"
-+    if last_band == "low":
-+        if confidence >= high + _PLANNER_HYSTERESIS:
-+            return "high"
-+        if confidence >= medium + _PLANNER_HYSTERESIS:
-+            return "medium"
-+        return "low"
-+
-+    if confidence >= high:
-+        return "high"
-+    if confidence >= medium:
-+        return "medium"
-+    return "low"
++    return overrides or None
 +
 +
-+def _chips_for_band(band: str, missing: Sequence[str]) -> List[str]:
-+    fallback = _BAND_CHIPS.get(band)
-+    if band in {"medium", "low"}:
-+        return _chips_from_missing(missing, fallback=fallback)
-+    return []
-+
+ def _get_session_id(scope) -> str:
+     try:
+         raw = (scope.get("query_string") or b"").decode("utf-8", "ignore")
+         if raw:
+             for pair in raw.split("&"):
+                 if not pair or "=" not in pair:
+                     continue
+                 k, v = pair.split("=", 1)
+                 if k == "session_id":
+                     return v or "default"
+     except Exception:
+         pass
+     return "default"
  
-+def _update_goal_band(goal: Optional[Mapping[str, Any]], band: str) -> Optional[Dict[str, Any]]:
-+    if not isinstance(goal, Mapping):
-+        return None
-+    metadata = goal.get("metadata") if isinstance(goal.get("metadata"), Mapping) else {}
-+    metadata = dict(metadata)
-+    metadata["planner_confidence_band"] = band
-+    return metadata
-+
-+
-+__all__ = ["pick"]
+ 
+ def _has_deepgram_key() -> bool:
+     return bool((os.getenv("DEEPGRAM_API_KEY") or "").strip())
+ 
+ 
+ def _env_truth(name: str, default: bool = False) -> bool:
+     v = (os.getenv(name) or "").strip().lower()
+     if not v:
+         return default
+     return v in ("1", "true", "yes", "on")
+ 
+@@ -459,80 +520,85 @@ async def _pump_dg_to_client(
+                             pass
+                     if on_turn_finish:
+                         try:
+                             on_turn_finish(
+                                 turn_id_for_event, "provider_final", False, len(text)
+                             )
+                         except Exception:
+                             pass
+                     await _ws_send_json(send, make_utterance_end(turn_id_for_event))
+                     try:
+                         note_utterance_end(sid)
+                     except Exception:
+                         pass
+                     try:
+                         set_recorder_active(sid, False)
+                     except Exception:
+                         pass
+                     try:
+                         _admin_emit and _admin_emit("asr:final", session_id=sid)
+                     except Exception:
+                         pass
+ 
+                     if text:
+                         dialog_nlu_pre: Dict[str, Any] = {}
+                         universal_pre: Dict[str, Any] = {}
++                        policy_pre: Dict[str, Any] = {}
++                        prepared_meta: Dict[str, Any] = {}
+                         meta_stub = {"source": "user_ws", "channel": "ws"}
+                         try:
+-                            prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
++                            prepared_meta_raw, dialog_nlu_raw, policy_raw = prepare_turn_metadata(
+                                 text, dict(meta_stub)
+                             )
+-                            if isinstance(dialog_nlu_raw, dict):
+-                                dialog_nlu_pre = dict(dialog_nlu_raw)
+-                            if isinstance(prepared_meta, dict):
++                            if isinstance(prepared_meta_raw, dict):
++                                prepared_meta = dict(prepared_meta_raw)
+                                 raw_universal = prepared_meta.get("universal") or {}
+                                 if isinstance(raw_universal, dict):
+                                     universal_pre = _ensure_universal_fields(raw_universal)
++                            if isinstance(dialog_nlu_raw, dict):
++                                dialog_nlu_pre = dict(dialog_nlu_raw)
++                            if isinstance(policy_raw, dict):
++                                policy_pre = dict(policy_raw)
+                         except Exception:
++                            prepared_meta = {}
+                             dialog_nlu_pre = {}
+                             universal_pre = {}
++                            policy_pre = {}
+ 
+                         _emit_admin_nlu_event(
+                             text,
+                             sid,
+                             dialog_nlu=dialog_nlu_pre,
+                             universal=universal_pre,
+                         )
+ 
+-                        meta_overrides: Optional[Dict[str, Any]] = None
+-                        if dialog_nlu_pre or universal_pre:
+-                            meta_overrides = {}
+-                            if dialog_nlu_pre:
+-                                meta_overrides["nlu"] = dict(dialog_nlu_pre)
+-                                meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
+-                            if universal_pre:
+-                                meta_overrides["universal"] = dict(universal_pre)
++                        meta_overrides = _build_meta_overrides(
++                            prepared_meta,
++                            dialog_nlu_pre,
++                            universal_pre,
++                            policy_pre,
++                        )
+ 
+                         if turn_id_for_event in completed_llm_turns:
+                             with contextlib.suppress(Exception):
+                                 _jlog(
+                                     "llm_turn_skip_duplicate",
+                                     sid=sid,
+                                     turn_id=turn_id_for_event,
+                                 )
+                         else:
+                             completed_llm_turns.add(turn_id_for_event)
+ 
+                             async def _bg_turn(meta_payload=meta_overrides):
+                                 try:
+                                     await asyncio.to_thread(
+                                         run_ws_user_turn,
+                                         sid,
+                                         text,
+                                         None,
+                                         meta_overrides=meta_payload,
+                                     )
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+                                         await _ws_send_json(
+                                             send,
+                                             make_error(
+@@ -1649,79 +1715,84 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                             "UserUtterance",
+                             "UserTextMessage",
+                         ):
+                             text = (obj.get("text") or "").strip()
+                             if not text:
+                                 continue
+                             if len(text) > 8000:
+                                 await _ws_send_json(
+                                     send, make_error("payload_too_large", "user_text")
+                                 )
+                                 continue
+                             corr = obj.get("correlation_user_msg_id") or obj.get(
+                                 "userMsgId"
+                             )
+                             _jlog(
+                                 "ws_user_msg_recv",
+                                 sid=sid,
+                                 text_len=len(text),
+                                 corr=bool(corr),
+                             )
+ 
+                             nudges.cancel_idle_timers(sid)
+ 
+                             dialog_nlu_pre: Dict[str, Any] = {}
+                             universal_pre: Dict[str, Any] = {}
++                            policy_pre: Dict[str, Any] = {}
++                            prepared_meta: Dict[str, Any] = {}
+                             try:
+-                                prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
++                                prepared_meta_raw, dialog_nlu_raw, policy_raw = prepare_turn_metadata(
+                                     text, {"source": "user_ws", "channel": "ws"}
+                                 )
+-                                if isinstance(dialog_nlu_raw, dict):
+-                                    dialog_nlu_pre = dict(dialog_nlu_raw)
+-                                if isinstance(prepared_meta, dict):
++                                if isinstance(prepared_meta_raw, dict):
++                                    prepared_meta = dict(prepared_meta_raw)
+                                     raw_universal = prepared_meta.get("universal") or {}
+                                     if isinstance(raw_universal, dict):
+                                         universal_pre = _ensure_universal_fields(raw_universal)
++                                if isinstance(dialog_nlu_raw, dict):
++                                    dialog_nlu_pre = dict(dialog_nlu_raw)
++                                if isinstance(policy_raw, dict):
++                                    policy_pre = dict(policy_raw)
+                             except Exception:
++                                prepared_meta = {}
+                                 dialog_nlu_pre = {}
+                                 universal_pre = {}
++                                policy_pre = {}
+ 
+                             _emit_admin_nlu_event(
+                                 text,
+                                 sid,
+                                 dialog_nlu=dialog_nlu_pre,
+                                 universal=universal_pre,
+                             )
+ 
+-                            meta_overrides: Optional[Dict[str, Any]] = None
+-                            if dialog_nlu_pre or universal_pre:
+-                                meta_overrides = {}
+-                                if dialog_nlu_pre:
+-                                    meta_overrides["nlu"] = dict(dialog_nlu_pre)
+-                                    meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
+-                                if universal_pre:
+-                                    meta_overrides["universal"] = dict(universal_pre)
++                            meta_overrides = _build_meta_overrides(
++                                prepared_meta,
++                                dialog_nlu_pre,
++                                universal_pre,
++                                policy_pre,
++                            )
+ 
+                             async def _bg_user():
+                                 try:
+                                     await asyncio.to_thread(
+                                         run_ws_user_turn,
+                                         sid,
+                                         text,
+                                         corr,
+                                         meta_overrides=meta_overrides,
+                                     )
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+                                         await _ws_send_json(
+                                             send,
+                                             make_error(
+                                                 "user_fail", e.__class__.__name__
+                                             ),
+                                         )
+ 
+                             asyncio.create_task(_bg_user())
+ 
+                         elif t == "activity":
+                             kind = (obj.get("kind") or "").strip().lower()
+                             if kind in {"speech", "text", "chip"}:
+                                 nudges.cancel_idle_timers(sid)

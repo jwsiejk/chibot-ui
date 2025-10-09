@@ -1256,6 +1256,32 @@ def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
     return cleaned
 
 
+def summarize_policy_metadata(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Extract lightweight policy hints for downstream consumers."""
+    summary: Dict[str, Any] = {}
+    chips = _collect_policy_chips(policy)
+    if chips:
+        summary["policy_chips"] = chips
+
+    band: Optional[str] = None
+    if isinstance(policy, dict):
+        raw_band = policy.get("confidence_band")
+        if isinstance(raw_band, str) and raw_band.strip():
+            band = raw_band.strip()
+        else:
+            goal_meta = policy.get("goal_metadata")
+            if isinstance(goal_meta, dict):
+                goal_band = goal_meta.get("planner_confidence_band") or goal_meta.get(
+                    "confidence_band"
+                )
+                if isinstance(goal_band, str) and goal_band.strip():
+                    band = goal_band.strip()
+    if band:
+        summary["policy_confidence_band"] = band
+        summary.setdefault("planner_confidence_band", band)
+    return summary
+
+
 def _coerce_bool_flag(value: Any) -> Optional[bool]:
     if isinstance(value, bool):
         return value
@@ -1542,12 +1568,47 @@ def make_assistant_frames(seed_text: str,
     context.log_start(seed_text, meta=meta if isinstance(meta, dict) else {})
 
     try:
-        meta, classified_labels, classified_policy = prepare_turn_metadata(
-            seed_text,
-            meta,
-            cfg=cfg,
-            telemetry=context,
-        )
+        classified_labels: Dict[str, Any]
+        classified_policy: Dict[str, Any]
+        skip_prepare = False
+        existing_policy: Optional[Dict[str, Any]] = None
+        existing_labels: Optional[Dict[str, Any]] = None
+
+        if isinstance(meta, dict):
+            raw_policy = meta.get(_DIALOG_POLICY_KEY) or meta.get("policy")
+            if isinstance(raw_policy, dict):
+                existing_policy = dict(raw_policy)
+            raw_labels = meta.get(_DIALOG_NLU_KEY)
+            if not isinstance(raw_labels, dict):
+                raw_labels = meta.get("nlu") if isinstance(meta.get("nlu"), dict) else None
+            if isinstance(raw_labels, dict):
+                existing_labels = dict(raw_labels)
+            if existing_policy is not None and existing_labels is not None:
+                skip_prepare = True
+                meta[_DIALOG_POLICY_KEY] = dict(existing_policy)
+                if isinstance(meta.get("nlu"), dict):
+                    try:
+                        meta["nlu"].update(existing_labels)
+                    except Exception:
+                        meta["nlu"] = dict(existing_labels)
+                else:
+                    meta["nlu"] = dict(existing_labels)
+                meta[_DIALOG_NLU_KEY] = dict(existing_labels)
+
+        if not skip_prepare:
+            meta, classified_labels, classified_policy = prepare_turn_metadata(
+                seed_text,
+                meta,
+                cfg=cfg,
+                telemetry=context,
+            )
+        else:
+            classified_labels = dict(existing_labels or {})
+            classified_policy = dict(existing_policy or {})
+            if context:
+                context.log_intent(classified_labels)
+                context.log_entities(classified_labels.get("entities"))
+                context.log_guardrail(decision="allow")
         skip_legacy = _should_skip_legacy(meta)
 
         action = _normalize_action(meta)

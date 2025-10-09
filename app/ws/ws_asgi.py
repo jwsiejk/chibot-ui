@@ -35,7 +35,11 @@ from app.services.greet_idempotency import clear_greet_turn_cache
 from app.metrics import ws_metrics
 
 # NEW: invoke LLM on final transcript
-from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
+from app.services.streaming import (
+    run_ws_user_turn,
+    prepare_turn_metadata,
+    summarize_policy_metadata,
+)  # NEW
 from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
 from app.ws.barge import BargeState
 from app.ws.bus import bus
@@ -188,6 +192,63 @@ def _emit_admin_nlu_event(text: str,
         admin_cb("nlu", **payload)
     except Exception:
         pass
+
+
+def _build_meta_overrides(prepared_meta: Optional[Dict[str, Any]],
+                          dialog_nlu: Optional[Dict[str, Any]],
+                          universal: Optional[Dict[str, Any]],
+                          policy: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    base = prepared_meta if isinstance(prepared_meta, dict) else {}
+    overrides: Dict[str, Any] = {}
+
+    def _set(key: str, value: Any) -> None:
+        if value is None:
+            return
+        try:
+            overrides[key] = copy.deepcopy(value)
+        except Exception:
+            overrides[key] = value
+
+    if isinstance(dialog_nlu, dict) and dialog_nlu:
+        _set("nlu", dialog_nlu)
+        _set("dialog_nlu", dialog_nlu)
+    else:
+        if isinstance(base.get("nlu"), dict):
+            _set("nlu", base["nlu"])
+        if isinstance(base.get("dialog_nlu"), dict):
+            _set("dialog_nlu", base["dialog_nlu"])
+
+    if isinstance(universal, dict) and universal:
+        _set("universal", universal)
+    elif isinstance(base.get("universal"), dict):
+        _set("universal", base["universal"])
+
+    for key in (
+        "action",
+        "dialog_action",
+        "frame",
+        "show_suggestions",
+        "dialog_show_suggestions",
+        "dialog_verbosity",
+        "verbosity",
+        "policy_chips",
+        "policy_confidence_band",
+        "planner_confidence_band",
+    ):
+        if key in base:
+            _set(key, base[key])
+
+    policy_obj: Optional[Dict[str, Any]] = policy if isinstance(policy, dict) else None
+    if policy_obj is None and isinstance(base.get("dialog_policy"), dict):
+        policy_obj = base["dialog_policy"]
+
+    if policy_obj is not None:
+        _set("dialog_policy", policy_obj)
+        summary = summarize_policy_metadata(policy_obj)
+        for key, value in summary.items():
+            _set(key, value)
+
+    return overrides or None
 
 
 def _get_session_id(scope) -> str:
@@ -481,20 +542,27 @@ async def _pump_dg_to_client(
                     if text:
                         dialog_nlu_pre: Dict[str, Any] = {}
                         universal_pre: Dict[str, Any] = {}
+                        policy_pre: Dict[str, Any] = {}
+                        prepared_meta: Dict[str, Any] = {}
                         meta_stub = {"source": "user_ws", "channel": "ws"}
                         try:
-                            prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
+                            prepared_meta_raw, dialog_nlu_raw, policy_raw = prepare_turn_metadata(
                                 text, dict(meta_stub)
                             )
-                            if isinstance(dialog_nlu_raw, dict):
-                                dialog_nlu_pre = dict(dialog_nlu_raw)
-                            if isinstance(prepared_meta, dict):
+                            if isinstance(prepared_meta_raw, dict):
+                                prepared_meta = dict(prepared_meta_raw)
                                 raw_universal = prepared_meta.get("universal") or {}
                                 if isinstance(raw_universal, dict):
                                     universal_pre = _ensure_universal_fields(raw_universal)
+                            if isinstance(dialog_nlu_raw, dict):
+                                dialog_nlu_pre = dict(dialog_nlu_raw)
+                            if isinstance(policy_raw, dict):
+                                policy_pre = dict(policy_raw)
                         except Exception:
+                            prepared_meta = {}
                             dialog_nlu_pre = {}
                             universal_pre = {}
+                            policy_pre = {}
 
                         _emit_admin_nlu_event(
                             text,
@@ -503,14 +571,12 @@ async def _pump_dg_to_client(
                             universal=universal_pre,
                         )
 
-                        meta_overrides: Optional[Dict[str, Any]] = None
-                        if dialog_nlu_pre or universal_pre:
-                            meta_overrides = {}
-                            if dialog_nlu_pre:
-                                meta_overrides["nlu"] = dict(dialog_nlu_pre)
-                                meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
-                            if universal_pre:
-                                meta_overrides["universal"] = dict(universal_pre)
+                        meta_overrides = _build_meta_overrides(
+                            prepared_meta,
+                            dialog_nlu_pre,
+                            universal_pre,
+                            policy_pre,
+                        )
 
                         if turn_id_for_event in completed_llm_turns:
                             with contextlib.suppress(Exception):
@@ -1671,19 +1737,26 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                             dialog_nlu_pre: Dict[str, Any] = {}
                             universal_pre: Dict[str, Any] = {}
+                            policy_pre: Dict[str, Any] = {}
+                            prepared_meta: Dict[str, Any] = {}
                             try:
-                                prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
+                                prepared_meta_raw, dialog_nlu_raw, policy_raw = prepare_turn_metadata(
                                     text, {"source": "user_ws", "channel": "ws"}
                                 )
-                                if isinstance(dialog_nlu_raw, dict):
-                                    dialog_nlu_pre = dict(dialog_nlu_raw)
-                                if isinstance(prepared_meta, dict):
+                                if isinstance(prepared_meta_raw, dict):
+                                    prepared_meta = dict(prepared_meta_raw)
                                     raw_universal = prepared_meta.get("universal") or {}
                                     if isinstance(raw_universal, dict):
                                         universal_pre = _ensure_universal_fields(raw_universal)
+                                if isinstance(dialog_nlu_raw, dict):
+                                    dialog_nlu_pre = dict(dialog_nlu_raw)
+                                if isinstance(policy_raw, dict):
+                                    policy_pre = dict(policy_raw)
                             except Exception:
+                                prepared_meta = {}
                                 dialog_nlu_pre = {}
                                 universal_pre = {}
+                                policy_pre = {}
 
                             _emit_admin_nlu_event(
                                 text,
@@ -1692,14 +1765,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 universal=universal_pre,
                             )
 
-                            meta_overrides: Optional[Dict[str, Any]] = None
-                            if dialog_nlu_pre or universal_pre:
-                                meta_overrides = {}
-                                if dialog_nlu_pre:
-                                    meta_overrides["nlu"] = dict(dialog_nlu_pre)
-                                    meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
-                                if universal_pre:
-                                    meta_overrides["universal"] = dict(universal_pre)
+                            meta_overrides = _build_meta_overrides(
+                                prepared_meta,
+                                dialog_nlu_pre,
+                                universal_pre,
+                                policy_pre,
+                            )
 
                             async def _bg_user():
                                 try:
