@@ -9,6 +9,8 @@ from ..services.streaming import (
     schedule_frames,
     merge_suggestions,
     build_suggestion_items,
+    wait_for_tts_completion,
+    wait_for_listen_ready,
 )
 from ..nlu.classifier import classify as classify_turn  # backwards-compat shim for tests
 from ..dialog.policy import pick as pick_dialog_policy  # backwards-compat shim for tests
@@ -57,6 +59,31 @@ def post_chat():
         tid = (data.get("turn_id") or "").strip()
         try:
             bus.cancel_turn(sid, tid)
+        except Exception:
+            pass
+        wait_cfg = {}
+        try:
+            wait_cfg = db.get_config() or {}
+        except Exception:
+            wait_cfg = {}
+        try:
+            wait_timeout = float(wait_cfg.get("tts_cancel_wait_s", 3.0) or 0.0)
+        except Exception:
+            wait_timeout = 3.0
+        try:
+            listen_timeout = float(wait_cfg.get("barge_listen_ready_wait_s", 1.0) or 0.0)
+        except Exception:
+            listen_timeout = 1.0
+        try:
+            wait_for_tts_completion(
+                sid,
+                tid or None,
+                timeout=None if wait_timeout <= 0 else wait_timeout,
+            )
+        except Exception:
+            pass
+        try:
+            wait_for_listen_ready(sid, timeout=max(0.0, listen_timeout))
         except Exception:
             pass
         try:

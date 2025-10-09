@@ -39,6 +39,8 @@ from app.services.streaming import (
     run_ws_user_turn,
     prepare_turn_metadata,
     summarize_policy_metadata,
+    wait_for_tts_completion,
+    wait_for_listen_ready,
 )  # NEW
 from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
 from app.ws.barge import BargeState
@@ -1627,7 +1629,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         except Exception:
                             confirm_ms = 420
 
-                        def _on_barge_commit() -> None:
+                        def _on_barge_commit():
                             target_turn = current_assistant_turn
                             try:
                                 latest = bus.current_assistant_turn(sid)
@@ -1635,11 +1637,41 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 latest = None
                             if latest:
                                 target_turn = latest
-                            if target_turn:
+
+                            wait_turn = target_turn
+                            if wait_turn:
                                 try:
-                                    bus.cancel_turn(sid, target_turn)
+                                    bus.cancel_turn(sid, wait_turn)
                                 except Exception:
                                     pass
+
+                            try:
+                                wait_timeout = float(cfg.get("tts_cancel_wait_s", 3.0) or 0.0)
+                            except Exception:
+                                wait_timeout = 3.0
+                            try:
+                                listen_timeout = float(cfg.get("barge_listen_ready_wait_s", 1.0) or 0.0)
+                            except Exception:
+                                listen_timeout = 1.0
+
+                            def _wait_ready() -> None:
+                                try:
+                                    wait_for_tts_completion(
+                                        sid,
+                                        wait_turn,
+                                        timeout=None if wait_timeout <= 0 else wait_timeout,
+                                    )
+                                except Exception:
+                                    pass
+                                try:
+                                    wait_for_listen_ready(
+                                        sid,
+                                        timeout=max(0.0, listen_timeout),
+                                    )
+                                except Exception:
+                                    pass
+
+                            return _wait_ready
                         with contextlib.suppress(Exception):
                             barge.start(
                                 confirm_ms=confirm_ms,

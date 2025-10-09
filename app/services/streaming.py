@@ -13,7 +13,12 @@ import copy
 import random
 
 from ..security_state import get_profile, get_user
-from ..session_state import note_utterance_end, set_phase, should_emit_phase
+from ..session_state import (
+    get as get_session_state,
+    note_utterance_end,
+    set_phase,
+    should_emit_phase,
+)
 def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
     # 1) Profile name
     try:
@@ -49,6 +54,96 @@ _GOAL_ASKS = [
 ]
 
 _CHIP_INTRO_RE = re.compile(r"^hey[\s,\-–—]*i['’`]?m\s+chip[.!\s]*$", re.IGNORECASE)
+
+_TTS_COMPLETION_LOCK = threading.Lock()
+_TTS_COMPLETION_EVENTS: Dict[str, Dict[str, threading.Event]] = {}
+_TTS_LATEST_TURN: Dict[str, str] = {}
+
+
+def _tts_event_key(turn_id: Optional[str]) -> str:
+    return str(turn_id) if turn_id is not None else "greet"
+
+
+def _prepare_tts_completion_event(session_id: str, turn_key: str) -> threading.Event:
+    event = threading.Event()
+    with _TTS_COMPLETION_LOCK:
+        session_events = _TTS_COMPLETION_EVENTS.setdefault(session_id, {})
+        session_events[turn_key] = event
+        _TTS_LATEST_TURN[session_id] = turn_key
+    return event
+
+
+def _signal_tts_completion(session_id: str, turn_key: str) -> None:
+    with _TTS_COMPLETION_LOCK:
+        session_events = _TTS_COMPLETION_EVENTS.get(session_id)
+        if not session_events:
+            _TTS_LATEST_TURN.pop(session_id, None)
+            return
+        event = session_events.get(turn_key)
+        if event:
+            event.set()
+        session_events.pop(turn_key, None)
+        if not session_events:
+            _TTS_COMPLETION_EVENTS.pop(session_id, None)
+            _TTS_LATEST_TURN.pop(session_id, None)
+        else:
+            if _TTS_LATEST_TURN.get(session_id) == turn_key:
+                remaining_keys = list(session_events.keys())
+                if remaining_keys:
+                    _TTS_LATEST_TURN[session_id] = remaining_keys[-1]
+                else:
+                    _TTS_LATEST_TURN.pop(session_id, None)
+
+
+def wait_for_tts_completion(session_id: str,
+                            turn_id: Optional[str] = None,
+                            *,
+                            timeout: Optional[float] = None) -> bool:
+    with _TTS_COMPLETION_LOCK:
+        session_events = _TTS_COMPLETION_EVENTS.get(session_id)
+        if not session_events:
+            event = None
+        else:
+            lookup_key: Optional[str]
+            if turn_id:
+                lookup_key = _tts_event_key(turn_id)
+            else:
+                lookup_key = _TTS_LATEST_TURN.get(session_id)
+            event = session_events.get(lookup_key) if lookup_key else None
+    if event is None:
+        return True
+    try:
+        return bool(event.wait(timeout))
+    except Exception:
+        return False
+
+
+def is_listen_ready(session_id: str) -> bool:
+    try:
+        st = get_session_state(session_id)
+    except Exception:
+        return True
+    try:
+        recorder_active = bool(getattr(st, "recorder_active", False))
+        asr_open = bool(getattr(st, "asr_stream_open", False))
+    except Exception:
+        return True
+    return recorder_active or asr_open
+
+
+def wait_for_listen_ready(session_id: str,
+                          *,
+                          timeout: float = 1.0,
+                          poll_interval: float = 0.05) -> bool:
+    if is_listen_ready(session_id):
+        return True
+    deadline = _t.time() + max(0.0, float(timeout))
+    interval = max(0.01, float(poll_interval))
+    while _t.time() < deadline:
+        _t.sleep(interval)
+        if is_listen_ready(session_id):
+            return True
+    return is_listen_ready(session_id)
 
 def _pick_goal_ask(seed: str | None = None) -> str:
     try:
@@ -2559,6 +2654,8 @@ def schedule_tts_audio(session_id: str,
     turn_key = str(turn_id) if turn_id is not None else 'greet'
     state = sess_tbl.setdefault(turn_key, {'started': False, 'first_chunk': False, 'done': False, 'error': None})
 
+    completion_event: Optional[threading.Event] = None
+
     safe_turn_id = str(turn_id) if turn_id is not None else None
     text_markers = _tts_text_markers(text)
     audio_override = audio_bytes is not None
@@ -2586,6 +2683,8 @@ def schedule_tts_audio(session_id: str,
 
     if not feature_audio:
         return False
+
+    completion_event = _prepare_tts_completion_event(session_id, turn_key)
 
     def _run():
         total_audio_bytes = 0
@@ -2808,6 +2907,12 @@ def schedule_tts_audio(session_id: str,
                         on_post_silence()
                     except Exception:
                         pass
+
+            try:
+                if completion_event is not None:
+                    _signal_tts_completion(session_id, turn_key)
+            except Exception:
+                pass
 
     threading.Thread(target=_run, daemon=True).start()
     return True
