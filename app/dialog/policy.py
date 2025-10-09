@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from ..nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+from ..services import config_store
 
 _CLARIFY_THRESHOLD = 0.45
 _PLANNER_HYSTERESIS = 0.05
@@ -12,7 +13,7 @@ _PLANNER_HYSTERESIS = 0.05
 _BAND_ORDER = {"low": 0, "medium": 1, "high": 2}
 _DEFAULT_PLANNER_THRESHOLDS = {
     "low": 0.0,
-    "medium": _CLARIFY_THRESHOLD,
+    "medium": 0.60,
     "high": 0.75,
 }
 
@@ -38,6 +39,25 @@ def _coerce_float(raw: Any, default: float = 0.0) -> float:
         return float(raw)
     except Exception:
         return float(default)
+
+
+def _configured_default_planner_thresholds() -> Dict[str, float]:
+    defaults = dict(_DEFAULT_PLANNER_THRESHOLDS)
+    try:
+        configured = config_store.get_planner_threshold_defaults()
+    except Exception:
+        configured = None
+    if isinstance(configured, Mapping):
+        for key in ("low", "medium", "high"):
+            if key in configured:
+                try:
+                    defaults[key] = float(configured[key])
+                except Exception:
+                    continue
+    defaults["low"] = max(0.0, min(1.0, defaults.get("low", 0.0)))
+    defaults["medium"] = max(defaults["low"], min(1.0, defaults.get("medium", 0.0)))
+    defaults["high"] = max(defaults["medium"], min(1.0, defaults.get("high", 0.0)))
+    return defaults
 
 
 def _normalize_str(value: Any) -> str:
@@ -170,7 +190,14 @@ def pick(nlu_result: Dict[str, Any],
     if is_greet:
         missing = []
 
-    thresholds = _resolve_planner_thresholds(universal, goal, clarify_threshold)
+    planner_defaults = _configured_default_planner_thresholds()
+    fallback_medium = max(planner_defaults.get("medium", 0.0), clarify_threshold)
+    thresholds = _resolve_planner_thresholds(
+        universal,
+        goal,
+        fallback_medium,
+        defaults=planner_defaults,
+    )
     last_band = _extract_last_band(goal)
     confidence_band = _select_band(confidence, thresholds, last_band)
 
@@ -257,20 +284,22 @@ def _normalize_band(value: Any) -> Optional[str]:
 
 def _ensure_thresholds(raw: Mapping[str, Any],
                        *,
-                       fallback_medium: float) -> Dict[str, float]:
+                       fallback_medium: float,
+                       defaults: Optional[Mapping[str, float]] = None) -> Dict[str, float]:
+    base = dict(defaults or _configured_default_planner_thresholds())
     thresholds: Dict[str, float] = {}
     for key in ("low", "medium", "high"):
         if key in raw:
-            thresholds[key] = _coerce_float(raw.get(key), default=_DEFAULT_PLANNER_THRESHOLDS.get(key, 0.0))
+            thresholds[key] = _coerce_float(raw.get(key), default=base.get(key, 0.0))
     if "medium" not in thresholds:
         thresholds["medium"] = float(fallback_medium)
     if "high" not in thresholds:
         thresholds["high"] = max(
             thresholds["medium"] + 0.2,
-            _DEFAULT_PLANNER_THRESHOLDS.get("high", thresholds["medium"] + 0.2),
+            base.get("high", thresholds["medium"] + 0.2),
         )
     if "low" not in thresholds:
-        thresholds["low"] = _DEFAULT_PLANNER_THRESHOLDS.get("low", 0.0)
+        thresholds["low"] = base.get("low", 0.0)
 
     # Clamp and enforce ordering
     thresholds["low"] = max(0.0, min(1.0, thresholds["low"]))
@@ -281,7 +310,12 @@ def _ensure_thresholds(raw: Mapping[str, Any],
 
 def _resolve_planner_thresholds(universal: Mapping[str, Any],
                                 goal: Optional[Mapping[str, Any]],
-                                fallback_medium: float) -> Dict[str, float]:
+                                fallback_medium: float,
+                                *,
+                                defaults: Optional[Mapping[str, float]] = None) -> Dict[str, float]:
+    defaults = dict(defaults or _configured_default_planner_thresholds())
+    fallback_medium = max(defaults.get("medium", 0.0), fallback_medium)
+
     def _candidate_mappings(container: Optional[Mapping[str, Any]]) -> Iterable[Mapping[str, Any]]:
         if not isinstance(container, Mapping):
             return
@@ -303,16 +337,16 @@ def _resolve_planner_thresholds(universal: Mapping[str, Any],
 
     for mapping in _candidate_mappings(goal):
         try:
-            return _ensure_thresholds(mapping, fallback_medium=fallback_medium)
+            return _ensure_thresholds(mapping, fallback_medium=fallback_medium, defaults=defaults)
         except Exception:
             continue
     for mapping in _candidate_mappings(universal):
         try:
-            return _ensure_thresholds(mapping, fallback_medium=fallback_medium)
+            return _ensure_thresholds(mapping, fallback_medium=fallback_medium, defaults=defaults)
         except Exception:
             continue
 
-    return _ensure_thresholds(_DEFAULT_PLANNER_THRESHOLDS, fallback_medium=fallback_medium)
+    return _ensure_thresholds(defaults, fallback_medium=fallback_medium, defaults=defaults)
 
 
 def _extract_last_band(goal: Optional[Mapping[str, Any]]) -> Optional[str]:

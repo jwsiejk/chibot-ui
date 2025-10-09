@@ -73,10 +73,13 @@ class DB:
                 'feature_audio': True,
                 'tts_voice_id': '',
                 'tts_output_format': 'mp3_44100_128',
-                'tts_model_id': 'eleven_multilingual_v2'
+                'tts_model_id': 'eleven_multilingual_v2',
+                'planner_high_threshold': 0.75,
+                'planner_medium_threshold': 0.60,
             },
             'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{}
         }
+        self._ensure_config_defaults()
     def ensure_session(self, sid, email):
         try:
             if persist_enabled():
@@ -109,9 +112,22 @@ class DB:
             session['goal'] = _normalize_session_goal(session['goal'])
         self.memory['sessions'][sid]['messages'].append((role,text))
     def get_transcript(self, sid): return "\n".join([f"{r.upper()}: {t}" for r,t in self.memory['sessions'].get(sid,{'messages':[]})['messages']])
-    def get_config(self): import copy; return copy.deepcopy(self.memory['configs'])
+    def _ensure_config_defaults(self) -> None:
+        configs = self.memory.setdefault('configs', {})
+        if configs.get('planner_high_threshold') is None:
+            configs['planner_high_threshold'] = 0.75
+        if configs.get('planner_medium_threshold') is None:
+            configs['planner_medium_threshold'] = 0.60
+
+    def get_config(self, key: Optional[str] = None, default: Any = None):
+        self._ensure_config_defaults()
+        snapshot = copy.deepcopy(self.memory['configs'])
+        if key is None:
+            return snapshot
+        return snapshot.get(key, default)
     def update_config(self, updates):
         self.memory['configs'].update(updates)
+        self._ensure_config_defaults()
         try:
             if persist_enabled():
                 from .dal import neon_pg

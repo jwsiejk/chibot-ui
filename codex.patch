@@ -1,296 +1,446 @@
-diff --git a/app/obs/nlu_logging.py b/app/obs/nlu_logging.py
-index e9dbb971fd3fb08ca0f10bea9c7f129fbd63d97c..8eddd37bc93c6ea63c56782370f5f0f3ffdc1af0 100644
---- a/app/obs/nlu_logging.py
-+++ b/app/obs/nlu_logging.py
-@@ -172,50 +172,74 @@ class NluLoggingContext:
-         for key, value in entities.items():
-             try:
-                 cleaned[key] = redact_pii(value if isinstance(value, str) else str(value))
-             except Exception:
-                 cleaned[key] = "[redacted]"
-         if cleaned:
-             self._emit("nlu.entities", entities=cleaned)
- 
-     def log_guardrail(self, *, decision: str = "allow", reason: Optional[str] = None) -> None:
-         self._emit("nlu.guardrail", decision=decision, reason=reason)
- 
-     def log_teacher_move(
-         self,
-         *,
-         resolved_move: Optional[str],
-         policy_move: Optional[str],
-         reason: Optional[str] = None,
-     ) -> None:
-         self._emit(
-             "nlu.teacher_move",
-             resolved_move=resolved_move,
-             policy_move=policy_move,
-             reason=reason,
+diff --git a/app/db.py b/app/db.py
+index 0614b35665457a86a4bb29dda0adf86623901b6d..67433552148663214a90db2a98cded84985d0eef 100644
+--- a/app/db.py
++++ b/app/db.py
+@@ -51,89 +51,105 @@ class DB:
+         self.memory={
+             'configs':{
+                 'audio_worklet_enabled': False,
+                 'vad_attack_ms': 12,
+                 'vad_release_ms': 240,
+                 'vad_dbfs_threshold': -42,
+                 'csrf_enforced': bool(__import__('os').environ.get('CSRF_ENFORCED','')).__bool__(),'profile_gate_enabled':False,
+                 'show_instruction_strip': True,'show_state_dots': True,'theme':'light',
+                 'suggestions_enabled': True,'suggestions_max_items':4,'suggestions_max_words':7,
+                 'nudges_enabled': True,'nudge_delay_ms':4200,'nudge_backoff_after_ignored':2,
+                 'silence_guard_ms':1800,
+                 'confirm_ms':420,'echo_threshold_boost':1.9,'min_speech_ms':220,'voice_command_hints':True,
+                 'language_lock':'en','max_turn_seconds':90,'normalization_table_version':1,
+                 'nebraska_persona_level':0.13,'nebraska_quotes_enabled':True,
+                 'ws_ping_interval_ms':25000,'ws_idle_timeout_ms':30000,'reconnect_policy':'1_attempt_5s','llm_provider':'auto','openai_model':'gpt-4o-mini','stt_provider':'auto','tts_provider':'auto',
+                 'redact_email_in_logs':True,
+                 'nlu_logging_enabled': True,
+                 'gen_humor': 0.0,
+                 'gen_target_verbosity': 'medium',
+                 'gen_max_sentences': 4,
+                 'gen_top_p': 1.0,
+                 'gen_temperature': 0.3,
+                 'feature_audio': True,
+                 'tts_voice_id': '',
+                 'tts_output_format': 'mp3_44100_128',
+-                'tts_model_id': 'eleven_multilingual_v2'
++                'tts_model_id': 'eleven_multilingual_v2',
++                'planner_high_threshold': 0.75,
++                'planner_medium_threshold': 0.60,
+             },
+             'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{}
+         }
++        self._ensure_config_defaults()
+     def ensure_session(self, sid, email):
+         try:
+             if persist_enabled():
+                 from .dal import neon_pg
+                 neon_pg.ensure_schema(); neon_pg.upsert_user(email); neon_pg.ensure_session(sid, email)
+         except Exception:
+             pass
+         session = self.memory['sessions'].setdefault(
+             sid,
+             {'email':email,'messages':[],'nudges':0,'persona_id':'chip'}
          )
- 
-+    def log_planner_decision(
-+        self,
-+        *,
-+        confidence: Optional[float],
-+        band: Optional[str],
-+        teacher_move: Optional[str],
-+        top_features: Optional[Sequence[str]] = None,
-+    ) -> None:
-+        if not self.enabled:
-+            return
-+        features = None
-+        if top_features:
-+            try:
-+                features = list(top_features)[:5]
-+            except Exception:
-+                features = [str(top_features)]
-+        self._emit(
-+            "planner.decision",
-+            confidence=confidence,
-+            band=band,
-+            teacher_move=teacher_move,
-+            features=features,
-+        )
+         if not isinstance(session.get('goal'), dict):
+             session['goal'] = _empty_session_goal()
+         else:
+             session['goal'] = _normalize_session_goal(session['goal'])
+     def add_message(self, sid, role, text):
+         try:
+             if persist_enabled():
+                 from .dal import neon_pg
+                 neon_pg.add_message(sid, role, text)
+         except Exception:
+             pass
+         session = self.memory['sessions'].setdefault(
+             sid,
+             {'email':'user@example.com','messages':[],'nudges':0,'persona_id':'chip'}
+         )
+         if not isinstance(session.get('goal'), dict):
+             session['goal'] = _empty_session_goal()
+         else:
+             session['goal'] = _normalize_session_goal(session['goal'])
+         self.memory['sessions'][sid]['messages'].append((role,text))
+     def get_transcript(self, sid): return "\n".join([f"{r.upper()}: {t}" for r,t in self.memory['sessions'].get(sid,{'messages':[]})['messages']])
+-    def get_config(self): import copy; return copy.deepcopy(self.memory['configs'])
++    def _ensure_config_defaults(self) -> None:
++        configs = self.memory.setdefault('configs', {})
++        if configs.get('planner_high_threshold') is None:
++            configs['planner_high_threshold'] = 0.75
++        if configs.get('planner_medium_threshold') is None:
++            configs['planner_medium_threshold'] = 0.60
 +
-     def log_toolplan(self, plan: Optional[Dict[str, Any]]) -> None:
-         if not self.enabled:
-             return
-         tool = None
-         payload = None
-         if isinstance(plan, dict):
-             tool = plan.get("tool")
-             payload = plan.get("tool_payload")
-             if isinstance(payload, dict):
-                 payload = {k: payload[k] for k in list(payload)[:5]}
-             elif payload is not None:
-                 payload = str(payload)
-         self._emit("nlu.toolplan", tool=tool, payload=payload)
++    def get_config(self, key: Optional[str] = None, default: Any = None):
++        self._ensure_config_defaults()
++        snapshot = copy.deepcopy(self.memory['configs'])
++        if key is None:
++            return snapshot
++        return snapshot.get(key, default)
+     def update_config(self, updates):
+         self.memory['configs'].update(updates)
++        self._ensure_config_defaults()
+         try:
+             if persist_enabled():
+                 from .dal import neon_pg
+                 neon_pg.ensure_schema(); neon_pg.save_config(self.memory['configs'])
+         except Exception:
+             pass
+         return self.get_config()
+     def add_email(self,to,subject,body): self.memory['emails'].append({'to':to,'subject':subject,'body':body,'created_at':time.time()})
+     def list_emails(self): return list(self.memory['emails'])
+     def get_session_goal(self, sid: str) -> Dict[str, Any]:
+         session = self.memory['sessions'].get(sid, {})
+         goal = session.get('goal') if isinstance(session, dict) else None
+         return copy.deepcopy(_normalize_session_goal(goal))
  
-     def log_prompt_summary(
-         self,
-         *,
-         messages: Optional[Sequence[Dict[str, Any]]] = None,
-         prompt_hash: Optional[str] = None,
-         kb_count: int = 0,
-     ) -> None:
-         if not self.enabled:
-             return
-         summary = _summarize_messages(messages)
-         summary["kb_count"] = int(kb_count)
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index f29201f7559a255ccde1fd3064413c9497e3c58a..104cf375f25d87f184f3a0355ceccec454b6c11f 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -1,31 +1,31 @@
- # app/services/streaming.py — Production-grade assistant framing
- # Guarantees assistant_* frames are broadcast even if the LLM provider fails.
- # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
+     def update_session_goal(self,
+                             sid: Optional[str],
+                             *,
+                             phase: Optional[Any] = None,
+                             depth: Optional[Any] = None,
+                             delivery_pref: Optional[Any] = None,
+                             working_intent: Optional[Any] = None,
+                             entities: Optional[Mapping[str, Any]] = None,
+                             confirmed: Optional[Iterable[Any]] = None) -> Dict[str, Any]:
+         if not sid:
+             return _empty_session_goal()
+diff --git a/app/dialog/policy.py b/app/dialog/policy.py
+index afd1a38f78accd578cd7524055224b11bfc08ff7..061a897a4699da33c513571388cda39798b12ad0 100644
+--- a/app/dialog/policy.py
++++ b/app/dialog/policy.py
+@@ -1,67 +1,87 @@
+ """Policy heuristics that map interpreter output to dialog frames."""
  
  from __future__ import annotations
--from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable
-+from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable, Mapping
- import base64
- import hashlib
- import threading, time as _t
- import os
- import re
- import copy
- import random
  
- from ..security_state import get_profile, get_user
- from ..session_state import note_utterance_end, set_phase
- def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
-     # 1) Profile name
+ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+ 
+ from ..nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
++from ..services import config_store
+ 
+ _CLARIFY_THRESHOLD = 0.45
+ _PLANNER_HYSTERESIS = 0.05
+ 
+ _BAND_ORDER = {"low": 0, "medium": 1, "high": 2}
+ _DEFAULT_PLANNER_THRESHOLDS = {
+     "low": 0.0,
+-    "medium": _CLARIFY_THRESHOLD,
++    "medium": 0.60,
+     "high": 0.75,
+ }
+ 
+ _BAND_CHIPS = {
+     "medium": ["Share more context", "What are you solving?", "Show an example"],
+     "low": ["Ask a question", "Explain how it works", "Project advice"],
+ }
+ _SUGGESTION_ACTIONS = {"clarify", "offer_steps"}
+ 
+ _MISSING_CHIP_LIBRARY = {
+     "details": "Add more detail",
+     "intent": "Tell me your goal",
+     "product": "Name the product",
+     "issue_detail": "Describe the issue",
+     "message": "Repeat the request",
+ }
+ 
+ _DEFAULT_CHIPS = ["Share more context", "What are you solving?", "Show an example"]
+ 
+ 
+ def _coerce_float(raw: Any, default: float = 0.0) -> float:
      try:
-         prof = get_profile() or {}
-         name = str(prof.get("name") or "").strip()
-         if name:
-             return name.split()[0]
+         return float(raw)
      except Exception:
-         pass
-     # 2) Email to first name
-     email = None
+         return float(default)
+ 
+ 
++def _configured_default_planner_thresholds() -> Dict[str, float]:
++    defaults = dict(_DEFAULT_PLANNER_THRESHOLDS)
++    try:
++        configured = config_store.get_planner_threshold_defaults()
++    except Exception:
++        configured = None
++    if isinstance(configured, Mapping):
++        for key in ("low", "medium", "high"):
++            if key in configured:
++                try:
++                    defaults[key] = float(configured[key])
++                except Exception:
++                    continue
++    defaults["low"] = max(0.0, min(1.0, defaults.get("low", 0.0)))
++    defaults["medium"] = max(defaults["low"], min(1.0, defaults.get("medium", 0.0)))
++    defaults["high"] = max(defaults["medium"], min(1.0, defaults.get("high", 0.0)))
++    return defaults
++
++
+ def _normalize_str(value: Any) -> str:
      try:
-         email = (meta or {}).get("email")
+         return str(value or "").strip().lower()
      except Exception:
-         email = None
-@@ -1082,50 +1082,113 @@ def classify(seed_text: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str,
-         engagement = score_engagement(seed_text, base_meta)
-         if isinstance(engagement, dict):
-             for key, value in engagement.items():
-                 if key not in labels:
-                     labels[key] = value
+         return ""
+ 
+ 
+ def _confirmed_set(goal: Optional[Mapping[str, Any]]) -> Sequence[str]:
+     if not isinstance(goal, Mapping):
+         return []
+     confirmed = goal.get("confirmed")
+     if isinstance(confirmed, Iterable) and not isinstance(confirmed, (str, bytes)):
+         return [str(item) for item in confirmed if item is not None]
+     if isinstance(confirmed, str):
+         return [confirmed]
+     return []
+ 
+ 
+ def _has_goal_entity(goal: Optional[Mapping[str, Any]], key: str) -> bool:
+     if not isinstance(goal, Mapping):
+         return False
+     entities = goal.get("entities")
+     if not isinstance(entities, Mapping):
+         return False
+     items = entities.get(key)
+@@ -148,51 +168,58 @@ def _resolve_delivery_frame(universal: Mapping[str, Any],
+ 
+     if depth == "deep":
+         return "deep_dive"
+     return "high_level"
+ 
+ 
+ def pick(nlu_result: Dict[str, Any],
+          universal_result: Optional[Dict[str, Any]] = None,
+          *,
+          session_goal: Optional[Dict[str, Any]] = None,
+          clarify_threshold: float = _CLARIFY_THRESHOLD) -> Dict[str, Any]:
+     """Select a dialog frame based on interpreter output."""
+ 
+     nlu_result = nlu_result or {}
+     universal = _ensure_universal_fields(universal_result)
+     goal = session_goal or {}
+ 
+     confidence = _coerce_float(universal.get("confidence"), default=0.0)
+     intent = _normalize_str(nlu_result.get("intent"))
+     is_greet = intent in {"greet", "idle"}
+     needs_clarification = bool(universal.get("needs_clarification"))
+     missing = _missing_for_clarify(universal, goal)
+     if is_greet:
+         missing = []
+ 
+-    thresholds = _resolve_planner_thresholds(universal, goal, clarify_threshold)
++    planner_defaults = _configured_default_planner_thresholds()
++    fallback_medium = max(planner_defaults.get("medium", 0.0), clarify_threshold)
++    thresholds = _resolve_planner_thresholds(
++        universal,
++        goal,
++        fallback_medium,
++        defaults=planner_defaults,
++    )
+     last_band = _extract_last_band(goal)
+     confidence_band = _select_band(confidence, thresholds, last_band)
+ 
+     unknown_fields = any(
+         _is_unknown_field(universal.get(field)) for field in ("phase", "depth", "delivery_pref")
+     )
+ 
+     if missing:
+         confidence_band = "medium"
+     elif needs_clarification or unknown_fields:
+         confidence_band = "low"
+ 
+     action: str
+     frame_name: str
+     chips: List[str] = []
+     frame_meta: Dict[str, Any] = {}
+ 
+     if is_greet:
+         confidence_band = "high"
+ 
+     clarify_variant: Optional[str] = None
+ 
+     if confidence_band == "high" and not (needs_clarification or unknown_fields or missing):
+         action = _resolve_delivery_frame(universal, nlu_result, missing)
+         frame_name = action
+@@ -235,106 +262,113 @@ def pick(nlu_result: Dict[str, Any],
+     }
+     if clarify_variant:
+         result["clarify_variant"] = clarify_variant
+     if chips:
+         result["chips"] = chips
+     if frame_meta:
+         result.update(frame_meta)
+     if goal_metadata is not None:
+         result["goal_metadata"] = goal_metadata
+ 
+     return result
+ 
+ 
+ def _normalize_band(value: Any) -> Optional[str]:
+     if not value:
+         return None
+     try:
+         band = str(value).strip().lower()
      except Exception:
-         pass
- 
-     if "intent" not in labels:
-         text = (seed_text or "").strip().lower()
-         if not text:
-             labels["intent"] = "idle"
-         elif text == "greet":
-             labels["intent"] = "greet"
-         elif seed_text.endswith("?") if isinstance(seed_text, str) else False:
-             labels["intent"] = "broad_topic_help"
-         else:
-             labels["intent"] = "broad_topic_help"
- 
-     if "confidence" not in labels:
-         labels["confidence"] = 0.0 if not (seed_text or "").strip() else 0.5
- 
-     return labels
+         return None
+     return band if band in _BAND_ORDER else None
  
  
-+def _planner_feature_summary(
-+    dialog_nlu: Optional[Mapping[str, Any]], universal: Optional[Mapping[str, Any]]
-+) -> List[str]:
-+    candidates: List[Tuple[str, float]] = []
-+
-+    def _add(label: Optional[str], weight: float) -> None:
-+        if not label:
-+            return
-+        candidates.append((str(label), weight))
-+
-+    nlu = dialog_nlu or {}
-+    uni = universal or {}
-+
-+    intent = nlu.get("intent") if isinstance(nlu, Mapping) else None
-+    if intent:
-+        _add(f"intent:{intent}", 1.0)
-+
-+    topic = nlu.get("topic") if isinstance(nlu, Mapping) else None
-+    if topic:
-+        _add(f"topic:{topic}", 0.75)
-+
-+    if isinstance(uni, Mapping) and uni.get("needs_clarification"):
-+        _add("needs_clarification", 0.9)
-+
-+    missing: Iterable[Any] = []
-+    if isinstance(uni, Mapping):
-+        raw_missing = uni.get("missing")
-+        if isinstance(raw_missing, (list, tuple, set)):
-+            missing = raw_missing
-+        elif raw_missing:
-+            missing = [raw_missing]
-+    for idx, item in enumerate(missing):
-+        text = str(item).strip()
-+        if not text:
-+            continue
-+        _add(f"missing:{text}", max(0.5, 0.85 - idx * 0.05))
-+
-+    if isinstance(uni, Mapping) and uni.get("multi_intent"):
-+        _add("multi_intent", 0.6)
-+
-+    if isinstance(uni, Mapping) and uni.get("out_of_domain"):
-+        _add("out_of_domain", 0.6)
-+
-+    if isinstance(uni, Mapping):
-+        depth = str(uni.get("depth") or "").strip()
-+        if depth and depth not in {"normal"}:
-+            _add(f"depth:{depth}", 0.5)
-+
-+        delivery = str(uni.get("delivery_pref") or "").strip()
-+        if delivery and delivery not in {"explain"}:
-+            _add(f"delivery:{delivery}", 0.5)
-+
-+        urgency = str(uni.get("urgency") or "").strip()
-+        if urgency and urgency not in {"normal"}:
-+            _add(f"urgency:{urgency}", 0.45)
-+
-+    if not candidates:
-+        return []
-+
-+    sorted_features = sorted(candidates, key=lambda item: item[1], reverse=True)
-+    return [label for label, _ in sorted_features[:5]]
-+
-+
- def prepare_turn_metadata(seed_text: str,
-                           meta: Optional[Dict[str, Any]] = None,
-                           *,
-                           cfg: Optional[Dict[str, Any]] = None,
-                           telemetry: Optional[NluLoggingContext] = None) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
-     """Ensure dialog metadata is populated for downstream consumers."""
-     cfg = cfg or db.get_config()
-     incoming_meta = meta if isinstance(meta, dict) else {}
-     target_meta = incoming_meta if incoming_meta is meta and isinstance(meta, dict) else dict(incoming_meta)
-     incoming_action = None
-     if isinstance(incoming_meta, dict):
-         incoming_action = incoming_meta.get("action")
+ def _ensure_thresholds(raw: Mapping[str, Any],
+                        *,
+-                       fallback_medium: float) -> Dict[str, float]:
++                       fallback_medium: float,
++                       defaults: Optional[Mapping[str, float]] = None) -> Dict[str, float]:
++    base = dict(defaults or _configured_default_planner_thresholds())
+     thresholds: Dict[str, float] = {}
+     for key in ("low", "medium", "high"):
+         if key in raw:
+-            thresholds[key] = _coerce_float(raw.get(key), default=_DEFAULT_PLANNER_THRESHOLDS.get(key, 0.0))
++            thresholds[key] = _coerce_float(raw.get(key), default=base.get(key, 0.0))
+     if "medium" not in thresholds:
+         thresholds["medium"] = float(fallback_medium)
+     if "high" not in thresholds:
+         thresholds["high"] = max(
+             thresholds["medium"] + 0.2,
+-            _DEFAULT_PLANNER_THRESHOLDS.get("high", thresholds["medium"] + 0.2),
++            base.get("high", thresholds["medium"] + 0.2),
+         )
+     if "low" not in thresholds:
+-        thresholds["low"] = _DEFAULT_PLANNER_THRESHOLDS.get("low", 0.0)
++        thresholds["low"] = base.get("low", 0.0)
  
-     labels = classify(seed_text, target_meta)
-     dialog_nlu = dict(labels)
+     # Clamp and enforce ordering
+     thresholds["low"] = max(0.0, min(1.0, thresholds["low"]))
+     thresholds["medium"] = max(thresholds["low"], min(1.0, thresholds["medium"]))
+     thresholds["high"] = max(thresholds["medium"], min(1.0, thresholds["high"]))
+     return thresholds
  
-     if telemetry:
-         telemetry.log_intent(dialog_nlu)
-         telemetry.log_entities(dialog_nlu.get("entities"))
-         telemetry.log_guardrail(decision="allow")
  
-     if not isinstance(target_meta.get("nlu"), dict):
-         target_meta["nlu"] = dict(dialog_nlu)
-     else:
+ def _resolve_planner_thresholds(universal: Mapping[str, Any],
+                                 goal: Optional[Mapping[str, Any]],
+-                                fallback_medium: float) -> Dict[str, float]:
++                                fallback_medium: float,
++                                *,
++                                defaults: Optional[Mapping[str, float]] = None) -> Dict[str, float]:
++    defaults = dict(defaults or _configured_default_planner_thresholds())
++    fallback_medium = max(defaults.get("medium", 0.0), fallback_medium)
++
+     def _candidate_mappings(container: Optional[Mapping[str, Any]]) -> Iterable[Mapping[str, Any]]:
+         if not isinstance(container, Mapping):
+             return
+         direct = container.get("planner_thresholds")
+         if isinstance(direct, Mapping):
+             yield direct
+         alt = container.get("planner_confidence_thresholds")
+         if isinstance(alt, Mapping):
+             yield alt
+         metadata = container.get("metadata") if isinstance(container.get("metadata"), Mapping) else None
+         if isinstance(metadata, Mapping):
+             direct_meta = metadata.get("planner_thresholds")
+             if isinstance(direct_meta, Mapping):
+                 yield direct_meta
+             alt_meta = metadata.get("planner_confidence_thresholds")
+             if isinstance(alt_meta, Mapping):
+                 yield alt_meta
+         return
+ 
+     for mapping in _candidate_mappings(goal):
          try:
-@@ -1149,50 +1212,65 @@ def prepare_turn_metadata(seed_text: str,
-             universal = _ensure_universal_fields(None)
-     target_meta["universal"] = universal
- 
-     session_id = _extract_session_id(target_meta)
-     session_goal = None
-     if session_id:
-         try:
-             session_goal = db.update_session_goal(
-                 session_id,
-                 phase=universal.get("phase"),
-                 depth=universal.get("depth"),
-                 delivery_pref=universal.get("delivery_pref"),
-                 working_intent=dialog_nlu.get("intent") or universal.get("intent_hint"),
-                 entities=universal.get("entities"),
-             )
+-            return _ensure_thresholds(mapping, fallback_medium=fallback_medium)
++            return _ensure_thresholds(mapping, fallback_medium=fallback_medium, defaults=defaults)
          except Exception:
-             session_goal = db.get_session_goal(session_id)
-         if session_goal:
-             target_meta["session_goal"] = copy.deepcopy(session_goal)
+             continue
+     for mapping in _candidate_mappings(universal):
+         try:
+-            return _ensure_thresholds(mapping, fallback_medium=fallback_medium)
++            return _ensure_thresholds(mapping, fallback_medium=fallback_medium, defaults=defaults)
+         except Exception:
+             continue
  
-     raw_policy = pick_dialog_policy(dialog_nlu, universal, session_goal=session_goal) or {}
-     policy = dict(raw_policy)
-     if policy.get("action") and "teacher_move" not in policy:
-         policy["teacher_move"] = policy["action"]
+-    return _ensure_thresholds(_DEFAULT_PLANNER_THRESHOLDS, fallback_medium=fallback_medium)
++    return _ensure_thresholds(defaults, fallback_medium=fallback_medium, defaults=defaults)
  
-+    if telemetry:
-+        confidence_value: Optional[float]
-+        try:
-+            confidence_raw = universal.get("confidence") if isinstance(universal, Mapping) else None
-+            confidence_value = float(confidence_raw) if isinstance(confidence_raw, (int, float)) else None
-+        except Exception:
-+            confidence_value = None
-+        planner_features = _planner_feature_summary(dialog_nlu, universal)
-+        telemetry.log_planner_decision(
-+            confidence=confidence_value,
-+            band=policy.get("confidence_band"),
-+            teacher_move=policy.get("teacher_move") or policy.get("action"),
-+            top_features=planner_features or None,
-+        )
+ 
+ def _extract_last_band(goal: Optional[Mapping[str, Any]]) -> Optional[str]:
+     if not isinstance(goal, Mapping):
+         return None
+     for source in (goal.get("metadata") if isinstance(goal.get("metadata"), Mapping) else None, goal):
+         if not isinstance(source, Mapping):
+             continue
+         band = source.get("planner_confidence_band") or source.get("confidence_band")
+         normalized = _normalize_band(band)
+         if normalized:
+             return normalized
+     return None
+ 
+ 
+ def _select_band(confidence: float,
+                  thresholds: Mapping[str, float],
+                  last_band: Optional[str]) -> str:
+     high = float(thresholds.get("high", _DEFAULT_PLANNER_THRESHOLDS["high"]))
+     medium = float(thresholds.get("medium", _DEFAULT_PLANNER_THRESHOLDS["medium"]))
+ 
+     if last_band == "high" and confidence >= high - _PLANNER_HYSTERESIS:
+         return "high"
+     if last_band == "medium":
+         if confidence >= high + _PLANNER_HYSTERESIS:
+diff --git a/app/services/config_store.py b/app/services/config_store.py
+index 39041a206a29c0053c90416d80105b14a8b673ba..1c6b5ec9d736b6d56bea08c34fd0cc1076c8708c 100644
+--- a/app/services/config_store.py
++++ b/app/services/config_store.py
+@@ -1,34 +1,54 @@
+ import time, json
+ from typing import Dict, Any
+ from ..db import db
+ 
+ _listeners = []
+ 
+ def get_config() -> Dict[str, Any]:
+     return db.get_config()
+ 
 +
-     action = target_meta.get(_DIALOG_ACTION_KEY) or target_meta.get("action")
-     if not action:
-         action = policy.get("action") or policy.get("teacher_move") or "respond"
-     canonical_action = _ACTION_ALIASES.get(str(action or "").strip().lower(), action)
-     target_meta["action"] = canonical_action
-     target_meta[_DIALOG_ACTION_KEY] = canonical_action
-     if policy.get("frame"):
-         target_meta.setdefault("frame", policy.get("frame"))
-     else:
-         target_meta.setdefault("frame", canonical_action)
++def get_config_value(key: str, default: Any = None) -> Any:
++    return db.get_config(key=key, default=default)
++
++
++def get_config_float(key: str, default: float) -> float:
++    value = get_config_value(key, default)
++    try:
++        return float(value)
++    except Exception:
++        return float(default)
++
++
++def get_planner_threshold_defaults() -> Dict[str, float]:
++    return {
++        "low": 0.0,
++        "medium": get_config_float("planner_medium_threshold", 0.60),
++        "high": get_config_float("planner_high_threshold", 0.75),
++    }
++
+ def update_config(updates: Dict[str, Any]) -> Dict[str, Any]:
+     cfg = db.update_config(updates or {})
+     # notify listeners
+     payload = {"event":"config_updated","config": cfg, "updated_at": time.time()}
+     for q in list(_listeners):
+         q.append(json.dumps(payload))
+     return cfg
  
-     policy_verbosity = str(policy.get("verbosity") or "").strip().lower() or None
-     if policy_verbosity and policy_verbosity not in {"brief", "normal"}:
-         policy_verbosity = None
+ def subscribe():
+     q = []
+     _listeners.append(q)
+     return q
  
-     if policy_verbosity:
-         target_meta.setdefault(_DIALOG_VERBOSITY_KEY, policy_verbosity)
-         target_meta.setdefault("verbosity", policy_verbosity)
+ def unsubscribe(q):
+     if q in _listeners:
+         _listeners.remove(q)
  
-     if _DIALOG_VERBOSITY_KEY not in target_meta:
-         target_meta[_DIALOG_VERBOSITY_KEY] = cfg.get("gen_target_verbosity", "medium")
-     if "verbosity" not in target_meta:
-         target_meta["verbosity"] = target_meta[_DIALOG_VERBOSITY_KEY]
-     elif _DIALOG_VERBOSITY_KEY not in target_meta:
-         target_meta[_DIALOG_VERBOSITY_KEY] = target_meta["verbosity"]
+ 
+ def get_config_version() -> int:
+     try:
+         import os
+         if os.environ.get("DATABASE_URL"):
+             from ..dal import neon_pg
+             neon_pg.ensure_schema()
+             # latest version id is ROWID in sqlite autoinc; return count

@@ -7,6 +7,26 @@ _listeners = []
 def get_config() -> Dict[str, Any]:
     return db.get_config()
 
+
+def get_config_value(key: str, default: Any = None) -> Any:
+    return db.get_config(key=key, default=default)
+
+
+def get_config_float(key: str, default: float) -> float:
+    value = get_config_value(key, default)
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def get_planner_threshold_defaults() -> Dict[str, float]:
+    return {
+        "low": 0.0,
+        "medium": get_config_float("planner_medium_threshold", 0.60),
+        "high": get_config_float("planner_high_threshold", 0.75),
+    }
+
 def update_config(updates: Dict[str, Any]) -> Dict[str, Any]:
     cfg = db.update_config(updates or {})
     # notify listeners
