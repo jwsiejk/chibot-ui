@@ -7,6 +7,19 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 from ..nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
 
 _CLARIFY_THRESHOLD = 0.45
+_PLANNER_HYSTERESIS = 0.05
+
+_BAND_ORDER = {"low": 0, "medium": 1, "high": 2}
+_DEFAULT_PLANNER_THRESHOLDS = {
+    "low": 0.0,
+    "medium": _CLARIFY_THRESHOLD,
+    "high": 0.75,
+}
+
+_BAND_CHIPS = {
+    "medium": ["Share more context", "What are you solving?", "Show an example"],
+    "low": ["Ask a question", "Explain how it works", "Project advice"],
+}
 _SUGGESTION_ACTIONS = {"clarify", "offer_steps"}
 
 _MISSING_CHIP_LIBRARY = {
@@ -85,7 +98,7 @@ def _missing_for_clarify(universal: Mapping[str, Any], goal: Optional[Mapping[st
     return filtered
 
 
-def _chips_from_missing(missing: Sequence[str]) -> List[str]:
+def _chips_from_missing(missing: Sequence[str], fallback: Optional[Sequence[str]] = None) -> List[str]:
     chips: List[str] = []
     for key in missing:
         choice = _MISSING_CHIP_LIBRARY.get(key)
@@ -95,7 +108,9 @@ def _chips_from_missing(missing: Sequence[str]) -> List[str]:
             break
     if chips:
         return chips
-    return list(_DEFAULT_CHIPS[:3])
+    if fallback is None:
+        fallback = _DEFAULT_CHIPS
+    return list(fallback[:3])
 
 
 def _is_unknown_field(value: Any) -> bool:
@@ -155,30 +170,47 @@ def pick(nlu_result: Dict[str, Any],
     if is_greet:
         missing = []
 
-    should_clarify = (
-        needs_clarification
-        or confidence < clarify_threshold
-        or any(_is_unknown_field(universal.get(field)) for field in ("phase", "depth", "delivery_pref"))
+    thresholds = _resolve_planner_thresholds(universal, goal, clarify_threshold)
+    last_band = _extract_last_band(goal)
+    confidence_band = _select_band(confidence, thresholds, last_band)
+
+    unknown_fields = any(
+        _is_unknown_field(universal.get(field)) for field in ("phase", "depth", "delivery_pref")
     )
-    if is_greet:
-        should_clarify = False
+
+    if missing:
+        confidence_band = "medium"
+    elif needs_clarification or unknown_fields:
+        confidence_band = "low"
 
     action: str
+    frame_name: str
     chips: List[str] = []
     frame_meta: Dict[str, Any] = {}
 
-    if should_clarify:
-        action = "clarify"
-        chips = _chips_from_missing(missing)
-        frame_meta["clarify_targets"] = missing or ["details"]
-    else:
+    if is_greet:
+        confidence_band = "high"
+
+    clarify_variant: Optional[str] = None
+
+    if confidence_band == "high" and not (needs_clarification or unknown_fields or missing):
         action = _resolve_delivery_frame(universal, nlu_result, missing)
-        if action == "clarify":
-            chips = _chips_from_missing(missing)
-            frame_meta["clarify_targets"] = missing or ["details"]
+        frame_name = action
+    else:
+        if missing:
+            confidence_band = "medium"
+        elif confidence_band not in {"medium", "low"}:
+            confidence_band = "low"
+        action = "clarify"
+        frame_name = "clarify"
+        clarify_variant = "specific" if confidence_band == "medium" else "high_level"
+        chips = _chips_for_band(confidence_band, missing)
+        frame_meta["clarify_targets"] = missing or ["details"]
+        frame_meta["clarify_variant"] = clarify_variant
 
     if is_greet:
         action = "offer_steps"
+        frame_name = action
         chips = []
         frame_meta = {}
 
@@ -189,20 +221,155 @@ def pick(nlu_result: Dict[str, Any],
 
     show_suggestions = action in _SUGGESTION_ACTIONS or bool(chips)
 
+    goal_metadata = _update_goal_band(goal, confidence_band)
+
+    teacher_move = action
+
     result: Dict[str, Any] = {
         "action": action,
-        "teacher_move": action,
-        "frame": action,
+        "teacher_move": teacher_move,
+        "frame": frame_name,
         "verbosity": verbosity,
         "show_suggestions": bool(show_suggestions),
+        "confidence_band": confidence_band,
     }
+    if clarify_variant:
+        result["clarify_variant"] = clarify_variant
     if chips:
         result["chips"] = chips
     if frame_meta:
         result.update(frame_meta)
+    if goal_metadata is not None:
+        result["goal_metadata"] = goal_metadata
 
     return result
 
 
-__all__ = ["pick"]
+def _normalize_band(value: Any) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        band = str(value).strip().lower()
+    except Exception:
+        return None
+    return band if band in _BAND_ORDER else None
 
+
+def _ensure_thresholds(raw: Mapping[str, Any],
+                       *,
+                       fallback_medium: float) -> Dict[str, float]:
+    thresholds: Dict[str, float] = {}
+    for key in ("low", "medium", "high"):
+        if key in raw:
+            thresholds[key] = _coerce_float(raw.get(key), default=_DEFAULT_PLANNER_THRESHOLDS.get(key, 0.0))
+    if "medium" not in thresholds:
+        thresholds["medium"] = float(fallback_medium)
+    if "high" not in thresholds:
+        thresholds["high"] = max(
+            thresholds["medium"] + 0.2,
+            _DEFAULT_PLANNER_THRESHOLDS.get("high", thresholds["medium"] + 0.2),
+        )
+    if "low" not in thresholds:
+        thresholds["low"] = _DEFAULT_PLANNER_THRESHOLDS.get("low", 0.0)
+
+    # Clamp and enforce ordering
+    thresholds["low"] = max(0.0, min(1.0, thresholds["low"]))
+    thresholds["medium"] = max(thresholds["low"], min(1.0, thresholds["medium"]))
+    thresholds["high"] = max(thresholds["medium"], min(1.0, thresholds["high"]))
+    return thresholds
+
+
+def _resolve_planner_thresholds(universal: Mapping[str, Any],
+                                goal: Optional[Mapping[str, Any]],
+                                fallback_medium: float) -> Dict[str, float]:
+    def _candidate_mappings(container: Optional[Mapping[str, Any]]) -> Iterable[Mapping[str, Any]]:
+        if not isinstance(container, Mapping):
+            return
+        direct = container.get("planner_thresholds")
+        if isinstance(direct, Mapping):
+            yield direct
+        alt = container.get("planner_confidence_thresholds")
+        if isinstance(alt, Mapping):
+            yield alt
+        metadata = container.get("metadata") if isinstance(container.get("metadata"), Mapping) else None
+        if isinstance(metadata, Mapping):
+            direct_meta = metadata.get("planner_thresholds")
+            if isinstance(direct_meta, Mapping):
+                yield direct_meta
+            alt_meta = metadata.get("planner_confidence_thresholds")
+            if isinstance(alt_meta, Mapping):
+                yield alt_meta
+        return
+
+    for mapping in _candidate_mappings(goal):
+        try:
+            return _ensure_thresholds(mapping, fallback_medium=fallback_medium)
+        except Exception:
+            continue
+    for mapping in _candidate_mappings(universal):
+        try:
+            return _ensure_thresholds(mapping, fallback_medium=fallback_medium)
+        except Exception:
+            continue
+
+    return _ensure_thresholds(_DEFAULT_PLANNER_THRESHOLDS, fallback_medium=fallback_medium)
+
+
+def _extract_last_band(goal: Optional[Mapping[str, Any]]) -> Optional[str]:
+    if not isinstance(goal, Mapping):
+        return None
+    for source in (goal.get("metadata") if isinstance(goal.get("metadata"), Mapping) else None, goal):
+        if not isinstance(source, Mapping):
+            continue
+        band = source.get("planner_confidence_band") or source.get("confidence_band")
+        normalized = _normalize_band(band)
+        if normalized:
+            return normalized
+    return None
+
+
+def _select_band(confidence: float,
+                 thresholds: Mapping[str, float],
+                 last_band: Optional[str]) -> str:
+    high = float(thresholds.get("high", _DEFAULT_PLANNER_THRESHOLDS["high"]))
+    medium = float(thresholds.get("medium", _DEFAULT_PLANNER_THRESHOLDS["medium"]))
+
+    if last_band == "high" and confidence >= high - _PLANNER_HYSTERESIS:
+        return "high"
+    if last_band == "medium":
+        if confidence >= high + _PLANNER_HYSTERESIS:
+            return "high"
+        if confidence < max(0.0, medium - _PLANNER_HYSTERESIS):
+            return "low"
+        return "medium"
+    if last_band == "low":
+        if confidence >= high + _PLANNER_HYSTERESIS:
+            return "high"
+        if confidence >= medium + _PLANNER_HYSTERESIS:
+            return "medium"
+        return "low"
+
+    if confidence >= high:
+        return "high"
+    if confidence >= medium:
+        return "medium"
+    return "low"
+
+
+def _chips_for_band(band: str, missing: Sequence[str]) -> List[str]:
+    fallback = _BAND_CHIPS.get(band)
+    if band in {"medium", "low"}:
+        return _chips_from_missing(missing, fallback=fallback)
+    return []
+
+
+def _update_goal_band(goal: Optional[Mapping[str, Any]], band: str) -> Optional[Dict[str, Any]]:
+    if not isinstance(goal, Mapping):
+        return None
+    metadata = goal.get("metadata") if isinstance(goal.get("metadata"), Mapping) else {}
+    metadata = dict(metadata)
+    metadata["planner_confidence_band"] = band
+    return metadata
+
+
+__all__ = ["pick"]

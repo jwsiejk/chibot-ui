@@ -1,456 +1,363 @@
-diff --git a/app/policy/nudges.py b/app/policy/nudges.py
-index 4f210d88508ba9943fe246b81c25934cc362f68e..0e88e4fd40385c74591a765ef9c438b92964e4e6 100644
---- a/app/policy/nudges.py
-+++ b/app/policy/nudges.py
-@@ -63,101 +63,111 @@ def _session_record(session_id: str) -> Dict:
-         {
-             "email": "user@example.com",
-             "messages": [],
-             "nudges": 0,
-             "persona_id": "chip",
-         },
-     )
+diff --git a/app/dialog/policy.py b/app/dialog/policy.py
+index bf478f60202fa570ae403ef7d29a182b36cae2d0..afd1a38f78accd578cd7524055224b11bfc08ff7 100644
+--- a/app/dialog/policy.py
++++ b/app/dialog/policy.py
+@@ -1,34 +1,47 @@
+ """Policy heuristics that map interpreter output to dialog frames."""
+ 
+ from __future__ import annotations
+ 
+ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+ 
+ from ..nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+ 
+ _CLARIFY_THRESHOLD = 0.45
++_PLANNER_HYSTERESIS = 0.05
++
++_BAND_ORDER = {"low": 0, "medium": 1, "high": 2}
++_DEFAULT_PLANNER_THRESHOLDS = {
++    "low": 0.0,
++    "medium": _CLARIFY_THRESHOLD,
++    "high": 0.75,
++}
++
++_BAND_CHIPS = {
++    "medium": ["Share more context", "What are you solving?", "Show an example"],
++    "low": ["Ask a question", "Explain how it works", "Project advice"],
++}
+ _SUGGESTION_ACTIONS = {"clarify", "offer_steps"}
+ 
+ _MISSING_CHIP_LIBRARY = {
+     "details": "Add more detail",
+     "intent": "Tell me your goal",
+     "product": "Name the product",
+     "issue_detail": "Describe the issue",
+     "message": "Repeat the request",
+ }
+ 
+ _DEFAULT_CHIPS = ["Share more context", "What are you solving?", "Show an example"]
  
  
- def _increment_session_nudges(session_id: str) -> None:
-     sess = _session_record(session_id)
-     sess["nudges"] = sess.get("nudges", 0) + 1
- 
- 
- def _schedule_timer(
-     session_id: str,
-     name: str,
-     delay_ms: int,
-     fn: Callable[[], None],
-     *,
-     origin: str = "",
- ) -> None:
-     delay = max(0, int(delay_ms)) / 1000.0
- 
-     timer: Optional[threading.Timer] = None
--    armed_at = time.time()
-+    armed_wall = time.time()
-+    armed_mono = time.monotonic()
-+    nonce = time.monotonic_ns()
- 
-     def _run() -> None:
-         nonlocal timer
-         if timer is None:
-             return
-         with _LOCK:
-             timers = _scheduled.get(session_id)
-             entry = timers.get(name) if timers else None
-             current = entry.get("timer") if isinstance(entry, dict) else None
--            if not timers or current is not timer:
-+            current_nonce = entry.get("nonce") if isinstance(entry, dict) else None
-+            if not timers or current is not timer or current_nonce != nonce:
-                 return
-         try:
--            elapsed_ms = int((time.time() - armed_at) * 1000)
-+            elapsed_ms = int((time.monotonic() - armed_mono) * 1000)
-             _LOGGER.info(
-                 "nudge_fired sid=%s name=%s elapsed_ms=%s origin=%s",
-                 session_id,
-                 name,
-                 elapsed_ms,
-                 origin or "",
-             )
-             fn()
-         finally:
-             with _LOCK:
-                 timers = _scheduled.get(session_id)
-                 entry = timers.get(name) if timers else None
--                if timers and isinstance(entry, dict) and entry.get("timer") is timer:
-+                if (
-+                    timers
-+                    and isinstance(entry, dict)
-+                    and entry.get("timer") is timer
-+                    and entry.get("nonce") == nonce
-+                ):
-                     timers.pop(name, None)
-                     if not timers:
-                         _scheduled.pop(session_id, None)
- 
-     timer = threading.Timer(delay, _run)
-     timer.daemon = True
- 
-     with _LOCK:
-         timers = _scheduled.setdefault(session_id, {})
-         existing = timers.get(name)
-         if isinstance(existing, dict):
-             existing_timer = existing.get("timer")
-         else:
-             existing_timer = existing
-         if isinstance(existing_timer, threading.Timer):
-             try:
-                 existing_timer.cancel()
-             except Exception:
-                 pass
-         timers[name] = {
-             "timer": timer,
--            "armed_at": armed_at,
-+            "armed_at": armed_wall,
-+            "armed_mono": armed_mono,
-             "delay_ms": int(delay_ms),
-             "origin": origin or "",
-+            "nonce": nonce,
-         }
- 
-     _LOGGER.info(
-         "nudge_timer_set sid=%s name=%s delay_ms=%s origin=%s",
-         session_id,
-         name,
-         int(delay_ms),
-         origin or "",
-     )
- 
-     timer.start()
- 
- 
- def cancel_idle_timers(session_id: str, *, source: str = "", mark: bool = True) -> None:
-     timers: Optional[Dict[str, Dict[str, object]]] = None
-     with _LOCK:
-         timers = _scheduled.pop(session_id, None)
- 
-     if timers:
-         for entry in list(timers.values()):
-             timer = entry.get("timer") if isinstance(entry, dict) else entry
-             try:
-                 if isinstance(timer, threading.Timer):
-                     timer.cancel()
-             except Exception:
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index f507f6aa8b5aba94e388249822dd7da86f7ee9bd..fa1a55c415bd88ac12dceecb577578dd8841d3f1 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -2094,50 +2094,54 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_conn_cleanup",
-                 conn_id=conn_id,
-                 sid=sid,
-                 duration=duration,
-                 had_disconnect=had_disconnect,
-             )
-         with contextlib.suppress(Exception):
-             if _admin_emit:
-                 _admin_emit(
-                     "ws_conn_cleanup",
-                     conn_id=conn_id,
-                     sid=sid,
-                     duration=duration,
-                     had_disconnect=had_disconnect,
-                 )
-         # Clean up safely; never raise in cleanup
-         with contextlib.suppress(Exception):
-             if rx_task:
-                 rx_task.cancel()
-                 await rx_task
-         with contextlib.suppress(Exception):
-             if dg is not None:
-                 await dg.close(wait_for_final=False)
-+                try:
-+                    set_asr_stream_open(sid, False)
-+                except Exception:
-+                    pass
-         with contextlib.suppress(Exception):
-             bus_task.cancel()
-             await bus_task
-         with contextlib.suppress(Exception):
-             ping_task.cancel()
-             await ping_task
-         with contextlib.suppress(Exception):
-             await send(
-                 {"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"}
-             )
- 
- 
- # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
- try:
-     from starlette.websockets import WebSocket as _StarletteWebSocket  # noqa
- except Exception:
-     _StarletteWebSocket = None
- 
- 
- async def ws_chat(websocket):
-     """Accept, validate, send ready, then pump frames to keep the connection alive."""
-     _jlog("ws_chat_compat_invoked")
-     await websocket.accept()
+ def _coerce_float(raw: Any, default: float = 0.0) -> float:
      try:
-         sid = _get_session_id(websocket.scope)
-diff --git a/static/js/voice/vad.js b/static/js/voice/vad.js
-index 5a82604912aae8639df9a3039f7feeae0eb3b283..ac962dc8568dee76bfd3dc092a00fe534448360c 100644
---- a/static/js/voice/vad.js
-+++ b/static/js/voice/vad.js
-@@ -19,94 +19,104 @@
-  */
+         return float(raw)
+     except Exception:
+         return float(default)
  
- /** @typedef {{
-  *   onSpeechStart?: ()=>void,
-  *   onSpeechEnd?: ()=>void,
-  * }} VADCallbacks
-  */
  
- export class VAD {
-   /**
-    * @param {AnalyserNode} analyser
-    * @param {VADOptions} opts
-    * @param {VADCallbacks} cbs
-    */
-   constructor(analyser, opts, cbs) {
-     this.analyser = analyser;
-     this.opts = Object.assign({
-       startRms: 0.015,       // ~ -36 dBFS
-       stopRms: 0.010,        // ~ -40 dBFS
-       minSpeechMs: 220,
-       minSilenceMs: 420,
-       pollMs: 33,
-       echoBoostStart: 1.5,
-       echoBoostStop: 1.3,
-       echoStateFn: null,
-+      cooldownMs: 380,
-     }, opts || {});
-     this.cbs = cbs || {};
-     this._buf = new Float32Array(this.analyser.fftSize || 2048);
-     this._timer = null;
-     this._recording = false;
-     this._aboveSince = 0;
-     this._belowSince = 0;
-+    this._cooldownUntil = 0;
-   }
+ def _normalize_str(value: Any) -> str:
+     try:
+         return str(value or "").strip().lower()
+     except Exception:
+         return ""
+@@ -63,61 +76,63 @@ def _missing_for_clarify(universal: Mapping[str, Any], goal: Optional[Mapping[st
+     raw_missing = universal.get("missing") if isinstance(universal, Mapping) else None
+     missing: List[str] = []
+     if isinstance(raw_missing, Iterable) and not isinstance(raw_missing, (str, bytes)):
+         for item in raw_missing:
+             text = _normalize_str(item)
+             if text:
+                 missing.append(text)
+     elif isinstance(raw_missing, str):
+         normalized = _normalize_str(raw_missing)
+         if normalized:
+             missing.append(normalized)
  
-   _rms() {
-     this.analyser.getFloatTimeDomainData(this._buf);
-     let sum = 0;
-     for (let i = 0; i < this._buf.length; i++) {
-       const v = this._buf[i];
-       sum += v * v;
+     confirmed = {m.lower() for m in _confirmed_set(goal)}
+     filtered: List[str] = []
+     for key in missing:
+         if key in confirmed:
+             continue
+         if key == "product" and _has_goal_entity(goal, "products"):
+             continue
+         if key == "intent" and _normalize_str(goal.get("working_intent")):
+             continue
+         filtered.append(key)
+     return filtered
+ 
+ 
+-def _chips_from_missing(missing: Sequence[str]) -> List[str]:
++def _chips_from_missing(missing: Sequence[str], fallback: Optional[Sequence[str]] = None) -> List[str]:
+     chips: List[str] = []
+     for key in missing:
+         choice = _MISSING_CHIP_LIBRARY.get(key)
+         if choice and choice not in chips:
+             chips.append(choice)
+         if len(chips) >= 3:
+             break
+     if chips:
+         return chips
+-    return list(_DEFAULT_CHIPS[:3])
++    if fallback is None:
++        fallback = _DEFAULT_CHIPS
++    return list(fallback[:3])
+ 
+ 
+ def _is_unknown_field(value: Any) -> bool:
+     normalized = _normalize_str(value)
+     if not normalized:
+         return True
+     return normalized in {"unknown", "undetermined"}
+ 
+ 
+ def _resolve_delivery_frame(universal: Mapping[str, Any],
+                             nlu_result: Mapping[str, Any],
+                             missing: Sequence[str]) -> str:
+     delivery = _normalize_str(universal.get("delivery_pref"))
+     if delivery == "summary":
+         return "summarize_next_actions"
+     if delivery == "steps":
+         return "offer_steps"
+     if delivery in {"list", "compare"}:
+         return "compare"
+ 
+     if bool(nlu_result.get("wants_list")):
+         return "compare"
+ 
+     user_goal = _normalize_str(universal.get("user_goal"))
+     depth = _normalize_str(universal.get("depth"))
+@@ -133,76 +148,228 @@ def _resolve_delivery_frame(universal: Mapping[str, Any],
+ 
+     if depth == "deep":
+         return "deep_dive"
+     return "high_level"
+ 
+ 
+ def pick(nlu_result: Dict[str, Any],
+          universal_result: Optional[Dict[str, Any]] = None,
+          *,
+          session_goal: Optional[Dict[str, Any]] = None,
+          clarify_threshold: float = _CLARIFY_THRESHOLD) -> Dict[str, Any]:
+     """Select a dialog frame based on interpreter output."""
+ 
+     nlu_result = nlu_result or {}
+     universal = _ensure_universal_fields(universal_result)
+     goal = session_goal or {}
+ 
+     confidence = _coerce_float(universal.get("confidence"), default=0.0)
+     intent = _normalize_str(nlu_result.get("intent"))
+     is_greet = intent in {"greet", "idle"}
+     needs_clarification = bool(universal.get("needs_clarification"))
+     missing = _missing_for_clarify(universal, goal)
+     if is_greet:
+         missing = []
+ 
+-    should_clarify = (
+-        needs_clarification
+-        or confidence < clarify_threshold
+-        or any(_is_unknown_field(universal.get(field)) for field in ("phase", "depth", "delivery_pref"))
++    thresholds = _resolve_planner_thresholds(universal, goal, clarify_threshold)
++    last_band = _extract_last_band(goal)
++    confidence_band = _select_band(confidence, thresholds, last_band)
++
++    unknown_fields = any(
++        _is_unknown_field(universal.get(field)) for field in ("phase", "depth", "delivery_pref")
+     )
+-    if is_greet:
+-        should_clarify = False
++
++    if missing:
++        confidence_band = "medium"
++    elif needs_clarification or unknown_fields:
++        confidence_band = "low"
+ 
+     action: str
++    frame_name: str
+     chips: List[str] = []
+     frame_meta: Dict[str, Any] = {}
+ 
+-    if should_clarify:
++    if is_greet:
++        confidence_band = "high"
++
++    clarify_variant: Optional[str] = None
++
++    if confidence_band == "high" and not (needs_clarification or unknown_fields or missing):
++        action = _resolve_delivery_frame(universal, nlu_result, missing)
++        frame_name = action
++    else:
++        if missing:
++            confidence_band = "medium"
++        elif confidence_band not in {"medium", "low"}:
++            confidence_band = "low"
+         action = "clarify"
+-        chips = _chips_from_missing(missing)
++        frame_name = "clarify"
++        clarify_variant = "specific" if confidence_band == "medium" else "high_level"
++        chips = _chips_for_band(confidence_band, missing)
+         frame_meta["clarify_targets"] = missing or ["details"]
+-    else:
+-        action = _resolve_delivery_frame(universal, nlu_result, missing)
+-        if action == "clarify":
+-            chips = _chips_from_missing(missing)
+-            frame_meta["clarify_targets"] = missing or ["details"]
++        frame_meta["clarify_variant"] = clarify_variant
+ 
+     if is_greet:
+         action = "offer_steps"
++        frame_name = action
+         chips = []
+         frame_meta = {}
+ 
+     depth_value = _normalize_str(universal.get("depth"))
+     if is_greet:
+         depth_value = "brief"
+     verbosity = "brief" if action == "clarify" or depth_value == "brief" else "normal"
+ 
+     show_suggestions = action in _SUGGESTION_ACTIONS or bool(chips)
+ 
++    goal_metadata = _update_goal_band(goal, confidence_band)
++
++    teacher_move = action
++
+     result: Dict[str, Any] = {
+         "action": action,
+-        "teacher_move": action,
+-        "frame": action,
++        "teacher_move": teacher_move,
++        "frame": frame_name,
+         "verbosity": verbosity,
+         "show_suggestions": bool(show_suggestions),
++        "confidence_band": confidence_band,
      }
-     return Math.sqrt(sum / this._buf.length);
-   }
++    if clarify_variant:
++        result["clarify_variant"] = clarify_variant
+     if chips:
+         result["chips"] = chips
+     if frame_meta:
+         result.update(frame_meta)
++    if goal_metadata is not None:
++        result["goal_metadata"] = goal_metadata
  
-   start() {
-     this.stop(); // idempotent
-     this._aboveSince = 0;
-     this._belowSince = 0;
-+    this._cooldownUntil = 0;
-     const { pollMs } = this.opts;
+     return result
  
-     this._timer = setInterval(() => {
-       const rms = this._rms();
-       const now = performance.now();
-+      const inCooldown = now < this._cooldownUntil;
-       const echo = this.opts.echoStateFn ? !!this.opts.echoStateFn() : false;
  
-       const startR = this.opts.startRms * (echo ? this.opts.echoBoostStart : 1);
-       const stopR  = this.opts.stopRms  * (echo ? this.opts.echoBoostStop  : 1);
+-__all__ = ["pick"]
++def _normalize_band(value: Any) -> Optional[str]:
++    if not value:
++        return None
++    try:
++        band = str(value).strip().lower()
++    except Exception:
++        return None
++    return band if band in _BAND_ORDER else None
++
++
++def _ensure_thresholds(raw: Mapping[str, Any],
++                       *,
++                       fallback_medium: float) -> Dict[str, float]:
++    thresholds: Dict[str, float] = {}
++    for key in ("low", "medium", "high"):
++        if key in raw:
++            thresholds[key] = _coerce_float(raw.get(key), default=_DEFAULT_PLANNER_THRESHOLDS.get(key, 0.0))
++    if "medium" not in thresholds:
++        thresholds["medium"] = float(fallback_medium)
++    if "high" not in thresholds:
++        thresholds["high"] = max(
++            thresholds["medium"] + 0.2,
++            _DEFAULT_PLANNER_THRESHOLDS.get("high", thresholds["medium"] + 0.2),
++        )
++    if "low" not in thresholds:
++        thresholds["low"] = _DEFAULT_PLANNER_THRESHOLDS.get("low", 0.0)
++
++    # Clamp and enforce ordering
++    thresholds["low"] = max(0.0, min(1.0, thresholds["low"]))
++    thresholds["medium"] = max(thresholds["low"], min(1.0, thresholds["medium"]))
++    thresholds["high"] = max(thresholds["medium"], min(1.0, thresholds["high"]))
++    return thresholds
++
++
++def _resolve_planner_thresholds(universal: Mapping[str, Any],
++                                goal: Optional[Mapping[str, Any]],
++                                fallback_medium: float) -> Dict[str, float]:
++    def _candidate_mappings(container: Optional[Mapping[str, Any]]) -> Iterable[Mapping[str, Any]]:
++        if not isinstance(container, Mapping):
++            return
++        direct = container.get("planner_thresholds")
++        if isinstance(direct, Mapping):
++            yield direct
++        alt = container.get("planner_confidence_thresholds")
++        if isinstance(alt, Mapping):
++            yield alt
++        metadata = container.get("metadata") if isinstance(container.get("metadata"), Mapping) else None
++        if isinstance(metadata, Mapping):
++            direct_meta = metadata.get("planner_thresholds")
++            if isinstance(direct_meta, Mapping):
++                yield direct_meta
++            alt_meta = metadata.get("planner_confidence_thresholds")
++            if isinstance(alt_meta, Mapping):
++                yield alt_meta
++        return
++
++    for mapping in _candidate_mappings(goal):
++        try:
++            return _ensure_thresholds(mapping, fallback_medium=fallback_medium)
++        except Exception:
++            continue
++    for mapping in _candidate_mappings(universal):
++        try:
++            return _ensure_thresholds(mapping, fallback_medium=fallback_medium)
++        except Exception:
++            continue
++
++    return _ensure_thresholds(_DEFAULT_PLANNER_THRESHOLDS, fallback_medium=fallback_medium)
++
++
++def _extract_last_band(goal: Optional[Mapping[str, Any]]) -> Optional[str]:
++    if not isinstance(goal, Mapping):
++        return None
++    for source in (goal.get("metadata") if isinstance(goal.get("metadata"), Mapping) else None, goal):
++        if not isinstance(source, Mapping):
++            continue
++        band = source.get("planner_confidence_band") or source.get("confidence_band")
++        normalized = _normalize_band(band)
++        if normalized:
++            return normalized
++    return None
++
++
++def _select_band(confidence: float,
++                 thresholds: Mapping[str, float],
++                 last_band: Optional[str]) -> str:
++    high = float(thresholds.get("high", _DEFAULT_PLANNER_THRESHOLDS["high"]))
++    medium = float(thresholds.get("medium", _DEFAULT_PLANNER_THRESHOLDS["medium"]))
++
++    if last_band == "high" and confidence >= high - _PLANNER_HYSTERESIS:
++        return "high"
++    if last_band == "medium":
++        if confidence >= high + _PLANNER_HYSTERESIS:
++            return "high"
++        if confidence < max(0.0, medium - _PLANNER_HYSTERESIS):
++            return "low"
++        return "medium"
++    if last_band == "low":
++        if confidence >= high + _PLANNER_HYSTERESIS:
++            return "high"
++        if confidence >= medium + _PLANNER_HYSTERESIS:
++            return "medium"
++        return "low"
++
++    if confidence >= high:
++        return "high"
++    if confidence >= medium:
++        return "medium"
++    return "low"
++
++
++def _chips_for_band(band: str, missing: Sequence[str]) -> List[str]:
++    fallback = _BAND_CHIPS.get(band)
++    if band in {"medium", "low"}:
++        return _chips_from_missing(missing, fallback=fallback)
++    return []
++
  
-       if (!this._recording) {
-+        if (inCooldown) {
-+          this._aboveSince = 0;
-+          return;
-+        }
-         if (rms >= startR) {
-           if (!this._aboveSince) this._aboveSince = now;
-           if (now - this._aboveSince >= this.opts.minSpeechMs) {
-             this._recording = true;
-             this._belowSince = 0;
-             try { this.cbs.onSpeechStart && this.cbs.onSpeechStart(); } catch {}
-           }
-         } else {
-           this._aboveSince = 0;
-         }
-       } else {
-         if (rms < stopR) {
-           if (!this._belowSince) this._belowSince = now;
-           if (now - this._belowSince >= this.opts.minSilenceMs) {
-             this._recording = false;
-             this._aboveSince = 0;
-+            this._cooldownUntil = now + Math.max(0, this.opts.cooldownMs || 0);
-             try { this.cbs.onSpeechEnd && this.cbs.onSpeechEnd(); } catch {}
-           }
-         } else {
-           this._belowSince = 0;
-         }
-       }
-     }, pollMs);
-   }
- 
-   stop() {
-     if (this._timer) { clearInterval(this._timer); this._timer = null; }
-     this._recording = false;
-     this._aboveSince = 0;
-     this._belowSince = 0;
-+    this._cooldownUntil = 0;
-   }
- 
-   isRecording() { return this._recording; }
- }
- 
-diff --git a/static/js/ws.js b/static/js/ws.js
-index 410768efa73ed1c756b81764ab8606c9adebb491..ed7f6aa1c8f868b2460fe60f25e55847d2b630fa 100644
---- a/static/js/ws.js
-+++ b/static/js/ws.js
-@@ -2,50 +2,51 @@
- // Responsibilities:
- //   (Patched) Optional reconnect control for diagnostics
- let __WS_RECONNECT_ENABLED = true;
- //   • Own a single WebSocket connection per tab to /ws/v1/chat
- //   • Subprotocol auth (bearer + bearer.<token>)
- //   • Auto-reconnect with bounded backoff (only if session is active)
- //   • Helpers: waitWSOpen(), isOpen(), bufferedAmount(), sendJSON/audio, configure()
- //   • DOM events: 'askchip-ws' (messages), 'askchip-ws-close' (terminal close)
- 
- import { playStream, audioEnd, unlockAudio } from './audio.js';
- import { getSID } from './util/sid.js';
- 
- let _ws = null;
- let _onOpen = [];
- const _KEEPALIVE_POLL_MS = 1000;
- const _KEEPALIVE_IDLE_THRESHOLD_MS = 3500;
- const _KEEPALIVE_RESUME_AFTER_UPLOAD_MS = 750;
- const _KEEPALIVE_PROVIDER_FALLBACK_MS = 10000;
- 
- const _KEEPALIVE_REASON_PROVIDER = 'provider_wait';
- const _KEEPALIVE_REASON_UPLOAD = 'audio_upload';
- 
- const _keepaliveState = {
-   timer: null,
-   lastSentTs: 0,
-+  lastReadyAt: 0,
-   providerReady: false,
-   pauseReasons: new Set(),
-   resumeTimers: new Map(),
-   providerGateTimer: null,
-   sawFirstDeepgram: false,
- };
- 
- function _scheduleProviderFallback(){
-   if (_keepaliveState.providerGateTimer){
-     clearTimeout(_keepaliveState.providerGateTimer);
-   }
-   if (!_keepaliveState.pauseReasons.has(_KEEPALIVE_REASON_PROVIDER)){
-     _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
-   }
-   _keepaliveState.providerGateTimer = setTimeout(()=>{
-     _keepaliveState.providerGateTimer = null;
-     if (!_keepaliveState.providerReady){
-       _keepaliveState.providerReady = true;
-     }
-     _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
-   }, _KEEPALIVE_PROVIDER_FALLBACK_MS);
- }
- 
- let _lastUserSendTs = 0;
- let _gotReady = false;
-@@ -57,50 +58,51 @@ let _reconnectTimer = null;
- let _backoff = 500;            // start 0.5s
- const _BACKOFF_MAX = 8000;     // cap 8s
- const _BACKOFF_RESET_MS = 30000;
- 
- export function isOpen(){ return !!(_ws && _ws.readyState === WebSocket.OPEN); }
- export function isConnecting(){ return !!(_ws && _ws.readyState === WebSocket.CONNECTING); }
- export function waitWSOpen(){
-   return new Promise(res => {
-     if (isOpen()) return res();
-     _onOpen.push(res);
-   });
- }
- function _notifyOpen(){ for (const fn of _onOpen.splice(0)) { try{ fn(); }catch{} } }
- 
- export function bufferedAmount(){ return _ws ? _ws.bufferedAmount : 0; }
- 
- function _clearKeepaliveTimer(){
-   if (_keepaliveState.timer){
-     clearInterval(_keepaliveState.timer);
-     _keepaliveState.timer = null;
-   }
- }
- 
- function _resetKeepaliveState(scheduleFallback = false){
-   _keepaliveState.lastSentTs = 0;
-+  _keepaliveState.lastReadyAt = 0;
-   _keepaliveState.providerReady = false;
-   _keepaliveState.sawFirstDeepgram = false;
-   for (const t of _keepaliveState.resumeTimers.values()){
-     clearTimeout(t);
-   }
-   _keepaliveState.resumeTimers.clear();
-   if (_keepaliveState.providerGateTimer){
-     clearTimeout(_keepaliveState.providerGateTimer);
-     _keepaliveState.providerGateTimer = null;
-   }
-   _keepaliveState.pauseReasons.clear();
-   if (scheduleFallback){
-     _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
-     _scheduleProviderFallback();
-   }
- }
- 
- function _pauseKeepalive(reason){
-   if (!reason) return;
-   const timer = _keepaliveState.resumeTimers.get(reason);
-   if (timer){
-     clearTimeout(timer);
-     _keepaliveState.resumeTimers.delete(reason);
-   }
-   _keepaliveState.pauseReasons.add(reason);
-@@ -150,50 +152,58 @@ function _stopKeepAlive(){
-   _clearKeepaliveTimer();
-   _resetKeepaliveState(false);
- }
- 
- function _handleProviderSignal(obj){
-   const type = (obj && obj.type ? String(obj.type) : '').toLowerCase();
-   const provider = (obj && (obj.provider || obj.service || obj.source || obj.name) ? String(obj.provider || obj.service || obj.source || obj.name) : '').toLowerCase();
-   const state = (obj && (obj.state || obj.status || obj.phase)) ? String(obj.state || obj.status || obj.phase).toLowerCase() : '';
-   const compactType = type.replace(/[^a-z]/g, '');
-   const compactProvider = provider.replace(/[^a-z]/g, '');
-   const typeAsProvider = compactType.replace(/(?:provider)?(?:state|status)$/, '');
-   const vendor = (obj && obj.vendor ? String(obj.vendor) : '').toLowerCase();
-   const compactVendor = vendor.replace(/[^a-z]/g, '');
- 
-   const looksDeepgram =
-     compactType.includes('deepgram') ||
-     compactProvider === 'deepgram' ||
-     typeAsProvider === 'deepgram' ||
-     compactVendor === 'deepgram';
-   if (looksDeepgram && !_keepaliveState.sawFirstDeepgram){
-     _keepaliveState.sawFirstDeepgram = true;
-     _startKeepAlive();
-   }
- 
-   const markReady = () => {
-+    const now = Date.now();
-+    if (
-+      _keepaliveState.lastReadyAt &&
-+      now - _keepaliveState.lastReadyAt < 800
-+    ){
-+      return;
-+    }
-+    _keepaliveState.lastReadyAt = now;
-     if (!_keepaliveState.providerReady){
-       _keepaliveState.providerReady = true;
-     }
-     if (_keepaliveState.providerGateTimer){
-       clearTimeout(_keepaliveState.providerGateTimer);
-       _keepaliveState.providerGateTimer = null;
-     }
-     _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
-   };
-   const markNotReady = () => {
-     if (_keepaliveState.providerReady){
-       _keepaliveState.providerReady = false;
-     }
-     _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
-     _scheduleProviderFallback();
-   };
- 
-   if (!type) return;
- 
-   if (compactType === 'asropen' || compactType === 'deepgramopen' || compactType === 'deepgramready'){ markReady(); return; }
-   if (compactType === 'asrclose' || compactType === 'asrclosed' || compactType === 'deepgramclosed' || compactType === 'asrerror'){ markNotReady(); return; }
- 
-   const providerTargets = ['deepgram', 'asr', 'stt'];
-   const applies = compactProvider ? providerTargets.includes(compactProvider) : false;
-   if (compactType === 'providerstate' || compactType === 'asrproviderstate' || applies || providerTargets.includes(typeAsProvider)){
++def _update_goal_band(goal: Optional[Mapping[str, Any]], band: str) -> Optional[Dict[str, Any]]:
++    if not isinstance(goal, Mapping):
++        return None
++    metadata = goal.get("metadata") if isinstance(goal.get("metadata"), Mapping) else {}
++    metadata = dict(metadata)
++    metadata["planner_confidence_band"] = band
++    return metadata
++
++
++__all__ = ["pick"]
