@@ -1,543 +1,594 @@
+diff --git a/app/personas/prompt_builder.py b/app/personas/prompt_builder.py
+index 0ceb82fde7e7f2f5bb5ce7133c4fface2bc93c1d..c8e5ad4dca7e31782e22804a68ffeee920073fb2 100644
+--- a/app/personas/prompt_builder.py
++++ b/app/personas/prompt_builder.py
+@@ -212,50 +212,97 @@ def _maybe_persona_quote(cfg: Dict[str, Any], intensity: float) -> Tuple[str, Di
+ 
+     if not meta["enabled"]:
+         return "", meta
+ 
+     try:
+         p = max(0.0, min(1.0, float(intensity)))
+         if random.random() <= p:
+             chosen_text, candidate_id = random.choice(candidates)
+             meta["picked"] = True
+             meta["text"] = chosen_text
+             meta["quote_id"] = _stable_quote_id(
+                 chosen_text,
+                 bank=meta.get("bank"),
+                 candidate_id=candidate_id,
+             )
+             return chosen_text, meta
+     except Exception:
+         pass
+     return "", meta
+ 
+ 
+ def _coerce_str_map(obj: Any) -> Dict[str, Any]:
+     return obj if isinstance(obj, dict) else {}
+ 
+ 
++def _extract_topic(meta: Optional[Dict[str, Any]]) -> str:
++    """Best effort topic extraction from dialog metadata."""
++    if not isinstance(meta, dict):
++        return ""
++    topic: Optional[str] = None
++    for key in ("topic",):
++        raw = meta.get(key)
++        if raw:
++            topic = raw
++            break
++    if not topic:
++        for key in ("nlu", "dialog_nlu"):
++            section = meta.get(key)
++            if isinstance(section, dict) and section.get("topic"):
++                topic = section.get("topic")
++                break
++    if not topic:
++        return ""
++    try:
++        cleaned = str(topic or "").strip()
++    except Exception:
++        cleaned = ""
++    return cleaned.rstrip("?.! ")
++
++
++def _build_clarifier_high_level_example(
++    user_text: str, meta: Optional[Dict[str, Any]]
++) -> Dict[str, str]:
++    """Construct a clarifier-high-level few-shot example."""
++    topic = _extract_topic(meta)
++    try:
++        sample_user = str(user_text or "").strip()
++    except Exception:
++        sample_user = ""
++    if not sample_user:
++        sample_user = "We're trying to figure out the right next step."
++    if len(sample_user) > 240:
++        sample_user = sample_user[:237].rstrip() + "…"
++    if topic:
++        ack = f"Thanks for flagging {topic}."
++    else:
++        ack = "Thanks for flagging that."
++    clarifier = "Want a direct answer, a quick explanation, or advice so I aim it right?"
++    assistant_text = f"{ack} {clarifier}".strip()
++    return {"user": sample_user, "assistant": assistant_text}
++
++
+ def _is_greet(dialog_meta: Optional[Dict[str, Any]]) -> bool:
+     """Robust greet detection across multiple meta fields."""
+     try:
+         meta = dialog_meta or {}
+         src = str(meta.get("source", "")).strip().lower()
+         seed = str(meta.get("seed_text", "")).strip().lower()
+         kind = str(meta.get("turn_kind", "")).strip().lower()
+         intent = str(meta.get("intent", "")).strip().lower()
+         greet_markers = {"greet", "ws_greet", "greet_fallback", "greeting", "welcome"}
+         return (src in greet_markers) or (seed in greet_markers or seed == "greet") \
+             or (kind in greet_markers) or (intent in {"greet", "opening"})
+     except Exception:
+         return False
+ 
+ 
+ def _first_name_from_profile(user_profile: Optional[Dict[str, Any]]) -> str:
+     """Best-effort: prefer first_name; else split 'name'/'full_name' on space; else ''."""
+     try:
+         p = user_profile or {}
+         fn = str(p.get("first_name") or "").strip()
+         if fn:
+             return fn
+         nm = str(p.get("name") or p.get("full_name") or "").strip()
+         if nm:
+             # Avoid greeting with emails or long identifiers
+@@ -391,57 +438,77 @@ def build_messages(
+             )
+     else:
+         dev_lines.insert(
+             0,
+             'For non-greet: you may start with a short human acknowledgement only if it adds clarity '
+             '(e.g., "Good question."). Avoid "Got it." unless explicitly asked.'
+         )
+ 
+     # Core dev guidance (applies to all turns)
+     dev_lines.extend([
+         "Never stall; respond in 1–2 sentences before any bullets.",
+         "Prefer concise sentences; use bullets only when listing true options/steps.",
+         "Avoid over-formality. Sound like a knowledgeable, friendly engineer.",
+         "If the user seems uncertain, ask one brief clarifying question, then proceed.",
+         "Keep empathy short and professional; do not overemote.",
+     ])
+     dev_lines.append(frame_instruction)
+ 
+     messages: List[Dict[str, str]] = [
+         {"role": "system", "content": "\n".join(sys_lines)},
+         {"role": "developer", "content": "\n".join(dev_lines)},
+     ]
+ 
+     # ---------- FEW-SHOTS (optional, before user) ----------
+     # Accept either {"pattern": "...", "assistant": "..."} or {"user":"...","assistant":"..."}
+-    if examples:
++    clarifier_style: Optional[str] = None
++    dynamic_examples: List[Dict[str, str]] = list(examples or [])
++    meta_for_examples = dict(dialog_meta or {})
++    move = (teacher_move or "").strip().lower()
++    band = str(meta_for_examples.get("confidence_band") or "").strip().lower()
++    clarify_variant = str(meta_for_examples.get("clarify_variant") or "").strip().lower()
++    existing_style = str(meta_for_examples.get("clarifier_style") or "").strip().lower()
++    if (
++        move == "clarify"
++        and (
++            existing_style == "clarifier_high_level"
++            or clarify_variant == "high_level"
++            or band == "low"
++        )
++    ):
++        clarifier_style = "clarifier_high_level"
++        meta_for_examples.setdefault("clarifier_style", clarifier_style)
++        dynamic_examples.insert(0, _build_clarifier_high_level_example(user_text, meta_for_examples))
++
++    if dynamic_examples:
+         count = 0
+-        for ex in examples:
++        for ex in dynamic_examples:
+             if count >= MAX_FEWSHOTS:
+                 break
+             user_ex = ex.get("user") or ex.get("pattern")
+             asst_ex = ex.get("assistant") or ex.get("assistant_target")
+             if user_ex and asst_ex:
+                 messages.append({"role": "user", "content": str(user_ex)})
+                 messages.append({"role": "assistant", "content": str(asst_ex)})
+                 count += 1
+ 
+     # ---------- USER MESSAGE ----------
+     messages.append({"role": "user", "content": str(user_text)})
+ 
+     # Hash for telemetry (full message roles/contents)
+     prompt_hash = _hash_prompt([f"{m['role']}:{m['content']}" for m in messages])
+ 
+     toggles: Dict[str, Any] = {}
+     for toggle_name in ("humor", "metaphor"):
+         value = _extract_toggle(cfg, toggle_name)
+         if value is not None:
+             toggles[toggle_name] = value
+ 
+     persona_trace = {
+         "intensity": intensity,
+         "quote": quote_meta,
+         "toggles": toggles,
+         "guardrail": _collect_guardrail_markers(dialog_meta),
++        "clarifier_style": clarifier_style,
+     }
+ 
+     return messages, teacher_move, prompt_hash, persona_trace
+diff --git a/app/services/providers/openai_provider.py b/app/services/providers/openai_provider.py
+index 69afe79553fc2fdfbc50c5bcc4a9e61c0f791e48..a17a208026c6e244c95a29a7711f49f4bb413fdb 100644
+--- a/app/services/providers/openai_provider.py
++++ b/app/services/providers/openai_provider.py
+@@ -1,31 +1,33 @@
+ 
+ # app/services/providers/openai_provider.py
+ from __future__ import annotations
+ import uuid
+ from typing import Any, Dict, Optional, Callable
+ 
++from ..nlg.humanize import humanize_text
++
+ MakeClient = Callable[[], Any]
+ 
+ def _limit_sentences(text: str, max_s: int) -> str:
+     """Best-effort cap on number of sentences without breaking formatting."""
+     try:
+         import re
+         parts = re.split(r'(?<=[.!?])\s+', (text or '').strip())
+         if max_s and max_s > 0 and len(parts) > max_s:
+             parts = parts[:max_s]
+         return ' '.join(p.strip() for p in parts if p.strip())
+     except Exception:
+         return text or ''
+ 
+ class OpenAIProvider:
+     """
+     Network-agnostic adapter.
+     - No SDK imports here.
+     - Reads model from cfg (openai_model), not environment.
+     - Requires a client factory to be passed in by the loader.
+     """
+     def __init__(self, cfg: Optional[Dict[str, Any]] = None, *, client_factory: Optional[MakeClient] = None) -> None:
+         self.cfg = cfg or {}
+         if client_factory is None:
+             raise RuntimeError("OpenAIProvider requires a client_factory")
+         self._client_factory = client_factory
+@@ -33,52 +35,82 @@ class OpenAIProvider:
+ 
+     @property
+     def model(self) -> str:
+         # default sane model if not configured explicitly
+         return (self.cfg.get("openai_model") or self.cfg.get("OPENAI_MODEL") or "gpt-4o-mini")
+ 
+     def _client_lazy(self):
+         if self._client is None:
+             self._client = self._client_factory()
+         return self._client
+ 
+     def new_turn_id(self) -> str:
+         return str(uuid.uuid4())
+ 
+     def generate_reply(self, prompt: str, persona: Dict[str, Any] | None = None,
+                        teacher_move: str | None = None, context: Dict[str, Any] | None = None) -> str:
+         who = (persona or {}).get("id") or "Chip"
+         pre = (context or {}).get("preamble") or ""
+         kb = (context or {}).get("kb") or []
+         kb_hint = f" Use the provided knowledge base items ({len(kb)} items) if relevant." if kb else ""
+ 
+         # Extra guidance from config (NLG knobs)
+         cfg = self.cfg or {}
+         verb = (cfg.get('gen_target_verbosity') or 'medium')
+         humor = float(cfg.get('gen_humor', 0.0))
+-        max_s = int(cfg.get('gen_max_sentences', 4))
++        base_max_s = int(cfg.get('gen_max_sentences', 4))
++        max_s = base_max_s
++        ctx = context or {}
++        move = (teacher_move or "").strip().lower()
++        ctx_band = str(ctx.get('confidence_band') or "").strip().lower() if ctx else ""
++        ctx_variant = str(ctx.get('clarify_variant') or "").strip().lower() if ctx else ""
++        ctx_style = str(ctx.get('clarifier_style') or "").strip().lower() if ctx else ""
++        dialog_meta = ctx.get('dialog_meta') if isinstance(ctx, dict) else None
++        if dialog_meta and isinstance(dialog_meta, dict):
++            if not ctx_band:
++                ctx_band = str(dialog_meta.get('confidence_band') or "").strip().lower()
++            if not ctx_variant:
++                ctx_variant = str(dialog_meta.get('clarify_variant') or "").strip().lower()
++            if not ctx_style:
++                ctx_style = str(dialog_meta.get('clarifier_style') or "").strip().lower()
++        clarifier_high_level = (
++            move == "clarify"
++            and (
++                ctx_style == "clarifier_high_level"
++                or ctx_variant == "high_level"
++                or ctx_band == "low"
++            )
++        )
++        if clarifier_high_level:
++            max_s = 2 if base_max_s <= 0 else min(base_max_s, 2)
++            if max_s <= 0:
++                max_s = 2
+         extra = f" Target verbosity: {verb}. Humor level: {humor:.2f} (0..1). Aim for no more than {max_s} sentences unless necessary."
+ 
+         system = (f"You are {who}, a concise, friendly Pure Storage virtual systems engineer. "
+                   f"Speak conversationally and stay on-brand.{kb_hint}{extra}\n{pre}").strip()
+ 
+         messages = [
+             {"role": "system", "content": system},
+             {"role": "user", "content": (prompt or "Hello")},
+         ]
+ 
+         temperature = float(cfg.get('gen_temperature', 0.3))
+         top_p = float(cfg.get('gen_top_p', 1.0))
+ 
+         resp = self._client_lazy().chat.completions.create(
+             model=self.model,
+             messages=messages,
+             temperature=temperature,
+             top_p=top_p,
+             stream=False,
+         )
+         out = (resp.choices[0].message.content or "").strip()
+         kb = (context or {}).get('kb') or []
+         if isinstance(kb, list):
+             out = f"{out} [KB:{len(kb)}]"
++        if clarifier_high_level:
++            out = humanize_text(out)
+         out = _limit_sentences(out, max_s)
++        if clarifier_high_level:
++            out = humanize_text(out)
+         return out
 diff --git a/app/services/streaming.py b/app/services/streaming.py
-index d85cf02a55a46ba11ff9b3ad5e28310e5f3d40fa..b7e8d919001dbc9690853a806d097acfbc28230c 100644
+index b7e8d919001dbc9690853a806d097acfbc28230c..e3cb2fdf68162d70460fa241496adf5498efdc9d 100644
 --- a/app/services/streaming.py
 +++ b/app/services/streaming.py
-@@ -1234,50 +1234,76 @@ def _collect_policy_chips(policy: Optional[Dict[str, Any]]) -> List[str]:
-     raw = policy.get("chips") if isinstance(policy, dict) else None
-     if not raw:
-         return []
-     if isinstance(raw, (list, tuple, set)):
-         chips = list(raw)
-     else:
-         chips = [raw]
-     cap = _suggestion_cap()
-     cleaned: List[str] = []
-     seen = set()
-     for item in chips:
-         text = _normalize_suggestion_item(item)
-         if not text:
-             continue
-         if len(text) > 50:
-             text = text[:50].rstrip()
-         if not text or text in seen:
-             continue
-         cleaned.append(text)
-         seen.add(text)
-         if len(cleaned) >= cap:
-             break
-     return cleaned
+@@ -676,57 +676,62 @@ def _dialog_verbosity(meta: Optional[Dict[str, Any]]) -> str:
  
- 
-+def summarize_policy_metadata(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-+    """Extract lightweight policy hints for downstream consumers."""
-+    summary: Dict[str, Any] = {}
-+    chips = _collect_policy_chips(policy)
-+    if chips:
-+        summary["policy_chips"] = chips
-+
-+    band: Optional[str] = None
-+    if isinstance(policy, dict):
-+        raw_band = policy.get("confidence_band")
-+        if isinstance(raw_band, str) and raw_band.strip():
-+            band = raw_band.strip()
-+        else:
-+            goal_meta = policy.get("goal_metadata")
-+            if isinstance(goal_meta, dict):
-+                goal_band = goal_meta.get("planner_confidence_band") or goal_meta.get(
-+                    "confidence_band"
-+                )
-+                if isinstance(goal_band, str) and goal_band.strip():
-+                    band = goal_band.strip()
-+    if band:
-+        summary["policy_confidence_band"] = band
-+        summary.setdefault("planner_confidence_band", band)
-+    return summary
-+
-+
- def _coerce_bool_flag(value: Any) -> Optional[bool]:
-     if isinstance(value, bool):
-         return value
-     if value is None:
+ def _extract_topic(meta: Optional[Dict[str, Any]]) -> Optional[str]:
+     if not isinstance(meta, dict):
          return None
-     if isinstance(value, str):
-         lowered = value.strip().lower()
-         if lowered in {"true", "1", "yes", "on"}:
-             return True
-         if lowered in {"false", "0", "no", "off"}:
-             return False
+     topic: Optional[str] = None
+     nlu_meta = meta.get("nlu")
+     if isinstance(nlu_meta, dict):
+         topic = nlu_meta.get("topic")
+     if not topic:
+         dialog_nlu = meta.get(_DIALOG_NLU_KEY)
+         if isinstance(dialog_nlu, dict):
+             topic = dialog_nlu.get("topic")
+     if not topic:
          return None
      try:
-         return bool(value)
+         cleaned = str(topic or "").strip()
      except Exception:
-         return None
+         cleaned = ""
+     cleaned = cleaned.rstrip("?.! ")
+     return cleaned or None
  
  
- def _coerce_float(value: Any) -> Optional[float]:
-     if value is None:
-         return None
-     if isinstance(value, (int, float)):
-         return float(value)
-     if isinstance(value, str):
-         stripped = value.strip()
-@@ -1520,56 +1546,91 @@ def make_assistant_frames(seed_text: str,
-     ALWAYS returns a frames list that includes at least:
-         - one 'assistant_chunk' (with either model text OR a safe fallback), and
-         - one 'assistant_end'.
-     When broadcast_immediately is True (default) frames are broadcast to the WS bus.
-     """
-     cfg = cfg or db.get_config()
-     meta = dict(meta or {})
-     if session_id:
-         meta.setdefault("session_id", session_id)
-         meta.setdefault("sid", session_id)
-     turn_id = _allocate_turn_id(force_turn_id)
- 
-     context = telemetry or _create_nlu_context(
-         turn_id=turn_id,
-         session_id=session_id,
-         correlation_user_msg_id=correlation_user_msg_id,
-         meta=meta if isinstance(meta, dict) else {},
-         settings=SETTINGS,
-         cfg=cfg,
-     )
-     context.turn_id = str(turn_id)
- 
-     context.log_start(seed_text, meta=meta if isinstance(meta, dict) else {})
- 
-     try:
--        meta, classified_labels, classified_policy = prepare_turn_metadata(
--            seed_text,
--            meta,
--            cfg=cfg,
--            telemetry=context,
--        )
-+        classified_labels: Dict[str, Any]
-+        classified_policy: Dict[str, Any]
-+        skip_prepare = False
-+        existing_policy: Optional[Dict[str, Any]] = None
-+        existing_labels: Optional[Dict[str, Any]] = None
-+
-+        if isinstance(meta, dict):
-+            raw_policy = meta.get(_DIALOG_POLICY_KEY) or meta.get("policy")
-+            if isinstance(raw_policy, dict):
-+                existing_policy = dict(raw_policy)
-+            raw_labels = meta.get(_DIALOG_NLU_KEY)
-+            if not isinstance(raw_labels, dict):
-+                raw_labels = meta.get("nlu") if isinstance(meta.get("nlu"), dict) else None
-+            if isinstance(raw_labels, dict):
-+                existing_labels = dict(raw_labels)
-+            if existing_policy is not None and existing_labels is not None:
-+                skip_prepare = True
-+                meta[_DIALOG_POLICY_KEY] = dict(existing_policy)
-+                if isinstance(meta.get("nlu"), dict):
-+                    try:
-+                        meta["nlu"].update(existing_labels)
-+                    except Exception:
-+                        meta["nlu"] = dict(existing_labels)
-+                else:
-+                    meta["nlu"] = dict(existing_labels)
-+                meta[_DIALOG_NLU_KEY] = dict(existing_labels)
-+
-+        if not skip_prepare:
-+            meta, classified_labels, classified_policy = prepare_turn_metadata(
-+                seed_text,
-+                meta,
-+                cfg=cfg,
-+                telemetry=context,
-+            )
+ def _build_clarify_question(seed_text: str, meta: Optional[Dict[str, Any]]) -> str:
+     topic = _extract_topic(meta)
+     verbosity = _dialog_verbosity(meta)
++    text: str
+     if topic:
+         if verbosity == "brief":
+-            return f"What part of {topic} should we focus on?"
+-        return f"What part of {topic} should we focus on so I can help?"
+-    if verbosity == "brief":
+-        return "What should we clarify so I can help?"
+-    return "What detail should we clarify so I can point you the right way?"
++            text = f"What part of {topic} should we focus on?"
 +        else:
-+            classified_labels = dict(existing_labels or {})
-+            classified_policy = dict(existing_policy or {})
-+            if context:
-+                context.log_intent(classified_labels)
-+                context.log_entities(classified_labels.get("entities"))
-+                context.log_guardrail(decision="allow")
-         skip_legacy = _should_skip_legacy(meta)
- 
-         action = _normalize_action(meta)
-         if isinstance(meta, dict):
-             meta['action'] = action
-             meta[_DIALOG_ACTION_KEY] = action
- 
-         try:
-             source = str(meta.get("source", "") or "").strip().lower()
-         except Exception:
-             source = ""
-         try:
-             is_greet = str(seed_text or "").strip().lower() == "greet"
-         except Exception:
-             is_greet = False
-         if not is_greet and source:
-             is_greet = source in {"greet", "ws_greet", "greet_fallback"}
- 
-         fallback_line = str(cfg.get("assistant_fallback_line") or "Hi! I’m ready to help.")
- 
-         def _cfg_flag(key: str, default: bool) -> bool:
-             val = meta.get(key)
-             if val is None:
-                 val = cfg.get(key, default)
-             try:
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index fa1a55c415bd88ac12dceecb577578dd8841d3f1..62cadcd075a9e067a88a1e31c252794d29ebe55b 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -13,51 +13,55 @@ from app.services.audio.raw_fallback import (
-     StreamStats as RawStreamStats,
-     raw_fallback_disabled,
-     coerce_to_raw_config,
-     normalize_pcm_frame,
-     should_use_raw_fallback,
- )
- 
- from .schema_v1 import (
-     parse_client_json,
-     make_keepalive_ack,
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
- 
- # NEW: invoke LLM on final transcript
--from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
-+from app.services.streaming import (
-+    run_ws_user_turn,
-+    prepare_turn_metadata,
-+    summarize_policy_metadata,
-+)  # NEW
- from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
- from app.ws.barge import BargeState
- from app.ws.bus import bus
- from app.policy import nudges
- from app.session_state import (
-     note_partial,
-     note_utterance_end,
-     set_asr_stream_open,
-     set_phase,
-     set_recorder_active,
- )
- 
- # Optional admin emitter
- try:
-     from app.api_v1.admin import _emit as _admin_emit
- except Exception:
-     _admin_emit = None
- 
- 
- ACTIVE_WS: dict[str, dict[str, Any]] = {}
- ACTIVE_WS_LOCK = asyncio.Lock()
- 
- WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
- try:
-     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
-@@ -168,50 +172,107 @@ def _emit_admin_nlu_event(text: str,
-     if isinstance(entities, dict):
-         slots_dict.setdefault("entities", _safe_copy(entities))
-     elif isinstance(entities, list):
-         slots_dict.setdefault("entities", _safe_copy(entities))
-     products = dialog_nlu.get("products")
-     if isinstance(products, list):
-         slots_dict.setdefault("products", list(products))
- 
-     payload = {
-         "event": "nlu",
-         "intent": dialog_nlu.get("intent"),
-         "confidence": dialog_nlu.get("confidence"),
-         "slots": slots_dict,
-         "text": text,
-         "session_id": sid,
-     }
-     if isinstance(universal, dict):
-         payload["universal"] = _safe_copy(universal)
- 
-     try:
-         admin_cb("nlu", **payload)
-     except Exception:
-         pass
- 
- 
-+def _build_meta_overrides(prepared_meta: Optional[Dict[str, Any]],
-+                          dialog_nlu: Optional[Dict[str, Any]],
-+                          universal: Optional[Dict[str, Any]],
-+                          policy: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-+    base = prepared_meta if isinstance(prepared_meta, dict) else {}
-+    overrides: Dict[str, Any] = {}
-+
-+    def _set(key: str, value: Any) -> None:
-+        if value is None:
-+            return
-+        try:
-+            overrides[key] = copy.deepcopy(value)
-+        except Exception:
-+            overrides[key] = value
-+
-+    if isinstance(dialog_nlu, dict) and dialog_nlu:
-+        _set("nlu", dialog_nlu)
-+        _set("dialog_nlu", dialog_nlu)
++            text = f"What part of {topic} should we focus on so I can help?"
 +    else:
-+        if isinstance(base.get("nlu"), dict):
-+            _set("nlu", base["nlu"])
-+        if isinstance(base.get("dialog_nlu"), dict):
-+            _set("dialog_nlu", base["dialog_nlu"])
-+
-+    if isinstance(universal, dict) and universal:
-+        _set("universal", universal)
-+    elif isinstance(base.get("universal"), dict):
-+        _set("universal", base["universal"])
-+
-+    for key in (
-+        "action",
-+        "dialog_action",
-+        "frame",
-+        "show_suggestions",
-+        "dialog_show_suggestions",
-+        "dialog_verbosity",
-+        "verbosity",
-+        "policy_chips",
-+        "policy_confidence_band",
-+        "planner_confidence_band",
-+    ):
-+        if key in base:
-+            _set(key, base[key])
-+
-+    policy_obj: Optional[Dict[str, Any]] = policy if isinstance(policy, dict) else None
-+    if policy_obj is None and isinstance(base.get("dialog_policy"), dict):
-+        policy_obj = base["dialog_policy"]
-+
-+    if policy_obj is not None:
-+        _set("dialog_policy", policy_obj)
-+        summary = summarize_policy_metadata(policy_obj)
-+        for key, value in summary.items():
-+            _set(key, value)
-+
-+    return overrides or None
-+
-+
- def _get_session_id(scope) -> str:
++        if verbosity == "brief":
++            text = "What should we clarify so I can help?"
++        else:
++            text = "What detail should we clarify so I can point you the right way?"
++    return humanize_text(text)
+ 
+ 
+ def _collapse_whitespace(text: str) -> str:
+     return re.sub(r"\s+", " ", text or "").strip()
+ 
+ 
+ def _limit_sentences(text: str, max_sentences: int) -> str:
+     collapsed = _collapse_whitespace(text)
+     if not collapsed:
+         return ""
+     parts = _SENTENCE_SPLIT_RE.split(collapsed)
+     if not parts:
+         return collapsed
+     limited: List[str] = []
+     for part in parts:
+         candidate = part.strip()
+         if not candidate:
+             continue
+         limited.append(candidate)
+         if len(limited) >= max_sentences:
+             break
+     if not limited:
+         return collapsed
+     return " ".join(limited)
+ 
+@@ -786,51 +791,51 @@ def _format_brief_answer(text: str, meta: Optional[Dict[str, Any]]) -> str:
+     return _truncate_chars(limited, max_chars)
+ 
+ 
+ def _format_next_actions(text: str, meta: Optional[Dict[str, Any]]) -> str:
+     verbosity = _dialog_verbosity(meta)
+     max_items = 2 if verbosity == "brief" else 3
+     max_chars = 90 if verbosity == "brief" else 120
+     items = _extract_list_items(text)
+     if not items:
+         return ""
+     trimmed: List[str] = []
+     for item in items[:max_items]:
+         cleaned = _truncate_chars(item, max_chars)
+         trimmed.append(f"• {cleaned}")
+     if verbosity == "brief":
+         return "\n".join(trimmed)
+     return "Next actions:\n" + "\n".join(trimmed)
+ 
+ 
+ def _apply_action_shape(action: str,
+                         text: str,
+                         meta: Optional[Dict[str, Any]]) -> str:
+     if not text:
+         return text
+     normalized = (action or "").strip().lower()
+-    if normalized in {"give_brief_answer", "high_level"}:
++    if normalized in {"give_brief_answer", "high_level", "clarify"}:
+         return _format_brief_answer(text, meta)
+     if normalized == "offer_steps":
+         return _format_offer_steps(text, meta)
+     if normalized == "summarize_next_actions":
+         return _format_next_actions(text, meta)
+     return text
+ 
+ 
+ def _call_foundation_llm(messages: List[Dict[str, str]],
+                          cfg: Dict[str, Any],
+                          telemetry: Optional[NluLoggingContext] = None) -> Tuple[str, Dict[str, Any]]:
+     client = make_openai_client()
+     model = (
+         cfg.get("openai_model")
+         or cfg.get("OPENAI_MODEL")
+         or os.getenv("OPENAI_MODEL")
+         or "gpt-4o-mini"
+     )
+     temperature = float(cfg.get("gen_temperature", 0.3))
+     top_p = float(cfg.get("gen_top_p", 1.0))
+     payload = [dict(m) for m in messages]
+     prompt_tokens_estimate = 0
+     for msg in payload:
+         content = msg.get("content")
+         if isinstance(content, str):
+@@ -1714,69 +1719,90 @@ def _make_foundation_frames(seed_text: str,
+                             action: Optional[str] = None,
+                             broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
+     if turn_id is None:
+         turn_id = _allocate_turn_id(force_turn_id)
+     turn_id = str(turn_id)
+ 
+     if telemetry is None:
+         telemetry = _create_nlu_context(
+             turn_id=turn_id,
+             session_id=session_id,
+             correlation_user_msg_id=correlation_user_msg_id,
+             meta=meta,
+             settings=SETTINGS,
+             cfg=cfg,
+         )
+         telemetry.turn_id = turn_id
+         telemetry.log_start(seed_text, meta=meta)
+     else:
+         telemetry.turn_id = turn_id
+     store = PersonaStore()
+     persona = PersonaManager(store).get_active()
+     dialog_meta = dict(meta or {})
+ 
+     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
+     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store) or {}
++    if isinstance(policy, dict):
++        for key in ("confidence_band", "clarify_variant"):
++            value = policy.get(key)
++            existing = meta.get(key) if isinstance(meta, dict) else None
++            chosen = existing or value
++            if value is not None and existing in (None, ""):
++                meta[key] = value
++                chosen = value
++            if chosen is not None and key not in dialog_meta:
++                dialog_meta[key] = chosen
+ 
+     telemetry.log_entities(nlu_result.get("entities"))
+ 
      try:
-         raw = (scope.get("query_string") or b"").decode("utf-8", "ignore")
-         if raw:
-             for pair in raw.split("&"):
-                 if not pair or "=" not in pair:
-                     continue
-                 k, v = pair.split("=", 1)
-                 if k == "session_id":
-                     return v or "default"
+         nlu_meta = dict(nlu_result)
      except Exception:
-         pass
-     return "default"
+         nlu_meta = {}
+     else:
+         meta["nlu"] = nlu_meta
+         meta[_DIALOG_NLU_KEY] = dict(nlu_meta)
  
+     provided_action: Optional[str] = None
+     if action is not None:
+         try:
+             provided_action = str(action or "").strip().lower()
+         except Exception:
+             provided_action = None
+     normalized_action = provided_action or _normalize_action(meta)
+     policy_move = _policy_action(policy)
++    clarifier_style: Optional[str] = None
++    band_flag = str(dialog_meta.get('confidence_band') or meta.get('confidence_band') or "").strip().lower()
++    variant_flag = str(dialog_meta.get('clarify_variant') or meta.get('clarify_variant') or "").strip().lower()
++    existing_style = str(meta.get('clarifier_style') or dialog_meta.get('clarifier_style') or "").strip().lower()
++    if policy_move == "clarify" and (band_flag == "low" or variant_flag == "high_level"):
++        clarifier_style = "clarifier_high_level"
++    elif existing_style == "clarifier_high_level":
++        clarifier_style = existing_style
++    if clarifier_style:
++        meta['clarifier_style'] = clarifier_style
++        dialog_meta['clarifier_style'] = clarifier_style
+     if not provided_action and policy_move and not normalized_action:
+         normalized_action = str(policy_move or "").strip().lower() or normalized_action
+     if normalized_action:
+         meta['action'] = normalized_action
+         meta[_DIALOG_ACTION_KEY] = normalized_action
+     if _DIALOG_VERBOSITY_KEY not in meta:
+         meta[_DIALOG_VERBOSITY_KEY] = cfg.get('gen_target_verbosity', 'medium')
+     if 'verbosity' not in meta:
+         meta['verbosity'] = meta[_DIALOG_VERBOSITY_KEY]
+     elif _DIALOG_VERBOSITY_KEY not in meta:
+         meta[_DIALOG_VERBOSITY_KEY] = meta['verbosity']
  
- def _has_deepgram_key() -> bool:
-     return bool((os.getenv("DEEPGRAM_API_KEY") or "").strip())
+     def _coerce_dialog_flag(value: Any) -> Optional[bool]:
+         if value is None:
+             return None
+         if isinstance(value, str):
+             lowered = value.strip().lower()
+             if lowered in {"1", "true", "yes", "on"}:
+                 return True
+             if lowered in {"0", "false", "no", "off"}:
+                 return False
+             return None
+         try:
+             return bool(value)
+         except Exception:
+@@ -2147,51 +2173,72 @@ def _make_legacy_frames(seed_text: str,
+             kb = kb_search(seed_text, top_k=int(cfg.get('kb_top_k', 3)))
+     except Exception:
+         kb = []
  
+     prompt = _build_prompt(seed_text, persona, kb, teacher_move)
+     try:
+         prompt_hash = hashlib.sha256(prompt.encode('utf-8')).hexdigest()[:12]
+     except Exception:
+         prompt_hash = None
+     telemetry.log_prompt_summary(messages=None, prompt_hash=prompt_hash, kb_count=len(kb))
  
- def _env_truth(name: str, default: bool = False) -> bool:
-     v = (os.getenv(name) or "").strip().lower()
-     if not v:
-         return default
-     return v in ("1", "true", "yes", "on")
+     reply: str
+     error_note: Optional[str] = None
+     use_llm = True
  
-@@ -459,80 +520,85 @@ async def _pump_dg_to_client(
-                             pass
-                     if on_turn_finish:
-                         try:
-                             on_turn_finish(
-                                 turn_id_for_event, "provider_final", False, len(text)
-                             )
-                         except Exception:
-                             pass
-                     await _ws_send_json(send, make_utterance_end(turn_id_for_event))
-                     try:
-                         note_utterance_end(sid)
-                     except Exception:
-                         pass
-                     try:
-                         set_recorder_active(sid, False)
-                     except Exception:
-                         pass
-                     try:
-                         _admin_emit and _admin_emit("asr:final", session_id=sid)
-                     except Exception:
-                         pass
+     if use_llm:
+         try:
+             provider = get_provider(cfg)
+         except Exception as e:
+             provider = None
+             error_note = "llm_not_available"
+             _admin_emit("llm_provider_error", error=e.__class__.__name__)
+             telemetry.log_error("llm_not_available", str(e))
+         if provider is not None:
+             try:
+-                reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
++                provider_context: Dict[str, Any] = {'kb': kb}
++                for key in ('confidence_band', 'clarify_variant', 'clarifier_style'):
++                    if isinstance(meta, dict):
++                        value = meta.get(key)
++                    else:
++                        value = None
++                    if value:
++                        provider_context[key] = value
++                if isinstance(meta, dict):
++                    dialog_subset = {
++                        key: meta.get(key)
++                        for key in ('confidence_band', 'clarify_variant', 'clarifier_style')
++                        if meta.get(key)
++                    }
++                    if dialog_subset:
++                        provider_context['dialog_meta'] = dialog_subset
++                reply = provider.generate_reply(
++                    prompt,
++                    persona=persona,
++                    teacher_move=teacher_move,
++                    context=provider_context,
++                )
+             except Exception as e:
+                 error_note = f"llm_error:{e.__class__.__name__}"
+                 reply = _LEGACY_WARMUP_LINE
+                 _admin_emit("llm_generate_error", error=e.__class__.__name__)
+                 telemetry.log_error("llm_generate_error", str(e))
+         else:
+             reply = "Hi! I’m ready to help."
+     else:
+         reply = _LEGACY_WARMUP_LINE
  
-                     if text:
-                         dialog_nlu_pre: Dict[str, Any] = {}
-                         universal_pre: Dict[str, Any] = {}
-+                        policy_pre: Dict[str, Any] = {}
-+                        prepared_meta: Dict[str, Any] = {}
-                         meta_stub = {"source": "user_ws", "channel": "ws"}
-                         try:
--                            prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
-+                            prepared_meta_raw, dialog_nlu_raw, policy_raw = prepare_turn_metadata(
-                                 text, dict(meta_stub)
-                             )
--                            if isinstance(dialog_nlu_raw, dict):
--                                dialog_nlu_pre = dict(dialog_nlu_raw)
--                            if isinstance(prepared_meta, dict):
-+                            if isinstance(prepared_meta_raw, dict):
-+                                prepared_meta = dict(prepared_meta_raw)
-                                 raw_universal = prepared_meta.get("universal") or {}
-                                 if isinstance(raw_universal, dict):
-                                     universal_pre = _ensure_universal_fields(raw_universal)
-+                            if isinstance(dialog_nlu_raw, dict):
-+                                dialog_nlu_pre = dict(dialog_nlu_raw)
-+                            if isinstance(policy_raw, dict):
-+                                policy_pre = dict(policy_raw)
-                         except Exception:
-+                            prepared_meta = {}
-                             dialog_nlu_pre = {}
-                             universal_pre = {}
-+                            policy_pre = {}
+     fallback_fired = False
+     fallback_reason: Optional[str] = None
  
-                         _emit_admin_nlu_event(
-                             text,
-                             sid,
-                             dialog_nlu=dialog_nlu_pre,
-                             universal=universal_pre,
-                         )
+     if use_llm:
+         if fallback_on_error and error_note:
+             reply = fallback_line
+             fallback_fired = True
+             fallback_reason = error_note
+         elif fallback_on_empty and not (reply or "").strip():
+             reply = fallback_line
+             fallback_fired = True
+             fallback_reason = "empty"
  
--                        meta_overrides: Optional[Dict[str, Any]] = None
--                        if dialog_nlu_pre or universal_pre:
--                            meta_overrides = {}
--                            if dialog_nlu_pre:
--                                meta_overrides["nlu"] = dict(dialog_nlu_pre)
--                                meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
--                            if universal_pre:
--                                meta_overrides["universal"] = dict(universal_pre)
-+                        meta_overrides = _build_meta_overrides(
-+                            prepared_meta,
-+                            dialog_nlu_pre,
-+                            universal_pre,
-+                            policy_pre,
-+                        )
+     safe_reply = _scrub_debug_stamps(reply)
  
-                         if turn_id_for_event in completed_llm_turns:
-                             with contextlib.suppress(Exception):
-                                 _jlog(
-                                     "llm_turn_skip_duplicate",
-                                     sid=sid,
-                                     turn_id=turn_id_for_event,
-                                 )
-                         else:
-                             completed_llm_turns.add(turn_id_for_event)
- 
-                             async def _bg_turn(meta_payload=meta_overrides):
-                                 try:
-                                     await asyncio.to_thread(
-                                         run_ws_user_turn,
-                                         sid,
-                                         text,
-                                         None,
-                                         meta_overrides=meta_payload,
-                                     )
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-                                         await _ws_send_json(
-                                             send,
-                                             make_error(
-@@ -1649,79 +1715,84 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                             "UserUtterance",
-                             "UserTextMessage",
-                         ):
-                             text = (obj.get("text") or "").strip()
-                             if not text:
-                                 continue
-                             if len(text) > 8000:
-                                 await _ws_send_json(
-                                     send, make_error("payload_too_large", "user_text")
-                                 )
-                                 continue
-                             corr = obj.get("correlation_user_msg_id") or obj.get(
-                                 "userMsgId"
-                             )
-                             _jlog(
-                                 "ws_user_msg_recv",
-                                 sid=sid,
-                                 text_len=len(text),
-                                 corr=bool(corr),
-                             )
- 
-                             nudges.cancel_idle_timers(sid)
- 
-                             dialog_nlu_pre: Dict[str, Any] = {}
-                             universal_pre: Dict[str, Any] = {}
-+                            policy_pre: Dict[str, Any] = {}
-+                            prepared_meta: Dict[str, Any] = {}
-                             try:
--                                prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
-+                                prepared_meta_raw, dialog_nlu_raw, policy_raw = prepare_turn_metadata(
-                                     text, {"source": "user_ws", "channel": "ws"}
-                                 )
--                                if isinstance(dialog_nlu_raw, dict):
--                                    dialog_nlu_pre = dict(dialog_nlu_raw)
--                                if isinstance(prepared_meta, dict):
-+                                if isinstance(prepared_meta_raw, dict):
-+                                    prepared_meta = dict(prepared_meta_raw)
-                                     raw_universal = prepared_meta.get("universal") or {}
-                                     if isinstance(raw_universal, dict):
-                                         universal_pre = _ensure_universal_fields(raw_universal)
-+                                if isinstance(dialog_nlu_raw, dict):
-+                                    dialog_nlu_pre = dict(dialog_nlu_raw)
-+                                if isinstance(policy_raw, dict):
-+                                    policy_pre = dict(policy_raw)
-                             except Exception:
-+                                prepared_meta = {}
-                                 dialog_nlu_pre = {}
-                                 universal_pre = {}
-+                                policy_pre = {}
- 
-                             _emit_admin_nlu_event(
-                                 text,
-                                 sid,
-                                 dialog_nlu=dialog_nlu_pre,
-                                 universal=universal_pre,
-                             )
- 
--                            meta_overrides: Optional[Dict[str, Any]] = None
--                            if dialog_nlu_pre or universal_pre:
--                                meta_overrides = {}
--                                if dialog_nlu_pre:
--                                    meta_overrides["nlu"] = dict(dialog_nlu_pre)
--                                    meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
--                                if universal_pre:
--                                    meta_overrides["universal"] = dict(universal_pre)
-+                            meta_overrides = _build_meta_overrides(
-+                                prepared_meta,
-+                                dialog_nlu_pre,
-+                                universal_pre,
-+                                policy_pre,
-+                            )
- 
-                             async def _bg_user():
-                                 try:
-                                     await asyncio.to_thread(
-                                         run_ws_user_turn,
-                                         sid,
-                                         text,
-                                         corr,
-                                         meta_overrides=meta_overrides,
-                                     )
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-                                         await _ws_send_json(
-                                             send,
-                                             make_error(
-                                                 "user_fail", e.__class__.__name__
-                                             ),
-                                         )
- 
-                             asyncio.create_task(_bg_user())
- 
-                         elif t == "activity":
-                             kind = (obj.get("kind") or "").strip().lower()
-                             if kind in {"speech", "text", "chip"}:
-                                 nudges.cancel_idle_timers(sid)

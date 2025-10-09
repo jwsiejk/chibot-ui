@@ -698,13 +698,18 @@ def _extract_topic(meta: Optional[Dict[str, Any]]) -> Optional[str]:
 def _build_clarify_question(seed_text: str, meta: Optional[Dict[str, Any]]) -> str:
     topic = _extract_topic(meta)
     verbosity = _dialog_verbosity(meta)
+    text: str
     if topic:
         if verbosity == "brief":
-            return f"What part of {topic} should we focus on?"
-        return f"What part of {topic} should we focus on so I can help?"
-    if verbosity == "brief":
-        return "What should we clarify so I can help?"
-    return "What detail should we clarify so I can point you the right way?"
+            text = f"What part of {topic} should we focus on?"
+        else:
+            text = f"What part of {topic} should we focus on so I can help?"
+    else:
+        if verbosity == "brief":
+            text = "What should we clarify so I can help?"
+        else:
+            text = "What detail should we clarify so I can point you the right way?"
+    return humanize_text(text)
 
 
 def _collapse_whitespace(text: str) -> str:
@@ -808,7 +813,7 @@ def _apply_action_shape(action: str,
     if not text:
         return text
     normalized = (action or "").strip().lower()
-    if normalized in {"give_brief_answer", "high_level"}:
+    if normalized in {"give_brief_answer", "high_level", "clarify"}:
         return _format_brief_answer(text, meta)
     if normalized == "offer_steps":
         return _format_offer_steps(text, meta)
@@ -1736,6 +1741,16 @@ def _make_foundation_frames(seed_text: str,
 
     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store) or {}
+    if isinstance(policy, dict):
+        for key in ("confidence_band", "clarify_variant"):
+            value = policy.get(key)
+            existing = meta.get(key) if isinstance(meta, dict) else None
+            chosen = existing or value
+            if value is not None and existing in (None, ""):
+                meta[key] = value
+                chosen = value
+            if chosen is not None and key not in dialog_meta:
+                dialog_meta[key] = chosen
 
     telemetry.log_entities(nlu_result.get("entities"))
 
@@ -1755,6 +1770,17 @@ def _make_foundation_frames(seed_text: str,
             provided_action = None
     normalized_action = provided_action or _normalize_action(meta)
     policy_move = _policy_action(policy)
+    clarifier_style: Optional[str] = None
+    band_flag = str(dialog_meta.get('confidence_band') or meta.get('confidence_band') or "").strip().lower()
+    variant_flag = str(dialog_meta.get('clarify_variant') or meta.get('clarify_variant') or "").strip().lower()
+    existing_style = str(meta.get('clarifier_style') or dialog_meta.get('clarifier_style') or "").strip().lower()
+    if policy_move == "clarify" and (band_flag == "low" or variant_flag == "high_level"):
+        clarifier_style = "clarifier_high_level"
+    elif existing_style == "clarifier_high_level":
+        clarifier_style = existing_style
+    if clarifier_style:
+        meta['clarifier_style'] = clarifier_style
+        dialog_meta['clarifier_style'] = clarifier_style
     if not provided_action and policy_move and not normalized_action:
         normalized_action = str(policy_move or "").strip().lower() or normalized_action
     if normalized_action:
@@ -2169,7 +2195,28 @@ def _make_legacy_frames(seed_text: str,
             telemetry.log_error("llm_not_available", str(e))
         if provider is not None:
             try:
-                reply = provider.generate_reply(prompt, persona=persona, teacher_move=teacher_move, context={'kb': kb})
+                provider_context: Dict[str, Any] = {'kb': kb}
+                for key in ('confidence_band', 'clarify_variant', 'clarifier_style'):
+                    if isinstance(meta, dict):
+                        value = meta.get(key)
+                    else:
+                        value = None
+                    if value:
+                        provider_context[key] = value
+                if isinstance(meta, dict):
+                    dialog_subset = {
+                        key: meta.get(key)
+                        for key in ('confidence_band', 'clarify_variant', 'clarifier_style')
+                        if meta.get(key)
+                    }
+                    if dialog_subset:
+                        provider_context['dialog_meta'] = dialog_subset
+                reply = provider.generate_reply(
+                    prompt,
+                    persona=persona,
+                    teacher_move=teacher_move,
+                    context=provider_context,
+                )
             except Exception as e:
                 error_note = f"llm_error:{e.__class__.__name__}"
                 reply = _LEGACY_WARMUP_LINE

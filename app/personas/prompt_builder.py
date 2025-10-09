@@ -234,6 +234,53 @@ def _coerce_str_map(obj: Any) -> Dict[str, Any]:
     return obj if isinstance(obj, dict) else {}
 
 
+def _extract_topic(meta: Optional[Dict[str, Any]]) -> str:
+    """Best effort topic extraction from dialog metadata."""
+    if not isinstance(meta, dict):
+        return ""
+    topic: Optional[str] = None
+    for key in ("topic",):
+        raw = meta.get(key)
+        if raw:
+            topic = raw
+            break
+    if not topic:
+        for key in ("nlu", "dialog_nlu"):
+            section = meta.get(key)
+            if isinstance(section, dict) and section.get("topic"):
+                topic = section.get("topic")
+                break
+    if not topic:
+        return ""
+    try:
+        cleaned = str(topic or "").strip()
+    except Exception:
+        cleaned = ""
+    return cleaned.rstrip("?.! ")
+
+
+def _build_clarifier_high_level_example(
+    user_text: str, meta: Optional[Dict[str, Any]]
+) -> Dict[str, str]:
+    """Construct a clarifier-high-level few-shot example."""
+    topic = _extract_topic(meta)
+    try:
+        sample_user = str(user_text or "").strip()
+    except Exception:
+        sample_user = ""
+    if not sample_user:
+        sample_user = "We're trying to figure out the right next step."
+    if len(sample_user) > 240:
+        sample_user = sample_user[:237].rstrip() + "…"
+    if topic:
+        ack = f"Thanks for flagging {topic}."
+    else:
+        ack = "Thanks for flagging that."
+    clarifier = "Want a direct answer, a quick explanation, or advice so I aim it right?"
+    assistant_text = f"{ack} {clarifier}".strip()
+    return {"user": sample_user, "assistant": assistant_text}
+
+
 def _is_greet(dialog_meta: Optional[Dict[str, Any]]) -> bool:
     """Robust greet detection across multiple meta fields."""
     try:
@@ -413,9 +460,28 @@ def build_messages(
 
     # ---------- FEW-SHOTS (optional, before user) ----------
     # Accept either {"pattern": "...", "assistant": "..."} or {"user":"...","assistant":"..."}
-    if examples:
+    clarifier_style: Optional[str] = None
+    dynamic_examples: List[Dict[str, str]] = list(examples or [])
+    meta_for_examples = dict(dialog_meta or {})
+    move = (teacher_move or "").strip().lower()
+    band = str(meta_for_examples.get("confidence_band") or "").strip().lower()
+    clarify_variant = str(meta_for_examples.get("clarify_variant") or "").strip().lower()
+    existing_style = str(meta_for_examples.get("clarifier_style") or "").strip().lower()
+    if (
+        move == "clarify"
+        and (
+            existing_style == "clarifier_high_level"
+            or clarify_variant == "high_level"
+            or band == "low"
+        )
+    ):
+        clarifier_style = "clarifier_high_level"
+        meta_for_examples.setdefault("clarifier_style", clarifier_style)
+        dynamic_examples.insert(0, _build_clarifier_high_level_example(user_text, meta_for_examples))
+
+    if dynamic_examples:
         count = 0
-        for ex in examples:
+        for ex in dynamic_examples:
             if count >= MAX_FEWSHOTS:
                 break
             user_ex = ex.get("user") or ex.get("pattern")
@@ -442,6 +508,7 @@ def build_messages(
         "quote": quote_meta,
         "toggles": toggles,
         "guardrail": _collect_guardrail_markers(dialog_meta),
+        "clarifier_style": clarifier_style,
     }
 
     return messages, teacher_move, prompt_hash, persona_trace
