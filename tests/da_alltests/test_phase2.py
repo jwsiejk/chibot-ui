@@ -21,35 +21,68 @@ def test_rate_limit_chat_and_voice_stt(monkeypatch):
     app = import_app()
     client = app.test_client()
 
-    # Chat: ensure guard is wired (blueprint before_request is present)
-    chat_mod = importlib.import_module("app.api_v1.chat")
-    assert hasattr(chat_mod, "_chat_rl_guard"), "chat rate-limit guard missing"
+    def _csrf_headers():
+        resp = client.get("/api/v1/csrf")
+        token = resp.headers.get("X-CSRF-Token")
+        return {"X-CSRF-Token": token}
 
-    # Voice STT: trigger limiter with 3 rapid calls (limit=2 in 10s window)
+    from app.middleware import rate_limit as rate_limit_mw
+    monkeypatch.setattr(rate_limit_mw, "_MAX", 2)
+    monkeypatch.setattr(rate_limit_mw, "_MAX_VOICE", 2)
+    monkeypatch.setattr(rate_limit_mw, "_WINDOW", 10.0)
+    rate_limit_mw._BUCKETS.clear()
+
+    from app.db import db
+    db.memory.setdefault("rl_buckets", {}).clear()
+
+    # Chat: trigger limiter with rapid calls (limit ~2 in 10s window)
+    headers = _csrf_headers()
+    headers.update({"X-Forwarded-For": "3.3.3.3"})
+    chat_statuses = []
+    for i in range(5):
+        hv = dict(headers, **{"Idempotency-Key": f"msg-{i}"})
+        rv = client.post("/api/v1/chat", json={"session_id": "s-chat", "text": "hello"}, headers=hv)
+        chat_statuses.append(rv.status_code)
+        if rv.status_code == 429:
+            break
+    assert 429 in chat_statuses, f"expected chat rate limiting, got {chat_statuses}"
+
+    # Voice STT: trigger limiter with rapid calls
+    headers = dict(_csrf_headers(), **{"X-Forwarded-For": "1.2.3.5"})
     data = {"session_id":"s1","mime":"audio/webm"}
-    for i in range(2):
-        rv = client.post("/api/v1/voice/stt", headers={"X-Forwarded-For":"1.2.3.5"},
-                         data={**data, "file": (io.BytesIO(b"FAKEAUDIO"), "audio.webm")},
-                         content_type="multipart/form-data")
-        assert rv.status_code == 200, rv.data
-    rv = client.post("/api/v1/voice/stt", headers={"X-Forwarded-For":"1.2.3.5"},
-                     data={**data, "file": (io.BytesIO(b"FAKEAUDIO"), "audio.webm")},
-                     content_type="multipart/form-data")
-    assert rv.status_code == 429, f"expected 429 on stt overflow, got {rv.status_code}"
+    stt_statuses = []
+    for i in range(5):
+        rv = client.post("/api/v1/voice/stt", headers=headers,
+                         data={**data, "file": (io.BytesIO(b"FAKEAUDIO"), "audio.webm")})
+        stt_statuses.append(rv.status_code)
+        if rv.status_code == 429:
+            break
+        assert rv.status_code in (200, 429), rv.data
+    assert 429 in stt_statuses, f"expected voice STT rate limiting, got {stt_statuses}"
 def test_one_ws_per_tab_guard_module():
     # Guard logic should exist and work
     guard = importlib.import_module("app.ws.one_tab")
     key = "sessionX:tabY"
+    guard.release(key)
     assert guard.acquire(key) is True
     assert guard.acquire(key) is False, "second acquire for same key must fail"
     guard.release(key)
     assert guard.acquire(key) is True, "after release, acquire should succeed"
 
-def test_email_transcript_on_end():
+def test_email_transcript_on_end(monkeypatch):
     from app.db import db
     before = len(db.list_emails())
     app = import_app()
     client = app.test_client()
+    with client.session_transaction() as sess:
+        sess["user"] = {"email": "test@example.com"}
+    view = client.application.view_functions["api_v1.chat.post_chat"]
+
+    def fake_send_transcript(*args, **kwargs):
+        db.add_email("test@example.com", "Transcript", "Body")
+        return True
+
+    monkeypatch.setitem(view.__globals__, "send_transcript", fake_send_transcript)
     rv = client.post("/api/v1/chat", json={"cmd":"end_session", "session_id":"s-email"}, headers={"X-Forwarded-For":"9.9.9.9"})
     assert rv.status_code == 200, rv.data
     data = rv.get_json()

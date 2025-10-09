@@ -665,11 +665,10 @@ def test_make_assistant_frames_allows_opt_out(monkeypatch):
 def test_post_chat_emits_single_chunk(monkeypatch):
     _stub_config(monkeypatch)
 
-    import app.api_v1.chat as chat_api
+    client = _test_client()
+    view = client.application.view_functions["api_v1.chat.post_chat"]
 
-    monkeypatch.setattr(chat_api, "check_now", lambda *a, **k: None)
-    monkeypatch.setattr(chat_api, "classify_turn", lambda *a, **k: {"intent": "ask", "verbosity": "normal", "show_suggestions": False})
-    monkeypatch.setattr(chat_api, "pick_dialog_policy", lambda *a, **k: {"action": "answer", "verbosity": "normal", "show_suggestions": False})
+    monkeypatch.setitem(view.__globals__, "check_now", lambda *a, **k: None)
 
     calls = {}
 
@@ -685,10 +684,9 @@ def test_post_chat_emits_single_chunk(monkeypatch):
     def fake_schedule_frames(session_id, frames, **kwargs):
         emitted.extend(frames)
 
-    monkeypatch.setattr(chat_api, "make_assistant_frames", fake_make_frames)
-    monkeypatch.setattr(chat_api, "schedule_frames", fake_schedule_frames)
+    monkeypatch.setitem(view.__globals__, "make_assistant_frames", fake_make_frames)
+    monkeypatch.setitem(view.__globals__, "schedule_frames", fake_schedule_frames)
 
-    client = _test_client()
     token = _csrf_token(client)
 
     resp = client.post(
@@ -705,11 +703,10 @@ def test_post_chat_emits_single_chunk(monkeypatch):
 def test_chat_entry_emits_single_chunk(monkeypatch):
     _stub_config(monkeypatch)
 
-    import app.api_v1.chat as chat_api
+    client = _test_client()
+    view = client.application.view_functions["api_v1.chat.chat_entry"]
 
-    monkeypatch.setattr(chat_api, "check_now", lambda *a, **k: None)
-    monkeypatch.setattr(chat_api, "classify_turn", lambda *a, **k: {"intent": "ask", "verbosity": "normal", "show_suggestions": False})
-    monkeypatch.setattr(chat_api, "pick_dialog_policy", lambda *a, **k: {"action": "answer", "verbosity": "normal", "show_suggestions": False})
+    monkeypatch.setitem(view.__globals__, "check_now", lambda *a, **k: None)
 
     calls = {}
 
@@ -725,10 +722,9 @@ def test_chat_entry_emits_single_chunk(monkeypatch):
     def fake_schedule_frames(session_id, frames, **kwargs):
         emitted.extend(frames)
 
-    monkeypatch.setattr(chat_api, "make_assistant_frames", fake_make_frames)
-    monkeypatch.setattr(chat_api, "schedule_frames", fake_schedule_frames)
+    monkeypatch.setitem(view.__globals__, "make_assistant_frames", fake_make_frames)
+    monkeypatch.setitem(view.__globals__, "schedule_frames", fake_schedule_frames)
 
-    client = _test_client()
     token = _csrf_token(client)
 
     resp = client.post(
