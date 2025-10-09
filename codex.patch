@@ -1,272 +1,399 @@
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index 2594ed2034728292d122493fcf8a2b20bce8fd14..caaba52242a2f5a63f3e8196854885a3768027be 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -149,50 +149,52 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
+     Audio transport parameters must be in the URL query for Deepgram's v1/listen.
+     For **containerized Opus** (OGG/WebM), we must NOT send encoding, sample_rate, or channels.
+     """
+     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
+ 
+     # Detect containerized Opus from overrides (nested under _transport)
+     containerized = False
+     try:
+         if overrides and isinstance(overrides.get("_transport"), dict):
+             containerized = bool(overrides["_transport"].get("containerized_opus"))
+     except Exception:
+         containerized = False
+ 
+     # Append conservative defaults ONLY when not containerized
+     if (not containerized) and ("encoding=" not in base):
+         sep = "&" if "?" in base else "?"
+         base = (
+             base
+             + sep
+             # RAW defaults; safe for legacy raw paths. If truly containerized, these will be stripped below.
+             + "encoding=opus&sample_rate=48000&channels=1"
+             + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true"
+         )
+ 
+     # Apply overrides into query string and clean up for containerized
++    effective_utterance_end_ms = 0
++
+     try:
+         import urllib.parse as _p
+ 
+         parts = _p.urlsplit(base)
+         q = _p.parse_qsl(parts.query, keep_blank_values=True)
+         qd = {k: v for k, v in q}
+ 
+         def _fmt(v):
+             if isinstance(v, bool):
+                 return "true" if v else "false"
+             if isinstance(v, int):
+                 return str(int(v))
+             return str(v)
+ 
+         tag_source: Optional[str] = None
+ 
+         # Allow top-level overrides (model, language, etc.)
+         if overrides:
+             for k in (
+                 "encoding",
+                 "sample_rate",
+                 "channels",
+                 "interim_results",
+                 "smart_format",
+                 "punctuate",
+@@ -258,58 +260,74 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
+         # If a language env is provided (optional), prefer it if not set
+         _env_lang = os.getenv("DEEPGRAM_LANG")
+         if _env_lang and "language" not in qd:
+             qd["language"] = _env_lang
+ 
+         # Ensure some model is present; default to nova-2 if none provided
+         if "model" not in qd:
+             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
+ 
+         # Provide a sensible default for utterance_end_ms (2s) unless explicitly overridden
+         qd.setdefault("utterance_end_ms", "2000")
+ 
+         interim_val = qd.get("interim_results")
+         interim_false = False
+         try:
+             if isinstance(interim_val, bool):
+                 interim_false = not interim_val
+             elif interim_val is None:
+                 interim_false = False
+             else:
+                 interim_false = str(interim_val).strip().lower() in {"false", "0"}
+         except Exception:
+             interim_false = False
+         if interim_false:
+             qd.pop("utterance_end_ms", None)
++            effective_utterance_end_ms = 0
++        else:
++            try:
++                val = qd.get("utterance_end_ms")
++                if val is not None:
++                    effective_utterance_end_ms = int(str(val))
++            except Exception:
++                effective_utterance_end_ms = 0
+ 
+         query = _p.urlencode(qd)
+         base = _p.urlunsplit(
+             (parts.scheme, parts.netloc, parts.path, query, parts.fragment)
+         )
+     except Exception:
+         pass
+ 
++    if isinstance(overrides, dict):
++        try:
++            overrides["_effective_utterance_end_ms"] = int(
++                effective_utterance_end_ms or 0
++            )
++        except Exception:
++            overrides["_effective_utterance_end_ms"] = 0
++
+     return base
+ 
+ 
+ def _auth_header() -> str:
+     key, _ = _api_key_info()
+     return f"Token {key}"
+ 
+ 
+ def _initial_config(overrides: Optional[dict] = None) -> dict:
+     """Build Configure payload with FEATURES ONLY (no audio/transport keys)."""
+     interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
+     features = {
+         "interim_results": interim,
+         "smart_format": True,
+         "punctuate": True,
+         "vad_events": True,
+         # Keep URL-only keys (like utterance_end_ms) out of Configure
+     }
+ 
+     # Allow simple boolean overrides at top-level OR nested under "features"
+     try:
+         if overrides:
+             # Merge nested features if provided
+             if isinstance(overrides.get("features"), dict):
+                 for k, v in overrides["features"].items():
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 959d2f80c1a361d2a32c891023aa4e63ef548e4e..e43f5081b8efac676565180ca5a3b86506679944 100644
+index e43f5081b8efac676565180ca5a3b86506679944..4ebbdb9c3d276f8e184a246a60968af4eaeb1868 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -106,50 +106,75 @@ def _clip_text(txt: str, limit: int = 120) -> str:
+@@ -819,50 +819,56 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+     if no_audio_window_s < 0:
+         no_audio_window_s = 0.0
+     no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
+     asr_ready_evt: asyncio.Event = asyncio.Event()
+     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
+     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
+     ws_frames_in = 0
+     ws_bytes_in = 0
+     backpressure_drop_count = 0
+     backpressure_last_emit = 0.0
+     backpressure_last_queue_len = 0
+     backpressure_emit_interval = 1.0
+     turn_connect_started = [False]
  
- def _dumps(obj) -> str:
-     import json as _json
+     # NEW: per-turn mic capture state
+     mic_chunks: List[bytes] = []
+     mic_first_ts = [0.0]
+     mic_last_ts = [0.0]
  
-     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+     # Deferred provider final guard state
+     pending_user_final: Dict[str, Any] = {"payload": None, "ts": 0.0}
+     pending_user_final_task: List[Optional[asyncio.Task]] = [None]
  
- 
- def _should_emit_barge_phase(sid: str, phase: str) -> bool:
-     """Return True if the barge phase changed and should be broadcast."""
-     if not phase:
-         return False
- 
-     try:
-         if not should_emit_phase(sid, phase):
-             with contextlib.suppress(Exception):
-                 set_phase(sid, phase)
-             return False
-         with contextlib.suppress(Exception):
-             set_phase(sid, phase, emitted=True)
-     except Exception:
-         return False
- 
-     return True
- 
- 
-+def _broadcast_barge_state_frame(sid: str, phase: str) -> Optional[Dict[str, Any]]:
-+    """Broadcast a barge state frame to session subscribers if it changed."""
-+    if not phase:
-+        return None
-+
-+    if not _should_emit_barge_phase(sid, phase):
-+        return None
-+
-+    if phase == "paused":
+     def _resolve_final_guard_window_s() -> float:
+         guard_candidates: List[int] = []
 +        try:
-+            set_recorder_active(sid, True)
++            eff_val = int(cfg.get("_effective_utterance_end_ms") or 0)
++            if eff_val > 0:
++                guard_candidates.append(eff_val)
 +        except Exception:
 +            pass
-+        nudges.cancel_idle_timers(sid, source="ws_state_paused")
-+
-+    frame: Dict[str, Any] = {"type": "state", "phase": phase}
-+
-+    try:
-+        bus.broadcast(sid, frame)
-+    except Exception:
-+        pass
-+
-+    return frame
-+
-+
- def _emit_admin_nlu_event(text: str,
-                           sid: str,
-                           *,
-                           dialog_nlu: Optional[Dict[str, Any]] = None,
-                           universal: Optional[Dict[str, Any]] = None) -> None:
-     if not text:
-         return
-     admin_cb = globals().get("_admin_emit")
-     if not callable(admin_cb):
-         return
- 
-     meta_stub = {"source": "user_ws", "channel": "ws"}
-     prepared_meta: Dict[str, Any] = {}
-     computed_dialog: Dict[str, Any] = {}
-     if isinstance(dialog_nlu, dict):
-         computed_dialog = dict(dialog_nlu)
-     try:
-         if not computed_dialog:
-             prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
-             if isinstance(dialog_nlu_raw, dict):
-                 computed_dialog = dict(dialog_nlu_raw)
-         if universal is None:
-             if not prepared_meta:
-                 prepared_meta, _, _ = prepare_turn_metadata(text, dict(meta_stub))
-             raw_universal = {}
-@@ -733,85 +758,54 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 try:
-                     await _ws_send_json(
-                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
-                     )
-                 except Exception:
-                     break
-         except asyncio.CancelledError:
+         try:
+             cfg_val = int(cfg.get("utterance_end_ms") or 0)
+             if cfg_val > 0:
+                 guard_candidates.append(cfg_val)
+         except Exception:
              pass
+         try:
+             env_val = int(os.getenv("WS_FINAL_GUARD_MS", "0") or 0)
+             if env_val > 0:
+                 guard_candidates.append(env_val)
+         except Exception:
+             pass
+         if not guard_candidates:
+             return 0.0
+         try:
+             return max(guard_candidates) / 1000.0
+         except Exception:
+             return 0.0
  
-     ping_task = asyncio.create_task(_ping_loop())
+     def _cancel_pending_user_final_task(reason: str = "cancel") -> None:
+         task = pending_user_final_task[0]
+         if task and not task.done():
+             payload = pending_user_final.get("payload")
+             with contextlib.suppress(Exception):
+                 _jlog(
+diff --git a/tests/test_ws_final_guard.py b/tests/test_ws_final_guard.py
+index e9a51c2d9c7f566bdd112357a1093c3f01f7b5cf..4d6ce68a3e1de8c696566c1773dd6c2b2ed71543 100644
+--- a/tests/test_ws_final_guard.py
++++ b/tests/test_ws_final_guard.py
+@@ -1,29 +1,30 @@
+ import asyncio
+ import json
+ from collections import deque
  
-     try:
-         await _ws_send_json(send, {"type": "ready", "session_id": sid})
-     except Exception:
-         with contextlib.suppress(Exception):
-             await send(
-                 {
-                     "type": "websocket.close",
-                     "code": 1011,
-                     "reason": "initial_ready_failed",
-                 }
-             )
-         return
- 
-     cfg: Dict[str, Any] = {}
--    loop = asyncio.get_running_loop()
-     barge = BargeState()
- 
-     def _send_barge_state(phase: str) -> None:
--        if not phase:
--            return
--        if not _should_emit_barge_phase(sid, phase):
--            return
--        if phase == "paused":
--            try:
--                set_recorder_active(sid, True)
--            except Exception:
--                pass
--            nudges.cancel_idle_timers(sid, source="ws_state_paused")
--        frame = {"type": "state", "phase": phase}
--        try:
--            bus.broadcast(sid, frame)
--        except Exception:
--            pass
--        try:
--            if loop.is_closed():
--                return
--            payload = dict(frame)
--            try:
--                running = asyncio.get_running_loop()
--            except RuntimeError:
--                running = None
--            if running is loop:
--                asyncio.create_task(_ws_send_json(send, payload))
--            else:
--                loop.call_soon_threadsafe(
--                    asyncio.create_task, _ws_send_json(send, payload)
--                )
--        except Exception:
--            pass
-+        _broadcast_barge_state_frame(sid, phase)
- 
-     buf = TurnBuffer()
-     dg: Optional[DeepgramClient] = None
-     rx_task: Optional[asyncio.Task] = None
-     dg_connect_task: Optional[asyncio.Task] = None
-     dg_state: str = "closed"
-     turn_id_ref = [0]
-     pending_final_turns: Deque[int] = deque()
-     completed_llm_turns: Set[int] = set()
-     synthetic_final_turns: Set[int] = set()
-     final_seen = [False]
-     asr_seen_partial = [False]
-     turn_timing: Dict[str, List[float]] = {
-         "start": [0.0],
-         "dg_open": [0.0],
-         "first_partial": [0.0],
-         "final": [0.0],
-     }
-     turn_finish_logged = [False]
- 
-     # Turn-scoped buffering + state
-     buffered_chunks: Deque[bytes] = deque()
-     sent_any_audio = [False]
-     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
-     no_audio_notified = [False]
-diff --git a/tests/phase3/test_barge_state_phase_dedup.py b/tests/phase3/test_barge_state_phase_dedup.py
-index 4940afdd959a52f9ba2b3c00ee013d85d7c81fd8..48d5ede3be0ee0fdd72a8be3a18f880bd0eb1ed2 100644
---- a/tests/phase3/test_barge_state_phase_dedup.py
-+++ b/tests/phase3/test_barge_state_phase_dedup.py
-@@ -1,31 +1,42 @@
-+import asyncio
- import threading
- import time
- import uuid
-+from queue import Empty
- 
-+import pytest
-+
-+from app.session_state import set_phase, set_recorder_active
- from app.ws.barge import BargeState
++from app.services.streaming_asr import deepgram_client
  from app.ws import ws_asgi
-+from app.ws.bus import bus
+ 
+ 
+ def _json_payloads(messages):
+     out = []
+     for msg in messages:
+         if msg.get("type") != "websocket.send":
+             continue
+         text = msg.get("text")
+         if not text:
+             continue
+         try:
+             out.append(json.loads(text))
+         except Exception:
+             continue
+     return out
+ 
+ 
+ def test_provider_final_waits_for_guard_window(monkeypatch):
+     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
+     monkeypatch.setenv("WS_FINAL_GUARD_MS", "200")
+ 
+     monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
+     monkeypatch.setattr(ws_asgi, "_admin_emit", None)
+@@ -111,50 +112,170 @@ def test_provider_final_waits_for_guard_window(monkeypatch):
+         ]
+         assert not finals_before, "Final results should wait for guard window"
+         assert not any(p.get("type") == "UtteranceEnd" for p in payloads_before)
+ 
+         loop.run_until_complete(asyncio.sleep(0.3))
+         new_payloads = _json_payloads(sent[before_len:])
+         finals_after = [
+             p
+             for p in new_payloads
+             if p.get("type") == "Results"
+             and (p.get("channel") or {}).get("is_final")
+         ]
+         utter_after = [p for p in new_payloads if p.get("type") == "UtteranceEnd"]
+         assert len(finals_after) == 1, "Provider final should emit once after guard"
+         assert len(utter_after) == 1, "UtteranceEnd should follow provider final"
+ 
+         loop.run_until_complete(events.put({"type": "websocket.disconnect"}))
+         loop.run_until_complete(main_task)
+     finally:
+         asyncio.set_event_loop(None)
+         loop.close()
+ 
+     assert llm_calls, "LLM turn should still run after guarded final"
+ 
+ 
++def test_default_guard_waits_for_deepgram_default(monkeypatch):
++    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
++    monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
++    monkeypatch.delenv("WS_FINAL_GUARD_MS", raising=False)
 +
++    monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
++    monkeypatch.setattr(ws_asgi, "_admin_emit", None)
++    monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
 +
-+@pytest.fixture
-+def anyio_backend():
-+    return "asyncio"
- 
- 
- def test_barge_state_emits_distinct_phases():
-     sid = f"test-barge-{uuid.uuid4()}"
-     emitted = []
- 
-     def capture(phase: str) -> None:
-         if ws_asgi._should_emit_barge_phase(sid, phase):
-             emitted.append(phase)
- 
-     barge = BargeState()
- 
-     assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
-     barge.cancel(capture)
-     barge.cancel(capture)
- 
-     assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
-     barge.commit(capture)
-     barge.commit(capture)
- 
-     assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
-     barge.cancel(capture)
-     barge.cancel(capture)
- 
-     assert emitted == [
-@@ -46,25 +57,57 @@ def test_barge_commit_waits_for_ready_gate():
-         if ws_asgi._should_emit_barge_phase(sid, phase):
-             phases.append(phase)
- 
-     ready_evt = threading.Event()
- 
-     def on_commit():
-         phases.append("commit")
-         return ready_evt.wait
- 
-     barge = BargeState()
- 
-     assert barge.start(confirm_ms=500, on_commit=on_commit, send_state=capture) is True
- 
-     worker = threading.Thread(target=barge.commit, args=(capture,))
-     worker.daemon = True
-     worker.start()
- 
-     time.sleep(0.05)
-     assert "ready" not in phases
- 
-     ready_evt.set()
-     worker.join(timeout=1.0)
- 
-     assert not worker.is_alive()
-     assert phases[-1] == "ready"
++    async def immediate_to_thread(func, *args, **kwargs):
++        return func(*args, **kwargs)
 +
++    monkeypatch.setattr(ws_asgi.asyncio, "to_thread", immediate_to_thread)
 +
-+@pytest.mark.anyio
-+async def test_barge_state_single_broadcast_for_client():
-+    sid = f"test-barge-subscriber-{uuid.uuid4()}"
-+    barge = BargeState()
-+    frames = []
-+    q = bus.subscribe(sid)
++    def fake_prepare(text, meta=None, **kwargs):
++        return {}, {}, {}
 +
-+    def capture(phase: str) -> None:
-+        ws_asgi._broadcast_barge_state_frame(sid, phase)
++    monkeypatch.setattr(ws_asgi, "prepare_turn_metadata", fake_prepare)
 +
++    llm_calls = []
++
++    def fake_run_ws_user_turn(session_id, text, corr_id=None, **kwargs):
++        llm_calls.append((session_id, text))
++
++    monkeypatch.setattr(ws_asgi, "run_ws_user_turn", fake_run_ws_user_turn)
++
++    class _DefaultGuardDeepgram:
++        instances = []
++
++        def __init__(self, cfg):
++            self.cfg = cfg
++            self._queue: asyncio.Queue = asyncio.Queue()
++            self._final_sent = False
++            self.guard_ms = 0
++            _DefaultGuardDeepgram.instances.append(self)
++
++        async def connect(self):
++            deepgram_client._dg_url(self.cfg)
++            self.guard_ms = int(self.cfg.get("_effective_utterance_end_ms") or 0)
++            await self._queue.put({"type": "asr_open"})
++
++        async def events(self):
++            while True:
++                ev = await self._queue.get()
++                if ev is None:
++                    break
++                yield ev
++
++        async def send(self, chunk: bytes):
++            if not self._final_sent:
++                await self._queue.put({"type": "user_final", "text": "hello default"})
++                self._final_sent = True
++
++        async def close(self, wait_for_final=True):
++            await self._queue.put(None)
++
++    monkeypatch.setattr(ws_asgi, "DeepgramClient", _DefaultGuardDeepgram)
++
++    sent = []
++
++    async def _send(message):
++        sent.append(message)
++
++    scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
++
++    loop = asyncio.new_event_loop()
++    asyncio.set_event_loop(loop)
 +    try:
-+        assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture)
-+        barge.commit(capture)
++        events: asyncio.Queue = asyncio.Queue()
++        events.put_nowait({"type": "websocket.receive", "bytes": b"\x00\x01"})
++        events.put_nowait(
++            {"type": "websocket.receive", "bytes": b"\x02\x03", "_delay": 0.05}
++        )
 +
-+        # allow any background tasks to process
-+        await asyncio.sleep(0)
++        async def _receive():
++            ev = await events.get()
++            delay = ev.pop("_delay", 0)
++            if delay:
++                await asyncio.sleep(delay)
++            return ev
 +
-+        while True:
-+            try:
-+                frames.append(q.get_nowait())
-+            except Empty:
-+                break
++        main_task = loop.create_task(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
++
++        loop.run_until_complete(asyncio.sleep(1.5))
++        interim_payloads = _json_payloads(sent)
++        interim_finals = [
++            p
++            for p in interim_payloads
++            if p.get("type") == "Results"
++            and (p.get("channel") or {}).get("is_final")
++        ]
++        assert not interim_finals, "Final results should wait for default guard"
++
++        before_len = len(sent)
++
++        loop.run_until_complete(asyncio.sleep(1.0))
++        new_payloads = _json_payloads(sent[before_len:])
++        finals_after = [
++            p
++            for p in new_payloads
++            if p.get("type") == "Results"
++            and (p.get("channel") or {}).get("is_final")
++        ]
++        utter_after = [p for p in new_payloads if p.get("type") == "UtteranceEnd"]
++        assert len(finals_after) == 1, "Provider final should emit once after guard"
++        assert len(utter_after) == 1, "UtteranceEnd should follow provider final"
++
++        loop.run_until_complete(events.put({"type": "websocket.disconnect"}))
++        loop.run_until_complete(main_task)
 +    finally:
-+        bus.unsubscribe(sid, q)
-+        set_recorder_active(sid, False)
-+        set_phase(sid, "", emitted=True)
++        asyncio.set_event_loop(None)
++        loop.close()
 +
-+    state_phases = [fr.get("phase") for fr in frames if fr.get("type") == "state"]
++    assert llm_calls, "LLM turn should still run after guarded final"
++    assert _DefaultGuardDeepgram.instances, "Deepgram client should be instantiated"
++    assert (
++        _DefaultGuardDeepgram.instances[0].guard_ms == 2000
++    ), "Default guard should use Deepgram default"
 +
-+    assert state_phases == ["paused", "ready"]
++
+ def test_late_audio_after_final_emits_single_pair(monkeypatch):
+     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
+     monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
+ 
+     monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
+     monkeypatch.setattr(ws_asgi, "_admin_emit", None)
+     monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
+ 
+     async def immediate_to_thread(func, *args, **kwargs):
+         return func(*args, **kwargs)
+ 
+     monkeypatch.setattr(ws_asgi.asyncio, "to_thread", immediate_to_thread)
+ 
+     def fake_prepare(text, meta=None, **kwargs):
+         return {}, {}, {}
+ 
+     monkeypatch.setattr(ws_asgi, "prepare_turn_metadata", fake_prepare)
+ 
+     llm_calls = []
+ 
+     def fake_run_ws_user_turn(session_id, text, corr_id=None, **kwargs):
+         llm_calls.append((session_id, text))
+ 
+     monkeypatch.setattr(ws_asgi, "run_ws_user_turn", fake_run_ws_user_turn)

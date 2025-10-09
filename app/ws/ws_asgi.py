@@ -842,6 +842,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     def _resolve_final_guard_window_s() -> float:
         guard_candidates: List[int] = []
         try:
+            eff_val = int(cfg.get("_effective_utterance_end_ms") or 0)
+            if eff_val > 0:
+                guard_candidates.append(eff_val)
+        except Exception:
+            pass
+        try:
             cfg_val = int(cfg.get("utterance_end_ms") or 0)
             if cfg_val > 0:
                 guard_candidates.append(cfg_val)

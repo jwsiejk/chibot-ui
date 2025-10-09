@@ -171,6 +171,8 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         )
 
     # Apply overrides into query string and clean up for containerized
+    effective_utterance_end_ms = 0
+
     try:
         import urllib.parse as _p
 
@@ -280,6 +282,14 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             interim_false = False
         if interim_false:
             qd.pop("utterance_end_ms", None)
+            effective_utterance_end_ms = 0
+        else:
+            try:
+                val = qd.get("utterance_end_ms")
+                if val is not None:
+                    effective_utterance_end_ms = int(str(val))
+            except Exception:
+                effective_utterance_end_ms = 0
 
         query = _p.urlencode(qd)
         base = _p.urlunsplit(
@@ -287,6 +297,14 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         )
     except Exception:
         pass
+
+    if isinstance(overrides, dict):
+        try:
+            overrides["_effective_utterance_end_ms"] = int(
+                effective_utterance_end_ms or 0
+            )
+        except Exception:
+            overrides["_effective_utterance_end_ms"] = 0
 
     return base
 
