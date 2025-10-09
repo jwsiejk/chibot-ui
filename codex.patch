@@ -1,158 +1,169 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index fcd66d39ee30b3a7ca6197424d2e5d9b8c0c9e4c..b621f6401e4fb0b6c0c782f99e3552f8752de90b 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -17,50 +17,52 @@ from app.services.audio.raw_fallback import (
-     should_use_raw_fallback,
- )
+diff --git a/app/__init__.py b/app/__init__.py
+index 8bb77e6cefe4427061da914c5a88f4d29cfa87e0..c5519ad7f856d1e1e6ed1f70860122ee819242ab 100644
+--- a/app/__init__.py
++++ b/app/__init__.py
+@@ -38,55 +38,50 @@ def admin_console():
+     from .utils.admin import is_admin_email
+     from .security_state import get_user
+     from flask import abort, render_template as _rt, session as _sess, request as _req
+     email = (_sess.get("user") or {}).get("email") or _sess.get("email") or _req.headers.get("X-User-Email") or (get_user() or "")
+     if not is_admin_email((email or "").strip().lower()):
+         abort(403)
+     return _rt("admin_console.html")
+ def create_app():
+     app = Flask(
+         __name__,
+         static_folder="../static",
+         static_url_path="/static",
+         template_folder="../templates",
+     )
+     app.config["JSON_SORT_KEYS"] = False
+     if os.environ.get("CI_FAST"):
+         app.config["TESTING"] = True
  
- from .schema_v1 import (
-     parse_client_json,
-     make_keepalive_ack,
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
+     app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
  
- # NEW: invoke LLM on final transcript
- from app.services.streaming import (
-     run_ws_user_turn,
-     prepare_turn_metadata,
-     summarize_policy_metadata,
-+    wait_for_tts_completion,
-+    wait_for_listen_ready,
- )  # NEW
- from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
- from app.ws.barge import BargeState
- from app.ws.bus import bus
- from app.policy import nudges
- from app.session_state import (
-     note_partial,
-     note_utterance_end,
-     set_asr_stream_open,
-     set_phase,
-     set_recorder_active,
-     should_emit_phase,
- )
+     # v1-only API + core + health
+     app.register_blueprint(create_v1_blueprint(), url_prefix="/api/v1")
+     app.register_blueprint(core_bp)
+     app.register_blueprint(health_bp)
  
- # Optional admin emitter
- try:
-     from app.api_v1.admin import _emit as _admin_emit
- except Exception:
-     _admin_emit = None
+-    # Ensure legacy SSE endpoint is always mounted (tests reload modules)
+-    from .ws.chat_ws import register_ws_route
+-
+-    register_ws_route(app)
+-
+     # Ensure CSRF header/cookie attached to responses
+     app.after_request(ensure_csrf_headers)
  
+     # Middleware
+     app.before_request(csrf_before_request)
+     rate_limit_register(app)
  
- ACTIVE_WS: dict[str, dict[str, Any]] = {}
- ACTIVE_WS_LOCK = asyncio.Lock()
+     make_csrf_route(app)
  
- WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index fcd66d39ee30b3a7ca6197424d2e5d9b8c0c9e4c..b621f6401e4fb0b6c0c782f99e3552f8752de90b 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1605,63 +1607,93 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 removed_pending=removed_pending,
-                                 closed_turn_id=closed_turn_id,
-                                 buffered_before=buffered_before,
-                                 mic_before=mic_before,
-                             )
+     @app.after_request
+     def maybe_allow_cors(resp):
+         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
+         if allow:
+             origins = [o.strip() for o in allow.split(",") if o.strip()]
+             ori = request.headers.get("Origin", "")
+             if ori in origins:
+                 resp.headers["Access-Control-Allow-Origin"] = ori
+                 resp.headers["Vary"] = "Origin"
+                 resp.headers["Access-Control-Allow-Credentials"] = "true"
+                 resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token"
+                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+         return resp
  
-                     pending_final_payload = pending_user_final.get("payload")
-                     if buf.is_empty() and not pending_final_payload:
-                         nudges.cancel_idle_timers(sid, source="turn_start")
-                         try:
-                             set_recorder_active(sid, True)
-                         except Exception:
-                             pass
-                         # New audio turn
-                         current_assistant_turn = None
-                         try:
-                             current_assistant_turn = bus.current_assistant_turn(sid)
-                         except Exception:
-                             current_assistant_turn = None
-                         confirm_ms = 420
-                         try:
-                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
-                         except Exception:
-                             confirm_ms = 420
+     @app.route("/<path:_>", methods=["OPTIONS"])
+     def _cors_preflight(_):
+diff --git a/app/ws/chat_ws.py b/app/ws/chat_ws.py
+index ab5868abbb08f7ef18e5ceb7db47e873b598a04c..dd6d888a5e3960a722e297756f3a010456bb5d31 100644
+--- a/app/ws/chat_ws.py
++++ b/app/ws/chat_ws.py
+@@ -1,96 +1,12 @@
+-# app/ws/chat_ws.py — SSE bridge for /ws/v1/chat (legacy stream)
+-# Notes:
+-# • Sends initial "ready" plus state:ready for UI compatibility
+-# • Heartbeat every ~5s (event: heartbeat + ping line)
+-# • KeepAliveAck every ~4s so clients see activity
+-# • Pushes state:ready after assistant_end
+-# • Closes after ~1.8s idle once any frames have been sent (kept from original)
++"""Legacy SSE bridge removed.
  
--                        def _on_barge_commit() -> None:
-+                        def _on_barge_commit():
-                             target_turn = current_assistant_turn
-                             try:
-                                 latest = bus.current_assistant_turn(sid)
-                             except Exception:
-                                 latest = None
-                             if latest:
-                                 target_turn = latest
--                            if target_turn:
-+
-+                            wait_turn = target_turn
-+                            if wait_turn:
-+                                try:
-+                                    bus.cancel_turn(sid, wait_turn)
-+                                except Exception:
-+                                    pass
-+
-+                            try:
-+                                wait_timeout = float(cfg.get("tts_cancel_wait_s", 3.0) or 0.0)
-+                            except Exception:
-+                                wait_timeout = 3.0
-+                            try:
-+                                listen_timeout = float(cfg.get("barge_listen_ready_wait_s", 1.0) or 0.0)
-+                            except Exception:
-+                                listen_timeout = 1.0
-+
-+                            def _wait_ready() -> None:
-                                 try:
--                                    bus.cancel_turn(sid, target_turn)
-+                                    wait_for_tts_completion(
-+                                        sid,
-+                                        wait_turn,
-+                                        timeout=None if wait_timeout <= 0 else wait_timeout,
-+                                    )
-                                 except Exception:
-                                     pass
-+                                try:
-+                                    wait_for_listen_ready(
-+                                        sid,
-+                                        timeout=max(0.0, listen_timeout),
-+                                    )
-+                                except Exception:
-+                                    pass
-+
-+                            return _wait_ready
-                         with contextlib.suppress(Exception):
-                             barge.start(
-                                 confirm_ms=confirm_ms,
-                                 on_commit=_on_barge_commit,
-                                 send_state=_send_barge_state,
-                             )
-                         turn_id_ref[0] = buf.turn_seq + 1
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-                             completed_llm_turns.discard(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
-                         stream_stats.reset_turn()
-                         turn_connect_started[0] = False
-                         # reset mic capture
-                         mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
-                         _reset_turn_metrics(now)
-                         _schedule_no_audio_watch(turn_id_ref[0])
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "turn_start",
+-from flask import Response, request, stream_with_context
+-import json, time
+-from queue import Empty
+-from ..ws.bus import bus
++This module previously exposed a Flask route that mirrored WebSocket
++traffic over Server-Sent Events. The project now relies solely on the
++native WebSocket implementation, so the helper remains only as a stub
++for older imports.
++"""
+ 
+-def _sse_event(data: dict, event: str | None = None):
+-    """Yield a single SSE event with optional event name."""
+-    if event:
+-        yield f"event: {event}\n"
+-    # compact JSON to reduce buffering
+-    yield "data: " + json.dumps(data, separators=(',', ':')) + "\n\n"
+ 
+ def register_ws_route(app):
+-    @app.route('/ws/v1/chat', methods=['GET'])
+-    def ws_sse_stream():
+-        sid = request.args.get('session_id') or 'default'
+-        q = bus.subscribe(sid)
+-
+-        @stream_with_context
+-        def stream():
+-            last_hb = 0.0
+-            last_keep = 0.0
+-            sent_any = False
+-            last_send = time.time()
+-
+-            # Initial connect signals (keep both for compatibility)
+-            yield from _sse_event({"type": "ready", "session_id": sid})
+-            yield from _sse_event({"type": "state", "phase": "ready", "session_id": sid})
+-            # Initial heartbeat/ping
+-            now = time.time()
+-            yield from _sse_event({"ts": now, "kind": "heartbeat", "msg": "ok"}, event="heartbeat")
+-            yield from _sse_event({"ts": now, "kind": "ping"})
+-
+-            try:
+-                while True:
+-                    now = time.time()
+-
+-                    # Heartbeat every ~5s (plus legacy ping line)
+-                    if now - last_hb > 5.0:
+-                        yield from _sse_event({"ts": now, "kind": "heartbeat", "msg": "ok"}, event="heartbeat")
+-                        yield from _sse_event({"ts": now, "kind": "ping"})
+-                        last_hb = now
+-
+-                    # KeepAliveAck every ~4s so clients see activity
+-                    if now - last_keep > 4.0:
+-                        yield from _sse_event({"type": "KeepAliveAck"})
+-                        last_keep = now
+-
+-                    # Drain bus with short timeout to allow heartbeats
+-                    try:
+-                        fr = q.get(timeout=0.25)
+-                    except Empty:
+-                        # If we have sent any frames and idle for >1.8s, close stream
+-                        if sent_any and (time.time() - last_send) > 1.8:
+-                            break
+-                        continue
+-
+-                    # Forward the frame
+-                    t = fr.get("type")
+-                    yield from _sse_event(fr)
+-                    sent_any = True
+-                    last_send = time.time()
+-
+-                    # After assistant_end, nudge UI back to ready
+-                    if t == "assistant_end":
+-                        yield from _sse_event({"type": "state", "phase": "ready", "session_id": sid})
+-                        sent_any = True
+-                        last_send = time.time()
+-
+-            except GeneratorExit:
+-                # client disconnected
+-                pass
+-            except Exception:
+-                # swallow to keep SSE robust
+-                pass
+-            finally:
+-                try:
+-                    # Unsubscribe if bus provides an unsubscribe API
+-                    if hasattr(bus, "unsubscribe"):
+-                        bus.unsubscribe(sid, q)
+-                except Exception:
+-                    pass
+-
+-        resp = Response(stream(), mimetype="text/event-stream")
+-        # Recommended headers for SSE behind proxies
+-        resp.headers['Cache-Control'] = 'no-cache'
+-        resp.headers['X-Accel-Buffering'] = 'no'
+-        return resp
++    """Retained for backwards compatibility; no SSE route is registered."""
++    return None
