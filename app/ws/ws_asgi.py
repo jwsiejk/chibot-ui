@@ -45,6 +45,7 @@ from app.ws.barge import BargeState
 from app.ws.bus import bus
 from app.policy import nudges
 from app.session_state import (
+    get as get_session_state,
     note_partial,
     note_utterance_end,
     set_asr_stream_open,
@@ -114,6 +115,25 @@ def _dumps(obj) -> str:
     import json as _json
 
     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
+def _should_emit_barge_phase(sid: str, phase: str) -> bool:
+    """Return True if the barge phase changed and should be broadcast."""
+    if not phase:
+        return False
+
+    try:
+        st = get_session_state(sid)
+    except Exception:
+        st = None
+
+    if st and st.phase == phase:
+        return False
+
+    with contextlib.suppress(Exception):
+        set_phase(sid, phase)
+
+    return True
 
 
 def _emit_admin_nlu_event(text: str,
@@ -758,10 +778,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     def _send_barge_state(phase: str) -> None:
         if not phase:
             return
-        try:
-            set_phase(sid, phase)
-        except Exception:
-            pass
+        if not _should_emit_barge_phase(sid, phase):
+            return
         if phase == "paused":
             try:
                 set_recorder_active(sid, True)

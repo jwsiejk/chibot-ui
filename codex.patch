@@ -1,275 +1,225 @@
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 5aba47f4e9a83a329ce5b86445e6ab49421cb998..6d9f809ba1a3b20b7adb24871c67ab527f48e33a 100644
+index 6d9f809ba1a3b20b7adb24871c67ab527f48e33a..265e36a4bc896f097ec167136bab39e602c83f93 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -1522,50 +1522,97 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                             with contextlib.suppress(Exception):
-                                 _admin_emit(
-                                     "ws_bin_recv",
-                                     sid=sid,
-                                     frames_in=ws_frames_in,
-                                     bytes_total=ws_bytes_in,
-                                 )
-                     if chunk:
-                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
-                         if not audio_sig_logged:
-                             with contextlib.suppress(Exception):
-                                 _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
-                             audio_sig_logged = True
-                     else:
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "ws_audio_chunk_empty",
-                                 sid=sid,
-                                 bytes=len(frame_bytes or b""),
-                                 turn_id=turn_id_ref[0],
-                                 buf_empty=buf.is_empty(),
-                             )
+@@ -23,50 +23,51 @@ from .schema_v1 import (
+     make_results,
+     make_utterance_end,
+     make_error,
+ )
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
  
-                     raw_chunk = chunk
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import (
+     run_ws_user_turn,
+     prepare_turn_metadata,
+     summarize_policy_metadata,
+ )  # NEW
+ from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+ from app.ws.barge import BargeState
+ from app.ws.bus import bus
+ from app.policy import nudges
+ from app.session_state import (
++    get as get_session_state,
+     note_partial,
+     note_utterance_end,
+     set_asr_stream_open,
+     set_phase,
+     set_recorder_active,
+ )
  
-+                    if final_seen[0]:
-+                        previous_turn_id = turn_id_ref[0]
-+                        removed_pending = 0
-+                        while True:
-+                            try:
-+                                pending_final_turns.remove(previous_turn_id)
-+                                removed_pending += 1
-+                            except ValueError:
-+                                break
-+                        synthetic_final_turns.discard(previous_turn_id)
-+                        _clear_pending_user_final("late_audio")
-+                        _cancel_no_audio_watch()
-+                        buffered_before = len(buffered_chunks)
-+                        mic_before = len(mic_chunks)
-+                        closed_turn_id = None
-+                        if not buf.is_empty():
-+                            try:
-+                                closed_turn_id, _ = buf.close_turn()
-+                                turn_id_ref[0] = closed_turn_id
-+                            except Exception:
-+                                closed_turn_id = None
-+                        else:
-+                            turn_id_ref[0] = buf.turn_seq
-+                        buffered_chunks.clear()
-+                        try:
-+                            stream_stats.reset_turn()
-+                        except Exception:
-+                            pass
-+                        mic_chunks.clear()
-+                        mic_first_ts[0] = now
-+                        mic_last_ts[0] = now
-+                        sent_any_audio[0] = False
-+                        asr_seen_partial[0] = False
-+                        turn_connect_started[0] = False
-+                        final_seen[0] = False
-+                        _reset_turn_metrics(now)
-+                        with contextlib.suppress(Exception):
-+                            _jlog(
-+                                "late_audio_after_final",
-+                                sid=sid,
-+                                turn_id=previous_turn_id,
-+                                removed_pending=removed_pending,
-+                                closed_turn_id=closed_turn_id,
-+                                buffered_before=buffered_before,
-+                                mic_before=mic_before,
-+                            )
-+
-                     pending_final_payload = pending_user_final.get("payload")
-                     if buf.is_empty() and not pending_final_payload:
-                         nudges.cancel_idle_timers(sid, source="turn_start")
-                         try:
-                             set_recorder_active(sid, True)
-                         except Exception:
-                             pass
-                         # New audio turn
-                         current_assistant_turn = None
-                         try:
-                             current_assistant_turn = bus.current_assistant_turn(sid)
-                         except Exception:
-                             current_assistant_turn = None
-                         confirm_ms = 420
-                         try:
-                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
-                         except Exception:
-                             confirm_ms = 420
- 
-                         def _on_barge_commit() -> None:
-                             target_turn = current_assistant_turn
-                             try:
-                                 latest = bus.current_assistant_turn(sid)
-                             except Exception:
-                                 latest = None
-diff --git a/tests/test_ws_final_guard.py b/tests/test_ws_final_guard.py
-index b1631bfad5961028f312ebcb5bc233c9299bedd9..e9a51c2d9c7f566bdd112357a1093c3f01f7b5cf 100644
---- a/tests/test_ws_final_guard.py
-+++ b/tests/test_ws_final_guard.py
-@@ -1,27 +1,28 @@
- import asyncio
- import json
-+from collections import deque
- 
- from app.ws import ws_asgi
+ # Optional admin emitter
+ try:
+     from app.api_v1.admin import _emit as _admin_emit
+ except Exception:
+     _admin_emit = None
  
  
- def _json_payloads(messages):
-     out = []
-     for msg in messages:
-         if msg.get("type") != "websocket.send":
-             continue
-         text = msg.get("text")
-         if not text:
-             continue
-         try:
-             out.append(json.loads(text))
-         except Exception:
-             continue
-     return out
+ ACTIVE_WS: dict[str, dict[str, Any]] = {}
+ ACTIVE_WS_LOCK = asyncio.Lock()
+ 
+ WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
+ try:
+     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
+ except Exception:
+     pass
+ 
+ # ------------------------------ small helpers ------------------------------
+ 
+@@ -94,50 +95,69 @@ def _jlog(event: str, **fields):
+         import time as _t, json as _json
+ 
+         fields.setdefault("event", event)
+         fields.setdefault("ts", _t.time())
+         print(_json.dumps(fields, separators=(",", ":"), ensure_ascii=False))
+     except Exception:
+         pass
  
  
- def test_provider_final_waits_for_guard_window(monkeypatch):
-     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
-     monkeypatch.setenv("WS_FINAL_GUARD_MS", "200")
+ def _clip_text(txt: str, limit: int = 120) -> str:
+     try:
+         txt = txt or ""
+         if len(txt) <= limit:
+             return txt
+         return txt[:limit] + "…"
+     except Exception:
+         return ""
  
-     monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
-@@ -108,25 +109,139 @@ def test_provider_final_waits_for_guard_window(monkeypatch):
-             if p.get("type") == "Results"
-             and (p.get("channel") or {}).get("is_final")
-         ]
-         assert not finals_before, "Final results should wait for guard window"
-         assert not any(p.get("type") == "UtteranceEnd" for p in payloads_before)
  
-         loop.run_until_complete(asyncio.sleep(0.3))
-         new_payloads = _json_payloads(sent[before_len:])
-         finals_after = [
-             p
-             for p in new_payloads
-             if p.get("type") == "Results"
-             and (p.get("channel") or {}).get("is_final")
-         ]
-         utter_after = [p for p in new_payloads if p.get("type") == "UtteranceEnd"]
-         assert len(finals_after) == 1, "Provider final should emit once after guard"
-         assert len(utter_after) == 1, "UtteranceEnd should follow provider final"
+ def _dumps(obj) -> str:
+     import json as _json
  
-         loop.run_until_complete(events.put({"type": "websocket.disconnect"}))
-         loop.run_until_complete(main_task)
-     finally:
-         asyncio.set_event_loop(None)
-         loop.close()
+     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
  
-     assert llm_calls, "LLM turn should still run after guarded final"
+ 
++def _should_emit_barge_phase(sid: str, phase: str) -> bool:
++    """Return True if the barge phase changed and should be broadcast."""
++    if not phase:
++        return False
 +
-+
-+def test_late_audio_after_final_emits_single_pair(monkeypatch):
-+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
-+    monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
-+
-+    monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
-+    monkeypatch.setattr(ws_asgi, "_admin_emit", None)
-+    monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
-+
-+    async def immediate_to_thread(func, *args, **kwargs):
-+        return func(*args, **kwargs)
-+
-+    monkeypatch.setattr(ws_asgi.asyncio, "to_thread", immediate_to_thread)
-+
-+    def fake_prepare(text, meta=None, **kwargs):
-+        return {}, {}, {}
-+
-+    monkeypatch.setattr(ws_asgi, "prepare_turn_metadata", fake_prepare)
-+
-+    llm_calls = []
-+
-+    def fake_run_ws_user_turn(session_id, text, corr_id=None, **kwargs):
-+        llm_calls.append((session_id, text))
-+
-+    monkeypatch.setattr(ws_asgi, "run_ws_user_turn", fake_run_ws_user_turn)
-+
-+    class _LateAudioDeepgram:
-+        instances = []
-+
-+        def __init__(self, cfg):
-+            self.cfg = cfg
-+            self._queue: asyncio.Queue = asyncio.Queue()
-+            self._final_sent = False
-+            _LateAudioDeepgram.instances.append(self)
-+
-+        async def connect(self):
-+            await self._queue.put({"type": "asr_open"})
-+
-+        async def events(self):
-+            while True:
-+                ev = await self._queue.get()
-+                if ev is None:
-+                    break
-+                yield ev
-+
-+        async def send(self, _chunk: bytes):
-+            if not self._final_sent:
-+                self._final_sent = True
-+                await self._queue.put({"type": "user_final", "text": "turn-one"})
-+
-+        async def close(self, wait_for_final=True):
-+            await self._queue.put(None)
-+
-+    monkeypatch.setattr(ws_asgi, "DeepgramClient", _LateAudioDeepgram)
-+
-+    sent = []
-+
-+    async def _send(message):
-+        sent.append(message)
-+
-+    events = deque(
-+        [
-+            {"type": "websocket.receive", "bytes": b"\x00\x01"},
-+            {"type": "websocket.receive", "bytes": b"\x02\x03", "_delay": 0.05},
-+            {
-+                "type": "websocket.receive",
-+                "text": json.dumps({"type": "CloseStream"}),
-+                "_delay": 0.05,
-+            },
-+            {"type": "websocket.disconnect"},
-+        ]
-+    )
-+
-+    async def _receive():
-+        if not events:
-+            return {"type": "websocket.disconnect"}
-+        ev = events.popleft()
-+        delay = ev.pop("_delay", 0)
-+        if delay:
-+            await asyncio.sleep(delay)
-+        return ev
-+
-+    scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
-+
-+    loop = asyncio.new_event_loop()
-+    asyncio.set_event_loop(loop)
 +    try:
-+        main_task = loop.create_task(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-+        loop.run_until_complete(main_task)
-+    finally:
-+        asyncio.set_event_loop(None)
-+        loop.close()
++        st = get_session_state(sid)
++    except Exception:
++        st = None
 +
-+    payloads = _json_payloads(sent)
++    if st and st.phase == phase:
++        return False
 +
-+    finals_by_turn = {}
-+    ends_by_turn = {}
-+    for payload in payloads:
-+        if payload.get("type") == "Results" and (payload.get("channel") or {}).get(
-+            "is_final"
-+        ):
-+            turn_id = payload.get("turn_id")
-+            finals_by_turn[turn_id] = finals_by_turn.get(turn_id, 0) + 1
-+        elif payload.get("type") == "UtteranceEnd":
-+            turn_id = payload.get("turn_id")
-+            ends_by_turn[turn_id] = ends_by_turn.get(turn_id, 0) + 1
++    with contextlib.suppress(Exception):
++        set_phase(sid, phase)
 +
-+    assert finals_by_turn, "Expected at least one final result"
-+    assert finals_by_turn == ends_by_turn
-+    assert all(count == 1 for count in finals_by_turn.values())
-+    assert all(count == 1 for count in ends_by_turn.values())
-+    assert llm_calls, "LLM turn should be invoked for final results"
++    return True
++
++
+ def _emit_admin_nlu_event(text: str,
+                           sid: str,
+                           *,
+                           dialog_nlu: Optional[Dict[str, Any]] = None,
+                           universal: Optional[Dict[str, Any]] = None) -> None:
+     if not text:
+         return
+     admin_cb = globals().get("_admin_emit")
+     if not callable(admin_cb):
+         return
+ 
+     meta_stub = {"source": "user_ws", "channel": "ws"}
+     prepared_meta: Dict[str, Any] = {}
+     computed_dialog: Dict[str, Any] = {}
+     if isinstance(dialog_nlu, dict):
+         computed_dialog = dict(dialog_nlu)
+     try:
+         if not computed_dialog:
+             prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
+             if isinstance(dialog_nlu_raw, dict):
+                 computed_dialog = dict(dialog_nlu_raw)
+         if universal is None:
+             if not prepared_meta:
+                 prepared_meta, _, _ = prepare_turn_metadata(text, dict(meta_stub))
+             raw_universal = {}
+@@ -736,54 +756,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         except asyncio.CancelledError:
+             pass
+ 
+     ping_task = asyncio.create_task(_ping_loop())
+ 
+     try:
+         await _ws_send_json(send, {"type": "ready", "session_id": sid})
+     except Exception:
+         with contextlib.suppress(Exception):
+             await send(
+                 {
+                     "type": "websocket.close",
+                     "code": 1011,
+                     "reason": "initial_ready_failed",
+                 }
+             )
+         return
+ 
+     cfg: Dict[str, Any] = {}
+     loop = asyncio.get_running_loop()
+     barge = BargeState()
+ 
+     def _send_barge_state(phase: str) -> None:
+         if not phase:
+             return
+-        try:
+-            set_phase(sid, phase)
+-        except Exception:
+-            pass
++        if not _should_emit_barge_phase(sid, phase):
++            return
+         if phase == "paused":
+             try:
+                 set_recorder_active(sid, True)
+             except Exception:
+                 pass
+             nudges.cancel_idle_timers(sid, source="ws_state_paused")
+         frame = {"type": "state", "phase": phase}
+         try:
+             bus.broadcast(sid, frame)
+         except Exception:
+             pass
+         try:
+             if loop.is_closed():
+                 return
+             payload = dict(frame)
+             try:
+                 running = asyncio.get_running_loop()
+             except RuntimeError:
+                 running = None
+             if running is loop:
+                 asyncio.create_task(_ws_send_json(send, payload))
+             else:
+                 loop.call_soon_threadsafe(
+                     asyncio.create_task, _ws_send_json(send, payload)
+                 )
+diff --git a/tests/phase3/test_barge_state_phase_dedup.py b/tests/phase3/test_barge_state_phase_dedup.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..fbf87e41643590e67116d7559064b2e17adc28cb
+--- /dev/null
++++ b/tests/phase3/test_barge_state_phase_dedup.py
+@@ -0,0 +1,36 @@
++import uuid
++
++from app.ws.barge import BargeState
++from app.ws import ws_asgi
++
++
++def test_barge_state_emits_distinct_phases():
++    sid = f"test-barge-{uuid.uuid4()}"
++    emitted = []
++
++    def capture(phase: str) -> None:
++        if ws_asgi._should_emit_barge_phase(sid, phase):
++            emitted.append(phase)
++
++    barge = BargeState()
++
++    assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
++    barge.cancel(capture)
++    barge.cancel(capture)
++
++    assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
++    barge.commit(capture)
++    barge.commit(capture)
++
++    assert barge.start(confirm_ms=1000, on_commit=lambda: None, send_state=capture) is True
++    barge.cancel(capture)
++    barge.cancel(capture)
++
++    assert emitted == [
++        "paused",
++        "assistant_speaking",
++        "paused",
++        "ready",
++        "paused",
++        "assistant_speaking",
++    ]
