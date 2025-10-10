@@ -1,82 +1,8 @@
-diff --git a/app/ws/schema_v1.py b/app/ws/schema_v1.py
-index 6de041f345645457203ab1c138e810a0f1d4dd9c..f2f4206fb7ab1863c5580bb64993d3a0d841a342 100644
---- a/app/ws/schema_v1.py
-+++ b/app/ws/schema_v1.py
-@@ -2,51 +2,51 @@
- """
- Deepgram-aligned WS schema (Phase 1 → 2).
- 
- Client -> Server (text JSON):
-  - {"type":"Configure", ...}
-  - {"type":"KeepAlive"}
-  - {"type":"CloseStream"}
-  - {"type":"greet"}                         # WS-only greet alias
-  - {"type":"user_msg","text":"..."}         # WS-only user text turn
-    # (Also accept legacy aliases: "User","UserText","UserMessage","UserUtterance","UserTextMessage")
- 
- Client -> Server (binary):
-  - raw Opus frames
- 
- Server -> Client:
-  - {"type":"Results","channel":{"alternatives":[{"transcript":"","confidence":0.0}],"is_final":true},"turn_id":N}
-  - {"type":"UtteranceEnd","turn_id":N}
-  - {"type":"KeepAliveAck"}
-  - {"type":"Error","code":"...","message":"..."}
- """
- from __future__ import annotations
- from typing import Any, Dict
- 
- _ALLOWED_TYPES = {
-     "Configure", "KeepAlive", "CloseStream",
--    "greet", "user_msg",
-+    "greet", "user_msg", "AudioStart",
-     # Legacy aliases
-     "User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage",
- }
- 
- def parse_client_json(text: str) -> Dict[str, Any]:
-     import json
-     try:
-         obj = json.loads(text or "{}")
-     except Exception:
-         raise ValueError("bad_json")
-     t = (obj.get("type") or "").strip()
-     if t not in _ALLOWED_TYPES:
-         raise ValueError("bad_message_type")
- 
-     if t == "Configure":
-         enc = (obj.get("encoding") or "").lower()
-         if enc and enc not in {"opus", "pcm"}:
-             raise ValueError("bad_encoding")
-         sr = obj.get("sample_rate")
-         if sr is not None and (not isinstance(sr, int) or sr <= 0):
-             raise ValueError("bad_sample_rate")
-         ch = obj.get("channels")
-         if ch is not None and (not isinstance(ch, int) or ch <= 0):
-             raise ValueError("bad_channels")
-     return obj
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2d257522c 100644
+index 66c488ef8e7149929d78dddb9ae6bec2d257522c..8197054b6f983ec895c69b8a398bb8284aff5b08 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -784,73 +784,81 @@ async def _ws_chat_asgi_impl(scope, receive, send):
- 
-     def _send_barge_state(phase: str) -> None:
-         _broadcast_barge_state_frame(sid, phase)
- 
-     buf = TurnBuffer()
-     dg: Optional[DeepgramClient] = None
-     rx_task: Optional[asyncio.Task] = None
-     dg_connect_task: Optional[asyncio.Task] = None
-     dg_state: str = "closed"
-     turn_id_ref = [0]
-     pending_final_turns: Deque[int] = deque()
-     completed_llm_turns: Set[int] = set()
-     synthetic_final_turns: Set[int] = set()
-     final_seen = [False]
-     asr_seen_partial = [False]
-     turn_timing: Dict[str, List[float]] = {
-         "start": [0.0],
+@@ -801,64 +801,68 @@ async def _ws_chat_asgi_impl(scope, receive, send):
          "dg_open": [0.0],
          "first_partial": [0.0],
          "final": [0.0],
@@ -85,7 +11,7 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
  
      # Turn-scoped buffering + state
      buffered_chunks: Deque[bytes] = deque()
-+    buffered_byte_total = [0]
+     buffered_byte_total = [0]
      sent_any_audio = [False]
      no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
      no_audio_notified = [False]
@@ -102,12 +28,12 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
      asr_ready_evt: asyncio.Event = asyncio.Event()
      asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
      max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
-+    try:
-+        connect_buffer_threshold = int(os.getenv("ASR_CONNECT_BUFFER_BYTES", str(10 * 1024)))
-+    except Exception:
-+        connect_buffer_threshold = 10 * 1024
-+    if connect_buffer_threshold < 0:
-+        connect_buffer_threshold = 0
+-    try:
+-        connect_buffer_threshold = int(os.getenv("ASR_CONNECT_BUFFER_BYTES", str(10 * 1024)))
+-    except Exception:
+-        connect_buffer_threshold = 10 * 1024
+-    if connect_buffer_threshold < 0:
+-        connect_buffer_threshold = 0
      ws_frames_in = 0
      ws_bytes_in = 0
      backpressure_drop_count = 0
@@ -115,7 +41,18 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
      backpressure_last_queue_len = 0
      backpressure_emit_interval = 1.0
      turn_connect_started = [False]
-+    format_hint_received = [False]
+-    format_hint_received = [False]
++    webm_hint_gate = [False]
++    webm_sniff_gate = [False]
++    sniffer_bytes_seen = [0]
++    SNIFFER_GATE_BUDGET = 10 * 1024
++
++    def _connect_gate_state() -> tuple[bool, Optional[str]]:
++        if webm_hint_gate[0]:
++            return True, "audio_start_webm"
++        if webm_sniff_gate[0]:
++            return True, "sniff_webm"
++        return False, None
  
      # NEW: per-turn mic capture state
      mic_chunks: List[bytes] = []
@@ -141,74 +78,7 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
  
      def _cancel_pending_user_final_task(reason: str = "cancel") -> None:
          task = pending_user_final_task[0]
-@@ -1396,62 +1404,65 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
-         return False
- 
-     async def _flush_buffered_chunks() -> None:
-         nonlocal dg, backpressure_drop_count
-         if not buffered_chunks:
-             return
-         if not _has_deepgram_key() or dg is None:
-             return
-         initial_queued = len(buffered_chunks)
-         flushed_chunks = 0
-         flushed_bytes = 0
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_flush_request",
-                 sid=sid,
-                 queued=initial_queued,
-                 dg_ready=_dg_client_ready(dg),
-             )
-         while buffered_chunks:
-             chunk = buffered_chunks[0]
-             chunk_len = len(chunk) if isinstance(chunk, (bytes, bytearray)) else 0
-             ok = await _send_chunk(chunk, from_buffer=True)
-             if ok:
-                 buffered_chunks.popleft()
-+                if chunk_len:
-+                    buffered_byte_total[0] = max(0, buffered_byte_total[0] - chunk_len)
-                 flushed_chunks += 1
-                 flushed_bytes += chunk_len
-                 continue
-             break
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_flush_done",
-                 sid=sid,
-                 queued=initial_queued,
-                 flushed_chunks=flushed_chunks,
-                 flushed_bytes=flushed_bytes,
-                 remaining=len(buffered_chunks),
-+                remaining_bytes=buffered_byte_total[0],
-             )
-         _maybe_emit_backpressure(len(buffered_chunks))
-         if not buffered_chunks:
-             backpressure_drop_count = 0
- 
-     try:
-         while True:
-             ev = await receive()
-             et = ev.get("type")
- 
-             if et == "websocket.disconnect":
-                 had_disconnect = True
-                 now = time.time()
-                 idle_s = (
-                     max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
-                 )
-                 with contextlib.suppress(Exception):
-                     _jlog(
-                         "ws_conn_disconnect",
-                         conn_id=conn_id,
-                         sid=sid,
-                         code=ev.get("code"),
-                         reason=ev.get("reason"),
-                         idle_s=idle_s,
-                     )
-@@ -1528,50 +1539,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
- 
+@@ -1540,51 +1544,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                      if final_seen[0]:
                          previous_turn_id = turn_id_ref[0]
                          removed_pending = 0
@@ -233,8 +103,11 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
                          else:
                              turn_id_ref[0] = buf.turn_seq
                          buffered_chunks.clear()
-+                        buffered_byte_total[0] = 0
-+                        format_hint_received[0] = False
+                         buffered_byte_total[0] = 0
+-                        format_hint_received[0] = False
++                        webm_hint_gate[0] = False
++                        webm_sniff_gate[0] = False
++                        sniffer_bytes_seen[0] = 0
                          mic_chunks.clear()
                          mic_first_ts[0] = now
                          mic_last_ts[0] = now
@@ -260,8 +133,7 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
                          try:
                              set_recorder_active(sid, True)
                          except Exception:
-@@ -1623,50 +1636,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 except Exception:
+@@ -1637,90 +1643,109 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                      pass
                                  try:
                                      wait_for_listen_ready(
@@ -286,8 +158,11 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
                          asr_seen_partial[0] = False
                          sent_any_audio[0] = False
                          buffered_chunks.clear()
-+                        buffered_byte_total[0] = 0
-+                        format_hint_received[0] = False
+                         buffered_byte_total[0] = 0
+-                        format_hint_received[0] = False
++                        webm_hint_gate[0] = False
++                        webm_sniff_gate[0] = False
++                        sniffer_bytes_seen[0] = 0
                          turn_connect_started[0] = False
                          # reset mic capture
                          mic_chunks.clear()
@@ -306,85 +181,126 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
  
                      # Detect container early
                      try:
-                         if transport.get("container") is None and raw_chunk:
+-                        if transport.get("container") is None and raw_chunk:
++                        if raw_chunk:
++                            bytes_before = sniffer_bytes_seen[0]
++                            sniffer_bytes_seen[0] += len(raw_chunk)
                              det = sniffer.feed(raw_chunk)
                              if det:
                                  container = getattr(det, "container", None)
                                  codec = getattr(det, "codec", None)
                                  containerized = bool(
                                      getattr(det, "containerized", codec == "opus")
-@@ -1714,115 +1729,180 @@ async def _ws_chat_asgi_impl(scope, receive, send):
- 
-                     buf.append(chunk)
- 
-                     # capture bytes for diagnostic playback
-                     mic_last_ts[0] = now
-                     if MIC_CAPTURE:
-                         mic_chunks.append(chunk)
-                     _jlog(
-                         "mic_capture_append",
-                         sid=sid,
-                         turn_id=turn_id_ref[0],
-                         chunks=len(mic_chunks),
-                         last_bytes=len(chunk),
-                     )
-                     nudges.cancel_idle_timers(sid, source="mic_capture")
- 
-                     if pending_user_final.get("payload"):
-                         _schedule_pending_user_final_guard("audio")
- 
-                     if not _has_deepgram_key():
-                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
-                         continue
- 
-                     # Stage early frames
-                     if chunk:
-+                        chunk_len = len(chunk) if isinstance(chunk, (bytes, bytearray)) else 0
-                         buffered_chunks.append(chunk)
-+                        if chunk_len:
-+                            buffered_byte_total[0] += chunk_len
+                                 )
+-                                transport["container"] = container
+-                                transport["codec"] = codec
+-                                transport["containerized_opus"] = containerized
+-                                _jlog(
+-                                    "sniffer_detect",
+-                                    sid=sid,
+-                                    container=transport.get("container"),
+-                                    codec=transport.get("codec"),
+-                                    containerized_opus=transport.get(
+-                                        "containerized_opus"
+-                                    ),
+-                                )
+-                            else:
++                                if transport.get("container") is None:
++                                    transport["container"] = container
++                                    transport["codec"] = codec
++                                    transport["containerized_opus"] = containerized
++                                    _jlog(
++                                        "sniffer_detect",
++                                        sid=sid,
++                                        container=transport.get("container"),
++                                        codec=transport.get("codec"),
++                                        containerized_opus=transport.get(
++                                            "containerized_opus"
++                                        ),
++                                    )
++                                if (
++                                    not webm_sniff_gate[0]
++                                    and container == "webm"
++                                    and codec == "opus"
++                                    and bytes_before < SNIFFER_GATE_BUDGET
++                                ):
++                                    webm_sniff_gate[0] = True
++                                    with contextlib.suppress(Exception):
++                                        _jlog(
++                                            "sniffer_gate_open",
++                                            sid=sid,
++                                            reason="sniff_webm",
++                                            bytes_seen=sniffer_bytes_seen[0],
++                                        )
++                            elif transport.get("container") is None:
+                                 meta_det = coerce_detection_from_meta(
+                                     getattr(sniffer, "meta", lambda: None)()
+                                 )
+                                 if meta_det and getattr(meta_det, "container", None):
+                                     container = getattr(meta_det, "container", None)
+                                     codec = getattr(meta_det, "codec", None)
+                                     containerized = bool(
+                                         getattr(
+                                             meta_det, "containerized", codec == "opus"
+                                         )
+                                     )
+                                     transport["container"] = container
+                                     transport["codec"] = codec
+                                     transport["containerized_opus"] = containerized
+                                     _jlog(
+                                         "sniffer_detect",
+                                         sid=sid,
+                                         container=transport.get("container"),
+                                         codec=transport.get("codec"),
+                                         containerized_opus=transport.get(
+                                             "containerized_opus"
+                                         ),
+                                     )
+                     except Exception:
+                         pass
+@@ -1756,84 +1781,67 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                         if chunk_len:
+                             buffered_byte_total[0] += chunk_len
                          dropped_now = 0
                          if len(buffered_chunks) > max_buffered_chunks:
                              dropped_now = len(buffered_chunks) - max_buffered_chunks
                              for _ in range(dropped_now):
                                  if not buffered_chunks:
                                      break
--                                buffered_chunks.popleft()
-+                                dropped_chunk = buffered_chunks.popleft()
-+                                if isinstance(dropped_chunk, (bytes, bytearray)):
-+                                    buffered_byte_total[0] = max(
-+                                        0, buffered_byte_total[0] - len(dropped_chunk)
-+                                    )
+                                 dropped_chunk = buffered_chunks.popleft()
+                                 if isinstance(dropped_chunk, (bytes, bytearray)):
+                                     buffered_byte_total[0] = max(
+                                         0, buffered_byte_total[0] - len(dropped_chunk)
+                                     )
                              _jlog(
--                                "ws_audio_drop", sid=sid, dropped=dropped_now, queued=len(buffered_chunks)
-+                                "ws_audio_drop",
-+                                sid=sid,
-+                                dropped=dropped_now,
-+                                queued=len(buffered_chunks),
-+                                queued_bytes=buffered_byte_total[0],
+                                 "ws_audio_drop",
+                                 sid=sid,
+                                 dropped=dropped_now,
+                                 queued=len(buffered_chunks),
+                                 queued_bytes=buffered_byte_total[0],
                              )
--                        _maybe_emit_backpressure(len(buffered_chunks), dropped_now=dropped_now)
-+                        _maybe_emit_backpressure(
-+                            len(buffered_chunks), dropped_now=dropped_now
-+                        )
+                         _maybe_emit_backpressure(
+                             len(buffered_chunks), dropped_now=dropped_now
+                         )
  
                      # Ensure provider connection
--                    if not turn_connect_started[0] and dg_state == "closed":
-+                    connect_ready = format_hint_received[0] or bool(
-+                        transport.get("containerized_opus")
-+                    )
-+                    if (
-+                        not connect_ready
-+                        and connect_buffer_threshold > 0
-+                        and buffered_byte_total[0] >= connect_buffer_threshold
-+                    ):
-+                        connect_ready = True
-+
-+                    if (
-+                        not turn_connect_started[0]
-+                        and dg_state == "closed"
-+                        and connect_ready
-+                    ):
+-                    connect_ready = format_hint_received[0] or bool(
+-                        transport.get("containerized_opus")
+-                    )
+-                    if (
+-                        not connect_ready
+-                        and connect_buffer_threshold > 0
+-                        and buffered_byte_total[0] >= connect_buffer_threshold
+-                    ):
+-                        connect_ready = True
+-
++                    gate_open, gate_reason = _connect_gate_state()
+                     if (
+                         not turn_connect_started[0]
+                         and dg_state == "closed"
+-                        and connect_ready
++                        and gate_open
+                     ):
                          turn_connect_started[0] = True
                          if dg_connect_task is None:
                              with contextlib.suppress(Exception):
@@ -393,17 +309,18 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
                                      sid=sid,
                                      turn_id=turn_id_ref[0],
                                      queued=len(buffered_chunks),
-+                                    queued_bytes=buffered_byte_total[0],
+                                     queued_bytes=buffered_byte_total[0],
                                      dg_state=dg_state,
-+                                    connect_ready_reason=(
-+                                        "hint"
-+                                        if format_hint_received[0]
-+                                        else (
-+                                            "detected"
-+                                            if transport.get("containerized_opus")
-+                                            else "buffer_threshold"
-+                                        )
-+                                    ),
+-                                    connect_ready_reason=(
+-                                        "hint"
+-                                        if format_hint_received[0]
+-                                        else (
+-                                            "detected"
+-                                            if transport.get("containerized_opus")
+-                                            else "buffer_threshold"
+-                                        )
+-                                    ),
++                                    connect_ready_reason=gate_reason,
                                  )
                              dg_connect_task = asyncio.create_task(
                                  _ensure_dg_connected()
@@ -429,15 +346,7 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
                              sid=sid,
                              queued=len(buffered_chunks),
                          )
-                     continue
- 
-                 # -------------------- Text / control lane --------------------
-                 if ev.get("text") is not None:
-                     try:
-                         obj = parse_client_json(ev.get("text") or "")
-                         t = obj.get("type")
-                         with contextlib.suppress(Exception):
-                             _jlog("ws_json_recv", sid=sid, type=t)
+@@ -1849,58 +1857,64 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                          if _admin_emit:
                              with contextlib.suppress(Exception):
                                  _admin_emit("ws_json_recv", sid=sid, type=t)
@@ -445,34 +354,41 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
                          if t == "KeepAlive":
                              await _ws_send_json(send, make_keepalive_ack())
  
-+                        elif t == "AudioStart":
-+                            mime = (
-+                                (obj.get("mime") or obj.get("mime_type") or obj.get("contentType"))
-+                                or ""
+                         elif t == "AudioStart":
+                             mime = (
+                                 (obj.get("mime") or obj.get("mime_type") or obj.get("contentType"))
+                                 or ""
+                             )
+                             try:
+                                 mime = mime.strip()
+                             except Exception:
+                                 mime = ""
+                             with contextlib.suppress(Exception):
+                                 sniffer.set_meta(mime or None)
+                             detection = coerce_detection_from_meta(mime) if mime else None
+                             if detection is not None:
+                                 transport["container"] = getattr(detection, "container", None)
+                                 transport["codec"] = getattr(detection, "codec", None)
+                                 transport["containerized_opus"] = bool(
+                                     getattr(detection, "containerized", True)
+                                 )
+-                            format_hint_received[0] = True
++                            gate_from_mime = bool(
++                                detection
++                                and getattr(detection, "container", None) == "webm"
++                                and getattr(detection, "codec", None) == "opus"
 +                            )
-+                            try:
-+                                mime = mime.strip()
-+                            except Exception:
-+                                mime = ""
-+                            with contextlib.suppress(Exception):
-+                                sniffer.set_meta(mime or None)
-+                            detection = coerce_detection_from_meta(mime) if mime else None
-+                            if detection is not None:
-+                                transport["container"] = getattr(detection, "container", None)
-+                                transport["codec"] = getattr(detection, "codec", None)
-+                                transport["containerized_opus"] = bool(
-+                                    getattr(detection, "containerized", True)
-+                                )
-+                            format_hint_received[0] = True
-+                            _jlog(
-+                                "ws_audio_hint",
-+                                sid=sid,
-+                                mime=mime or None,
-+                                container=transport.get("container"),
-+                                codec=transport.get("codec"),
-+                                containerized_opus=transport.get("containerized_opus"),
-+                            )
-+
++                            webm_hint_gate[0] = gate_from_mime
+                             _jlog(
+                                 "ws_audio_hint",
+                                 sid=sid,
+                                 mime=mime or None,
+                                 container=transport.get("container"),
+                                 codec=transport.get("codec"),
+                                 containerized_opus=transport.get("containerized_opus"),
++                                gate_open=gate_from_mime,
+                             )
+ 
                          elif t == "greet":
                              _jlog("ws_greet_recv", sid=sid)
  
@@ -496,10 +412,87 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
                                                  turn_id=tid,
                                                  audio_scheduled=audio_on,
                                              )
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-@@ -2301,50 +2381,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                             with open(out_path, "wb") as f:
+@@ -2075,58 +2089,71 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                         sid=sid,
+                                         turn_id=turn_id_ref[0],
+                                         first_bytes=0,
+                                         empty_turn=True,
+                                     )
+ 
+                             # --- Get a turn_id (with guard logs) ---
+                             _jlog(
+                                 "before_close_turn",
+                                 sid=sid,
+                                 next_turn_id=buf.turn_seq + 1,
+                             )
+                             try:
+                                 turn_id, _pcm = buf.close_turn()
+                             except Exception as e:
+                                 _jlog("close_turn_fail", sid=sid, err=type(e).__name__)
+                                 turn_id = turn_id_ref[0] or (buf.turn_seq + 1)
+                                 _pcm = None
+                             _jlog("after_close_turn", sid=sid, turn_id=turn_id)
+                             turn_id_ref[0] = turn_id
+ 
+                             # ---- THEN finish the ASR turn (unchanged logic) ----
+                             if _has_deepgram_key():
+                                 # If provider isn't ready yet but we have audio, try to connect now (bounded wait)
+                                 if dg is None and (buffered_chunks or mic_chunks):
+-                                    if dg_connect_task is None:
+-                                        dg_connect_task = asyncio.create_task(
+-                                            _ensure_dg_connected()
+-                                        )
+-                                    with contextlib.suppress(asyncio.TimeoutError):
+-                                        await asyncio.wait_for(
+-                                            asr_ready_evt.wait(), timeout=1.2
+-                                        )
++                                    gate_open, gate_reason = _connect_gate_state()
++                                    if gate_open:
++                                        if dg_connect_task is None:
++                                            with contextlib.suppress(Exception):
++                                                _jlog(
++                                                    "asr_connect_schedule",
++                                                    sid=sid,
++                                                    turn_id=turn_id_ref[0],
++                                                    queued=len(buffered_chunks),
++                                                    queued_bytes=buffered_byte_total[0],
++                                                    dg_state=dg_state,
++                                                    connect_ready_reason=gate_reason,
++                                                    via="close_stream",
++                                                )
++                                            dg_connect_task = asyncio.create_task(
++                                                _ensure_dg_connected()
++                                            )
++                                        with contextlib.suppress(asyncio.TimeoutError):
++                                            await asyncio.wait_for(
++                                                asr_ready_evt.wait(), timeout=1.2
++                                            )
+ 
+                                 # If we have buffered chunks but ASR not ready yet, give it a moment then flush.
+                                 if buffered_chunks and not asr_ready_evt.is_set():
+                                     if (
+                                         dg_state == "connecting"
+                                         and dg_connect_task is not None
+                                     ):
+                                         with contextlib.suppress(Exception):
+                                             await asyncio.wait_for(
+                                                 dg_connect_task,
+                                                 timeout=asr_ready_wait_s,
+                                             )
+                                     with contextlib.suppress(asyncio.TimeoutError):
+                                         await asyncio.wait_for(
+                                             asr_ready_evt.wait(),
+                                             timeout=asr_ready_wait_s,
+                                         )
+ 
+                                 # Flush any staged audio first
+                                 await _flush_buffered_chunks()
+ 
+                                 # Give ASR a brief chance to be "ready", then flush again
+                                 with contextlib.suppress(asyncio.TimeoutError):
+                                     await asyncio.wait_for(
+                                         asr_ready_evt.wait(), timeout=1.0
+@@ -2382,51 +2409,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                  f.write(wav)
                                              data_to_echo = wav
  
@@ -524,9 +517,12 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
                                          err=type(e).__name__,
                                      )
  
-+                            buffered_byte_total[0] = 0
-+                            format_hint_received[0] = False
-+
+                             buffered_byte_total[0] = 0
+-                            format_hint_received[0] = False
++                            webm_hint_gate[0] = False
++                            webm_sniff_gate[0] = False
++                            sniffer_bytes_seen[0] = 0
+ 
                          else:
                              # Unknown type already filtered by schema; no-op to future-proof.
                              pass
@@ -551,209 +547,3 @@ index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2
              _jlog(
                  "ws_conn_cleanup",
                  conn_id=conn_id,
-                 sid=sid,
-diff --git a/tests/test_ws_wav_preroll.py b/tests/test_ws_wav_preroll.py
-index 3cf0ee4e10217deedc88b2089bc3842849b95597..f4bc93b730ab205bc26e802a71f4d4f3631baa89 100644
---- a/tests/test_ws_wav_preroll.py
-+++ b/tests/test_ws_wav_preroll.py
-@@ -1,145 +1,197 @@
- import asyncio
- import json
- from collections import deque
-+from typing import Optional
- 
- from app.ws import ws_asgi
- from app.services.audio import container_sniffer
- 
- 
- class _TrackingSniffer(container_sniffer.AudioContainerSniffer):
-     instances = []
- 
-     def __init__(self):
-         super().__init__()
-         self.feed_chunks = []
-         self.__class__.instances.append(self)
- 
-     def feed(self, chunk: bytes):
-         self.feed_chunks.append(bytes(chunk))
-         return super().feed(chunk)
- 
- 
- class _TrackingDeepgram:
-     instances = []
- 
-     def __init__(self, cfg=None):
-         self.cfg = cfg or {}
-         self.sent_chunks = []
-         self._queue: asyncio.Queue = asyncio.Queue()
-         self.__class__.instances.append(self)
- 
-     async def connect(self):
-         await self._queue.put({"type": "asr_open"})
-         await self._queue.put(None)
- 
-     def is_open(self):
-         return True
- 
-     async def events(self):
-         while True:
-             ev = await self._queue.get()
-             if ev is None:
-                 break
-             yield ev
- 
-     async def send(self, chunk: bytes):
-         self.sent_chunks.append(bytes(chunk))
- 
-     async def close(self, wait_for_final: bool = True, **_):
-         return
- 
- 
--def _run_ws_session(monkeypatch, webm_chunk: bytes, wav_preroll: bytes = b"RIFF1234"):
-+def _run_ws_session(
-+    monkeypatch,
-+    webm_chunk: bytes,
-+    wav_preroll: bytes = b"RIFF1234",
-+    *,
-+    audio_start_mime: Optional[str] = None,
-+):
-     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
-     monkeypatch.setenv("DG_LINGER_MS", "0")
-     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
- 
-     _TrackingSniffer.instances = []
-     _TrackingDeepgram.instances = []
- 
-     monkeypatch.setattr(ws_asgi, "AudioContainerSniffer", _TrackingSniffer)
-     monkeypatch.setattr(ws_asgi, "DeepgramClient", _TrackingDeepgram)
-     monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
-     monkeypatch.setattr(ws_asgi.bus, "current_assistant_turn", lambda sid: None)
-     monkeypatch.setattr(ws_asgi, "_admin_emit", None)
-     monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
- 
--    events = deque(
-+    log_events = []
-+
-+    def _capture_jlog(event: str, **fields):
-+        entry = dict(fields)
-+        entry.setdefault("event", event)
-+        log_events.append(entry)
-+
-+    monkeypatch.setattr(ws_asgi, "_jlog", _capture_jlog)
-+
-+    events_list = [{"type": "websocket.receive", "bytes": wav_preroll}]
-+    if audio_start_mime is not None:
-+        events_list.append(
-+            {
-+                "type": "websocket.receive",
-+                "text": json.dumps({"type": "AudioStart", "mime": audio_start_mime}),
-+            }
-+        )
-+    events_list.extend(
-         [
--            {"type": "websocket.receive", "bytes": wav_preroll},
-             {"type": "websocket.receive", "bytes": webm_chunk},
-             {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
-             {"type": "websocket.disconnect"},
-         ]
-     )
-+    events = deque(events_list)
- 
-     sent_messages = []
- 
-     async def _receive():
-         return events.popleft() if events else {"type": "websocket.disconnect"}
- 
-     async def _send(msg):
-         sent_messages.append(msg)
- 
-     scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
- 
-     loop = asyncio.new_event_loop()
-     asyncio.set_event_loop(loop)
-     try:
-         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-         loop.run_until_complete(asyncio.sleep(0.05))
-     finally:
-         asyncio.set_event_loop(None)
-         loop.close()
- 
-     sniffer_instance = _TrackingSniffer.instances[0]
-     deepgram_instance = _TrackingDeepgram.instances[0]
- 
-     return {
-         "sniffer": sniffer_instance,
-         "deepgram": deepgram_instance,
-         "wav_preroll": wav_preroll,
-         "webm_chunk": webm_chunk,
-+        "logs": log_events,
-     }
- 
- 
- def test_wav_preroll_is_ignored(monkeypatch):
-     webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
-     result = _run_ws_session(monkeypatch, webm_chunk)
- 
-     sniffer_instance = result["sniffer"]
-     deepgram_instance = result["deepgram"]
-     wav_preroll = result["wav_preroll"]
-     webm_chunk = result["webm_chunk"]
- 
-     assert sniffer_instance.feed_chunks == [webm_chunk]
-     assert wav_preroll not in deepgram_instance.sent_chunks
-     assert webm_chunk in deepgram_instance.sent_chunks
- 
-     transport = deepgram_instance.cfg.get("_transport") or {}
-     assert transport.get("container") == "webm"
-     assert transport.get("codec") == "opus"
-     assert transport.get("containerized_opus") is True
- 
- 
- def test_webm_chunk_larger_than_window(monkeypatch):
-     webm_chunk = container_sniffer.AudioContainerSniffer.EBML_MAGIC + b"X" * (
-         container_sniffer.AudioContainerSniffer.MAX_WINDOW + 10
-     )
- 
-     result = _run_ws_session(monkeypatch, webm_chunk)
- 
-     sniffer_instance = result["sniffer"]
-     deepgram_instance = result["deepgram"]
-     wav_preroll = result["wav_preroll"]
-     webm_chunk = result["webm_chunk"]
- 
-     assert sniffer_instance.feed_chunks == [webm_chunk]
-     assert wav_preroll not in deepgram_instance.sent_chunks
-     assert webm_chunk in deepgram_instance.sent_chunks
- 
-     transport = deepgram_instance.cfg.get("_transport") or {}
-     assert transport.get("container") == "webm"
-     assert transport.get("codec") == "opus"
-     assert transport.get("containerized_opus") is True
-+
-+
-+def test_audio_start_hint_controls_connect(monkeypatch):
-+    webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
-+    result = _run_ws_session(
-+        monkeypatch,
-+        webm_chunk,
-+        audio_start_mime="audio/webm; codecs=opus",
-+    )
-+
-+    logs = result["logs"]
-+    hint_index = next(
-+        i for i, entry in enumerate(logs) if entry.get("event") == "ws_audio_hint"
-+    )
-+    schedule_index = next(
-+        i for i, entry in enumerate(logs) if entry.get("event") == "asr_connect_schedule"
-+    )
-+
-+    assert schedule_index > hint_index
-+
-+    begin_entry = next(
-+        entry for entry in logs if entry.get("event") == "asr_connect_begin"
-+    )
-+    transport = begin_entry.get("transport") or {}
-+    assert transport.get("containerized_opus") is True
-+    assert transport.get("container") == "webm"
-+    assert transport.get("codec") == "opus"

@@ -823,12 +823,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     asr_ready_evt: asyncio.Event = asyncio.Event()
     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
-    try:
-        connect_buffer_threshold = int(os.getenv("ASR_CONNECT_BUFFER_BYTES", str(10 * 1024)))
-    except Exception:
-        connect_buffer_threshold = 10 * 1024
-    if connect_buffer_threshold < 0:
-        connect_buffer_threshold = 0
     ws_frames_in = 0
     ws_bytes_in = 0
     backpressure_drop_count = 0
@@ -836,7 +830,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     backpressure_last_queue_len = 0
     backpressure_emit_interval = 1.0
     turn_connect_started = [False]
-    format_hint_received = [False]
+    webm_hint_gate = [False]
+    webm_sniff_gate = [False]
+    sniffer_bytes_seen = [0]
+    SNIFFER_GATE_BUDGET = 10 * 1024
+
+    def _connect_gate_state() -> tuple[bool, Optional[str]]:
+        if webm_hint_gate[0]:
+            return True, "audio_start_webm"
+        if webm_sniff_gate[0]:
+            return True, "sniff_webm"
+        return False, None
 
     # NEW: per-turn mic capture state
     mic_chunks: List[bytes] = []
@@ -1562,7 +1566,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             turn_id_ref[0] = buf.turn_seq
                         buffered_chunks.clear()
                         buffered_byte_total[0] = 0
-                        format_hint_received[0] = False
+                        webm_hint_gate[0] = False
+                        webm_sniff_gate[0] = False
+                        sniffer_bytes_seen[0] = 0
                         mic_chunks.clear()
                         mic_first_ts[0] = now
                         mic_last_ts[0] = now
@@ -1659,7 +1665,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         sent_any_audio[0] = False
                         buffered_chunks.clear()
                         buffered_byte_total[0] = 0
-                        format_hint_received[0] = False
+                        webm_hint_gate[0] = False
+                        webm_sniff_gate[0] = False
+                        sniffer_bytes_seen[0] = 0
                         turn_connect_started[0] = False
                         # reset mic capture
                         mic_chunks.clear()
@@ -1678,7 +1686,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                     # Detect container early
                     try:
-                        if transport.get("container") is None and raw_chunk:
+                        if raw_chunk:
+                            bytes_before = sniffer_bytes_seen[0]
+                            sniffer_bytes_seen[0] += len(raw_chunk)
                             det = sniffer.feed(raw_chunk)
                             if det:
                                 container = getattr(det, "container", None)
@@ -1686,19 +1696,34 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 containerized = bool(
                                     getattr(det, "containerized", codec == "opus")
                                 )
-                                transport["container"] = container
-                                transport["codec"] = codec
-                                transport["containerized_opus"] = containerized
-                                _jlog(
-                                    "sniffer_detect",
-                                    sid=sid,
-                                    container=transport.get("container"),
-                                    codec=transport.get("codec"),
-                                    containerized_opus=transport.get(
-                                        "containerized_opus"
-                                    ),
-                                )
-                            else:
+                                if transport.get("container") is None:
+                                    transport["container"] = container
+                                    transport["codec"] = codec
+                                    transport["containerized_opus"] = containerized
+                                    _jlog(
+                                        "sniffer_detect",
+                                        sid=sid,
+                                        container=transport.get("container"),
+                                        codec=transport.get("codec"),
+                                        containerized_opus=transport.get(
+                                            "containerized_opus"
+                                        ),
+                                    )
+                                if (
+                                    not webm_sniff_gate[0]
+                                    and container == "webm"
+                                    and codec == "opus"
+                                    and bytes_before < SNIFFER_GATE_BUDGET
+                                ):
+                                    webm_sniff_gate[0] = True
+                                    with contextlib.suppress(Exception):
+                                        _jlog(
+                                            "sniffer_gate_open",
+                                            sid=sid,
+                                            reason="sniff_webm",
+                                            bytes_seen=sniffer_bytes_seen[0],
+                                        )
+                            elif transport.get("container") is None:
                                 meta_det = coerce_detection_from_meta(
                                     getattr(sniffer, "meta", lambda: None)()
                                 )
@@ -1778,20 +1803,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         )
 
                     # Ensure provider connection
-                    connect_ready = format_hint_received[0] or bool(
-                        transport.get("containerized_opus")
-                    )
-                    if (
-                        not connect_ready
-                        and connect_buffer_threshold > 0
-                        and buffered_byte_total[0] >= connect_buffer_threshold
-                    ):
-                        connect_ready = True
-
+                    gate_open, gate_reason = _connect_gate_state()
                     if (
                         not turn_connect_started[0]
                         and dg_state == "closed"
-                        and connect_ready
+                        and gate_open
                     ):
                         turn_connect_started[0] = True
                         if dg_connect_task is None:
@@ -1803,15 +1819,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     queued=len(buffered_chunks),
                                     queued_bytes=buffered_byte_total[0],
                                     dg_state=dg_state,
-                                    connect_ready_reason=(
-                                        "hint"
-                                        if format_hint_received[0]
-                                        else (
-                                            "detected"
-                                            if transport.get("containerized_opus")
-                                            else "buffer_threshold"
-                                        )
-                                    ),
+                                    connect_ready_reason=gate_reason,
                                 )
                             dg_connect_task = asyncio.create_task(
                                 _ensure_dg_connected()
@@ -1871,7 +1879,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 transport["containerized_opus"] = bool(
                                     getattr(detection, "containerized", True)
                                 )
-                            format_hint_received[0] = True
+                            gate_from_mime = bool(
+                                detection
+                                and getattr(detection, "container", None) == "webm"
+                                and getattr(detection, "codec", None) == "opus"
+                            )
+                            webm_hint_gate[0] = gate_from_mime
                             _jlog(
                                 "ws_audio_hint",
                                 sid=sid,
@@ -1879,6 +1892,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 container=transport.get("container"),
                                 codec=transport.get("codec"),
                                 containerized_opus=transport.get("containerized_opus"),
+                                gate_open=gate_from_mime,
                             )
 
                         elif t == "greet":
@@ -2097,14 +2111,27 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             if _has_deepgram_key():
                                 # If provider isn't ready yet but we have audio, try to connect now (bounded wait)
                                 if dg is None and (buffered_chunks or mic_chunks):
-                                    if dg_connect_task is None:
-                                        dg_connect_task = asyncio.create_task(
-                                            _ensure_dg_connected()
-                                        )
-                                    with contextlib.suppress(asyncio.TimeoutError):
-                                        await asyncio.wait_for(
-                                            asr_ready_evt.wait(), timeout=1.2
-                                        )
+                                    gate_open, gate_reason = _connect_gate_state()
+                                    if gate_open:
+                                        if dg_connect_task is None:
+                                            with contextlib.suppress(Exception):
+                                                _jlog(
+                                                    "asr_connect_schedule",
+                                                    sid=sid,
+                                                    turn_id=turn_id_ref[0],
+                                                    queued=len(buffered_chunks),
+                                                    queued_bytes=buffered_byte_total[0],
+                                                    dg_state=dg_state,
+                                                    connect_ready_reason=gate_reason,
+                                                    via="close_stream",
+                                                )
+                                            dg_connect_task = asyncio.create_task(
+                                                _ensure_dg_connected()
+                                            )
+                                        with contextlib.suppress(asyncio.TimeoutError):
+                                            await asyncio.wait_for(
+                                                asr_ready_evt.wait(), timeout=1.2
+                                            )
 
                                 # If we have buffered chunks but ASR not ready yet, give it a moment then flush.
                                 if buffered_chunks and not asr_ready_evt.is_set():
@@ -2404,7 +2431,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     )
 
                             buffered_byte_total[0] = 0
-                            format_hint_received[0] = False
+                            webm_hint_gate[0] = False
+                            webm_sniff_gate[0] = False
+                            sniffer_bytes_seen[0] = 0
 
                         else:
                             # Unknown type already filtered by schema; no-op to future-proof.
