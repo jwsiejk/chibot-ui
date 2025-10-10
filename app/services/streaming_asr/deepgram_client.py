@@ -452,6 +452,7 @@ class DeepgramClient:
         self._first_real_sent: bool = False
         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
         self._last_chunk_ts: float = 0.0
+        self._last_transcript: str = ""
 
         # Tunables
         self._linger_ms: int = int(
@@ -1593,8 +1594,11 @@ class DeepgramClient:
                         or (evt_type in ("utteranceend", "UtteranceEnd"))
                     )
 
-                    # No usable text in this message; keep listening
-                    if not text:
+                    if text:
+                        self._last_transcript = text
+                    elif is_final:
+                        text = self._last_transcript or ""
+                    else:
                         continue
 
                     # Seeing a result also implies the upstream is functioning
@@ -1626,6 +1630,7 @@ class DeepgramClient:
                     if is_final:
                         self._any_result = True
                         self._final_event.set()
+                        self._last_transcript = ""
                         continue
 
                 elif evt_type in ("error", "close"):

@@ -1,159 +1,325 @@
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 05142e29da044a44775056b58ad563554078b14d..6ad76dcbcdb1db4f2f75867c4f73e7d4f506596c 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -2741,50 +2741,53 @@ def schedule_tts_audio(session_id: str,
-             dur_ms=0,
-             audio_bytes=total_audio_bytes,
-             override=True,
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index caaba52242a2f5a63f3e8196854885a3768027be..d343230a553ab98689df1c4c49979bde80f392f1 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -430,50 +430,51 @@ class DeepgramClient:
+                     val = self._cfg.get(key)
+                     if val:
+                         tag_hint = str(val)
+                         break
+             self._diag_tag_hint: Optional[str] = tag_hint
+         except Exception:
+             self._diag_tag_hint = None
+ 
+         # TX queue + flushing
+         self._tx_queue: Deque[bytes] = deque()
+         self._flush_task: Optional[asyncio.Task] = None
+ 
+         # Graceful shutdown coordination
+         self._final_event: asyncio.Event = asyncio.Event()
+         self._any_result: bool = False
+         self._drain_event: asyncio.Event = asyncio.Event()
+         self._drain_event.set()
+         self._drain_timeout_s: float = float(
+             os.getenv("DG_CLOSE_DRAIN_TIMEOUT_S", "1.5")
          )
  
-     if not audio_payload:
-         state['error'] = 'empty_audio'
-         _log("tts.synth.error", error='empty_audio', override=audio_override)
-         return False
+         # First-chunk guard & timing
+         self._first_real_sent: bool = False
+         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
+         self._last_chunk_ts: float = 0.0
++        self._last_transcript: str = ""
  
-     completion_event = _prepare_tts_completion_event(session_id, turn_key)
+         # Tunables
+         self._linger_ms: int = int(
+             os.getenv("DG_LINGER_MS", "800")
+         )  # slightly longer default
+         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "12"))
  
-     payload_for_stream = audio_payload
+         # Open gate
+         self._open_evt: asyncio.Event = asyncio.Event()
+         self._asr_open_emitted: bool = False
+         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
+         self._open_gate_warned: bool = False
  
-     def _run():
-         total_audio_bytes = 0
-         chunk_count = 0
-         chunk_bytes_sent = 0
-         canceled = False
-         truncated = False
-         utterance_end_sent = False
-         max_frames = 256  # guardrail
+         # Keepalive
+         self._keepalive_task: Optional[asyncio.Task] = None
+         self._keepalive_interval: float = float(
+             os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0")
+         )
  
-         def _emit_utterance_end(reason: str) -> None:
-             nonlocal utterance_end_sent
-+            if utterance_end_sent:
-+                _log("tts.utterance_end.skip", reason=reason, already_sent=True)
-+                return
-             _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
-             try:
-                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
-             except Exception:
-                 pass
-             utterance_end_sent = True
+         # Optional JSON logger injected by WS layer (ws_asgi)
+         self._jlog = self._cfg.get("_jlog")
  
-         stream_payload = audio_bytes if audio_override else payload_for_stream
-         try:
-             # Small pacing delay if requested
-             if delay_ms and delay_ms > 0:
-                 _t.sleep(max(0, delay_ms) / 1000.0)
+         # Serialize outbound websocket sends to avoid concurrent writer errors
+         self._send_lock = asyncio.Lock()
  
-             total_audio_bytes = len(stream_payload or b"")
+@@ -1571,83 +1572,87 @@ class DeepgramClient:
  
-             try:
-                 _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
-             except Exception:
-                 pass
+                     # Prefer channel.* first (typical DG shape)
+                     channel = msg.get("channel") or {}
+                     alts = channel.get("alternatives")
+                     if isinstance(alts, list) and alts:
+                         text = (alts[0].get("transcript") or "").strip()
  
-             # Chunk and broadcast
-             mv = memoryview(stream_payload)
-             idx = 0
-             first_sent = False
+                     # Fallback: top-level alternatives (some messages)
+                     if not text:
+                         top_alts = msg.get("alternatives")
+                         if isinstance(top_alts, list) and top_alts:
+                             text = (top_alts[0].get("transcript") or "").strip()
  
-diff --git a/tests/test_ws_two_turn_regression.py b/tests/test_ws_two_turn_regression.py
-index 0cc143d0a793cde5f2ab0648b8171292814c9f0b..fe82717d528b553a92bab4acef30b9847d7c41b9 100644
---- a/tests/test_ws_two_turn_regression.py
-+++ b/tests/test_ws_two_turn_regression.py
-@@ -151,50 +151,96 @@ def test_schedule_frames_tracks_current_assistant_turn(monkeypatch):
-         {"type": "assistant_end", "turn_id": "turn-42"},
-     ]
-     calls = []
-     orig_note = bus.note_assistant_turn
+                     # Fallback: top-level transcript (some messages)
+                     if not text and isinstance(msg.get("transcript"), str):
+                         text = (msg.get("transcript") or "").strip()
  
-     def _capture_note(sid_arg, tid_arg):
-         calls.append((sid_arg, tid_arg))
-         orig_note(sid_arg, tid_arg)
+                     # Finalness can be on channel or top-level, or implied by event type
+                     is_final = (
+                         bool(channel.get("is_final"))
+                         or bool(msg.get("is_final"))
+                         or bool(msg.get("speech_final"))
+                         or (evt_type in ("utteranceend", "UtteranceEnd"))
+                     )
  
-     monkeypatch.setattr(bus, "note_assistant_turn", _capture_note)
+-                    # No usable text in this message; keep listening
+-                    if not text:
++                    if text:
++                        self._last_transcript = text
++                    elif is_final:
++                        text = self._last_transcript or ""
++                    else:
+                         continue
  
-     q = bus.subscribe(sid)
-     try:
-         schedule_frames(sid, frames)
-         q.get(timeout=1.0)
-         q.get(timeout=1.0)
+                     # Seeing a result also implies the upstream is functioning
+                     await self._signal_ready()
+ 
+                     logger.debug(
+                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
+                         sid,
+                         is_final,
+                         len(text),
+                         _clip_text(text),
+                     )
+                     self._emit_diag(
+                         "asr_final" if is_final else "asr_partial",
+                         text=text,
+                         chars=len(text),
+                         active=True,
+                     )
+                     try:
+                         await self._ev_queue.put(
+                             {
+                                 "type": "user_final" if is_final else "user_partial",
+                                 "text": text,
+                             }
+                         )
+                     except Exception:
+                         pass
+ 
+                     if is_final:
+                         self._any_result = True
+                         self._final_event.set()
++                        self._last_transcript = ""
+                         continue
+ 
+                 elif evt_type in ("error", "close"):
+                     logger.warning(
+                         "Deepgram error event sid=%s evt_type=%s detail=%s",
+                         sid,
+                         evt_type,
+                         _clip_text(str(msg), 200),
+                     )
+                     self._emit_diag(
+                         "asr_error",
+                         error=msg.get("error") or evt_type,
+                         provider_error=True,
+                         detail=_clip_text(str(msg), 200),
+                     )
+                     try:
+                         await self._ev_queue.put(
+                             {"type": "asr_error", "error": msg.get("error") or evt_type}
+                         )
+                     except Exception:
+                         pass
+ 
+                 else:
+                     logger.debug(
+                         "Deepgram unhandled event sid=%s evt_type=%s",
+diff --git a/tests/test_ws_final_guard.py b/tests/test_ws_final_guard.py
+index 4d6ce68a3e1de8c696566c1773dd6c2b2ed71543..7c4f25d83deb89ec48349cacc670425087a1c3cf 100644
+--- a/tests/test_ws_final_guard.py
++++ b/tests/test_ws_final_guard.py
+@@ -344,25 +344,174 @@ def test_late_audio_after_final_emits_single_pair(monkeypatch):
+         main_task = loop.create_task(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
+         loop.run_until_complete(main_task)
      finally:
-         bus.unsubscribe(sid, q)
-         bus.note_assistant_turn(sid, None)
-         bus._canceled.discard((sid, "turn-42"))
+         asyncio.set_event_loop(None)
+         loop.close()
  
-     assert (sid, "turn-42") in calls
-     assert (sid, None) in calls
+     payloads = _json_payloads(sent)
  
+     finals_by_turn = {}
+     ends_by_turn = {}
+     for payload in payloads:
+         if payload.get("type") == "Results" and (payload.get("channel") or {}).get(
+             "is_final"
+         ):
+             turn_id = payload.get("turn_id")
+             finals_by_turn[turn_id] = finals_by_turn.get(turn_id, 0) + 1
+         elif payload.get("type") == "UtteranceEnd":
+             turn_id = payload.get("turn_id")
+             ends_by_turn[turn_id] = ends_by_turn.get(turn_id, 0) + 1
  
-+def test_schedule_tts_audio_truncation_emits_single_utterance_end(monkeypatch):
-+    sid = "s-tts-truncation"
-+    turn_id = "turn-truncate"
+     assert finals_by_turn, "Expected at least one final result"
+     assert finals_by_turn == ends_by_turn
+     assert all(count == 1 for count in finals_by_turn.values())
+     assert all(count == 1 for count in ends_by_turn.values())
+     assert llm_calls, "LLM turn should be invoked for final results"
 +
-+    # Capture structured logs to confirm duplicate suppression fires.
-+    logs = []
 +
-+    def _capture_log(kind, **fields):
-+        logs.append((kind, fields))
++def test_deepgram_final_without_transcript_still_emits(monkeypatch):
++    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
++    monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
++    monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
++    monkeypatch.setenv("DG_KEEPALIVE_INTERVAL_S", "0")
 +
-+    monkeypatch.setattr(streaming, "_jlog", _capture_log)
++    monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
++    monkeypatch.setattr(ws_asgi, "_admin_emit", None)
++    monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
 +
-+    q = bus.subscribe(sid)
++    async def immediate_to_thread(func, *args, **kwargs):
++        return func(*args, **kwargs)
++
++    monkeypatch.setattr(ws_asgi.asyncio, "to_thread", immediate_to_thread)
++
++    def fake_prepare(text, meta=None, **kwargs):
++        return {}, {}, {}
++
++    monkeypatch.setattr(ws_asgi, "prepare_turn_metadata", fake_prepare)
++
++    llm_calls = []
++
++    def fake_run_ws_user_turn(session_id, text, corr_id=None, **kwargs):
++        llm_calls.append((session_id, text))
++
++    monkeypatch.setattr(ws_asgi, "run_ws_user_turn", fake_run_ws_user_turn)
++
++    partial_text = "fallback transcript"
++
++    class _ScriptedWS:
++        def __init__(self, payloads):
++            self._payloads = deque(payloads)
++            self.open = True
++            self.sent = []
++
++        async def send(self, data):
++            self.sent.append(data)
++
++        async def close(self):
++            self.open = False
++
++        def __aiter__(self):
++            ws = self
++
++            async def _gen():
++                while ws._payloads:
++                    await asyncio.sleep(0)
++                    yield ws._payloads.popleft()
++                ws.open = False
++
++            return _gen()
++
++    scripted_messages = [
++        json.dumps(
++            {
++                "type": "Results",
++                "channel": {
++                    "alternatives": [{"transcript": partial_text}],
++                    "is_final": False,
++                },
++            }
++        ),
++        json.dumps(
++            {
++                "type": "Results",
++                "channel": {
++                    "alternatives": [],
++                    "is_final": True,
++                },
++            }
++        ),
++    ]
++
++    ws_instances = []
++
++    async def fake_ws_connect(*args, **kwargs):
++        ws = _ScriptedWS(list(scripted_messages))
++        ws_instances.append(ws)
++        return ws
++
++    monkeypatch.setattr(deepgram_client.websockets, "connect", fake_ws_connect)
++
++    dg_instances = []
++
++    def tracked_deepgram(cfg):
++        cfg["utterance_end_ms"] = 0
++        cfg["_effective_utterance_end_ms"] = 0
++        client = deepgram_client.DeepgramClient(cfg)
++        dg_instances.append(client)
++        return client
++
++    monkeypatch.setattr(ws_asgi, "DeepgramClient", tracked_deepgram)
++
++    sent = []
++
++    async def _send(message):
++        sent.append(message)
++
++    scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
++
++    loop = asyncio.new_event_loop()
++    asyncio.set_event_loop(loop)
 +    try:
-+        # Force the guard by exceeding the max frame count with 1-byte chunks.
-+        audio_bytes = b"a" * 300
-+        scheduled = streaming.schedule_tts_audio(
-+            sid,
-+            "hello",
-+            turn_id=turn_id,
-+            audio_bytes=audio_bytes,
-+            chunk_bytes=1,
++        events: asyncio.Queue = asyncio.Queue()
++        events.put_nowait({"type": "websocket.receive", "bytes": b"\x00\x01"})
++        events.put_nowait({"type": "websocket.receive", "bytes": b"\x02\x03"})
++
++        async def _receive():
++            ev = await events.get()
++            delay = ev.pop("_delay", 0)
++            if delay:
++                await asyncio.sleep(delay)
++            return ev
++
++        main_task = loop.create_task(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
++
++        finals = []
++        payloads = []
++        for _ in range(10):
++            loop.run_until_complete(asyncio.sleep(0.05))
++            payloads = _json_payloads(sent)
++            finals = [
++                p
++                for p in payloads
++                if p.get("type") == "Results"
++                and (p.get("channel") or {}).get("is_final")
++            ]
++            if finals:
++                break
++        assert finals, "Final Results frame should be emitted despite empty transcript"
++        assert finals[0].get("channel", {}).get("alternatives", [{}])[0].get(
++            "transcript"
++        ) == partial_text
++        assert any(p.get("type") == "UtteranceEnd" for p in payloads), (
++            "UtteranceEnd should follow final Results"
 +        )
-+        assert scheduled, "TTS scheduling should succeed for override payloads"
 +
-+        frames = []
-+        idle_streak = 0
-+        deadline = time.time() + 5
-+        while time.time() < deadline and idle_streak < 3:
-+            try:
-+                frames.append(q.get(timeout=0.1))
-+                idle_streak = 0
-+            except Empty:
-+                idle_streak += 1
-+
-+        utterance_ends = [fr for fr in frames if fr.get("type") == "UtteranceEnd"]
-+        assert len(utterance_ends) == 1, f"expected single UtteranceEnd, saw {len(utterance_ends)}"
-+
-+        skip_logs = [kind for kind, payload in logs if kind == "tts.utterance_end.skip"]
-+        assert skip_logs, "expected duplicate suppression log"
++        loop.run_until_complete(events.put({"type": "websocket.disconnect"}))
++        loop.run_until_complete(main_task)
 +    finally:
-+        bus.unsubscribe(sid, q)
-+        bus.note_assistant_turn(sid, None)
-+        bus._canceled.discard((sid, turn_id))
++        asyncio.set_event_loop(None)
++        loop.close()
 +
-+
- def test_ws_barge_commit_cancels_turn(monkeypatch):
-     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
- 
-     sid = "s-barge-commit"
-     bus.note_assistant_turn(sid, "turn-commit")
- 
-     cancel_calls = []
-     orig_cancel = bus.cancel_turn
- 
-     def _capture_cancel(sid_arg, tid_arg):
-         cancel_calls.append((sid_arg, tid_arg))
-         orig_cancel(sid_arg, tid_arg)
- 
-     monkeypatch.setattr(bus, "cancel_turn", _capture_cancel)
- 
-     start_results = []
-     orig_start = ws_asgi.BargeState.start
- 
-     def _capture_start(self, *args, **kwargs):
-         result = orig_start(self, *args, **kwargs)
-         start_results.append(result)
-         return result
- 
-     monkeypatch.setattr(ws_asgi.BargeState, "start", _capture_start)
++    assert ws_instances, "Fake websocket should have been used"
++    assert llm_calls, "LLM turn should run after Deepgram final"
++    assert dg_instances, "Deepgram client should be instantiated"
++    assert not dg_instances[0]._last_transcript, "Cached transcript should reset after final"
