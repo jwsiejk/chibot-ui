@@ -68,11 +68,13 @@ const state = {
   // Pre-roll tap state
   preRollNode: null,
   preRollGain: null,
-  preRollBuffer: null,
-  preRollWriteIndex: 0,
-  preRollFilled: 0,
-  preRollSampleRate: 48_000,
-  preRollPending: null,
+  preRollBlobs: [],
+  preRollDurationMs: 0,
+  preRollLastTimecode: null,
+  preRollTimeslice: 150,
+  recStreaming: false,
+  recStopping: false,
+  recStopShouldSend: false,
 };
 
 const BARGE_CONFIRM_DEFAULT_MS = 420;
@@ -290,20 +292,15 @@ async function _setupPreRollTap(ctx, source) {
   _teardownPreRollTap();
 
   if (!ctx || !source) {
-    state.preRollBuffer = null;
-    state.preRollPending = null;
+    _resetPreRollBuffer();
     return;
   }
 
-  const sampleRate = ctx.sampleRate || 48_000;
-  state.preRollSampleRate = sampleRate;
+  _resetPreRollBuffer();
 
   const worklet = ctx.audioWorklet;
   if (!worklet || typeof worklet.addModule !== 'function') {
     // AudioWorklet unavailable; gracefully degrade without pre-roll.
-    state.preRollBuffer = null;
-    state.preRollWriteIndex = 0;
-    state.preRollFilled = 0;
     return;
   }
 
@@ -312,16 +309,8 @@ async function _setupPreRollTap(ctx, source) {
     await worklet.addModule(moduleUrl);
   } catch (err) {
     try { console.warn('[voice] failed to load pre-roll worklet', err); } catch {}
-    state.preRollBuffer = null;
-    state.preRollWriteIndex = 0;
-    state.preRollFilled = 0;
     return;
   }
-
-  const capacity = Math.max(1, Math.round((sampleRate * PRE_ROLL_MS) / 1000));
-  state.preRollBuffer = new Float32Array(capacity);
-  state.preRollWriteIndex = 0;
-  state.preRollFilled = 0;
 
   try {
     const node = new AudioWorkletNode(ctx, 'pre-roll-processor', {
@@ -330,15 +319,8 @@ async function _setupPreRollTap(ctx, source) {
       channelCount: 1,
       outputChannelCount: [1],
     });
-    node.port.onmessage = (event) => {
-      try {
-        const data = event?.data;
-        if (!data) return;
-        _pushPreRollSamples(data);
-      } catch (err) {
-        try { console.warn('[voice] pre-roll tap handler failed', err); } catch {}
-      }
-    };
+    // Preserve the tap for VAD/visualization without buffering PCM samples.
+    node.port.onmessage = null;
     const silentGain = ctx.createGain();
     silentGain.gain.value = 0;
     source.connect(node);
@@ -354,25 +336,6 @@ async function _setupPreRollTap(ctx, source) {
   }
 }
 
-function _pushPreRollSamples(samples) {
-  const buffer = state.preRollBuffer;
-  if (!buffer || !buffer.length) {
-    return;
-  }
-  const capacity = buffer.length;
-  let writeIndex = state.preRollWriteIndex || 0;
-  let filled = state.preRollFilled || 0;
-  for (let i = 0; i < samples.length; i += 1) {
-    buffer[writeIndex] = samples[i];
-    writeIndex = (writeIndex + 1) % capacity;
-    if (filled < capacity) {
-      filled += 1;
-    }
-  }
-  state.preRollWriteIndex = writeIndex;
-  state.preRollFilled = filled;
-}
-
 function _teardownPreRollTap() {
   if (state.preRollNode) {
     try { state.preRollNode.port.onmessage = null; } catch {}
@@ -383,58 +346,76 @@ function _teardownPreRollTap() {
   }
   state.preRollNode = null;
   state.preRollGain = null;
-  state.preRollBuffer = null;
-  state.preRollWriteIndex = 0;
-  state.preRollFilled = 0;
-  state.preRollPending = null;
+  _resetPreRollBuffer();
 }
 
-function _snapshotPreRoll() {
-  const buffer = state.preRollBuffer;
-  if (!buffer || !buffer.length) {
-    return null;
-  }
-
-  const capacity = buffer.length;
-  const filled = Math.min(state.preRollFilled || 0, capacity);
-  if (filled <= 0) {
-    return null;
-  }
-
-  const sampleRate = state.preRollSampleRate || 48_000;
-  const floatSamples = new Float32Array(filled);
-  const writeIndex = state.preRollWriteIndex || 0;
-  const start = (writeIndex - filled + capacity) % capacity;
-  if (start + filled <= capacity) {
-    floatSamples.set(buffer.subarray(start, start + filled));
-  } else {
-    const firstLen = capacity - start;
-    floatSamples.set(buffer.subarray(start, capacity), 0);
-    floatSamples.set(buffer.subarray(0, filled - firstLen), firstLen);
-  }
-
-  const blob = _pcmFloatToWavBlob(floatSamples, sampleRate);
-  if (!blob) {
-    return null;
-  }
-
-  return {
-    blob,
-    durationMs: (filled / sampleRate) * 1000,
-    frames: filled,
-    sampleRate,
-  };
+function _resetPreRollBuffer() {
+  state.preRollBlobs = [];
+  state.preRollDurationMs = 0;
+  state.preRollLastTimecode = null;
 }
 
-function _enqueuePreRoll(preRoll) {
-  if (!preRoll || !preRoll.blob) {
-    state.preRollPending = null;
+function _computePreRollDuration(timecode) {
+  const timeslice = state.preRollTimeslice || 0;
+  let duration = timeslice || PRE_ROLL_MS;
+  if (Number.isFinite(timecode)) {
+    const last = state.preRollLastTimecode;
+    if (Number.isFinite(last)) {
+      duration = Math.max(0, timecode - last);
+    } else if (timecode > 0) {
+      duration = timecode;
+    }
+    state.preRollLastTimecode = timecode;
+  }
+  if (!Number.isFinite(duration) || duration <= 0) {
+    duration = timeslice || PRE_ROLL_MS;
+  }
+  return duration;
+}
+
+function _bufferPreRollChunk(entry) {
+  if (!entry || !entry.blob) {
     return;
   }
+  const chunk = {
+    blob: entry.blob,
+    durationMs: Number.isFinite(entry.durationMs) ? Math.max(0, entry.durationMs) : 0,
+    timecode: Number.isFinite(entry.timecode) ? entry.timecode : null,
+  };
+  state.preRollBlobs.push(chunk);
+  state.preRollDurationMs += chunk.durationMs;
+  while (state.preRollDurationMs > PRE_ROLL_MS && state.preRollBlobs.length > 1) {
+    const removed = state.preRollBlobs.shift();
+    state.preRollDurationMs -= removed?.durationMs || 0;
+  }
+  if (state.preRollDurationMs < 0) {
+    state.preRollDurationMs = 0;
+  }
+}
 
-  const { blob, frames, durationMs, sampleRate } = preRoll;
-  state.preRollPending = null;
+function _enqueuePreRollBlobs() {
+  const queued = state.preRollBlobs ? [...state.preRollBlobs] : [];
+  const durationMs = queued.reduce((sum, chunk) => sum + (chunk?.durationMs || 0), 0);
+  const totalBytes = queued.reduce((sum, chunk) => sum + (chunk?.blob?.size || 0), 0);
+  const count = queued.length;
+  _resetPreRollBuffer();
+  for (const chunk of queued) {
+    if (!chunk?.blob) continue;
+    _sendRecorderChunk(chunk.blob, {
+      preRoll: true,
+      durationMs: chunk.durationMs,
+      timecode: chunk.timecode,
+    });
+  }
+  return { count, durationMs, totalBytes };
+}
 
+function _sendRecorderChunk(blob, meta = {}) {
+  if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
+    return;
+  }
+  const { preRoll = false, durationMs = null, timecode = null } = meta || {};
+  const logLabel = preRoll ? 'streamed pre-roll chunk' : 'streamed audio chunk';
   state.chunkSendPromise = state.chunkSendPromise
     .catch(() => {})
     .then(async () => {
@@ -442,88 +423,158 @@ function _enqueuePreRoll(preRoll) {
         await sendAudioChunk(blob);
         state.chunkBytesSent += blob.size;
         try {
-          console.debug('[voice] streamed pre-roll chunk', {
+          console.debug('[voice]', logLabel, {
             bytes: blob.size,
-            frames,
             durationMs,
-            sampleRate,
+            timecode,
             mime: blob.type,
           });
         } catch {}
       } catch (err) {
         state.chunkSendError = err;
         try {
-          console.warn('[voice] failed to stream pre-roll chunk', err);
+          console.warn('[voice] failed to stream audio chunk', err);
         } catch {}
       }
     });
 }
 
-function _pcmFloatToWavBlob(floatSamples, sampleRate) {
-  if (!floatSamples || !floatSamples.length || typeof Blob === 'undefined') {
-    return null;
+function _primeRecorderForPreRoll(options = {}) {
+  const { resetBuffer = true } = options || {};
+  if (!state.stream) {
+    return false;
+  }
+  if (typeof MediaRecorder === 'undefined') {
+    console.warn('[voice] MediaRecorder not supported in this browser');
+    state.rec = null;
+    return false;
+  }
+  if (state.rec && state.rec.state === 'recording') {
+    if (resetBuffer) {
+      _resetPreRollBuffer();
+    }
+    return true;
   }
 
-  const frameCount = floatSamples.length;
-  const channels = 1;
-  const bitsPerSample = 16;
-  const pcm16 = new Int16Array(frameCount);
-  for (let i = 0; i < frameCount; i += 1) {
-    let sample = floatSamples[i];
-    if (!Number.isFinite(sample)) sample = 0;
-    sample = Math.max(-1, Math.min(1, sample));
-    pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+  let recorder;
+  try {
+    recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
+  } catch (primaryErr) {
+    try {
+      recorder = new MediaRecorder(state.stream); // fallback, browser picks best
+    } catch (fallbackErr) {
+      console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
+      state.rec = null;
+      return false;
+    }
   }
 
-  const header = _createWavHeader({
-    sampleRate,
-    channels,
-    bitsPerSample,
-    frameCount,
-  });
+  state.rec = recorder;
+  state.recStreaming = false;
+  state.recStopping = false;
+  state.recStopShouldSend = false;
+  if (resetBuffer) {
+    _resetPreRollBuffer();
+  }
 
-  return new Blob([header, pcm16.buffer], { type: 'audio/wav' });
-}
-
-function _createWavHeader({ sampleRate, channels, bitsPerSample, frameCount }) {
-  const header = new ArrayBuffer(44);
-  const view = new DataView(header);
-  const bytesPerSample = bitsPerSample / 8;
-  const blockAlign = channels * bytesPerSample;
-  const byteRate = sampleRate * blockAlign;
-  const dataSize = frameCount * blockAlign;
-  let offset = 0;
-
-  const writeString = (str) => {
-    for (let i = 0; i < str.length; i += 1) {
-      view.setUint8(offset, str.charCodeAt(i));
-      offset += 1;
+  const timeslice = state.preRollTimeslice || 150;
+  recorder.ondataavailable = _handleRecorderData;
+  recorder.onstop = async () => {
+    state.recStreaming = false;
+    state.recStopping = false;
+    state.recStopShouldSend = false;
+    state.rec = null;
+    let finalDetail;
+    try {
+      await state.chunkSendPromise.catch((err) => {
+        state.chunkSendError = state.chunkSendError || err;
+      });
+      if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
+        console.warn('[voice] recorded chunks too small', state.chunkBytesSent);
+        finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
+      }
+    } catch (e) {
+      console.warn('[voice] send audio failed', e);
+      state.chunkSendError = state.chunkSendError || e;
+    } finally {
+      if (state.chunkSendError && !finalDetail) {
+        finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
+      }
+      if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
+        try {
+          console.warn('[voice] recorder stopped with issues', {
+            bytesSent: state.chunkBytesSent,
+            error: state.chunkSendError,
+          });
+        } catch {}
+      } else {
+        try {
+          console.debug('[voice] recorder stopped', {
+            bytesSent: state.chunkBytesSent,
+            mime: (recorder && recorder.mimeType) || REC_MIME,
+          });
+        } catch {}
+      }
+      const pendingClose = _closeTurnIfOpen();
+      if (pendingClose) {
+        try {
+          await pendingClose;
+        } catch {}
+      }
+      _emitVoiceState('armed', finalDetail);
+      if (state.vad && state.stream && state.stream.active) {
+        try { _primeRecorderForPreRoll(); } catch (err) { try { console.warn('[voice] failed to re-prime recorder', err); } catch {} }
+      }
     }
   };
-  const writeUint32 = (value) => {
-    view.setUint32(offset, value, true);
-    offset += 4;
-  };
-  const writeUint16 = (value) => {
-    view.setUint16(offset, value, true);
-    offset += 2;
-  };
 
-  writeString('RIFF');
-  writeUint32(36 + dataSize);
-  writeString('WAVE');
-  writeString('fmt ');
-  writeUint32(16);
-  writeUint16(1); // PCM format
-  writeUint16(channels);
-  writeUint32(sampleRate);
-  writeUint32(byteRate);
-  writeUint16(blockAlign);
-  writeUint16(bitsPerSample);
-  writeString('data');
-  writeUint32(dataSize);
+  try {
+    recorder.start(timeslice);
+    state.preRollTimeslice = timeslice;
+    try {
+      console.debug('[voice] recorder primed', { mime: recorder.mimeType, timeslice });
+    } catch {}
+  } catch (err) {
+    console.warn('[voice] recorder start failed', err);
+    state.rec = null;
+    return false;
+  }
 
-  return header;
+  return true;
+}
+
+function _handleRecorderData(event) {
+  if (!event) {
+    return;
+  }
+  if (state.finalized) {
+    return;
+  }
+  const blob = event.data;
+  if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
+    return;
+  }
+
+  const timecode = Number.isFinite(event.timecode) ? event.timecode : null;
+
+  if (state.recStopping && !state.recStopShouldSend) {
+    return;
+  }
+
+  if (state.recStopping && state.recStopShouldSend) {
+    state.recStopShouldSend = false;
+    state.recStopping = false;
+    _sendRecorderChunk(blob, { preRoll: false, durationMs: null, timecode });
+    return;
+  }
+
+  if (state.recStreaming) {
+    _sendRecorderChunk(blob, { preRoll: false, durationMs: null, timecode });
+    return;
+  }
+
+  const durationMs = _computePreRollDuration(timecode);
+  _bufferPreRollChunk({ blob, durationMs, timecode });
 }
 
 function _stopRecorder(detail = null) {
@@ -552,6 +603,14 @@ function _stopRecorder(detail = null) {
   if (recorder.state === 'inactive') {
     state.rec = null;
     return;
+  }
+
+  const shouldSendFinal = !!state.recStreaming;
+  state.recStopShouldSend = shouldSendFinal;
+  state.recStopping = true;
+  state.recStreaming = false;
+  if (!shouldSendFinal) {
+    _resetPreRollBuffer();
   }
 
   try { recorder.stop(); } catch {}
@@ -650,6 +709,8 @@ async function _arm(stream = null, opts = {}) {
   });
   _emitVoiceState('armed');
 
+  _primeRecorderForPreRoll();
+
   return mic;
 }
 
@@ -657,135 +718,47 @@ async function _arm(stream = null, opts = {}) {
 
 function _startRecorder() {
   if (!state.stream) return false;
-  if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
 
-  if (typeof MediaRecorder === 'undefined') {
-    console.warn('[voice] MediaRecorder not supported in this browser');
-    state.rec = null;
+  const primed = _primeRecorderForPreRoll({ resetBuffer: false });
+  if (!primed || !state.rec || state.rec.state !== 'recording') {
     return false;
+  }
+
+  if (state.recStreaming) {
+    return true;
   }
 
   state.chunkSendPromise = Promise.resolve();
   state.chunkBytesSent = 0;
   state.chunkSendError = null;
   state.turnClosePromise = null;
-  _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
-  state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
+  _clearPendingEndTimer();
+  state.recStartedAt = performance.now ? performance.now() : Date.now();
   state.finalized = false;
   state.postFinalHoldUntil = 0;
+  state.recStreaming = true;
+  state.recStopping = false;
+  state.recStopShouldSend = false;
   _ensureWSListener();
 
-  const pendingPreRoll = state.preRollPending;
-  if (pendingPreRoll) {
-    _enqueuePreRoll(pendingPreRoll);
-  } else {
-    state.preRollPending = null;
-  }
-
-  let recorder;
-  try {
-    recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
-  } catch (primaryErr) {
+  const preRollStats = _enqueuePreRollBlobs();
+  if (preRollStats?.count) {
     try {
-      recorder = new MediaRecorder(state.stream); // fallback, browser picks best
-    } catch (fallbackErr) {
-      console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
-      state.rec = null;
-      return false;
-    }
-  }
-
-  state.rec = recorder;
-
-  state.rec.ondataavailable = (e) => {
-    if (state.finalized) {
-      return;
-    }
-    const blob = e.data;
-    if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
-      return;
-    }
-
-    // Chain chunk sends to preserve ordering across the WS.
-    state.chunkSendPromise = state.chunkSendPromise
-      .catch(() => {}) // allow queue to continue even if a prior chunk failed
-      .then(async () => {
-        try {
-          await sendAudioChunk(blob);
-          state.chunkBytesSent += blob.size;
-          try {
-            console.debug('[voice] streamed audio chunk', { bytes: blob.size });
-          } catch {}
-        } catch (err) {
-          state.chunkSendError = err;
-          try {
-            console.warn('[voice] failed to stream audio chunk', err);
-          } catch {}
-        }
+      console.debug('[voice] flushed pre-roll buffer', {
+        chunks: preRollStats.count,
+        durationMs: preRollStats.durationMs,
+        bytes: preRollStats.totalBytes,
       });
-  };
-
-  state.rec.onstop = async () => {
-    let finalDetail;
-    try {
-      await state.chunkSendPromise.catch((err) => {
-        state.chunkSendError = state.chunkSendError || err;
-      });
-      if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
-        console.warn('[voice] recorded chunks too small', state.chunkBytesSent);
-        finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
-      }
-    } catch (e) {
-      console.warn('[voice] send audio failed', e);
-      state.chunkSendError = state.chunkSendError || e;
-    } finally {
-      if (state.chunkSendError && !finalDetail) {
-        finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
-      }
-      if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
-        try {
-          console.warn('[voice] recorder stopped with issues', {
-            bytesSent: state.chunkBytesSent,
-            error: state.chunkSendError,
-          });
-        } catch {}
-      } else {
-        try {
-          console.debug('[voice] recorder stopped', {
-            bytesSent: state.chunkBytesSent,
-            // state.rec may be nulled by _stopRecorder; fall back to selected REC_MIME
-            mime: (state.rec && state.rec.mimeType) || REC_MIME,
-          });
-        } catch {}
-      }
-      // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
-      const pendingClose = _closeTurnIfOpen();
-      if (pendingClose) {
-        try {
-          await pendingClose;
-        } catch {}
-      }
-      _emitVoiceState('armed', finalDetail);
-    }
-  };
-
-  try {
-    // Small timeslice ensures non-empty dataavailable frames while still producing a single turn blob.
-    const timeslice = 150; // 150 ms sits comfortably within the 100–200 ms target window
-    state.rec.start(timeslice);
-    state.turnOpen = true; // mark an open ASR turn on the server
-    try {
-      console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice });
     } catch {}
-  } catch (e) {
-    console.warn('[voice] recorder start failed', e);
-    state.rec = null;
-    state.turnOpen = false;
-    state.turnClosePromise = null;
-    return false;
   }
 
-  // Safety timeout to prevent runaway recordings
+  state.turnOpen = true;
+  try {
+    console.debug('[voice] recorder streaming', {
+      mime: (state.rec && state.rec.mimeType) || REC_MIME,
+    });
+  } catch {}
+
   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
   _safeClearTurnTimer();
   state.turnTimer = setTimeout(() => {
@@ -796,24 +769,20 @@ function _startRecorder() {
 }
 
 function _onSpeechStartCommitted() {
-  const preRollSnapshot = _snapshotPreRoll();
-  state.preRollPending = preRollSnapshot;
-  const bufferedFrames = state.preRollBuffer ? Math.min(state.preRollFilled || 0, state.preRollBuffer.length) : 0;
-  const sampleRate = state.preRollSampleRate || (preRollSnapshot && preRollSnapshot.sampleRate) || null;
-  const bufferedMsRaw = sampleRate ? (bufferedFrames / sampleRate) * 1000 : 0;
-  const sentMsRaw = preRollSnapshot ? preRollSnapshot.durationMs : 0;
+  const bufferedMsRaw = Number.isFinite(state.preRollDurationMs) ? state.preRollDurationMs : 0;
+  const preRollBlobs = state.preRollBlobs || [];
+  const totalBytes = preRollBlobs.reduce((sum, chunk) => sum + (chunk?.blob?.size || 0), 0);
   const round = (v) => {
     if (!Number.isFinite(v)) return 0;
     return Math.round(v * 100) / 100;
   };
   _logLifecycle('vad_speech_start', {
     preRollBufferedMs: round(bufferedMsRaw),
-    preRollSentMs: round(sentMsRaw),
-    preRollFrames: preRollSnapshot?.frames ?? 0,
-    preRollBytes: preRollSnapshot?.blob?.size ?? 0,
-    preRollSampleRate: sampleRate,
-    preRollEnabled: !!state.preRollBuffer,
-    preRollMime: preRollSnapshot?.blob?.type || null,
+    preRollSentMs: round(Math.min(bufferedMsRaw, PRE_ROLL_MS)),
+    preRollChunks: preRollBlobs.length,
+    preRollBytes: totalBytes,
+    preRollEnabled: preRollBlobs.length > 0,
+    preRollMime: (state.rec && state.rec.mimeType) || REC_MIME,
   });
 
   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')

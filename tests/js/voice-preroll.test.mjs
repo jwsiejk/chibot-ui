@@ -53,7 +53,7 @@ globalThis.__TEST_WS_HOOKS = {};
 class FakeRecorder {
   constructor() {
     this.state = 'inactive';
-    this.mimeType = 'audio/ogg; codecs=opus';
+    this.mimeType = 'audio/webm; codecs=opus';
     this.ondataavailable = null;
     this.onstop = null;
     this.stopCalled = false;
@@ -85,13 +85,9 @@ test('pre-roll audio is flushed before first live MediaRecorder chunk', async ()
   hooks.state.chunkBytesSent = 0;
   hooks.state.chunkSendError = null;
 
-  const preRollBlob = new Blob(['pre'], { type: 'audio/wav' });
-  hooks.state.preRollPending = {
-    blob: preRollBlob,
-    frames: 1200,
-    durationMs: 25,
-    sampleRate: 48000,
-  };
+  const preRollBlob = new Blob(['pre'], { type: 'audio/webm; codecs=opus' });
+  hooks.state.preRollBlobs = [{ blob: preRollBlob, durationMs: 25, timecode: 25 }];
+  hooks.state.preRollDurationMs = 25;
 
   const events = [];
   globalThis.__TEST_WS_HOOKS = {
@@ -102,13 +98,13 @@ test('pre-roll audio is flushed before first live MediaRecorder chunk', async ()
 
   const started = hooks.startRecorder();
   assert.equal(started, true, 'recorder should start with fake stream');
-  assert.equal(hooks.state.preRollPending, null, 'pre-roll state should clear once recorder starts');
+  assert.equal(hooks.state.preRollBlobs.length, 0, 'pre-roll buffer should clear once recorder starts');
 
   const recorder = FakeRecorder.instances.at(-1);
   assert.ok(recorder, 'fake recorder should exist');
   assert.equal(recorder.state, 'recording', 'recorder should be recording');
 
-  const liveBlob = new Blob(['live'], { type: 'audio/ogg; codecs=opus' });
+  const liveBlob = new Blob(['live'], { type: 'audio/webm; codecs=opus' });
   recorder.ondataavailable({ data: liveBlob });
 
   await hooks.state.chunkSendPromise;
@@ -119,6 +115,7 @@ test('pre-roll audio is flushed before first live MediaRecorder chunk', async ()
     texts.push(await blob.text());
   }
   assert.deepEqual(texts, ['pre', 'live'], 'pre-roll chunk must precede the live chunk');
+  assert.equal(events[0].type, 'audio/webm; codecs=opus', 'pre-roll chunk should use WebM/Opus');
 
   hooks.stopRecorder({ reason: 'test_cleanup' });
   if (typeof recorder.onstop === 'function') {
