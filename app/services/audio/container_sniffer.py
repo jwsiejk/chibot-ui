@@ -25,9 +25,9 @@ class AudioContainerSniffer:
     def feed(self, chunk: bytes) -> Optional[Detection]:
         if self._detected or not chunk:
             return self._detected
-        remain = self.MAX_WINDOW - len(self._buf)
-        if remain > 0:
-            self._buf += chunk[:remain]
+        self._buf += chunk
+        if len(self._buf) > self.MAX_WINDOW:
+            del self._buf[:-self.MAX_WINDOW]
         if self.EBML_MAGIC in self._buf:
             self._detected = Detection(container="webm", codec="opus", containerized=True)
         elif self.OGG_MAGIC in self._buf:
