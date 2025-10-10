@@ -40,6 +40,7 @@ const REC_MIME = (typeof MediaRecorder !== 'undefined'
 
 const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
 const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+const PRE_ROLL_MS = 250;            // ~0.25s of pre-roll audio
 
 const state = {
   stream: null,
@@ -64,6 +65,14 @@ const state = {
   ttsPlaying: false,
   bargeConfirmTimer: null,
   bargeConfirmActive: false,
+  // Pre-roll tap state
+  preRollNode: null,
+  preRollGain: null,
+  preRollBuffer: null,
+  preRollWriteIndex: 0,
+  preRollFilled: 0,
+  preRollSampleRate: 48_000,
+  preRollPending: null,
 };
 
 const BARGE_CONFIRM_DEFAULT_MS = 420;
@@ -228,6 +237,7 @@ async function _ensureMic(externalStream = null) {
   analyser.fftSize = 2048;
   analyser.smoothingTimeConstant = 0.06;          // LESS twitchy (was 0.03)
   source.connect(analyser);
+  _setupPreRollTap(ctx, source);
 
   state.stream = stream;
   state.ctx = ctx;
@@ -276,6 +286,229 @@ function _closeTurnIfOpen() {
   return closePromise;
 }
 
+function _setupPreRollTap(ctx, source) {
+  _teardownPreRollTap();
+
+  if (!ctx || !source) {
+    state.preRollBuffer = null;
+    state.preRollPending = null;
+    return;
+  }
+
+  const sampleRate = ctx.sampleRate || 48_000;
+  state.preRollSampleRate = sampleRate;
+
+  if (typeof ctx.createScriptProcessor !== 'function') {
+    // ScriptProcessorNode unavailable; gracefully degrade without pre-roll.
+    state.preRollBuffer = null;
+    state.preRollWriteIndex = 0;
+    state.preRollFilled = 0;
+    return;
+  }
+
+  const capacity = Math.max(1, Math.round((sampleRate * PRE_ROLL_MS) / 1000));
+  state.preRollBuffer = new Float32Array(capacity);
+  state.preRollWriteIndex = 0;
+  state.preRollFilled = 0;
+
+  try {
+    const processor = ctx.createScriptProcessor(2048, 1, 1);
+    const silentGain = ctx.createGain();
+    silentGain.gain.value = 0;
+    processor.onaudioprocess = (event) => {
+      try {
+        const input = event?.inputBuffer?.getChannelData?.(0);
+        if (!input) return;
+        _pushPreRollSamples(input);
+      } catch (err) {
+        try { console.warn('[voice] pre-roll tap failed', err); } catch {}
+      }
+    };
+    source.connect(processor);
+    processor.connect(silentGain);
+    if (ctx.destination) {
+      silentGain.connect(ctx.destination);
+    }
+    state.preRollNode = processor;
+    state.preRollGain = silentGain;
+  } catch (err) {
+    try { console.warn('[voice] pre-roll tap unavailable', err); } catch {}
+    _teardownPreRollTap();
+  }
+}
+
+function _pushPreRollSamples(samples) {
+  const buffer = state.preRollBuffer;
+  if (!buffer || !buffer.length) {
+    return;
+  }
+  const capacity = buffer.length;
+  let writeIndex = state.preRollWriteIndex || 0;
+  let filled = state.preRollFilled || 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    buffer[writeIndex] = samples[i];
+    writeIndex = (writeIndex + 1) % capacity;
+    if (filled < capacity) {
+      filled += 1;
+    }
+  }
+  state.preRollWriteIndex = writeIndex;
+  state.preRollFilled = filled;
+}
+
+function _teardownPreRollTap() {
+  if (state.preRollNode) {
+    try { state.preRollNode.disconnect(); } catch {}
+    try { state.preRollNode.onaudioprocess = null; } catch {}
+  }
+  if (state.preRollGain) {
+    try { state.preRollGain.disconnect(); } catch {}
+  }
+  state.preRollNode = null;
+  state.preRollGain = null;
+  state.preRollBuffer = null;
+  state.preRollWriteIndex = 0;
+  state.preRollFilled = 0;
+  state.preRollPending = null;
+}
+
+function _snapshotPreRoll() {
+  const buffer = state.preRollBuffer;
+  if (!buffer || !buffer.length) {
+    return null;
+  }
+
+  const capacity = buffer.length;
+  const filled = Math.min(state.preRollFilled || 0, capacity);
+  if (filled <= 0) {
+    return null;
+  }
+
+  const sampleRate = state.preRollSampleRate || 48_000;
+  const floatSamples = new Float32Array(filled);
+  const writeIndex = state.preRollWriteIndex || 0;
+  const start = (writeIndex - filled + capacity) % capacity;
+  if (start + filled <= capacity) {
+    floatSamples.set(buffer.subarray(start, start + filled));
+  } else {
+    const firstLen = capacity - start;
+    floatSamples.set(buffer.subarray(start, capacity), 0);
+    floatSamples.set(buffer.subarray(0, filled - firstLen), firstLen);
+  }
+
+  const blob = _pcmFloatToWavBlob(floatSamples, sampleRate);
+  if (!blob) {
+    return null;
+  }
+
+  return {
+    blob,
+    durationMs: (filled / sampleRate) * 1000,
+    frames: filled,
+    sampleRate,
+  };
+}
+
+function _enqueuePreRoll(preRoll) {
+  if (!preRoll || !preRoll.blob) {
+    state.preRollPending = null;
+    return;
+  }
+
+  const { blob, frames, durationMs, sampleRate } = preRoll;
+  state.preRollPending = null;
+
+  state.chunkSendPromise = state.chunkSendPromise
+    .catch(() => {})
+    .then(async () => {
+      try {
+        await sendAudioChunk(blob);
+        state.chunkBytesSent += blob.size;
+        try {
+          console.debug('[voice] streamed pre-roll chunk', {
+            bytes: blob.size,
+            frames,
+            durationMs,
+            sampleRate,
+            mime: blob.type,
+          });
+        } catch {}
+      } catch (err) {
+        state.chunkSendError = err;
+        try {
+          console.warn('[voice] failed to stream pre-roll chunk', err);
+        } catch {}
+      }
+    });
+}
+
+function _pcmFloatToWavBlob(floatSamples, sampleRate) {
+  if (!floatSamples || !floatSamples.length || typeof Blob === 'undefined') {
+    return null;
+  }
+
+  const frameCount = floatSamples.length;
+  const channels = 1;
+  const bitsPerSample = 16;
+  const pcm16 = new Int16Array(frameCount);
+  for (let i = 0; i < frameCount; i += 1) {
+    let sample = floatSamples[i];
+    if (!Number.isFinite(sample)) sample = 0;
+    sample = Math.max(-1, Math.min(1, sample));
+    pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+  }
+
+  const header = _createWavHeader({
+    sampleRate,
+    channels,
+    bitsPerSample,
+    frameCount,
+  });
+
+  return new Blob([header, pcm16.buffer], { type: 'audio/wav' });
+}
+
+function _createWavHeader({ sampleRate, channels, bitsPerSample, frameCount }) {
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+  const bytesPerSample = bitsPerSample / 8;
+  const blockAlign = channels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = frameCount * blockAlign;
+  let offset = 0;
+
+  const writeString = (str) => {
+    for (let i = 0; i < str.length; i += 1) {
+      view.setUint8(offset, str.charCodeAt(i));
+      offset += 1;
+    }
+  };
+  const writeUint32 = (value) => {
+    view.setUint32(offset, value, true);
+    offset += 4;
+  };
+  const writeUint16 = (value) => {
+    view.setUint16(offset, value, true);
+    offset += 2;
+  };
+
+  writeString('RIFF');
+  writeUint32(36 + dataSize);
+  writeString('WAVE');
+  writeString('fmt ');
+  writeUint32(16);
+  writeUint16(1); // PCM format
+  writeUint16(channels);
+  writeUint32(sampleRate);
+  writeUint32(byteRate);
+  writeUint16(blockAlign);
+  writeUint16(bitsPerSample);
+  writeString('data');
+  writeUint32(dataSize);
+
+  return header;
+}
+
 function _stopRecorder(detail = null) {
   const recorder = state.rec;
   const wasActive = !!recorder && recorder.state !== 'inactive';
@@ -315,6 +548,7 @@ function _teardownVADOnly() {
 }
 
 function _teardownAudioGraph() {
+  _teardownPreRollTap();
   try { state.source && state.source.disconnect(); } catch {}
   try { state.analyser && state.analyser.disconnect(); } catch {}
   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
@@ -423,6 +657,13 @@ function _startRecorder() {
   state.finalized = false;
   state.postFinalHoldUntil = 0;
   _ensureWSListener();
+
+  const pendingPreRoll = state.preRollPending;
+  if (pendingPreRoll) {
+    _enqueuePreRoll(pendingPreRoll);
+  } else {
+    state.preRollPending = null;
+  }
 
   let recorder;
   try {
@@ -538,7 +779,25 @@ function _startRecorder() {
 }
 
 function _onSpeechStartCommitted() {
-  _logLifecycle('vad_speech_start');
+  const preRollSnapshot = _snapshotPreRoll();
+  state.preRollPending = preRollSnapshot;
+  const bufferedFrames = state.preRollBuffer ? Math.min(state.preRollFilled || 0, state.preRollBuffer.length) : 0;
+  const sampleRate = state.preRollSampleRate || (preRollSnapshot && preRollSnapshot.sampleRate) || null;
+  const bufferedMsRaw = sampleRate ? (bufferedFrames / sampleRate) * 1000 : 0;
+  const sentMsRaw = preRollSnapshot ? preRollSnapshot.durationMs : 0;
+  const round = (v) => {
+    if (!Number.isFinite(v)) return 0;
+    return Math.round(v * 100) / 100;
+  };
+  _logLifecycle('vad_speech_start', {
+    preRollBufferedMs: round(bufferedMsRaw),
+    preRollSentMs: round(sentMsRaw),
+    preRollFrames: preRollSnapshot?.frames ?? 0,
+    preRollBytes: preRollSnapshot?.blob?.size ?? 0,
+    preRollSampleRate: sampleRate,
+    preRollEnabled: !!state.preRollBuffer,
+    preRollMime: preRollSnapshot?.blob?.type || null,
+  });
 
   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
     ? performance.now()

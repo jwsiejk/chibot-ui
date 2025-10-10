@@ -1,83 +1,156 @@
-[DBG] debug:on Object
-bootstrap.js?v=v20250911b:358 [AskChip] bootstrap loaded
-ws.js?v=v20250911b:307 [ws] openWS build Object
-ws.js?v=v20250911b:311 [ws] openWS options= Object reconnect= true
-debug.js?v=v20250911b:4 [DBG] UI→WS Object
-bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"ready","session_id":"bb325dc4-8281-4d1b-b962-e8b01fdcf877"}
-voice.js:99 [voice] mic_device_selected Object
-voice.js:99 [voice] mic_start Object
-bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"assistant_chunk","turn_id":"554f5ec1fb294a63bc89d957e69a8e8e","text":"Hey James, what should we tackle first?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps"}
-bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"suggestions","turn_id":"554f5ec1fb294a63bc89d957e69a8e8e","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"},{"text":"Explain the business value"}]}
-bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"assistant_end","turn_id":"554f5ec1fb294a63bc89d957e69a8e8e"}
-bootstrap.js?v=v20250911b:86 [WS→UI] {"type":"assistant_audio","turn_id":"554f5ec1fb294a63bc89d957e69a8e8e","mime":"audio/mpeg","audio_chunks":["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
+[AskChip] bootstrap loaded
+debug.js?v=1760061325:4 [DBG] debug:on Object
+ws.js?v=1760061325:307 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760061325', version: '1760061325', flags: undefined, reconnectEnabled: true, sessionStarted: false}
+ws.js?v=1760061325:311 [ws] openWS options= {} reconnect= true
+debug.js?v=1760061325:4 [DBG] UI→WS {type: 'Configure', session_id: '70b3467b-c43b-4543-92b0-b150dbd52f10', greet: true, reset: 1}
+bootstrap.js?v=1760061325:86 [WS→UI] {"type":"ready","session_id":"70b3467b-c43b-4543-92b0-b150dbd52f10"}
+voice.js:99 [voice] mic_device_selected {event: 'mic_device_selected', label: 'Microphone Array (Intel® Smart Sound Technology for Digital Microphones)', sampleRate: 48000, channels: 1}
+voice.js:99 [voice] mic_start {event: 'mic_start', sampleRate: 48000, pollMs: 33}
+bootstrap.js?v=1760061325:86 [WS→UI] {"type":"assistant_chunk","turn_id":"40d1b07086c046098ac884f4a4f61407","text":"Hey James, what would you like to accomplish today?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps"}
+bootstrap.js?v=1760061325:86 [WS→UI] {"type":"suggestions","turn_id":"40d1b07086c046098ac884f4a4f61407","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"},{"text":"Explain the business value"}]}
+bootstrap.js?v=1760061325:86 [WS→UI] {"type":"assistant_end","turn_id":"40d1b07086c046098ac884f4a4f61407"}
+bootstrap.js?v=1760061325:86 [WS→UI] {"type":"assistant_audio","turn_id":"40d1b07086c046098ac884f4a4f61407","mime":"audio/mpeg","audio_chunks":["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
 voice.js:99 [voice] vad_speech_start {event: 'vad_speech_start'}
 voice.js:520 [voice] recorder started {mime: 'audio/webm; codecs=opus', timeslice: 150}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2094, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2094)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2094, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2094)
 voice.js:459 [voice] streamed audio chunk {bytes: 2094}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:459 [voice] streamed audio chunk {bytes: 2898}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
 voice.js:459 [voice] streamed audio chunk {bytes: 2898}
 voice.js:99 [voice] vad_speech_end {event: 'vad_speech_end', reason: 'vad_silence'}
 voice.js:99 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'vad_silence'}
-ws.js?v=v20250911b:476 [ws] sending audio chunk {bytes: 2897, mime: 'audio/webm;codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS ArrayBuffer(2897)
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2897, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2897)
 voice.js:459 [voice] streamed audio chunk {bytes: 2897}
-voice.js:496 [voice] recorder stopped {bytesSent: 57155, mime: 'audio/webm; codecs=opus'}
-debug.js?v=v20250911b:4 [DBG] UI→WS {type: 'CloseStream'}
-voice.js:99 [voice] post_final_hold_applied {event: 'post_final_hold_applied', holdMs: 600, holdUntil: 24434, source: 'ws_final'}
+voice.js:496 [voice] recorder stopped {bytesSent: 48461, mime: 'audio/webm; codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS {type: 'CloseStream'}
+voice.js:99 [voice] post_final_hold_applied {event: 'post_final_hold_applied', holdMs: 600, holdUntil: 31730.100000023842, source: 'ws_final'}
+voice.js:99 [voice] vad_speech_start {event: 'vad_speech_start'}
+voice.js:520 [voice] recorder started {mime: 'audio/webm; codecs=opus', timeslice: 150}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2094, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2094)
+voice.js:459 [voice] streamed audio chunk {bytes: 2094}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+voice.js:628 [voice] delaying VAD end {waitMs: 210.5999999642372, elapsed: 989.4000000357628}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+voice.js:628 [voice] delaying VAD end {waitMs: 0.09999996423721313, elapsed: 1199.9000000357628}
+voice.js:99 [voice] vad_speech_end {event: 'vad_speech_end', reason: 'vad_silence'}
+voice.js:99 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'vad_silence'}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2897, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2897)
+voice.js:459 [voice] streamed audio chunk {bytes: 2897}
+voice.js:496 [voice] recorder stopped {bytesSent: 19481, mime: 'audio/webm; codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS {type: 'CloseStream'}
+voice.js:99 [voice] post_final_hold_applied {event: 'post_final_hold_applied', holdMs: 600, holdUntil: 48156.60000002384, source: 'ws_final'}
+voice.js:99 [voice] vad_speech_start {event: 'vad_speech_start'}
+voice.js:520 [voice] recorder started {mime: 'audio/webm; codecs=opus', timeslice: 150}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2094, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2094)
+voice.js:459 [voice] streamed audio chunk {bytes: 2094}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:459 [voice] streamed audio chunk {bytes: 2898}
+voice.js:99 [voice] vad_speech_end {event: 'vad_speech_end', reason: 'vad_silence'}
+voice.js:99 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'vad_silence'}
+ws.js?v=1760061325:476 [ws] sending audio chunk {bytes: 2897, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS ArrayBuffer(2897)
+voice.js:459 [voice] streamed audio chunk {bytes: 2897}
+voice.js:496 [voice] recorder stopped {bytesSent: 42665, mime: 'audio/webm; codecs=opus'}
+debug.js?v=1760061325:4 [DBG] UI→WS {type: 'CloseStream'}
+voice.js:99 [voice] post_final_hold_applied {event: 'post_final_hold_applied', holdMs: 600, holdUntil: 63339.60000002384, source: 'ws_final'}
 voice.js:99 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
-debug.js?v=v20250911b:4 [DBG] UI→WS {type: 'CloseStream'}
+debug.js?v=1760061325:4 [DBG] UI→WS {type: 'CloseStream'}
 voice.js:99 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
-bootstrap.js?v=v20250911b:115 [WS close] {code: 1000, reason: 'normal closure'}
+bootstrap.js?v=1760061325:115 [WS close] {code: 1000, reason: 'normal closure'}

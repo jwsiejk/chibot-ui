@@ -1,242 +1,720 @@
-diff --git a/app/__init__.py b/app/__init__.py
-index c5519ad7f856d1e1e6ed1f70860122ee819242ab..3dee09c8a1ff0bbe226eefd5e42f3385239e4747 100644
---- a/app/__init__.py
-+++ b/app/__init__.py
-@@ -1,29 +1,29 @@
+diff --git a/static/js/voice.js b/static/js/voice.js
+index 2b1504553e3fb221bbd8b74f077ab1bec720e889..544117347f06dc49df59a6f4dd5f6d4fe41a8819 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -18,74 +18,83 @@ Citations for context (non-functional):
+ */
  
- # app/__init__.py
- import os
--from flask import Flask, Blueprint, render_template, request, session
-+from flask import Flask, Blueprint, render_template, request, session, current_app
+ import { VAD } from './voice/vad.js';
+ import { sendAudioChunk, sendCloseStream } from './ws_module.js';
+ import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
  
- from .api_v1 import create_v1_blueprint
- from .api_v1.health import bp as health_bp
- from .middleware.csrf import csrf_before_request, make_csrf_route, ensure_csrf_headers
- from .middleware.rate_limit import register_before_request as rate_limit_register
+ // Public API (matches prior usage)
+ export async function initMic(stream = null) { return await _ensureMic(stream); }
+ export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
+ export function disarmVAD() { _disarm(); }
+ export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
+ export function bargeIn() { _bargeIn(); }         // keeps API parity
+ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
  
- # ---------- Core blueprint (UI shells / docs) ----------
- core_bp = Blueprint("core", __name__)
+ // ---- Internal state ---------------------------------------------------------
  
- @core_bp.get("/")
- def home():
-     return render_template("index.html")
+ // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   && typeof MediaRecorder.isTypeSupported === 'function'
+   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
+   ? 'audio/ogg; codecs=opus'
+   : 'audio/webm; codecs=opus';
  
- @core_bp.get("/diagnostics")
- def diagnostics():
-     return render_template("diagnostics.html")
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
++const PRE_ROLL_MS = 250;            // ~0.25s of pre-roll audio
  
- @core_bp.get("/favicon.ico")
- def favicon():
-     # Serve from /static/favicon.ico
-     from flask import current_app, send_file
-     import os as _os
-     return send_file(_os.path.join(current_app.static_folder, "favicon.ico"), mimetype="image/x-icon")
+ const state = {
+   stream: null,
+   ctx: null,
+   source: null,
+   analyser: null,
+   vad: null,
+   rec: null,
+   finalized: false,
+   postFinalHoldUntil: 0,
+   wsListener: null,
+   chunkSendPromise: Promise.resolve(),
+   chunkBytesSent: 0,
+   chunkSendError: null,
+   turnTimer: null,
+   turnOpen: false,   // track whether a turn is currently open server-side
+   turnClosePromise: null,
+   deviceLogged: false,
+   // NEW: min-turn gating
+   recStartedAt: 0,
+   pendingEndTimer: null,
+   ttsPlaying: false,
+   bargeConfirmTimer: null,
+   bargeConfirmActive: false,
++  // Pre-roll tap state
++  preRollNode: null,
++  preRollGain: null,
++  preRollBuffer: null,
++  preRollWriteIndex: 0,
++  preRollFilled: 0,
++  preRollSampleRate: 48_000,
++  preRollPending: null,
+ };
  
- @core_bp.get("/logs-ui")
-@@ -47,50 +47,61 @@ def create_app():
-         __name__,
-         static_folder="../static",
-         static_url_path="/static",
-         template_folder="../templates",
-     )
-     app.config["JSON_SORT_KEYS"] = False
-     if os.environ.get("CI_FAST"):
-         app.config["TESTING"] = True
- 
-     app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
- 
-     # v1-only API + core + health
-     app.register_blueprint(create_v1_blueprint(), url_prefix="/api/v1")
-     app.register_blueprint(core_bp)
-     app.register_blueprint(health_bp)
- 
-     # Ensure CSRF header/cookie attached to responses
-     app.after_request(ensure_csrf_headers)
- 
-     # Middleware
-     app.before_request(csrf_before_request)
-     rate_limit_register(app)
- 
-     make_csrf_route(app)
- 
-+    def asset_version(rel_path: str) -> str:
-+        try:
-+            full_path = os.path.join(current_app.static_folder, rel_path)
-+            return str(int(os.path.getmtime(full_path)))
-+        except (OSError, TypeError, ValueError):
-+            return "0"
-+
-+    @app.context_processor
-+    def _inject_asset_version():
-+        return {"asset_version": asset_version}
-+
-     @app.after_request
-     def maybe_allow_cors(resp):
-         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
-         if allow:
-             origins = [o.strip() for o in allow.split(",") if o.strip()]
-             ori = request.headers.get("Origin", "")
-             if ori in origins:
-                 resp.headers["Access-Control-Allow-Origin"] = ori
-                 resp.headers["Vary"] = "Origin"
-                 resp.headers["Access-Control-Allow-Credentials"] = "true"
-                 resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token"
-                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-         return resp
- 
-     @app.route("/<path:_>", methods=["OPTIONS"])
-     def _cors_preflight(_):
-         return ("", 204)
- 
-     @app.before_request
-     def _auth_gate():
-         p = request.path or "/"
-         allow = (
-             p.startswith("/api/") or
-             p.startswith("/ws") or
-             p.startswith("/static") or
-diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
-index 56d059860dbf92dff9efa04e50bbe06dfd14c6cd..df990edf35a23d83703c80142cc86dfa88410117 100644
---- a/static/js/bootstrap.js
-+++ b/static/js/bootstrap.js
-@@ -343,26 +343,29 @@ function wireUI(){
- 
-   // Reset bootstrap state when session ends so Start can be used again
-   window.addEventListener('askchip-session-ended', () => {
-     try { disarmVAD(); } catch {}
-     try { Visualizer.stop({ reset: true }); } catch {}
-     started = false;
-     const sb = $('#startButton');
-     if (sb) sb.disabled = false;
-     _disableButtons();
-     setDot('ready');
-   });
- 
-   setDot('ready');
-   setStatusText('Ready');
-   window.__askchip_bootstrap_loaded = true;
-   console.log('[AskChip] bootstrap loaded');
- }
- 
- if (document.readyState === 'loading'){
-   document.addEventListener('DOMContentLoaded', wireUI);
- } else {
-   wireUI();
- }
- 
- // Debug import (opt-in via localStorage.AskChipDebug='1')
--import '/static/js/debug.js?v=v20250911b';
-+const __assetVersion =
-+  (typeof globalThis !== 'undefined' && globalThis.__askchipAssetVersion) || '';
-+const __debugSuffix = __assetVersion ? `?v=${__assetVersion}` : '';
-+import(`/static/js/debug.js${__debugSuffix}`);
-diff --git a/static/js/ws_module.js b/static/js/ws_module.js
-index c982da4d52084fdfd0e6e86b43839f2e12b04908..9ddb591b59f6ca8ee807136553093883239efae3 100644
---- a/static/js/ws_module.js
-+++ b/static/js/ws_module.js
-@@ -1,27 +1,29 @@
--export const WS_MODULE_VERSION = 'v20250911b';
--export const WS_MODULE_URL = `/static/js/ws.js?v=${WS_MODULE_VERSION}`;
-+const __assetVersion =
-+  (typeof globalThis !== 'undefined' && globalThis.__askchipAssetVersion) || '';
-+const __wsSuffix = __assetVersion ? `?v=${__assetVersion}` : '';
-+export const WS_MODULE_URL = `/static/js/ws.js${__wsSuffix}`;
- 
- let cached = null;
- 
- const wsModulePromise = import(WS_MODULE_URL).then((mod) => {
-   cached = mod;
-   return mod;
- }).catch((err) => {
-   console.error('[ws_module] failed to load ws.js module', err);
-   throw err;
- });
- 
- function moduleReady() {
-   return cached;
- }
- 
- export function getWSModule() {
-   return wsModulePromise;
- }
- 
- export function openWS(...args) {
-   if (moduleReady()) return moduleReady().openWS(...args);
-   return wsModulePromise.then((mod) => mod.openWS(...args));
- }
- 
- export function waitWSOpen(...args) {
-diff --git a/templates/index.html b/templates/index.html
-index 58769ebfe98cd2c1861b1e515e64d62dd1c4a2d1..3c54d56ccd6767534bc2a94ad2b81c8589102551 100644
---- a/templates/index.html
-+++ b/templates/index.html
-@@ -84,30 +84,43 @@
-         </div>
-         <div id="inlineLoginMsg" class="msgline"></div>
-       </form>
-     </div>
-   </div>
- 
-   <div id="profileModal" class="modal hidden">
-     <div class="sheet">
-       <h3>Profile</h3>
-       <div class="grid">
-         <label>Name<input id="prof_name"/></label>
-         <label>Email<input id="prof_email" disabled/></label>
-         <label>Role<input id="prof_role"/></label>
-         <label>Region<input id="prof_region"/></label>
-         <label>Company<input id="prof_company"/></label>
-       </div>
-       <div class="actions">
-         <button id="profileSave" class="primary">Save</button>
-         <button id="profileCancel" type="button">Cancel</button>
-       </div>
-       <div id="profileMsg" class="msgline"></div>
-     </div>
-   </div>
- 
-   <!-- Scripts -->
--  <script type="module" src="/static/js/bootstrap.js?v=v20250911b"></script>
--  <script type="module" src="/static/js/auth_gate.js?v=v20250911b"></script>
--  <script type="module" src="/static/js/ui_menu.js?v=v20250911b"></script>
-+  {% set asset_ver = asset_version('js/bootstrap.js') %}
-+  <script>
-+    window.__askchipAssetVersion = {{ asset_ver|tojson }};
-+  </script>
-+  <script
-+    type="module"
-+    src="{{ url_for('static', filename='js/bootstrap.js') }}?v={{ asset_ver }}"
-+  ></script>
-+  <script
-+    type="module"
-+    src="{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}"
-+  ></script>
-+  <script
-+    type="module"
-+    src="{{ url_for('static', filename='js/ui_menu.js') }}?v={{ asset_ver }}"
-+  ></script>
- </body>
- </html>
-diff --git a/tests/js/test-loader.mjs b/tests/js/test-loader.mjs
-index 66086af21d3a461bd5149abc3609b74701d7147a..a5b1f9459b3fade73b60193fab4cc76cedec22b2 100644
---- a/tests/js/test-loader.mjs
-+++ b/tests/js/test-loader.mjs
-@@ -1,12 +1,15 @@
- import path from 'node:path';
- import { pathToFileURL } from 'node:url';
- 
--const STUB_SPEC = '/static/js/ws.js?v=v20250911b';
-+const STUB_SPEC_PREFIX = '/static/js/ws.js';
- const STUB_URL = pathToFileURL(path.resolve('./tests/js/ws_stub.mjs')).href;
- 
- export async function resolve(specifier, context, defaultResolve) {
--  if (specifier === STUB_SPEC) {
--    return { url: STUB_URL, shortCircuit: true };
-+  if (specifier.startsWith(STUB_SPEC_PREFIX)) {
-+    const normalized = specifier.replace(/\?v=.*$/, '');
-+    if (normalized === STUB_SPEC_PREFIX) {
-+      return { url: STUB_URL, shortCircuit: true };
-+    }
+ const BARGE_CONFIRM_DEFAULT_MS = 420;
+ let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
+ try {
+   const cfg = window.__askchip_config || {};
+   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
+     bargeConfirmMs = cfg.barge_confirm_ms;
    }
-   return defaultResolve(specifier, context, defaultResolve);
+ } catch {}
+ bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
+ 
+ try {
+   window.addEventListener('chip-tts', (ev) => {
+     const detail = ev?.detail || {};
+     const playing = String(detail.state || '').toLowerCase() === 'playing';
+     state.ttsPlaying = playing;
+   });
+ } catch {}
+ 
+ // ---- Helpers ----------------------------------------------------------------
+ 
+ function _emitVoiceState(state, detail = {}) {
+   try {
+     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
+@@ -206,137 +215,362 @@ async function _ensureMic(externalStream = null) {
+     _logLifecycle('mic_request_perm', { constraints });
+     try {
+       // Request a clean mono stream with echo/noise controls
+       stream = await navigator.mediaDevices.getUserMedia(constraints);
+       _logLifecycle('mic_perm_granted');
+     } catch (err) {
+       _logLifecycle('mic_perm_denied', {
+         name: err?.name,
+         message: err?.message,
+         constraints,
+       }, 'warn');
+       throw err;
+     }
+   }
+ 
+   // Build WebAudio chain
+   const AC = window.AudioContext || window.webkitAudioContext;
+   const ctx = new AC({ sampleRate: 48000 });
+   if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
+ 
+   const source = ctx.createMediaStreamSource(stream);
+   const analyser = ctx.createAnalyser();
+   analyser.fftSize = 2048;
+   analyser.smoothingTimeConstant = 0.06;          // LESS twitchy (was 0.03)
+   source.connect(analyser);
++  _setupPreRollTap(ctx, source);
+ 
+   state.stream = stream;
+   state.ctx = ctx;
+   state.source = source;
+   state.analyser = analyser;
+ 
+   if (!state.deviceLogged) {
+     const [track] = stream.getAudioTracks();
+     let settings = {};
+     try { settings = track?.getSettings?.() || {}; } catch {}
+     const detail = {
+       label: (track?.label && track.label.trim()) || settings.label || settings.deviceId || 'unknown',
+       sampleRate: settings.sampleRate ?? ctx?.sampleRate ?? null,
+       channels: settings.channelCount ?? settings.channels ?? ctx?.destination?.channelCount ?? 1,
+     };
+     _logLifecycle('mic_device_selected', detail);
+     state.deviceLogged = true;
+   }
+ 
+   return stream;
  }
+ 
+ function _safeClearTurnTimer() {
+   if (state.turnTimer) { clearTimeout(state.turnTimer); state.turnTimer = null; }
+ }
+ 
+ function _closeTurnIfOpen() {
+   if (!state.turnOpen && !state.turnClosePromise) {
+     return null;
+   }
+   if (state.turnClosePromise) {
+     return state.turnClosePromise;
+   }
+   if (!state.turnOpen) {
+     return null;
+   }
+   const closePromise = (async () => {
+     try {
+       await sendCloseStream();
+     } finally {
+       state.turnOpen = false;
+       state.turnClosePromise = null;
+     }
+   })();
+   state.turnClosePromise = closePromise;
+   return closePromise;
+ }
+ 
++function _setupPreRollTap(ctx, source) {
++  _teardownPreRollTap();
++
++  if (!ctx || !source) {
++    state.preRollBuffer = null;
++    state.preRollPending = null;
++    return;
++  }
++
++  const sampleRate = ctx.sampleRate || 48_000;
++  state.preRollSampleRate = sampleRate;
++
++  if (typeof ctx.createScriptProcessor !== 'function') {
++    // ScriptProcessorNode unavailable; gracefully degrade without pre-roll.
++    state.preRollBuffer = null;
++    state.preRollWriteIndex = 0;
++    state.preRollFilled = 0;
++    return;
++  }
++
++  const capacity = Math.max(1, Math.round((sampleRate * PRE_ROLL_MS) / 1000));
++  state.preRollBuffer = new Float32Array(capacity);
++  state.preRollWriteIndex = 0;
++  state.preRollFilled = 0;
++
++  try {
++    const processor = ctx.createScriptProcessor(2048, 1, 1);
++    const silentGain = ctx.createGain();
++    silentGain.gain.value = 0;
++    processor.onaudioprocess = (event) => {
++      try {
++        const input = event?.inputBuffer?.getChannelData?.(0);
++        if (!input) return;
++        _pushPreRollSamples(input);
++      } catch (err) {
++        try { console.warn('[voice] pre-roll tap failed', err); } catch {}
++      }
++    };
++    source.connect(processor);
++    processor.connect(silentGain);
++    if (ctx.destination) {
++      silentGain.connect(ctx.destination);
++    }
++    state.preRollNode = processor;
++    state.preRollGain = silentGain;
++  } catch (err) {
++    try { console.warn('[voice] pre-roll tap unavailable', err); } catch {}
++    _teardownPreRollTap();
++  }
++}
++
++function _pushPreRollSamples(samples) {
++  const buffer = state.preRollBuffer;
++  if (!buffer || !buffer.length) {
++    return;
++  }
++  const capacity = buffer.length;
++  let writeIndex = state.preRollWriteIndex || 0;
++  let filled = state.preRollFilled || 0;
++  for (let i = 0; i < samples.length; i += 1) {
++    buffer[writeIndex] = samples[i];
++    writeIndex = (writeIndex + 1) % capacity;
++    if (filled < capacity) {
++      filled += 1;
++    }
++  }
++  state.preRollWriteIndex = writeIndex;
++  state.preRollFilled = filled;
++}
++
++function _teardownPreRollTap() {
++  if (state.preRollNode) {
++    try { state.preRollNode.disconnect(); } catch {}
++    try { state.preRollNode.onaudioprocess = null; } catch {}
++  }
++  if (state.preRollGain) {
++    try { state.preRollGain.disconnect(); } catch {}
++  }
++  state.preRollNode = null;
++  state.preRollGain = null;
++  state.preRollBuffer = null;
++  state.preRollWriteIndex = 0;
++  state.preRollFilled = 0;
++  state.preRollPending = null;
++}
++
++function _snapshotPreRoll() {
++  const buffer = state.preRollBuffer;
++  if (!buffer || !buffer.length) {
++    return null;
++  }
++
++  const capacity = buffer.length;
++  const filled = Math.min(state.preRollFilled || 0, capacity);
++  if (filled <= 0) {
++    return null;
++  }
++
++  const sampleRate = state.preRollSampleRate || 48_000;
++  const floatSamples = new Float32Array(filled);
++  const writeIndex = state.preRollWriteIndex || 0;
++  const start = (writeIndex - filled + capacity) % capacity;
++  if (start + filled <= capacity) {
++    floatSamples.set(buffer.subarray(start, start + filled));
++  } else {
++    const firstLen = capacity - start;
++    floatSamples.set(buffer.subarray(start, capacity), 0);
++    floatSamples.set(buffer.subarray(0, filled - firstLen), firstLen);
++  }
++
++  const blob = _pcmFloatToWavBlob(floatSamples, sampleRate);
++  if (!blob) {
++    return null;
++  }
++
++  return {
++    blob,
++    durationMs: (filled / sampleRate) * 1000,
++    frames: filled,
++    sampleRate,
++  };
++}
++
++function _enqueuePreRoll(preRoll) {
++  if (!preRoll || !preRoll.blob) {
++    state.preRollPending = null;
++    return;
++  }
++
++  const { blob, frames, durationMs, sampleRate } = preRoll;
++  state.preRollPending = null;
++
++  state.chunkSendPromise = state.chunkSendPromise
++    .catch(() => {})
++    .then(async () => {
++      try {
++        await sendAudioChunk(blob);
++        state.chunkBytesSent += blob.size;
++        try {
++          console.debug('[voice] streamed pre-roll chunk', {
++            bytes: blob.size,
++            frames,
++            durationMs,
++            sampleRate,
++            mime: blob.type,
++          });
++        } catch {}
++      } catch (err) {
++        state.chunkSendError = err;
++        try {
++          console.warn('[voice] failed to stream pre-roll chunk', err);
++        } catch {}
++      }
++    });
++}
++
++function _pcmFloatToWavBlob(floatSamples, sampleRate) {
++  if (!floatSamples || !floatSamples.length || typeof Blob === 'undefined') {
++    return null;
++  }
++
++  const frameCount = floatSamples.length;
++  const channels = 1;
++  const bitsPerSample = 16;
++  const pcm16 = new Int16Array(frameCount);
++  for (let i = 0; i < frameCount; i += 1) {
++    let sample = floatSamples[i];
++    if (!Number.isFinite(sample)) sample = 0;
++    sample = Math.max(-1, Math.min(1, sample));
++    pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
++  }
++
++  const header = _createWavHeader({
++    sampleRate,
++    channels,
++    bitsPerSample,
++    frameCount,
++  });
++
++  return new Blob([header, pcm16.buffer], { type: 'audio/wav' });
++}
++
++function _createWavHeader({ sampleRate, channels, bitsPerSample, frameCount }) {
++  const header = new ArrayBuffer(44);
++  const view = new DataView(header);
++  const bytesPerSample = bitsPerSample / 8;
++  const blockAlign = channels * bytesPerSample;
++  const byteRate = sampleRate * blockAlign;
++  const dataSize = frameCount * blockAlign;
++  let offset = 0;
++
++  const writeString = (str) => {
++    for (let i = 0; i < str.length; i += 1) {
++      view.setUint8(offset, str.charCodeAt(i));
++      offset += 1;
++    }
++  };
++  const writeUint32 = (value) => {
++    view.setUint32(offset, value, true);
++    offset += 4;
++  };
++  const writeUint16 = (value) => {
++    view.setUint16(offset, value, true);
++    offset += 2;
++  };
++
++  writeString('RIFF');
++  writeUint32(36 + dataSize);
++  writeString('WAVE');
++  writeString('fmt ');
++  writeUint32(16);
++  writeUint16(1); // PCM format
++  writeUint16(channels);
++  writeUint32(sampleRate);
++  writeUint32(byteRate);
++  writeUint16(blockAlign);
++  writeUint16(bitsPerSample);
++  writeString('data');
++  writeUint32(dataSize);
++
++  return header;
++}
++
+ function _stopRecorder(detail = null) {
+   const recorder = state.rec;
+   const wasActive = !!recorder && recorder.state !== 'inactive';
+   const payload = Object.assign({
+     active: wasActive,
+     hasRecorder: !!recorder,
+   }, detail || {});
+   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
+ 
+   if (detail?.reason === 'server_final') {
+     _applyPostFinalHold('stop_recorder');
+   } else if (state.finalized) {
+     if (!recorder || recorder.state === 'inactive') {
+       state.rec = null;
+       return;
+     }
+   }
+ 
+   if (!recorder) {
+     state.rec = null;
+     return;
+   }
+ 
+   if (recorder.state === 'inactive') {
+     state.rec = null;
+     return;
+   }
+ 
+   try { recorder.stop(); } catch {}
+   // intentionally keep state.rec reference nullable here; onstop handler handles final close
+   state.rec = null;
+ }
+ 
+ function _teardownVADOnly() {
+   try { state.vad && state.vad.stop(); } catch {}
+   state.vad = null;
+ }
+ 
+ function _teardownAudioGraph() {
++  _teardownPreRollTap();
+   try { state.source && state.source.disconnect(); } catch {}
+   try { state.analyser && state.analyser.disconnect(); } catch {}
+   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
+   state.source = null;
+   state.analyser = null;
+   state.ctx = null;
+   state.deviceLogged = false;
+   state.finalized = false;
+   state.postFinalHoldUntil = 0;
+   _removeWSListener();
+ }
+ 
+ function _disarm() {
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   _clearBargeConfirm(false);
+   _stopRecorder({ reason: 'manual_disarm' });
+   _teardownVADOnly();
+   state.turnOpen = false; // ensure local state is clean
+   state.turnClosePromise = null;
+   state.recStartedAt = 0;
+   state.ttsPlaying = false;
+   state.finalized = false;
+   state.postFinalHoldUntil = 0;
+   _removeWSListener();
+@@ -402,50 +636,57 @@ async function _arm(stream = null, opts = {}) {
+   return mic;
+ }
+ 
+ // ---- Recorder lifecycle -----------------------------------------------------
+ 
+ function _startRecorder() {
+   if (!state.stream) return false;
+   if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
+ 
+   if (typeof MediaRecorder === 'undefined') {
+     console.warn('[voice] MediaRecorder not supported in this browser');
+     state.rec = null;
+     return false;
+   }
+ 
+   state.chunkSendPromise = Promise.resolve();
+   state.chunkBytesSent = 0;
+   state.chunkSendError = null;
+   state.turnClosePromise = null;
+   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
+   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
+   state.finalized = false;
+   state.postFinalHoldUntil = 0;
+   _ensureWSListener();
+ 
++  const pendingPreRoll = state.preRollPending;
++  if (pendingPreRoll) {
++    _enqueuePreRoll(pendingPreRoll);
++  } else {
++    state.preRollPending = null;
++  }
++
+   let recorder;
+   try {
+     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
+   } catch (primaryErr) {
+     try {
+       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
+     } catch (fallbackErr) {
+       console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
+       state.rec = null;
+       return false;
+     }
+   }
+ 
+   state.rec = recorder;
+ 
+   state.rec.ondataavailable = (e) => {
+     if (state.finalized) {
+       return;
+     }
+     const blob = e.data;
+     if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
+       return;
+     }
+ 
+     // Chain chunk sends to preserve ordering across the WS.
+@@ -516,51 +757,69 @@ function _startRecorder() {
+     const timeslice = 150; // 150 ms sits comfortably within the 100–200 ms target window
+     state.rec.start(timeslice);
+     state.turnOpen = true; // mark an open ASR turn on the server
+     try {
+       console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice });
+     } catch {}
+   } catch (e) {
+     console.warn('[voice] recorder start failed', e);
+     state.rec = null;
+     state.turnOpen = false;
+     state.turnClosePromise = null;
+     return false;
+   }
+ 
+   // Safety timeout to prevent runaway recordings
+   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
+   _safeClearTurnTimer();
+   state.turnTimer = setTimeout(() => {
+     try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
+   }, limitMs);
+ 
+   return true;
+ }
+ 
+ function _onSpeechStartCommitted() {
+-  _logLifecycle('vad_speech_start');
++  const preRollSnapshot = _snapshotPreRoll();
++  state.preRollPending = preRollSnapshot;
++  const bufferedFrames = state.preRollBuffer ? Math.min(state.preRollFilled || 0, state.preRollBuffer.length) : 0;
++  const sampleRate = state.preRollSampleRate || (preRollSnapshot && preRollSnapshot.sampleRate) || null;
++  const bufferedMsRaw = sampleRate ? (bufferedFrames / sampleRate) * 1000 : 0;
++  const sentMsRaw = preRollSnapshot ? preRollSnapshot.durationMs : 0;
++  const round = (v) => {
++    if (!Number.isFinite(v)) return 0;
++    return Math.round(v * 100) / 100;
++  };
++  _logLifecycle('vad_speech_start', {
++    preRollBufferedMs: round(bufferedMsRaw),
++    preRollSentMs: round(sentMsRaw),
++    preRollFrames: preRollSnapshot?.frames ?? 0,
++    preRollBytes: preRollSnapshot?.blob?.size ?? 0,
++    preRollSampleRate: sampleRate,
++    preRollEnabled: !!state.preRollBuffer,
++    preRollMime: preRollSnapshot?.blob?.type || null,
++  });
+ 
+   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+     ? performance.now()
+     : Date.now();
+   const holdUntil = state.postFinalHoldUntil || 0;
+ 
+   if (state.finalized) {
+     if (now < holdUntil) {
+       _logLifecycle('vad_speech_start_suppressed', {
+         reason: 'post_final_hold_finalized',
+         holdUntil,
+         now,
+       });
+       return;
+     }
+     state.finalized = false;
+   }
+ 
+   if (now < holdUntil) {
+     _logLifecycle('vad_speech_start_suppressed', {
+       reason: 'post_final_hold',
+       holdUntil,
+       now,
+     });
+     return;
+diff --git a/tests/js/voice-preroll.test.mjs b/tests/js/voice-preroll.test.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..331eafc9ffeac54b29b039d85913a133f9f016d1
+--- /dev/null
++++ b/tests/js/voice-preroll.test.mjs
+@@ -0,0 +1,134 @@
++import { test } from 'node:test';
++import assert from 'node:assert/strict';
++import { Blob as NodeBlob } from 'node:buffer';
++
++if (typeof Blob === 'undefined') {
++  globalThis.Blob = NodeBlob;
++}
++
++const listenerMap = new Map();
++
++class TestCustomEvent {
++  constructor(type, init = {}) {
++    this.type = type;
++    this.detail = init.detail;
++  }
++}
++
++globalThis.CustomEvent = TestCustomEvent;
++
++const windowStub = {
++  __askchip_config: {},
++  addEventListener(type, handler) {
++    if (!listenerMap.has(type)) listenerMap.set(type, new Set());
++    listenerMap.get(type).add(handler);
++  },
++  removeEventListener(type, handler) {
++    const set = listenerMap.get(type);
++    if (!set) return;
++    set.delete(handler);
++    if (set.size === 0) listenerMap.delete(type);
++  },
++  dispatchEvent(event) {
++    const set = listenerMap.get(event.type);
++    if (!set) return true;
++    for (const handler of Array.from(set)) {
++      handler(event);
++    }
++    return true;
++  },
++};
++
++windowStub.CustomEvent = TestCustomEvent;
++windowStub.dispatchEvent = windowStub.dispatchEvent.bind(windowStub);
++
++globalThis.window = windowStub;
++
++globalThis.performance = {
++  now: () => Date.now(),
++};
++
++globalThis.__TEST_WS_HOOKS = {};
++
++class FakeRecorder {
++  constructor() {
++    this.state = 'inactive';
++    this.mimeType = 'audio/ogg; codecs=opus';
++    this.ondataavailable = null;
++    this.onstop = null;
++    this.stopCalled = false;
++    FakeRecorder.instances.push(this);
++  }
++
++  start() {
++    this.state = 'recording';
++  }
++
++  stop() {
++    this.state = 'inactive';
++    this.stopCalled = true;
++  }
++}
++
++FakeRecorder.instances = [];
++
++globalThis.MediaRecorder = FakeRecorder;
++
++test('pre-roll audio is flushed before first live MediaRecorder chunk', async () => {
++  const voice = await import('../../static/js/voice.js');
++  const hooks = voice.__TEST_ONLY__;
++
++  hooks.state.stream = { active: true };
++  hooks.state.turnOpen = false;
++  hooks.state.turnClosePromise = null;
++  hooks.state.chunkSendPromise = Promise.resolve();
++  hooks.state.chunkBytesSent = 0;
++  hooks.state.chunkSendError = null;
++
++  const preRollBlob = new Blob(['pre'], { type: 'audio/wav' });
++  hooks.state.preRollPending = {
++    blob: preRollBlob,
++    frames: 1200,
++    durationMs: 25,
++    sampleRate: 48000,
++  };
++
++  const events = [];
++  globalThis.__TEST_WS_HOOKS = {
++    onSendAudioChunk: (blob) => {
++      events.push(blob);
++    },
++  };
++
++  const started = hooks.startRecorder();
++  assert.equal(started, true, 'recorder should start with fake stream');
++  assert.equal(hooks.state.preRollPending, null, 'pre-roll state should clear once recorder starts');
++
++  const recorder = FakeRecorder.instances.at(-1);
++  assert.ok(recorder, 'fake recorder should exist');
++  assert.equal(recorder.state, 'recording', 'recorder should be recording');
++
++  const liveBlob = new Blob(['live'], { type: 'audio/ogg; codecs=opus' });
++  recorder.ondataavailable({ data: liveBlob });
++
++  await hooks.state.chunkSendPromise;
++
++  assert.equal(events.length, 2, 'both pre-roll and live chunks should be sent');
++  const texts = [];
++  for (const blob of events) {
++    texts.push(await blob.text());
++  }
++  assert.deepEqual(texts, ['pre', 'live'], 'pre-roll chunk must precede the live chunk');
++
++  hooks.stopRecorder({ reason: 'test_cleanup' });
++  if (typeof recorder.onstop === 'function') {
++    await recorder.onstop();
++  }
++
++  if (hooks.state.turnTimer) {
++    clearTimeout(hooks.state.turnTimer);
++    hooks.state.turnTimer = null;
++  }
++  globalThis.__TEST_WS_HOOKS = {};
++  FakeRecorder.instances = [];
++});
