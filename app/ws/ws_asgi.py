@@ -806,6 +806,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     # Turn-scoped buffering + state
     buffered_chunks: Deque[bytes] = deque()
+    buffered_byte_total = [0]
     sent_any_audio = [False]
     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
     no_audio_notified = [False]
@@ -822,6 +823,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     asr_ready_evt: asyncio.Event = asyncio.Event()
     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
+    try:
+        connect_buffer_threshold = int(os.getenv("ASR_CONNECT_BUFFER_BYTES", str(10 * 1024)))
+    except Exception:
+        connect_buffer_threshold = 10 * 1024
+    if connect_buffer_threshold < 0:
+        connect_buffer_threshold = 0
     ws_frames_in = 0
     ws_bytes_in = 0
     backpressure_drop_count = 0
@@ -829,6 +836,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     backpressure_last_queue_len = 0
     backpressure_emit_interval = 1.0
     turn_connect_started = [False]
+    format_hint_received = [False]
 
     # NEW: per-turn mic capture state
     mic_chunks: List[bytes] = []
@@ -1418,6 +1426,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             ok = await _send_chunk(chunk, from_buffer=True)
             if ok:
                 buffered_chunks.popleft()
+                if chunk_len:
+                    buffered_byte_total[0] = max(0, buffered_byte_total[0] - chunk_len)
                 flushed_chunks += 1
                 flushed_bytes += chunk_len
                 continue
@@ -1430,6 +1440,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 flushed_chunks=flushed_chunks,
                 flushed_bytes=flushed_bytes,
                 remaining=len(buffered_chunks),
+                remaining_bytes=buffered_byte_total[0],
             )
         _maybe_emit_backpressure(len(buffered_chunks))
         if not buffered_chunks:
@@ -1550,6 +1561,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         else:
                             turn_id_ref[0] = buf.turn_seq
                         buffered_chunks.clear()
+                        buffered_byte_total[0] = 0
+                        format_hint_received[0] = False
                         mic_chunks.clear()
                         mic_first_ts[0] = now
                         mic_last_ts[0] = now
@@ -1645,6 +1658,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         asr_seen_partial[0] = False
                         sent_any_audio[0] = False
                         buffered_chunks.clear()
+                        buffered_byte_total[0] = 0
+                        format_hint_received[0] = False
                         turn_connect_started[0] = False
                         # reset mic capture
                         mic_chunks.clear()
@@ -1736,21 +1751,48 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                     # Stage early frames
                     if chunk:
+                        chunk_len = len(chunk) if isinstance(chunk, (bytes, bytearray)) else 0
                         buffered_chunks.append(chunk)
+                        if chunk_len:
+                            buffered_byte_total[0] += chunk_len
                         dropped_now = 0
                         if len(buffered_chunks) > max_buffered_chunks:
                             dropped_now = len(buffered_chunks) - max_buffered_chunks
                             for _ in range(dropped_now):
                                 if not buffered_chunks:
                                     break
-                                buffered_chunks.popleft()
+                                dropped_chunk = buffered_chunks.popleft()
+                                if isinstance(dropped_chunk, (bytes, bytearray)):
+                                    buffered_byte_total[0] = max(
+                                        0, buffered_byte_total[0] - len(dropped_chunk)
+                                    )
                             _jlog(
-                                "ws_audio_drop", sid=sid, dropped=dropped_now, queued=len(buffered_chunks)
+                                "ws_audio_drop",
+                                sid=sid,
+                                dropped=dropped_now,
+                                queued=len(buffered_chunks),
+                                queued_bytes=buffered_byte_total[0],
                             )
-                        _maybe_emit_backpressure(len(buffered_chunks), dropped_now=dropped_now)
+                        _maybe_emit_backpressure(
+                            len(buffered_chunks), dropped_now=dropped_now
+                        )
 
                     # Ensure provider connection
-                    if not turn_connect_started[0] and dg_state == "closed":
+                    connect_ready = format_hint_received[0] or bool(
+                        transport.get("containerized_opus")
+                    )
+                    if (
+                        not connect_ready
+                        and connect_buffer_threshold > 0
+                        and buffered_byte_total[0] >= connect_buffer_threshold
+                    ):
+                        connect_ready = True
+
+                    if (
+                        not turn_connect_started[0]
+                        and dg_state == "closed"
+                        and connect_ready
+                    ):
                         turn_connect_started[0] = True
                         if dg_connect_task is None:
                             with contextlib.suppress(Exception):
@@ -1759,7 +1801,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     sid=sid,
                                     turn_id=turn_id_ref[0],
                                     queued=len(buffered_chunks),
+                                    queued_bytes=buffered_byte_total[0],
                                     dg_state=dg_state,
+                                    connect_ready_reason=(
+                                        "hint"
+                                        if format_hint_received[0]
+                                        else (
+                                            "detected"
+                                            if transport.get("containerized_opus")
+                                            else "buffer_threshold"
+                                        )
+                                    ),
                                 )
                             dg_connect_task = asyncio.create_task(
                                 _ensure_dg_connected()
@@ -1800,6 +1852,34 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                         if t == "KeepAlive":
                             await _ws_send_json(send, make_keepalive_ack())
+
+                        elif t == "AudioStart":
+                            mime = (
+                                (obj.get("mime") or obj.get("mime_type") or obj.get("contentType"))
+                                or ""
+                            )
+                            try:
+                                mime = mime.strip()
+                            except Exception:
+                                mime = ""
+                            with contextlib.suppress(Exception):
+                                sniffer.set_meta(mime or None)
+                            detection = coerce_detection_from_meta(mime) if mime else None
+                            if detection is not None:
+                                transport["container"] = getattr(detection, "container", None)
+                                transport["codec"] = getattr(detection, "codec", None)
+                                transport["containerized_opus"] = bool(
+                                    getattr(detection, "containerized", True)
+                                )
+                            format_hint_received[0] = True
+                            _jlog(
+                                "ws_audio_hint",
+                                sid=sid,
+                                mime=mime or None,
+                                container=transport.get("container"),
+                                codec=transport.get("codec"),
+                                containerized_opus=transport.get("containerized_opus"),
+                            )
 
                         elif t == "greet":
                             _jlog("ws_greet_recv", sid=sid)
@@ -2322,6 +2402,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         sid=sid,
                                         err=type(e).__name__,
                                     )
+
+                            buffered_byte_total[0] = 0
+                            format_hint_received[0] = False
 
                         else:
                             # Unknown type already filtered by schema; no-op to future-proof.

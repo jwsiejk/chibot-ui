@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections import deque
+from typing import Optional
 
 from app.ws import ws_asgi
 from app.services.audio import container_sniffer
@@ -49,7 +50,13 @@ class _TrackingDeepgram:
         return
 
 
-def _run_ws_session(monkeypatch, webm_chunk: bytes, wav_preroll: bytes = b"RIFF1234"):
+def _run_ws_session(
+    monkeypatch,
+    webm_chunk: bytes,
+    wav_preroll: bytes = b"RIFF1234",
+    *,
+    audio_start_mime: Optional[str] = None,
+):
     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
     monkeypatch.setenv("DG_LINGER_MS", "0")
@@ -65,14 +72,31 @@ def _run_ws_session(monkeypatch, webm_chunk: bytes, wav_preroll: bytes = b"RIFF1
     monkeypatch.setattr(ws_asgi, "_admin_emit", None)
     monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
 
-    events = deque(
+    log_events = []
+
+    def _capture_jlog(event: str, **fields):
+        entry = dict(fields)
+        entry.setdefault("event", event)
+        log_events.append(entry)
+
+    monkeypatch.setattr(ws_asgi, "_jlog", _capture_jlog)
+
+    events_list = [{"type": "websocket.receive", "bytes": wav_preroll}]
+    if audio_start_mime is not None:
+        events_list.append(
+            {
+                "type": "websocket.receive",
+                "text": json.dumps({"type": "AudioStart", "mime": audio_start_mime}),
+            }
+        )
+    events_list.extend(
         [
-            {"type": "websocket.receive", "bytes": wav_preroll},
             {"type": "websocket.receive", "bytes": webm_chunk},
             {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
             {"type": "websocket.disconnect"},
         ]
     )
+    events = deque(events_list)
 
     sent_messages = []
 
@@ -101,6 +125,7 @@ def _run_ws_session(monkeypatch, webm_chunk: bytes, wav_preroll: bytes = b"RIFF1
         "deepgram": deepgram_instance,
         "wav_preroll": wav_preroll,
         "webm_chunk": webm_chunk,
+        "logs": log_events,
     }
 
 
@@ -143,3 +168,30 @@ def test_webm_chunk_larger_than_window(monkeypatch):
     assert transport.get("container") == "webm"
     assert transport.get("codec") == "opus"
     assert transport.get("containerized_opus") is True
+
+
+def test_audio_start_hint_controls_connect(monkeypatch):
+    webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
+    result = _run_ws_session(
+        monkeypatch,
+        webm_chunk,
+        audio_start_mime="audio/webm; codecs=opus",
+    )
+
+    logs = result["logs"]
+    hint_index = next(
+        i for i, entry in enumerate(logs) if entry.get("event") == "ws_audio_hint"
+    )
+    schedule_index = next(
+        i for i, entry in enumerate(logs) if entry.get("event") == "asr_connect_schedule"
+    )
+
+    assert schedule_index > hint_index
+
+    begin_entry = next(
+        entry for entry in logs if entry.get("event") == "asr_connect_begin"
+    )
+    transport = begin_entry.get("transport") or {}
+    assert transport.get("containerized_opus") is True
+    assert transport.get("container") == "webm"
+    assert transport.get("codec") == "opus"

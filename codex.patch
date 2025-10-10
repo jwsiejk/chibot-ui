@@ -1,409 +1,759 @@
-diff --git a/static/js/voice.js b/static/js/voice.js
-index cbed64c16ea032facb0e882a59fecb847833c925..e9b48790ae8ce90fb8a8ad73e8e399a278e66abf 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -1,85 +1,86 @@
- /*
- Citations for context (non-functional):
- :contentReference[oaicite:0]{index=0}
- :contentReference[oaicite:1]{index=1}
- */
+diff --git a/app/ws/schema_v1.py b/app/ws/schema_v1.py
+index 6de041f345645457203ab1c138e810a0f1d4dd9c..f2f4206fb7ab1863c5580bb64993d3a0d841a342 100644
+--- a/app/ws/schema_v1.py
++++ b/app/ws/schema_v1.py
+@@ -2,51 +2,51 @@
+ """
+ Deepgram-aligned WS schema (Phase 1 → 2).
  
- /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
-    Goals satisfied:
-     • Echo-aware VAD (threshold boost while TTS is playing)
-     • Streaming Opus blobs per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
-     • Soft barge-in: pause Chip TTS on committed speech start
-     • Turn timeout (safety), robust errors, clean session end
-     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
+ Client -> Server (text JSON):
+  - {"type":"Configure", ...}
+  - {"type":"KeepAlive"}
+  - {"type":"CloseStream"}
+  - {"type":"greet"}                         # WS-only greet alias
+  - {"type":"user_msg","text":"..."}         # WS-only user text turn
+    # (Also accept legacy aliases: "User","UserText","UserMessage","UserUtterance","UserTextMessage")
  
-    Notes:
-     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
-     • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
- */
+ Client -> Server (binary):
+  - raw Opus frames
  
- import { VAD } from './voice/vad.js';
--import { sendAudioChunk, sendCloseStream } from './ws_module.js';
-+import { sendAudioChunk, sendCloseStream, sendJSON } from './ws_module.js';
- import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
+ Server -> Client:
+  - {"type":"Results","channel":{"alternatives":[{"transcript":"","confidence":0.0}],"is_final":true},"turn_id":N}
+  - {"type":"UtteranceEnd","turn_id":N}
+  - {"type":"KeepAliveAck"}
+  - {"type":"Error","code":"...","message":"..."}
+ """
+ from __future__ import annotations
+ from typing import Any, Dict
  
- // Public API (matches prior usage)
- export async function initMic(stream = null) { return await _ensureMic(stream); }
- export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
- export function disarmVAD() { _disarm(); }
- export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
- export function bargeIn() { _bargeIn(); }         // keeps API parity
- export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+ _ALLOWED_TYPES = {
+     "Configure", "KeepAlive", "CloseStream",
+-    "greet", "user_msg",
++    "greet", "user_msg", "AudioStart",
+     # Legacy aliases
+     "User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage",
+ }
  
- // ---- Internal state ---------------------------------------------------------
+ def parse_client_json(text: str) -> Dict[str, Any]:
+     import json
+     try:
+         obj = json.loads(text or "{}")
+     except Exception:
+         raise ValueError("bad_json")
+     t = (obj.get("type") or "").strip()
+     if t not in _ALLOWED_TYPES:
+         raise ValueError("bad_message_type")
  
- // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
- const REC_MIME = (typeof MediaRecorder !== 'undefined'
-   && typeof MediaRecorder.isTypeSupported === 'function'
-   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
-   ? 'audio/ogg; codecs=opus'
-   : 'audio/webm; codecs=opus';
+     if t == "Configure":
+         enc = (obj.get("encoding") or "").lower()
+         if enc and enc not in {"opus", "pcm"}:
+             raise ValueError("bad_encoding")
+         sr = obj.get("sample_rate")
+         if sr is not None and (not isinstance(sr, int) or sr <= 0):
+             raise ValueError("bad_sample_rate")
+         ch = obj.get("channels")
+         if ch is not None and (not isinstance(ch, int) or ch <= 0):
+             raise ValueError("bad_channels")
+     return obj
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 675caa9acbee42a9c08b7eb46571afc8b5d388a3..66c488ef8e7149929d78dddb9ae6bec2d257522c 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -784,73 +784,81 @@ async def _ws_chat_asgi_impl(scope, receive, send):
  
- const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
- const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
- const PRE_ROLL_MS = 250;            // ~0.25s of pre-roll audio
+     def _send_barge_state(phase: str) -> None:
+         _broadcast_barge_state_frame(sid, phase)
  
- const state = {
-   stream: null,
-   ctx: null,
-   source: null,
-   analyser: null,
-   vad: null,
-   rec: null,
-   finalized: false,
-   postFinalHoldUntil: 0,
-   wsListener: null,
-   chunkSendPromise: Promise.resolve(),
-   chunkBytesSent: 0,
-   chunkSendError: null,
-   turnTimer: null,
-   turnOpen: false,   // track whether a turn is currently open server-side
-   turnClosePromise: null,
-+  turnHintSent: false,
-   deviceLogged: false,
-   // NEW: min-turn gating
-   recStartedAt: 0,
-   pendingEndTimer: null,
-   ttsPlaying: false,
-   bargeConfirmTimer: null,
-   bargeConfirmActive: false,
-   // Pre-roll tap state
-   preRollNode: null,
-   preRollGain: null,
-   preRollBlobs: [],
-   preRollDurationMs: 0,
-   preRollLastTimecode: null,
-   preRollTimeslice: 150,
-   recStreaming: false,
-   recStopping: false,
-   recStopShouldSend: false,
- };
- 
- const BARGE_CONFIRM_DEFAULT_MS = 420;
- let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
- try {
-   const cfg = window.__askchip_config || {};
-   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
-     bargeConfirmMs = cfg.barge_confirm_ms;
-@@ -451,57 +452,59 @@ function _primeRecorderForPreRoll(options = {}) {
-   }
-   if (state.rec && state.rec.state === 'recording') {
-     if (resetBuffer) {
-       _resetPreRollBuffer();
+     buf = TurnBuffer()
+     dg: Optional[DeepgramClient] = None
+     rx_task: Optional[asyncio.Task] = None
+     dg_connect_task: Optional[asyncio.Task] = None
+     dg_state: str = "closed"
+     turn_id_ref = [0]
+     pending_final_turns: Deque[int] = deque()
+     completed_llm_turns: Set[int] = set()
+     synthetic_final_turns: Set[int] = set()
+     final_seen = [False]
+     asr_seen_partial = [False]
+     turn_timing: Dict[str, List[float]] = {
+         "start": [0.0],
+         "dg_open": [0.0],
+         "first_partial": [0.0],
+         "final": [0.0],
      }
-     return true;
-   }
+     turn_finish_logged = [False]
  
-   let recorder;
-   try {
-     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
-   } catch (primaryErr) {
-     try {
-       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
-     } catch (fallbackErr) {
-       console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
-       state.rec = null;
-       return false;
-     }
-   }
+     # Turn-scoped buffering + state
+     buffered_chunks: Deque[bytes] = deque()
++    buffered_byte_total = [0]
+     sent_any_audio = [False]
+     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
+     no_audio_notified = [False]
+     no_audio_turn_id = [0]
+     try:
+         no_audio_window_s = float(
+             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
+         )
+     except Exception:
+         no_audio_window_s = 10.0
+     if no_audio_window_s < 0:
+         no_audio_window_s = 0.0
+     no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
+     asr_ready_evt: asyncio.Event = asyncio.Event()
+     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
+     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
++    try:
++        connect_buffer_threshold = int(os.getenv("ASR_CONNECT_BUFFER_BYTES", str(10 * 1024)))
++    except Exception:
++        connect_buffer_threshold = 10 * 1024
++    if connect_buffer_threshold < 0:
++        connect_buffer_threshold = 0
+     ws_frames_in = 0
+     ws_bytes_in = 0
+     backpressure_drop_count = 0
+     backpressure_last_emit = 0.0
+     backpressure_last_queue_len = 0
+     backpressure_emit_interval = 1.0
+     turn_connect_started = [False]
++    format_hint_received = [False]
  
-   state.rec = recorder;
-   state.recStreaming = false;
-   state.recStopping = false;
-   state.recStopShouldSend = false;
-+  state.turnHintSent = false;
-   if (resetBuffer) {
-     _resetPreRollBuffer();
-   }
+     # NEW: per-turn mic capture state
+     mic_chunks: List[bytes] = []
+     mic_first_ts = [0.0]
+     mic_last_ts = [0.0]
  
-   const timeslice = state.preRollTimeslice || 150;
-   recorder.ondataavailable = _handleRecorderData;
-   recorder.onstop = async () => {
-+    state.turnHintSent = false;
-     state.recStreaming = false;
-     state.recStopping = false;
-     state.recStopShouldSend = false;
-     state.rec = null;
-     let finalDetail;
-     try {
-       await state.chunkSendPromise.catch((err) => {
-         state.chunkSendError = state.chunkSendError || err;
-       });
-       if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
-         console.warn('[voice] recorded chunks too small', state.chunkBytesSent);
-         finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
-       }
-     } catch (e) {
-       console.warn('[voice] send audio failed', e);
-       state.chunkSendError = state.chunkSendError || e;
-     } finally {
-       if (state.chunkSendError && !finalDetail) {
-         finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
-       }
-       if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
-         try {
-           console.warn('[voice] recorder stopped with issues', {
-             bytesSent: state.chunkBytesSent,
-             error: state.chunkSendError,
-@@ -569,75 +572,79 @@ function _handleRecorderData(event) {
-   }
+     # Deferred provider final guard state
+     pending_user_final: Dict[str, Any] = {"payload": None, "ts": 0.0}
+     pending_user_final_task: List[Optional[asyncio.Task]] = [None]
  
-   if (state.recStreaming) {
-     _sendRecorderChunk(blob, { preRoll: false, durationMs: null, timecode });
-     return;
-   }
+     def _resolve_final_guard_window_s() -> float:
+         """Resolve how long to wait after a provider final before committing it to the client."""
+         try:
+             raw_val = os.getenv("WS_FINAL_GUARD_MS", "900") or "0"
+             env_val = int(raw_val)
+         except Exception:
+             env_val = 600
+         # Return seconds (clamped to >= 0)
+         try:
+             return max(0, env_val) / 1000.0
+         except Exception:
+             return 0.6      
  
-   const durationMs = _computePreRollDuration(timecode);
-   _bufferPreRollChunk({ blob, durationMs, timecode });
- }
+     def _cancel_pending_user_final_task(reason: str = "cancel") -> None:
+         task = pending_user_final_task[0]
+@@ -1396,62 +1404,65 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
+         return False
  
- function _stopRecorder(detail = null) {
-   const recorder = state.rec;
-   const wasActive = !!recorder && recorder.state !== 'inactive';
-   const payload = Object.assign({
-     active: wasActive,
-     hasRecorder: !!recorder,
-   }, detail || {});
-   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
+     async def _flush_buffered_chunks() -> None:
+         nonlocal dg, backpressure_drop_count
+         if not buffered_chunks:
+             return
+         if not _has_deepgram_key() or dg is None:
+             return
+         initial_queued = len(buffered_chunks)
+         flushed_chunks = 0
+         flushed_bytes = 0
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "ws_flush_request",
+                 sid=sid,
+                 queued=initial_queued,
+                 dg_ready=_dg_client_ready(dg),
+             )
+         while buffered_chunks:
+             chunk = buffered_chunks[0]
+             chunk_len = len(chunk) if isinstance(chunk, (bytes, bytearray)) else 0
+             ok = await _send_chunk(chunk, from_buffer=True)
+             if ok:
+                 buffered_chunks.popleft()
++                if chunk_len:
++                    buffered_byte_total[0] = max(0, buffered_byte_total[0] - chunk_len)
+                 flushed_chunks += 1
+                 flushed_bytes += chunk_len
+                 continue
+             break
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "ws_flush_done",
+                 sid=sid,
+                 queued=initial_queued,
+                 flushed_chunks=flushed_chunks,
+                 flushed_bytes=flushed_bytes,
+                 remaining=len(buffered_chunks),
++                remaining_bytes=buffered_byte_total[0],
+             )
+         _maybe_emit_backpressure(len(buffered_chunks))
+         if not buffered_chunks:
+             backpressure_drop_count = 0
  
-   if (detail?.reason === 'server_final') {
-     _applyPostFinalHold('stop_recorder');
-   } else if (state.finalized) {
-     if (!recorder || recorder.state === 'inactive') {
-       state.rec = null;
-+      state.turnHintSent = false;
-       return;
-     }
-   }
+     try:
+         while True:
+             ev = await receive()
+             et = ev.get("type")
  
-   if (!recorder) {
-     state.rec = null;
-+    state.turnHintSent = false;
-     return;
-   }
+             if et == "websocket.disconnect":
+                 had_disconnect = True
+                 now = time.time()
+                 idle_s = (
+                     max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
+                 )
+                 with contextlib.suppress(Exception):
+                     _jlog(
+                         "ws_conn_disconnect",
+                         conn_id=conn_id,
+                         sid=sid,
+                         code=ev.get("code"),
+                         reason=ev.get("reason"),
+                         idle_s=idle_s,
+                     )
+@@ -1528,50 +1539,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
  
-   if (recorder.state === 'inactive') {
-     state.rec = null;
-+    state.turnHintSent = false;
-     return;
-   }
+                     if final_seen[0]:
+                         previous_turn_id = turn_id_ref[0]
+                         removed_pending = 0
+                         while True:
+                             try:
+                                 pending_final_turns.remove(previous_turn_id)
+                                 removed_pending += 1
+                             except ValueError:
+                                 break
+                         synthetic_final_turns.discard(previous_turn_id)
+                         _clear_pending_user_final("late_audio")
+                         _cancel_no_audio_watch()
+                         buffered_before = len(buffered_chunks)
+                         mic_before = len(mic_chunks)
+                         closed_turn_id = None
+                         if not buf.is_empty():
+                             try:
+                                 closed_turn_id, _ = buf.close_turn()
+                                 turn_id_ref[0] = closed_turn_id
+                             except Exception:
+                                 closed_turn_id = None
+                         else:
+                             turn_id_ref[0] = buf.turn_seq
+                         buffered_chunks.clear()
++                        buffered_byte_total[0] = 0
++                        format_hint_received[0] = False
+                         mic_chunks.clear()
+                         mic_first_ts[0] = now
+                         mic_last_ts[0] = now
+                         sent_any_audio[0] = False
+                         asr_seen_partial[0] = False
+                         turn_connect_started[0] = False
+                         final_seen[0] = False
+                         _reset_turn_metrics(now)
+                         with contextlib.suppress(Exception):
+                             _jlog(
+                                 "late_audio_after_final",
+                                 sid=sid,
+                                 turn_id=previous_turn_id,
+                                 removed_pending=removed_pending,
+                                 closed_turn_id=closed_turn_id,
+                                 buffered_before=buffered_before,
+                                 mic_before=mic_before,
+                             )
  
-   const shouldSendFinal = !!state.recStreaming;
-   state.recStopShouldSend = shouldSendFinal;
-   state.recStopping = true;
-   state.recStreaming = false;
-   if (!shouldSendFinal) {
-     _resetPreRollBuffer();
-   }
+                     pending_final_payload = pending_user_final.get("payload")
+                     if buf.is_empty() and not pending_final_payload:
+                         nudges.cancel_idle_timers(sid, source="turn_start")
+                         try:
+                             set_recorder_active(sid, True)
+                         except Exception:
+@@ -1623,50 +1636,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                 except Exception:
+                                     pass
+                                 try:
+                                     wait_for_listen_ready(
+                                         sid,
+                                         timeout=max(0.0, listen_timeout),
+                                     )
+                                 except Exception:
+                                     pass
  
-   try { recorder.stop(); } catch {}
-   // intentionally keep state.rec reference nullable here; onstop handler handles final close
-   state.rec = null;
-+  state.turnHintSent = false;
- }
+                             return _wait_ready
+                         with contextlib.suppress(Exception):
+                             barge.start(
+                                 confirm_ms=confirm_ms,
+                                 on_commit=_on_barge_commit,
+                                 send_state=_send_barge_state,
+                             )
+                         turn_id_ref[0] = buf.turn_seq + 1
+                         with contextlib.suppress(Exception):
+                             pending_final_turns.append(turn_id_ref[0])
+                             completed_llm_turns.discard(turn_id_ref[0])
+                         final_seen[0] = False
+                         asr_seen_partial[0] = False
+                         sent_any_audio[0] = False
+                         buffered_chunks.clear()
++                        buffered_byte_total[0] = 0
++                        format_hint_received[0] = False
+                         turn_connect_started[0] = False
+                         # reset mic capture
+                         mic_chunks.clear()
+                         mic_first_ts[0] = now
+                         mic_last_ts[0] = now
+                         _reset_turn_metrics(now)
+                         _schedule_no_audio_watch(turn_id_ref[0])
+                         with contextlib.suppress(Exception):
+                             _jlog(
+                                 "turn_start",
+                                 sid=sid,
+                                 turn_id=turn_id_ref[0],
+                                 first_bytes=len(raw_chunk),
+                             )
+                     # Detect container early using raw bytes
  
- function _teardownVADOnly() {
-   try { state.vad && state.vad.stop(); } catch {}
-   state.vad = null;
- }
+                     # Detect container early
+                     try:
+                         if transport.get("container") is None and raw_chunk:
+                             det = sniffer.feed(raw_chunk)
+                             if det:
+                                 container = getattr(det, "container", None)
+                                 codec = getattr(det, "codec", None)
+                                 containerized = bool(
+                                     getattr(det, "containerized", codec == "opus")
+@@ -1714,115 +1729,180 @@ async def _ws_chat_asgi_impl(scope, receive, send):
  
- function _teardownAudioGraph() {
-   _teardownPreRollTap();
-   try { state.source && state.source.disconnect(); } catch {}
-   try { state.analyser && state.analyser.disconnect(); } catch {}
-   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
-   state.source = null;
-   state.analyser = null;
-   state.ctx = null;
-   state.deviceLogged = false;
-   state.finalized = false;
-   state.postFinalHoldUntil = 0;
-   _removeWSListener();
- }
+                     buf.append(chunk)
  
- function _disarm() {
-   _safeClearTurnTimer();
-   _clearPendingEndTimer();
-   _clearBargeConfirm(false);
-@@ -719,50 +726,60 @@ async function _arm(stream = null, opts = {}) {
- function _startRecorder() {
-   if (!state.stream) return false;
+                     # capture bytes for diagnostic playback
+                     mic_last_ts[0] = now
+                     if MIC_CAPTURE:
+                         mic_chunks.append(chunk)
+                     _jlog(
+                         "mic_capture_append",
+                         sid=sid,
+                         turn_id=turn_id_ref[0],
+                         chunks=len(mic_chunks),
+                         last_bytes=len(chunk),
+                     )
+                     nudges.cancel_idle_timers(sid, source="mic_capture")
  
-   const primed = _primeRecorderForPreRoll({ resetBuffer: false });
-   if (!primed || !state.rec || state.rec.state !== 'recording') {
-     return false;
-   }
+                     if pending_user_final.get("payload"):
+                         _schedule_pending_user_final_guard("audio")
  
-   if (state.recStreaming) {
-     return true;
-   }
+                     if not _has_deepgram_key():
+                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
+                         continue
  
-   state.chunkSendPromise = Promise.resolve();
-   state.chunkBytesSent = 0;
-   state.chunkSendError = null;
-   state.turnClosePromise = null;
-   _clearPendingEndTimer();
-   state.recStartedAt = performance.now ? performance.now() : Date.now();
-   state.finalized = false;
-   state.postFinalHoldUntil = 0;
-   state.recStreaming = true;
-   state.recStopping = false;
-   state.recStopShouldSend = false;
-   _ensureWSListener();
+                     # Stage early frames
+                     if chunk:
++                        chunk_len = len(chunk) if isinstance(chunk, (bytes, bytearray)) else 0
+                         buffered_chunks.append(chunk)
++                        if chunk_len:
++                            buffered_byte_total[0] += chunk_len
+                         dropped_now = 0
+                         if len(buffered_chunks) > max_buffered_chunks:
+                             dropped_now = len(buffered_chunks) - max_buffered_chunks
+                             for _ in range(dropped_now):
+                                 if not buffered_chunks:
+                                     break
+-                                buffered_chunks.popleft()
++                                dropped_chunk = buffered_chunks.popleft()
++                                if isinstance(dropped_chunk, (bytes, bytearray)):
++                                    buffered_byte_total[0] = max(
++                                        0, buffered_byte_total[0] - len(dropped_chunk)
++                                    )
+                             _jlog(
+-                                "ws_audio_drop", sid=sid, dropped=dropped_now, queued=len(buffered_chunks)
++                                "ws_audio_drop",
++                                sid=sid,
++                                dropped=dropped_now,
++                                queued=len(buffered_chunks),
++                                queued_bytes=buffered_byte_total[0],
+                             )
+-                        _maybe_emit_backpressure(len(buffered_chunks), dropped_now=dropped_now)
++                        _maybe_emit_backpressure(
++                            len(buffered_chunks), dropped_now=dropped_now
++                        )
  
-+  if (!state.turnHintSent) {
-+    const recorderMime = (state.rec && state.rec.mimeType) || REC_MIME;
-+    try {
-+      sendJSON({ type: 'AudioStart', mime: recorderMime });
-+    } catch (err) {
-+      try { console.warn('[voice] failed to send AudioStart hint', err); } catch {}
-+    }
-+    state.turnHintSent = true;
-+  }
+                     # Ensure provider connection
+-                    if not turn_connect_started[0] and dg_state == "closed":
++                    connect_ready = format_hint_received[0] or bool(
++                        transport.get("containerized_opus")
++                    )
++                    if (
++                        not connect_ready
++                        and connect_buffer_threshold > 0
++                        and buffered_byte_total[0] >= connect_buffer_threshold
++                    ):
++                        connect_ready = True
 +
-   const preRollStats = _enqueuePreRollBlobs();
-   if (preRollStats?.count) {
-     try {
-       console.debug('[voice] flushed pre-roll buffer', {
-         chunks: preRollStats.count,
-         durationMs: preRollStats.durationMs,
-         bytes: preRollStats.totalBytes,
-       });
-     } catch {}
-   }
++                    if (
++                        not turn_connect_started[0]
++                        and dg_state == "closed"
++                        and connect_ready
++                    ):
+                         turn_connect_started[0] = True
+                         if dg_connect_task is None:
+                             with contextlib.suppress(Exception):
+                                 _jlog(
+                                     "asr_connect_schedule",
+                                     sid=sid,
+                                     turn_id=turn_id_ref[0],
+                                     queued=len(buffered_chunks),
++                                    queued_bytes=buffered_byte_total[0],
+                                     dg_state=dg_state,
++                                    connect_ready_reason=(
++                                        "hint"
++                                        if format_hint_received[0]
++                                        else (
++                                            "detected"
++                                            if transport.get("containerized_opus")
++                                            else "buffer_threshold"
++                                        )
++                                    ),
+                                 )
+                             dg_connect_task = asyncio.create_task(
+                                 _ensure_dg_connected()
+                             )
+                     elif dg_state == "connecting":
+                         pass
  
-   state.turnOpen = true;
-   try {
-     console.debug('[voice] recorder streaming', {
-       mime: (state.rec && state.rec.mimeType) || REC_MIME,
-     });
-   } catch {}
+                     # Flush when ready
+                     if dg is not None:
+                         if not asr_ready_evt.is_set():
+                             try:
+                                 await asyncio.wait_for(
+                                     asr_ready_evt.wait(), timeout=asr_ready_wait_s
+                                 )
+                             except asyncio.TimeoutError:
+                                 _jlog("asr_not_ready_timeout", sid=sid)
+                         if len(buffered_chunks) >= max_buffered_chunks:
+                             await _flush_buffered_chunks()
+                         await _flush_buffered_chunks()
+                     else:
+                         _jlog(
+                             "ws_audio_provider_connecting",
+                             sid=sid,
+                             queued=len(buffered_chunks),
+                         )
+                     continue
  
-   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
-   _safeClearTurnTimer();
-   state.turnTimer = setTimeout(() => {
-     try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
-   }, limitMs);
+                 # -------------------- Text / control lane --------------------
+                 if ev.get("text") is not None:
+                     try:
+                         obj = parse_client_json(ev.get("text") or "")
+                         t = obj.get("type")
+                         with contextlib.suppress(Exception):
+                             _jlog("ws_json_recv", sid=sid, type=t)
+                         if _admin_emit:
+                             with contextlib.suppress(Exception):
+                                 _admin_emit("ws_json_recv", sid=sid, type=t)
  
-   return true;
-diff --git a/tests/js/voice-preroll.test.mjs b/tests/js/voice-preroll.test.mjs
-index 15bddf2eb25864a1b5eedb2d729a234a276b964b..6ab214453e279dfa94cb5489fcb5b20d26279b8f 100644
---- a/tests/js/voice-preroll.test.mjs
-+++ b/tests/js/voice-preroll.test.mjs
-@@ -67,65 +67,74 @@ class FakeRecorder {
-   stop() {
-     this.state = 'inactive';
-     this.stopCalled = true;
-   }
- }
+                         if t == "KeepAlive":
+                             await _ws_send_json(send, make_keepalive_ack())
  
- FakeRecorder.instances = [];
- 
- globalThis.MediaRecorder = FakeRecorder;
- 
- test('pre-roll audio is flushed before first live MediaRecorder chunk', async () => {
-   const voice = await import('../../static/js/voice.js');
-   const hooks = voice.__TEST_ONLY__;
- 
-   hooks.state.stream = { active: true };
-   hooks.state.turnOpen = false;
-   hooks.state.turnClosePromise = null;
-   hooks.state.chunkSendPromise = Promise.resolve();
-   hooks.state.chunkBytesSent = 0;
-   hooks.state.chunkSendError = null;
- 
-   const preRollBlob = new Blob(['pre'], { type: 'audio/webm; codecs=opus' });
-   hooks.state.preRollBlobs = [{ blob: preRollBlob, durationMs: 25, timecode: 25 }];
-   hooks.state.preRollDurationMs = 25;
- 
--  const events = [];
-+  const transportEvents = [];
-   globalThis.__TEST_WS_HOOKS = {
-+    onSendJSON: (payload) => {
-+      transportEvents.push({ kind: 'json', payload });
-+    },
-     onSendAudioChunk: (blob) => {
--      events.push(blob);
-+      transportEvents.push({ kind: 'chunk', payload: blob });
-     },
-   };
- 
-   const started = hooks.startRecorder();
-   assert.equal(started, true, 'recorder should start with fake stream');
-   assert.equal(hooks.state.preRollBlobs.length, 0, 'pre-roll buffer should clear once recorder starts');
- 
-   const recorder = FakeRecorder.instances.at(-1);
-   assert.ok(recorder, 'fake recorder should exist');
-   assert.equal(recorder.state, 'recording', 'recorder should be recording');
- 
-   const liveBlob = new Blob(['live'], { type: 'audio/webm; codecs=opus' });
-   recorder.ondataavailable({ data: liveBlob });
- 
-   await hooks.state.chunkSendPromise;
- 
--  assert.equal(events.length, 2, 'both pre-roll and live chunks should be sent');
-+  assert.ok(transportEvents.length >= 3, 'AudioStart and two chunks should be emitted');
-+  assert.equal(transportEvents[0]?.kind, 'json', 'AudioStart must be sent before audio chunks');
-+  assert.equal(transportEvents[0]?.payload?.type, 'AudioStart', 'AudioStart frame should be emitted');
-+  assert.equal(transportEvents[0]?.payload?.mime, recorder.mimeType, 'AudioStart must include recorder MIME');
++                        elif t == "AudioStart":
++                            mime = (
++                                (obj.get("mime") or obj.get("mime_type") or obj.get("contentType"))
++                                or ""
++                            )
++                            try:
++                                mime = mime.strip()
++                            except Exception:
++                                mime = ""
++                            with contextlib.suppress(Exception):
++                                sniffer.set_meta(mime or None)
++                            detection = coerce_detection_from_meta(mime) if mime else None
++                            if detection is not None:
++                                transport["container"] = getattr(detection, "container", None)
++                                transport["codec"] = getattr(detection, "codec", None)
++                                transport["containerized_opus"] = bool(
++                                    getattr(detection, "containerized", True)
++                                )
++                            format_hint_received[0] = True
++                            _jlog(
++                                "ws_audio_hint",
++                                sid=sid,
++                                mime=mime or None,
++                                container=transport.get("container"),
++                                codec=transport.get("codec"),
++                                containerized_opus=transport.get("containerized_opus"),
++                            )
 +
-+  const chunkEvents = transportEvents.filter((ev) => ev.kind === 'chunk');
-+  assert.equal(chunkEvents.length, 2, 'both pre-roll and live chunks should be sent');
-   const texts = [];
--  for (const blob of events) {
--    texts.push(await blob.text());
-+  for (const ev of chunkEvents) {
-+    texts.push(await ev.payload.text());
-   }
-   assert.deepEqual(texts, ['pre', 'live'], 'pre-roll chunk must precede the live chunk');
--  assert.equal(events[0].type, 'audio/webm; codecs=opus', 'pre-roll chunk should use WebM/Opus');
-+  assert.equal(chunkEvents[0].payload.type, 'audio/webm; codecs=opus', 'pre-roll chunk should use WebM/Opus');
+                         elif t == "greet":
+                             _jlog("ws_greet_recv", sid=sid)
  
-   hooks.stopRecorder({ reason: 'test_cleanup' });
-   if (typeof recorder.onstop === 'function') {
-     await recorder.onstop();
-   }
+                             async def _bg():
+                                 try:
+                                     from app.services.streaming import run_ws_greet
  
-   if (hooks.state.turnTimer) {
-     clearTimeout(hooks.state.turnTimer);
-     hooks.state.turnTimer = null;
-   }
-   globalThis.__TEST_WS_HOOKS = {};
-   FakeRecorder.instances = [];
- });
-diff --git a/tests/js/ws_stub.mjs b/tests/js/ws_stub.mjs
-index c4f250db3fd70bbf5dd0352d14ffde4533664bc4..c7f3228ea1690a353fecf2b28ccaab60c79b535b 100644
---- a/tests/js/ws_stub.mjs
-+++ b/tests/js/ws_stub.mjs
-@@ -1,22 +1,25 @@
- function hooks() {
-   return globalThis.__TEST_WS_HOOKS || {};
- }
+                                     tid = await asyncio.to_thread(run_ws_greet, sid)
+                                     with contextlib.suppress(Exception):
+                                         if _admin_emit:
+                                             cfg_now = db.get_config()
+                                             audio_on = bool(
+                                                 (cfg_now or {}).get(
+                                                     "feature_audio", True
+                                                 )
+                                             )
+                                             _admin_emit(
+                                                 "greet:resp",
+                                                 label="greet:resp",
+                                                 session_id=sid,
+                                                 turn_id=tid,
+                                                 audio_scheduled=audio_on,
+                                             )
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+@@ -2301,50 +2381,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                             with open(out_path, "wb") as f:
+                                                 f.write(wav)
+                                             data_to_echo = wav
  
- export function openWS() { return undefined; }
- export function waitWSOpen() { return Promise.resolve(); }
- export function isOpen() { return true; }
- export function isConnecting() { return false; }
- export function closeWS() { return Promise.resolve(); }
- export function bufferedAmount() { return 0; }
- export function configure() { return undefined; }
--export function sendJSON() { return undefined; }
-+export function sendJSON(...args) {
-+  const fn = hooks().onSendJSON;
-+  return fn ? fn(...args) : undefined;
-+}
- export function sendAudioChunk(...args) {
-   const fn = hooks().onSendAudioChunk;
-   const result = fn ? fn(...args) : undefined;
-   return Promise.resolve(result);
- }
- export function sendCloseStream(...args) {
-   const fn = hooks().onSendCloseStream;
-   const result = fn ? fn(...args) : undefined;
-   return Promise.resolve(result);
- }
+                                         _jlog(
+                                             "mic_capture_saved",
+                                             sid=sid,
+                                             turn_id=turn_id,
+                                             path=out_path,
+                                             bytes=len(raw),
+                                             mime=mime,
+                                         )
+ 
+                                         if MIC_ECHO_WS:
+                                             # Send the audio back over WS so the client can play it
+                                             await _ws_send_diagnostic_audio(
+                                                 send, turn_id, mime, data_to_echo
+                                             )
+                                 except Exception as e:
+                                     _jlog(
+                                         "mic_capture_fail",
+                                         sid=sid,
+                                         err=type(e).__name__,
+                                     )
+ 
++                            buffered_byte_total[0] = 0
++                            format_hint_received[0] = False
++
+                         else:
+                             # Unknown type already filtered by schema; no-op to future-proof.
+                             pass
+ 
+                     except ValueError as e:
+                         await _ws_send_json(send, make_error("bad_message", str(e)))
+                 else:
+                     # websocket.receive without text/bytes
+                     pass
+             else:
+                 # Other ASGI events are ignored
+                 pass
+ 
+     finally:
+         with contextlib.suppress(Exception):
+             _clear_pending_user_final("shutdown")
+         with contextlib.suppress(Exception):
+             _cancel_no_audio_watch()
+         await _remove_active_ws_entry("cleanup")
+         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "ws_conn_cleanup",
+                 conn_id=conn_id,
+                 sid=sid,
+diff --git a/tests/test_ws_wav_preroll.py b/tests/test_ws_wav_preroll.py
+index 3cf0ee4e10217deedc88b2089bc3842849b95597..f4bc93b730ab205bc26e802a71f4d4f3631baa89 100644
+--- a/tests/test_ws_wav_preroll.py
++++ b/tests/test_ws_wav_preroll.py
+@@ -1,145 +1,197 @@
+ import asyncio
+ import json
+ from collections import deque
++from typing import Optional
+ 
+ from app.ws import ws_asgi
+ from app.services.audio import container_sniffer
+ 
+ 
+ class _TrackingSniffer(container_sniffer.AudioContainerSniffer):
+     instances = []
+ 
+     def __init__(self):
+         super().__init__()
+         self.feed_chunks = []
+         self.__class__.instances.append(self)
+ 
+     def feed(self, chunk: bytes):
+         self.feed_chunks.append(bytes(chunk))
+         return super().feed(chunk)
+ 
+ 
+ class _TrackingDeepgram:
+     instances = []
+ 
+     def __init__(self, cfg=None):
+         self.cfg = cfg or {}
+         self.sent_chunks = []
+         self._queue: asyncio.Queue = asyncio.Queue()
+         self.__class__.instances.append(self)
+ 
+     async def connect(self):
+         await self._queue.put({"type": "asr_open"})
+         await self._queue.put(None)
+ 
+     def is_open(self):
+         return True
+ 
+     async def events(self):
+         while True:
+             ev = await self._queue.get()
+             if ev is None:
+                 break
+             yield ev
+ 
+     async def send(self, chunk: bytes):
+         self.sent_chunks.append(bytes(chunk))
+ 
+     async def close(self, wait_for_final: bool = True, **_):
+         return
+ 
+ 
+-def _run_ws_session(monkeypatch, webm_chunk: bytes, wav_preroll: bytes = b"RIFF1234"):
++def _run_ws_session(
++    monkeypatch,
++    webm_chunk: bytes,
++    wav_preroll: bytes = b"RIFF1234",
++    *,
++    audio_start_mime: Optional[str] = None,
++):
+     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
+     monkeypatch.setenv("DG_LINGER_MS", "0")
+     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
+ 
+     _TrackingSniffer.instances = []
+     _TrackingDeepgram.instances = []
+ 
+     monkeypatch.setattr(ws_asgi, "AudioContainerSniffer", _TrackingSniffer)
+     monkeypatch.setattr(ws_asgi, "DeepgramClient", _TrackingDeepgram)
+     monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
+     monkeypatch.setattr(ws_asgi.bus, "current_assistant_turn", lambda sid: None)
+     monkeypatch.setattr(ws_asgi, "_admin_emit", None)
+     monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
+ 
+-    events = deque(
++    log_events = []
++
++    def _capture_jlog(event: str, **fields):
++        entry = dict(fields)
++        entry.setdefault("event", event)
++        log_events.append(entry)
++
++    monkeypatch.setattr(ws_asgi, "_jlog", _capture_jlog)
++
++    events_list = [{"type": "websocket.receive", "bytes": wav_preroll}]
++    if audio_start_mime is not None:
++        events_list.append(
++            {
++                "type": "websocket.receive",
++                "text": json.dumps({"type": "AudioStart", "mime": audio_start_mime}),
++            }
++        )
++    events_list.extend(
+         [
+-            {"type": "websocket.receive", "bytes": wav_preroll},
+             {"type": "websocket.receive", "bytes": webm_chunk},
+             {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
+             {"type": "websocket.disconnect"},
+         ]
+     )
++    events = deque(events_list)
+ 
+     sent_messages = []
+ 
+     async def _receive():
+         return events.popleft() if events else {"type": "websocket.disconnect"}
+ 
+     async def _send(msg):
+         sent_messages.append(msg)
+ 
+     scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
+ 
+     loop = asyncio.new_event_loop()
+     asyncio.set_event_loop(loop)
+     try:
+         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
+         loop.run_until_complete(asyncio.sleep(0.05))
+     finally:
+         asyncio.set_event_loop(None)
+         loop.close()
+ 
+     sniffer_instance = _TrackingSniffer.instances[0]
+     deepgram_instance = _TrackingDeepgram.instances[0]
+ 
+     return {
+         "sniffer": sniffer_instance,
+         "deepgram": deepgram_instance,
+         "wav_preroll": wav_preroll,
+         "webm_chunk": webm_chunk,
++        "logs": log_events,
+     }
+ 
+ 
+ def test_wav_preroll_is_ignored(monkeypatch):
+     webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
+     result = _run_ws_session(monkeypatch, webm_chunk)
+ 
+     sniffer_instance = result["sniffer"]
+     deepgram_instance = result["deepgram"]
+     wav_preroll = result["wav_preroll"]
+     webm_chunk = result["webm_chunk"]
+ 
+     assert sniffer_instance.feed_chunks == [webm_chunk]
+     assert wav_preroll not in deepgram_instance.sent_chunks
+     assert webm_chunk in deepgram_instance.sent_chunks
+ 
+     transport = deepgram_instance.cfg.get("_transport") or {}
+     assert transport.get("container") == "webm"
+     assert transport.get("codec") == "opus"
+     assert transport.get("containerized_opus") is True
+ 
+ 
+ def test_webm_chunk_larger_than_window(monkeypatch):
+     webm_chunk = container_sniffer.AudioContainerSniffer.EBML_MAGIC + b"X" * (
+         container_sniffer.AudioContainerSniffer.MAX_WINDOW + 10
+     )
+ 
+     result = _run_ws_session(monkeypatch, webm_chunk)
+ 
+     sniffer_instance = result["sniffer"]
+     deepgram_instance = result["deepgram"]
+     wav_preroll = result["wav_preroll"]
+     webm_chunk = result["webm_chunk"]
+ 
+     assert sniffer_instance.feed_chunks == [webm_chunk]
+     assert wav_preroll not in deepgram_instance.sent_chunks
+     assert webm_chunk in deepgram_instance.sent_chunks
+ 
+     transport = deepgram_instance.cfg.get("_transport") or {}
+     assert transport.get("container") == "webm"
+     assert transport.get("codec") == "opus"
+     assert transport.get("containerized_opus") is True
++
++
++def test_audio_start_hint_controls_connect(monkeypatch):
++    webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
++    result = _run_ws_session(
++        monkeypatch,
++        webm_chunk,
++        audio_start_mime="audio/webm; codecs=opus",
++    )
++
++    logs = result["logs"]
++    hint_index = next(
++        i for i, entry in enumerate(logs) if entry.get("event") == "ws_audio_hint"
++    )
++    schedule_index = next(
++        i for i, entry in enumerate(logs) if entry.get("event") == "asr_connect_schedule"
++    )
++
++    assert schedule_index > hint_index
++
++    begin_entry = next(
++        entry for entry in logs if entry.get("event") == "asr_connect_begin"
++    )
++    transport = begin_entry.get("transport") or {}
++    assert transport.get("containerized_opus") is True
++    assert transport.get("container") == "webm"
++    assert transport.get("codec") == "opus"
