@@ -1,9 +1,8 @@
 diff --git a/app/services/audio/container_sniffer.py b/app/services/audio/container_sniffer.py
-index 8d40b4000d6a4c96bb77650962ce1d4f811c9e96..974143167be4e3b91350e28c8520b8e04ca991e1 100644
+index 974143167be4e3b91350e28c8520b8e04ca991e1..da784a4074da7debdb3461a2244e7d792d01cc73 100644
 --- a/app/services/audio/container_sniffer.py
 +++ b/app/services/audio/container_sniffer.py
-@@ -3,53 +3,53 @@ from typing import Optional
- 
+@@ -4,53 +4,55 @@ from typing import Optional
  @dataclass(frozen=True)
  class Detection:
      container: str
@@ -28,16 +27,18 @@ index 8d40b4000d6a4c96bb77650962ce1d4f811c9e96..974143167be4e3b91350e28c8520b8e0
      def feed(self, chunk: bytes) -> Optional[Detection]:
          if self._detected or not chunk:
              return self._detected
--        remain = self.MAX_WINDOW - len(self._buf)
--        if remain > 0:
--            self._buf += chunk[:remain]
-+        self._buf += chunk
-+        if len(self._buf) > self.MAX_WINDOW:
-+            del self._buf[:-self.MAX_WINDOW]
+         self._buf += chunk
+-        if len(self._buf) > self.MAX_WINDOW:
+-            del self._buf[:-self.MAX_WINDOW]
          if self.EBML_MAGIC in self._buf:
              self._detected = Detection(container="webm", codec="opus", containerized=True)
-         elif self.OGG_MAGIC in self._buf:
+-        elif self.OGG_MAGIC in self._buf:
++            return self._detected
++        if self.OGG_MAGIC in self._buf:
              self._detected = Detection(container="ogg", codec="opus", containerized=True)
++            return self._detected
++        if len(self._buf) > self.MAX_WINDOW:
++            del self._buf[:-self.MAX_WINDOW]
          return self._detected
  
      # Optional MIME hint storage (e.g., from client headers); used by ws layer for logging.
@@ -59,27 +60,132 @@ index 8d40b4000d6a4c96bb77650962ce1d4f811c9e96..974143167be4e3b91350e28c8520b8e0
          return Detection(container="webm", codec="opus", containerized=True)
      if "opus" in m and "ogg" in m:
          return Detection(container="ogg", codec="opus", containerized=True)
-diff --git a/tests/test_audio_container_sniffer.py b/tests/test_audio_container_sniffer.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..853b3c83bcb9a60d204618cd3b1b17315224b334
---- /dev/null
-+++ b/tests/test_audio_container_sniffer.py
-@@ -0,0 +1,18 @@
-+from app.services.audio.container_sniffer import AudioContainerSniffer
+     return None
+diff --git a/tests/test_ws_wav_preroll.py b/tests/test_ws_wav_preroll.py
+index 722b1d7d4753e88bb0cf0a13d0a6721ac0078541..3cf0ee4e10217deedc88b2089bc3842849b95597 100644
+--- a/tests/test_ws_wav_preroll.py
++++ b/tests/test_ws_wav_preroll.py
+@@ -27,83 +27,119 @@ class _TrackingDeepgram:
+         self.sent_chunks = []
+         self._queue: asyncio.Queue = asyncio.Queue()
+         self.__class__.instances.append(self)
+ 
+     async def connect(self):
+         await self._queue.put({"type": "asr_open"})
+         await self._queue.put(None)
+ 
+     def is_open(self):
+         return True
+ 
+     async def events(self):
+         while True:
+             ev = await self._queue.get()
+             if ev is None:
+                 break
+             yield ev
+ 
+     async def send(self, chunk: bytes):
+         self.sent_chunks.append(bytes(chunk))
+ 
+     async def close(self, wait_for_final: bool = True, **_):
+         return
+ 
+ 
+-def test_wav_preroll_is_ignored(monkeypatch):
++def _run_ws_session(monkeypatch, webm_chunk: bytes, wav_preroll: bytes = b"RIFF1234"):
+     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
+     monkeypatch.setenv("DG_LINGER_MS", "0")
+     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
+ 
+     _TrackingSniffer.instances = []
+     _TrackingDeepgram.instances = []
+ 
+     monkeypatch.setattr(ws_asgi, "AudioContainerSniffer", _TrackingSniffer)
+     monkeypatch.setattr(ws_asgi, "DeepgramClient", _TrackingDeepgram)
+     monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
+     monkeypatch.setattr(ws_asgi.bus, "current_assistant_turn", lambda sid: None)
+     monkeypatch.setattr(ws_asgi, "_admin_emit", None)
+     monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
+ 
+-    wav_preroll = b"RIFF1234"
+-    webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
+-
+     events = deque(
+         [
+             {"type": "websocket.receive", "bytes": wav_preroll},
+             {"type": "websocket.receive", "bytes": webm_chunk},
+             {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
+             {"type": "websocket.disconnect"},
+         ]
+     )
+ 
+     sent_messages = []
+ 
+     async def _receive():
+         return events.popleft() if events else {"type": "websocket.disconnect"}
+ 
+     async def _send(msg):
+         sent_messages.append(msg)
+ 
+     scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
+ 
+     loop = asyncio.new_event_loop()
+     asyncio.set_event_loop(loop)
+     try:
+         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
+         loop.run_until_complete(asyncio.sleep(0.05))
+     finally:
+         asyncio.set_event_loop(None)
+         loop.close()
+ 
+     sniffer_instance = _TrackingSniffer.instances[0]
+     deepgram_instance = _TrackingDeepgram.instances[0]
+ 
++    return {
++        "sniffer": sniffer_instance,
++        "deepgram": deepgram_instance,
++        "wav_preroll": wav_preroll,
++        "webm_chunk": webm_chunk,
++    }
 +
 +
-+def test_sniffer_detects_header_after_initial_window():
-+    sniffer = AudioContainerSniffer()
++def test_wav_preroll_is_ignored(monkeypatch):
++    webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
++    result = _run_ws_session(monkeypatch, webm_chunk)
 +
-+    # Initial chunk without a recognizable header.
-+    sniffer.feed(b"\x00" * sniffer.MAX_WINDOW)
-+    assert sniffer.detected is None
++    sniffer_instance = result["sniffer"]
++    deepgram_instance = result["deepgram"]
++    wav_preroll = result["wav_preroll"]
++    webm_chunk = result["webm_chunk"]
 +
-+    # Second chunk where the header starts after the first 64 bytes overall.
-+    delayed_header_chunk = b"\x00" * 20 + sniffer.OGG_MAGIC + b"\x00" * 60
-+    detection = sniffer.feed(delayed_header_chunk)
++    assert sniffer_instance.feed_chunks == [webm_chunk]
++    assert wav_preroll not in deepgram_instance.sent_chunks
++    assert webm_chunk in deepgram_instance.sent_chunks
 +
-+    assert detection is not None
-+    assert detection.container == "ogg"
-+    assert detection.codec == "opus"
-+    assert detection.containerized is True
++    transport = deepgram_instance.cfg.get("_transport") or {}
++    assert transport.get("container") == "webm"
++    assert transport.get("codec") == "opus"
++    assert transport.get("containerized_opus") is True
++
++
++def test_webm_chunk_larger_than_window(monkeypatch):
++    webm_chunk = container_sniffer.AudioContainerSniffer.EBML_MAGIC + b"X" * (
++        container_sniffer.AudioContainerSniffer.MAX_WINDOW + 10
++    )
++
++    result = _run_ws_session(monkeypatch, webm_chunk)
++
++    sniffer_instance = result["sniffer"]
++    deepgram_instance = result["deepgram"]
++    wav_preroll = result["wav_preroll"]
++    webm_chunk = result["webm_chunk"]
++
+     assert sniffer_instance.feed_chunks == [webm_chunk]
+     assert wav_preroll not in deepgram_instance.sent_chunks
+     assert webm_chunk in deepgram_instance.sent_chunks
+ 
+     transport = deepgram_instance.cfg.get("_transport") or {}
+     assert transport.get("container") == "webm"
+     assert transport.get("codec") == "opus"
+     assert transport.get("containerized_opus") is True

@@ -49,7 +49,7 @@ class _TrackingDeepgram:
         return
 
 
-def test_wav_preroll_is_ignored(monkeypatch):
+def _run_ws_session(monkeypatch, webm_chunk: bytes, wav_preroll: bytes = b"RIFF1234"):
     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
     monkeypatch.setenv("DG_LINGER_MS", "0")
@@ -64,9 +64,6 @@ def test_wav_preroll_is_ignored(monkeypatch):
     monkeypatch.setattr(ws_asgi.bus, "current_assistant_turn", lambda sid: None)
     monkeypatch.setattr(ws_asgi, "_admin_emit", None)
     monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
-
-    wav_preroll = b"RIFF1234"
-    webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
 
     events = deque(
         [
@@ -98,6 +95,45 @@ def test_wav_preroll_is_ignored(monkeypatch):
 
     sniffer_instance = _TrackingSniffer.instances[0]
     deepgram_instance = _TrackingDeepgram.instances[0]
+
+    return {
+        "sniffer": sniffer_instance,
+        "deepgram": deepgram_instance,
+        "wav_preroll": wav_preroll,
+        "webm_chunk": webm_chunk,
+    }
+
+
+def test_wav_preroll_is_ignored(monkeypatch):
+    webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
+    result = _run_ws_session(monkeypatch, webm_chunk)
+
+    sniffer_instance = result["sniffer"]
+    deepgram_instance = result["deepgram"]
+    wav_preroll = result["wav_preroll"]
+    webm_chunk = result["webm_chunk"]
+
+    assert sniffer_instance.feed_chunks == [webm_chunk]
+    assert wav_preroll not in deepgram_instance.sent_chunks
+    assert webm_chunk in deepgram_instance.sent_chunks
+
+    transport = deepgram_instance.cfg.get("_transport") or {}
+    assert transport.get("container") == "webm"
+    assert transport.get("codec") == "opus"
+    assert transport.get("containerized_opus") is True
+
+
+def test_webm_chunk_larger_than_window(monkeypatch):
+    webm_chunk = container_sniffer.AudioContainerSniffer.EBML_MAGIC + b"X" * (
+        container_sniffer.AudioContainerSniffer.MAX_WINDOW + 10
+    )
+
+    result = _run_ws_session(monkeypatch, webm_chunk)
+
+    sniffer_instance = result["sniffer"]
+    deepgram_instance = result["deepgram"]
+    wav_preroll = result["wav_preroll"]
+    webm_chunk = result["webm_chunk"]
 
     assert sniffer_instance.feed_chunks == [webm_chunk]
     assert wav_preroll not in deepgram_instance.sent_chunks

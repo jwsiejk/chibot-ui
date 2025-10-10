@@ -26,12 +26,14 @@ class AudioContainerSniffer:
         if self._detected or not chunk:
             return self._detected
         self._buf += chunk
-        if len(self._buf) > self.MAX_WINDOW:
-            del self._buf[:-self.MAX_WINDOW]
         if self.EBML_MAGIC in self._buf:
             self._detected = Detection(container="webm", codec="opus", containerized=True)
-        elif self.OGG_MAGIC in self._buf:
+            return self._detected
+        if self.OGG_MAGIC in self._buf:
             self._detected = Detection(container="ogg", codec="opus", containerized=True)
+            return self._detected
+        if len(self._buf) > self.MAX_WINDOW:
+            del self._buf[:-self.MAX_WINDOW]
         return self._detected
 
     # Optional MIME hint storage (e.g., from client headers); used by ws layer for logging.
