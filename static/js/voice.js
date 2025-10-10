@@ -18,7 +18,7 @@ Citations for context (non-functional):
 */
 
 import { VAD } from './voice/vad.js';
-import { sendAudioChunk, sendCloseStream } from './ws_module.js';
+import { sendAudioChunk, sendCloseStream, sendJSON } from './ws_module.js';
 import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
 
 // Public API (matches prior usage)
@@ -58,6 +58,7 @@ const state = {
   turnTimer: null,
   turnOpen: false,   // track whether a turn is currently open server-side
   turnClosePromise: null,
+  turnHintSent: false,
   deviceLogged: false,
   // NEW: min-turn gating
   recStartedAt: 0,
@@ -473,6 +474,7 @@ function _primeRecorderForPreRoll(options = {}) {
   state.recStreaming = false;
   state.recStopping = false;
   state.recStopShouldSend = false;
+  state.turnHintSent = false;
   if (resetBuffer) {
     _resetPreRollBuffer();
   }
@@ -480,6 +482,7 @@ function _primeRecorderForPreRoll(options = {}) {
   const timeslice = state.preRollTimeslice || 150;
   recorder.ondataavailable = _handleRecorderData;
   recorder.onstop = async () => {
+    state.turnHintSent = false;
     state.recStreaming = false;
     state.recStopping = false;
     state.recStopShouldSend = false;
@@ -591,17 +594,20 @@ function _stopRecorder(detail = null) {
   } else if (state.finalized) {
     if (!recorder || recorder.state === 'inactive') {
       state.rec = null;
+      state.turnHintSent = false;
       return;
     }
   }
 
   if (!recorder) {
     state.rec = null;
+    state.turnHintSent = false;
     return;
   }
 
   if (recorder.state === 'inactive') {
     state.rec = null;
+    state.turnHintSent = false;
     return;
   }
 
@@ -616,6 +622,7 @@ function _stopRecorder(detail = null) {
   try { recorder.stop(); } catch {}
   // intentionally keep state.rec reference nullable here; onstop handler handles final close
   state.rec = null;
+  state.turnHintSent = false;
 }
 
 function _teardownVADOnly() {
@@ -740,6 +747,16 @@ function _startRecorder() {
   state.recStopping = false;
   state.recStopShouldSend = false;
   _ensureWSListener();
+
+  if (!state.turnHintSent) {
+    const recorderMime = (state.rec && state.rec.mimeType) || REC_MIME;
+    try {
+      sendJSON({ type: 'AudioStart', mime: recorderMime });
+    } catch (err) {
+      try { console.warn('[voice] failed to send AudioStart hint', err); } catch {}
+    }
+    state.turnHintSent = true;
+  }
 
   const preRollStats = _enqueuePreRollBlobs();
   if (preRollStats?.count) {

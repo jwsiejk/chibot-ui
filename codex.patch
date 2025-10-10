@@ -1,191 +1,409 @@
-diff --git a/app/services/audio/container_sniffer.py b/app/services/audio/container_sniffer.py
-index 974143167be4e3b91350e28c8520b8e04ca991e1..da784a4074da7debdb3461a2244e7d792d01cc73 100644
---- a/app/services/audio/container_sniffer.py
-+++ b/app/services/audio/container_sniffer.py
-@@ -4,53 +4,55 @@ from typing import Optional
- @dataclass(frozen=True)
- class Detection:
-     container: str
-     codec: str
-     containerized: bool = True
+diff --git a/static/js/voice.js b/static/js/voice.js
+index cbed64c16ea032facb0e882a59fecb847833c925..e9b48790ae8ce90fb8a8ad73e8e399a278e66abf 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -1,85 +1,86 @@
+ /*
+ Citations for context (non-functional):
+ :contentReference[oaicite:0]{index=0}
+ :contentReference[oaicite:1]{index=1}
+ */
  
- class AudioContainerSniffer:
-     EBML_MAGIC = bytes([0x1A, 0x45, 0xDF, 0xA3])
-     OGG_MAGIC = b'OggS'
-     MAX_WINDOW = 64
+ /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
+    Goals satisfied:
+     • Echo-aware VAD (threshold boost while TTS is playing)
+     • Streaming Opus blobs per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
+     • Soft barge-in: pause Chip TTS on committed speech start
+     • Turn timeout (safety), robust errors, clean session end
+     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
  
-     def __init__(self) -> None:
-         self._buf = bytearray()
-         self._detected: Optional[Detection] = None
-         # optional MIME hint
-         self._mime: Optional[str] = None
+    Notes:
+     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
+     • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
+ */
  
-     @property
-     def detected(self) -> Optional[Detection]:
-         return self._detected
+ import { VAD } from './voice/vad.js';
+-import { sendAudioChunk, sendCloseStream } from './ws_module.js';
++import { sendAudioChunk, sendCloseStream, sendJSON } from './ws_module.js';
+ import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
  
-     def feed(self, chunk: bytes) -> Optional[Detection]:
-         if self._detected or not chunk:
-             return self._detected
-         self._buf += chunk
--        if len(self._buf) > self.MAX_WINDOW:
--            del self._buf[:-self.MAX_WINDOW]
-         if self.EBML_MAGIC in self._buf:
-             self._detected = Detection(container="webm", codec="opus", containerized=True)
--        elif self.OGG_MAGIC in self._buf:
-+            return self._detected
-+        if self.OGG_MAGIC in self._buf:
-             self._detected = Detection(container="ogg", codec="opus", containerized=True)
-+            return self._detected
-+        if len(self._buf) > self.MAX_WINDOW:
-+            del self._buf[:-self.MAX_WINDOW]
-         return self._detected
+ // Public API (matches prior usage)
+ export async function initMic(stream = null) { return await _ensureMic(stream); }
+ export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
+ export function disarmVAD() { _disarm(); }
+ export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
+ export function bargeIn() { _bargeIn(); }         // keeps API parity
+ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
  
-     # Optional MIME hint storage (e.g., from client headers); used by ws layer for logging.
-     def set_meta(self, mime: Optional[str]) -> None:
-         try:
-             self._mime = (mime or "").strip() or None
-         except Exception:
-             self._mime = None
+ // ---- Internal state ---------------------------------------------------------
  
-     def meta(self) -> Optional[str]:
-         # Return last seen MIME hint, if any. Container detection is based on bytes in feed().
-         return getattr(self, "_mime", None)
+ // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   && typeof MediaRecorder.isTypeSupported === 'function'
+   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
+   ? 'audio/ogg; codecs=opus'
+   : 'audio/webm; codecs=opus';
  
- def coerce_detection_from_meta(mime: Optional[str]) -> Optional[Detection]:
-     if not mime:
-         return None
-     m = mime.lower()
-     if "opus" in m and "webm" in m:
-         return Detection(container="webm", codec="opus", containerized=True)
-     if "opus" in m and "ogg" in m:
-         return Detection(container="ogg", codec="opus", containerized=True)
-     return None
-diff --git a/tests/test_ws_wav_preroll.py b/tests/test_ws_wav_preroll.py
-index 722b1d7d4753e88bb0cf0a13d0a6721ac0078541..3cf0ee4e10217deedc88b2089bc3842849b95597 100644
---- a/tests/test_ws_wav_preroll.py
-+++ b/tests/test_ws_wav_preroll.py
-@@ -27,83 +27,119 @@ class _TrackingDeepgram:
-         self.sent_chunks = []
-         self._queue: asyncio.Queue = asyncio.Queue()
-         self.__class__.instances.append(self)
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+ const PRE_ROLL_MS = 250;            // ~0.25s of pre-roll audio
  
-     async def connect(self):
-         await self._queue.put({"type": "asr_open"})
-         await self._queue.put(None)
+ const state = {
+   stream: null,
+   ctx: null,
+   source: null,
+   analyser: null,
+   vad: null,
+   rec: null,
+   finalized: false,
+   postFinalHoldUntil: 0,
+   wsListener: null,
+   chunkSendPromise: Promise.resolve(),
+   chunkBytesSent: 0,
+   chunkSendError: null,
+   turnTimer: null,
+   turnOpen: false,   // track whether a turn is currently open server-side
+   turnClosePromise: null,
++  turnHintSent: false,
+   deviceLogged: false,
+   // NEW: min-turn gating
+   recStartedAt: 0,
+   pendingEndTimer: null,
+   ttsPlaying: false,
+   bargeConfirmTimer: null,
+   bargeConfirmActive: false,
+   // Pre-roll tap state
+   preRollNode: null,
+   preRollGain: null,
+   preRollBlobs: [],
+   preRollDurationMs: 0,
+   preRollLastTimecode: null,
+   preRollTimeslice: 150,
+   recStreaming: false,
+   recStopping: false,
+   recStopShouldSend: false,
+ };
  
-     def is_open(self):
-         return True
+ const BARGE_CONFIRM_DEFAULT_MS = 420;
+ let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
+ try {
+   const cfg = window.__askchip_config || {};
+   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
+     bargeConfirmMs = cfg.barge_confirm_ms;
+@@ -451,57 +452,59 @@ function _primeRecorderForPreRoll(options = {}) {
+   }
+   if (state.rec && state.rec.state === 'recording') {
+     if (resetBuffer) {
+       _resetPreRollBuffer();
+     }
+     return true;
+   }
  
-     async def events(self):
-         while True:
-             ev = await self._queue.get()
-             if ev is None:
-                 break
-             yield ev
+   let recorder;
+   try {
+     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
+   } catch (primaryErr) {
+     try {
+       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
+     } catch (fallbackErr) {
+       console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
+       state.rec = null;
+       return false;
+     }
+   }
  
-     async def send(self, chunk: bytes):
-         self.sent_chunks.append(bytes(chunk))
+   state.rec = recorder;
+   state.recStreaming = false;
+   state.recStopping = false;
+   state.recStopShouldSend = false;
++  state.turnHintSent = false;
+   if (resetBuffer) {
+     _resetPreRollBuffer();
+   }
  
-     async def close(self, wait_for_final: bool = True, **_):
-         return
+   const timeslice = state.preRollTimeslice || 150;
+   recorder.ondataavailable = _handleRecorderData;
+   recorder.onstop = async () => {
++    state.turnHintSent = false;
+     state.recStreaming = false;
+     state.recStopping = false;
+     state.recStopShouldSend = false;
+     state.rec = null;
+     let finalDetail;
+     try {
+       await state.chunkSendPromise.catch((err) => {
+         state.chunkSendError = state.chunkSendError || err;
+       });
+       if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
+         console.warn('[voice] recorded chunks too small', state.chunkBytesSent);
+         finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
+       }
+     } catch (e) {
+       console.warn('[voice] send audio failed', e);
+       state.chunkSendError = state.chunkSendError || e;
+     } finally {
+       if (state.chunkSendError && !finalDetail) {
+         finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
+       }
+       if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
+         try {
+           console.warn('[voice] recorder stopped with issues', {
+             bytesSent: state.chunkBytesSent,
+             error: state.chunkSendError,
+@@ -569,75 +572,79 @@ function _handleRecorderData(event) {
+   }
  
+   if (state.recStreaming) {
+     _sendRecorderChunk(blob, { preRoll: false, durationMs: null, timecode });
+     return;
+   }
  
--def test_wav_preroll_is_ignored(monkeypatch):
-+def _run_ws_session(monkeypatch, webm_chunk: bytes, wav_preroll: bytes = b"RIFF1234"):
-     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
-     monkeypatch.setenv("DG_LINGER_MS", "0")
-     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
+   const durationMs = _computePreRollDuration(timecode);
+   _bufferPreRollChunk({ blob, durationMs, timecode });
+ }
  
-     _TrackingSniffer.instances = []
-     _TrackingDeepgram.instances = []
+ function _stopRecorder(detail = null) {
+   const recorder = state.rec;
+   const wasActive = !!recorder && recorder.state !== 'inactive';
+   const payload = Object.assign({
+     active: wasActive,
+     hasRecorder: !!recorder,
+   }, detail || {});
+   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
  
-     monkeypatch.setattr(ws_asgi, "AudioContainerSniffer", _TrackingSniffer)
-     monkeypatch.setattr(ws_asgi, "DeepgramClient", _TrackingDeepgram)
-     monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
-     monkeypatch.setattr(ws_asgi.bus, "current_assistant_turn", lambda sid: None)
-     monkeypatch.setattr(ws_asgi, "_admin_emit", None)
-     monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
+   if (detail?.reason === 'server_final') {
+     _applyPostFinalHold('stop_recorder');
+   } else if (state.finalized) {
+     if (!recorder || recorder.state === 'inactive') {
+       state.rec = null;
++      state.turnHintSent = false;
+       return;
+     }
+   }
  
--    wav_preroll = b"RIFF1234"
--    webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
--
-     events = deque(
-         [
-             {"type": "websocket.receive", "bytes": wav_preroll},
-             {"type": "websocket.receive", "bytes": webm_chunk},
-             {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
-             {"type": "websocket.disconnect"},
-         ]
-     )
+   if (!recorder) {
+     state.rec = null;
++    state.turnHintSent = false;
+     return;
+   }
  
-     sent_messages = []
+   if (recorder.state === 'inactive') {
+     state.rec = null;
++    state.turnHintSent = false;
+     return;
+   }
  
-     async def _receive():
-         return events.popleft() if events else {"type": "websocket.disconnect"}
+   const shouldSendFinal = !!state.recStreaming;
+   state.recStopShouldSend = shouldSendFinal;
+   state.recStopping = true;
+   state.recStreaming = false;
+   if (!shouldSendFinal) {
+     _resetPreRollBuffer();
+   }
  
-     async def _send(msg):
-         sent_messages.append(msg)
+   try { recorder.stop(); } catch {}
+   // intentionally keep state.rec reference nullable here; onstop handler handles final close
+   state.rec = null;
++  state.turnHintSent = false;
+ }
  
-     scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
+ function _teardownVADOnly() {
+   try { state.vad && state.vad.stop(); } catch {}
+   state.vad = null;
+ }
  
-     loop = asyncio.new_event_loop()
-     asyncio.set_event_loop(loop)
-     try:
-         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-         loop.run_until_complete(asyncio.sleep(0.05))
-     finally:
-         asyncio.set_event_loop(None)
-         loop.close()
+ function _teardownAudioGraph() {
+   _teardownPreRollTap();
+   try { state.source && state.source.disconnect(); } catch {}
+   try { state.analyser && state.analyser.disconnect(); } catch {}
+   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
+   state.source = null;
+   state.analyser = null;
+   state.ctx = null;
+   state.deviceLogged = false;
+   state.finalized = false;
+   state.postFinalHoldUntil = 0;
+   _removeWSListener();
+ }
  
-     sniffer_instance = _TrackingSniffer.instances[0]
-     deepgram_instance = _TrackingDeepgram.instances[0]
+ function _disarm() {
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   _clearBargeConfirm(false);
+@@ -719,50 +726,60 @@ async function _arm(stream = null, opts = {}) {
+ function _startRecorder() {
+   if (!state.stream) return false;
  
-+    return {
-+        "sniffer": sniffer_instance,
-+        "deepgram": deepgram_instance,
-+        "wav_preroll": wav_preroll,
-+        "webm_chunk": webm_chunk,
+   const primed = _primeRecorderForPreRoll({ resetBuffer: false });
+   if (!primed || !state.rec || state.rec.state !== 'recording') {
+     return false;
+   }
+ 
+   if (state.recStreaming) {
+     return true;
+   }
+ 
+   state.chunkSendPromise = Promise.resolve();
+   state.chunkBytesSent = 0;
+   state.chunkSendError = null;
+   state.turnClosePromise = null;
+   _clearPendingEndTimer();
+   state.recStartedAt = performance.now ? performance.now() : Date.now();
+   state.finalized = false;
+   state.postFinalHoldUntil = 0;
+   state.recStreaming = true;
+   state.recStopping = false;
+   state.recStopShouldSend = false;
+   _ensureWSListener();
+ 
++  if (!state.turnHintSent) {
++    const recorderMime = (state.rec && state.rec.mimeType) || REC_MIME;
++    try {
++      sendJSON({ type: 'AudioStart', mime: recorderMime });
++    } catch (err) {
++      try { console.warn('[voice] failed to send AudioStart hint', err); } catch {}
 +    }
++    state.turnHintSent = true;
++  }
 +
-+
-+def test_wav_preroll_is_ignored(monkeypatch):
-+    webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
-+    result = _run_ws_session(monkeypatch, webm_chunk)
-+
-+    sniffer_instance = result["sniffer"]
-+    deepgram_instance = result["deepgram"]
-+    wav_preroll = result["wav_preroll"]
-+    webm_chunk = result["webm_chunk"]
-+
-+    assert sniffer_instance.feed_chunks == [webm_chunk]
-+    assert wav_preroll not in deepgram_instance.sent_chunks
-+    assert webm_chunk in deepgram_instance.sent_chunks
-+
-+    transport = deepgram_instance.cfg.get("_transport") or {}
-+    assert transport.get("container") == "webm"
-+    assert transport.get("codec") == "opus"
-+    assert transport.get("containerized_opus") is True
-+
-+
-+def test_webm_chunk_larger_than_window(monkeypatch):
-+    webm_chunk = container_sniffer.AudioContainerSniffer.EBML_MAGIC + b"X" * (
-+        container_sniffer.AudioContainerSniffer.MAX_WINDOW + 10
-+    )
-+
-+    result = _run_ws_session(monkeypatch, webm_chunk)
-+
-+    sniffer_instance = result["sniffer"]
-+    deepgram_instance = result["deepgram"]
-+    wav_preroll = result["wav_preroll"]
-+    webm_chunk = result["webm_chunk"]
-+
-     assert sniffer_instance.feed_chunks == [webm_chunk]
-     assert wav_preroll not in deepgram_instance.sent_chunks
-     assert webm_chunk in deepgram_instance.sent_chunks
+   const preRollStats = _enqueuePreRollBlobs();
+   if (preRollStats?.count) {
+     try {
+       console.debug('[voice] flushed pre-roll buffer', {
+         chunks: preRollStats.count,
+         durationMs: preRollStats.durationMs,
+         bytes: preRollStats.totalBytes,
+       });
+     } catch {}
+   }
  
-     transport = deepgram_instance.cfg.get("_transport") or {}
-     assert transport.get("container") == "webm"
-     assert transport.get("codec") == "opus"
-     assert transport.get("containerized_opus") is True
+   state.turnOpen = true;
+   try {
+     console.debug('[voice] recorder streaming', {
+       mime: (state.rec && state.rec.mimeType) || REC_MIME,
+     });
+   } catch {}
+ 
+   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
+   _safeClearTurnTimer();
+   state.turnTimer = setTimeout(() => {
+     try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
+   }, limitMs);
+ 
+   return true;
+diff --git a/tests/js/voice-preroll.test.mjs b/tests/js/voice-preroll.test.mjs
+index 15bddf2eb25864a1b5eedb2d729a234a276b964b..6ab214453e279dfa94cb5489fcb5b20d26279b8f 100644
+--- a/tests/js/voice-preroll.test.mjs
++++ b/tests/js/voice-preroll.test.mjs
+@@ -67,65 +67,74 @@ class FakeRecorder {
+   stop() {
+     this.state = 'inactive';
+     this.stopCalled = true;
+   }
+ }
+ 
+ FakeRecorder.instances = [];
+ 
+ globalThis.MediaRecorder = FakeRecorder;
+ 
+ test('pre-roll audio is flushed before first live MediaRecorder chunk', async () => {
+   const voice = await import('../../static/js/voice.js');
+   const hooks = voice.__TEST_ONLY__;
+ 
+   hooks.state.stream = { active: true };
+   hooks.state.turnOpen = false;
+   hooks.state.turnClosePromise = null;
+   hooks.state.chunkSendPromise = Promise.resolve();
+   hooks.state.chunkBytesSent = 0;
+   hooks.state.chunkSendError = null;
+ 
+   const preRollBlob = new Blob(['pre'], { type: 'audio/webm; codecs=opus' });
+   hooks.state.preRollBlobs = [{ blob: preRollBlob, durationMs: 25, timecode: 25 }];
+   hooks.state.preRollDurationMs = 25;
+ 
+-  const events = [];
++  const transportEvents = [];
+   globalThis.__TEST_WS_HOOKS = {
++    onSendJSON: (payload) => {
++      transportEvents.push({ kind: 'json', payload });
++    },
+     onSendAudioChunk: (blob) => {
+-      events.push(blob);
++      transportEvents.push({ kind: 'chunk', payload: blob });
+     },
+   };
+ 
+   const started = hooks.startRecorder();
+   assert.equal(started, true, 'recorder should start with fake stream');
+   assert.equal(hooks.state.preRollBlobs.length, 0, 'pre-roll buffer should clear once recorder starts');
+ 
+   const recorder = FakeRecorder.instances.at(-1);
+   assert.ok(recorder, 'fake recorder should exist');
+   assert.equal(recorder.state, 'recording', 'recorder should be recording');
+ 
+   const liveBlob = new Blob(['live'], { type: 'audio/webm; codecs=opus' });
+   recorder.ondataavailable({ data: liveBlob });
+ 
+   await hooks.state.chunkSendPromise;
+ 
+-  assert.equal(events.length, 2, 'both pre-roll and live chunks should be sent');
++  assert.ok(transportEvents.length >= 3, 'AudioStart and two chunks should be emitted');
++  assert.equal(transportEvents[0]?.kind, 'json', 'AudioStart must be sent before audio chunks');
++  assert.equal(transportEvents[0]?.payload?.type, 'AudioStart', 'AudioStart frame should be emitted');
++  assert.equal(transportEvents[0]?.payload?.mime, recorder.mimeType, 'AudioStart must include recorder MIME');
++
++  const chunkEvents = transportEvents.filter((ev) => ev.kind === 'chunk');
++  assert.equal(chunkEvents.length, 2, 'both pre-roll and live chunks should be sent');
+   const texts = [];
+-  for (const blob of events) {
+-    texts.push(await blob.text());
++  for (const ev of chunkEvents) {
++    texts.push(await ev.payload.text());
+   }
+   assert.deepEqual(texts, ['pre', 'live'], 'pre-roll chunk must precede the live chunk');
+-  assert.equal(events[0].type, 'audio/webm; codecs=opus', 'pre-roll chunk should use WebM/Opus');
++  assert.equal(chunkEvents[0].payload.type, 'audio/webm; codecs=opus', 'pre-roll chunk should use WebM/Opus');
+ 
+   hooks.stopRecorder({ reason: 'test_cleanup' });
+   if (typeof recorder.onstop === 'function') {
+     await recorder.onstop();
+   }
+ 
+   if (hooks.state.turnTimer) {
+     clearTimeout(hooks.state.turnTimer);
+     hooks.state.turnTimer = null;
+   }
+   globalThis.__TEST_WS_HOOKS = {};
+   FakeRecorder.instances = [];
+ });
+diff --git a/tests/js/ws_stub.mjs b/tests/js/ws_stub.mjs
+index c4f250db3fd70bbf5dd0352d14ffde4533664bc4..c7f3228ea1690a353fecf2b28ccaab60c79b535b 100644
+--- a/tests/js/ws_stub.mjs
++++ b/tests/js/ws_stub.mjs
+@@ -1,22 +1,25 @@
+ function hooks() {
+   return globalThis.__TEST_WS_HOOKS || {};
+ }
+ 
+ export function openWS() { return undefined; }
+ export function waitWSOpen() { return Promise.resolve(); }
+ export function isOpen() { return true; }
+ export function isConnecting() { return false; }
+ export function closeWS() { return Promise.resolve(); }
+ export function bufferedAmount() { return 0; }
+ export function configure() { return undefined; }
+-export function sendJSON() { return undefined; }
++export function sendJSON(...args) {
++  const fn = hooks().onSendJSON;
++  return fn ? fn(...args) : undefined;
++}
+ export function sendAudioChunk(...args) {
+   const fn = hooks().onSendAudioChunk;
+   const result = fn ? fn(...args) : undefined;
+   return Promise.resolve(result);
+ }
+ export function sendCloseStream(...args) {
+   const fn = hooks().onSendCloseStream;
+   const result = fn ? fn(...args) : undefined;
+   return Promise.resolve(result);
+ }

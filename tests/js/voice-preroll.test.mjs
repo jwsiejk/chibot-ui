@@ -89,10 +89,13 @@ test('pre-roll audio is flushed before first live MediaRecorder chunk', async ()
   hooks.state.preRollBlobs = [{ blob: preRollBlob, durationMs: 25, timecode: 25 }];
   hooks.state.preRollDurationMs = 25;
 
-  const events = [];
+  const transportEvents = [];
   globalThis.__TEST_WS_HOOKS = {
+    onSendJSON: (payload) => {
+      transportEvents.push({ kind: 'json', payload });
+    },
     onSendAudioChunk: (blob) => {
-      events.push(blob);
+      transportEvents.push({ kind: 'chunk', payload: blob });
     },
   };
 
@@ -109,13 +112,19 @@ test('pre-roll audio is flushed before first live MediaRecorder chunk', async ()
 
   await hooks.state.chunkSendPromise;
 
-  assert.equal(events.length, 2, 'both pre-roll and live chunks should be sent');
+  assert.ok(transportEvents.length >= 3, 'AudioStart and two chunks should be emitted');
+  assert.equal(transportEvents[0]?.kind, 'json', 'AudioStart must be sent before audio chunks');
+  assert.equal(transportEvents[0]?.payload?.type, 'AudioStart', 'AudioStart frame should be emitted');
+  assert.equal(transportEvents[0]?.payload?.mime, recorder.mimeType, 'AudioStart must include recorder MIME');
+
+  const chunkEvents = transportEvents.filter((ev) => ev.kind === 'chunk');
+  assert.equal(chunkEvents.length, 2, 'both pre-roll and live chunks should be sent');
   const texts = [];
-  for (const blob of events) {
-    texts.push(await blob.text());
+  for (const ev of chunkEvents) {
+    texts.push(await ev.payload.text());
   }
   assert.deepEqual(texts, ['pre', 'live'], 'pre-roll chunk must precede the live chunk');
-  assert.equal(events[0].type, 'audio/webm; codecs=opus', 'pre-roll chunk should use WebM/Opus');
+  assert.equal(chunkEvents[0].payload.type, 'audio/webm; codecs=opus', 'pre-roll chunk should use WebM/Opus');
 
   hooks.stopRecorder({ reason: 'test_cleanup' });
   if (typeof recorder.onstop === 'function') {
