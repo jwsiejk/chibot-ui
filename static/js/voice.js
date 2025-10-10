@@ -237,7 +237,7 @@ async function _ensureMic(externalStream = null) {
   analyser.fftSize = 2048;
   analyser.smoothingTimeConstant = 0.06;          // LESS twitchy (was 0.03)
   source.connect(analyser);
-  _setupPreRollTap(ctx, source);
+  await _setupPreRollTap(ctx, source);
 
   state.stream = stream;
   state.ctx = ctx;
@@ -286,7 +286,7 @@ function _closeTurnIfOpen() {
   return closePromise;
 }
 
-function _setupPreRollTap(ctx, source) {
+async function _setupPreRollTap(ctx, source) {
   _teardownPreRollTap();
 
   if (!ctx || !source) {
@@ -298,8 +298,20 @@ function _setupPreRollTap(ctx, source) {
   const sampleRate = ctx.sampleRate || 48_000;
   state.preRollSampleRate = sampleRate;
 
-  if (typeof ctx.createScriptProcessor !== 'function') {
-    // ScriptProcessorNode unavailable; gracefully degrade without pre-roll.
+  const worklet = ctx.audioWorklet;
+  if (!worklet || typeof worklet.addModule !== 'function') {
+    // AudioWorklet unavailable; gracefully degrade without pre-roll.
+    state.preRollBuffer = null;
+    state.preRollWriteIndex = 0;
+    state.preRollFilled = 0;
+    return;
+  }
+
+  try {
+    const moduleUrl = new URL('./voice/pre_roll_processor.js', import.meta.url);
+    await worklet.addModule(moduleUrl);
+  } catch (err) {
+    try { console.warn('[voice] failed to load pre-roll worklet', err); } catch {}
     state.preRollBuffer = null;
     state.preRollWriteIndex = 0;
     state.preRollFilled = 0;
@@ -312,27 +324,32 @@ function _setupPreRollTap(ctx, source) {
   state.preRollFilled = 0;
 
   try {
-    const processor = ctx.createScriptProcessor(2048, 1, 1);
-    const silentGain = ctx.createGain();
-    silentGain.gain.value = 0;
-    processor.onaudioprocess = (event) => {
+    const node = new AudioWorkletNode(ctx, 'pre-roll-processor', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      channelCount: 1,
+      outputChannelCount: [1],
+    });
+    node.port.onmessage = (event) => {
       try {
-        const input = event?.inputBuffer?.getChannelData?.(0);
-        if (!input) return;
-        _pushPreRollSamples(input);
+        const data = event?.data;
+        if (!data) return;
+        _pushPreRollSamples(data);
       } catch (err) {
-        try { console.warn('[voice] pre-roll tap failed', err); } catch {}
+        try { console.warn('[voice] pre-roll tap handler failed', err); } catch {}
       }
     };
-    source.connect(processor);
-    processor.connect(silentGain);
+    const silentGain = ctx.createGain();
+    silentGain.gain.value = 0;
+    source.connect(node);
+    node.connect(silentGain);
     if (ctx.destination) {
       silentGain.connect(ctx.destination);
     }
-    state.preRollNode = processor;
+    state.preRollNode = node;
     state.preRollGain = silentGain;
   } catch (err) {
-    try { console.warn('[voice] pre-roll tap unavailable', err); } catch {}
+    try { console.warn('[voice] pre-roll worklet unavailable', err); } catch {}
     _teardownPreRollTap();
   }
 }
@@ -358,8 +375,8 @@ function _pushPreRollSamples(samples) {
 
 function _teardownPreRollTap() {
   if (state.preRollNode) {
+    try { state.preRollNode.port.onmessage = null; } catch {}
     try { state.preRollNode.disconnect(); } catch {}
-    try { state.preRollNode.onaudioprocess = null; } catch {}
   }
   if (state.preRollGain) {
     try { state.preRollGain.disconnect(); } catch {}
