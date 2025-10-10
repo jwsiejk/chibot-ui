@@ -842,7 +842,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     def _resolve_final_guard_window_s() -> float:
         """Resolve how long to wait after a provider final before committing it to the client."""
         try:
-            raw_val = os.getenv("WS_FINAL_GUARD_MS", "600") or "0"
+            raw_val = os.getenv("WS_FINAL_GUARD_MS", "900") or "0"
             env_val = int(raw_val)
         except Exception:
             env_val = 600
