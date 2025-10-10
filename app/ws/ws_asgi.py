@@ -839,26 +839,18 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     pending_user_final: Dict[str, Any] = {"payload": None, "ts": 0.0}
     pending_user_final_task: List[Optional[asyncio.Task]] = [None]
 
-    
-def _resolve_final_guard_window_s() -> float:
-        """
-        Resolve how long to wait after a provider-final before committing the final to the client.
-        We keep this short to prevent user-turn slicing. Default = 600ms, override with WS_FINAL_GUARD_MS.
-        """
+    def _resolve_final_guard_window_s() -> float:
+        """Resolve how long to wait after a provider final before committing it to the client."""
         try:
-            env_val = int(os.getenv("WS_FINAL_GUARD_MS", "600") or 0)
+            raw_val = os.getenv("WS_FINAL_GUARD_MS", "600") or "0"
+            env_val = int(raw_val)
         except Exception:
             env_val = 600
-        # Return seconds
+        # Return seconds (clamped to >= 0)
         try:
             return max(0, env_val) / 1000.0
         except Exception:
-            return 0.6
-
-        try:
-            return max(guard_candidates) / 1000.0
-        except Exception:
-            return 0.0
+            return 0.6      
 
     def _cancel_pending_user_final_task(reason: str = "cancel") -> None:
         task = pending_user_final_task[0]
