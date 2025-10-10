@@ -1,7 +1,7 @@
 
 # app/__init__.py
 import os
-from flask import Flask, Blueprint, render_template, request, session
+from flask import Flask, Blueprint, render_template, request, session, current_app
 
 from .api_v1 import create_v1_blueprint
 from .api_v1.health import bp as health_bp
@@ -68,6 +68,17 @@ def create_app():
     rate_limit_register(app)
 
     make_csrf_route(app)
+
+    def asset_version(rel_path: str) -> str:
+        try:
+            full_path = os.path.join(current_app.static_folder, rel_path)
+            return str(int(os.path.getmtime(full_path)))
+        except (OSError, TypeError, ValueError):
+            return "0"
+
+    @app.context_processor
+    def _inject_asset_version():
+        return {"asset_version": asset_version}
 
     @app.after_request
     def maybe_allow_cors(resp):

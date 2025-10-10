@@ -365,4 +365,7 @@ if (document.readyState === 'loading'){
 }
 
 // Debug import (opt-in via localStorage.AskChipDebug='1')
-import '/static/js/debug.js?v=v20250911b';
+const __assetVersion =
+  (typeof globalThis !== 'undefined' && globalThis.__askchipAssetVersion) || '';
+const __debugSuffix = __assetVersion ? `?v=${__assetVersion}` : '';
+import(`/static/js/debug.js${__debugSuffix}`);

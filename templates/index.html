@@ -106,8 +106,21 @@
   </div>
 
   <!-- Scripts -->
-  <script type="module" src="/static/js/bootstrap.js?v=v20250911b"></script>
-  <script type="module" src="/static/js/auth_gate.js?v=v20250911b"></script>
-  <script type="module" src="/static/js/ui_menu.js?v=v20250911b"></script>
+  {% set asset_ver = asset_version('js/bootstrap.js') %}
+  <script>
+    window.__askchipAssetVersion = {{ asset_ver|tojson }};
+  </script>
+  <script
+    type="module"
+    src="{{ url_for('static', filename='js/bootstrap.js') }}?v={{ asset_ver }}"
+  ></script>
+  <script
+    type="module"
+    src="{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}"
+  ></script>
+  <script
+    type="module"
+    src="{{ url_for('static', filename='js/ui_menu.js') }}?v={{ asset_ver }}"
+  ></script>
 </body>
 </html>

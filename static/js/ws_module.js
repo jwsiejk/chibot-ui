@@ -1,5 +1,7 @@
-export const WS_MODULE_VERSION = 'v20250911b';
-export const WS_MODULE_URL = `/static/js/ws.js?v=${WS_MODULE_VERSION}`;
+const __assetVersion =
+  (typeof globalThis !== 'undefined' && globalThis.__askchipAssetVersion) || '';
+const __wsSuffix = __assetVersion ? `?v=${__assetVersion}` : '';
+export const WS_MODULE_URL = `/static/js/ws.js${__wsSuffix}`;
 
 let cached = null;
 

@@ -1,325 +1,242 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index caaba52242a2f5a63f3e8196854885a3768027be..d343230a553ab98689df1c4c49979bde80f392f1 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -430,50 +430,51 @@ class DeepgramClient:
-                     val = self._cfg.get(key)
-                     if val:
-                         tag_hint = str(val)
-                         break
-             self._diag_tag_hint: Optional[str] = tag_hint
-         except Exception:
-             self._diag_tag_hint = None
+diff --git a/app/__init__.py b/app/__init__.py
+index c5519ad7f856d1e1e6ed1f70860122ee819242ab..3dee09c8a1ff0bbe226eefd5e42f3385239e4747 100644
+--- a/app/__init__.py
++++ b/app/__init__.py
+@@ -1,29 +1,29 @@
  
-         # TX queue + flushing
-         self._tx_queue: Deque[bytes] = deque()
-         self._flush_task: Optional[asyncio.Task] = None
+ # app/__init__.py
+ import os
+-from flask import Flask, Blueprint, render_template, request, session
++from flask import Flask, Blueprint, render_template, request, session, current_app
  
-         # Graceful shutdown coordination
-         self._final_event: asyncio.Event = asyncio.Event()
-         self._any_result: bool = False
-         self._drain_event: asyncio.Event = asyncio.Event()
-         self._drain_event.set()
-         self._drain_timeout_s: float = float(
-             os.getenv("DG_CLOSE_DRAIN_TIMEOUT_S", "1.5")
-         )
+ from .api_v1 import create_v1_blueprint
+ from .api_v1.health import bp as health_bp
+ from .middleware.csrf import csrf_before_request, make_csrf_route, ensure_csrf_headers
+ from .middleware.rate_limit import register_before_request as rate_limit_register
  
-         # First-chunk guard & timing
-         self._first_real_sent: bool = False
-         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
-         self._last_chunk_ts: float = 0.0
-+        self._last_transcript: str = ""
+ # ---------- Core blueprint (UI shells / docs) ----------
+ core_bp = Blueprint("core", __name__)
  
-         # Tunables
-         self._linger_ms: int = int(
-             os.getenv("DG_LINGER_MS", "800")
-         )  # slightly longer default
-         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "12"))
+ @core_bp.get("/")
+ def home():
+     return render_template("index.html")
  
-         # Open gate
-         self._open_evt: asyncio.Event = asyncio.Event()
-         self._asr_open_emitted: bool = False
-         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
-         self._open_gate_warned: bool = False
+ @core_bp.get("/diagnostics")
+ def diagnostics():
+     return render_template("diagnostics.html")
  
-         # Keepalive
-         self._keepalive_task: Optional[asyncio.Task] = None
-         self._keepalive_interval: float = float(
-             os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0")
-         )
+ @core_bp.get("/favicon.ico")
+ def favicon():
+     # Serve from /static/favicon.ico
+     from flask import current_app, send_file
+     import os as _os
+     return send_file(_os.path.join(current_app.static_folder, "favicon.ico"), mimetype="image/x-icon")
  
-         # Optional JSON logger injected by WS layer (ws_asgi)
-         self._jlog = self._cfg.get("_jlog")
+ @core_bp.get("/logs-ui")
+@@ -47,50 +47,61 @@ def create_app():
+         __name__,
+         static_folder="../static",
+         static_url_path="/static",
+         template_folder="../templates",
+     )
+     app.config["JSON_SORT_KEYS"] = False
+     if os.environ.get("CI_FAST"):
+         app.config["TESTING"] = True
  
-         # Serialize outbound websocket sends to avoid concurrent writer errors
-         self._send_lock = asyncio.Lock()
+     app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
  
-@@ -1571,83 +1572,87 @@ class DeepgramClient:
+     # v1-only API + core + health
+     app.register_blueprint(create_v1_blueprint(), url_prefix="/api/v1")
+     app.register_blueprint(core_bp)
+     app.register_blueprint(health_bp)
  
-                     # Prefer channel.* first (typical DG shape)
-                     channel = msg.get("channel") or {}
-                     alts = channel.get("alternatives")
-                     if isinstance(alts, list) and alts:
-                         text = (alts[0].get("transcript") or "").strip()
+     # Ensure CSRF header/cookie attached to responses
+     app.after_request(ensure_csrf_headers)
  
-                     # Fallback: top-level alternatives (some messages)
-                     if not text:
-                         top_alts = msg.get("alternatives")
-                         if isinstance(top_alts, list) and top_alts:
-                             text = (top_alts[0].get("transcript") or "").strip()
+     # Middleware
+     app.before_request(csrf_before_request)
+     rate_limit_register(app)
  
-                     # Fallback: top-level transcript (some messages)
-                     if not text and isinstance(msg.get("transcript"), str):
-                         text = (msg.get("transcript") or "").strip()
+     make_csrf_route(app)
  
-                     # Finalness can be on channel or top-level, or implied by event type
-                     is_final = (
-                         bool(channel.get("is_final"))
-                         or bool(msg.get("is_final"))
-                         or bool(msg.get("speech_final"))
-                         or (evt_type in ("utteranceend", "UtteranceEnd"))
-                     )
++    def asset_version(rel_path: str) -> str:
++        try:
++            full_path = os.path.join(current_app.static_folder, rel_path)
++            return str(int(os.path.getmtime(full_path)))
++        except (OSError, TypeError, ValueError):
++            return "0"
++
++    @app.context_processor
++    def _inject_asset_version():
++        return {"asset_version": asset_version}
++
+     @app.after_request
+     def maybe_allow_cors(resp):
+         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
+         if allow:
+             origins = [o.strip() for o in allow.split(",") if o.strip()]
+             ori = request.headers.get("Origin", "")
+             if ori in origins:
+                 resp.headers["Access-Control-Allow-Origin"] = ori
+                 resp.headers["Vary"] = "Origin"
+                 resp.headers["Access-Control-Allow-Credentials"] = "true"
+                 resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token"
+                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+         return resp
  
--                    # No usable text in this message; keep listening
--                    if not text:
-+                    if text:
-+                        self._last_transcript = text
-+                    elif is_final:
-+                        text = self._last_transcript or ""
-+                    else:
-                         continue
+     @app.route("/<path:_>", methods=["OPTIONS"])
+     def _cors_preflight(_):
+         return ("", 204)
  
-                     # Seeing a result also implies the upstream is functioning
-                     await self._signal_ready()
+     @app.before_request
+     def _auth_gate():
+         p = request.path or "/"
+         allow = (
+             p.startswith("/api/") or
+             p.startswith("/ws") or
+             p.startswith("/static") or
+diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
+index 56d059860dbf92dff9efa04e50bbe06dfd14c6cd..df990edf35a23d83703c80142cc86dfa88410117 100644
+--- a/static/js/bootstrap.js
++++ b/static/js/bootstrap.js
+@@ -343,26 +343,29 @@ function wireUI(){
  
-                     logger.debug(
-                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
-                         sid,
-                         is_final,
-                         len(text),
-                         _clip_text(text),
-                     )
-                     self._emit_diag(
-                         "asr_final" if is_final else "asr_partial",
-                         text=text,
-                         chars=len(text),
-                         active=True,
-                     )
-                     try:
-                         await self._ev_queue.put(
-                             {
-                                 "type": "user_final" if is_final else "user_partial",
-                                 "text": text,
-                             }
-                         )
-                     except Exception:
-                         pass
+   // Reset bootstrap state when session ends so Start can be used again
+   window.addEventListener('askchip-session-ended', () => {
+     try { disarmVAD(); } catch {}
+     try { Visualizer.stop({ reset: true }); } catch {}
+     started = false;
+     const sb = $('#startButton');
+     if (sb) sb.disabled = false;
+     _disableButtons();
+     setDot('ready');
+   });
  
-                     if is_final:
-                         self._any_result = True
-                         self._final_event.set()
-+                        self._last_transcript = ""
-                         continue
+   setDot('ready');
+   setStatusText('Ready');
+   window.__askchip_bootstrap_loaded = true;
+   console.log('[AskChip] bootstrap loaded');
+ }
  
-                 elif evt_type in ("error", "close"):
-                     logger.warning(
-                         "Deepgram error event sid=%s evt_type=%s detail=%s",
-                         sid,
-                         evt_type,
-                         _clip_text(str(msg), 200),
-                     )
-                     self._emit_diag(
-                         "asr_error",
-                         error=msg.get("error") or evt_type,
-                         provider_error=True,
-                         detail=_clip_text(str(msg), 200),
-                     )
-                     try:
-                         await self._ev_queue.put(
-                             {"type": "asr_error", "error": msg.get("error") or evt_type}
-                         )
-                     except Exception:
-                         pass
+ if (document.readyState === 'loading'){
+   document.addEventListener('DOMContentLoaded', wireUI);
+ } else {
+   wireUI();
+ }
  
-                 else:
-                     logger.debug(
-                         "Deepgram unhandled event sid=%s evt_type=%s",
-diff --git a/tests/test_ws_final_guard.py b/tests/test_ws_final_guard.py
-index 4d6ce68a3e1de8c696566c1773dd6c2b2ed71543..7c4f25d83deb89ec48349cacc670425087a1c3cf 100644
---- a/tests/test_ws_final_guard.py
-+++ b/tests/test_ws_final_guard.py
-@@ -344,25 +344,174 @@ def test_late_audio_after_final_emits_single_pair(monkeypatch):
-         main_task = loop.create_task(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-         loop.run_until_complete(main_task)
-     finally:
-         asyncio.set_event_loop(None)
-         loop.close()
+ // Debug import (opt-in via localStorage.AskChipDebug='1')
+-import '/static/js/debug.js?v=v20250911b';
++const __assetVersion =
++  (typeof globalThis !== 'undefined' && globalThis.__askchipAssetVersion) || '';
++const __debugSuffix = __assetVersion ? `?v=${__assetVersion}` : '';
++import(`/static/js/debug.js${__debugSuffix}`);
+diff --git a/static/js/ws_module.js b/static/js/ws_module.js
+index c982da4d52084fdfd0e6e86b43839f2e12b04908..9ddb591b59f6ca8ee807136553093883239efae3 100644
+--- a/static/js/ws_module.js
++++ b/static/js/ws_module.js
+@@ -1,27 +1,29 @@
+-export const WS_MODULE_VERSION = 'v20250911b';
+-export const WS_MODULE_URL = `/static/js/ws.js?v=${WS_MODULE_VERSION}`;
++const __assetVersion =
++  (typeof globalThis !== 'undefined' && globalThis.__askchipAssetVersion) || '';
++const __wsSuffix = __assetVersion ? `?v=${__assetVersion}` : '';
++export const WS_MODULE_URL = `/static/js/ws.js${__wsSuffix}`;
  
-     payloads = _json_payloads(sent)
+ let cached = null;
  
-     finals_by_turn = {}
-     ends_by_turn = {}
-     for payload in payloads:
-         if payload.get("type") == "Results" and (payload.get("channel") or {}).get(
-             "is_final"
-         ):
-             turn_id = payload.get("turn_id")
-             finals_by_turn[turn_id] = finals_by_turn.get(turn_id, 0) + 1
-         elif payload.get("type") == "UtteranceEnd":
-             turn_id = payload.get("turn_id")
-             ends_by_turn[turn_id] = ends_by_turn.get(turn_id, 0) + 1
+ const wsModulePromise = import(WS_MODULE_URL).then((mod) => {
+   cached = mod;
+   return mod;
+ }).catch((err) => {
+   console.error('[ws_module] failed to load ws.js module', err);
+   throw err;
+ });
  
-     assert finals_by_turn, "Expected at least one final result"
-     assert finals_by_turn == ends_by_turn
-     assert all(count == 1 for count in finals_by_turn.values())
-     assert all(count == 1 for count in ends_by_turn.values())
-     assert llm_calls, "LLM turn should be invoked for final results"
-+
-+
-+def test_deepgram_final_without_transcript_still_emits(monkeypatch):
-+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
-+    monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
-+    monkeypatch.setenv("DG_KEEPALIVE_INTERVAL_S", "0")
-+
-+    monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
-+    monkeypatch.setattr(ws_asgi, "_admin_emit", None)
-+    monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
-+
-+    async def immediate_to_thread(func, *args, **kwargs):
-+        return func(*args, **kwargs)
-+
-+    monkeypatch.setattr(ws_asgi.asyncio, "to_thread", immediate_to_thread)
-+
-+    def fake_prepare(text, meta=None, **kwargs):
-+        return {}, {}, {}
-+
-+    monkeypatch.setattr(ws_asgi, "prepare_turn_metadata", fake_prepare)
-+
-+    llm_calls = []
-+
-+    def fake_run_ws_user_turn(session_id, text, corr_id=None, **kwargs):
-+        llm_calls.append((session_id, text))
-+
-+    monkeypatch.setattr(ws_asgi, "run_ws_user_turn", fake_run_ws_user_turn)
-+
-+    partial_text = "fallback transcript"
-+
-+    class _ScriptedWS:
-+        def __init__(self, payloads):
-+            self._payloads = deque(payloads)
-+            self.open = True
-+            self.sent = []
-+
-+        async def send(self, data):
-+            self.sent.append(data)
-+
-+        async def close(self):
-+            self.open = False
-+
-+        def __aiter__(self):
-+            ws = self
-+
-+            async def _gen():
-+                while ws._payloads:
-+                    await asyncio.sleep(0)
-+                    yield ws._payloads.popleft()
-+                ws.open = False
-+
-+            return _gen()
-+
-+    scripted_messages = [
-+        json.dumps(
-+            {
-+                "type": "Results",
-+                "channel": {
-+                    "alternatives": [{"transcript": partial_text}],
-+                    "is_final": False,
-+                },
-+            }
-+        ),
-+        json.dumps(
-+            {
-+                "type": "Results",
-+                "channel": {
-+                    "alternatives": [],
-+                    "is_final": True,
-+                },
-+            }
-+        ),
-+    ]
-+
-+    ws_instances = []
-+
-+    async def fake_ws_connect(*args, **kwargs):
-+        ws = _ScriptedWS(list(scripted_messages))
-+        ws_instances.append(ws)
-+        return ws
-+
-+    monkeypatch.setattr(deepgram_client.websockets, "connect", fake_ws_connect)
-+
-+    dg_instances = []
-+
-+    def tracked_deepgram(cfg):
-+        cfg["utterance_end_ms"] = 0
-+        cfg["_effective_utterance_end_ms"] = 0
-+        client = deepgram_client.DeepgramClient(cfg)
-+        dg_instances.append(client)
-+        return client
-+
-+    monkeypatch.setattr(ws_asgi, "DeepgramClient", tracked_deepgram)
-+
-+    sent = []
-+
-+    async def _send(message):
-+        sent.append(message)
-+
-+    scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
-+
-+    loop = asyncio.new_event_loop()
-+    asyncio.set_event_loop(loop)
-+    try:
-+        events: asyncio.Queue = asyncio.Queue()
-+        events.put_nowait({"type": "websocket.receive", "bytes": b"\x00\x01"})
-+        events.put_nowait({"type": "websocket.receive", "bytes": b"\x02\x03"})
-+
-+        async def _receive():
-+            ev = await events.get()
-+            delay = ev.pop("_delay", 0)
-+            if delay:
-+                await asyncio.sleep(delay)
-+            return ev
-+
-+        main_task = loop.create_task(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-+
-+        finals = []
-+        payloads = []
-+        for _ in range(10):
-+            loop.run_until_complete(asyncio.sleep(0.05))
-+            payloads = _json_payloads(sent)
-+            finals = [
-+                p
-+                for p in payloads
-+                if p.get("type") == "Results"
-+                and (p.get("channel") or {}).get("is_final")
-+            ]
-+            if finals:
-+                break
-+        assert finals, "Final Results frame should be emitted despite empty transcript"
-+        assert finals[0].get("channel", {}).get("alternatives", [{}])[0].get(
-+            "transcript"
-+        ) == partial_text
-+        assert any(p.get("type") == "UtteranceEnd" for p in payloads), (
-+            "UtteranceEnd should follow final Results"
-+        )
-+
-+        loop.run_until_complete(events.put({"type": "websocket.disconnect"}))
-+        loop.run_until_complete(main_task)
-+    finally:
-+        asyncio.set_event_loop(None)
-+        loop.close()
-+
-+    assert ws_instances, "Fake websocket should have been used"
-+    assert llm_calls, "LLM turn should run after Deepgram final"
-+    assert dg_instances, "Deepgram client should be instantiated"
-+    assert not dg_instances[0]._last_transcript, "Cached transcript should reset after final"
+ function moduleReady() {
+   return cached;
+ }
+ 
+ export function getWSModule() {
+   return wsModulePromise;
+ }
+ 
+ export function openWS(...args) {
+   if (moduleReady()) return moduleReady().openWS(...args);
+   return wsModulePromise.then((mod) => mod.openWS(...args));
+ }
+ 
+ export function waitWSOpen(...args) {
+diff --git a/templates/index.html b/templates/index.html
+index 58769ebfe98cd2c1861b1e515e64d62dd1c4a2d1..3c54d56ccd6767534bc2a94ad2b81c8589102551 100644
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -84,30 +84,43 @@
+         </div>
+         <div id="inlineLoginMsg" class="msgline"></div>
+       </form>
+     </div>
+   </div>
+ 
+   <div id="profileModal" class="modal hidden">
+     <div class="sheet">
+       <h3>Profile</h3>
+       <div class="grid">
+         <label>Name<input id="prof_name"/></label>
+         <label>Email<input id="prof_email" disabled/></label>
+         <label>Role<input id="prof_role"/></label>
+         <label>Region<input id="prof_region"/></label>
+         <label>Company<input id="prof_company"/></label>
+       </div>
+       <div class="actions">
+         <button id="profileSave" class="primary">Save</button>
+         <button id="profileCancel" type="button">Cancel</button>
+       </div>
+       <div id="profileMsg" class="msgline"></div>
+     </div>
+   </div>
+ 
+   <!-- Scripts -->
+-  <script type="module" src="/static/js/bootstrap.js?v=v20250911b"></script>
+-  <script type="module" src="/static/js/auth_gate.js?v=v20250911b"></script>
+-  <script type="module" src="/static/js/ui_menu.js?v=v20250911b"></script>
++  {% set asset_ver = asset_version('js/bootstrap.js') %}
++  <script>
++    window.__askchipAssetVersion = {{ asset_ver|tojson }};
++  </script>
++  <script
++    type="module"
++    src="{{ url_for('static', filename='js/bootstrap.js') }}?v={{ asset_ver }}"
++  ></script>
++  <script
++    type="module"
++    src="{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}"
++  ></script>
++  <script
++    type="module"
++    src="{{ url_for('static', filename='js/ui_menu.js') }}?v={{ asset_ver }}"
++  ></script>
+ </body>
+ </html>
+diff --git a/tests/js/test-loader.mjs b/tests/js/test-loader.mjs
+index 66086af21d3a461bd5149abc3609b74701d7147a..a5b1f9459b3fade73b60193fab4cc76cedec22b2 100644
+--- a/tests/js/test-loader.mjs
++++ b/tests/js/test-loader.mjs
+@@ -1,12 +1,15 @@
+ import path from 'node:path';
+ import { pathToFileURL } from 'node:url';
+ 
+-const STUB_SPEC = '/static/js/ws.js?v=v20250911b';
++const STUB_SPEC_PREFIX = '/static/js/ws.js';
+ const STUB_URL = pathToFileURL(path.resolve('./tests/js/ws_stub.mjs')).href;
+ 
+ export async function resolve(specifier, context, defaultResolve) {
+-  if (specifier === STUB_SPEC) {
+-    return { url: STUB_URL, shortCircuit: true };
++  if (specifier.startsWith(STUB_SPEC_PREFIX)) {
++    const normalized = specifier.replace(/\?v=.*$/, '');
++    if (normalized === STUB_SPEC_PREFIX) {
++      return { url: STUB_URL, shortCircuit: true };
++    }
+   }
+   return defaultResolve(specifier, context, defaultResolve);
+ }
