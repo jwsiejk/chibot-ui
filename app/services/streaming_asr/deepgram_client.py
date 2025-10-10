@@ -267,7 +267,7 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
 
         # Provide a sensible default for utterance_end_ms (2s) unless explicitly overridden
-        qd.setdefault("utterance_end_ms", "2000")
+        qd.setdefault("utterance_end_ms", os.getenv("DEEPGRAM_UTTERANCE_END_MS", "3000"))
 
         interim_val = qd.get("interim_results")
         interim_false = False

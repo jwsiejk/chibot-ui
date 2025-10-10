@@ -484,9 +484,27 @@ export async function sendAudioChunk(blob){
   }
 }
 
-export function sendCloseStream(){
-  sendJSON({ type: "CloseStream" });
+
+export async function sendCloseStream(){
+  // Drain the WS send buffer before closing the user turn.
+  try{
+    const deadline = Date.now() + 1500; // up to ~1.5s drain budget
+    // small sleep helper
+    const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
+    // allow two cycles to ensure MediaRecorder 'stop' enqueued the last blob
+    await sleep(20);
+    await sleep(20);
+    // drain bufferedAmount down near zero, without blocking forever
+    while (isOpen() && bufferedAmount() > 0 && Date.now() < deadline){
+      await sleep(20);
+    }
+  }catch(e){
+    console.warn('[ws] sendCloseStream drain failed', e);
+  } finally {
+    sendJSON({ type: "CloseStream" });
+  }
 }
+
 
 export function configure(opts = {}){
   // ensure session id is included if caller forgot

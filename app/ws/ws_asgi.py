@@ -839,28 +839,22 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     pending_user_final: Dict[str, Any] = {"payload": None, "ts": 0.0}
     pending_user_final_task: List[Optional[asyncio.Task]] = [None]
 
-    def _resolve_final_guard_window_s() -> float:
-        guard_candidates: List[int] = []
+    
+def _resolve_final_guard_window_s() -> float:
+        """
+        Resolve how long to wait after a provider-final before committing the final to the client.
+        We keep this short to prevent user-turn slicing. Default = 600ms, override with WS_FINAL_GUARD_MS.
+        """
         try:
-            eff_val = int(cfg.get("_effective_utterance_end_ms") or 0)
-            if eff_val > 0:
-                guard_candidates.append(eff_val)
+            env_val = int(os.getenv("WS_FINAL_GUARD_MS", "600") or 0)
         except Exception:
-            pass
+            env_val = 600
+        # Return seconds
         try:
-            cfg_val = int(cfg.get("utterance_end_ms") or 0)
-            if cfg_val > 0:
-                guard_candidates.append(cfg_val)
+            return max(0, env_val) / 1000.0
         except Exception:
-            pass
-        try:
-            env_val = int(os.getenv("WS_FINAL_GUARD_MS", "0") or 0)
-            if env_val > 0:
-                guard_candidates.append(env_val)
-        except Exception:
-            pass
-        if not guard_candidates:
-            return 0.0
+            return 0.6
+
         try:
             return max(guard_candidates) / 1000.0
         except Exception:
@@ -943,6 +937,29 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             _admin_emit and _admin_emit("asr:final", session_id=sid)
         except Exception:
             pass
+
+        if not text:
+            # Handle empty finals gracefully: send a brief nudge so the user hears feedback.
+            try:
+                from app.services.streaming import make_assistant_frames, schedule_frames
+                fallback_text = "Sorry, I didn’t catch that. Could you say that again?"
+                meta_stub = {"source": "nudge_empty_final", "channel": "ws"}
+                prepared_meta_fallback, _, _ = prepare_turn_metadata(
+                    fallback_text, dict(meta_stub)
+                )
+                _tid_f, frames_f = make_assistant_frames(
+                    fallback_text,
+                    sid,
+                    meta=prepared_meta_fallback,
+                    broadcast_immediately=True,
+                )
+                # Optionally, you could wait for TTS completion; we avoid blocking the WS loop.
+            except Exception:
+                pass
+            with contextlib.suppress(Exception):
+                _jlog("empty_final_nudge", sid=sid, turn_id=turn_id_for_event)
+            return
+
 
         if text:
             dialog_nlu_pre: Dict[str, Any] = {}
