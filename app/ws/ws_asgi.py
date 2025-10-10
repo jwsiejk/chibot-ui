@@ -1512,6 +1512,20 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                     raw_chunk = chunk
 
+                    if (
+                        raw_chunk
+                        and not sent_any_audio[0]
+                        and raw_chunk[:4] == b"RIFF"
+                    ):
+                        with contextlib.suppress(Exception):
+                            _jlog(
+                                "wav_preroll_ignored",
+                                sid=sid,
+                                bytes=len(raw_chunk),
+                                first8_hex=raw_chunk[:8].hex(),
+                            )
+                        continue
+
                     if final_seen[0]:
                         previous_turn_id = turn_id_ref[0]
                         removed_pending = 0

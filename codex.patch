@@ -1,948 +1,184 @@
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 4546a5abf83a5df2fd9772f460298fc2e934d73b..cbed64c16ea032facb0e882a59fecb847833c925 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -46,55 +46,57 @@ const state = {
-   stream: null,
-   ctx: null,
-   source: null,
-   analyser: null,
-   vad: null,
-   rec: null,
-   finalized: false,
-   postFinalHoldUntil: 0,
-   wsListener: null,
-   chunkSendPromise: Promise.resolve(),
-   chunkBytesSent: 0,
-   chunkSendError: null,
-   turnTimer: null,
-   turnOpen: false,   // track whether a turn is currently open server-side
-   turnClosePromise: null,
-   deviceLogged: false,
-   // NEW: min-turn gating
-   recStartedAt: 0,
-   pendingEndTimer: null,
-   ttsPlaying: false,
-   bargeConfirmTimer: null,
-   bargeConfirmActive: false,
-   // Pre-roll tap state
-   preRollNode: null,
-   preRollGain: null,
--  preRollBuffer: null,
--  preRollWriteIndex: 0,
--  preRollFilled: 0,
--  preRollSampleRate: 48_000,
--  preRollPending: null,
-+  preRollBlobs: [],
-+  preRollDurationMs: 0,
-+  preRollLastTimecode: null,
-+  preRollTimeslice: 150,
-+  recStreaming: false,
-+  recStopping: false,
-+  recStopShouldSend: false,
- };
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 8828e99a8b8b33f922b30f93133adf55ac130ae9..675caa9acbee42a9c08b7eb46571afc8b5d388a3 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -1490,50 +1490,64 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                             with contextlib.suppress(Exception):
+                                 _admin_emit(
+                                     "ws_bin_recv",
+                                     sid=sid,
+                                     frames_in=ws_frames_in,
+                                     bytes_total=ws_bytes_in,
+                                 )
+                     if chunk:
+                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
+                         if not audio_sig_logged:
+                             with contextlib.suppress(Exception):
+                                 _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
+                             audio_sig_logged = True
+                     else:
+                         with contextlib.suppress(Exception):
+                             _jlog(
+                                 "ws_audio_chunk_empty",
+                                 sid=sid,
+                                 bytes=len(frame_bytes or b""),
+                                 turn_id=turn_id_ref[0],
+                                 buf_empty=buf.is_empty(),
+                             )
  
- const BARGE_CONFIRM_DEFAULT_MS = 420;
- let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
- try {
-   const cfg = window.__askchip_config || {};
-   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
-     bargeConfirmMs = cfg.barge_confirm_ms;
-   }
- } catch {}
- bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
+                     raw_chunk = chunk
  
- try {
-   window.addEventListener('chip-tts', (ev) => {
-     const detail = ev?.detail || {};
-     const playing = String(detail.state || '').toLowerCase() === 'playing';
-     state.ttsPlaying = playing;
-   });
- } catch {}
- 
- // ---- Helpers ----------------------------------------------------------------
- 
- function _emitVoiceState(state, detail = {}) {
-   try {
-     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
-@@ -268,314 +270,371 @@ function _closeTurnIfOpen() {
-   if (!state.turnOpen && !state.turnClosePromise) {
-     return null;
-   }
-   if (state.turnClosePromise) {
-     return state.turnClosePromise;
-   }
-   if (!state.turnOpen) {
-     return null;
-   }
-   const closePromise = (async () => {
-     try {
-       await sendCloseStream();
-     } finally {
-       state.turnOpen = false;
-       state.turnClosePromise = null;
-     }
-   })();
-   state.turnClosePromise = closePromise;
-   return closePromise;
- }
- 
- async function _setupPreRollTap(ctx, source) {
-   _teardownPreRollTap();
- 
-   if (!ctx || !source) {
--    state.preRollBuffer = null;
--    state.preRollPending = null;
-+    _resetPreRollBuffer();
-     return;
-   }
- 
--  const sampleRate = ctx.sampleRate || 48_000;
--  state.preRollSampleRate = sampleRate;
-+  _resetPreRollBuffer();
- 
-   const worklet = ctx.audioWorklet;
-   if (!worklet || typeof worklet.addModule !== 'function') {
-     // AudioWorklet unavailable; gracefully degrade without pre-roll.
--    state.preRollBuffer = null;
--    state.preRollWriteIndex = 0;
--    state.preRollFilled = 0;
-     return;
-   }
- 
-   try {
-     const moduleUrl = new URL('./voice/pre_roll_processor.js', import.meta.url);
-     await worklet.addModule(moduleUrl);
-   } catch (err) {
-     try { console.warn('[voice] failed to load pre-roll worklet', err); } catch {}
--    state.preRollBuffer = null;
--    state.preRollWriteIndex = 0;
--    state.preRollFilled = 0;
-     return;
-   }
- 
--  const capacity = Math.max(1, Math.round((sampleRate * PRE_ROLL_MS) / 1000));
--  state.preRollBuffer = new Float32Array(capacity);
--  state.preRollWriteIndex = 0;
--  state.preRollFilled = 0;
--
-   try {
-     const node = new AudioWorkletNode(ctx, 'pre-roll-processor', {
-       numberOfInputs: 1,
-       numberOfOutputs: 1,
-       channelCount: 1,
-       outputChannelCount: [1],
-     });
--    node.port.onmessage = (event) => {
--      try {
--        const data = event?.data;
--        if (!data) return;
--        _pushPreRollSamples(data);
--      } catch (err) {
--        try { console.warn('[voice] pre-roll tap handler failed', err); } catch {}
--      }
--    };
-+    // Preserve the tap for VAD/visualization without buffering PCM samples.
-+    node.port.onmessage = null;
-     const silentGain = ctx.createGain();
-     silentGain.gain.value = 0;
-     source.connect(node);
-     node.connect(silentGain);
-     if (ctx.destination) {
-       silentGain.connect(ctx.destination);
-     }
-     state.preRollNode = node;
-     state.preRollGain = silentGain;
-   } catch (err) {
-     try { console.warn('[voice] pre-roll worklet unavailable', err); } catch {}
-     _teardownPreRollTap();
-   }
- }
- 
--function _pushPreRollSamples(samples) {
--  const buffer = state.preRollBuffer;
--  if (!buffer || !buffer.length) {
--    return;
--  }
--  const capacity = buffer.length;
--  let writeIndex = state.preRollWriteIndex || 0;
--  let filled = state.preRollFilled || 0;
--  for (let i = 0; i < samples.length; i += 1) {
--    buffer[writeIndex] = samples[i];
--    writeIndex = (writeIndex + 1) % capacity;
--    if (filled < capacity) {
--      filled += 1;
--    }
--  }
--  state.preRollWriteIndex = writeIndex;
--  state.preRollFilled = filled;
--}
--
- function _teardownPreRollTap() {
-   if (state.preRollNode) {
-     try { state.preRollNode.port.onmessage = null; } catch {}
-     try { state.preRollNode.disconnect(); } catch {}
-   }
-   if (state.preRollGain) {
-     try { state.preRollGain.disconnect(); } catch {}
-   }
-   state.preRollNode = null;
-   state.preRollGain = null;
--  state.preRollBuffer = null;
--  state.preRollWriteIndex = 0;
--  state.preRollFilled = 0;
--  state.preRollPending = null;
-+  _resetPreRollBuffer();
- }
- 
--function _snapshotPreRoll() {
--  const buffer = state.preRollBuffer;
--  if (!buffer || !buffer.length) {
--    return null;
--  }
-+function _resetPreRollBuffer() {
-+  state.preRollBlobs = [];
-+  state.preRollDurationMs = 0;
-+  state.preRollLastTimecode = null;
-+}
- 
--  const capacity = buffer.length;
--  const filled = Math.min(state.preRollFilled || 0, capacity);
--  if (filled <= 0) {
--    return null;
-+function _computePreRollDuration(timecode) {
-+  const timeslice = state.preRollTimeslice || 0;
-+  let duration = timeslice || PRE_ROLL_MS;
-+  if (Number.isFinite(timecode)) {
-+    const last = state.preRollLastTimecode;
-+    if (Number.isFinite(last)) {
-+      duration = Math.max(0, timecode - last);
-+    } else if (timecode > 0) {
-+      duration = timecode;
-+    }
-+    state.preRollLastTimecode = timecode;
-   }
--
--  const sampleRate = state.preRollSampleRate || 48_000;
--  const floatSamples = new Float32Array(filled);
--  const writeIndex = state.preRollWriteIndex || 0;
--  const start = (writeIndex - filled + capacity) % capacity;
--  if (start + filled <= capacity) {
--    floatSamples.set(buffer.subarray(start, start + filled));
--  } else {
--    const firstLen = capacity - start;
--    floatSamples.set(buffer.subarray(start, capacity), 0);
--    floatSamples.set(buffer.subarray(0, filled - firstLen), firstLen);
-+  if (!Number.isFinite(duration) || duration <= 0) {
-+    duration = timeslice || PRE_ROLL_MS;
-   }
-+  return duration;
-+}
- 
--  const blob = _pcmFloatToWavBlob(floatSamples, sampleRate);
--  if (!blob) {
--    return null;
-+function _bufferPreRollChunk(entry) {
-+  if (!entry || !entry.blob) {
-+    return;
-   }
--
--  return {
--    blob,
--    durationMs: (filled / sampleRate) * 1000,
--    frames: filled,
--    sampleRate,
-+  const chunk = {
-+    blob: entry.blob,
-+    durationMs: Number.isFinite(entry.durationMs) ? Math.max(0, entry.durationMs) : 0,
-+    timecode: Number.isFinite(entry.timecode) ? entry.timecode : null,
-   };
-+  state.preRollBlobs.push(chunk);
-+  state.preRollDurationMs += chunk.durationMs;
-+  while (state.preRollDurationMs > PRE_ROLL_MS && state.preRollBlobs.length > 1) {
-+    const removed = state.preRollBlobs.shift();
-+    state.preRollDurationMs -= removed?.durationMs || 0;
-+  }
-+  if (state.preRollDurationMs < 0) {
-+    state.preRollDurationMs = 0;
-+  }
- }
- 
--function _enqueuePreRoll(preRoll) {
--  if (!preRoll || !preRoll.blob) {
--    state.preRollPending = null;
--    return;
-+function _enqueuePreRollBlobs() {
-+  const queued = state.preRollBlobs ? [...state.preRollBlobs] : [];
-+  const durationMs = queued.reduce((sum, chunk) => sum + (chunk?.durationMs || 0), 0);
-+  const totalBytes = queued.reduce((sum, chunk) => sum + (chunk?.blob?.size || 0), 0);
-+  const count = queued.length;
-+  _resetPreRollBuffer();
-+  for (const chunk of queued) {
-+    if (!chunk?.blob) continue;
-+    _sendRecorderChunk(chunk.blob, {
-+      preRoll: true,
-+      durationMs: chunk.durationMs,
-+      timecode: chunk.timecode,
-+    });
-   }
-+  return { count, durationMs, totalBytes };
-+}
- 
--  const { blob, frames, durationMs, sampleRate } = preRoll;
--  state.preRollPending = null;
--
-+function _sendRecorderChunk(blob, meta = {}) {
-+  if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
-+    return;
-+  }
-+  const { preRoll = false, durationMs = null, timecode = null } = meta || {};
-+  const logLabel = preRoll ? 'streamed pre-roll chunk' : 'streamed audio chunk';
-   state.chunkSendPromise = state.chunkSendPromise
-     .catch(() => {})
-     .then(async () => {
-       try {
-         await sendAudioChunk(blob);
-         state.chunkBytesSent += blob.size;
-         try {
--          console.debug('[voice] streamed pre-roll chunk', {
-+          console.debug('[voice]', logLabel, {
-             bytes: blob.size,
--            frames,
-             durationMs,
--            sampleRate,
-+            timecode,
-             mime: blob.type,
-           });
-         } catch {}
-       } catch (err) {
-         state.chunkSendError = err;
-         try {
--          console.warn('[voice] failed to stream pre-roll chunk', err);
-+          console.warn('[voice] failed to stream audio chunk', err);
-         } catch {}
-       }
-     });
- }
- 
--function _pcmFloatToWavBlob(floatSamples, sampleRate) {
--  if (!floatSamples || !floatSamples.length || typeof Blob === 'undefined') {
--    return null;
-+function _primeRecorderForPreRoll(options = {}) {
-+  const { resetBuffer = true } = options || {};
-+  if (!state.stream) {
-+    return false;
-+  }
-+  if (typeof MediaRecorder === 'undefined') {
-+    console.warn('[voice] MediaRecorder not supported in this browser');
-+    state.rec = null;
-+    return false;
-+  }
-+  if (state.rec && state.rec.state === 'recording') {
-+    if (resetBuffer) {
-+      _resetPreRollBuffer();
-+    }
-+    return true;
-   }
- 
--  const frameCount = floatSamples.length;
--  const channels = 1;
--  const bitsPerSample = 16;
--  const pcm16 = new Int16Array(frameCount);
--  for (let i = 0; i < frameCount; i += 1) {
--    let sample = floatSamples[i];
--    if (!Number.isFinite(sample)) sample = 0;
--    sample = Math.max(-1, Math.min(1, sample));
--    pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-+  let recorder;
-+  try {
-+    recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
-+  } catch (primaryErr) {
-+    try {
-+      recorder = new MediaRecorder(state.stream); // fallback, browser picks best
-+    } catch (fallbackErr) {
-+      console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
-+      state.rec = null;
-+      return false;
-+    }
-   }
- 
--  const header = _createWavHeader({
--    sampleRate,
--    channels,
--    bitsPerSample,
--    frameCount,
--  });
-+  state.rec = recorder;
-+  state.recStreaming = false;
-+  state.recStopping = false;
-+  state.recStopShouldSend = false;
-+  if (resetBuffer) {
-+    _resetPreRollBuffer();
-+  }
++                    if (
++                        raw_chunk
++                        and not sent_any_audio[0]
++                        and raw_chunk[:4] == b"RIFF"
++                    ):
++                        with contextlib.suppress(Exception):
++                            _jlog(
++                                "wav_preroll_ignored",
++                                sid=sid,
++                                bytes=len(raw_chunk),
++                                first8_hex=raw_chunk[:8].hex(),
++                            )
++                        continue
 +
-+  const timeslice = state.preRollTimeslice || 150;
-+  recorder.ondataavailable = _handleRecorderData;
-+  recorder.onstop = async () => {
-+    state.recStreaming = false;
-+    state.recStopping = false;
-+    state.recStopShouldSend = false;
-+    state.rec = null;
-+    let finalDetail;
-+    try {
-+      await state.chunkSendPromise.catch((err) => {
-+        state.chunkSendError = state.chunkSendError || err;
-+      });
-+      if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
-+        console.warn('[voice] recorded chunks too small', state.chunkBytesSent);
-+        finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
-+      }
-+    } catch (e) {
-+      console.warn('[voice] send audio failed', e);
-+      state.chunkSendError = state.chunkSendError || e;
-+    } finally {
-+      if (state.chunkSendError && !finalDetail) {
-+        finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
-+      }
-+      if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
-+        try {
-+          console.warn('[voice] recorder stopped with issues', {
-+            bytesSent: state.chunkBytesSent,
-+            error: state.chunkSendError,
-+          });
-+        } catch {}
-+      } else {
-+        try {
-+          console.debug('[voice] recorder stopped', {
-+            bytesSent: state.chunkBytesSent,
-+            mime: (recorder && recorder.mimeType) || REC_MIME,
-+          });
-+        } catch {}
-+      }
-+      const pendingClose = _closeTurnIfOpen();
-+      if (pendingClose) {
-+        try {
-+          await pendingClose;
-+        } catch {}
-+      }
-+      _emitVoiceState('armed', finalDetail);
-+      if (state.vad && state.stream && state.stream.active) {
-+        try { _primeRecorderForPreRoll(); } catch (err) { try { console.warn('[voice] failed to re-prime recorder', err); } catch {} }
-+      }
-+    }
-+  };
+                     if final_seen[0]:
+                         previous_turn_id = turn_id_ref[0]
+                         removed_pending = 0
+                         while True:
+                             try:
+                                 pending_final_turns.remove(previous_turn_id)
+                                 removed_pending += 1
+                             except ValueError:
+                                 break
+                         synthetic_final_turns.discard(previous_turn_id)
+                         _clear_pending_user_final("late_audio")
+                         _cancel_no_audio_watch()
+                         buffered_before = len(buffered_chunks)
+                         mic_before = len(mic_chunks)
+                         closed_turn_id = None
+                         if not buf.is_empty():
+                             try:
+                                 closed_turn_id, _ = buf.close_turn()
+                                 turn_id_ref[0] = closed_turn_id
+                             except Exception:
+                                 closed_turn_id = None
+                         else:
+                             turn_id_ref[0] = buf.turn_seq
+                         buffered_chunks.clear()
+                         mic_chunks.clear()
+diff --git a/tests/test_ws_wav_preroll.py b/tests/test_ws_wav_preroll.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..722b1d7d4753e88bb0cf0a13d0a6721ac0078541
+--- /dev/null
++++ b/tests/test_ws_wav_preroll.py
+@@ -0,0 +1,109 @@
++import asyncio
++import json
++from collections import deque
 +
-+  try {
-+    recorder.start(timeslice);
-+    state.preRollTimeslice = timeslice;
-+    try {
-+      console.debug('[voice] recorder primed', { mime: recorder.mimeType, timeslice });
-+    } catch {}
-+  } catch (err) {
-+    console.warn('[voice] recorder start failed', err);
-+    state.rec = null;
-+    return false;
-+  }
- 
--  return new Blob([header, pcm16.buffer], { type: 'audio/wav' });
-+  return true;
- }
- 
--function _createWavHeader({ sampleRate, channels, bitsPerSample, frameCount }) {
--  const header = new ArrayBuffer(44);
--  const view = new DataView(header);
--  const bytesPerSample = bitsPerSample / 8;
--  const blockAlign = channels * bytesPerSample;
--  const byteRate = sampleRate * blockAlign;
--  const dataSize = frameCount * blockAlign;
--  let offset = 0;
--
--  const writeString = (str) => {
--    for (let i = 0; i < str.length; i += 1) {
--      view.setUint8(offset, str.charCodeAt(i));
--      offset += 1;
--    }
--  };
--  const writeUint32 = (value) => {
--    view.setUint32(offset, value, true);
--    offset += 4;
--  };
--  const writeUint16 = (value) => {
--    view.setUint16(offset, value, true);
--    offset += 2;
--  };
-+function _handleRecorderData(event) {
-+  if (!event) {
-+    return;
-+  }
-+  if (state.finalized) {
-+    return;
-+  }
-+  const blob = event.data;
-+  if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
-+    return;
-+  }
++from app.ws import ws_asgi
++from app.services.audio import container_sniffer
 +
-+  const timecode = Number.isFinite(event.timecode) ? event.timecode : null;
 +
-+  if (state.recStopping && !state.recStopShouldSend) {
-+    return;
-+  }
++class _TrackingSniffer(container_sniffer.AudioContainerSniffer):
++    instances = []
 +
-+  if (state.recStopping && state.recStopShouldSend) {
-+    state.recStopShouldSend = false;
-+    state.recStopping = false;
-+    _sendRecorderChunk(blob, { preRoll: false, durationMs: null, timecode });
-+    return;
-+  }
++    def __init__(self):
++        super().__init__()
++        self.feed_chunks = []
++        self.__class__.instances.append(self)
 +
-+  if (state.recStreaming) {
-+    _sendRecorderChunk(blob, { preRoll: false, durationMs: null, timecode });
-+    return;
-+  }
- 
--  writeString('RIFF');
--  writeUint32(36 + dataSize);
--  writeString('WAVE');
--  writeString('fmt ');
--  writeUint32(16);
--  writeUint16(1); // PCM format
--  writeUint16(channels);
--  writeUint32(sampleRate);
--  writeUint32(byteRate);
--  writeUint16(blockAlign);
--  writeUint16(bitsPerSample);
--  writeString('data');
--  writeUint32(dataSize);
--
--  return header;
-+  const durationMs = _computePreRollDuration(timecode);
-+  _bufferPreRollChunk({ blob, durationMs, timecode });
- }
- 
- function _stopRecorder(detail = null) {
-   const recorder = state.rec;
-   const wasActive = !!recorder && recorder.state !== 'inactive';
-   const payload = Object.assign({
-     active: wasActive,
-     hasRecorder: !!recorder,
-   }, detail || {});
-   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
- 
-   if (detail?.reason === 'server_final') {
-     _applyPostFinalHold('stop_recorder');
-   } else if (state.finalized) {
-     if (!recorder || recorder.state === 'inactive') {
-       state.rec = null;
-       return;
-     }
-   }
- 
-   if (!recorder) {
-     state.rec = null;
-     return;
-   }
- 
-   if (recorder.state === 'inactive') {
-     state.rec = null;
-     return;
-   }
- 
-+  const shouldSendFinal = !!state.recStreaming;
-+  state.recStopShouldSend = shouldSendFinal;
-+  state.recStopping = true;
-+  state.recStreaming = false;
-+  if (!shouldSendFinal) {
-+    _resetPreRollBuffer();
-+  }
++    def feed(self, chunk: bytes):
++        self.feed_chunks.append(bytes(chunk))
++        return super().feed(chunk)
 +
-   try { recorder.stop(); } catch {}
-   // intentionally keep state.rec reference nullable here; onstop handler handles final close
-   state.rec = null;
- }
- 
- function _teardownVADOnly() {
-   try { state.vad && state.vad.stop(); } catch {}
-   state.vad = null;
- }
- 
- function _teardownAudioGraph() {
-   _teardownPreRollTap();
-   try { state.source && state.source.disconnect(); } catch {}
-   try { state.analyser && state.analyser.disconnect(); } catch {}
-   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
-   state.source = null;
-   state.analyser = null;
-   state.ctx = null;
-   state.deviceLogged = false;
-   state.finalized = false;
-   state.postFinalHoldUntil = 0;
-   _removeWSListener();
- }
- 
- function _disarm() {
-@@ -628,214 +687,124 @@ async function _arm(stream = null, opts = {}) {
-       stopRms:  cfg.stopRms  ?? 0.006,   // LOWER = less twitchy end
-       minSpeechMs: cfg.minSpeechMs ?? 220,
-       minSilenceMs: cfg.minSilenceMs ?? 900, // HIGHER = needs longer quiet
-       pollMs,
-       echoBoostStart: cfg.echoBoostStart ?? 1.5,
-       echoBoostStop:  cfg.echoBoostStop  ?? 1.3,
-       echoStateFn: () => {
-         // treat "TTS is playing" as echo present
-         try { return !!ttsIsPlaying(); } catch { return false; }
-       }
-     },
-     {
-       onSpeechStart: _onSpeechStartCommitted,
-       onSpeechEnd: _onSpeechEndCommitted,
-     }
-   );
- 
-   state.vad = vad;
-   state.vad.start();
-   _logLifecycle('mic_start', {
-     sampleRate: state.ctx?.sampleRate,
-     pollMs,
-   });
-   _emitVoiceState('armed');
- 
-+  _primeRecorderForPreRoll();
 +
-   return mic;
- }
- 
- // ---- Recorder lifecycle -----------------------------------------------------
- 
- function _startRecorder() {
-   if (!state.stream) return false;
--  if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
- 
--  if (typeof MediaRecorder === 'undefined') {
--    console.warn('[voice] MediaRecorder not supported in this browser');
--    state.rec = null;
-+  const primed = _primeRecorderForPreRoll({ resetBuffer: false });
-+  if (!primed || !state.rec || state.rec.state !== 'recording') {
-     return false;
-   }
- 
-+  if (state.recStreaming) {
-+    return true;
-+  }
++class _TrackingDeepgram:
++    instances = []
 +
-   state.chunkSendPromise = Promise.resolve();
-   state.chunkBytesSent = 0;
-   state.chunkSendError = null;
-   state.turnClosePromise = null;
--  _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
--  state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
-+  _clearPendingEndTimer();
-+  state.recStartedAt = performance.now ? performance.now() : Date.now();
-   state.finalized = false;
-   state.postFinalHoldUntil = 0;
-+  state.recStreaming = true;
-+  state.recStopping = false;
-+  state.recStopShouldSend = false;
-   _ensureWSListener();
- 
--  const pendingPreRoll = state.preRollPending;
--  if (pendingPreRoll) {
--    _enqueuePreRoll(pendingPreRoll);
--  } else {
--    state.preRollPending = null;
--  }
--
--  let recorder;
--  try {
--    recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
--  } catch (primaryErr) {
-+  const preRollStats = _enqueuePreRollBlobs();
-+  if (preRollStats?.count) {
-     try {
--      recorder = new MediaRecorder(state.stream); // fallback, browser picks best
--    } catch (fallbackErr) {
--      console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
--      state.rec = null;
--      return false;
--    }
--  }
--
--  state.rec = recorder;
--
--  state.rec.ondataavailable = (e) => {
--    if (state.finalized) {
--      return;
--    }
--    const blob = e.data;
--    if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
--      return;
--    }
--
--    // Chain chunk sends to preserve ordering across the WS.
--    state.chunkSendPromise = state.chunkSendPromise
--      .catch(() => {}) // allow queue to continue even if a prior chunk failed
--      .then(async () => {
--        try {
--          await sendAudioChunk(blob);
--          state.chunkBytesSent += blob.size;
--          try {
--            console.debug('[voice] streamed audio chunk', { bytes: blob.size });
--          } catch {}
--        } catch (err) {
--          state.chunkSendError = err;
--          try {
--            console.warn('[voice] failed to stream audio chunk', err);
--          } catch {}
--        }
-+      console.debug('[voice] flushed pre-roll buffer', {
-+        chunks: preRollStats.count,
-+        durationMs: preRollStats.durationMs,
-+        bytes: preRollStats.totalBytes,
-       });
--  };
--
--  state.rec.onstop = async () => {
--    let finalDetail;
--    try {
--      await state.chunkSendPromise.catch((err) => {
--        state.chunkSendError = state.chunkSendError || err;
--      });
--      if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
--        console.warn('[voice] recorded chunks too small', state.chunkBytesSent);
--        finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
--      }
--    } catch (e) {
--      console.warn('[voice] send audio failed', e);
--      state.chunkSendError = state.chunkSendError || e;
--    } finally {
--      if (state.chunkSendError && !finalDetail) {
--        finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
--      }
--      if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
--        try {
--          console.warn('[voice] recorder stopped with issues', {
--            bytesSent: state.chunkBytesSent,
--            error: state.chunkSendError,
--          });
--        } catch {}
--      } else {
--        try {
--          console.debug('[voice] recorder stopped', {
--            bytesSent: state.chunkBytesSent,
--            // state.rec may be nulled by _stopRecorder; fall back to selected REC_MIME
--            mime: (state.rec && state.rec.mimeType) || REC_MIME,
--          });
--        } catch {}
--      }
--      // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
--      const pendingClose = _closeTurnIfOpen();
--      if (pendingClose) {
--        try {
--          await pendingClose;
--        } catch {}
--      }
--      _emitVoiceState('armed', finalDetail);
--    }
--  };
--
--  try {
--    // Small timeslice ensures non-empty dataavailable frames while still producing a single turn blob.
--    const timeslice = 150; // 150 ms sits comfortably within the 100–200 ms target window
--    state.rec.start(timeslice);
--    state.turnOpen = true; // mark an open ASR turn on the server
--    try {
--      console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice });
-     } catch {}
--  } catch (e) {
--    console.warn('[voice] recorder start failed', e);
--    state.rec = null;
--    state.turnOpen = false;
--    state.turnClosePromise = null;
--    return false;
-   }
- 
--  // Safety timeout to prevent runaway recordings
-+  state.turnOpen = true;
-+  try {
-+    console.debug('[voice] recorder streaming', {
-+      mime: (state.rec && state.rec.mimeType) || REC_MIME,
-+    });
-+  } catch {}
++    def __init__(self, cfg=None):
++        self.cfg = cfg or {}
++        self.sent_chunks = []
++        self._queue: asyncio.Queue = asyncio.Queue()
++        self.__class__.instances.append(self)
 +
-   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
-   _safeClearTurnTimer();
-   state.turnTimer = setTimeout(() => {
-     try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
-   }, limitMs);
- 
-   return true;
- }
- 
- function _onSpeechStartCommitted() {
--  const preRollSnapshot = _snapshotPreRoll();
--  state.preRollPending = preRollSnapshot;
--  const bufferedFrames = state.preRollBuffer ? Math.min(state.preRollFilled || 0, state.preRollBuffer.length) : 0;
--  const sampleRate = state.preRollSampleRate || (preRollSnapshot && preRollSnapshot.sampleRate) || null;
--  const bufferedMsRaw = sampleRate ? (bufferedFrames / sampleRate) * 1000 : 0;
--  const sentMsRaw = preRollSnapshot ? preRollSnapshot.durationMs : 0;
-+  const bufferedMsRaw = Number.isFinite(state.preRollDurationMs) ? state.preRollDurationMs : 0;
-+  const preRollBlobs = state.preRollBlobs || [];
-+  const totalBytes = preRollBlobs.reduce((sum, chunk) => sum + (chunk?.blob?.size || 0), 0);
-   const round = (v) => {
-     if (!Number.isFinite(v)) return 0;
-     return Math.round(v * 100) / 100;
-   };
-   _logLifecycle('vad_speech_start', {
-     preRollBufferedMs: round(bufferedMsRaw),
--    preRollSentMs: round(sentMsRaw),
--    preRollFrames: preRollSnapshot?.frames ?? 0,
--    preRollBytes: preRollSnapshot?.blob?.size ?? 0,
--    preRollSampleRate: sampleRate,
--    preRollEnabled: !!state.preRollBuffer,
--    preRollMime: preRollSnapshot?.blob?.type || null,
-+    preRollSentMs: round(Math.min(bufferedMsRaw, PRE_ROLL_MS)),
-+    preRollChunks: preRollBlobs.length,
-+    preRollBytes: totalBytes,
-+    preRollEnabled: preRollBlobs.length > 0,
-+    preRollMime: (state.rec && state.rec.mimeType) || REC_MIME,
-   });
- 
-   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-     ? performance.now()
-     : Date.now();
-   const holdUntil = state.postFinalHoldUntil || 0;
- 
-   if (state.finalized) {
-     if (now < holdUntil) {
-       _logLifecycle('vad_speech_start_suppressed', {
-         reason: 'post_final_hold_finalized',
-         holdUntil,
-         now,
-       });
-       return;
-     }
-     state.finalized = false;
-   }
- 
-   if (now < holdUntil) {
-     _logLifecycle('vad_speech_start_suppressed', {
-       reason: 'post_final_hold',
-       holdUntil,
-       now,
-     });
-diff --git a/tests/js/voice-preroll.test.mjs b/tests/js/voice-preroll.test.mjs
-index 331eafc9ffeac54b29b039d85913a133f9f016d1..15bddf2eb25864a1b5eedb2d729a234a276b964b 100644
---- a/tests/js/voice-preroll.test.mjs
-+++ b/tests/js/voice-preroll.test.mjs
-@@ -31,104 +31,101 @@ const windowStub = {
-   },
-   dispatchEvent(event) {
-     const set = listenerMap.get(event.type);
-     if (!set) return true;
-     for (const handler of Array.from(set)) {
-       handler(event);
-     }
-     return true;
-   },
- };
- 
- windowStub.CustomEvent = TestCustomEvent;
- windowStub.dispatchEvent = windowStub.dispatchEvent.bind(windowStub);
- 
- globalThis.window = windowStub;
- 
- globalThis.performance = {
-   now: () => Date.now(),
- };
- 
- globalThis.__TEST_WS_HOOKS = {};
- 
- class FakeRecorder {
-   constructor() {
-     this.state = 'inactive';
--    this.mimeType = 'audio/ogg; codecs=opus';
-+    this.mimeType = 'audio/webm; codecs=opus';
-     this.ondataavailable = null;
-     this.onstop = null;
-     this.stopCalled = false;
-     FakeRecorder.instances.push(this);
-   }
- 
-   start() {
-     this.state = 'recording';
-   }
- 
-   stop() {
-     this.state = 'inactive';
-     this.stopCalled = true;
-   }
- }
- 
- FakeRecorder.instances = [];
- 
- globalThis.MediaRecorder = FakeRecorder;
- 
- test('pre-roll audio is flushed before first live MediaRecorder chunk', async () => {
-   const voice = await import('../../static/js/voice.js');
-   const hooks = voice.__TEST_ONLY__;
- 
-   hooks.state.stream = { active: true };
-   hooks.state.turnOpen = false;
-   hooks.state.turnClosePromise = null;
-   hooks.state.chunkSendPromise = Promise.resolve();
-   hooks.state.chunkBytesSent = 0;
-   hooks.state.chunkSendError = null;
- 
--  const preRollBlob = new Blob(['pre'], { type: 'audio/wav' });
--  hooks.state.preRollPending = {
--    blob: preRollBlob,
--    frames: 1200,
--    durationMs: 25,
--    sampleRate: 48000,
--  };
-+  const preRollBlob = new Blob(['pre'], { type: 'audio/webm; codecs=opus' });
-+  hooks.state.preRollBlobs = [{ blob: preRollBlob, durationMs: 25, timecode: 25 }];
-+  hooks.state.preRollDurationMs = 25;
- 
-   const events = [];
-   globalThis.__TEST_WS_HOOKS = {
-     onSendAudioChunk: (blob) => {
-       events.push(blob);
-     },
-   };
- 
-   const started = hooks.startRecorder();
-   assert.equal(started, true, 'recorder should start with fake stream');
--  assert.equal(hooks.state.preRollPending, null, 'pre-roll state should clear once recorder starts');
-+  assert.equal(hooks.state.preRollBlobs.length, 0, 'pre-roll buffer should clear once recorder starts');
- 
-   const recorder = FakeRecorder.instances.at(-1);
-   assert.ok(recorder, 'fake recorder should exist');
-   assert.equal(recorder.state, 'recording', 'recorder should be recording');
- 
--  const liveBlob = new Blob(['live'], { type: 'audio/ogg; codecs=opus' });
-+  const liveBlob = new Blob(['live'], { type: 'audio/webm; codecs=opus' });
-   recorder.ondataavailable({ data: liveBlob });
- 
-   await hooks.state.chunkSendPromise;
- 
-   assert.equal(events.length, 2, 'both pre-roll and live chunks should be sent');
-   const texts = [];
-   for (const blob of events) {
-     texts.push(await blob.text());
-   }
-   assert.deepEqual(texts, ['pre', 'live'], 'pre-roll chunk must precede the live chunk');
-+  assert.equal(events[0].type, 'audio/webm; codecs=opus', 'pre-roll chunk should use WebM/Opus');
- 
-   hooks.stopRecorder({ reason: 'test_cleanup' });
-   if (typeof recorder.onstop === 'function') {
-     await recorder.onstop();
-   }
- 
-   if (hooks.state.turnTimer) {
-     clearTimeout(hooks.state.turnTimer);
-     hooks.state.turnTimer = null;
-   }
-   globalThis.__TEST_WS_HOOKS = {};
-   FakeRecorder.instances = [];
- });
++    async def connect(self):
++        await self._queue.put({"type": "asr_open"})
++        await self._queue.put(None)
++
++    def is_open(self):
++        return True
++
++    async def events(self):
++        while True:
++            ev = await self._queue.get()
++            if ev is None:
++                break
++            yield ev
++
++    async def send(self, chunk: bytes):
++        self.sent_chunks.append(bytes(chunk))
++
++    async def close(self, wait_for_final: bool = True, **_):
++        return
++
++
++def test_wav_preroll_is_ignored(monkeypatch):
++    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
++    monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
++    monkeypatch.setenv("DG_LINGER_MS", "0")
++    monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
++
++    _TrackingSniffer.instances = []
++    _TrackingDeepgram.instances = []
++
++    monkeypatch.setattr(ws_asgi, "AudioContainerSniffer", _TrackingSniffer)
++    monkeypatch.setattr(ws_asgi, "DeepgramClient", _TrackingDeepgram)
++    monkeypatch.setattr(ws_asgi.bus, "broadcast", lambda *a, **k: None)
++    monkeypatch.setattr(ws_asgi.bus, "current_assistant_turn", lambda sid: None)
++    monkeypatch.setattr(ws_asgi, "_admin_emit", None)
++    monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
++
++    wav_preroll = b"RIFF1234"
++    webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
++
++    events = deque(
++        [
++            {"type": "websocket.receive", "bytes": wav_preroll},
++            {"type": "websocket.receive", "bytes": webm_chunk},
++            {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
++            {"type": "websocket.disconnect"},
++        ]
++    )
++
++    sent_messages = []
++
++    async def _receive():
++        return events.popleft() if events else {"type": "websocket.disconnect"}
++
++    async def _send(msg):
++        sent_messages.append(msg)
++
++    scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
++
++    loop = asyncio.new_event_loop()
++    asyncio.set_event_loop(loop)
++    try:
++        loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
++        loop.run_until_complete(asyncio.sleep(0.05))
++    finally:
++        asyncio.set_event_loop(None)
++        loop.close()
++
++    sniffer_instance = _TrackingSniffer.instances[0]
++    deepgram_instance = _TrackingDeepgram.instances[0]
++
++    assert sniffer_instance.feed_chunks == [webm_chunk]
++    assert wav_preroll not in deepgram_instance.sent_chunks
++    assert webm_chunk in deepgram_instance.sent_chunks
++
++    transport = deepgram_instance.cfg.get("_transport") or {}
++    assert transport.get("container") == "webm"
++    assert transport.get("codec") == "opus"
++    assert transport.get("containerized_opus") is True
