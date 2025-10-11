@@ -279,6 +279,8 @@ function _closeTurnIfOpen() {
   }
   const closePromise = (async () => {
     try {
+      const closeFrame = { type: 'CloseStream' };
+      _logLifecycle('turn_close_signal', { frame: closeFrame }, 'info');
       await sendCloseStream();
     } finally {
       state.turnOpen = false;
@@ -619,7 +621,12 @@ function _stopRecorder(detail = null) {
     _resetPreRollBuffer();
   }
 
-  try { recorder.stop(); } catch {}
+  try {
+    _logLifecycle('recorder_stop_invoked', {
+      reason: detail?.reason || null,
+    }, 'info');
+    recorder.stop();
+  } catch {}
   // intentionally keep state.rec reference nullable here; onstop handler handles final close
   state.rec = null;
   state.turnHintSent = false;
@@ -894,7 +901,7 @@ function _onSpeechEndCommitted(detail = null) {
     }
   }
 
-  _logLifecycle('vad_speech_end', { reason });
+  _logLifecycle('vad_speech_end', { reason }, 'info');
   _safeClearTurnTimer();
   _clearPendingEndTimer();
   _stopRecorder({ reason });

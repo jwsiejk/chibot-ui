@@ -1,306 +1,168 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 8197054b6f983ec895c69b8a398bb8284aff5b08..26b704fea93a825e0e770dbaa636188a80881cfd 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -34,50 +34,71 @@ from app.services.streaming import (
-     wait_for_listen_ready,
- )  # NEW
- from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
- from app.ws.barge import BargeState
- from app.ws.bus import bus
- from app.policy import nudges
- from app.session_state import (
-     note_partial,
-     note_utterance_end,
-     set_asr_stream_open,
-     set_phase,
-     set_recorder_active,
-     should_emit_phase,
- )
+diff --git a/static/js/voice.js b/static/js/voice.js
+index e9b48790ae8ce90fb8a8ad73e8e399a278e66abf..77199cf5d9a561264ad26f1f4873460bd91034f8 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -257,50 +257,52 @@ async function _ensureMic(externalStream = null) {
+       channels: settings.channelCount ?? settings.channels ?? ctx?.destination?.channelCount ?? 1,
+     };
+     _logLifecycle('mic_device_selected', detail);
+     state.deviceLogged = true;
+   }
  
- # Optional admin emitter
- try:
-     from app.api_v1.admin import _emit as _admin_emit
- except Exception:
-     _admin_emit = None
+   return stream;
+ }
  
+ function _safeClearTurnTimer() {
+   if (state.turnTimer) { clearTimeout(state.turnTimer); state.turnTimer = null; }
+ }
  
- ACTIVE_WS: dict[str, dict[str, Any]] = {}
- ACTIVE_WS_LOCK = asyncio.Lock()
+ function _closeTurnIfOpen() {
+   if (!state.turnOpen && !state.turnClosePromise) {
+     return null;
+   }
+   if (state.turnClosePromise) {
+     return state.turnClosePromise;
+   }
+   if (!state.turnOpen) {
+     return null;
+   }
+   const closePromise = (async () => {
+     try {
++      const closeFrame = { type: 'CloseStream' };
++      _logLifecycle('turn_close_signal', { frame: closeFrame }, 'info');
+       await sendCloseStream();
+     } finally {
+       state.turnOpen = false;
+       state.turnClosePromise = null;
+     }
+   })();
+   state.turnClosePromise = closePromise;
+   return closePromise;
+ }
  
-+
-+def _transport_enables_webm_hint(transport_meta: Optional[Dict[str, Any]]) -> bool:
-+    """Return True when existing transport metadata should keep the WebM gate open."""
-+
-+    if not isinstance(transport_meta, dict):
-+        return False
-+
-+    def _normalize(value: Any) -> str:
-+        try:
-+            return str(value or "").strip().lower()
-+        except Exception:
-+            return ""
-+
-+    container = _normalize(transport_meta.get("container"))
-+    codec = _normalize(transport_meta.get("codec"))
-+
-+    return container == "webm" and codec == "opus"
-+
-+
-+CONNECT_GATE_OBSERVER: Optional[Callable[[bool, Optional[str]], None]] = None
-+
- WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
- try:
-     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
- except Exception:
-     pass
+ async function _setupPreRollTap(ctx, source) {
+   _teardownPreRollTap();
  
- # ------------------------------ small helpers ------------------------------
+   if (!ctx || !source) {
+     _resetPreRollBuffer();
+     return;
+   }
  
+   _resetPreRollBuffer();
  
- def _client_ip_from_scope(scope) -> str:
-     try:
-         c = scope.get("client") or ()
-         if isinstance(c, (list, tuple)) and c:
-             return str(c[0])
-     except Exception:
-         pass
-     try:
-         hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
-         xff = hdrs.get("x-forwarded-for", "").split(",")[0].strip()
-         if xff:
-             return xff
-     except Exception:
-         pass
-     return "unknown"
+   const worklet = ctx.audioWorklet;
+   if (!worklet || typeof worklet.addModule !== 'function') {
+     // AudioWorklet unavailable; gracefully degrade without pre-roll.
+     return;
+   }
+@@ -597,51 +599,56 @@ function _stopRecorder(detail = null) {
+       state.turnHintSent = false;
+       return;
+     }
+   }
  
-@@ -814,55 +835,67 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     try:
-         no_audio_window_s = float(
-             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
-         )
-     except Exception:
-         no_audio_window_s = 10.0
-     if no_audio_window_s < 0:
-         no_audio_window_s = 0.0
-     no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
-     asr_ready_evt: asyncio.Event = asyncio.Event()
-     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
-     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
-     ws_frames_in = 0
-     ws_bytes_in = 0
-     backpressure_drop_count = 0
-     backpressure_last_emit = 0.0
-     backpressure_last_queue_len = 0
-     backpressure_emit_interval = 1.0
-     turn_connect_started = [False]
-     webm_hint_gate = [False]
-     webm_sniff_gate = [False]
-     sniffer_bytes_seen = [0]
-     SNIFFER_GATE_BUDGET = 10 * 1024
+   if (!recorder) {
+     state.rec = null;
+     state.turnHintSent = false;
+     return;
+   }
  
-     def _connect_gate_state() -> tuple[bool, Optional[str]]:
-+        gate_open = False
-+        gate_reason: Optional[str] = None
-         if webm_hint_gate[0]:
--            return True, "audio_start_webm"
--        if webm_sniff_gate[0]:
--            return True, "sniff_webm"
--        return False, None
-+            gate_open = True
-+            gate_reason = "audio_start_webm"
-+        elif webm_sniff_gate[0]:
-+            gate_open = True
-+            gate_reason = "sniff_webm"
-+
-+        observer = CONNECT_GATE_OBSERVER
-+        if callable(observer):
-+            try:
-+                observer(gate_open, gate_reason)
-+            except Exception:
-+                pass
-+
-+        return gate_open, gate_reason
+   if (recorder.state === 'inactive') {
+     state.rec = null;
+     state.turnHintSent = false;
+     return;
+   }
  
-     # NEW: per-turn mic capture state
-     mic_chunks: List[bytes] = []
-     mic_first_ts = [0.0]
-     mic_last_ts = [0.0]
+   const shouldSendFinal = !!state.recStreaming;
+   state.recStopShouldSend = shouldSendFinal;
+   state.recStopping = true;
+   state.recStreaming = false;
+   if (!shouldSendFinal) {
+     _resetPreRollBuffer();
+   }
  
-     # Deferred provider final guard state
-     pending_user_final: Dict[str, Any] = {"payload": None, "ts": 0.0}
-     pending_user_final_task: List[Optional[asyncio.Task]] = [None]
+-  try { recorder.stop(); } catch {}
++  try {
++    _logLifecycle('recorder_stop_invoked', {
++      reason: detail?.reason || null,
++    }, 'info');
++    recorder.stop();
++  } catch {}
+   // intentionally keep state.rec reference nullable here; onstop handler handles final close
+   state.rec = null;
+   state.turnHintSent = false;
+ }
  
-     def _resolve_final_guard_window_s() -> float:
-         """Resolve how long to wait after a provider final before committing it to the client."""
-         try:
-             raw_val = os.getenv("WS_FINAL_GUARD_MS", "900") or "0"
-             env_val = int(raw_val)
-         except Exception:
-             env_val = 600
-         # Return seconds (clamped to >= 0)
-         try:
-             return max(0, env_val) / 1000.0
-         except Exception:
-             return 0.6      
+ function _teardownVADOnly() {
+   try { state.vad && state.vad.stop(); } catch {}
+   state.vad = null;
+ }
  
-     def _cancel_pending_user_final_task(reason: str = "cancel") -> None:
-         task = pending_user_final_task[0]
-@@ -1544,51 +1577,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                     if final_seen[0]:
-                         previous_turn_id = turn_id_ref[0]
-                         removed_pending = 0
-                         while True:
-                             try:
-                                 pending_final_turns.remove(previous_turn_id)
-                                 removed_pending += 1
-                             except ValueError:
-                                 break
-                         synthetic_final_turns.discard(previous_turn_id)
-                         _clear_pending_user_final("late_audio")
-                         _cancel_no_audio_watch()
-                         buffered_before = len(buffered_chunks)
-                         mic_before = len(mic_chunks)
-                         closed_turn_id = None
-                         if not buf.is_empty():
-                             try:
-                                 closed_turn_id, _ = buf.close_turn()
-                                 turn_id_ref[0] = closed_turn_id
-                             except Exception:
-                                 closed_turn_id = None
-                         else:
-                             turn_id_ref[0] = buf.turn_seq
-                         buffered_chunks.clear()
-                         buffered_byte_total[0] = 0
--                        webm_hint_gate[0] = False
-+                        webm_hint_gate[0] = _transport_enables_webm_hint(transport)
-                         webm_sniff_gate[0] = False
-                         sniffer_bytes_seen[0] = 0
-                         mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
-                         sent_any_audio[0] = False
-                         asr_seen_partial[0] = False
-                         turn_connect_started[0] = False
-                         final_seen[0] = False
-                         _reset_turn_metrics(now)
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "late_audio_after_final",
-                                 sid=sid,
-                                 turn_id=previous_turn_id,
-                                 removed_pending=removed_pending,
-                                 closed_turn_id=closed_turn_id,
-                                 buffered_before=buffered_before,
-                                 mic_before=mic_before,
-                             )
+ function _teardownAudioGraph() {
+   _teardownPreRollTap();
+   try { state.source && state.source.disconnect(); } catch {}
+   try { state.analyser && state.analyser.disconnect(); } catch {}
+   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
+   state.source = null;
+   state.analyser = null;
+   state.ctx = null;
+   state.deviceLogged = false;
+   state.finalized = false;
+   state.postFinalHoldUntil = 0;
+   _removeWSListener();
+ }
  
-                     pending_final_payload = pending_user_final.get("payload")
-                     if buf.is_empty() and not pending_final_payload:
-                         nudges.cancel_idle_timers(sid, source="turn_start")
-                         try:
-@@ -1643,51 +1676,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                     pass
-                                 try:
-                                     wait_for_listen_ready(
-                                         sid,
-                                         timeout=max(0.0, listen_timeout),
-                                     )
-                                 except Exception:
-                                     pass
+ function _disarm() {
+@@ -872,51 +879,51 @@ function _onSpeechStartCommitted() {
+   _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+ }
  
-                             return _wait_ready
-                         with contextlib.suppress(Exception):
-                             barge.start(
-                                 confirm_ms=confirm_ms,
-                                 on_commit=_on_barge_commit,
-                                 send_state=_send_barge_state,
-                             )
-                         turn_id_ref[0] = buf.turn_seq + 1
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-                             completed_llm_turns.discard(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
-                         buffered_byte_total[0] = 0
--                        webm_hint_gate[0] = False
-+                        webm_hint_gate[0] = _transport_enables_webm_hint(transport)
-                         webm_sniff_gate[0] = False
-                         sniffer_bytes_seen[0] = 0
-                         turn_connect_started[0] = False
-                         # reset mic capture
-                         mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
-                         _reset_turn_metrics(now)
-                         _schedule_no_audio_watch(turn_id_ref[0])
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "turn_start",
-                                 sid=sid,
-                                 turn_id=turn_id_ref[0],
-                                 first_bytes=len(raw_chunk),
-                             )
-                     # Detect container early using raw bytes
+ function _onSpeechEndCommitted(detail = null) {
+   const reason = detail?.reason || 'vad_silence';
+   const now = performance.now ? performance.now() : Date.now();
+   const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
  
-                     # Detect container early
-                     try:
-                         if raw_chunk:
-                             bytes_before = sniffer_bytes_seen[0]
-                             sniffer_bytes_seen[0] += len(raw_chunk)
-                             det = sniffer.feed(raw_chunk)
-                             if det:
-diff --git a/tests/test_ws_wav_preroll.py b/tests/test_ws_wav_preroll.py
-index f4bc93b730ab205bc26e802a71f4d4f3631baa89..53d2d1475e64324232f190a9b4ac703bd501f61e 100644
---- a/tests/test_ws_wav_preroll.py
-+++ b/tests/test_ws_wav_preroll.py
-@@ -173,25 +173,47 @@ def test_webm_chunk_larger_than_window(monkeypatch):
- def test_audio_start_hint_controls_connect(monkeypatch):
-     webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
-     result = _run_ws_session(
-         monkeypatch,
-         webm_chunk,
-         audio_start_mime="audio/webm; codecs=opus",
-     )
+   if (state.bargeConfirmActive) {
+     _clearBargeConfirm(true);
+   }
  
-     logs = result["logs"]
-     hint_index = next(
-         i for i, entry in enumerate(logs) if entry.get("event") == "ws_audio_hint"
-     )
-     schedule_index = next(
-         i for i, entry in enumerate(logs) if entry.get("event") == "asr_connect_schedule"
-     )
+   // If we haven't recorded at least minTurnMs, delay honoring VAD-end.
+   // Only applies while recorder is actually running.
+   if (state.rec && typeof state.rec.state === 'string' && state.rec.state === 'recording') {
+     const elapsed = Math.max(0, now - (state.recStartedAt || now));
+     const wait = Math.max(0, minTurnMs - elapsed);
+     if (wait > 0) {
+       try { console.debug('[voice] delaying VAD end', { waitMs: wait, elapsed }); } catch {}
+       _clearPendingEndTimer();
+       state.pendingEndTimer = setTimeout(() => _onSpeechEndCommitted(detail), wait);
+       return; // do not stop yet
+     }
+   }
  
-     assert schedule_index > hint_index
+-  _logLifecycle('vad_speech_end', { reason });
++  _logLifecycle('vad_speech_end', { reason }, 'info');
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   _stopRecorder({ reason });
+   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
+ }
  
-     begin_entry = next(
-         entry for entry in logs if entry.get("event") == "asr_connect_begin"
-     )
-     transport = begin_entry.get("transport") or {}
-     assert transport.get("containerized_opus") is True
-     assert transport.get("container") == "webm"
-     assert transport.get("codec") == "opus"
-+
-+
-+def test_webm_hint_gate_remains_open(monkeypatch):
-+    webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
-+    gate_events = []
-+
-+    def _observe(open_state: bool, reason: Optional[str]):
-+        gate_events.append((open_state, reason))
-+
-+    monkeypatch.setattr(ws_asgi, "CONNECT_GATE_OBSERVER", _observe, raising=False)
-+
-+    result = _run_ws_session(
-+        monkeypatch,
-+        webm_chunk,
-+        audio_start_mime="audio/webm; codecs=opus",
-+    )
-+
-+    assert any(open_state and reason == "audio_start_webm" for open_state, reason in gate_events)
-+
-+    log_events = [entry.get("event") for entry in result["logs"]]
-+    assert "asr_connect_schedule" in log_events
-+    assert "fallback_no_audio" not in log_events
+ // ---- Utilities --------------------------------------------------------------
+ 
+ function optsFromGlobal(key, fallback) {
+   // Allow admin-configurable values to seep in (if app exposes them)
+   try {
+     const cfg = window.__askchip_config || {};
+     if (key in cfg) return cfg[key];
+   } catch {}
+   return fallback;
+ }
+ 
+ function _applyPostFinalHold(source = 'unknown') {
+   const rawHold = Number(optsFromGlobal('post_final_hold_ms', 600));
+   const holdMs = Number.isFinite(rawHold) ? Math.max(0, rawHold) : 0;
+   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+     ? performance.now()
+     : Date.now();
+   const targetUntil = now + holdMs;
+   const previousUntil = state.postFinalHoldUntil || 0;
