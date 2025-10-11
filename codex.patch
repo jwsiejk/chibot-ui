@@ -1,678 +1,327 @@
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 8c7b14f04021aec279d9e57b41bc2e7405c6eff5..f57149f2d34d82be93da180d965ca4192d21030b 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -19,132 +19,162 @@ Citations for context (non-functional):
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index 1d0ce7edb34952e81871f165329622f35c47850d..f71a6078b368414b3e05282235128d3289cb61e0 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -36,50 +36,64 @@ except AttributeError:  # pragma: no cover - older packaging style
+     except Exception:  # pragma: no cover - highly defensive
+         _WEBSOCKETS_PROTOCOL = None  # type: ignore
  
- import { VAD } from './voice/vad.js';
- import { sendAudioChunk, sendCloseStream, sendJSON } from './ws_module.js';
- import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
  
- // Public API (matches prior usage)
- export async function initMic(stream = null) { return await _ensureMic(stream); }
- export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
- export function disarmVAD() { _disarm(); }
- export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
- export function bargeIn() { _bargeIn(); }         // keeps API parity
- export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+ # Test-mode and last-observed info for CI assertions
+ DG_TEST_MODE = os.getenv("DG_TEST_MODE", "").strip() == "1"
+ DG_LAST_URL: str | None = None
+ DG_LAST_CONFIG: dict | None = None
  
- // ---- Internal state ---------------------------------------------------------
+ _TAG_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.:-]")
  
- // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
- const REC_MIME = (typeof MediaRecorder !== 'undefined'
-   && typeof MediaRecorder.isTypeSupported === 'function'
-   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
-   ? 'audio/ogg; codecs=opus'
-   : 'audio/webm; codecs=opus';
  
- const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
- const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
- const PRE_ROLL_MS = 250;            // ~0.25s of pre-roll audio
-+const SAFETY_CLOSE_DELAY_MS = 2500; // ~2.5s grace after last chunk
+ def _sanitize_tag(val: Optional[str], *, limit: int = 64) -> Optional[str]:
+     if not val:
+         return None
+     try:
+         txt = str(val)
+     except Exception:
+         return None
+     txt = _TAG_SANITIZE_RE.sub("_", txt)
+     if not txt:
+         return None
+     return txt[:limit]
  
- const state = {
-   stream: null,
-   ctx: null,
-   source: null,
-   analyser: null,
-   vad: null,
-   rec: null,
-   finalized: false,
-   postFinalHoldUntil: 0,
-   wsListener: null,
-   chunkSendPromise: Promise.resolve(),
-   chunkBytesSent: 0,
-   chunkSendError: null,
-   turnTimer: null,
-   turnOpen: false,   // track whether a turn is currently open server-side
-   turnClosePromise: null,
-   turnHintSent: false,
-   turnHintMime: null,
-   deviceLogged: false,
-   // NEW: min-turn gating
-   recStartedAt: 0,
-   pendingEndTimer: null,
-   ttsPlaying: false,
-   bargeConfirmTimer: null,
-   bargeConfirmActive: false,
-   // Pre-roll tap state
-   preRollNode: null,
-   preRollGain: null,
-   preRollBlobs: [],
-   preRollDurationMs: 0,
-   preRollLastTimecode: null,
-   preRollTimeslice: 150,
-   recStreaming: false,
-   recStopping: false,
-   recStopShouldSend: false,
-+  lastChunkAt: 0,
-+  safetyCloseTimer: null,
- };
  
- const BARGE_CONFIRM_DEFAULT_MS = 420;
- let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
- try {
-   const cfg = window.__askchip_config || {};
-   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
-     bargeConfirmMs = cfg.barge_confirm_ms;
-   }
- } catch {}
- bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
- 
- try {
-   window.addEventListener('chip-tts', (ev) => {
-     const detail = ev?.detail || {};
-     const playing = String(detail.state || '').toLowerCase() === 'playing';
-     state.ttsPlaying = playing;
-   });
- } catch {}
- 
- // ---- Helpers ----------------------------------------------------------------
- 
- function _emitVoiceState(state, detail = {}) {
-   try {
-     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
-   } catch {}
- }
- 
- function _logLifecycle(event, detail = {}, level = 'debug') {
-   const payload = { event, ...(detail && typeof detail === 'object' ? detail : { detail }) };
-   try {
-     const method = (typeof console[level] === 'function') ? level : 'log';
-     console[method]?.('[voice]', event, payload);
-   } catch {}
-   try {
-     window.dispatchEvent(new CustomEvent('askchip-voice-lifecycle', { detail: payload }));
-   } catch {}
- }
- 
- function _clearPendingEndTimer() {
-   if (state.pendingEndTimer) {
-     try { clearTimeout(state.pendingEndTimer); } catch {}
-     state.pendingEndTimer = null;
-   }
- }
- 
-+function _clearSafetyCloseTimer() {
-+  if (state.safetyCloseTimer) {
-+    try { clearTimeout(state.safetyCloseTimer); } catch {}
-+    state.safetyCloseTimer = null;
-+  }
-+}
++def _coerce_bool(val: Any) -> Optional[bool]:
++    if isinstance(val, bool):
++        return val
++    if isinstance(val, (int, float)):
++        return bool(val)
++    if isinstance(val, str):
++        txt = val.strip().lower()
++        if txt in {"1", "true", "yes", "on"}:
++            return True
++        if txt in {"0", "false", "no", "off", ""}:
++            return False
++    return None
 +
-+function _armSafetyCloseTimer() {
-+  const shouldArm = state.turnOpen || state.recStreaming;
-+  if (!shouldArm) {
-+    return;
-+  }
 +
-+  const rawDelay = Number(optsFromGlobal('chunk_safety_timeout_ms', SAFETY_CLOSE_DELAY_MS));
-+  const delayMs = Number.isFinite(rawDelay) ? Math.max(0, rawDelay) : SAFETY_CLOSE_DELAY_MS;
+ logger = logging.getLogger(__name__)
+ 
+ _DG_KEY_PROBED = False
+ 
+ 
+ def _mask_key_fragment(raw: str) -> str:
+     try:
+         txt = str(raw)
+     except Exception:
+         return "?"
+     txt = txt.strip()
+     if not txt:
+         return "?"
+     if len(txt) <= 4:
+         return "*" * len(txt)
+     return f"{txt[:2]}…{txt[-2:]}"
+ 
+ 
+ def _api_key_info() -> tuple[str, int]:
+     key = os.getenv("DEEPGRAM_API_KEY", "")
+     if key is None:
+         key = ""
+     key = str(key).strip()
+     if not key:
+         raise RuntimeError("DEEPGRAM_API_KEY is not set")
+@@ -478,62 +492,84 @@ class DeepgramClient:
+         self._any_result: bool = False
+         self._drain_event: asyncio.Event = asyncio.Event()
+         self._drain_event.set()
+         self._drain_timeout_s: float = float(
+             os.getenv("DG_CLOSE_DRAIN_TIMEOUT_S", "1.5")
+         )
+ 
+         # First-chunk guard & timing
+         self._first_real_sent: bool = False
+         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
+         self._last_chunk_ts: float = 0.0
+         self._last_transcript: str = ""
+ 
+         # Tunables
+         self._linger_ms: int = int(
+             os.getenv("DG_LINGER_MS", "800")
+         )  # slightly longer default
+         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "12"))
+ 
+         # Open gate
+         self._open_evt: asyncio.Event = asyncio.Event()
+         self._asr_open_emitted: bool = False
+         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
+         self._open_gate_warned: bool = False
+ 
++        env_bypass = _coerce_bool(os.getenv("DG_DEBUG_BYPASS_OPEN_GATE"))
++        cfg_bypass: Optional[bool] = None
++        if isinstance(self._cfg, dict):
++            for key in ("_debug_bypass_open_gate", "debug_bypass_open_gate"):
++                try:
++                    cfg_bypass = _coerce_bool(self._cfg.get(key))
++                except Exception:
++                    cfg_bypass = None
++                if cfg_bypass is not None:
++                    break
++        if cfg_bypass is not None:
++            self._debug_bypass_open_gate: bool = cfg_bypass
++        elif env_bypass is not None:
++            self._debug_bypass_open_gate = env_bypass
++        else:
++            self._debug_bypass_open_gate = False
 +
-+  _clearSafetyCloseTimer();
+         # Keepalive
+         self._keepalive_task: Optional[asyncio.Task] = None
+         self._keepalive_interval: float = float(
+             os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0")
+         )
+ 
+         # Optional JSON logger injected by WS layer (ws_asgi)
+         self._jlog = self._cfg.get("_jlog")
+ 
+         # Serialize outbound websocket sends to avoid concurrent writer errors
+         self._send_lock = asyncio.Lock()
+ 
++        # Forward logging control
++        self._forward_log_step: int = 8192
++        self._forward_log_next_threshold: int = self._forward_log_step
++        self._forwarded_total_bytes: int = 0
 +
-+  state.safetyCloseTimer = setTimeout(() => {
-+    state.safetyCloseTimer = null;
-+    const pending = _closeTurnIfOpen();
-+    if (pending) {
-+      pending.catch(() => {});
-+    }
-+  }, delayMs);
-+}
+     def _diag_payload(self, **extra: Any) -> dict:
+         payload: dict[str, Any] = {"provider": "deepgram"}
+         if self._diag_session_id:
+             payload["session_id"] = self._diag_session_id
+         tag = self._url_tag or self._diag_tag_hint
+         if tag:
+             payload["tag"] = tag
+         payload.update(extra)
+         return payload
+ 
+     def _emit_diag(self, label: str, **extra: Any) -> None:
+         hook = self._diag_hook
+         if not callable(hook):
+             return
+         payload = self._diag_payload(**extra)
+         try:
+             hook(label, **payload)
+         except TypeError:
+             try:
+                 hook(label, payload)
+             except Exception:
+                 pass
+         except Exception:
+             pass
+ 
+@@ -689,142 +725,155 @@ class DeepgramClient:
+                 self._drain_event.set()
+             ws_open_after = self._ws_is_open()
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_flush_exit",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         tag=self._url_tag,
+                         queued=len(self._tx_queue),
+                         sent_bytes=0,
+                         sent_chunks=0,
+                         ws_open=ws_open_after,
+                         open_evt=self._open_evt.is_set(),
+                         first8_hex=None,
+                     )
+                 except Exception:
+                     pass
+             logger.debug(
+                 "Deepgram flush exit sid=%s queued=%s sent_bytes=%s",
+                 sid,
+                 len(self._tx_queue),
+                 0,
+             )
+             return 0, None
++        transport_cfg = {}
++        try:
++            transport_cfg = (self._cfg or {}).get("_transport") or {}
++        except Exception:
++            transport_cfg = {}
++        containerized = bool(transport_cfg.get("containerized_opus"))
 +
- function _clearBargeConfirm(resume = false) {
-   if (state.bargeConfirmTimer) {
-     try { clearTimeout(state.bargeConfirmTimer); } catch {}
-     state.bargeConfirmTimer = null;
-   }
-   if (state.bargeConfirmActive) {
-     state.bargeConfirmActive = false;
-     if (resume) {
-       try { resumePlayback(); } catch {}
-     }
-   }
- }
+         # Wait until socket open — don't raise; just give it a short chance
+         await self.wait_socket_open(
+             timeout=float(os.getenv("DG_OPEN_MICRO_WAIT_S", "0.75"))
+         )
+         if not self._ws_is_open():
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_flush_exit",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         tag=self._url_tag,
+                         queued=len(self._tx_queue),
+                         sent_bytes=0,
+                         sent_chunks=0,
+                         ws_open=False,
+                         open_evt=self._open_evt.is_set(),
+                         first8_hex=None,
+                     )
+                 except Exception:
+                     pass
+             logger.debug(
+                 "Deepgram flush exit sid=%s queued=%s sent_bytes=%s ws_open=%s",
+                 sid,
+                 len(self._tx_queue),
+                 0,
+                 False,
+             )
+             return 0, None
+         # Ensure we've passed the ready/open gate
+         if not self._open_evt.is_set():
+-            try:
+-                await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
+-            except asyncio.TimeoutError:
+-                pass
+-
+-        transport_cfg = {}
+-        try:
+-            transport_cfg = (self._cfg or {}).get("_transport") or {}
+-        except Exception:
+-            transport_cfg = {}
+-        containerized = bool(transport_cfg.get("containerized_opus"))
++            if containerized and self._debug_bypass_open_gate:
++                logger.debug(
++                    "Deepgram bypassing open gate sid=%s containerized=%s", sid, containerized
++                )
++            else:
++                try:
++                    await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
++                except asyncio.TimeoutError:
++                    pass
  
- function _ensureWSListener() {
-   if (state.wsListener || typeof window === 'undefined') {
-     return;
-   }
-   const handler = async (ev) => {
-     const detail = ev?.detail || {};
-     const type = detail?.type;
-     const typeNorm = typeof type === 'string' ? type.toLowerCase() : '';
- 
-     let isFinal = false;
-     if (typeNorm === 'utteranceend') {
-       isFinal = true;
-@@ -248,50 +278,51 @@ async function _ensureMic(externalStream = null) {
-   state.ctx = ctx;
-   state.source = source;
-   state.analyser = analyser;
- 
-   if (!state.deviceLogged) {
-     const [track] = stream.getAudioTracks();
-     let settings = {};
-     try { settings = track?.getSettings?.() || {}; } catch {}
-     const detail = {
-       label: (track?.label && track.label.trim()) || settings.label || settings.deviceId || 'unknown',
-       sampleRate: settings.sampleRate ?? ctx?.sampleRate ?? null,
-       channels: settings.channelCount ?? settings.channels ?? ctx?.destination?.channelCount ?? 1,
-     };
-     _logLifecycle('mic_device_selected', detail);
-     state.deviceLogged = true;
-   }
- 
-   return stream;
- }
- 
- function _safeClearTurnTimer() {
-   if (state.turnTimer) { clearTimeout(state.turnTimer); state.turnTimer = null; }
- }
- 
- function _closeTurnIfOpen() {
-+  _clearSafetyCloseTimer();
-   if (!state.turnOpen && !state.turnClosePromise) {
-     return null;
-   }
-   if (state.turnClosePromise) {
-     return state.turnClosePromise;
-   }
-   if (!state.turnOpen) {
-     return null;
-   }
-   const closePromise = (async () => {
-     try {
-       const closeFrame = { type: 'CloseStream' };
-       _logLifecycle('turn_close_signal', { frame: closeFrame }, 'info');
-       await sendCloseStream();
-     } finally {
-       state.turnOpen = false;
-       state.turnClosePromise = null;
-     }
-   })();
-   state.turnClosePromise = closePromise;
-   return closePromise;
- }
- 
- async function _setupPreRollTap(ctx, source) {
-   _teardownPreRollTap();
-@@ -432,50 +463,55 @@ function _ensureAudioStartSent() {
-     sent = false;
-   }
- 
-   if (sent) {
-     state.turnHintSent = true;
-   }
- 
-   return sent;
- }
- 
- function _sendRecorderChunk(blob, meta = {}) {
-   if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
-     return;
-   }
- 
-   _ensureAudioStartSent();
- 
-   const { preRoll = false, durationMs = null, timecode = null } = meta || {};
-   const logLabel = preRoll ? 'streamed pre-roll chunk' : 'streamed audio chunk';
-   state.chunkSendPromise = state.chunkSendPromise
-     .catch(() => {})
-     .then(async () => {
-       try {
-         await sendAudioChunk(blob);
-         state.chunkBytesSent += blob.size;
-+        const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-+          ? performance.now()
-+          : Date.now();
-+        state.lastChunkAt = now;
-+        _armSafetyCloseTimer();
-         try {
-           console.debug('[voice]', logLabel, {
-             bytes: blob.size,
-             durationMs,
-             timecode,
-             mime: blob.type,
-           });
-         } catch {}
-       } catch (err) {
-         state.chunkSendError = err;
-         try {
-           console.warn('[voice] failed to stream audio chunk', err);
-         } catch {}
-       }
-     });
- }
- 
- function _primeRecorderForPreRoll(options = {}) {
-   const { resetBuffer = true } = options || {};
-   if (!state.stream) {
-     return false;
-   }
-   if (typeof MediaRecorder === 'undefined') {
-     console.warn('[voice] MediaRecorder not supported in this browser');
-     state.rec = null;
-@@ -492,50 +528,51 @@ function _primeRecorderForPreRoll(options = {}) {
-   try {
-     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
-   } catch (primaryErr) {
-     try {
-       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
-     } catch (fallbackErr) {
-       console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
-       state.rec = null;
-       return false;
-     }
-   }
- 
-   state.rec = recorder;
-   state.recStreaming = false;
-   state.recStopping = false;
-   state.recStopShouldSend = false;
-   state.turnHintSent = false;
-   state.turnHintMime = null;
-   if (resetBuffer) {
-     _resetPreRollBuffer();
-   }
- 
-   const timeslice = state.preRollTimeslice || 150;
-   recorder.ondataavailable = _handleRecorderData;
-   recorder.onstop = async () => {
-+    _clearSafetyCloseTimer();
-     state.turnHintSent = false;
-     state.turnHintMime = null;
-     state.recStreaming = false;
-     state.recStopping = false;
-     state.recStopShouldSend = false;
-     state.rec = null;
-     let finalDetail;
-     try {
-       await state.chunkSendPromise.catch((err) => {
-         state.chunkSendError = state.chunkSendError || err;
-       });
-       if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
-         console.warn('[voice] recorded chunks too small', state.chunkBytesSent);
-         finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
-       }
-     } catch (e) {
-       console.warn('[voice] send audio failed', e);
-       state.chunkSendError = state.chunkSendError || e;
-     } finally {
-       if (state.chunkSendError && !finalDetail) {
-         finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
-       }
-       if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
-         try {
-           console.warn('[voice] recorder stopped with issues', {
-@@ -592,50 +629,51 @@ function _handleRecorderData(event) {
-   }
- 
-   const timecode = Number.isFinite(event.timecode) ? event.timecode : null;
- 
-   if (state.recStopping && !state.recStopShouldSend) {
-     return;
-   }
- 
-   if (state.recStopping && state.recStopShouldSend) {
-     state.recStopShouldSend = false;
-     state.recStopping = false;
-     _sendRecorderChunk(blob, { preRoll: false, durationMs: null, timecode });
-     return;
-   }
- 
-   if (state.recStreaming) {
-     _sendRecorderChunk(blob, { preRoll: false, durationMs: null, timecode });
-     return;
-   }
- 
-   const durationMs = _computePreRollDuration(timecode);
-   _bufferPreRollChunk({ blob, durationMs, timecode });
- }
- 
- function _stopRecorder(detail = null) {
-+  _clearSafetyCloseTimer();
-   const recorder = state.rec;
-   const wasActive = !!recorder && recorder.state !== 'inactive';
-   const payload = Object.assign({
-     active: wasActive,
-     hasRecorder: !!recorder,
-   }, detail || {});
-   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
- 
-   if (detail?.reason === 'server_final') {
-     _applyPostFinalHold('stop_recorder');
-   } else if (state.finalized) {
-     if (!recorder || recorder.state === 'inactive') {
-       state.rec = null;
-       state.turnHintSent = false;
-       state.turnHintMime = null;
-       return;
-     }
-   }
- 
-   if (!recorder) {
-     state.rec = null;
-     state.turnHintSent = false;
-     state.turnHintMime = null;
-     return;
-   }
-@@ -668,56 +706,58 @@ function _stopRecorder(detail = null) {
-   state.turnHintMime = null;
- }
- 
- function _teardownVADOnly() {
-   try { state.vad && state.vad.stop(); } catch {}
-   state.vad = null;
- }
- 
- function _teardownAudioGraph() {
-   _teardownPreRollTap();
-   try { state.source && state.source.disconnect(); } catch {}
-   try { state.analyser && state.analyser.disconnect(); } catch {}
-   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
-   state.source = null;
-   state.analyser = null;
-   state.ctx = null;
-   state.deviceLogged = false;
-   state.finalized = false;
-   state.postFinalHoldUntil = 0;
-   _removeWSListener();
- }
- 
- function _disarm() {
-   _safeClearTurnTimer();
-   _clearPendingEndTimer();
-+  _clearSafetyCloseTimer();
-   _clearBargeConfirm(false);
-   _stopRecorder({ reason: 'manual_disarm' });
-   _teardownVADOnly();
-   state.turnOpen = false; // ensure local state is clean
-   state.turnClosePromise = null;
-   state.recStartedAt = 0;
-+  state.lastChunkAt = 0;
-   state.ttsPlaying = false;
-   state.finalized = false;
-   state.postFinalHoldUntil = 0;
-   _removeWSListener();
-   _emitVoiceState('idle');
- }
- 
- function _bargeIn() {
-   // Soft barge-in: pause audio locally
-   _clearBargeConfirm(false);
-   try { stopPlayback(); } catch {}
-   // If a prior ASR turn is somehow still open, politely close it.
-   // (Harmless if no turn is open; guarded to avoid duplicate closes.)
-   const pendingClose = _closeTurnIfOpen();
-   if (pendingClose) {
-     pendingClose.catch(() => {});
-   }
- }
- 
- // ---- VAD wiring -------------------------------------------------------------
- 
- async function _arm(stream = null, opts = {}) {
-   const mic = stream || await _ensureMic();
- 
-   // Build / rebuild VAD
-@@ -760,50 +800,51 @@ async function _arm(stream = null, opts = {}) {
-   _emitVoiceState('armed');
- 
-   _primeRecorderForPreRoll();
- 
-   return mic;
- }
- 
- // ---- Recorder lifecycle -----------------------------------------------------
- 
- function _startRecorder() {
-   if (!state.stream) return false;
- 
-   const primed = _primeRecorderForPreRoll({ resetBuffer: false });
-   if (!primed || !state.rec || state.rec.state !== 'recording') {
-     return false;
-   }
- 
-   if (state.recStreaming) {
-     return true;
-   }
- 
-   state.chunkSendPromise = Promise.resolve();
-   state.chunkBytesSent = 0;
-   state.chunkSendError = null;
-   state.turnClosePromise = null;
-+  state.lastChunkAt = 0;
-   _clearPendingEndTimer();
-   state.recStartedAt = performance.now ? performance.now() : Date.now();
-   state.finalized = false;
-   state.postFinalHoldUntil = 0;
-   state.recStreaming = true;
-   state.recStopping = false;
-   state.recStopShouldSend = false;
-   _ensureWSListener();
- 
-   if (!state.turnHintSent) {
-     _ensureAudioStartSent();
-   }
- 
-   const preRollStats = _enqueuePreRollBlobs();
-   if (preRollStats?.count) {
-     try {
-       console.debug('[voice] flushed pre-roll buffer', {
-         chunks: preRollStats.count,
-         durationMs: preRollStats.durationMs,
-         bytes: preRollStats.totalBytes,
-       });
-     } catch {}
-   }
- 
-   state.turnOpen = true;
-@@ -914,72 +955,75 @@ function _onSpeechEndCommitted(detail = null) {
-   const now = performance.now ? performance.now() : Date.now();
-   const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
- 
-   try { console.debug('[voice] vad_speech_end'); } catch {}   
- 
-   if (state.bargeConfirmActive) {
-     _clearBargeConfirm(true);
-   }
- 
-   // If we haven't recorded at least minTurnMs, delay honoring VAD-end.
-   // Only applies while recorder is actually running.
-   if (state.rec && typeof state.rec.state === 'string' && state.rec.state === 'recording') {
-     const elapsed = Math.max(0, now - (state.recStartedAt || now));
-     const wait = Math.max(0, minTurnMs - elapsed);
-     if (wait > 0) {
-       try { console.debug('[voice] delaying VAD end', { waitMs: wait, elapsed }); } catch {}
-       _clearPendingEndTimer();
-       state.pendingEndTimer = setTimeout(() => _onSpeechEndCommitted(detail), wait);
-       return; // do not stop yet
-     }
-   }
- 
-   _logLifecycle('vad_speech_end', { reason }, 'info');
-   _safeClearTurnTimer();
-   _clearPendingEndTimer();
-+  _clearSafetyCloseTimer();
-   _stopRecorder({ reason });
-   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
- }
- 
- // ---- Utilities --------------------------------------------------------------
- 
- function optsFromGlobal(key, fallback) {
-   // Allow admin-configurable values to seep in (if app exposes them)
-   try {
-     const cfg = window.__askchip_config || {};
-     if (key in cfg) return cfg[key];
-   } catch {}
-   return fallback;
- }
- 
- function _applyPostFinalHold(source = 'unknown') {
-   const rawHold = Number(optsFromGlobal('post_final_hold_ms', 600));
-   const holdMs = Number.isFinite(rawHold) ? Math.max(0, rawHold) : 0;
-   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-     ? performance.now()
-     : Date.now();
-   const targetUntil = now + holdMs;
-   const previousUntil = state.postFinalHoldUntil || 0;
-   const nextUntil = Math.max(targetUntil, previousUntil);
-   const wasFinalized = !!state.finalized;
- 
-   state.finalized = true;
-   state.postFinalHoldUntil = nextUntil;
- 
-   if (!wasFinalized || nextUntil !== previousUntil) {
-     _logLifecycle('post_final_hold_applied', {
-       holdMs,
-       holdUntil: nextUntil,
-       source,
-     });
-   }
- 
-   return nextUntil;
- }
- 
- export const __TEST_ONLY__ = {
-   state,
-   startRecorder: _startRecorder,
-   stopRecorder: _stopRecorder,
-   ensureWSListener: _ensureWSListener,
-   closeTurnIfOpen: _closeTurnIfOpen,
-+  sendRecorderChunk: _sendRecorderChunk,
-+  clearSafetyCloseTimer: _clearSafetyCloseTimer,
- };
-diff --git a/tests/js/voice-safety-close.test.mjs b/tests/js/voice-safety-close.test.mjs
-new file mode 100644
-index 0000000000000000000000000000000000000000..a1f7c90e6fb5c2b39f6f4b69a6983c820d9192c6
---- /dev/null
-+++ b/tests/js/voice-safety-close.test.mjs
-@@ -0,0 +1,106 @@
-+import { test } from 'node:test';
-+import assert from 'node:assert/strict';
-+import { Blob as NodeBlob } from 'node:buffer';
-+
-+if (typeof Blob === 'undefined') {
-+  globalThis.Blob = NodeBlob;
-+}
-+
-+const listenerMap = new Map();
-+
-+class TestCustomEvent {
-+  constructor(type, init = {}) {
-+    this.type = type;
-+    this.detail = init.detail;
-+  }
-+}
-+
-+globalThis.CustomEvent = TestCustomEvent;
-+
-+const windowStub = {
-+  __askchip_config: {},
-+  addEventListener(type, handler) {
-+    if (!listenerMap.has(type)) listenerMap.set(type, new Set());
-+    listenerMap.get(type).add(handler);
-+  },
-+  removeEventListener(type, handler) {
-+    const set = listenerMap.get(type);
-+    if (!set) return;
-+    set.delete(handler);
-+    if (set.size === 0) listenerMap.delete(type);
-+  },
-+  dispatchEvent(event) {
-+    const set = listenerMap.get(event.type);
-+    if (!set) return true;
-+    for (const handler of Array.from(set)) {
-+      handler(event);
-+    }
-+    return true;
-+  },
-+};
-+
-+windowStub.CustomEvent = TestCustomEvent;
-+windowStub.dispatchEvent = windowStub.dispatchEvent.bind(windowStub);
-+
-+globalThis.window = windowStub;
-+
-+globalThis.performance = {
-+  now: () => Date.now(),
-+};
-+
-+globalThis.__TEST_WS_HOOKS = {};
-+
-+test('safety close timer emits CloseStream when no VAD end arrives', async () => {
-+  const voice = await import('../../static/js/voice.js');
-+  const hooks = voice.__TEST_ONLY__;
-+  const wsModule = await import('../../static/js/ws_module.js');
-+  await wsModule.getWSModule();
-+
-+  hooks.clearSafetyCloseTimer();
-+  hooks.state.turnOpen = true;
-+  hooks.state.recStreaming = true;
-+  hooks.state.turnClosePromise = null;
-+  hooks.state.chunkSendPromise = Promise.resolve();
-+  hooks.state.chunkBytesSent = 0;
-+  hooks.state.chunkSendError = null;
-+  hooks.state.turnHintSent = true; // avoid sending AudioStart noise in this test
-+  hooks.state.lastChunkAt = 0;
-+
-+  windowStub.__askchip_config.chunk_safety_timeout_ms = 25;
-+
-+  let closeCalls = 0;
-+  let chunkCalls = 0;
-+
-+  globalThis.__TEST_WS_HOOKS = {
-+    onSendAudioChunk: async () => {
-+      chunkCalls += 1;
-+      return true;
-+    },
-+    onSendCloseStream: () => {
-+      closeCalls += 1;
-+      return true;
-+    },
-+  };
-+
-+  const blob = new Blob(['frame'], { type: 'audio/webm; codecs=opus' });
-+  hooks.sendRecorderChunk(blob);
-+
-+  await hooks.state.chunkSendPromise;
-+  assert.equal(chunkCalls, 1, 'chunk should be uploaded immediately');
-+  assert.equal(closeCalls, 0, 'close should not fire before the safety timer');
-+  assert.ok(hooks.state.lastChunkAt > 0, 'lastChunkAt must update after chunk send');
-+
-+  await new Promise((resolve) => setTimeout(resolve, 60));
-+
-+  assert.equal(closeCalls, 1, 'CloseStream should be sent after the safety timer elapses');
-+  assert.equal(hooks.state.turnOpen, false, 'turn should be marked closed');
-+  assert.equal(hooks.state.safetyCloseTimer, null, 'safety timer should clear after firing');
-+
-+  hooks.clearSafetyCloseTimer();
-+  hooks.state.recStreaming = false;
-+  hooks.state.turnClosePromise = null;
-+  hooks.state.turnOpen = false;
-+  hooks.state.lastChunkAt = 0;
-+  delete windowStub.__askchip_config.chunk_safety_timeout_ms;
-+  globalThis.__TEST_WS_HOOKS = {};
-+});
+         sid = self._sid_for_log()
+         total_sent = 0
+         sent_chunks = 0
+         first_chunk: Optional[bytes] = None
+         while self._tx_queue and self._ws_is_open():
+             ws = self._ws
+             if ws is None:
+                 break
+             data = self._tx_queue[0]
++            chunk_bytes = len(data)
+             # Drop tiny preamble once (RAW only)
+             if (
+                 not containerized
+                 and (not self._first_real_sent)
+-                and len(data) < self._min_valid_bytes
++                and chunk_bytes < self._min_valid_bytes
+             ):
+                 logger.debug(
+                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
+                     sid,
+-                    len(data),
++                    chunk_bytes,
+                     self._min_valid_bytes,
+                 )
+                 self._tx_queue.popleft()
+                 continue
+             try:
+                 async with self._send_lock:
+                     await ws.send(data)
+                 self._first_real_sent = True
+                 self._last_chunk_ts = time.time()
+                 self._tx_queue.popleft()
+-                total_sent += len(data)
++                total_sent += chunk_bytes
+                 sent_chunks += 1
+                 if first_chunk is None:
+                     first_chunk = data
+                 logger.debug(
+                     "Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
+                     sid,
+-                    len(data),
++                    chunk_bytes,
+                     len(self._tx_queue),
+                 )
+-                if callable(self._jlog):
++                self._forwarded_total_bytes += chunk_bytes
++                threshold_hit = False
++                if self._forwarded_total_bytes >= self._forward_log_next_threshold:
++                    threshold_hit = True
++                    while self._forwarded_total_bytes >= self._forward_log_next_threshold:
++                        self._forward_log_next_threshold += self._forward_log_step
++                if threshold_hit and callable(self._jlog):
+                     try:
+                         self._jlog(
+                             "dg_forward",
+                             sid=sid,
+                             dg_id=self._dg_id,
+                             tag=self._url_tag,
+-                            bytes=len(data),
++                            bytes=chunk_bytes,
+                             queued=len(self._tx_queue),
+                             total_sent=total_sent,
++                            total_forwarded=self._forwarded_total_bytes,
+                         )
+                     except Exception:
+                         pass
+             except Exception as e:
+                 # Transient send issue; stop and retry on next trigger
+                 logger.debug(
+                     "Deepgram deferred send sid=%s err=%s queued=%s",
+                     sid,
+                     type(e).__name__,
+                     len(self._tx_queue),
+                 )
+                 break
+         if not self._tx_queue and not self._drain_event.is_set():
+             self._drain_event.set()
+         first8_hex: Optional[str] = None
+         if first_chunk:
+             try:
+                 first8_hex = first_chunk[:8].hex()
+             except Exception:
+                 first8_hex = None
+         ws_open_after = self._ws_is_open()
+         open_evt_after = self._open_evt.is_set()
+         if callable(self._jlog):
+             try:
+                 self._jlog(

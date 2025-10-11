@@ -58,6 +58,20 @@ def _sanitize_tag(val: Optional[str], *, limit: int = 64) -> Optional[str]:
     return txt[:limit]
 
 
+def _coerce_bool(val: Any) -> Optional[bool]:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    if isinstance(val, str):
+        txt = val.strip().lower()
+        if txt in {"1", "true", "yes", "on"}:
+            return True
+        if txt in {"0", "false", "no", "off", ""}:
+            return False
+    return None
+
+
 logger = logging.getLogger(__name__)
 
 _DG_KEY_PROBED = False
@@ -500,6 +514,23 @@ class DeepgramClient:
         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
         self._open_gate_warned: bool = False
 
+        env_bypass = _coerce_bool(os.getenv("DG_DEBUG_BYPASS_OPEN_GATE"))
+        cfg_bypass: Optional[bool] = None
+        if isinstance(self._cfg, dict):
+            for key in ("_debug_bypass_open_gate", "debug_bypass_open_gate"):
+                try:
+                    cfg_bypass = _coerce_bool(self._cfg.get(key))
+                except Exception:
+                    cfg_bypass = None
+                if cfg_bypass is not None:
+                    break
+        if cfg_bypass is not None:
+            self._debug_bypass_open_gate: bool = cfg_bypass
+        elif env_bypass is not None:
+            self._debug_bypass_open_gate = env_bypass
+        else:
+            self._debug_bypass_open_gate = False
+
         # Keepalive
         self._keepalive_task: Optional[asyncio.Task] = None
         self._keepalive_interval: float = float(
@@ -511,6 +542,11 @@ class DeepgramClient:
 
         # Serialize outbound websocket sends to avoid concurrent writer errors
         self._send_lock = asyncio.Lock()
+
+        # Forward logging control
+        self._forward_log_step: int = 8192
+        self._forward_log_next_threshold: int = self._forward_log_step
+        self._forwarded_total_bytes: int = 0
 
     def _diag_payload(self, **extra: Any) -> dict:
         payload: dict[str, Any] = {"provider": "deepgram"}
@@ -711,6 +747,13 @@ class DeepgramClient:
                 0,
             )
             return 0, None
+        transport_cfg = {}
+        try:
+            transport_cfg = (self._cfg or {}).get("_transport") or {}
+        except Exception:
+            transport_cfg = {}
+        containerized = bool(transport_cfg.get("containerized_opus"))
+
         # Wait until socket open — don't raise; just give it a short chance
         await self.wait_socket_open(
             timeout=float(os.getenv("DG_OPEN_MICRO_WAIT_S", "0.75"))
@@ -742,17 +785,15 @@ class DeepgramClient:
             return 0, None
         # Ensure we've passed the ready/open gate
         if not self._open_evt.is_set():
-            try:
-                await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
-            except asyncio.TimeoutError:
-                pass
-
-        transport_cfg = {}
-        try:
-            transport_cfg = (self._cfg or {}).get("_transport") or {}
-        except Exception:
-            transport_cfg = {}
-        containerized = bool(transport_cfg.get("containerized_opus"))
+            if containerized and self._debug_bypass_open_gate:
+                logger.debug(
+                    "Deepgram bypassing open gate sid=%s containerized=%s", sid, containerized
+                )
+            else:
+                try:
+                    await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
+                except asyncio.TimeoutError:
+                    pass
 
         sid = self._sid_for_log()
         total_sent = 0
@@ -763,16 +804,17 @@ class DeepgramClient:
             if ws is None:
                 break
             data = self._tx_queue[0]
+            chunk_bytes = len(data)
             # Drop tiny preamble once (RAW only)
             if (
                 not containerized
                 and (not self._first_real_sent)
-                and len(data) < self._min_valid_bytes
+                and chunk_bytes < self._min_valid_bytes
             ):
                 logger.debug(
                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
                     sid,
-                    len(data),
+                    chunk_bytes,
                     self._min_valid_bytes,
                 )
                 self._tx_queue.popleft()
@@ -783,26 +825,33 @@ class DeepgramClient:
                 self._first_real_sent = True
                 self._last_chunk_ts = time.time()
                 self._tx_queue.popleft()
-                total_sent += len(data)
+                total_sent += chunk_bytes
                 sent_chunks += 1
                 if first_chunk is None:
                     first_chunk = data
                 logger.debug(
                     "Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
                     sid,
-                    len(data),
+                    chunk_bytes,
                     len(self._tx_queue),
                 )
-                if callable(self._jlog):
+                self._forwarded_total_bytes += chunk_bytes
+                threshold_hit = False
+                if self._forwarded_total_bytes >= self._forward_log_next_threshold:
+                    threshold_hit = True
+                    while self._forwarded_total_bytes >= self._forward_log_next_threshold:
+                        self._forward_log_next_threshold += self._forward_log_step
+                if threshold_hit and callable(self._jlog):
                     try:
                         self._jlog(
                             "dg_forward",
                             sid=sid,
                             dg_id=self._dg_id,
                             tag=self._url_tag,
-                            bytes=len(data),
+                            bytes=chunk_bytes,
                             queued=len(self._tx_queue),
                             total_sent=total_sent,
+                            total_forwarded=self._forwarded_total_bytes,
                         )
                     except Exception:
                         pass
