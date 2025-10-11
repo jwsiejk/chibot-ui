@@ -142,11 +142,12 @@ function _ensureWSListener() {
   const handler = async (ev) => {
     const detail = ev?.detail || {};
     const type = detail?.type;
+    const typeNorm = typeof type === 'string' ? type.toLowerCase() : '';
 
     let isFinal = false;
-    if (type === 'UtteranceEnd') {
+    if (typeNorm === 'utteranceend') {
       isFinal = true;
-    } else if (type === 'Results') {
+    } else if (typeNorm === 'results' || typeNorm === 'result') {
       const channelFinal = detail?.channel?.is_final === true;
       const payloadFinal = detail?.is_final === true;
       isFinal = channelFinal || payloadFinal;

@@ -1047,11 +1047,12 @@ function timestamp() {
 
 function describeFrame(frame) {
   const type = frame?.type || frame?.label || 'unknown';
+  const typeNorm = typeof type === 'string' ? type.toLowerCase() : '';
   if (type === 'assistant_audio') {
     const chunks = Array.isArray(frame.audio_chunks) ? frame.audio_chunks.length : 0;
     return `${type} chunks=${chunks}${frame.is_last ? ' (last)' : ''}`;
   }
-  if (type === 'Results' || type === 'results' || type === 'transcript') {
+  if (typeNorm === 'results' || typeNorm === 'result' || typeNorm === 'transcript') {
     const text = extractTranscript(frame);
     const final = isTranscriptFinal(frame) ? ' final' : '';
     return `${type}${final}${text ? ` text="${text}"` : ''}`;
@@ -1076,7 +1077,8 @@ function isAssistantFrame(frame) {
 
 function isTranscriptFrame(frame) {
   const type = frame?.type || frame?.label || '';
-  return type === 'Results' || type === 'results' || type === 'transcript';
+  const typeNorm = typeof type === 'string' ? type.toLowerCase() : '';
+  return typeNorm === 'results' || typeNorm === 'result' || typeNorm === 'transcript';
 }
 
 function extractTranscript(frame) {

@@ -373,6 +373,7 @@ function _handleSuggestionClick(text){
 export function handleAssistantFrame(d){
   if (!d) return;
   const t = d.type;
+  const typeNorm = typeof t === 'string' ? t.toLowerCase() : '';
 
   if (t === 'ready') {
     if (!_ttsPlaying) _scheduleAsrWatchdog();
@@ -413,7 +414,7 @@ export function handleAssistantFrame(d){
     }
   }
 
-  if (t === 'Results' && d.nlu === undefined){
+  if ((typeNorm === 'results' || typeNorm === 'result') && d.nlu === undefined){
     const turnId = _extractAsrTurnId(d);
     if (turnId != null) _ensureActiveAsrTurn(turnId);
     const matchesActive = turnId == null
