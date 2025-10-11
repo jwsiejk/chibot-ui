@@ -1,83 +1,369 @@
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 26b704fea93a825e0e770dbaa636188a80881cfd..c83287a727512d37ca16aa5c10206de0b840d446 100644
+index c83287a727512d37ca16aa5c10206de0b840d446..eb6b2a5ddace080c09e5e4123a3ec309f0f3b6df 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -445,50 +445,78 @@ async def _pump_bus_to_client(sid: str, send):
-             if hasattr(bus, "unsubscribe"):
-                 bus.unsubscribe(sid, q)
-         except Exception:
-             pass
+@@ -821,50 +821,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         with contextlib.suppress(Exception):
+             await send(
+                 {
+                     "type": "websocket.close",
+                     "code": 1011,
+                     "reason": "initial_ready_failed",
+                 }
+             )
+         return
  
+     cfg: Dict[str, Any] = {}
+     barge = BargeState()
  
- async def _pump_dg_to_client(
-     dg: DeepgramClient,
-     send,
-     turn_id_ref,
-     final_seen,
-     pending_final_turns,
-     synthetic_final_turns,
-     completed_llm_turns,
-     sid: str,
-     asr_ready_evt: Optional[asyncio.Event] = None,
-     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
-     schedule_user_final: Optional[Callable[[int, str], Awaitable[None]]] = None,
-     turn_timing: Optional[Dict[str, List[float]]] = None,
-     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
- ):
-     """Relay Deepgram events to client and, on final, kick LLM turn."""
+     def _send_barge_state(phase: str) -> None:
+         _broadcast_barge_state_frame(sid, phase)
+ 
+     buf = TurnBuffer()
+     dg: Optional[DeepgramClient] = None
+     rx_task: Optional[asyncio.Task] = None
+     dg_connect_task: Optional[asyncio.Task] = None
+     dg_state: str = "closed"
+     turn_id_ref = [0]
+     pending_final_turns: Deque[int] = deque()
+     completed_llm_turns: Set[int] = set()
+     synthetic_final_turns: Set[int] = set()
++    turn_commit_logged: Set[int] = set()
+     final_seen = [False]
+     asr_seen_partial = [False]
+     turn_timing: Dict[str, List[float]] = {
+         "start": [0.0],
+         "dg_open": [0.0],
+         "first_partial": [0.0],
+         "final": [0.0],
+     }
+     turn_finish_logged = [False]
+ 
+     # Turn-scoped buffering + state
+     buffered_chunks: Deque[bytes] = deque()
+     buffered_byte_total = [0]
+     sent_any_audio = [False]
+     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
+     no_audio_notified = [False]
+     no_audio_turn_id = [0]
      try:
-         async for ev in dg.events():
-             et = (ev.get("type") or "").lower()
-+            meta: Dict[str, Any] = {
-+                "sid": sid,
-+                "turn_id": turn_id_ref[0],
-+                "dg_type": et,
-+            }
-+            if isinstance(ev, dict):
-+                if "text" in ev:
-+                    try:
-+                        txt = (ev.get("text") or "")
-+                        meta["chars"] = len(txt)
-+                        meta["preview"] = _clip_text(str(txt))
-+                    except Exception:
-+                        pass
-+                if "error" in ev:
-+                    try:
-+                        meta["error"] = _clip_text(str(ev.get("error")), 120)
-+                    except Exception:
-+                        pass
-+                flags = ev.get("flags") or ev.get("dg_flags")
-+                if isinstance(flags, (list, tuple)):
-+                    try:
-+                        meta["flags"] = list(flags)[:4]
-+                    except Exception:
-+                        pass
-+                seq = ev.get("seq")
-+                if isinstance(seq, int):
-+                    meta["seq"] = seq
-+            _jlog("dg_message", **meta)
-             if et == "asr_open":
-                 delta_ms = None
-                 now_ts = time.time()
-                 if turn_timing is not None:
-                     try:
-                         holder = turn_timing.setdefault("dg_open", [0.0])
-                         holder[0] = now_ts
-                         start_ts = turn_timing.get("start", [0.0])[0]
-                         if start_ts:
-                             delta_ms = int((now_ts - start_ts) * 1000)
-                     except Exception:
-                         pass
+         no_audio_window_s = float(
+             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
+         )
+     except Exception:
+         no_audio_window_s = 10.0
+     if no_audio_window_s < 0:
+         no_audio_window_s = 0.0
+@@ -890,50 +891,71 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         if webm_hint_gate[0]:
+             gate_open = True
+             gate_reason = "audio_start_webm"
+         elif webm_sniff_gate[0]:
+             gate_open = True
+             gate_reason = "sniff_webm"
+ 
+         observer = CONNECT_GATE_OBSERVER
+         if callable(observer):
+             try:
+                 observer(gate_open, gate_reason)
+             except Exception:
+                 pass
+ 
+         return gate_open, gate_reason
+ 
+     # NEW: per-turn mic capture state
+     mic_chunks: List[bytes] = []
+     mic_first_ts = [0.0]
+     mic_last_ts = [0.0]
+ 
+     # Deferred provider final guard state
+     pending_user_final: Dict[str, Any] = {"payload": None, "ts": 0.0}
+     pending_user_final_task: List[Optional[asyncio.Task]] = [None]
+ 
++    def _note_turn_commit(
++        turn_id: Optional[int], *, source: str, **extra_fields: Any
++    ) -> None:
++        if turn_id is None:
++            return
++        if turn_id in turn_commit_logged:
++            return
++        turn_commit_logged.add(turn_id)
++        fields: Dict[str, Any] = {
++            "sid": sid,
++            "turn_id": turn_id,
++            "source": source,
++            "pending_guard": bool(pending_user_final.get("payload")),
++            "final_seen": bool(final_seen[0]),
++        }
++        for key, value in extra_fields.items():
++            if value is not None:
++                fields[key] = value
++        with contextlib.suppress(Exception):
++            _jlog("turn_commit", **fields)
++
+     def _resolve_final_guard_window_s() -> float:
+         """Resolve how long to wait after a provider final before committing it to the client."""
+         try:
+             raw_val = os.getenv("WS_FINAL_GUARD_MS", "900") or "0"
+             env_val = int(raw_val)
+         except Exception:
+             env_val = 600
+         # Return seconds (clamped to >= 0)
+         try:
+             return max(0, env_val) / 1000.0
+         except Exception:
+             return 0.6      
+ 
+     def _cancel_pending_user_final_task(reason: str = "cancel") -> None:
+         task = pending_user_final_task[0]
+         if task and not task.done():
+             payload = pending_user_final.get("payload")
+             with contextlib.suppress(Exception):
                  _jlog(
-                     "dg_asr_open",
+                     "ws_final_guard_cancel",
                      sid=sid,
-                     turn_id=turn_id_ref[0],
-                     delta_from_turn_ms=delta_ms,
+                     turn_id=(payload or (None,))[0],
+                     reason=reason,
                  )
-                 try:
-                     if asr_ready_evt and not asr_ready_evt.is_set():
-                         asr_ready_evt.set()
-                 except Exception:
-                     pass
-                 try:
-                     _admin_emit and _admin_emit("asr:start", session_id=sid)
+             task.cancel()
+@@ -941,50 +963,55 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+ 
+     def _clear_pending_user_final(reason: str = "clear") -> None:
+         payload = pending_user_final.get("payload")
+         _cancel_pending_user_final_task(reason)
+         pending_user_final["payload"] = None
+         pending_user_final["ts"] = 0.0
+         if payload:
+             with contextlib.suppress(Exception):
+                 _jlog(
+                     "ws_final_guard_cleared",
+                     sid=sid,
+                     turn_id=payload[0],
+                     reason=reason,
+                 )
+ 
+     async def _emit_user_final_payload(turn_id_for_event: int, text: str) -> None:
+         if final_seen[0]:
+             with contextlib.suppress(Exception):
+                 _jlog(
+                     "ws_final_guard_skip_duplicate",
+                     sid=sid,
+                     turn_id=turn_id_for_event,
+                 )
+             return
+ 
++        _note_turn_commit(
++            turn_id_for_event,
++            source="provider_final",
++            text_chars=len(text or ""),
++        )
+         final_seen[0] = True
+         pending_user_final["payload"] = None
+         pending_user_final["ts"] = 0.0
+ 
+         if turn_timing is not None and text:
+             try:
+                 first_holder = turn_timing.setdefault("first_partial", [0.0])
+                 if not first_holder[0]:
+                     first_holder[0] = time.time()
+             except Exception:
+                 pass
+ 
+         await _ws_send_json(
+             send,
+             make_results(
+                 turn_id_for_event,
+                 transcript=text,
+                 confidence=0.0,
+                 is_final=True,
+             ),
+         )
+ 
+         with contextlib.suppress(Exception):
+             _log_turn_finish(turn_id_for_event, "provider_final", False, len(text))
+ 
+@@ -1132,50 +1159,59 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 current = pending_user_final.get("payload")
+                 if not current:
+                     return
+                 await _emit_user_final_payload(*current)
+             except asyncio.CancelledError:
+                 raise
+             finally:
+                 if pending_user_final_task[0] is asyncio.current_task():
+                     pending_user_final_task[0] = None
+ 
+         pending_user_final_task[0] = asyncio.create_task(_wait_and_emit())
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "ws_final_guard_schedule",
+                 sid=sid,
+                 turn_id=payload[0],
+                 guard_s=guard_window_s,
+                 reason=reason,
+             )
+ 
+     async def _handle_provider_final(turn_id_for_event: int, text: str) -> None:
+         if final_seen[0]:
+             return
+         pending_user_final["payload"] = (turn_id_for_event, text)
+         pending_user_final["ts"] = time.time()
++        guard_window_s = _resolve_final_guard_window_s()
++        _note_turn_commit(
++            turn_id_for_event,
++            source="provider_final",
++            guard_s=guard_window_s,
++            text_chars=len(text or ""),
++            buffered_chunks=len(buffered_chunks),
++            buffered_bytes=buffered_byte_total[0],
++        )
+         _schedule_pending_user_final_guard("provider_final")
+ 
+     def _reset_turn_metrics(start_ts: float) -> None:
+         turn_timing["start"][0] = start_ts
+         turn_timing["dg_open"][0] = 0.0
+         turn_timing["first_partial"][0] = 0.0
+         turn_timing["final"][0] = 0.0
+         turn_finish_logged[0] = False
+ 
+     def _emit_no_audio_alert(reason: str) -> None:
+         if no_audio_notified[0]:
+             return
+         if sent_any_audio[0]:
+             return
+         no_audio_notified[0] = True
+         turn_id = no_audio_turn_id[0] or turn_id_ref[0] or 0
+         since_first_ms = None
+         if mic_first_ts[0]:
+             since_first_ms = int(max(0.0, (time.time() - mic_first_ts[0]) * 1000))
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "ws_no_audio_detected",
+                 sid=sid,
+                 turn_id=turn_id,
+                 reason=reason,
+@@ -1254,50 +1290,56 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             _jlog(
+                 "turn_finish",
+                 sid=sid,
+                 turn_id=turn_id,
+                 reason=reason,
+                 synthetic=bool(synthetic),
+                 delta_start_ms=delta_start,
+                 delta_asr_open_ms=delta_open,
+                 delta_first_partial_ms=delta_partial,
+                 transcript_chars=int(transcript_chars),
+             )
+ 
+     async def _emit_synthetic_final(
+         turn_id: int, reason: str, transcript: str = ""
+     ) -> bool:
+         _clear_pending_user_final("synthetic_final")
+         if final_seen[0]:
+             with contextlib.suppress(Exception):
+                 _jlog(
+                     "ws_synthetic_final_skip_duplicate",
+                     sid=sid,
+                     turn_id=turn_id,
+                     reason=reason,
+                 )
+             return False
++        _note_turn_commit(
++            turn_id,
++            source="synthetic_final",
++            reason=reason,
++            transcript_chars=len(transcript or ""),
++        )
+         final_seen[0] = True
+         payload = make_results(turn_id, transcript=transcript, is_final=True)
+         payload["type"] = "Results"
+         await _ws_send_json(send, payload)
+         utterance_payload = make_utterance_end(turn_id)
+         utterance_payload["type"] = "UtteranceEnd"
+         await _ws_send_json(send, utterance_payload)
+         with contextlib.suppress(Exception):
+             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
+         _log_turn_finish(
+             turn_id,
+             reason=reason,
+             synthetic=True,
+             transcript_chars=len(transcript or ""),
+         )
+         with contextlib.suppress(Exception):
+             note_utterance_end(sid)
+         with contextlib.suppress(Exception):
+             set_recorder_active(sid, False)
+         completed_llm_turns.discard(turn_id)
+         return True
+ 
+     async def _ensure_dg_connected() -> bool:
+         nonlocal dg, rx_task, dg_connect_task, dg_state
+ 
+@@ -2146,50 +2188,67 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                 _reset_turn_metrics(time.time())
+                                 with contextlib.suppress(Exception):
+                                     _jlog(
+                                         "turn_start",
+                                         sid=sid,
+                                         turn_id=turn_id_ref[0],
+                                         first_bytes=0,
+                                         empty_turn=True,
+                                     )
+ 
+                             # --- Get a turn_id (with guard logs) ---
+                             _jlog(
+                                 "before_close_turn",
+                                 sid=sid,
+                                 next_turn_id=buf.turn_seq + 1,
+                             )
+                             try:
+                                 turn_id, _pcm = buf.close_turn()
+                             except Exception as e:
+                                 _jlog("close_turn_fail", sid=sid, err=type(e).__name__)
+                                 turn_id = turn_id_ref[0] or (buf.turn_seq + 1)
+                                 _pcm = None
+                             _jlog("after_close_turn", sid=sid, turn_id=turn_id)
+                             turn_id_ref[0] = turn_id
+ 
++                            _note_turn_commit(
++                                turn_id,
++                                source="client_close_stream",
++                                buffered_chunks=len(buffered_chunks),
++                                buffered_bytes=buffered_byte_total[0],
++                                pending_provider_final=bool(
++                                    pending_user_final.get("payload")
++                                ),
++                                synthetic_expected=(
++                                    not bool(pending_user_final.get("payload"))
++                                    and not final_seen[0]
++                                ),
++                                pcm_bytes=len(_pcm)
++                                if isinstance(_pcm, (bytes, bytearray))
++                                else None,
++                            )
++
+                             # ---- THEN finish the ASR turn (unchanged logic) ----
+                             if _has_deepgram_key():
+                                 # If provider isn't ready yet but we have audio, try to connect now (bounded wait)
+                                 if dg is None and (buffered_chunks or mic_chunks):
+                                     gate_open, gate_reason = _connect_gate_state()
+                                     if gate_open:
+                                         if dg_connect_task is None:
+                                             with contextlib.suppress(Exception):
+                                                 _jlog(
+                                                     "asr_connect_schedule",
+                                                     sid=sid,
+                                                     turn_id=turn_id_ref[0],
+                                                     queued=len(buffered_chunks),
+                                                     queued_bytes=buffered_byte_total[0],
+                                                     dg_state=dg_state,
+                                                     connect_ready_reason=gate_reason,
+                                                     via="close_stream",
+                                                 )
+                                             dg_connect_task = asyncio.create_task(
+                                                 _ensure_dg_connected()
+                                             )
+                                         with contextlib.suppress(asyncio.TimeoutError):
+                                             await asyncio.wait_for(
+                                                 asr_ready_evt.wait(), timeout=1.2
+                                             )

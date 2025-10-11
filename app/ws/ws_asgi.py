@@ -843,6 +843,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     pending_final_turns: Deque[int] = deque()
     completed_llm_turns: Set[int] = set()
     synthetic_final_turns: Set[int] = set()
+    turn_commit_logged: Set[int] = set()
     final_seen = [False]
     asr_seen_partial = [False]
     turn_timing: Dict[str, List[float]] = {
@@ -912,6 +913,27 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     pending_user_final: Dict[str, Any] = {"payload": None, "ts": 0.0}
     pending_user_final_task: List[Optional[asyncio.Task]] = [None]
 
+    def _note_turn_commit(
+        turn_id: Optional[int], *, source: str, **extra_fields: Any
+    ) -> None:
+        if turn_id is None:
+            return
+        if turn_id in turn_commit_logged:
+            return
+        turn_commit_logged.add(turn_id)
+        fields: Dict[str, Any] = {
+            "sid": sid,
+            "turn_id": turn_id,
+            "source": source,
+            "pending_guard": bool(pending_user_final.get("payload")),
+            "final_seen": bool(final_seen[0]),
+        }
+        for key, value in extra_fields.items():
+            if value is not None:
+                fields[key] = value
+        with contextlib.suppress(Exception):
+            _jlog("turn_commit", **fields)
+
     def _resolve_final_guard_window_s() -> float:
         """Resolve how long to wait after a provider final before committing it to the client."""
         try:
@@ -963,6 +985,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 )
             return
 
+        _note_turn_commit(
+            turn_id_for_event,
+            source="provider_final",
+            text_chars=len(text or ""),
+        )
         final_seen[0] = True
         pending_user_final["payload"] = None
         pending_user_final["ts"] = 0.0
@@ -1154,6 +1181,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             return
         pending_user_final["payload"] = (turn_id_for_event, text)
         pending_user_final["ts"] = time.time()
+        guard_window_s = _resolve_final_guard_window_s()
+        _note_turn_commit(
+            turn_id_for_event,
+            source="provider_final",
+            guard_s=guard_window_s,
+            text_chars=len(text or ""),
+            buffered_chunks=len(buffered_chunks),
+            buffered_bytes=buffered_byte_total[0],
+        )
         _schedule_pending_user_final_guard("provider_final")
 
     def _reset_turn_metrics(start_ts: float) -> None:
@@ -1276,6 +1312,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     reason=reason,
                 )
             return False
+        _note_turn_commit(
+            turn_id,
+            source="synthetic_final",
+            reason=reason,
+            transcript_chars=len(transcript or ""),
+        )
         final_seen[0] = True
         payload = make_results(turn_id, transcript=transcript, is_final=True)
         payload["type"] = "Results"
@@ -2167,6 +2209,23 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 _pcm = None
                             _jlog("after_close_turn", sid=sid, turn_id=turn_id)
                             turn_id_ref[0] = turn_id
+
+                            _note_turn_commit(
+                                turn_id,
+                                source="client_close_stream",
+                                buffered_chunks=len(buffered_chunks),
+                                buffered_bytes=buffered_byte_total[0],
+                                pending_provider_final=bool(
+                                    pending_user_final.get("payload")
+                                ),
+                                synthetic_expected=(
+                                    not bool(pending_user_final.get("payload"))
+                                    and not final_seen[0]
+                                ),
+                                pcm_bytes=len(_pcm)
+                                if isinstance(_pcm, (bytes, bytearray))
+                                else None,
+                            )
 
                             # ---- THEN finish the ASR turn (unchanged logic) ----
                             if _has_deepgram_key():
