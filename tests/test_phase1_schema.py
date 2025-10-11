@@ -4,11 +4,12 @@ def test_schema_helpers():
     # parse
     assert parse_client_json('{"type":"KeepAlive"}')["type"]=="KeepAlive"
     assert parse_client_json('{"type":"CloseStream"}')["type"]=="CloseStream"
+    assert parse_client_json('{"type":"AudioStop"}')["type"]=="AudioStop"
     # results shape
     r = make_results(2, "hi")
     assert r["type"]=="Results"
     assert r["channel"]["alternatives"][0]["transcript"]=="hi"
-    assert r["is_final"] is True and r["turn_id"]==2
+    assert r["channel"]["is_final"] is True and r["turn_id"]==2
     # utterance end
     ue = make_utterance_end(3); assert ue=={"type":"UtteranceEnd","turn_id":3}
     # keepalive ack

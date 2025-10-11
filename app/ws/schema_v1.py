@@ -24,7 +24,7 @@ from typing import Any, Dict
 
 _ALLOWED_TYPES = {
     "Configure", "KeepAlive", "CloseStream",
-    "greet", "user_msg", "AudioStart",
+    "greet", "user_msg", "AudioStart", "AudioStop",
     # Legacy aliases
     "User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage",
 }

@@ -1,545 +1,79 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 76e6ee4ec97b311669d8ddc6eb03949a95263e83..751ff86221a89424527ccb11867926c8f9a5e43c 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -440,50 +440,51 @@ async def _pump_bus_to_client(sid: str, send):
-                 await asyncio.sleep(0.01)
-     except asyncio.CancelledError:
-         pass
-     finally:
-         try:
-             if hasattr(bus, "unsubscribe"):
-                 bus.unsubscribe(sid, q)
-         except Exception:
-             pass
+diff --git a/app/ws/schema_v1.py b/app/ws/schema_v1.py
+index f2f4206fb7ab1863c5580bb64993d3a0d841a342..ec8e1db6d150d7b7bcc7b5389c5879c838caa212 100644
+--- a/app/ws/schema_v1.py
++++ b/app/ws/schema_v1.py
+@@ -2,51 +2,51 @@
+ """
+ Deepgram-aligned WS schema (Phase 1 → 2).
  
+ Client -> Server (text JSON):
+  - {"type":"Configure", ...}
+  - {"type":"KeepAlive"}
+  - {"type":"CloseStream"}
+  - {"type":"greet"}                         # WS-only greet alias
+  - {"type":"user_msg","text":"..."}         # WS-only user text turn
+    # (Also accept legacy aliases: "User","UserText","UserMessage","UserUtterance","UserTextMessage")
  
- async def _pump_dg_to_client(
-     dg: DeepgramClient,
-     send,
-     turn_id_ref,
-     final_seen,
-     pending_final_turns,
-     synthetic_final_turns,
-     completed_llm_turns,
-     sid: str,
-     asr_ready_evt: Optional[asyncio.Event] = None,
-     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
-     schedule_user_final: Optional[Callable[[int, str], Awaitable[None]]] = None,
-     turn_timing: Optional[Dict[str, List[float]]] = None,
-     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
-+    cancel_turn_start_timeout: Optional[Callable[[], None]] = None,
- ):
-     """Relay Deepgram events to client and, on final, kick LLM turn."""
+ Client -> Server (binary):
+  - raw Opus frames
+ 
+ Server -> Client:
+  - {"type":"Results","channel":{"alternatives":[{"transcript":"","confidence":0.0}],"is_final":true},"turn_id":N}
+  - {"type":"UtteranceEnd","turn_id":N}
+  - {"type":"KeepAliveAck"}
+  - {"type":"Error","code":"...","message":"..."}
+ """
+ from __future__ import annotations
+ from typing import Any, Dict
+ 
+ _ALLOWED_TYPES = {
+     "Configure", "KeepAlive", "CloseStream",
+-    "greet", "user_msg", "AudioStart",
++    "greet", "user_msg", "AudioStart", "AudioStop",
+     # Legacy aliases
+     "User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage",
+ }
+ 
+ def parse_client_json(text: str) -> Dict[str, Any]:
+     import json
      try:
-         async for ev in dg.events():
-             et = (ev.get("type") or "").lower()
-             meta: Dict[str, Any] = {
-                 "sid": sid,
-                 "turn_id": turn_id_ref[0],
-                 "dg_type": et,
-             }
-             if isinstance(ev, dict):
-                 if "text" in ev:
-                     try:
-                         txt = (ev.get("text") or "")
-                         meta["chars"] = len(txt)
-                         meta["preview"] = _clip_text(str(txt))
-                     except Exception:
-                         pass
-                 if "error" in ev:
-                     try:
-                         meta["error"] = _clip_text(str(ev.get("error")), 120)
-                     except Exception:
-                         pass
-                 flags = ev.get("flags") or ev.get("dg_flags")
-                 if isinstance(flags, (list, tuple)):
-@@ -523,50 +524,53 @@ async def _pump_dg_to_client(
-                     delta_from_turn_ms=delta_ms,
-                 )
-                 try:
-                     if asr_ready_evt and not asr_ready_evt.is_set():
-                         asr_ready_evt.set()
-                 except Exception:
-                     pass
-                 try:
-                     _admin_emit and _admin_emit("asr:start", session_id=sid)
-                 except Exception:
-                     pass
-                 try:
-                     if on_asr_open_flush:
-                         await on_asr_open_flush()
-                         await asyncio.sleep(0.05)
-                         await on_asr_open_flush()
-                 except Exception:
-                     pass
-                 continue
- 
-             if et in ("user_partial", "user_final"):
-                 is_final = et == "user_final"
-                 text = (ev.get("text") or "").strip()
-                 turn_id_for_event = turn_id_ref[0]
-                 if is_final:
-+                    if cancel_turn_start_timeout:
-+                        with contextlib.suppress(Exception):
-+                            cancel_turn_start_timeout()
-                     next_turn_id = None
-                     try:
-                         next_turn_id = pending_final_turns.popleft()
-                     except Exception:
-                         next_turn_id = None
-                     if next_turn_id is None:
-                         try:
-                             next_turn_id = min(synthetic_final_turns)
-                             synthetic_final_turns.discard(next_turn_id)
-                         except Exception:
-                             next_turn_id = turn_id_ref[0]
-                     else:
-                         synthetic_final_turns.discard(next_turn_id)
-                     turn_id_for_event = next_turn_id
-                 if not is_final:
-                     nudges.cancel_idle_timers(sid, source="asr_partial")
-                     try:
-                         asr_seen_partial[0] = True
-                     except Exception:
-                         pass
-                     if turn_timing is not None:
-                         try:
-                             first_holder = turn_timing.setdefault(
-                                 "first_partial", [0.0]
-                             )
-@@ -856,50 +860,60 @@ async def _ws_chat_asgi_impl(scope, receive, send):
- 
-     buf = TurnBuffer()
-     dg: Optional[DeepgramClient] = None
-     rx_task: Optional[asyncio.Task] = None
-     dg_connect_task: Optional[asyncio.Task] = None
-     dg_state: str = "closed"
-     turn_id_ref = [0]
-     pending_final_turns: Deque[int] = deque()
-     completed_llm_turns: Set[int] = set()
-     synthetic_final_turns: Set[int] = set()
-     turn_commit_logged: Set[int] = set()
-     final_seen = [False]
-     asr_seen_partial = [False]
-     turn_timing: Dict[str, List[float]] = {
-         "start": [0.0],
-         "dg_open": [0.0],
-         "first_partial": [0.0],
-         "final": [0.0],
-     }
-     turn_finish_logged = [False]
- 
-     # Turn-scoped buffering + state
-     buffered_chunks: Deque[bytes] = deque()
-     buffered_byte_total = [0]
-     sent_any_audio = [False]
-+    turn_start_timeout_task: List[Optional[asyncio.Task]] = [None]
-+    turn_start_timeout_turn_id = [0]
-+    try:
-+        turn_start_timeout_s = float(
-+            os.getenv("WS_TURN_START_TIMEOUT_S", "2.5") or "0"
-+        )
-+    except Exception:
-+        turn_start_timeout_s = 2.5
-+    if turn_start_timeout_s < 0:
-+        turn_start_timeout_s = 0.0
-     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
-     no_audio_notified = [False]
-     no_audio_turn_id = [0]
-     try:
-         no_audio_window_s = float(
-             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
-         )
+         obj = json.loads(text or "{}")
      except Exception:
-         no_audio_window_s = 10.0
-     if no_audio_window_s < 0:
-         no_audio_window_s = 0.0
-     no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
-     asr_ready_evt: asyncio.Event = asyncio.Event()
-     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
-     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
-     ws_frames_in = 0
-     ws_bytes_in = 0
-     backpressure_drop_count = 0
-     backpressure_last_emit = 0.0
-     backpressure_last_queue_len = 0
-     backpressure_emit_interval = 1.0
-     turn_connect_started = [False]
-     webm_hint_gate = [False]
-     webm_sniff_gate = [False]
-     sniffer_bytes_seen = [0]
-@@ -1207,100 +1221,217 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     async def _handle_provider_final(turn_id_for_event: int, text: str) -> None:
-         if final_seen[0]:
-             return
-         pending_user_final["payload"] = (turn_id_for_event, text)
-         pending_user_final["ts"] = time.time()
-         guard_window_s = _resolve_final_guard_window_s()
-         _note_turn_commit(
-             turn_id_for_event,
-             source="provider_final",
-             guard_s=guard_window_s,
-             text_chars=len(text or ""),
-             buffered_chunks=len(buffered_chunks),
-             buffered_bytes=buffered_byte_total[0],
-         )
-         _schedule_pending_user_final_guard("provider_final")
+         raise ValueError("bad_json")
+     t = (obj.get("type") or "").strip()
+     if t not in _ALLOWED_TYPES:
+         raise ValueError("bad_message_type")
  
-     def _reset_turn_metrics(start_ts: float) -> None:
-         turn_timing["start"][0] = start_ts
-         turn_timing["dg_open"][0] = 0.0
-         turn_timing["first_partial"][0] = 0.0
-         turn_timing["final"][0] = 0.0
-         turn_finish_logged[0] = False
-         forwarded_total_bytes[0] = 0
-         forwarded_progress_next[0] = FORWARD_PROGRESS_STEP
+     if t == "Configure":
+         enc = (obj.get("encoding") or "").lower()
+         if enc and enc not in {"opus", "pcm"}:
+             raise ValueError("bad_encoding")
+         sr = obj.get("sample_rate")
+         if sr is not None and (not isinstance(sr, int) or sr <= 0):
+             raise ValueError("bad_sample_rate")
+         ch = obj.get("channels")
+         if ch is not None and (not isinstance(ch, int) or ch <= 0):
+             raise ValueError("bad_channels")
+     return obj
+diff --git a/tests/test_phase1_schema.py b/tests/test_phase1_schema.py
+index c8491d12ddd557d072ebe8eacbb2274d561ecc0c..d660de1ff403ec1387224bbff51eb2ee35e330b3 100644
+--- a/tests/test_phase1_schema.py
++++ b/tests/test_phase1_schema.py
+@@ -1,15 +1,16 @@
  
-+    def _cancel_turn_start_timeout() -> None:
-+        task = turn_start_timeout_task[0]
-+        if task and not task.done():
-+            if task is not asyncio.current_task():
-+                task.cancel()
-+        turn_start_timeout_task[0] = None
-+        turn_start_timeout_turn_id[0] = 0
-+
-+    async def _handle_turn_start_timeout(turn_id: int) -> None:
-+        nonlocal dg, dg_state, rx_task, dg_connect_task
-+
-+        if sent_any_audio[0] or final_seen[0]:
-+            return
-+        if buffered_byte_total[0] > 0:
-+            return
-+        since_first_ms = None
-+        if mic_first_ts[0]:
-+            since_first_ms = int(max(0.0, (time.time() - mic_first_ts[0]) * 1000))
-+        with contextlib.suppress(Exception):
-+            _jlog(
-+                "ws_turn_start_timeout",  # structured log for ops
-+                sid=sid,
-+                turn_id=turn_id,
-+                timeout_s=turn_start_timeout_s,
-+                mic_chunks=len(mic_chunks),
-+                buffered=len(buffered_chunks),
-+                since_first_ms=since_first_ms,
-+            )
-+        if _admin_emit:
-+            with contextlib.suppress(Exception):
-+                _admin_emit(
-+                    "turn_start_timeout",
-+                    session_id=sid,
-+                    turn_id=turn_id,
-+                    timeout_s=turn_start_timeout_s,
-+                    mic_chunks=len(mic_chunks),
-+                    buffered_chunks=len(buffered_chunks),
-+                    since_first_chunk_ms=since_first_ms,
-+                )
-+
-+        _emit_no_audio_alert("turn_start_timeout")
-+
-+        if dg_connect_task is not None and not dg_connect_task.done():
-+            dg_connect_task.cancel()
-+            with contextlib.suppress(asyncio.CancelledError, Exception):
-+                await dg_connect_task
-+            dg_connect_task = None
-+            dg_state = "closed"
-+        turn_connect_started[0] = False
-+
-+        close_ok = None
-+        if dg is not None:
-+            try:
-+                await dg.close(wait_for_final=False)
-+                close_ok = True
-+            except Exception as exc:
-+                close_ok = False
-+                _jlog(
-+                    "ws_turn_start_timeout_dg_close_error",
-+                    sid=sid,
-+                    turn_id=turn_id,
-+                    err=type(exc).__name__,
-+                )
-+            finally:
-+                dg_state = "closed"
-+                try:
-+                    set_asr_stream_open(sid, False)
-+                except Exception:
-+                    pass
-+                relay_task = rx_task
-+                rx_task = None
-+                if relay_task is not None:
-+                    relay_task.cancel()
-+                    with contextlib.suppress(asyncio.CancelledError, Exception):
-+                        await relay_task
-+                dg = None
-+                with contextlib.suppress(Exception):
-+                    asr_ready_evt.clear()
-+                with contextlib.suppress(Exception):
-+                    _jlog(
-+                        "dg_tx_close",
-+                        sid=sid,
-+                        turn_id=turn_id,
-+                        ok=(close_ok is True),
-+                        bytes_forwarded=forwarded_total_bytes[0],
-+                        source="turn_start_timeout",
-+                    )
-+
-+        if not final_seen[0]:
-+            emitted = await _emit_synthetic_final(turn_id, "turn_start_timeout")
-+            if emitted:
-+                with contextlib.suppress(ValueError):
-+                    pending_final_turns.remove(turn_id)
-+                synthetic_final_turns.add(turn_id)
-+
-+    def _schedule_turn_start_timeout(turn_id: int) -> None:
-+        if turn_start_timeout_s <= 0:
-+            return
-+        _cancel_turn_start_timeout()
-+        turn_start_timeout_turn_id[0] = turn_id
-+
-+        async def _watch() -> None:
-+            try:
-+                await asyncio.sleep(turn_start_timeout_s)
-+                if turn_start_timeout_turn_id[0] != turn_id:
-+                    return
-+                await _handle_turn_start_timeout(turn_id)
-+            except asyncio.CancelledError:
-+                pass
-+            finally:
-+                if turn_start_timeout_turn_id[0] == turn_id:
-+                    turn_start_timeout_turn_id[0] = 0
-+                turn_start_timeout_task[0] = None
-+
-+        turn_start_timeout_task[0] = asyncio.create_task(_watch())
-+
-     def _emit_no_audio_alert(reason: str) -> None:
-         if no_audio_notified[0]:
-             return
-         if sent_any_audio[0]:
-             return
-         no_audio_notified[0] = True
-         turn_id = no_audio_turn_id[0] or turn_id_ref[0] or 0
-         since_first_ms = None
-         if mic_first_ts[0]:
-             since_first_ms = int(max(0.0, (time.time() - mic_first_ts[0]) * 1000))
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_no_audio_detected",
-                 sid=sid,
-                 turn_id=turn_id,
-                 reason=reason,
-                 window_s=no_audio_window_s,
-                 mic_chunks=len(mic_chunks),
-                 buffered=len(buffered_chunks),
-                 since_first_ms=since_first_ms,
-             )
-         if _admin_emit:
-             with contextlib.suppress(Exception):
-                 _admin_emit(
-                     "no_audio_detected",
-                     session_id=sid,
-                     turn_id=turn_id,
-                     reason=reason,
-                     window_s=no_audio_window_s,
-                     mic_chunks=len(mic_chunks),
-                     buffered_chunks=len(buffered_chunks),
-                     since_first_chunk_ms=since_first_ms,
-                 )
-         if no_audio_broadcast_enabled:
-             frame = {
-                 "type": "no_audio_detected",
-                 "turn_id": str(turn_id),
-                 "window_s": no_audio_window_s,
-                 "reason": reason,
-             }
-             if since_first_ms is not None:
-                 frame["since_first_chunk_ms"] = since_first_ms
-             with contextlib.suppress(Exception):
-                 bus.broadcast(sid, frame)
- 
-     def _cancel_no_audio_watch() -> None:
-         task = no_audio_watch_task[0]
-         if task and not task.done():
-             task.cancel()
-         no_audio_watch_task[0] = None
-+        _cancel_turn_start_timeout()
- 
-     def _schedule_no_audio_watch(turn_id: int) -> None:
-         if no_audio_window_s <= 0:
-             return
-         _cancel_no_audio_watch()
-         no_audio_notified[0] = False
-         no_audio_turn_id[0] = turn_id
- 
-         async def _watch() -> None:
-             try:
-                 await asyncio.sleep(no_audio_window_s)
-                 if sent_any_audio[0] or no_audio_notified[0]:
-                     return
-                 _emit_no_audio_alert("timeout")
-             except asyncio.CancelledError:
-                 pass
-             finally:
-                 no_audio_watch_task[0] = None
- 
-         no_audio_watch_task[0] = asyncio.create_task(_watch())
- 
-     def _log_turn_finish(
-         turn_id: int, reason: str, synthetic: bool, transcript_chars: int
-     ) -> None:
-         if turn_finish_logged[0]:
-@@ -1416,50 +1547,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 dg = client
-                 await client.connect()
-                 nudges.cancel_idle_timers(sid, source="asr_connect_ok")
-                 try:
-                     set_asr_stream_open(sid, True)
-                 except Exception:
-                     pass
-                 dg_state = "open"
-                 connect_result["ok"] = True
-                 turn_id_ref[0] = buf.turn_seq + 1
-                 rx_task = asyncio.create_task(
-                     _pump_dg_to_client(
-                         client,
-                         send,
-                         turn_id_ref,
-                         final_seen,
-                         pending_final_turns,
-                         synthetic_final_turns,
-                         completed_llm_turns,
-                         sid,
-                         asr_ready_evt,
-                         _flush_buffered_chunks,
-                         _handle_provider_final,
-                         turn_timing,
-                         _log_turn_finish,
-+                        cancel_turn_start_timeout=_cancel_turn_start_timeout,
-                     )
-                 )
-                 _jlog("asr_connect_ok", sid=sid)
-             except Exception as e:
-                 dg_state = "closed"
-                 dg = None
-                 try:
-                     set_asr_stream_open(sid, False)
-                 except Exception:
-                     pass
-                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
-                 with contextlib.suppress(Exception):
-                     await _ws_send_json(
-                         send, make_error("asr_connect_fail", type(e).__name__)
-                     )
-                 with contextlib.suppress(Exception):
-                     _admin_emit and _admin_emit(
-                         "asr:error", session_id=sid, error=f"connect:{type(e).__name__}"
-                     )
-             finally:
-                 dg_connect_task = None
-                 try:
-                     set_asr_stream_open(sid, dg_state == "open")
-                 except Exception:
-                     pass
-@@ -1814,50 +1946,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 confirm_ms=confirm_ms,
-                                 on_commit=_on_barge_commit,
-                                 send_state=_send_barge_state,
-                             )
-                         turn_id_ref[0] = buf.turn_seq + 1
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-                             completed_llm_turns.discard(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
-                         buffered_byte_total[0] = 0
-                         webm_hint_gate[0] = _transport_enables_webm_hint(transport)
-                         webm_sniff_gate[0] = False
-                         sniffer_bytes_seen[0] = 0
-                         forwarded_total_bytes[0] = 0
-                         forwarded_progress_next[0] = FORWARD_PROGRESS_STEP
-                         turn_connect_started[0] = False
-                         # reset mic capture
-                         mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
-                         _reset_turn_metrics(now)
-                         _schedule_no_audio_watch(turn_id_ref[0])
-+                        _schedule_turn_start_timeout(turn_id_ref[0])
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "turn_start",
-                                 sid=sid,
-                                 turn_id=turn_id_ref[0],
-                                 first_bytes=len(raw_chunk),
-                             )
-                     # Detect container early using raw bytes
- 
-                     # Detect container early
-                     try:
-                         if raw_chunk:
-                             bytes_before = sniffer_bytes_seen[0]
-                             sniffer_bytes_seen[0] += len(raw_chunk)
-                             det = sniffer.feed(raw_chunk)
-                             if det:
-                                 container = getattr(det, "container", None)
-                                 codec = getattr(det, "codec", None)
-                                 containerized = bool(
-                                     getattr(det, "containerized", codec == "opus")
-                                 )
-                                 if transport.get("container") is None:
-                                     transport["container"] = container
-                                     transport["codec"] = codec
-                                     transport["containerized_opus"] = containerized
-@@ -2227,50 +2360,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                     )
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-                                         await _ws_send_json(
-                                             send,
-                                             make_error(
-                                                 "user_fail", e.__class__.__name__
-                                             ),
-                                         )
- 
-                             asyncio.create_task(_bg_user())
- 
-                         elif t == "activity":
-                             kind = (obj.get("kind") or "").strip().lower()
-                             if kind in {"speech", "text", "chip"}:
-                                 nudges.cancel_idle_timers(sid)
-                             continue
- 
-                         elif t in {"CloseStream", "AudioStop"}:
-                             _jlog(
-                                 "ws_close_stream",
-                                 sid=sid,
-                                 source=t,
-                                 bytes_forwarded=forwarded_total_bytes[0],
-                             )
-+                            _cancel_turn_start_timeout()
-                             nudges.cancel_idle_timers(sid)
- 
-                             # Always define this first so later 'if synthetic_emitted' is safe
-                             synthetic_emitted = False
- 
-                             if buf.is_empty():
-                                 # Empty turn closure; synthesize ids + reset final tracking.
-                                 turn_id_ref[0] = buf.turn_seq + 1
-                                 final_seen[0] = False
-                                 _reset_turn_metrics(time.time())
-                                 with contextlib.suppress(Exception):
-                                     _jlog(
-                                         "turn_start",
-                                         sid=sid,
-                                         turn_id=turn_id_ref[0],
-                                         first_bytes=0,
-                                         empty_turn=True,
-                                     )
- 
-                             # --- Get a turn_id (with guard logs) ---
-                             _jlog(
-                                 "before_close_turn",
-                                 sid=sid,
-                                 next_turn_id=buf.turn_seq + 1,
-                             )
+ def test_schema_helpers():
+     from app.ws.schema_v1 import parse_client_json, make_results, make_utterance_end, make_keepalive_ack
+     # parse
+     assert parse_client_json('{"type":"KeepAlive"}')["type"]=="KeepAlive"
+     assert parse_client_json('{"type":"CloseStream"}')["type"]=="CloseStream"
++    assert parse_client_json('{"type":"AudioStop"}')["type"]=="AudioStop"
+     # results shape
+     r = make_results(2, "hi")
+     assert r["type"]=="Results"
+     assert r["channel"]["alternatives"][0]["transcript"]=="hi"
+-    assert r["is_final"] is True and r["turn_id"]==2
++    assert r["channel"]["is_final"] is True and r["turn_id"]==2
+     # utterance end
+     ue = make_utterance_end(3); assert ue=={"type":"UtteranceEnd","turn_id":3}
+     # keepalive ack
+     ka = make_keepalive_ack(); assert ka=={"type":"KeepAliveAck"}
