@@ -379,6 +379,19 @@ export function openWS(options = {}){
           const obj = JSON.parse(ev.data);
           const t = obj && obj.type;
 
+          if (t === 'Result' || t === 'Results') {
+            const channel = obj && obj.channel;
+            const alternatives = channel && channel.alternatives;
+            const transcript = alternatives && alternatives[0] && alternatives[0].transcript;
+            const isFinal =
+              (channel && typeof channel.is_final === 'boolean' && channel.is_final) ||
+              (typeof obj.final === 'boolean' && obj.final) ||
+              false;
+            try {
+              console.debug('[WS→UI Result]', { final: isFinal, text: transcript });
+            } catch {}
+          }
+          
           _handleProviderSignal(obj);
 
           if (t === 'ready') {
@@ -484,7 +497,6 @@ export async function sendAudioChunk(blob){
   }
 }
 
-
 export async function sendCloseStream(){
   // Drain the WS send buffer before closing the user turn.
   try{
@@ -501,10 +513,10 @@ export async function sendCloseStream(){
   }catch(e){
     console.warn('[ws] sendCloseStream drain failed', e);
   } finally {
+    try { console.debug('[DBG] UI→WS', { type: 'CloseStream' }); } catch {}    
     sendJSON({ type: "CloseStream" });
   }
 }
-
 
 export function configure(opts = {}){
   // ensure session id is included if caller forgot
