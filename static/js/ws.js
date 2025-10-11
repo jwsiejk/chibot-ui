@@ -10,6 +10,7 @@ let __WS_RECONNECT_ENABLED = true;
 
 import { playStream, audioEnd, unlockAudio } from './audio.js';
 import { getSID } from './util/sid.js';
+import { logIfEnabled } from './util/logging.js';
 
 let _ws = null;
 let _onOpen = [];
@@ -42,27 +43,38 @@ function _getActiveTurnTraceId() {
   }
 }
 
+function _console(level, ...args) {
+  logIfEnabled(() => {
+    try {
+      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+      method?.apply(console, args);
+    } catch {}
+  });
+}
+
 function _wsLog(level, message, detail = undefined) {
-  try {
-    const method = typeof console?.[level] === 'function' ? console[level] : console.log;
-    if (!method) return;
-    const traceId = _getActiveTurnTraceId();
-    const prefix = traceId ? `[ws][trace:${traceId}]` : '[ws]';
-    if (detail === undefined) {
-      method.call(console, `${prefix} ${message}`);
-      return;
-    }
-    if (detail && typeof detail === 'object') {
-      const payload = traceId && detail.traceId !== traceId ? { ...detail, traceId } : detail;
-      method.call(console, `${prefix} ${message}`, payload);
-      return;
-    }
-    if (traceId) {
-      method.call(console, `${prefix} ${message}`, detail, `trace:${traceId}`);
-      return;
-    }
-    method.call(console, `${prefix} ${message}`, detail);
-  } catch {}
+  logIfEnabled(() => {
+    try {
+      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+      if (!method) return;
+      const traceId = _getActiveTurnTraceId();
+      const prefix = traceId ? `[ws][trace:${traceId}]` : '[ws]';
+      if (detail === undefined) {
+        method.call(console, `${prefix} ${message}`);
+        return;
+      }
+      if (detail && typeof detail === 'object') {
+        const payload = traceId && detail.traceId !== traceId ? { ...detail, traceId } : detail;
+        method.call(console, `${prefix} ${message}`, payload);
+        return;
+      }
+      if (traceId) {
+        method.call(console, `${prefix} ${message}`, detail, `trace:${traceId}`);
+        return;
+      }
+      method.call(console, `${prefix} ${message}`, detail);
+    } catch {}
+  });
 }
 
 function _scheduleProviderFallback(){
@@ -337,11 +349,11 @@ export function openWS(options = {}){
       reconnectEnabled: __WS_RECONNECT_ENABLED,
       sessionStarted: !!(window && window.__askchip_session_started),
     };
-    console.info('[ws] openWS build', stamp);
+    _console('info', '[ws] openWS build', stamp);
   } catch (_) {}
 
   try {
-    console.info('[ws] openWS options=', options, 'reconnect=', __WS_RECONNECT_ENABLED);
+    _console('info', '[ws] openWS options=', options, 'reconnect=', __WS_RECONNECT_ENABLED);
   } catch (_) {}
 
   if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)){
@@ -404,7 +416,7 @@ export function openWS(options = {}){
       }
     };
 
-    ws.onerror = (e) => console.warn('[ws] error', e);
+    ws.onerror = (e) => _console('warn', '[ws] error', e);
 
     ws.onmessage = (ev) => {
       try{
@@ -457,7 +469,7 @@ export function openWS(options = {}){
           if (t === 'KeepAliveAck'){
             // no-op
           } else if (t === 'Error'){
-            console.warn('[ws] server error:', obj.code, obj.message);
+            _console('warn', '[ws] server error:', obj.code, obj.message);
           } else if (t === 'assistant_end'){
             // Text is done. Do NOT teardown audio here (audio ends on UtteranceEnd).
           } else if (t === 'TTSChunk'){
@@ -467,7 +479,7 @@ export function openWS(options = {}){
           // Binary from server (future path not used in v1 WS-only)
         }
       }catch(err){
-        console.warn('[ws] message error', err);
+        _console('warn', '[ws] message error', err);
       }
     };
 
@@ -507,13 +519,13 @@ export function sendJSON(obj){
   try {
     const s = JSON.stringify(obj);
     if (bufferedAmount() > 5_000_000) { // ~5MB buffer guardrail
-      console.warn('[ws] bufferedAmount high; sending anyway', bufferedAmount());
+      _console('warn', '[ws] bufferedAmount high; sending anyway', bufferedAmount());
     }
     _ws.send(s);
     _lastUserSendTs = Date.now();
     return true;
   } catch(e){
-    console.warn('[ws] sendJSON error', e);
+    _console('warn', '[ws] sendJSON error', e);
     return false;
   }
 }
@@ -524,12 +536,12 @@ export async function sendAudioChunk(blob){
   try{
     const buf = await blob.arrayBuffer();
     try {
-      console.debug('[ws] sending audio chunk', { bytes: buf.byteLength, mime: blob.type });
+      _console('debug', '[ws] sending audio chunk', { bytes: buf.byteLength, mime: blob.type });
     } catch {}
     _ws.send(buf);
     _lastUserSendTs = Date.now();
   }catch(e){
-    console.warn('[ws] sendAudioChunk error', e);
+    _console('warn', '[ws] sendAudioChunk error', e);
   } finally {
     _scheduleKeepaliveResume(_KEEPALIVE_REASON_UPLOAD, _KEEPALIVE_RESUME_AFTER_UPLOAD_MS);
   }
@@ -549,9 +561,9 @@ export async function sendCloseStream(){
       await sleep(20);
     }
   }catch(e){
-    console.warn('[ws] sendCloseStream drain failed', e);
+    _console('warn', '[ws] sendCloseStream drain failed', e);
   } finally {
-    try { console.debug('[DBG] UI→WS', { type: 'CloseStream' }); } catch {}    
+    try { _console('debug', '[DBG] UI→WS', { type: 'CloseStream' }); } catch {}    
     sendJSON({ type: "CloseStream" });
   }
 }
@@ -562,3 +574,8 @@ export function configure(opts = {}){
   const payload = { type: "Configure", session_id: sid, ...opts };
   sendJSON(payload);
 }
+
+export const __TEST_ONLY__ = {
+  wsLog: _wsLog,
+  console: _console,
+};

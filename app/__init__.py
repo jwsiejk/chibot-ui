@@ -7,9 +7,12 @@ from .api_v1 import create_v1_blueprint
 from .api_v1.health import bp as health_bp
 from .middleware.csrf import csrf_before_request, make_csrf_route, ensure_csrf_headers
 from .middleware.rate_limit import register_before_request as rate_limit_register
+from .config import load_settings
 
 # ---------- Core blueprint (UI shells / docs) ----------
 core_bp = Blueprint("core", __name__)
+
+_SETTINGS = load_settings()
 
 @core_bp.get("/")
 def home():
@@ -79,6 +82,19 @@ def create_app():
     @app.context_processor
     def _inject_asset_version():
         return {"asset_version": asset_version}
+
+    @app.context_processor
+    def _inject_askchip_config():
+        enabled = True
+        try:
+            enabled = bool(getattr(_SETTINGS, "advanced_logging_enabled", True))
+        except Exception:
+            enabled = True
+        return {
+            "askchip_config": {
+                "logging": {"enabled": enabled},
+            }
+        }
 
     @app.after_request
     def maybe_allow_cors(resp):

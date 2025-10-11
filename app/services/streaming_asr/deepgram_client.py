@@ -60,6 +60,23 @@ def _sanitize_tag(val: Optional[str], *, limit: int = 64) -> Optional[str]:
 
 logger = logging.getLogger(__name__)
 
+
+class _NullLogger:
+    def debug(self, *args, **kwargs):
+        return None
+
+    def info(self, *args, **kwargs):
+        return None
+
+    def warning(self, *args, **kwargs):
+        return None
+
+    def error(self, *args, **kwargs):
+        return None
+
+    def exception(self, *args, **kwargs):
+        return None
+
 _DG_KEY_PROBED = False
 
 
@@ -76,7 +93,7 @@ def _mask_key_fragment(raw: str) -> str:
     return f"{txt[:2]}…{txt[-2:]}"
 
 
-def _api_key_info() -> tuple[str, int]:
+def _api_key_info(*, log: bool = True, logger_obj: logging.Logger = logger) -> tuple[str, int]:
     key = os.getenv("DEEPGRAM_API_KEY", "")
     if key is None:
         key = ""
@@ -85,13 +102,13 @@ def _api_key_info() -> tuple[str, int]:
         raise RuntimeError("DEEPGRAM_API_KEY is not set")
     length = len(key)
     global _DG_KEY_PROBED
-    if not _DG_KEY_PROBED:
+    if log and not _DG_KEY_PROBED:
         _DG_KEY_PROBED = True
         try:
             masked = _mask_key_fragment(key)
-            logger.info("Deepgram API key detected len=%s mask=%s", length, masked)
+            logger_obj.info("Deepgram API key detected len=%s mask=%s", length, masked)
         except Exception:
-            logger.info("Deepgram API key detected len=%s", length)
+            logger_obj.info("Deepgram API key detected len=%s", length)
     return key, length
 
 
@@ -291,8 +308,8 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
     return base
 
 
-def _auth_header() -> str:
-    key, _ = _api_key_info()
+def _auth_header(*, log: bool = True, logger_obj: logging.Logger = logger) -> str:
+    key, _ = _api_key_info(log=log, logger_obj=logger_obj)
     return f"Token {key}"
 
 
@@ -416,6 +433,19 @@ class DeepgramClient:
             self._diag_tag_hint: Optional[str] = tag_hint
         except Exception:
             self._diag_tag_hint = None
+
+        try:
+            raw_logging_enabled = None
+            if isinstance(self._cfg, dict):
+                raw_logging_enabled = self._cfg.get("advanced_logging_enabled")
+        except Exception:
+            raw_logging_enabled = None
+        if raw_logging_enabled is None:
+            raw_logging_enabled = True
+        self._advanced_logging_enabled: bool = bool(raw_logging_enabled)
+        self._logger: logging.Logger | _NullLogger = (
+            logger if self._advanced_logging_enabled else _NullLogger()
+        )
 
         # TX queue + flushing
         self._tx_queue: Deque[bytes] = deque()
@@ -596,7 +626,7 @@ class DeepgramClient:
             try:
                 await self._flush_tx()
             except Exception:
-                logger.debug(
+                self._logger.debug(
                     "Deepgram flush_tx raised; will retry on next trigger",
                     exc_info=True,
                 )
@@ -610,7 +640,7 @@ class DeepgramClient:
         ws_open_flag = self._ws_is_open()
         open_evt_set = self._open_evt.is_set()
 
-        logger.debug(
+        self._logger.debug(
             "Deepgram flush enter sid=%s queued=%s ws_open=%s open_evt=%s",
             sid,
             queued_at_start,
@@ -651,7 +681,7 @@ class DeepgramClient:
                     )
                 except Exception:
                     pass
-            logger.debug(
+            self._logger.debug(
                 "Deepgram flush exit sid=%s queued=%s sent_bytes=%s",
                 sid,
                 len(self._tx_queue),
@@ -679,7 +709,7 @@ class DeepgramClient:
                     )
                 except Exception:
                     pass
-            logger.debug(
+            self._logger.debug(
                 "Deepgram flush exit sid=%s queued=%s sent_bytes=%s ws_open=%s",
                 sid,
                 len(self._tx_queue),
@@ -716,7 +746,7 @@ class DeepgramClient:
                 and (not self._first_real_sent)
                 and len(data) < self._min_valid_bytes
             ):
-                logger.debug(
+                self._logger.debug(
                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
                     sid,
                     len(data),
@@ -734,7 +764,7 @@ class DeepgramClient:
                 sent_chunks += 1
                 if first_chunk is None:
                     first_chunk = data
-                logger.debug(
+                self._logger.debug(
                     "Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
                     sid,
                     len(data),
@@ -755,7 +785,7 @@ class DeepgramClient:
                         pass
             except Exception as e:
                 # Transient send issue; stop and retry on next trigger
-                logger.debug(
+                self._logger.debug(
                     "Deepgram deferred send sid=%s err=%s queued=%s",
                     sid,
                     type(e).__name__,
@@ -788,7 +818,7 @@ class DeepgramClient:
                 )
             except Exception:
                 pass
-        logger.debug(
+        self._logger.debug(
             "Deepgram flush exit sid=%s queued=%s sent_bytes=%s sent_chunks=%s ws_open=%s open_evt=%s",
             sid,
             len(self._tx_queue),
@@ -818,7 +848,7 @@ class DeepgramClient:
             except Exception:
                 pass
         if self._ws:
-            logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
+            self._logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
             return
 
         url = _dg_url(self._cfg)
@@ -910,7 +940,7 @@ class DeepgramClient:
                     pass
 
             # Keep existing human-readable info log
-            logger.info(
+            self._logger.info(
                 "dg_ws_connect sid=%s url=%s containerized_opus=%s normalized_pcm=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
                 sid,
                 url,
@@ -921,13 +951,15 @@ class DeepgramClient:
                 q.get("channels"),
             )
         except Exception:
-            logger.info("Deepgram connect start sid=%s url=%s", sid, url)
+            self._logger.info("Deepgram connect start sid=%s url=%s", sid, url)
 
-        key_value, key_len = _api_key_info()
+        key_value, key_len = _api_key_info(
+            log=self._advanced_logging_enabled, logger_obj=self._logger
+        )
         ws_headers = [("Authorization", f"Token {key_value}")]
         del key_value
         subprotocols = None
-        logger.info(
+        self._logger.info(
             "Deepgram connect attempt sid=%s safe_url=%s key_len=%s subprotocols=%s",
             sid,
             safe_url,
@@ -966,7 +998,7 @@ class DeepgramClient:
                 DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
                 self._open_evt.set()
                 await self._signal_ready()
-                logger.info("Deepgram test-mode connect sid=%s", sid)
+                self._logger.info("Deepgram test-mode connect sid=%s", sid)
                 if callable(self._jlog):
                     try:
                         self._jlog(
@@ -1038,7 +1070,7 @@ class DeepgramClient:
             if self._keepalive_interval > 0:
                 self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
-            logger.info("Deepgram connect ok sid=%s", sid)
+            self._logger.info("Deepgram connect ok sid=%s", sid)
             if callable(self._jlog):
                 try:
                     self._jlog(
@@ -1106,7 +1138,7 @@ class DeepgramClient:
                 if header_items is not None:
                     diag_extra["http_headers"] = header_items
 
-                logger.warning(
+                self._logger.warning(
                     "Deepgram connect invalid status sid=%s status=%s reason=%s headers=%s url=%s",
                     sid,
                     diag_extra.get("http_status"),
@@ -1180,7 +1212,7 @@ class DeepgramClient:
             return
         self._closing = True
         sid = self._sid_for_log()
-        logger.info(
+        self._logger.info(
             "Deepgram close start sid=%s wait_for_final=%s linger_ms=%s",
             sid,
             wait_for_final,
@@ -1297,7 +1329,7 @@ class DeepgramClient:
             except Exception:
                 dropped_bytes = 0
             drain_failed = True
-            logger.warning(
+            self._logger.warning(
                 "Deepgram close drain timeout sid=%s queued_chunks=%s queued_bytes=%s wait_timeout=%s",
                 sid,
                 dropped_chunks,
@@ -1322,7 +1354,7 @@ class DeepgramClient:
         drain_exc: Optional[DeepgramDrainTimeoutError] = None
 
         try:
-            logger.info(
+            self._logger.info(
                 "dg_writer_drained sid=%s bytes=%s first8_hex=%s queued=%s",
                 sid,
                 flush_bytes,
@@ -1402,7 +1434,7 @@ class DeepgramClient:
                 self._closing = False
                 await self._stop_keepalive()
 
-            logger.info("Deepgram close complete sid=%s", sid)
+            self._logger.info("Deepgram close complete sid=%s", sid)
             if callable(self._jlog):
                 try:
                     self._jlog(
@@ -1501,7 +1533,7 @@ class DeepgramClient:
             except asyncio.TimeoutError:
                 # Treat a gated send as a transport failure when the open event never arrived.
                 if not self._open_gate_warned:
-                    logger.warning(
+                    self._logger.warning(
                         "Deepgram send gated but no open within timeout sid=%s queued=%s",
                         sid,
                         len(self._tx_queue),
@@ -1587,7 +1619,7 @@ class DeepgramClient:
                     # Seeing a result also implies the upstream is functioning
                     await self._signal_ready()
 
-                    logger.debug(
+                    self._logger.debug(
                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
                         sid,
                         is_final,
@@ -1616,7 +1648,7 @@ class DeepgramClient:
                         continue
 
                 elif evt_type in ("error", "close"):
-                    logger.warning(
+                    self._logger.warning(
                         "Deepgram error event sid=%s evt_type=%s detail=%s",
                         sid,
                         evt_type,
@@ -1636,7 +1668,7 @@ class DeepgramClient:
                         pass
 
                 else:
-                    logger.debug(
+                    self._logger.debug(
                         "Deepgram unhandled event sid=%s evt_type=%s",
                         sid,
                         evt_type or "unknown",
@@ -1646,7 +1678,7 @@ class DeepgramClient:
         except asyncio.CancelledError:
             return
         except websockets.ConnectionClosed as e:
-            logger.warning(
+            self._logger.warning(
                 "Deepgram websocket closed sid=%s code=%s reason=%s had_result=%s",
                 sid,
                 getattr(e, "code", None),
@@ -1672,7 +1704,7 @@ class DeepgramClient:
                 except Exception:
                     pass
         except Exception as e:
-            logger.exception("Deepgram rx loop error sid=%s", sid)
+            self._logger.exception("Deepgram rx loop error sid=%s", sid)
             self._emit_diag(
                 "asr_error",
                 error=f"rx:{e.__class__.__name__}",
@@ -1705,16 +1737,16 @@ class DeepgramClient:
                 try:
                     async with self._send_lock:
                         await ws.send(json.dumps({"type": "KeepAlive"}))
-                    logger.debug(
+                    self._logger.debug(
                         "Deepgram keepalive sid=%s interval=%s",
                         sid,
                         self._keepalive_interval,
                     )
                 except websockets.ConnectionClosed as exc:
-                    logger.warning("Deepgram keepalive closed sid=%s err=%s", sid, exc)
+                    self._logger.warning("Deepgram keepalive closed sid=%s err=%s", sid, exc)
                     break
                 except Exception as exc:
-                    logger.warning("Deepgram keepalive failed sid=%s err=%s", sid, exc)
+                    self._logger.warning("Deepgram keepalive failed sid=%s err=%s", sid, exc)
                     try:
                         await asyncio.sleep(self._keepalive_interval)
                     except asyncio.CancelledError:

@@ -6,6 +6,7 @@ import { unlockAudio, stopPlayback } from '/static/js/audio.js';
 import { getSID } from '/static/js/util/sid.js';
 import * as App from '/static/js/app.js';
 import * as Visualizer from '/static/js/visualizer.js';
+import { logIfEnabled } from '/static/js/util/logging.js';
 
 // /static/js/bootstrap.js — single owner of Start/End/Send + audio unlock + WS→UI wiring
 
@@ -13,6 +14,15 @@ const $ = (s) => document.querySelector(s);
 
 let startInFlight = false;
 let started = false;
+
+function _console(level, ...args) {
+  logIfEnabled(() => {
+    try {
+      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+      method?.apply(console, args);
+    } catch {}
+  });
+}
 
 // ----- Assistant text de-dupe (turn_id + text) -----
 const _assistantSeen = new Set();
@@ -49,7 +59,7 @@ function setStatusText(text){
 
 function showBanner(msg){
   const b = $('#inlineLoginMsg');
-  if (!b) { console.warn('[AskChip]', msg); return; }
+  if (!b) { _console('warn', '[AskChip]', msg); return; }
   b.textContent = msg;
   b.classList.add('warn');
 }
@@ -83,7 +93,7 @@ function wireWSEventsOnce(){
     const t = d.type || '';
 
     if (seen < 5) {
-      try { console.log('[WS→UI]', JSON.stringify(d)); } catch {}
+      try { _console('log', '[WS→UI]', JSON.stringify(d)); } catch {}
       seen++;
     }
 
@@ -102,7 +112,7 @@ function wireWSEventsOnce(){
       if (!_dedupeAssistant(d)) return; // swallow duplicate
     }
 
-    try { App.handleAssistantFrame(d); } catch (e) { console.warn('App.handleAssistantFrame error', e); }
+    try { App.handleAssistantFrame(d); } catch (e) { _console('warn', 'App.handleAssistantFrame error', e); }
   });
 
   window.addEventListener('askchip-ws-close', (ev) => {
@@ -112,9 +122,9 @@ function wireWSEventsOnce(){
     const payload = { ...detail, reason };
 
     if (normal) {
-      console.info('[WS close]', payload);
+      _console('info', '[WS close]', payload);
     } else {
-      console.warn('[WS close]', payload);
+      _console('warn', '[WS close]', payload);
     }
     // When WS closes, disable Send/End and re-enable Start
     _disableButtons();
@@ -157,7 +167,7 @@ async function ensureWsOpenOrFail(timeoutMs = 5000){
   try {
     await openWS();
   } catch (err) {
-    console.warn('[bootstrap] openWS failed', err);
+    _console('warn', '[bootstrap] openWS failed', err);
     return false;
   }
   try {
@@ -206,11 +216,11 @@ async function startOnce(){
     //    audio hardware comes online.
     const sid = getSID();
     try {
-      console.log('[bootstrap] startOnce sending greet configure');
+      _console('log', '[bootstrap] startOnce sending greet configure');
       configure({ greet: true, reset: 1, session_id: sid });
-      console.log('[bootstrap] startOnce greet configure sent — recorder setup will follow');
+      _console('log', '[bootstrap] startOnce greet configure sent — recorder setup will follow');
     } catch (e) {
-      console.warn('[bootstrap] WS configure failed, cannot greet', e);
+      _console('warn', '[bootstrap] WS configure failed, cannot greet', e);
       showBanner('Greet failed to send — check WS configure()');
       throw e;
     }
@@ -220,16 +230,16 @@ async function startOnce(){
     try {
       visualizerStream = await Visualizer.start();
     } catch (e) {
-      console.warn('[bootstrap] visualizer init failed', e);
+      _console('warn', '[bootstrap] visualizer init failed', e);
     }
 
     try {
       const stream = await initMic(visualizerStream ?? undefined);
-      console.log('[bootstrap] startOnce mic initialized — about to arm VAD for voice turns');
+      _console('log', '[bootstrap] startOnce mic initialized — about to arm VAD for voice turns');
       await armVAD(stream);         // begins voice turns (one blob per user turn)
-      console.log('[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
+      _console('log', '[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
     } catch (e) {
-      console.warn('[bootstrap] mic/VAD init failed', e);
+      _console('warn', '[bootstrap] mic/VAD init failed', e);
       showBanner('Microphone unavailable — voice capture disabled.');
       setStatusText('Voice capture unavailable');
       try {
@@ -265,7 +275,7 @@ async function startOnce(){
     } catch (err) {
       markAssistantRemove = true;
       window.addEventListener('askchip-ws', markAssistant);
-      try { console.warn('[bootstrap] once listener fallback', err); } catch {}
+      try { _console('warn', '[bootstrap] once listener fallback', err); } catch {}
     }
 
     setTimeout(() => {
@@ -282,7 +292,7 @@ async function startOnce(){
     setDot('ready');
 
   } catch (e){
-    console.error('[bootstrap] start failed', e);
+    _console('error', '[bootstrap] start failed', e);
     if (startBtn) startBtn.disabled = false;
     _disableButtons();
     setDot('ready');
@@ -295,7 +305,7 @@ async function startOnce(){
 function wireUI(){
   // Safety guard: prevent duplicate UI wiring if module loaded twice
   if (window.__bootstrapWired) {
-    console.warn('[bootstrap] duplicate wiring prevented');
+    _console('warn', '[bootstrap] duplicate wiring prevented');
     return;
   }
   window.__bootstrapWired = true;
@@ -359,7 +369,7 @@ function wireUI(){
   setDot('ready');
   setStatusText('Ready');
   window.__askchip_bootstrap_loaded = true;
-  console.log('[AskChip] bootstrap loaded');
+  _console('log', '[AskChip] bootstrap loaded');
 }
 
 if (document.readyState === 'loading'){
@@ -373,3 +383,7 @@ const __assetVersion =
   (typeof globalThis !== 'undefined' && globalThis.__askchipAssetVersion) || '';
 const __debugSuffix = __assetVersion ? `?v=${__assetVersion}` : '';
 import(`/static/js/debug.js${__debugSuffix}`);
+
+export const __TEST_ONLY__ = {
+  console: _console,
+};

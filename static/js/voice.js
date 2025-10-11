@@ -20,6 +20,7 @@ Citations for context (non-functional):
 import { VAD } from './voice/vad.js';
 import { sendAudioChunk, sendCloseStream } from './ws_module.js';
 import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
+import { logIfEnabled } from './util/logging.js';
 
 // Public API (matches prior usage)
 export async function initMic(stream = null) { return await _ensureMic(stream); }
@@ -67,12 +68,18 @@ function _emitVoiceState(state, detail = {}) {
   } catch {}
 }
 
+function _console(level, ...args) {
+  logIfEnabled(() => {
+    try {
+      const method = (typeof console?.[level] === 'function') ? console[level] : console.log;
+      method?.apply(console, args);
+    } catch {}
+  });
+}
+
 function _logLifecycle(event, detail = {}, level = 'debug') {
   const payload = { event, ...(detail && typeof detail === 'object' ? detail : { detail }) };
-  try {
-    const method = (typeof console[level] === 'function') ? level : 'log';
-    console[method]?.('[voice]', event, payload);
-  } catch {}
+  _console(level, '[voice]', event, payload);
   try {
     window.dispatchEvent(new CustomEvent('askchip-voice-lifecycle', { detail: payload }));
   } catch {}
@@ -266,7 +273,7 @@ function _startRecorder() {
   if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
 
   if (typeof MediaRecorder === 'undefined') {
-    console.warn('[voice] MediaRecorder not supported in this browser');
+    _console('warn', '[voice] MediaRecorder not supported in this browser');
     state.rec = null;
     return false;
   }
@@ -284,7 +291,7 @@ function _startRecorder() {
     try {
       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
     } catch (fallbackErr) {
-      console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
+      _console('warn', '[voice] MediaRecorder init failed', fallbackErr || primaryErr);
       state.rec = null;
       return false;
     }
@@ -306,12 +313,12 @@ function _startRecorder() {
           await sendAudioChunk(blob);
           state.chunkBytesSent += blob.size;
           try {
-            console.debug('[voice] streamed audio chunk', { bytes: blob.size });
+            _console('debug', '[voice] streamed audio chunk', { bytes: blob.size });
           } catch {}
         } catch (err) {
           state.chunkSendError = err;
           try {
-            console.warn('[voice] failed to stream audio chunk', err);
+            _console('warn', '[voice] failed to stream audio chunk', err);
           } catch {}
         }
       });
@@ -324,11 +331,11 @@ function _startRecorder() {
         state.chunkSendError = state.chunkSendError || err;
       });
       if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
-        console.warn('[voice] recorded chunks too small', state.chunkBytesSent);
+        _console('warn', '[voice] recorded chunks too small', state.chunkBytesSent);
         finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
       }
     } catch (e) {
-      console.warn('[voice] send audio failed', e);
+      _console('warn', '[voice] send audio failed', e);
       state.chunkSendError = state.chunkSendError || e;
     } finally {
       if (state.chunkSendError && !finalDetail) {
@@ -336,14 +343,14 @@ function _startRecorder() {
       }
       if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
         try {
-          console.warn('[voice] recorder stopped with issues', {
+          _console('warn', '[voice] recorder stopped with issues', {
             bytesSent: state.chunkBytesSent,
             error: state.chunkSendError,
           });
         } catch {}
       } else {
         try {
-          console.debug('[voice] recorder stopped', {
+          _console('debug', '[voice] recorder stopped', {
             bytesSent: state.chunkBytesSent,
             // state.rec may be nulled by _stopRecorder; fall back to selected REC_MIME
             mime: (state.rec && state.rec.mimeType) || REC_MIME,
@@ -367,10 +374,10 @@ function _startRecorder() {
     state.rec.start(timeslice);
     state.turnOpen = true; // mark an open ASR turn on the server
     try {
-      console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice });
+      _console('debug', '[voice] recorder started', { mime: state.rec.mimeType, timeslice });
     } catch {}
   } catch (e) {
-    console.warn('[voice] recorder start failed', e);
+    _console('warn', '[voice] recorder start failed', e);
     state.rec = null;
     state.turnOpen = false;
     return false;
@@ -397,7 +404,7 @@ function _onSpeechStartCommitted() {
     return;
   }
 
-  console.warn('[voice] recorder unavailable — reverting to typing');
+  _console('warn', '[voice] recorder unavailable — reverting to typing');
   _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
 }
 
@@ -412,7 +419,7 @@ function _onSpeechEndCommitted(detail = null) {
     const elapsed = Math.max(0, now - (state.recStartedAt || now));
     const wait = Math.max(0, minTurnMs - elapsed);
     if (wait > 0) {
-      try { console.debug('[voice] delaying VAD end', { waitMs: wait, elapsed }); } catch {}
+      try { _console('debug', '[voice] delaying VAD end', { waitMs: wait, elapsed }); } catch {}
       _clearPendingEndTimer();
       state.pendingEndTimer = setTimeout(() => _onSpeechEndCommitted(detail), wait);
       return; // do not stop yet
@@ -436,3 +443,10 @@ function optsFromGlobal(key, fallback) {
   } catch {}
   return fallback;
 }
+
+export const __TEST_ONLY__ = {
+  state,
+  startRecorder: _startRecorder,
+  stopRecorder: _stopRecorder,
+  logLifecycle: _logLifecycle,
+};

@@ -38,6 +38,7 @@ class Settings:
     enable_chip_foundation: bool = os.getenv("ENABLE_CHIP_FOUNDATION", "1").strip().lower() not in ("0", "false", "no")
     enable_policy_chips: bool = os.getenv("ENABLE_POLICY_CHIPS", "1").strip().lower() not in ("0", "false", "no")
     enable_nlu_logging: Optional[bool] = _optional_bool_from_env("ENABLE_NLU_LOGGING")
+    advanced_logging_enabled: bool = os.getenv("ADVANCED_LOGGING_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
     suggestion_max: int = int(os.getenv("SUGGESTION_MAX", "4"))
     secret_key: str = os.getenv("SECRET_KEY", "dev-secret")
     session_type: str = os.getenv("SESSION_TYPE", "filesystem")

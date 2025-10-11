@@ -10,6 +10,17 @@
 
 <script>
 (function(){
+  const cfg = {{ askchip_config|tojson }};
+  try {
+    const target = (window.__askchip_config = Object.assign({}, window.__askchip_config || {}));
+    const logging = Object.assign({}, target.logging || {}, cfg && cfg.logging ? cfg.logging : {});
+    target.logging = logging;
+  } catch {}
+})();
+</script>
+
+<script>
+(function(){
   if (!window.askchipSetStatus || !window.askchipToast) return;
   // Attempt to attach to global ws/greet flow used in the previous patch
   const origEnsureWS = window.ensureWS;

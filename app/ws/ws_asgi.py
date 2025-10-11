@@ -20,6 +20,7 @@ from app.services.streaming_asr.deepgram_client import (
     DeepgramClient,
     DeepgramDrainTimeoutError,
 )
+from app.config import load_settings
 from app.security.ws_token import verify as verify_ws_token
 from app.db import db
 from app.services.greet_idempotency import clear_greet_turn_cache
@@ -42,6 +43,11 @@ ACTIVE_WS: dict[str, dict[str, Any]] = {}
 ACTIVE_WS_LOCK = asyncio.Lock()
 
 WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
+
+_SETTINGS = load_settings()
+_ADVANCED_LOGGING_ENABLED = bool(
+    getattr(_SETTINGS, "advanced_logging_enabled", True)
+)
 try:
     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
 except Exception:
@@ -69,6 +75,8 @@ def _client_ip_from_scope(scope) -> str:
 
 def _jlog(event: str, **fields):
     """Lightweight JSON log (stdout). Keep dependency-free inside WS path."""
+    if not _ADVANCED_LOGGING_ENABLED:
+        return
     try:
         import time as _t, json as _json
 
@@ -739,7 +747,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             )
         return
 
-    cfg: Dict[str, Any] = {}
+    cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
     loop = asyncio.get_running_loop()
     barge = BargeState()
 

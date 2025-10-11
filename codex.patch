@@ -1,17 +1,1860 @@
+diff --git a/app/__init__.py b/app/__init__.py
+index 3dee09c8a1ff0bbe226eefd5e42f3385239e4747..e486d002ca0ece2d2c93171c3363d0d800bbd34f 100644
+--- a/app/__init__.py
++++ b/app/__init__.py
+@@ -1,38 +1,41 @@
+ 
+ # app/__init__.py
+ import os
+ from flask import Flask, Blueprint, render_template, request, session, current_app
+ 
+ from .api_v1 import create_v1_blueprint
+ from .api_v1.health import bp as health_bp
+ from .middleware.csrf import csrf_before_request, make_csrf_route, ensure_csrf_headers
+ from .middleware.rate_limit import register_before_request as rate_limit_register
++from .config import load_settings
+ 
+ # ---------- Core blueprint (UI shells / docs) ----------
+ core_bp = Blueprint("core", __name__)
+ 
++_SETTINGS = load_settings()
++
+ @core_bp.get("/")
+ def home():
+     return render_template("index.html")
+ 
+ @core_bp.get("/diagnostics")
+ def diagnostics():
+     return render_template("diagnostics.html")
+ 
+ @core_bp.get("/favicon.ico")
+ def favicon():
+     # Serve from /static/favicon.ico
+     from flask import current_app, send_file
+     import os as _os
+     return send_file(_os.path.join(current_app.static_folder, "favicon.ico"), mimetype="image/x-icon")
+ 
+ @core_bp.get("/logs-ui")
+ def logs_ui_redirect():
+     # Convenience redirect for the admin log UI
+     from flask import redirect
+     return redirect("/api/v1/admin/logs-ui", code=302)
+ 
+ @core_bp.get("/admin")
+ def admin_console():
+     # Admin-only HTML console
+     from .utils.admin import is_admin_email
+@@ -58,50 +61,63 @@ def create_app():
+     # v1-only API + core + health
+     app.register_blueprint(create_v1_blueprint(), url_prefix="/api/v1")
+     app.register_blueprint(core_bp)
+     app.register_blueprint(health_bp)
+ 
+     # Ensure CSRF header/cookie attached to responses
+     app.after_request(ensure_csrf_headers)
+ 
+     # Middleware
+     app.before_request(csrf_before_request)
+     rate_limit_register(app)
+ 
+     make_csrf_route(app)
+ 
+     def asset_version(rel_path: str) -> str:
+         try:
+             full_path = os.path.join(current_app.static_folder, rel_path)
+             return str(int(os.path.getmtime(full_path)))
+         except (OSError, TypeError, ValueError):
+             return "0"
+ 
+     @app.context_processor
+     def _inject_asset_version():
+         return {"asset_version": asset_version}
+ 
++    @app.context_processor
++    def _inject_askchip_config():
++        enabled = True
++        try:
++            enabled = bool(getattr(_SETTINGS, "advanced_logging_enabled", True))
++        except Exception:
++            enabled = True
++        return {
++            "askchip_config": {
++                "logging": {"enabled": enabled},
++            }
++        }
++
+     @app.after_request
+     def maybe_allow_cors(resp):
+         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
+         if allow:
+             origins = [o.strip() for o in allow.split(",") if o.strip()]
+             ori = request.headers.get("Origin", "")
+             if ori in origins:
+                 resp.headers["Access-Control-Allow-Origin"] = ori
+                 resp.headers["Vary"] = "Origin"
+                 resp.headers["Access-Control-Allow-Credentials"] = "true"
+                 resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token"
+                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+         return resp
+ 
+     @app.route("/<path:_>", methods=["OPTIONS"])
+     def _cors_preflight(_):
+         return ("", 204)
+ 
+     @app.before_request
+     def _auth_gate():
+         p = request.path or "/"
+         allow = (
+             p.startswith("/api/") or
+             p.startswith("/ws") or
+             p.startswith("/static") or
+diff --git a/app/config.py b/app/config.py
+index 7dc9df710d5fea3988888080083b0790d15b9ba4..0b00e3441e20cf85fd891776747712c8edb19a9d 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -16,40 +16,41 @@ def _optional_bool_from_env(name: str) -> Optional[bool]:
+ 
+ @dataclass
+ class Settings:
+     admin_emails: str = os.getenv("ADMIN_EMAILS", "")
+     database_url: str = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/ask_chip?sslmode=require")
+     openai_api_key: str = os.getenv("OPENAI_API_KEY", "mock-openai-key")
+     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+     openai_stt_language: str = os.getenv("OPENAI_STT_LANGUAGE", "en")
+     elevenlabs_api_key: str = os.getenv("ELEVENLABS_API_KEY", "mock-eleven-key")
+     eleven_voice_id: str = os.getenv("ELEVENLABS_VOICE_ID", "mock-voice")
+     eleven_output_format: str = os.getenv("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128")
+     eleven_output_format_ws: str = os.getenv("ELEVEN_OUTPUT_FORMAT_WS", "mp3_44100_128")
+     email_host: str = os.getenv("EMAIL_HOST", "mock.smtp.local")
+     email_port: int = int(os.getenv("EMAIL_PORT", "587"))
+     email_use_tls: bool = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
+     email_host_user: str = os.getenv("EMAIL_HOST_USER", "mock-user")
+     email_host_password: str = os.getenv("EMAIL_HOST_PASSWORD", "mock-pass")
+     email_from_name: str = os.getenv("EMAIL_FROM_NAME", "Chip")
+     from_email: str = os.getenv("FROM_EMAIL", "chip@example.com")
+     feature_admin_ui: bool = os.getenv("FEATURE_ADMIN_UI", "true").lower() == "true"
+     feature_audio: bool = os.getenv("FEATURE_AUDIO", "true").lower() == "true"
+     feature_tools: bool = os.getenv("FEATURE_TOOLS", "false").lower() == "true"
+     enable_chip_foundation: bool = os.getenv("ENABLE_CHIP_FOUNDATION", "1").strip().lower() not in ("0", "false", "no")
+     enable_policy_chips: bool = os.getenv("ENABLE_POLICY_CHIPS", "1").strip().lower() not in ("0", "false", "no")
+     enable_nlu_logging: Optional[bool] = _optional_bool_from_env("ENABLE_NLU_LOGGING")
++    advanced_logging_enabled: bool = os.getenv("ADVANCED_LOGGING_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+     suggestion_max: int = int(os.getenv("SUGGESTION_MAX", "4"))
+     secret_key: str = os.getenv("SECRET_KEY", "dev-secret")
+     session_type: str = os.getenv("SESSION_TYPE", "filesystem")
+     ws_ping_interval_ms: int = int(os.getenv("WS_PING_INTERVAL_MS", "25000"))
+ 
+ def load_settings() -> Settings:
+     return Settings()
+ 
+ 
+ import os
+ 
+ # Usage caps / rate limits (Phase 3)
+ MAX_TURN_SEC = int(os.getenv("MAX_TURN_SEC", "30"))
+ MAX_SESSION_MIN = int(os.getenv("MAX_SESSION_MIN", "15"))
+ RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))  # requests per minute
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index d0b87d4f52b0a48d93ad6837b6c81eb0e0cadd29..3de8421f400d27edc12843a9dc749735f4567950 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -38,82 +38,99 @@ except AttributeError:  # pragma: no cover - older packaging style
+ 
+ 
+ # Test-mode and last-observed info for CI assertions
+ DG_TEST_MODE = os.getenv("DG_TEST_MODE", "").strip() == "1"
+ DG_LAST_URL: str | None = None
+ DG_LAST_CONFIG: dict | None = None
+ 
+ _TAG_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.:-]")
+ 
+ 
+ def _sanitize_tag(val: Optional[str], *, limit: int = 64) -> Optional[str]:
+     if not val:
+         return None
+     try:
+         txt = str(val)
+     except Exception:
+         return None
+     txt = _TAG_SANITIZE_RE.sub("_", txt)
+     if not txt:
+         return None
+     return txt[:limit]
+ 
+ 
+ logger = logging.getLogger(__name__)
+ 
++
++class _NullLogger:
++    def debug(self, *args, **kwargs):
++        return None
++
++    def info(self, *args, **kwargs):
++        return None
++
++    def warning(self, *args, **kwargs):
++        return None
++
++    def error(self, *args, **kwargs):
++        return None
++
++    def exception(self, *args, **kwargs):
++        return None
++
+ _DG_KEY_PROBED = False
+ 
+ 
+ def _mask_key_fragment(raw: str) -> str:
+     try:
+         txt = str(raw)
+     except Exception:
+         return "?"
+     txt = txt.strip()
+     if not txt:
+         return "?"
+     if len(txt) <= 4:
+         return "*" * len(txt)
+     return f"{txt[:2]}…{txt[-2:]}"
+ 
+ 
+-def _api_key_info() -> tuple[str, int]:
++def _api_key_info(*, log: bool = True, logger_obj: logging.Logger = logger) -> tuple[str, int]:
+     key = os.getenv("DEEPGRAM_API_KEY", "")
+     if key is None:
+         key = ""
+     key = str(key).strip()
+     if not key:
+         raise RuntimeError("DEEPGRAM_API_KEY is not set")
+     length = len(key)
+     global _DG_KEY_PROBED
+-    if not _DG_KEY_PROBED:
++    if log and not _DG_KEY_PROBED:
+         _DG_KEY_PROBED = True
+         try:
+             masked = _mask_key_fragment(key)
+-            logger.info("Deepgram API key detected len=%s mask=%s", length, masked)
++            logger_obj.info("Deepgram API key detected len=%s mask=%s", length, masked)
+         except Exception:
+-            logger.info("Deepgram API key detected len=%s", length)
++            logger_obj.info("Deepgram API key detected len=%s", length)
+     return key, length
+ 
+ 
+ class DeepgramDrainTimeoutError(RuntimeError):
+     """Raised when the transmit queue fails to drain during close."""
+ 
+     def __init__(
+         self, sid: str, *, queued_chunks: int, queued_bytes: int, wait_timeout: bool
+     ) -> None:
+         self.sid = sid
+         self.queued_chunks = queued_chunks
+         self.queued_bytes = queued_bytes
+         self.wait_timeout = wait_timeout
+         super().__init__(
+             f"drain_timeout sid={sid} queued_chunks={queued_chunks} queued_bytes={queued_bytes}"
+         )
+ 
+ 
+ class _FakeWSForTests:
+     def __init__(self):
+         self.open = True
+         self.sent = []
+ 
+     async def send(self, data):
+         self.sent.append(data)
+@@ -269,52 +286,52 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
+ 
+         interim_val = qd.get("interim_results")
+         interim_false = False
+         try:
+             if isinstance(interim_val, bool):
+                 interim_false = not interim_val
+             elif interim_val is None:
+                 interim_false = False
+             else:
+                 interim_false = str(interim_val).strip().lower() in {"false", "0"}
+         except Exception:
+             interim_false = False
+         if interim_false:
+             qd.pop("utterance_end_ms", None)
+ 
+         query = _p.urlencode(qd)
+         base = _p.urlunsplit(
+             (parts.scheme, parts.netloc, parts.path, query, parts.fragment)
+         )
+     except Exception:
+         pass
+ 
+     return base
+ 
+ 
+-def _auth_header() -> str:
+-    key, _ = _api_key_info()
++def _auth_header(*, log: bool = True, logger_obj: logging.Logger = logger) -> str:
++    key, _ = _api_key_info(log=log, logger_obj=logger_obj)
+     return f"Token {key}"
+ 
+ 
+ def _initial_config(overrides: Optional[dict] = None) -> dict:
+     """Build Configure payload with FEATURES ONLY (no audio/transport keys)."""
+     interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
+     features = {
+         "interim_results": interim,
+         "smart_format": True,
+         "punctuate": True,
+         "vad_events": True,
+         # Keep URL-only keys (like utterance_end_ms) out of Configure
+     }
+ 
+     # Allow simple boolean overrides at top-level OR nested under "features"
+     try:
+         if overrides:
+             # Merge nested features if provided
+             if isinstance(overrides.get("features"), dict):
+                 for k, v in overrides["features"].items():
+                     features[k] = v
+ 
+             # Support legacy boolean overrides at top level
+             for k in ("interim_results", "smart_format", "punctuate", "vad_events"):
+                 if k in overrides and overrides[k] is not None:
+@@ -395,50 +412,63 @@ class DeepgramClient:
+             except Exception:
+                 cfg_hook = None
+             if callable(cfg_hook):
+                 hook_candidate = cfg_hook
+         self._diag_hook: Optional[Callable[..., Any]] = hook_candidate
+         self._diag_end_emitted: bool = False
+         try:
+             sid_val = None
+             if isinstance(self._cfg, dict):
+                 sid_val = self._cfg.get("session_id") or self._cfg.get("sid")
+             self._diag_session_id: Optional[str] = str(sid_val) if sid_val else None
+         except Exception:
+             self._diag_session_id = None
+         try:
+             tag_hint = None
+             if isinstance(self._cfg, dict):
+                 for key in ("_url_tag", "dg_url_tag", "url_tag"):
+                     val = self._cfg.get(key)
+                     if val:
+                         tag_hint = str(val)
+                         break
+             self._diag_tag_hint: Optional[str] = tag_hint
+         except Exception:
+             self._diag_tag_hint = None
+ 
++        try:
++            raw_logging_enabled = None
++            if isinstance(self._cfg, dict):
++                raw_logging_enabled = self._cfg.get("advanced_logging_enabled")
++        except Exception:
++            raw_logging_enabled = None
++        if raw_logging_enabled is None:
++            raw_logging_enabled = True
++        self._advanced_logging_enabled: bool = bool(raw_logging_enabled)
++        self._logger: logging.Logger | _NullLogger = (
++            logger if self._advanced_logging_enabled else _NullLogger()
++        )
++
+         # TX queue + flushing
+         self._tx_queue: Deque[bytes] = deque()
+         self._flush_task: Optional[asyncio.Task] = None
+ 
+         # Graceful shutdown coordination
+         self._final_event: asyncio.Event = asyncio.Event()
+         self._any_result: bool = False
+         self._drain_event: asyncio.Event = asyncio.Event()
+         self._drain_event.set()
+         self._drain_timeout_s: float = float(
+             os.getenv("DG_CLOSE_DRAIN_TIMEOUT_S", "1.5")
+         )
+ 
+         # First-chunk guard & timing
+         self._first_real_sent: bool = False
+         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
+         self._last_chunk_ts: float = 0.0
+ 
+         # Tunables
+         self._linger_ms: int = int(
+             os.getenv("DG_LINGER_MS", "800")
+         )  # slightly longer default
+         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "12"))
+ 
+         # Open gate
+@@ -574,273 +604,273 @@ class DeepgramClient:
+ 
+     async def wait_socket_open(self, timeout: float = 1.5) -> bool:
+         """Micro-wait until the underlying websocket's .open flag is True."""
+         if self._ws_is_open():
+             return True
+         end = time.time() + timeout
+         while time.time() < end:
+             if self._ws_is_open():
+                 return True
+             await asyncio.sleep(0.01)
+         return False
+ 
+     def _schedule_flush(self, delay: float = 0.0) -> None:
+         if self._flush_task and not self._flush_task.done():
+             return
+ 
+         async def _runner():
+             if delay > 0:
+                 try:
+                     await asyncio.sleep(delay)
+                 except asyncio.CancelledError:
+                     return
+             try:
+                 await self._flush_tx()
+             except Exception:
+-                logger.debug(
++                self._logger.debug(
+                     "Deepgram flush_tx raised; will retry on next trigger",
+                     exc_info=True,
+                 )
+ 
+         self._flush_task = asyncio.create_task(_runner())
+ 
+     async def _flush_tx(self) -> Tuple[int, Optional[str]]:
+         """Drain queued audio if the socket is open and we've signaled ready."""
+         sid = self._sid_for_log()
+         queued_at_start = len(self._tx_queue)
+         ws_open_flag = self._ws_is_open()
+         open_evt_set = self._open_evt.is_set()
+ 
+-        logger.debug(
++        self._logger.debug(
+             "Deepgram flush enter sid=%s queued=%s ws_open=%s open_evt=%s",
+             sid,
+             queued_at_start,
+             ws_open_flag,
+             open_evt_set,
+         )
+         if callable(self._jlog):
+             try:
+                 self._jlog(
+                     "dg_flush_enter",
+                     sid=sid,
+                     dg_id=self._dg_id,
+                     tag=self._url_tag,
+                     queued=queued_at_start,
+                     ws_open=ws_open_flag,
+                     open_evt=open_evt_set,
+                 )
+             except Exception:
+                 pass
+ 
+         if not self._tx_queue:
+             if not self._drain_event.is_set():
+                 self._drain_event.set()
+             ws_open_after = self._ws_is_open()
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_flush_exit",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         tag=self._url_tag,
+                         queued=len(self._tx_queue),
+                         sent_bytes=0,
+                         sent_chunks=0,
+                         ws_open=ws_open_after,
+                         open_evt=self._open_evt.is_set(),
+                         first8_hex=None,
+                     )
+                 except Exception:
+                     pass
+-            logger.debug(
++            self._logger.debug(
+                 "Deepgram flush exit sid=%s queued=%s sent_bytes=%s",
+                 sid,
+                 len(self._tx_queue),
+                 0,
+             )
+             return 0, None
+         # Wait until socket open — don't raise; just give it a short chance
+         await self.wait_socket_open(
+             timeout=float(os.getenv("DG_OPEN_MICRO_WAIT_S", "0.75"))
+         )
+         if not self._ws_is_open():
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_flush_exit",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         tag=self._url_tag,
+                         queued=len(self._tx_queue),
+                         sent_bytes=0,
+                         sent_chunks=0,
+                         ws_open=False,
+                         open_evt=self._open_evt.is_set(),
+                         first8_hex=None,
+                     )
+                 except Exception:
+                     pass
+-            logger.debug(
++            self._logger.debug(
+                 "Deepgram flush exit sid=%s queued=%s sent_bytes=%s ws_open=%s",
+                 sid,
+                 len(self._tx_queue),
+                 0,
+                 False,
+             )
+             return 0, None
+         # Ensure we've passed the ready/open gate
+         if not self._open_evt.is_set():
+             try:
+                 await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
+             except asyncio.TimeoutError:
+                 pass
+ 
+         transport_cfg = {}
+         try:
+             transport_cfg = (self._cfg or {}).get("_transport") or {}
+         except Exception:
+             transport_cfg = {}
+         containerized = bool(transport_cfg.get("containerized_opus"))
+ 
+         sid = self._sid_for_log()
+         total_sent = 0
+         sent_chunks = 0
+         first_chunk: Optional[bytes] = None
+         while self._tx_queue and self._ws_is_open():
+             ws = self._ws
+             if ws is None:
+                 break
+             data = self._tx_queue[0]
+             # Drop tiny preamble once (RAW only)
+             if (
+                 not containerized
+                 and (not self._first_real_sent)
+                 and len(data) < self._min_valid_bytes
+             ):
+-                logger.debug(
++                self._logger.debug(
+                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
+                     sid,
+                     len(data),
+                     self._min_valid_bytes,
+                 )
+                 self._tx_queue.popleft()
+                 continue
+             try:
+                 async with self._send_lock:
+                     await ws.send(data)
+                 self._first_real_sent = True
+                 self._last_chunk_ts = time.time()
+                 self._tx_queue.popleft()
+                 total_sent += len(data)
+                 sent_chunks += 1
+                 if first_chunk is None:
+                     first_chunk = data
+-                logger.debug(
++                self._logger.debug(
+                     "Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
+                     sid,
+                     len(data),
+                     len(self._tx_queue),
+                 )
+                 if callable(self._jlog):
+                     try:
+                         self._jlog(
+                             "dg_forward",
+                             sid=sid,
+                             dg_id=self._dg_id,
+                             tag=self._url_tag,
+                             bytes=len(data),
+                             queued=len(self._tx_queue),
+                             total_sent=total_sent,
+                         )
+                     except Exception:
+                         pass
+             except Exception as e:
+                 # Transient send issue; stop and retry on next trigger
+-                logger.debug(
++                self._logger.debug(
+                     "Deepgram deferred send sid=%s err=%s queued=%s",
+                     sid,
+                     type(e).__name__,
+                     len(self._tx_queue),
+                 )
+                 break
+         if not self._tx_queue and not self._drain_event.is_set():
+             self._drain_event.set()
+         first8_hex: Optional[str] = None
+         if first_chunk:
+             try:
+                 first8_hex = first_chunk[:8].hex()
+             except Exception:
+                 first8_hex = None
+         ws_open_after = self._ws_is_open()
+         open_evt_after = self._open_evt.is_set()
+         if callable(self._jlog):
+             try:
+                 self._jlog(
+                     "dg_flush_exit",
+                     sid=sid,
+                     dg_id=self._dg_id,
+                     tag=self._url_tag,
+                     queued=len(self._tx_queue),
+                     sent_bytes=total_sent,
+                     sent_chunks=sent_chunks,
+                     ws_open=ws_open_after,
+                     open_evt=open_evt_after,
+                     first8_hex=first8_hex,
+                 )
+             except Exception:
+                 pass
+-        logger.debug(
++        self._logger.debug(
+             "Deepgram flush exit sid=%s queued=%s sent_bytes=%s sent_chunks=%s ws_open=%s open_evt=%s",
+             sid,
+             len(self._tx_queue),
+             total_sent,
+             sent_chunks,
+             ws_open_after,
+             open_evt_after,
+         )
+         return total_sent, first8_hex
+ 
+     # -- lifecycle -------------------------------------------------------------
+ 
+     async def connect(self) -> None:
+         global DG_LAST_URL, DG_LAST_CONFIG
+         sid = self._sid_for_log()
+         if callable(self._jlog):
+             try:
+                 self._jlog(
+                     "dg_connect_begin",
+                     sid=sid,
+                     dg_id=self._dg_id,
+                     tag=self._url_tag,
+                     already_open=bool(self._ws),
+                     closing=self._closing,
+                     closed=self._closed,
+                 )
+             except Exception:
+                 pass
+         if self._ws:
+-            logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
++            self._logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
+             return
+ 
+         url = _dg_url(self._cfg)
+         self._emit_diag("provider_open", active=True, url=url)
+ 
+         containerized = False
+         safe_url = url
+ 
+         try:
+             # Diagnostic: parse params and emit compact JSON log that shows
+             # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
+             import urllib.parse as _p
+ 
+             parts = _p.urlsplit(url)
+             q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
+             self._url_tag = q.get("tag") or None
+             transport = (self._cfg or {}).get("_transport", {}) or {}
+             containerized = bool(transport.get("containerized_opus"))
+             url_meta = {
+                 "container": transport.get("container"),
+                 "codec": transport.get("codec"),
+                 "containerized_opus": containerized,
+                 "normalized_pcm": bool(transport.get("normalized_pcm")),
+                 "omitted_params": None,
+                 "raw_params": None,
+@@ -888,107 +918,109 @@ class DeepgramClient:
+                         "dg_url_sanitized",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         qs=sanitized_qs,
+                         containerized_opus=containerized,
+                         raw_params_absent=raw_params_absent,
+                     )
+                 except Exception:
+                     pass
+                 try:
+                     self._jlog(
+                         "asr_url",
+                         dg_id=self._dg_id,
+                         url=url,
+                         container=url_meta.get("container"),
+                         codec=url_meta.get("codec"),
+                         containerized_opus=bool(url_meta.get("containerized_opus")),
+                         normalized_pcm=bool(url_meta.get("normalized_pcm")),
+                         omitted_params=url_meta.get("omitted_params"),
+                         raw_params=url_meta.get("raw_params"),
+                     )
+                 except Exception:
+                     pass
+ 
+             # Keep existing human-readable info log
+-            logger.info(
++            self._logger.info(
+                 "dg_ws_connect sid=%s url=%s containerized_opus=%s normalized_pcm=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
+                 sid,
+                 url,
+                 containerized,
+                 url_meta.get("normalized_pcm"),
+                 q.get("encoding"),
+                 q.get("sample_rate"),
+                 q.get("channels"),
+             )
+         except Exception:
+-            logger.info("Deepgram connect start sid=%s url=%s", sid, url)
++            self._logger.info("Deepgram connect start sid=%s url=%s", sid, url)
+ 
+-        key_value, key_len = _api_key_info()
++        key_value, key_len = _api_key_info(
++            log=self._advanced_logging_enabled, logger_obj=self._logger
++        )
+         ws_headers = [("Authorization", f"Token {key_value}")]
+         del key_value
+         subprotocols = None
+-        logger.info(
++        self._logger.info(
+             "Deepgram connect attempt sid=%s safe_url=%s key_len=%s subprotocols=%s",
+             sid,
+             safe_url,
+             key_len,
+             subprotocols,
+         )
+         if callable(self._jlog):
+             try:
+                 self._jlog(
+                     "dg_connect_attempt",
+                     sid=sid,
+                     dg_id=self._dg_id,
+                     safe_url=safe_url,
+                     key_len=key_len,
+                     subprotocols=subprotocols,
+                 )
+             except Exception:
+                 pass
+ 
+         start_ts = time.time()
+         if callable(self._jlog):
+             try:
+                 self._jlog(
+                     "asr_connect_start",
+                     sid=sid,
+                     dg_id=self._dg_id,
+                 )
+             except Exception:
+                 pass
+ 
+         try:
+             if DG_TEST_MODE:
+                 self._ws = _FakeWSForTests()
+                 DG_LAST_URL = url
+                 cfg_payload = _initial_config(self._cfg)
+                 DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
+                 self._open_evt.set()
+                 await self._signal_ready()
+-                logger.info("Deepgram test-mode connect sid=%s", sid)
++                self._logger.info("Deepgram test-mode connect sid=%s", sid)
+                 if callable(self._jlog):
+                     try:
+                         self._jlog(
+                             "dg_open",
+                             sid=sid,
+                             dg_id=self._dg_id,
+                             url=url,
+                             tag=self._url_tag,
+                             test_mode=True,
+                         )
+                     except Exception:
+                         pass
+                     try:
+                         elapsed_ms = int((time.time() - start_ts) * 1000)
+                     except Exception:
+                         elapsed_ms = 0
+                     try:
+                         self._jlog(
+                             "asr_connect_ok",
+                             sid=sid,
+                             dg_id=self._dg_id,
+                             elapsed_ms=elapsed_ms,
+                         )
+                     except Exception:
+                         pass
+@@ -1016,51 +1048,51 @@ class DeepgramClient:
+             DG_LAST_URL = url
+             DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
+             async with self._send_lock:
+                 await self._ws.send(json.dumps(cfg_payload))
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_config_sent",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         tag=self._url_tag,
+                         keys=sorted(cfg_payload.keys()),
+                     )
+                 except Exception:
+                     pass
+ 
+             await self._signal_ready()
+             # Proactively schedule a flush in case audio was queued before/while connecting
+             self._schedule_flush(delay=0.0)
+ 
+             self._rx_task = asyncio.create_task(self._rx_loop())
+ 
+             if self._keepalive_interval > 0:
+                 self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+ 
+-            logger.info("Deepgram connect ok sid=%s", sid)
++            self._logger.info("Deepgram connect ok sid=%s", sid)
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_open",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         url=url,
+                         tag=self._url_tag,
+                         containerized=containerized,
+                     )
+                 except Exception:
+                     pass
+                 try:
+                     elapsed_ms = int((time.time() - start_ts) * 1000)
+                 except Exception:
+                     elapsed_ms = 0
+                 try:
+                     self._jlog(
+                         "asr_connect_ok",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         elapsed_ms=elapsed_ms,
+                     )
+                 except Exception:
+                     pass
+@@ -1084,51 +1116,51 @@ class DeepgramClient:
+                     status_reason = getattr(exc, "reason_phrase", None)
+                     headers_obj = getattr(exc, "headers", None)
+ 
+                 if headers_obj is not None:
+                     header_iter = None
+                     try:
+                         header_iter = list(headers_obj.items())
+                     except Exception:
+                         try:
+                             header_iter = list(headers_obj.raw_items())  # type: ignore[attr-defined]
+                         except Exception:
+                             header_iter = None
+                     if header_iter is not None:
+                         header_items = [(str(k), str(v)) for k, v in header_iter]
+ 
+                 if status_code is not None:
+                     try:
+                         diag_extra["http_status"] = int(status_code)
+                     except Exception:
+                         diag_extra["http_status"] = status_code
+                 if status_reason:
+                     diag_extra["http_reason"] = str(status_reason)
+                 if header_items is not None:
+                     diag_extra["http_headers"] = header_items
+ 
+-                logger.warning(
++                self._logger.warning(
+                     "Deepgram connect invalid status sid=%s status=%s reason=%s headers=%s url=%s",
+                     sid,
+                     diag_extra.get("http_status"),
+                     diag_extra.get("http_reason"),
+                     header_items,
+                     safe_url,
+                 )
+                 if callable(self._jlog):
+                     try:
+                         self._jlog(
+                             "dg_connect_invalid_status",
+                             sid=sid,
+                             dg_id=self._dg_id,
+                             status=diag_extra.get("http_status"),
+                             reason=diag_extra.get("http_reason"),
+                             headers=header_items,
+                             url=safe_url,
+                         )
+                     except Exception:
+                         pass
+ 
+             if callable(self._jlog):
+                 try:
+                     elapsed_ms = int((time.time() - start_ts) * 1000)
+                 except Exception:
+@@ -1158,51 +1190,51 @@ class DeepgramClient:
+                 **diag_payload,
+             )
+             raise
+ 
+     async def close(
+         self,
+         wait_for_final: bool = True,
+         timeout: Optional[float] = None,
+         linger_ms: Optional[int] = None,
+     ) -> None:
+         """Graceful shutdown:
+         1) Drain queued audio (budget-based retry) BEFORE CloseStream
+         2) Send CloseStream
+         3) Optionally wait for final
+         4) Close socket
+         """
+         if self._closed:
+             if not self._diag_end_emitted:
+                 self._emit_diag("end", active=False, had_result=self._had_result())
+                 self._diag_end_emitted = True
+             return
+         if self._closing:
+             return
+         self._closing = True
+         sid = self._sid_for_log()
+-        logger.info(
++        self._logger.info(
+             "Deepgram close start sid=%s wait_for_final=%s linger_ms=%s",
+             sid,
+             wait_for_final,
+             linger_ms,
+         )
+ 
+         if linger_ms is None:
+             linger_ms = self._linger_ms
+ 
+         # If we've never sent a chunk but have queued bytes, add a tiny settle delay
+         # so the configure→ready gate can complete before our first flush attempt.
+         if self._last_chunk_ts == 0 and self._tx_queue and linger_ms > 0:
+             try:
+                 await asyncio.sleep(min(0.12, linger_ms / 1000.0))
+             except asyncio.CancelledError:
+                 pass
+ 
+         # Optional linger relative to the last successfully sent chunk
+         if self._last_chunk_ts > 0 and linger_ms > 0:
+             elapsed_ms = int((time.time() - self._last_chunk_ts) * 1000)
+             delay_ms = max(0, linger_ms - elapsed_ms)
+             if delay_ms > 0:
+                 try:
+                     await asyncio.sleep(delay_ms / 1000.0)
+                 except asyncio.CancelledError:
+@@ -1275,76 +1307,76 @@ class DeepgramClient:
+                 await self.wait_socket_open(timeout=min(0.5, remaining))
+             except Exception:
+                 pass
+ 
+             try:
+                 bytes_sent, first_hex = await self._flush_tx()
+                 _record_flush(bytes_sent, first_hex)
+             except Exception:
+                 break
+ 
+             if self._tx_queue:
+                 try:
+                     await asyncio.sleep(
+                         min(recheck_s, max(0.05, deadline - time.time()))
+                     )
+                 except asyncio.CancelledError:
+                     break
+ 
+         if self._tx_queue:
+             dropped_chunks = len(self._tx_queue)
+             try:
+                 dropped_bytes = sum(len(chunk) for chunk in self._tx_queue)
+             except Exception:
+                 dropped_bytes = 0
+             drain_failed = True
+-            logger.warning(
++            self._logger.warning(
+                 "Deepgram close drain timeout sid=%s queued_chunks=%s queued_bytes=%s wait_timeout=%s",
+                 sid,
+                 dropped_chunks,
+                 dropped_bytes,
+                 drain_wait_timeout,
+             )
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_writer_timeout",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         tag=self._url_tag,
+                         queued_chunks=dropped_chunks,
+                         queued_bytes=dropped_bytes,
+                         wait_timeout=drain_wait_timeout,
+                         attempts="budget",
+                     )
+                 except Exception:
+                     pass
+ 
+         drain_exc: Optional[DeepgramDrainTimeoutError] = None
+ 
+         try:
+-            logger.info(
++            self._logger.info(
+                 "dg_writer_drained sid=%s bytes=%s first8_hex=%s queued=%s",
+                 sid,
+                 flush_bytes,
+                 flush_first8,
+                 len(self._tx_queue),
+             )
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_writer_drained",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         tag=self._url_tag,
+                         bytes=flush_bytes,
+                         first8_hex=flush_first8,
+                         queued=len(self._tx_queue),
+                         dropped_chunks=dropped_chunks,
+                         dropped_bytes=dropped_bytes,
+                     )
+                 except Exception:
+                     pass
+ 
+             # Now send CloseStream after we've flushed all audio
+             try:
+                 ws = self._ws
+@@ -1380,51 +1412,51 @@ class DeepgramClient:
+                     try:
+                         await self._ev_queue.put({"type": "asr_error", "error": err_txt})
+                     except Exception:
+                         pass
+ 
+             try:
+                 ws = self._ws
+                 if ws and (self._ws_is_open(ws) or not hasattr(ws, "open")):
+                     await ws.close()
+             finally:
+                 self._ws = None
+ 
+             try:
+                 task = self._rx_task
+                 self._rx_task = None
+                 if task:
+                     try:
+                         task.cancel()
+                     except Exception:
+                         pass
+             finally:
+                 self._closed = True
+                 self._closing = False
+                 await self._stop_keepalive()
+ 
+-            logger.info("Deepgram close complete sid=%s", sid)
++            self._logger.info("Deepgram close complete sid=%s", sid)
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_close",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         tag=self._url_tag,
+                         wait_for_final=wait_for_final,
+                         linger_ms=linger_ms,
+                         had_result=self._had_result(),
+                         drain_failed=drain_failed,
+                     )
+                 except Exception:
+                     pass
+ 
+             if drain_failed:
+                 drain_exc = DeepgramDrainTimeoutError(
+                     sid,
+                     queued_chunks=dropped_chunks,
+                     queued_bytes=dropped_bytes,
+                     wait_timeout=drain_wait_timeout,
+                 )
+         finally:
+             if not self._diag_end_emitted:
+                 self._emit_diag(
+@@ -1479,51 +1511,51 @@ class DeepgramClient:
+         if not self.is_open() and not self._closing:
+             lazy_started = False
+             try:
+                 asyncio.create_task(self.connect())
+                 lazy_started = True
+             except Exception:
+                 pass
+             if lazy_started and callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_lazy_connect",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         tag=self._url_tag,
+                         queued=len(self._tx_queue),
+                     )
+                 except Exception:
+                     pass
+ 
+         if not self._open_evt.is_set():
+             try:
+                 await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
+             except asyncio.TimeoutError:
+                 # Treat a gated send as a transport failure when the open event never arrived.
+                 if not self._open_gate_warned:
+-                    logger.warning(
++                    self._logger.warning(
+                         "Deepgram send gated but no open within timeout sid=%s queued=%s",
+                         sid,
+                         len(self._tx_queue),
+                     )
+                     self._open_gate_warned = True
+                 if self._tx_queue:
+                     try:
+                         self._tx_queue.pop()
+                     except Exception:
+                         self._tx_queue.clear()
+                 if not self._tx_queue and not self._drain_event.is_set():
+                     self._drain_event.set()
+                 raise RuntimeError("deepgram_not_connected:open_gate_timeout")
+ 
+         # Opportunistic flush now (won't raise if socket not open yet)
+         self._schedule_flush()
+ 
+     # -- events API ------------------------------------------------------------
+ 
+     async def events(self) -> AsyncGenerator[dict, None]:
+         while True:
+             ev = await self._ev_queue.get()
+             yield ev
+ 
+     # -- receiver --------------------------------------------------------------
+@@ -1565,178 +1597,178 @@ class DeepgramClient:
+                     # Fallback: top-level alternatives (some messages)
+                     if not text:
+                         top_alts = msg.get("alternatives")
+                         if isinstance(top_alts, list) and top_alts:
+                             text = (top_alts[0].get("transcript") or "").strip()
+ 
+                     # Fallback: top-level transcript (some messages)
+                     if not text and isinstance(msg.get("transcript"), str):
+                         text = (msg.get("transcript") or "").strip()
+ 
+                     # Finalness can be on channel or top-level, or implied by event type
+                     is_final = (
+                         bool(channel.get("is_final"))
+                         or bool(msg.get("is_final"))
+                         or bool(msg.get("speech_final"))
+                         or (evt_type in ("utteranceend", "UtteranceEnd"))
+                     )
+ 
+                     # No usable text in this message; keep listening
+                     if not text:
+                         continue
+ 
+                     # Seeing a result also implies the upstream is functioning
+                     await self._signal_ready()
+ 
+-                    logger.debug(
++                    self._logger.debug(
+                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
+                         sid,
+                         is_final,
+                         len(text),
+                         _clip_text(text),
+                     )
+                     self._emit_diag(
+                         "asr_final" if is_final else "asr_partial",
+                         text=text,
+                         chars=len(text),
+                         active=True,
+                     )
+                     try:
+                         await self._ev_queue.put(
+                             {
+                                 "type": "user_final" if is_final else "user_partial",
+                                 "text": text,
+                             }
+                         )
+                     except Exception:
+                         pass
+ 
+                     if is_final:
+                         self._any_result = True
+                         self._final_event.set()
+                         continue
+ 
+                 elif evt_type in ("error", "close"):
+-                    logger.warning(
++                    self._logger.warning(
+                         "Deepgram error event sid=%s evt_type=%s detail=%s",
+                         sid,
+                         evt_type,
+                         _clip_text(str(msg), 200),
+                     )
+                     self._emit_diag(
+                         "asr_error",
+                         error=msg.get("error") or evt_type,
+                         provider_error=True,
+                         detail=_clip_text(str(msg), 200),
+                     )
+                     try:
+                         await self._ev_queue.put(
+                             {"type": "asr_error", "error": msg.get("error") or evt_type}
+                         )
+                     except Exception:
+                         pass
+ 
+                 else:
+-                    logger.debug(
++                    self._logger.debug(
+                         "Deepgram unhandled event sid=%s evt_type=%s",
+                         sid,
+                         evt_type or "unknown",
+                     )
+                     continue
+ 
+         except asyncio.CancelledError:
+             return
+         except websockets.ConnectionClosed as e:
+-            logger.warning(
++            self._logger.warning(
+                 "Deepgram websocket closed sid=%s code=%s reason=%s had_result=%s",
+                 sid,
+                 getattr(e, "code", None),
+                 getattr(e, "reason", ""),
+                 self._had_result(),
+             )
+             if not self._had_result():
+                 err_txt = f"recv_closed:{getattr(e, 'code', '')}:{getattr(e, 'reason', '')}"
+                 self._emit_diag(
+                     "asr_error",
+                     error=err_txt,
+                     provider_error=True,
+                     code=getattr(e, "code", None),
+                     reason=getattr(e, "reason", ""),
+                 )
+                 try:
+                     await self._ev_queue.put(
+                         {
+                             "type": "asr_error",
+                             "error": err_txt,
+                         }
+                     )
+                 except Exception:
+                     pass
+         except Exception as e:
+-            logger.exception("Deepgram rx loop error sid=%s", sid)
++            self._logger.exception("Deepgram rx loop error sid=%s", sid)
+             self._emit_diag(
+                 "asr_error",
+                 error=f"rx:{e.__class__.__name__}",
+                 provider_error=True,
+             )
+             try:
+                 await self._ev_queue.put(
+                     {"type": "asr_error", "error": f"rx:{e.__class__.__name__}"}
+                 )
+             except Exception:
+                 pass
+ 
+     # -- keepalive -------------------------------------------------------------
+ 
+     async def _keepalive_loop(self) -> None:
+         """Send KeepAlive frames immediately and then periodically."""
+         sid = self._sid_for_log()
+         try:
+             while True:
+                 if self._closed:
+                     break
+                 ws = self._ws
+                 if not ws:
+                     break
+                 if getattr(ws, "closed", False) or getattr(ws, "closing", False):
+                     break
+                 if not self._ws_is_open(ws):
+                     break
+ 
+                 try:
+                     async with self._send_lock:
+                         await ws.send(json.dumps({"type": "KeepAlive"}))
+-                    logger.debug(
++                    self._logger.debug(
+                         "Deepgram keepalive sid=%s interval=%s",
+                         sid,
+                         self._keepalive_interval,
+                     )
+                 except websockets.ConnectionClosed as exc:
+-                    logger.warning("Deepgram keepalive closed sid=%s err=%s", sid, exc)
++                    self._logger.warning("Deepgram keepalive closed sid=%s err=%s", sid, exc)
+                     break
+                 except Exception as exc:
+-                    logger.warning("Deepgram keepalive failed sid=%s err=%s", sid, exc)
++                    self._logger.warning("Deepgram keepalive failed sid=%s err=%s", sid, exc)
+                     try:
+                         await asyncio.sleep(self._keepalive_interval)
+                     except asyncio.CancelledError:
+                         return
+                     continue
+ 
+                 try:
+                     await asyncio.sleep(self._keepalive_interval)
+                 except asyncio.CancelledError:
+                     return
+         finally:
+             self._keepalive_task = None
+ 
+     async def _stop_keepalive(self) -> None:
+         task = self._keepalive_task
+         if not task:
+             return
+         self._keepalive_task = None
+         task.cancel()
+         try:
+             await task
+         except asyncio.CancelledError:
+             pass
+         except Exception:
+             pass
+diff --git a/app/templates/index.html b/app/templates/index.html
+index 98509bbfad4f3f0749800b66caac6ff403558a30..d8dd4cae95c7b2a359e5e4a372a253fec193aa54 100644
+--- a/app/templates/index.html
++++ b/app/templates/index.html
+@@ -1,35 +1,46 @@
+ <!doctype html>
+ <html><head><meta charset="utf-8"><title>Ask Chip</title></head>
+ <body>
+   <button id="startButton" data-role="start-btn">Start</button>
+   <div id="chat" data-role="chat-pane" style="display:none"></div>
+ {% include '_ui_status.html' %}
+ 
+ <script type="module" src="/static/js/bootstrap.js"></script>
+ <script type="module" src="/static/js/auth_gate.js"></script>
+ 
++<script>
++(function(){
++  const cfg = {{ askchip_config|tojson }};
++  try {
++    const target = (window.__askchip_config = Object.assign({}, window.__askchip_config || {}));
++    const logging = Object.assign({}, target.logging || {}, cfg && cfg.logging ? cfg.logging : {});
++    target.logging = logging;
++  } catch {}
++})();
++</script>
++
+ <script>
+ (function(){
+   if (!window.askchipSetStatus || !window.askchipToast) return;
+   // Attempt to attach to global ws/greet flow used in the previous patch
+   const origEnsureWS = window.ensureWS;
+   const origGreet = window.greet;
+   if (typeof origEnsureWS === 'function'){
+     window.ensureWS = function(){
+       const wsWas = (window.askchipWS && window.askchipWS.readyState===1);
+       origEnsureWS();
+       const ws = window.askchipWS;
+       if (ws && !ws.__uiWired){
+         ws.__uiWired = true;
+         const backoffMs = 3000; let retried = false;
+         ws.addEventListener('open', ()=>{ window.askchipToast('Connected to Chip','ok'); window.askchipSetStatus('Ready'); });
+         ws.addEventListener('close', ()=>{
+           if (!retried){
+             window.askchipSetStatus('Disconnected — retrying in 3s…');
+             window.askchipToast('Disconnected — retrying…','warn', 3000);
+             retried = true;
+             setTimeout(()=>{ try{ window.ensureWS(); }catch(e){} }, backoffMs);
+           }
+         });
+         ws.addEventListener('error', ()=>{ window.askchipToast('WebSocket error','err', 3000); });
+         ws.addEventListener('message', (ev)=>{
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 286aa7496627fc3d74161cd0a20fb35fcc9abd3e..cdde303daa0e1c414b88a79c735cfa01b13952d3 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -1,96 +1,104 @@
+ # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
+ from __future__ import annotations
+ import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
+ from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
+ from collections import deque
+ from app.services.audio.container_sniffer import (
+     AudioContainerSniffer,
+     coerce_detection_from_meta,
+ )
+ 
+ from .schema_v1 import (
+     parse_client_json,
+     make_keepalive_ack,
+     make_results,
+     make_utterance_end,
+     make_error,
+ )
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
++from app.config import load_settings
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
+ 
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
+ from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+ from app.ws.barge import BargeState
+ from app.ws.bus import bus
+ 
+ # Optional admin emitter
+ try:
+     from app.api_v1.admin import _emit as _admin_emit
+ except Exception:
+     _admin_emit = None
+ 
+ 
+ ACTIVE_WS: dict[str, dict[str, Any]] = {}
+ ACTIVE_WS_LOCK = asyncio.Lock()
+ 
+ WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
++
++_SETTINGS = load_settings()
++_ADVANCED_LOGGING_ENABLED = bool(
++    getattr(_SETTINGS, "advanced_logging_enabled", True)
++)
+ try:
+     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
+ except Exception:
+     pass
+ 
+ # ------------------------------ small helpers ------------------------------
+ 
+ 
+ def _client_ip_from_scope(scope) -> str:
+     try:
+         c = scope.get("client") or ()
+         if isinstance(c, (list, tuple)) and c:
+             return str(c[0])
+     except Exception:
+         pass
+     try:
+         hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
+         xff = hdrs.get("x-forwarded-for", "").split(",")[0].strip()
+         if xff:
+             return xff
+     except Exception:
+         pass
+     return "unknown"
+ 
+ 
+ def _jlog(event: str, **fields):
+     """Lightweight JSON log (stdout). Keep dependency-free inside WS path."""
++    if not _ADVANCED_LOGGING_ENABLED:
++        return
+     try:
+         import time as _t, json as _json
+ 
+         fields.setdefault("event", event)
+         fields.setdefault("ts", _t.time())
+         print(_json.dumps(fields, separators=(",", ":"), ensure_ascii=False))
+     except Exception:
+         pass
+ 
+ 
+ def _clip_text(txt: str, limit: int = 120) -> str:
+     try:
+         txt = txt or ""
+         if len(txt) <= limit:
+             return txt
+         return txt[:limit] + "…"
+     except Exception:
+         return ""
+ 
+ 
+ def _dumps(obj) -> str:
+     import json as _json
+ 
+     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+ 
+@@ -717,51 +725,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 await asyncio.sleep(20)
+                 try:
+                     await _ws_send_json(
+                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
+                     )
+                 except Exception:
+                     break
+         except asyncio.CancelledError:
+             pass
+ 
+     ping_task = asyncio.create_task(_ping_loop())
+ 
+     try:
+         await _ws_send_json(send, {"type": "ready", "session_id": sid})
+     except Exception:
+         with contextlib.suppress(Exception):
+             await send(
+                 {
+                     "type": "websocket.close",
+                     "code": 1011,
+                     "reason": "initial_ready_failed",
+                 }
+             )
+         return
+ 
+-    cfg: Dict[str, Any] = {}
++    cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
+     loop = asyncio.get_running_loop()
+     barge = BargeState()
+ 
+     def _send_barge_state(phase: str) -> None:
+         if not phase:
+             return
+         frame = {"type": "state", "phase": phase}
+         try:
+             bus.broadcast(sid, frame)
+         except Exception:
+             pass
+         try:
+             if loop.is_closed():
+                 return
+             payload = dict(frame)
+             try:
+                 running = asyncio.get_running_loop()
+             except RuntimeError:
+                 running = None
+             if running is loop:
+                 asyncio.create_task(_ws_send_json(send, payload))
+             else:
+                 loop.call_soon_threadsafe(
+                     asyncio.create_task, _ws_send_json(send, payload)
+                 )
+diff --git a/static/js/app.js b/static/js/app.js
+index 8b4c18068681255088654b709e3f5bc6ec11ee87..ecbab07210bffba898e2ad7aa06d50e34b0d0d61 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -1,81 +1,93 @@
+ // /static/js/app.js — chat helpers only (imports constrained by spec)
+ import { closeWS, sendCloseStream, sendJSON } from './ws_module.js';
+ import { getSID } from '/static/js/util/sid.js';
+ import { renderSuggestions } from '/static/js/suggestions.js';
++import { logIfEnabled } from './util/logging.js';
+ 
+ // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
+ // Exports: onEnd, onSend, handleAssistantFrame
+ 
+ const $  = (s)=>document.querySelector(s);
+ 
+ const ASR_TIMEOUT_MS = 10_000;
+ const ASR_FINALIZATION_TIMEOUT_MS = 2_000;
+ let _sessionReadyAt = 0;
+ let _awaitingFirstAsr = false;
+ let _noAsrTimeout = null;
+ let _noAsrNotified = false;
+ let _lastAsrLatencyMs = null;
+ let _ttsPlaying = false;
+ const _asrTurnState = {
+   activeId: null,
+   complete: false,
+   utteranceEnded: false,
+ };
+ const _asrCompletionWaiters = new Set();
+ 
+ function _getActiveTurnTraceId() {
+   try {
+     if (typeof window === 'undefined') return null;
+     const id = window.__askchip_turn_trace_id;
+     return id ? String(id) : null;
+   } catch {
+     return null;
+   }
+ }
+ 
++function _console(level, ...args) {
++  logIfEnabled(() => {
++    try {
++      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
++      method?.apply(console, args);
++    } catch {}
++  });
++}
++
+ function _appLog(level, message, detail = undefined) {
+-  try {
+-    const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+-    if (!method) return;
+-    const traceId = _getActiveTurnTraceId();
+-    const prefix = traceId ? `[ui][trace:${traceId}]` : '[ui]';
+-    if (detail === undefined) {
+-      method.call(console, `${prefix} ${message}`);
+-      return;
+-    }
+-    if (detail && typeof detail === 'object') {
+-      const payload = traceId && detail.traceId !== traceId ? { ...detail, traceId } : detail;
+-      method.call(console, `${prefix} ${message}`, payload);
+-      return;
+-    }
+-    if (traceId) {
+-      method.call(console, `${prefix} ${message}`, detail, `trace:${traceId}`);
+-      return;
+-    }
+-    method.call(console, `${prefix} ${message}`, detail);
+-  } catch {}
++  logIfEnabled(() => {
++    try {
++      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
++      if (!method) return;
++      const traceId = _getActiveTurnTraceId();
++      const prefix = traceId ? `[ui][trace:${traceId}]` : '[ui]';
++      if (detail === undefined) {
++        method.call(console, `${prefix} ${message}`);
++        return;
++      }
++      if (detail && typeof detail === 'object') {
++        const payload = traceId && detail.traceId !== traceId ? { ...detail, traceId } : detail;
++        method.call(console, `${prefix} ${message}`, payload);
++        return;
++      }
++      if (traceId) {
++        method.call(console, `${prefix} ${message}`, detail, `trace:${traceId}`);
++        return;
++      }
++      method.call(console, `${prefix} ${message}`, detail);
++    } catch {}
++  });
+ }
+ 
+ try {
+   window.addEventListener('chip-tts', (ev) => {
+     const detail = ev?.detail || {};
+     const playing = String(detail.state || '').toLowerCase() === 'playing';
+     _ttsPlaying = playing;
+     if (playing) {
+       _clearAsrTimeout();
+     }
+   });
+ } catch {}
+ 
+ function _clearAsrTimeout(){
+   if (_noAsrTimeout){
+     clearTimeout(_noAsrTimeout);
+     _noAsrTimeout = null;
+   }
+ }
+ 
+ function _resetAsrTracking(){
+   _clearAsrTimeout();
+   _awaitingFirstAsr = false;
+   _noAsrNotified = false;
+   _sessionReadyAt = 0;
+@@ -428,51 +440,51 @@ function _dedupeAssistant(d){
+     li.className = 'msg assistant';
+     li.textContent = text;
+     msgs.appendChild(li);
+     try { msgs.scrollTop = msgs.scrollHeight; } catch {}
+   }catch{}
+   return true;
+ }
+ 
+ let _lastSuggestionsKey = null;
+ 
+ function _clearSuggestions(){
+   const wrap = document.getElementById('suggestions');
+   if (!wrap) return;
+   try { wrap.innerHTML = ''; } catch {}
+   _lastSuggestionsKey = null;
+ }
+ 
+ function _handleSuggestionClick(text){
+   if (!window.__askchip_session_started) return;
+   const suggestion = (text || '').trim();
+   if (!suggestion) return;
+   const input = $('#composer');
+   if (input) {
+     try { input.value = suggestion; } catch {}
+   }
+-  try { onSend(suggestion); } catch (err) { console.warn('[suggestion click] send failed', err); }
++  try { onSend(suggestion); } catch (err) { _console('warn', '[suggestion click] send failed', err); }
+ }
+ 
+ export function handleAssistantFrame(d){
+   if (!d) return;
+   const t = d.type;
+   const typeNorm = typeof t === 'string' ? t.toLowerCase() : '';
+ 
+   if (t === 'ready') {
+     if (!_ttsPlaying) _scheduleAsrWatchdog();
+   }
+ 
+   if (t === 'no_audio_detected') {
+     _notifyNoAsr('server', d);
+     return;
+   }
+ 
+   // Surface server errors to the UI banner
+   if (t === 'Error') {
+     const msg = `Error: ${(d.code||'')}${d.message ? ' ' + d.message : ''}`.trim();
+     showBanner(msg || 'An error occurred.');
+     return;
+   }
+ 
+   if (t === 'session_end') {
+     _handleSessionEnd(d);
+@@ -501,139 +513,143 @@ export function handleAssistantFrame(d){
+   if (typeNorm === 'result' || typeNorm === 'results'){
+     const turnId = _extractAsrTurnId(d);
+     if (turnId != null) _ensureActiveAsrTurn(turnId);
+     const matchesActive = turnId == null
+       ? _asrTurnState.activeId == null
+       : _asrTurnState.activeId === turnId;
+     const isFinal = _isAsrFinalFrame(d);
+     if (matchesActive && isFinal && _asrTurnState.complete) {
+       return;
+     }
+     _renderUserTranscript(d);
+     if (matchesActive && isFinal) {
+       _asrTurnState.complete = true;
+       _notifyAsrCompletion('final_result');
+     }
+     return;
+   }
+ 
+   if (t === 'suggestions'){
+     const items = Array.isArray(d.items) ? d.items : [];
+     let key = '[]';
+     try { key = JSON.stringify(items ?? []); } catch { key = '[]'; }
+     if (key !== _lastSuggestionsKey){
+       _lastSuggestionsKey = key;
+       try { renderSuggestions(items, _handleSuggestionClick); } catch (err) {
+-        console.warn('[handleAssistantFrame] renderSuggestions failed', err);
++        _console('warn', '[handleAssistantFrame] renderSuggestions failed', err);
+       }
+     }
+     return;
+   }
+ 
+   if (_isAssistantTextFrame(d)) {
+     if (!_dedupeAssistant(d)) return;
+   }
+   // (other frame types can be handled here as needed)
+ }
+ 
+ /* ---------------- Send (WS-only) ---------------- */
+ 
+ export async function onSend(overrideText){
+   try{
+     if (!window.__askchip_session_started) return;
+     const input = $('#composer');
+     if (!input && overrideText == null) return;
+     const raw = overrideText != null ? overrideText : (input?.value || '');
+     const val = (raw || '').trim(); if (!val) return;
+ 
+     const sid = getSID();
+ 
+     // Optimistic render of user bubble
+     let optimisticBubble = null;
+     try{
+       const msgs = $('#chatMessages');
+       if (msgs){
+         const li = document.createElement('div');
+         li.dataset.role = 'user';
+         li.className = 'msg user';
+         li.textContent = val;
+         msgs.appendChild(li);
+         optimisticBubble = li;
+         try { msgs.scrollTop = msgs.scrollHeight; } catch {}
+       }
+     }catch{}
+ 
+     // WS send (WS-only turns; replaces legacy HTTP POST)
+     const correlation = (crypto.randomUUID?.() ?? (Date.now() + '-' + Math.random()));
+     let sendSucceeded = false;
+     try {
+       // Server expects: type='user_msg' and correlation_user_msg_id
+       sendSucceeded = sendJSON({ type: 'user_msg', text: val, correlation_user_msg_id: correlation, session_id: sid });
+     } catch (e){
+-      console.warn('[onSend] WS send failed', e);
++      _console('warn', '[onSend] WS send failed', e);
+       sendSucceeded = false;
+     }
+ 
+     if (!sendSucceeded){
+       if (optimisticBubble && optimisticBubble.parentElement){
+         try { optimisticBubble.remove(); } catch {}
+       }
+       showBanner('Message failed to send over WebSocket.');
+       return;
+     }
+ 
+     setDot('thinking');
+ 
+     // Clear composer after send
+     if (input){
+       try { input.value = ''; } catch {}
+     }
+ 
+   } catch (e){
+-    console.warn('[onSend] error', e);
++    _console('warn', '[onSend] error', e);
+   }
+ }
+ 
+ /* ---------------- End session (graceful) ---------------- */
+ 
+ let ending = false;
+ 
+ export async function onEnd(){
+   if (ending) return;
+   ending = true;
+   try {
+     _clearSuggestions();
+     const finalFrameWait = _waitForAsrCompletion(ASR_FINALIZATION_TIMEOUT_MS);
+     // Politely signal end of stream over WS, then close with code 1000
+     try { await sendCloseStream(); } catch {}
+     try { await finalFrameWait; } catch {}
+ 
+     try { closeWS(1000, 'user_end'); } catch {}
+ 
+     // Rotate the session so the next Start is clean (correct key)
+     try { localStorage.removeItem('chip.sid'); } catch {}
+ 
+     // Notify others (bootstrap etc.)
+     try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
+ 
+     // Update UI
+     disableForEnded();
+     showBanner('Session ended. Press Start to begin a new one.');
+ 
+     // Clear any bootstrap “session started” latch
+     window.__askchip_session_started = false;
+ 
+   } finally {
+     ending = false;
+   }
+ }
+ 
+ try {
+   window.addEventListener('askchip-session-ended', () => {
+     _clearSuggestions();
+     _resetAsrTracking();
+   });
+ } catch {}
+ 
+ /* ---------------- Expose minimal helpers (optional) ---------------- */
+ 
+ // (Intentionally minimal public surface)
++export const __TEST_ONLY__ = {
++  appLog: _appLog,
++  console: _console,
++};
 diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
-index c34ec5ca4c6e9e49315fab8f906586c8547027e2..324ae86d400a820bb98f48a2a974e8cad9e8a694 100644
+index 324ae86d400a820bb98f48a2a974e8cad9e8a694..eabc797ad408c7144aabca3a5088dca180a1317a 100644
 --- a/static/js/bootstrap.js
 +++ b/static/js/bootstrap.js
-@@ -1,29 +1,29 @@
+@@ -1,323 +1,333 @@
  // bootstrap.js
  import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
  import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
--import { initMic, armVAD, disarmVAD, setGreetGateActive } from '/static/js/voice.js';
-+import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
+ import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
  import { unlockAudio, stopPlayback } from '/static/js/audio.js';
  import { getSID } from '/static/js/util/sid.js';
  import * as App from '/static/js/app.js';
  import * as Visualizer from '/static/js/visualizer.js';
++import { logIfEnabled } from '/static/js/util/logging.js';
  
  // /static/js/bootstrap.js — single owner of Start/End/Send + audio unlock + WS→UI wiring
  
@@ -20,6 +1863,15 @@ index c34ec5ca4c6e9e49315fab8f906586c8547027e2..324ae86d400a820bb98f48a2a974e8ca
  let startInFlight = false;
  let started = false;
  
++function _console(level, ...args) {
++  logIfEnabled(() => {
++    try {
++      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
++      method?.apply(console, args);
++    } catch {}
++  });
++}
++
  // ----- Assistant text de-dupe (turn_id + text) -----
  const _assistantSeen = new Set();
  function _isAssistantTextFrame(d) {
@@ -33,7 +1885,166 @@ index c34ec5ca4c6e9e49315fab8f906586c8547027e2..324ae86d400a820bb98f48a2a974e8ca
    const key    = `${turnId}::${text}`;
    if (!text) return true; // empty texts don't render anyway
    if (_assistantSeen.has(key)) return false;
-@@ -184,74 +184,72 @@ async function startOnce(){
+   _assistantSeen.add(key);
+   return true;
+ }
+ 
+ function setDot(state){
+   const dot = $('#stateDot');
+   if (!dot) return;
+   dot.className = 'dot ' + (
+     state === 'listening' ? 'dot-listening' :
+     state === 'speaking'  ? 'dot-speaking'  :
+     state === 'thinking'  ? 'dot-thinking'  : 'dot-ready'
+   );
+ }
+ 
+ function setStatusText(text){
+   const status = $('#statusText');
+   if (!status) return;
+   status.textContent = text;
+ }
+ 
+ function showBanner(msg){
+   const b = $('#inlineLoginMsg');
+-  if (!b) { console.warn('[AskChip]', msg); return; }
++  if (!b) { _console('warn', '[AskChip]', msg); return; }
+   b.textContent = msg;
+   b.classList.add('warn');
+ }
+ 
+ function _disableButtons() {
+   const endBtn   = $('#endButton');
+   const sendBtnA = $('#composerSend');
+   const sendBtnB = $('#sendBtn');
+   if (sendBtnA) sendBtnA.disabled = true;
+   if (sendBtnB) sendBtnB.disabled = true;
+   if (endBtn)   endBtn.disabled   = true;
+ }
+ 
+ function _enableButtons() {
+   const endBtn   = $('#endButton');
+   const sendBtnA = $('#composerSend');
+   const sendBtnB = $('#sendBtn');
+   if (sendBtnA) sendBtnA.disabled = false;
+   if (sendBtnB) sendBtnB.disabled = false;
+   if (endBtn)   endBtn.disabled   = false;
+ }
+ 
+ function wireWSEventsOnce(){
+   if (window.__askchip_ws_wired) return;
+   window.__askchip_ws_wired = true;
+ 
+   // Log first few frames to verify payload shape
+   let seen = 0;
+   window.addEventListener('askchip-ws', (ev) => {
+     const d = ev.detail || {};
+     const t = d.type || '';
+ 
+     if (seen < 5) {
+-      try { console.log('[WS→UI]', JSON.stringify(d)); } catch {}
++      try { _console('log', '[WS→UI]', JSON.stringify(d)); } catch {}
+       seen++;
+     }
+ 
+     // Lightweight state dot hints (no UI regressions)
+     if (t === 'assistant_audio') setDot('speaking');
+     if (t === 'UtteranceEnd')    setDot('ready');
+     if (t === 'state' && d.phase) {
+       if (d.phase === 'ready')    setDot('ready');
+       if (d.phase === 'thinking') setDot('thinking');
+       if (d.phase === 'speaking') setDot('speaking');
+       if (d.phase === 'listening')setDot('listening');
+     }
+ 
+     // De-dupe assistant text frames so greet can't double-render
+     if (_isAssistantTextFrame(d)) {
+       if (!_dedupeAssistant(d)) return; // swallow duplicate
+     }
+ 
+-    try { App.handleAssistantFrame(d); } catch (e) { console.warn('App.handleAssistantFrame error', e); }
++    try { App.handleAssistantFrame(d); } catch (e) { _console('warn', 'App.handleAssistantFrame error', e); }
+   });
+ 
+   window.addEventListener('askchip-ws-close', (ev) => {
+     const detail = ev.detail || {};
+     const normal = detail.code === 1000 || detail.code === 1001;
+     const reason = detail.reason || (normal ? 'normal closure' : '');
+     const payload = { ...detail, reason };
+ 
+     if (normal) {
+-      console.info('[WS close]', payload);
++      _console('info', '[WS close]', payload);
+     } else {
+-      console.warn('[WS close]', payload);
++      _console('warn', '[WS close]', payload);
+     }
+     // When WS closes, disable Send/End and re-enable Start
+     _disableButtons();
+     const sb = $('#startButton');
+     if (sb) sb.disabled = false;
+     setDot('ready');
+   });
+ }
+ 
+ function wireVoiceEventsOnce(){
+   if (window.__askchip_voice_wired) return;
+   window.__askchip_voice_wired = true;
+ 
+   window.addEventListener('askchip-voice', (ev) => {
+     const detail = ev?.detail || {};
+     const state = detail.state;
+     const label = detail.statusText ?? detail.label ?? detail.message;
+ 
+     if (state === 'armed'){
+       setDot('listening');
+       setStatusText(label || 'Listening…');
+       return;
+     }
+ 
+     if (state === 'recording'){
+       setDot('speaking');
+       setStatusText(label || 'Recording…');
+       return;
+     }
+ 
+     if (state === 'idle'){
+       setDot('ready');
+       setStatusText(label || 'Ready');
+     }
+   });
+ }
+ 
+ async function ensureWsOpenOrFail(timeoutMs = 5000){
+   if (isOpen()) return true;
+   try {
+     await openWS();
+   } catch (err) {
+-    console.warn('[bootstrap] openWS failed', err);
++    _console('warn', '[bootstrap] openWS failed', err);
+     return false;
+   }
+   try {
+     await Promise.race([
+       waitWSOpen(),
+       new Promise((_, rej) => setTimeout(() => rej(new Error('WS timeout')), timeoutMs))
+     ]);
+   } catch {
+     return false;
+   }
+   return isOpen();
+ }
+ 
+ async function startOnce(){
+   if (started || startInFlight) return;
+   startInFlight = true;
+   setDot('thinking');
+ 
+   const startBtn = $('#startButton');
+   const endBtn   = $('#endButton');
+ 
+   try{
+     if (startBtn) startBtn.disabled = true;
  
      // 0) Audio unlock so TTS is permitted by browser autoplay policies
      try { await unlockAudio(); } catch {}
@@ -59,14 +2070,14 @@ index c34ec5ca4c6e9e49315fab8f906586c8547027e2..324ae86d400a820bb98f48a2a974e8ca
      //    audio hardware comes online.
      const sid = getSID();
      try {
--      console.log('[bootstrap] startOnce arming greet gate before greet configure');
--      setGreetGateActive(true);
--      console.log('[bootstrap] startOnce greet gate armed — proceeding to configure greet');
-+      console.log('[bootstrap] startOnce sending greet configure');
+-      console.log('[bootstrap] startOnce sending greet configure');
++      _console('log', '[bootstrap] startOnce sending greet configure');
        configure({ greet: true, reset: 1, session_id: sid });
-       console.log('[bootstrap] startOnce greet configure sent — recorder setup will follow');
+-      console.log('[bootstrap] startOnce greet configure sent — recorder setup will follow');
++      _console('log', '[bootstrap] startOnce greet configure sent — recorder setup will follow');
      } catch (e) {
-       console.warn('[bootstrap] WS configure failed, cannot greet', e);
+-      console.warn('[bootstrap] WS configure failed, cannot greet', e);
++      _console('warn', '[bootstrap] WS configure failed, cannot greet', e);
        showBanner('Greet failed to send — check WS configure()');
        throw e;
      }
@@ -76,18 +2087,20 @@ index c34ec5ca4c6e9e49315fab8f906586c8547027e2..324ae86d400a820bb98f48a2a974e8ca
      try {
        visualizerStream = await Visualizer.start();
      } catch (e) {
-       console.warn('[bootstrap] visualizer init failed', e);
+-      console.warn('[bootstrap] visualizer init failed', e);
++      _console('warn', '[bootstrap] visualizer init failed', e);
      }
  
      try {
        const stream = await initMic(visualizerStream ?? undefined);
--      console.log('[bootstrap] startOnce mic initialized — about to arm VAD (greet gate should already be active)');
-+      console.log('[bootstrap] startOnce mic initialized — about to arm VAD for voice turns');
+-      console.log('[bootstrap] startOnce mic initialized — about to arm VAD for voice turns');
++      _console('log', '[bootstrap] startOnce mic initialized — about to arm VAD for voice turns');
        await armVAD(stream);         // begins voice turns (one blob per user turn)
--      console.log('[bootstrap] startOnce VAD armed — recorder priming should now be able to observe greet gate state');
-+      console.log('[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
+-      console.log('[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
++      _console('log', '[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
      } catch (e) {
-       console.warn('[bootstrap] mic/VAD init failed', e);
+-      console.warn('[bootstrap] mic/VAD init failed', e);
++      _console('warn', '[bootstrap] mic/VAD init failed', e);
        showBanner('Microphone unavailable — voice capture disabled.');
        setStatusText('Voice capture unavailable');
        try {
@@ -111,3 +2124,1057 @@ index c34ec5ca4c6e9e49315fab8f906586c8547027e2..324ae86d400a820bb98f48a2a974e8ca
      let gotAssistant = false;
      let markAssistantRemove = false;
      const markAssistant = (ev) => {
+       const d = ev.detail || {};
+       if (_isAssistantTextFrame(d)) gotAssistant = true;
+       if (markAssistantRemove) {
+         markAssistantRemove = false;
+         try { window.removeEventListener('askchip-ws', markAssistant); } catch {}
+       }
+     };
+     try {
+       window.addEventListener('askchip-ws', markAssistant, { once: true });
+     } catch (err) {
+       markAssistantRemove = true;
+       window.addEventListener('askchip-ws', markAssistant);
+-      try { console.warn('[bootstrap] once listener fallback', err); } catch {}
++      try { _console('warn', '[bootstrap] once listener fallback', err); } catch {}
+     }
+ 
+     setTimeout(() => {
+       if (!gotAssistant) showBanner('No assistant frames after greet — check WS handler/payload.');
+     }, 6000);
+ 
+     // Ready for user input
+     if (endBtn) endBtn.disabled = false;
+     _enableButtons();
+ 
+     // Mark session active so ws.js auto-reconnects through restarts
+     window.__askchip_session_started = true;
+     started = true;
+     setDot('ready');
+ 
+   } catch (e){
+-    console.error('[bootstrap] start failed', e);
++    _console('error', '[bootstrap] start failed', e);
+     if (startBtn) startBtn.disabled = false;
+     _disableButtons();
+     setDot('ready');
+     try { Visualizer.stop({ reset: true }); } catch {}
+   } finally {
+     startInFlight = false;
+   }
+ }
+ 
+ function wireUI(){
+   // Safety guard: prevent duplicate UI wiring if module loaded twice
+   if (window.__bootstrapWired) {
+-    console.warn('[bootstrap] duplicate wiring prevented');
++    _console('warn', '[bootstrap] duplicate wiring prevented');
+     return;
+   }
+   window.__bootstrapWired = true;
+ 
+   wireVoiceEventsOnce();
+ 
+   const startBtn = document.getElementById('startButton');
+   const endBtn   = document.getElementById('endButton');
+   const sendBtnA = document.getElementById('composerSend');
+   const sendBtnB = document.getElementById('sendBtn');
+   const form     = document.getElementById('composerForm');
+   const composer = document.getElementById('composer');
+ 
+   if (startBtn) startBtn.addEventListener('click', startOnce);
+   if (endBtn)   endBtn.addEventListener('click', () => {
+     try { disarmVAD(); } catch {}
+     try { Visualizer.stop({ reset: true }); } catch {}
+     App.onEnd();
+   });
+ 
+   // Stop TTS as soon as user interacts to send or type (soft barge-in polish)
+   const stopAudio = () => { try { stopPlayback(); } catch {} };
+ 
+   const bindSend = (btn) => {
+     if (!btn) return;
+@@ -337,39 +347,43 @@ function wireUI(){
+       if (disabled) return;
+       if (!composer.value || !composer.value.trim()) return;
+       ev.preventDefault();
+       App.onSend();
+     });
+     composer.addEventListener('input', stopAudio);
+   }
+ 
+   // Disabled until greet succeeds
+   _disableButtons();
+ 
+   // Reset bootstrap state when session ends so Start can be used again
+   window.addEventListener('askchip-session-ended', () => {
+     try { disarmVAD(); } catch {}
+     try { Visualizer.stop({ reset: true }); } catch {}
+     started = false;
+     const sb = $('#startButton');
+     if (sb) sb.disabled = false;
+     _disableButtons();
+     setDot('ready');
+   });
+ 
+   setDot('ready');
+   setStatusText('Ready');
+   window.__askchip_bootstrap_loaded = true;
+-  console.log('[AskChip] bootstrap loaded');
++  _console('log', '[AskChip] bootstrap loaded');
+ }
+ 
+ if (document.readyState === 'loading'){
+   document.addEventListener('DOMContentLoaded', wireUI);
+ } else {
+   wireUI();
+ }
+ 
+ // Debug import (opt-in via localStorage.AskChipDebug='1')
+ const __assetVersion =
+   (typeof globalThis !== 'undefined' && globalThis.__askchipAssetVersion) || '';
+ const __debugSuffix = __assetVersion ? `?v=${__assetVersion}` : '';
+ import(`/static/js/debug.js${__debugSuffix}`);
++
++export const __TEST_ONLY__ = {
++  console: _console,
++};
+diff --git a/static/js/util/logging.js b/static/js/util/logging.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..cabca113c87ded1f543a37454eefa48464bcd10d
+--- /dev/null
++++ b/static/js/util/logging.js
+@@ -0,0 +1,28 @@
++const DEFAULT_ENABLED = true;
++
++export function isAdvancedLoggingEnabled() {
++  try {
++    const cfg = typeof window !== 'undefined' ? window.__askchip_config : undefined;
++    if (cfg && typeof cfg === 'object') {
++      const logging = cfg.logging;
++      if (logging && typeof logging === 'object' && 'enabled' in logging) {
++        return !!logging.enabled;
++      }
++    }
++  } catch {}
++  return DEFAULT_ENABLED;
++}
++
++export function logIfEnabled(fn) {
++  if (!isAdvancedLoggingEnabled()) return;
++  try {
++    if (typeof fn === 'function') {
++      fn();
++    }
++  } catch {}
++}
++
++export const __TEST_ONLY__ = {
++  isAdvancedLoggingEnabled,
++  logIfEnabled,
++};
+diff --git a/static/js/voice.js b/static/js/voice.js
+index 15fe49250207e6118596a39a55074fb1d142c971..9e03e0ff6eca93cb1aeb47a6a6e70259f226d852 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -1,100 +1,107 @@
+ /*
+ Citations for context (non-functional):
+ :contentReference[oaicite:0]{index=0}
+ :contentReference[oaicite:1]{index=1}
+ */
+ 
+ /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
+    Goals satisfied:
+     • Echo-aware VAD (threshold boost while TTS is playing)
+     • Streaming Opus blobs per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
+     • Soft barge-in: pause Chip TTS on committed speech start
+     • Turn timeout (safety), robust errors, clean session end
+     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
+ 
+    Notes:
+     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
+     • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
+ */
+ 
+ import { VAD } from './voice/vad.js';
+ import { sendAudioChunk, sendCloseStream } from './ws_module.js';
+ import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
++import { logIfEnabled } from './util/logging.js';
+ 
+ // Public API (matches prior usage)
+ export async function initMic(stream = null) { return await _ensureMic(stream); }
+ export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
+ export function disarmVAD() { _disarm(); }
+ export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
+ export function bargeIn() { _bargeIn(); }         // keeps API parity
+ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+ 
+ // ---- Internal state ---------------------------------------------------------
+ 
+ // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   && typeof MediaRecorder.isTypeSupported === 'function'
+   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
+   ? 'audio/ogg; codecs=opus'
+   : 'audio/webm; codecs=opus';
+ 
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+ 
+ const state = {
+   stream: null,
+   ctx: null,
+   source: null,
+   analyser: null,
+   vad: null,
+   rec: null,
+   chunkSendPromise: Promise.resolve(),
+   chunkBytesSent: 0,
+   chunkSendError: null,
+   turnTimer: null,
+   turnOpen: false,   // track whether a turn is currently open server-side
+   deviceLogged: false,
+   // NEW: min-turn gating
+   recStartedAt: 0,
+   pendingEndTimer: null,
+ };
+ 
+ // ---- Helpers ----------------------------------------------------------------
+ 
+ function _emitVoiceState(state, detail = {}) {
+   try {
+     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
+   } catch {}
+ }
+ 
++function _console(level, ...args) {
++  logIfEnabled(() => {
++    try {
++      const method = (typeof console?.[level] === 'function') ? console[level] : console.log;
++      method?.apply(console, args);
++    } catch {}
++  });
++}
++
+ function _logLifecycle(event, detail = {}, level = 'debug') {
+   const payload = { event, ...(detail && typeof detail === 'object' ? detail : { detail }) };
+-  try {
+-    const method = (typeof console[level] === 'function') ? level : 'log';
+-    console[method]?.('[voice]', event, payload);
+-  } catch {}
++  _console(level, '[voice]', event, payload);
+   try {
+     window.dispatchEvent(new CustomEvent('askchip-voice-lifecycle', { detail: payload }));
+   } catch {}
+ }
+ 
+ function _clearPendingEndTimer() {
+   if (state.pendingEndTimer) {
+     try { clearTimeout(state.pendingEndTimer); } catch {}
+     state.pendingEndTimer = null;
+   }
+ }
+ 
+ async function _ensureMic(externalStream = null) {
+   if (state.stream && state.stream.active) return state.stream;
+ 
+   if (state.stream && !state.stream.active) {
+     _teardownAudioGraph();
+     state.stream = null;
+   }
+ 
+   let stream = externalStream;
+ 
+   if (!stream || !stream.active) {
+     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+       _logLifecycle('mic_perm_denied', { reason: 'mediaDevices_unavailable' }, 'warn');
+@@ -244,195 +251,202 @@ async function _arm(stream = null, opts = {}) {
+     },
+     {
+       onSpeechStart: _onSpeechStartCommitted,
+       onSpeechEnd: _onSpeechEndCommitted,
+     }
+   );
+ 
+   state.vad = vad;
+   state.vad.start();
+   _logLifecycle('mic_start', {
+     sampleRate: state.ctx?.sampleRate,
+     pollMs,
+   });
+   _emitVoiceState('armed');
+ 
+   return mic;
+ }
+ 
+ // ---- Recorder lifecycle -----------------------------------------------------
+ 
+ function _startRecorder() {
+   if (!state.stream) return false;
+   if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
+ 
+   if (typeof MediaRecorder === 'undefined') {
+-    console.warn('[voice] MediaRecorder not supported in this browser');
++    _console('warn', '[voice] MediaRecorder not supported in this browser');
+     state.rec = null;
+     return false;
+   }
+ 
+   state.chunkSendPromise = Promise.resolve();
+   state.chunkBytesSent = 0;
+   state.chunkSendError = null;
+   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
+   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
+ 
+   let recorder;
+   try {
+     recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
+   } catch (primaryErr) {
+     try {
+       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
+     } catch (fallbackErr) {
+-      console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
++      _console('warn', '[voice] MediaRecorder init failed', fallbackErr || primaryErr);
+       state.rec = null;
+       return false;
+     }
+   }
+ 
+   state.rec = recorder;
+ 
+   state.rec.ondataavailable = (e) => {
+     const blob = e.data;
+     if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
+       return;
+     }
+ 
+     // Chain chunk sends to preserve ordering across the WS.
+     state.chunkSendPromise = state.chunkSendPromise
+       .catch(() => {}) // allow queue to continue even if a prior chunk failed
+       .then(async () => {
+         try {
+           await sendAudioChunk(blob);
+           state.chunkBytesSent += blob.size;
+           try {
+-            console.debug('[voice] streamed audio chunk', { bytes: blob.size });
++            _console('debug', '[voice] streamed audio chunk', { bytes: blob.size });
+           } catch {}
+         } catch (err) {
+           state.chunkSendError = err;
+           try {
+-            console.warn('[voice] failed to stream audio chunk', err);
++            _console('warn', '[voice] failed to stream audio chunk', err);
+           } catch {}
+         }
+       });
+   };
+ 
+   state.rec.onstop = async () => {
+     let finalDetail;
+     try {
+       await state.chunkSendPromise.catch((err) => {
+         state.chunkSendError = state.chunkSendError || err;
+       });
+       if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
+-        console.warn('[voice] recorded chunks too small', state.chunkBytesSent);
++        _console('warn', '[voice] recorded chunks too small', state.chunkBytesSent);
+         finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
+       }
+     } catch (e) {
+-      console.warn('[voice] send audio failed', e);
++      _console('warn', '[voice] send audio failed', e);
+       state.chunkSendError = state.chunkSendError || e;
+     } finally {
+       if (state.chunkSendError && !finalDetail) {
+         finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
+       }
+       if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
+         try {
+-          console.warn('[voice] recorder stopped with issues', {
++          _console('warn', '[voice] recorder stopped with issues', {
+             bytesSent: state.chunkBytesSent,
+             error: state.chunkSendError,
+           });
+         } catch {}
+       } else {
+         try {
+-          console.debug('[voice] recorder stopped', {
++          _console('debug', '[voice] recorder stopped', {
+             bytesSent: state.chunkBytesSent,
+             // state.rec may be nulled by _stopRecorder; fall back to selected REC_MIME
+             mime: (state.rec && state.rec.mimeType) || REC_MIME,
+           });
+         } catch {}
+       }
+       // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
+       if (state.turnOpen) {
+         try {
+           await sendCloseStream();
+         } catch {}
+         state.turnOpen = false;
+       }
+       _emitVoiceState('armed', finalDetail);
+     }
+   };
+ 
+   try {
+     // Small timeslice ensures non-empty dataavailable frames while still producing a single turn blob.
+     const timeslice = 150; // 150 ms sits comfortably within the 100–200 ms target window
+     state.rec.start(timeslice);
+     state.turnOpen = true; // mark an open ASR turn on the server
+     try {
+-      console.debug('[voice] recorder started', { mime: state.rec.mimeType, timeslice });
++      _console('debug', '[voice] recorder started', { mime: state.rec.mimeType, timeslice });
+     } catch {}
+   } catch (e) {
+-    console.warn('[voice] recorder start failed', e);
++    _console('warn', '[voice] recorder start failed', e);
+     state.rec = null;
+     state.turnOpen = false;
+     return false;
+   }
+ 
+   // Safety timeout to prevent runaway recordings
+   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
+   _safeClearTurnTimer();
+   state.turnTimer = setTimeout(() => {
+     try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
+   }, limitMs);
+ 
+   return true;
+ }
+ 
+ function _onSpeechStartCommitted() {
+   _logLifecycle('vad_speech_start');
+   // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
+   _bargeIn();
+ 
+   const started = _startRecorder();
+   if (started) {
+     _emitVoiceState('recording');
+     return;
+   }
+ 
+-  console.warn('[voice] recorder unavailable — reverting to typing');
++  _console('warn', '[voice] recorder unavailable — reverting to typing');
+   _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+ }
+ 
+ function _onSpeechEndCommitted(detail = null) {
+   const reason = detail?.reason || 'vad_silence';
+   const now = performance.now ? performance.now() : Date.now();
+   const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
+ 
+   // If we haven't recorded at least minTurnMs, delay honoring VAD-end.
+   // Only applies while recorder is actually running.
+   if (state.rec && typeof state.rec.state === 'string' && state.rec.state === 'recording') {
+     const elapsed = Math.max(0, now - (state.recStartedAt || now));
+     const wait = Math.max(0, minTurnMs - elapsed);
+     if (wait > 0) {
+-      try { console.debug('[voice] delaying VAD end', { waitMs: wait, elapsed }); } catch {}
++      try { _console('debug', '[voice] delaying VAD end', { waitMs: wait, elapsed }); } catch {}
+       _clearPendingEndTimer();
+       state.pendingEndTimer = setTimeout(() => _onSpeechEndCommitted(detail), wait);
+       return; // do not stop yet
+     }
+   }
+ 
+   _logLifecycle('vad_speech_end', { reason });
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   _stopRecorder({ reason });
+   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
+ }
+ 
+ // ---- Utilities --------------------------------------------------------------
+ 
+ function optsFromGlobal(key, fallback) {
+   // Allow admin-configurable values to seep in (if app exposes them)
+   try {
+     const cfg = window.__askchip_config || {};
+     if (key in cfg) return cfg[key];
+   } catch {}
+   return fallback;
+ }
++
++export const __TEST_ONLY__ = {
++  state,
++  startRecorder: _startRecorder,
++  stopRecorder: _stopRecorder,
++  logLifecycle: _logLifecycle,
++};
+diff --git a/static/js/ws.js b/static/js/ws.js
+index ff27d65bf700b93c0a7767471ee0f137d0caeb2a..f0edd73db2bd30e2ab01f5d6addf7ed67c125628 100644
+--- a/static/js/ws.js
++++ b/static/js/ws.js
+@@ -1,90 +1,102 @@
+ // static/js/ws.js — Phase 4/5 hardened: single socket + reconnection + helpers
+ // Responsibilities:
+ //   (Patched) Optional reconnect control for diagnostics
+ let __WS_RECONNECT_ENABLED = true;
+ //   • Own a single WebSocket connection per tab to /ws/v1/chat
+ //   • Subprotocol auth (bearer + bearer.<token>)
+ //   • Auto-reconnect with bounded backoff (only if session is active)
+ //   • Helpers: waitWSOpen(), isOpen(), bufferedAmount(), sendJSON/audio, configure()
+ //   • DOM events: 'askchip-ws' (messages), 'askchip-ws-close' (terminal close)
+ 
+ import { playStream, audioEnd, unlockAudio } from './audio.js';
+ import { getSID } from './util/sid.js';
++import { logIfEnabled } from './util/logging.js';
+ 
+ let _ws = null;
+ let _onOpen = [];
+ const _KEEPALIVE_POLL_MS = 1000;
+ const _KEEPALIVE_IDLE_THRESHOLD_MS = 3500;
+ const _KEEPALIVE_RESUME_AFTER_UPLOAD_MS = 750;
+ const _KEEPALIVE_PROVIDER_FALLBACK_MS = 10000;
+ 
+ const _KEEPALIVE_REASON_PROVIDER = 'provider_wait';
+ const _KEEPALIVE_REASON_UPLOAD = 'audio_upload';
+ 
+ const _keepaliveState = {
+   timer: null,
+   lastSentTs: 0,
+   lastReadyAt: 0,
+   providerReady: false,
+   pauseReasons: new Set(),
+   resumeTimers: new Map(),
+   providerGateTimer: null,
+   sawFirstDeepgram: false,
+ };
+ 
+ function _getActiveTurnTraceId() {
+   try {
+     if (typeof window === 'undefined') return null;
+     const id = window.__askchip_turn_trace_id;
+     return id ? String(id) : null;
+   } catch {
+     return null;
+   }
+ }
+ 
++function _console(level, ...args) {
++  logIfEnabled(() => {
++    try {
++      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
++      method?.apply(console, args);
++    } catch {}
++  });
++}
++
+ function _wsLog(level, message, detail = undefined) {
+-  try {
+-    const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+-    if (!method) return;
+-    const traceId = _getActiveTurnTraceId();
+-    const prefix = traceId ? `[ws][trace:${traceId}]` : '[ws]';
+-    if (detail === undefined) {
+-      method.call(console, `${prefix} ${message}`);
+-      return;
+-    }
+-    if (detail && typeof detail === 'object') {
+-      const payload = traceId && detail.traceId !== traceId ? { ...detail, traceId } : detail;
+-      method.call(console, `${prefix} ${message}`, payload);
+-      return;
+-    }
+-    if (traceId) {
+-      method.call(console, `${prefix} ${message}`, detail, `trace:${traceId}`);
+-      return;
+-    }
+-    method.call(console, `${prefix} ${message}`, detail);
+-  } catch {}
++  logIfEnabled(() => {
++    try {
++      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
++      if (!method) return;
++      const traceId = _getActiveTurnTraceId();
++      const prefix = traceId ? `[ws][trace:${traceId}]` : '[ws]';
++      if (detail === undefined) {
++        method.call(console, `${prefix} ${message}`);
++        return;
++      }
++      if (detail && typeof detail === 'object') {
++        const payload = traceId && detail.traceId !== traceId ? { ...detail, traceId } : detail;
++        method.call(console, `${prefix} ${message}`, payload);
++        return;
++      }
++      if (traceId) {
++        method.call(console, `${prefix} ${message}`, detail, `trace:${traceId}`);
++        return;
++      }
++      method.call(console, `${prefix} ${message}`, detail);
++    } catch {}
++  });
+ }
+ 
+ function _scheduleProviderFallback(){
+   if (_keepaliveState.providerGateTimer){
+     clearTimeout(_keepaliveState.providerGateTimer);
+   }
+   if (!_keepaliveState.pauseReasons.has(_KEEPALIVE_REASON_PROVIDER)){
+     _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
+   }
+   _keepaliveState.providerGateTimer = setTimeout(()=>{
+     _keepaliveState.providerGateTimer = null;
+     if (!_keepaliveState.providerReady){
+       _keepaliveState.providerReady = true;
+     }
+     _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
+   }, _KEEPALIVE_PROVIDER_FALLBACK_MS);
+ }
+ 
+ let _lastUserSendTs = 0;
+ let _gotReady = false;
+ let _openPromise = null;
+ 
+ // reconnect state
+ let _reconnecting = false;
+ let _reconnectTimer = null;
+@@ -315,55 +327,55 @@ export function openWS(options = {}){
+   } catch(_) {}
+ 
+   try {
+     const stamp = {
+       module: import.meta && import.meta.url ? import.meta.url : undefined,
+       version: (() => {
+         try {
+           if (!import.meta || !import.meta.url) return undefined;
+           const u = new URL(import.meta.url, location.href);
+           return u.searchParams.get('v') || undefined;
+         } catch (_) {
+           return undefined;
+         }
+       })(),
+       flags: (() => {
+         try {
+           const cfg = window.__askchip_config || {};
+           return cfg.flags || cfg.ws_flags || undefined;
+         } catch (_) {
+           return undefined;
+         }
+       })(),
+       reconnectEnabled: __WS_RECONNECT_ENABLED,
+       sessionStarted: !!(window && window.__askchip_session_started),
+     };
+-    console.info('[ws] openWS build', stamp);
++    _console('info', '[ws] openWS build', stamp);
+   } catch (_) {}
+ 
+   try {
+-    console.info('[ws] openWS options=', options, 'reconnect=', __WS_RECONNECT_ENABLED);
++    _console('info', '[ws] openWS options=', options, 'reconnect=', __WS_RECONNECT_ENABLED);
+   } catch (_) {}
+ 
+   if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)){
+     return Promise.resolve(_ws);
+   }
+ 
+   if (_openPromise){
+     return _openPromise;
+   }
+ 
+   _openPromise = (async () => {
+     const sid = getSID();
+ 
+     // If there's a closing/closed socket, let GC take it and create a new one
+     _gotReady = false;
+ 
+     const base = location.origin.replace(/^http/, 'ws');
+     const url = new URL(base + '/ws/v1/chat');
+     url.searchParams.set('session_id', sid);
+ 
+     const token = await _getWSToken(sid);
+     const subprotocols = ['bearer', `bearer.${token.replace(/=+$/,'')}`]; // padding-less safe
+ 
+     const ws = new WebSocket(url.toString(), subprotocols);
+     ws.binaryType = 'arraybuffer';
+@@ -382,51 +394,51 @@ export function openWS(options = {}){
+       const sessionActive = !!(window && window.__askchip_session_started);
+       const shouldReconnect = __WS_RECONNECT_ENABLED && sessionActive;
+ 
+       _stopKeepAlive();
+ 
+       if (!shouldReconnect) {
+         try { window.__askchip_session_started = false; } catch {}
+       } else {
+         // If we closed before receiving server "ready", a transient connect race happened.
+         if (!_gotReady){
+           _scheduleReconnect();
+         } else {
+           // If already "ready", only reconnect if session is active
+           _scheduleReconnect();
+         }
+       }
+ 
+       try {
+         window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }}));
+       } catch {}
+       if (!shouldReconnect) {
+         return;
+       }
+     };
+ 
+-    ws.onerror = (e) => console.warn('[ws] error', e);
++    ws.onerror = (e) => _console('warn', '[ws] error', e);
+ 
+     ws.onmessage = (ev) => {
+       try{
+         if (typeof ev.data === 'string'){
+           const obj = JSON.parse(ev.data);
+           const t = obj && obj.type;
+ 
+           if (t === 'Result' || t === 'Results') {
+             const channel = obj && obj.channel;
+             const alternatives = channel && channel.alternatives;
+             const transcript = alternatives && alternatives[0] && alternatives[0].transcript;
+             const isFinal =
+               (channel && typeof channel.is_final === 'boolean' && channel.is_final) ||
+               (typeof obj.final === 'boolean' && obj.final) ||
+               false;
+             const chars = typeof transcript === 'string' ? transcript.length : 0;
+             const kind = isFinal ? 'final' : 'partial';
+             _wsLog('info', `ASR result (${kind})`, {
+               final: isFinal,
+               chars,
+               text: transcript || '',
+               frameType: t,
+             });
+           }
+           
+@@ -435,130 +447,135 @@ export function openWS(options = {}){
+           if (t === 'ready') {
+             _gotReady = true;
+             // small audio unlock nudge on first ready (harmless if already unlocked)
+             try { unlockAudio().catch(()=>{}); } catch {}
+           }
+ 
+           // Re-emit as DOM events so UI can respond
+           window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
+ 
+           // --- Audio routing (WS-only) ---------------------------------------
+           if (t === 'assistant_audio') {
+             // Server provides { mime, audio_chunks:[], is_last }
+             playStream(obj);
+             return;
+           }
+           if (t === 'UtteranceEnd') {
+             // Authoritative end-of-utterance: drain and endOfStream
+             audioEnd();
+             return;
+           }
+ 
+           // --- Other control/info messages -----------------------------------
+           if (t === 'KeepAliveAck'){
+             // no-op
+           } else if (t === 'Error'){
+-            console.warn('[ws] server error:', obj.code, obj.message);
++            _console('warn', '[ws] server error:', obj.code, obj.message);
+           } else if (t === 'assistant_end'){
+             // Text is done. Do NOT teardown audio here (audio ends on UtteranceEnd).
+           } else if (t === 'TTSChunk'){
+             // (legacy/future) not used; all audio uses assistant_audio frames now.
+           }
+         } else {
+           // Binary from server (future path not used in v1 WS-only)
+         }
+       }catch(err){
+-        console.warn('[ws] message error', err);
++        _console('warn', '[ws] message error', err);
+       }
+     };
+ 
+     // be a good citizen on unload — send a normal "going away" close
+     window.addEventListener('beforeunload', () => {
+       try { ws.close(1001, 'page_unload'); } catch {}
+     }, { once:true });
+ 
+     return ws;
+   })().catch((err) => {
+     if (_ws && _ws.readyState !== WebSocket.OPEN && _ws.readyState !== WebSocket.CONNECTING){
+       try { _ws.close(1000, 'open_failed'); } catch {}
+       _ws = null;
+     }
+     throw err;
+   }).finally(() => {
+     _openPromise = null;
+   });
+ 
+   return _openPromise;
+ }
+ 
+ // NOTE: updated to accept a code + reason so we emit a clean close (avoids 1005).
+ export function closeWS(code = 1000, reason = ''){
+   _stopKeepAlive();
+   clearTimeout(_reconnectTimer);
+   _reconnecting = false;
+   try { window.__askchip_session_started = false; } catch {}
+   try {
+     if (_ws) _ws.close(code, reason || undefined);
+   } catch {}
+   _ws = null;
+ }
+ 
+ export function sendJSON(obj){
+   if (!_ws || _ws.readyState !== WebSocket.OPEN) return false;
+   try {
+     const s = JSON.stringify(obj);
+     if (bufferedAmount() > 5_000_000) { // ~5MB buffer guardrail
+-      console.warn('[ws] bufferedAmount high; sending anyway', bufferedAmount());
++      _console('warn', '[ws] bufferedAmount high; sending anyway', bufferedAmount());
+     }
+     _ws.send(s);
+     _lastUserSendTs = Date.now();
+     return true;
+   } catch(e){
+-    console.warn('[ws] sendJSON error', e);
++    _console('warn', '[ws] sendJSON error', e);
+     return false;
+   }
+ }
+ 
+ export async function sendAudioChunk(blob){
+   if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
+   _pauseKeepalive(_KEEPALIVE_REASON_UPLOAD);
+   try{
+     const buf = await blob.arrayBuffer();
+     try {
+-      console.debug('[ws] sending audio chunk', { bytes: buf.byteLength, mime: blob.type });
++      _console('debug', '[ws] sending audio chunk', { bytes: buf.byteLength, mime: blob.type });
+     } catch {}
+     _ws.send(buf);
+     _lastUserSendTs = Date.now();
+   }catch(e){
+-    console.warn('[ws] sendAudioChunk error', e);
++    _console('warn', '[ws] sendAudioChunk error', e);
+   } finally {
+     _scheduleKeepaliveResume(_KEEPALIVE_REASON_UPLOAD, _KEEPALIVE_RESUME_AFTER_UPLOAD_MS);
+   }
+ }
+ 
+ export async function sendCloseStream(){
+   // Drain the WS send buffer before closing the user turn.
+   try{
+     const deadline = Date.now() + 1500; // up to ~1.5s drain budget
+     // small sleep helper
+     const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
+     // allow two cycles to ensure MediaRecorder 'stop' enqueued the last blob
+     await sleep(20);
+     await sleep(20);
+     // drain bufferedAmount down near zero, without blocking forever
+     while (isOpen() && bufferedAmount() > 0 && Date.now() < deadline){
+       await sleep(20);
+     }
+   }catch(e){
+-    console.warn('[ws] sendCloseStream drain failed', e);
++    _console('warn', '[ws] sendCloseStream drain failed', e);
+   } finally {
+-    try { console.debug('[DBG] UI→WS', { type: 'CloseStream' }); } catch {}    
++    try { _console('debug', '[DBG] UI→WS', { type: 'CloseStream' }); } catch {}    
+     sendJSON({ type: "CloseStream" });
+   }
+ }
+ 
+ export function configure(opts = {}){
+   // ensure session id is included if caller forgot
+   const sid = getSID();
+   const payload = { type: "Configure", session_id: sid, ...opts };
+   sendJSON(payload);
+ }
++
++export const __TEST_ONLY__ = {
++  wsLog: _wsLog,
++  console: _console,
++};
+diff --git a/tests/js/logging-flag.test.mjs b/tests/js/logging-flag.test.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..1c7a2244bccbb566e9f30bd45cc585202aefa2ae
+--- /dev/null
++++ b/tests/js/logging-flag.test.mjs
+@@ -0,0 +1,120 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++
++class TestCustomEvent {
++  constructor(type, init = {}) {
++    this.type = type;
++    this.detail = init.detail;
++  }
++}
++
++const logs = [];
++const consoleStub = {
++  log: (...args) => logs.push(['log', args]),
++  info: (...args) => logs.push(['info', args]),
++  warn: (...args) => logs.push(['warn', args]),
++  error: (...args) => logs.push(['error', args]),
++  debug: (...args) => logs.push(['debug', args]),
++};
++
++function resetLogs() {
++  logs.length = 0;
++}
++
++const listenerMap = new Map();
++
++const windowStub = {
++  __askchip_config: { logging: { enabled: false } },
++  addEventListener(type, handler) {
++    if (!listenerMap.has(type)) listenerMap.set(type, new Set());
++    listenerMap.get(type).add(handler);
++  },
++  removeEventListener(type, handler) {
++    const set = listenerMap.get(type);
++    if (!set) return;
++    set.delete(handler);
++    if (set.size === 0) listenerMap.delete(type);
++  },
++  dispatchEvent(event) {
++    const set = listenerMap.get(event.type);
++    if (!set) return true;
++    for (const handler of Array.from(set)) {
++      handler(event);
++    }
++    return true;
++  },
++};
++
++windowStub.CustomEvent = TestCustomEvent;
++windowStub.dispatchEvent = windowStub.dispatchEvent.bind(windowStub);
++
++Object.defineProperty(globalThis, 'window', { value: windowStub, configurable: true });
++Object.defineProperty(globalThis, 'console', { value: consoleStub, configurable: true });
++Object.defineProperty(globalThis, 'CustomEvent', { value: TestCustomEvent, configurable: true });
++
++Object.defineProperty(globalThis, 'document', {
++  value: {
++    readyState: 'complete',
++    querySelector: () => null,
++    getElementById: () => null,
++    addEventListener: () => {},
++  },
++  configurable: true,
++});
++
++Object.defineProperty(globalThis, 'performance', {
++  value: { now: () => Date.now() },
++  configurable: true,
++});
++
++Object.defineProperty(globalThis, 'navigator', {
++  value: { mediaDevices: {} },
++  configurable: true,
++});
++
++Object.defineProperty(globalThis, '__TEST_WS_HOOKS', {
++  value: {},
++  configurable: true,
++});
++
++const wsStubModule = await import('./ws_stub.mjs');
++Object.defineProperty(globalThis, '__TEST_WS_MODULE', {
++  value: wsStubModule,
++  configurable: true,
++});
++
++const loggingMod = await import(new URL('../../static/js/util/logging.js', import.meta.url));
++const appMod = await import(new URL('../../static/js/app.js', import.meta.url));
++const wsMod = await import(new URL('../../static/js/ws.js', import.meta.url));
++const bootstrapMod = await import(new URL('../../static/js/bootstrap.js', import.meta.url));
++
++function assertNoLogs(message) {
++  assert.equal(logs.length, 0, message);
++}
++
++test('advanced logging flag suppresses module output when disabled', async () => {
++  windowStub.__askchip_config.logging.enabled = false;
++  resetLogs();
++
++  loggingMod.logIfEnabled(() => logs.push(['direct', []]));
++  assertNoLogs('logIfEnabled should not execute callback when disabled');
++
++  appMod.__TEST_ONLY__.appLog('info', 'ui message');
++  wsMod.__TEST_ONLY__.wsLog('warn', 'ws message');
++  bootstrapMod.__TEST_ONLY__.console('info', 'bootstrap message');
++  assertNoLogs('module log helpers should not emit when disabled');
++
++  windowStub.__askchip_config.logging.enabled = true;
++  resetLogs();
++
++  loggingMod.logIfEnabled(() => logs.push(['direct', []]));
++  appMod.__TEST_ONLY__.appLog('info', 'ui message');
++  wsMod.__TEST_ONLY__.wsLog('warn', 'ws message');
++  bootstrapMod.__TEST_ONLY__.console('info', 'bootstrap message');
++
++  assert.equal(logs.length, 4, 'all logging pathways should emit when enabled');
++  assert.deepEqual(
++    logs.map(([level]) => level),
++    ['direct', 'info', 'warn', 'info'],
++  );
++});
+diff --git a/tests/js/test-loader.mjs b/tests/js/test-loader.mjs
+index cdb7be1fd6b4e763d71883e272ae9227e359458e..1b2267747850b1a90c2509443184f645149b6778 100644
+--- a/tests/js/test-loader.mjs
++++ b/tests/js/test-loader.mjs
+@@ -1,17 +1,18 @@
+ import path from 'node:path';
+ import { pathToFileURL } from 'node:url';
+ 
+ const STUB_SPEC_PREFIX = '/static/js/ws.js';
+ const STUB_URL = pathToFileURL(path.resolve('./tests/js/ws_stub.mjs')).href;
+ 
+ export async function resolve(specifier, context, defaultResolve) {
+-  const prefixIndex = specifier.indexOf(STUB_SPEC_PREFIX);
+-  if (prefixIndex !== -1) {
+-    const suffix = specifier.slice(prefixIndex);
+-    const normalized = suffix.replace(/\?v=.*$/, '');
+-    if (normalized === STUB_SPEC_PREFIX) {
+-      return { url: STUB_URL, shortCircuit: true };
+-    }
++  const normalized = specifier.replace(/\?v=.*$/, '');
++  if (normalized === STUB_SPEC_PREFIX) {
++    return { url: STUB_URL, shortCircuit: true };
++  }
++  if (normalized.startsWith('/static/js/')) {
++    const withoutQuery = normalized;
++    const filePath = path.resolve('.', withoutQuery.slice('/'.length));
++    return { url: pathToFileURL(filePath).href, shortCircuit: true };
+   }
+   return defaultResolve(specifier, context, defaultResolve);
+ }
+diff --git a/tests/test_voice_ws_frontend.py b/tests/test_voice_ws_frontend.py
+index 0fa5129c0d4f292db1c3fc3e4b22719643c4275a..97b5b8fee94bb10016b6ff33ecfff0b9b132a2a5 100644
+--- a/tests/test_voice_ws_frontend.py
++++ b/tests/test_voice_ws_frontend.py
+@@ -1,16 +1,30 @@
+ import subprocess
+ from pathlib import Path
+ 
+ 
+ def test_voice_final_chunk_before_close():
+     repo_root = Path(__file__).resolve().parents[1]
+     loader = repo_root / 'tests' / 'js' / 'test-loader.mjs'
+     spec = repo_root / 'tests' / 'js' / 'voice-order.test.mjs'
+     cmd = [
+         'node',
+         '--loader',
+         str(loader),
+         '--test',
+         str(spec),
+     ]
+     subprocess.run(cmd, check=True, cwd=repo_root)
++
++
++def test_advanced_logging_flag_js():
++    repo_root = Path(__file__).resolve().parents[1]
++    loader = repo_root / 'tests' / 'js' / 'test-loader.mjs'
++    spec = repo_root / 'tests' / 'js' / 'logging-flag.test.mjs'
++    cmd = [
++        'node',
++        '--loader',
++        str(loader),
++        '--test',
++        str(spec),
++    ]
++    subprocess.run(cmd, check=True, cwd=repo_root)

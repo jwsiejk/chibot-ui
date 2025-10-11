@@ -2,6 +2,7 @@
 import { closeWS, sendCloseStream, sendJSON } from './ws_module.js';
 import { getSID } from '/static/js/util/sid.js';
 import { renderSuggestions } from '/static/js/suggestions.js';
+import { logIfEnabled } from './util/logging.js';
 
 // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
 // Exports: onEnd, onSend, handleAssistantFrame
@@ -33,27 +34,38 @@ function _getActiveTurnTraceId() {
   }
 }
 
+function _console(level, ...args) {
+  logIfEnabled(() => {
+    try {
+      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+      method?.apply(console, args);
+    } catch {}
+  });
+}
+
 function _appLog(level, message, detail = undefined) {
-  try {
-    const method = typeof console?.[level] === 'function' ? console[level] : console.log;
-    if (!method) return;
-    const traceId = _getActiveTurnTraceId();
-    const prefix = traceId ? `[ui][trace:${traceId}]` : '[ui]';
-    if (detail === undefined) {
-      method.call(console, `${prefix} ${message}`);
-      return;
-    }
-    if (detail && typeof detail === 'object') {
-      const payload = traceId && detail.traceId !== traceId ? { ...detail, traceId } : detail;
-      method.call(console, `${prefix} ${message}`, payload);
-      return;
-    }
-    if (traceId) {
-      method.call(console, `${prefix} ${message}`, detail, `trace:${traceId}`);
-      return;
-    }
-    method.call(console, `${prefix} ${message}`, detail);
-  } catch {}
+  logIfEnabled(() => {
+    try {
+      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+      if (!method) return;
+      const traceId = _getActiveTurnTraceId();
+      const prefix = traceId ? `[ui][trace:${traceId}]` : '[ui]';
+      if (detail === undefined) {
+        method.call(console, `${prefix} ${message}`);
+        return;
+      }
+      if (detail && typeof detail === 'object') {
+        const payload = traceId && detail.traceId !== traceId ? { ...detail, traceId } : detail;
+        method.call(console, `${prefix} ${message}`, payload);
+        return;
+      }
+      if (traceId) {
+        method.call(console, `${prefix} ${message}`, detail, `trace:${traceId}`);
+        return;
+      }
+      method.call(console, `${prefix} ${message}`, detail);
+    } catch {}
+  });
 }
 
 try {
@@ -450,7 +462,7 @@ function _handleSuggestionClick(text){
   if (input) {
     try { input.value = suggestion; } catch {}
   }
-  try { onSend(suggestion); } catch (err) { console.warn('[suggestion click] send failed', err); }
+  try { onSend(suggestion); } catch (err) { _console('warn', '[suggestion click] send failed', err); }
 }
 
 export function handleAssistantFrame(d){
@@ -523,7 +535,7 @@ export function handleAssistantFrame(d){
     if (key !== _lastSuggestionsKey){
       _lastSuggestionsKey = key;
       try { renderSuggestions(items, _handleSuggestionClick); } catch (err) {
-        console.warn('[handleAssistantFrame] renderSuggestions failed', err);
+        _console('warn', '[handleAssistantFrame] renderSuggestions failed', err);
       }
     }
     return;
@@ -569,7 +581,7 @@ export async function onSend(overrideText){
       // Server expects: type='user_msg' and correlation_user_msg_id
       sendSucceeded = sendJSON({ type: 'user_msg', text: val, correlation_user_msg_id: correlation, session_id: sid });
     } catch (e){
-      console.warn('[onSend] WS send failed', e);
+      _console('warn', '[onSend] WS send failed', e);
       sendSucceeded = false;
     }
 
@@ -589,7 +601,7 @@ export async function onSend(overrideText){
     }
 
   } catch (e){
-    console.warn('[onSend] error', e);
+    _console('warn', '[onSend] error', e);
   }
 }
 
@@ -637,3 +649,7 @@ try {
 /* ---------------- Expose minimal helpers (optional) ---------------- */
 
 // (Intentionally minimal public surface)
+export const __TEST_ONLY__ = {
+  appLog: _appLog,
+  console: _console,
+};

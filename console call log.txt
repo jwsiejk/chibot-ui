@@ -1,712 +1,128 @@
-bootstrap.js?v=1760213721:364 [AskChip] bootstrap loaded
-debug.js?v=1760213721:4 [DBG] debug:on Object
-ws.js?v=1760213721:340 [ws] openWS build Object
-ws.js?v=1760213721:344 [ws] openWS options= Object reconnect= true
-bootstrap.js?v=1760213721:209 [bootstrap] startOnce arming greet gate before greet configure
-voice.js:387 [voice] greet gate activation requested Object
-voice.js:387 [voice] greet gate armed Object
-bootstrap.js?v=1760213721:211 [bootstrap] startOnce greet gate armed — proceeding to configure greet
-debug.js?v=1760213721:4 [DBG] UI→WS Object
-bootstrap.js?v=1760213721:213 [bootstrap] startOnce greet configure sent — recorder setup will follow
-bootstrap.js?v=1760213721:86 [WS→UI] {"type":"ready","session_id":"e6185cf0-09ff-478a-825d-4c0607e7f039"}
-voice.js:387 [voice] mic_device_selected Object
-bootstrap.js?v=1760213721:230 [bootstrap] startOnce mic initialized — about to arm VAD (greet gate should already be active)
-voice.js:387 [voice] mic_start Object
-voice.js:387 [voice] ensure AudioStart called Object
-voice.js:387 [voice] AudioStart waiting for greet gate Object
-voice.js:387 [voice][trace:l0b_1] turn trace started Object
-voice.js:387 [voice][trace:l0b_1] vad_speech_start Object
-voice.js:387 [voice][trace:l0b_1] speech started Object
-voice.js:387 [voice][trace:l0b_1] greet gate bypassed via barge-in Object
-voice.js:387 [voice][trace:l0b_1] greet gate released Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-debug.js?v=1760213721:4 [DBG] UI→WS Object
-voice.js:387 [voice][trace:l0b_1] AudioStart sent Object
-debug.js?v=1760213721:4 [DBG] UI→WS Object
-voice.js:387 [voice][trace:l0b_1] AudioStart sent Object
-voice.js:387 [voice][trace:l0b_1] recorder primed Object
-voice.js:387 [voice][trace:l0b_1] recorder primed Object
-voice.js:387 [voice][trace:l0b_1] recorder streaming Object
-bootstrap.js?v=1760213721:232 [bootstrap] startOnce VAD armed — recorder priming should now be able to observe greet gate state
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(614)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(614)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(673)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(673)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(653)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(653)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(669)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(669)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(667)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(667)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(650)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(650)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(628)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(628)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-bootstrap.js?v=1760213721:86 [WS→UI] {"type":"state","phase":"paused"}
-bootstrap.js?v=1760213721:86 [WS→UI] {"type":"state","phase":"ready"}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(679)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(679)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(647)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(647)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(695)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(695)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(670)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(670)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(678)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(678)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(656)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(656)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(651)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(651)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(624)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(624)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(658)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(658)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(664)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(664)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(640)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(640)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(638)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(638)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(637)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(637)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(598)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(598)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(570)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(570)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(576)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(576)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(575)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(575)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(576)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(576)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(606)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(606)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(669)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(669)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(675)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(675)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(678)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(678)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(686)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(686)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(652)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(652)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(707)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(707)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(646)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(646)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(661)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(661)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(646)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(646)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(673)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(673)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(646)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(646)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(656)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(656)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(669)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(669)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(664)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(664)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(672)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called Object
-ws.js?v=1760213721:527 [ws] sending audio chunk Object
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(672)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk Object
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 630, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(630)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 630, durationMs: null, timecode: 7377.66, mime: 'audio/webm;codecs=opus', totalBytes: 53814, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 630, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(630)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 630, durationMs: null, timecode: 7377.343, mime: 'audio/webm;codecs=opus', totalBytes: 54444, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 613, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(613)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 613, durationMs: null, timecode: 7559.12, mime: 'audio/webm;codecs=opus', totalBytes: 55057, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 613, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(613)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 613, durationMs: null, timecode: 7559.036, mime: 'audio/webm;codecs=opus', totalBytes: 55670, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 629, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(629)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 629, durationMs: null, timecode: 7739.72, mime: 'audio/webm;codecs=opus', totalBytes: 56299, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 629, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(629)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 629, durationMs: null, timecode: 7740.613, mime: 'audio/webm;codecs=opus', totalBytes: 56928, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 599, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(599)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 599, durationMs: null, timecode: 7917.651, mime: 'audio/webm;codecs=opus', totalBytes: 57527, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 599, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(599)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 599, durationMs: null, timecode: 7918.347, mime: 'audio/webm;codecs=opus', totalBytes: 58126, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 609, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(609)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 609, durationMs: null, timecode: 8097.556, mime: 'audio/webm;codecs=opus', totalBytes: 58735, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 609, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(609)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 609, durationMs: null, timecode: 8097.243, mime: 'audio/webm;codecs=opus', totalBytes: 59344, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 595, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(595)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 595, durationMs: null, timecode: 8277.601, mime: 'audio/webm;codecs=opus', totalBytes: 59939, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 595, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(595)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 595, durationMs: null, timecode: 8278.271, mime: 'audio/webm;codecs=opus', totalBytes: 60534, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 663, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(663)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 663, durationMs: null, timecode: 8457.49, mime: 'audio/webm;codecs=opus', totalBytes: 61197, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 663, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(663)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 663, durationMs: null, timecode: 8457.16, mime: 'audio/webm;codecs=opus', totalBytes: 61860, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 581, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(581)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 581, durationMs: null, timecode: 8637.172, mime: 'audio/webm;codecs=opus', totalBytes: 62441, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 581, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(581)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 581, durationMs: null, timecode: 8637.958, mime: 'audio/webm;codecs=opus', totalBytes: 63022, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 584, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(584)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 584, durationMs: null, timecode: 8817.365, mime: 'audio/webm;codecs=opus', totalBytes: 63606, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 584, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(584)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 584, durationMs: null, timecode: 8818.127, mime: 'audio/webm;codecs=opus', totalBytes: 64190, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 571, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(571)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 571, durationMs: null, timecode: 8997.811, mime: 'audio/webm;codecs=opus', totalBytes: 64761, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 571, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(571)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 571, durationMs: null, timecode: 8997.609, mime: 'audio/webm;codecs=opus', totalBytes: 65332, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 613, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(613)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 613, durationMs: null, timecode: 9177.968, mime: 'audio/webm;codecs=opus', totalBytes: 65945, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 613, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(613)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 613, durationMs: null, timecode: 9177.778, mime: 'audio/webm;codecs=opus', totalBytes: 66558, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 642, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(642)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 642, durationMs: null, timecode: 9357.197, mime: 'audio/webm;codecs=opus', totalBytes: 67200, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 642, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(642)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 642, durationMs: null, timecode: 9357.892, mime: 'audio/webm;codecs=opus', totalBytes: 67842, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 654, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(654)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 654, durationMs: null, timecode: 9538.734, mime: 'audio/webm;codecs=opus', totalBytes: 68496, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 654, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(654)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 654, durationMs: null, timecode: 9538.593, mime: 'audio/webm;codecs=opus', totalBytes: 69150, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 633, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(633)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 633, durationMs: null, timecode: 9717.671, mime: 'audio/webm;codecs=opus', totalBytes: 69783, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 633, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(633)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 633, durationMs: null, timecode: 9717.849, mime: 'audio/webm;codecs=opus', totalBytes: 70416, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 669, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(669)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 669, durationMs: null, timecode: 9898.379, mime: 'audio/webm;codecs=opus', totalBytes: 71085, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 669, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(669)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 669, durationMs: null, timecode: 9898.663, mime: 'audio/webm;codecs=opus', totalBytes: 71754, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 669, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(669)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 669, durationMs: null, timecode: 10078.894, mime: 'audio/webm;codecs=opus', totalBytes: 72423, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 669, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(669)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 669, durationMs: null, timecode: 10078.726, mime: 'audio/webm;codecs=opus', totalBytes: 73092, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 675, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(675)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 675, durationMs: null, timecode: 10257.668, mime: 'audio/webm;codecs=opus', totalBytes: 73767, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 675, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(675)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 675, durationMs: null, timecode: 10257.437, mime: 'audio/webm;codecs=opus', totalBytes: 74442, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 638, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(638)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 638, durationMs: null, timecode: 10437.791, mime: 'audio/webm;codecs=opus', totalBytes: 75080, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 638, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(638)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 638, durationMs: null, timecode: 10437.517, mime: 'audio/webm;codecs=opus', totalBytes: 75718, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 659, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(659)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 659, durationMs: null, timecode: 10618.245, mime: 'audio/webm;codecs=opus', totalBytes: 76377, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 659, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(659)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 659, durationMs: null, timecode: 10618.943, mime: 'audio/webm;codecs=opus', totalBytes: 77036, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 657, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(657)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 657, durationMs: null, timecode: 10797.573, mime: 'audio/webm;codecs=opus', totalBytes: 77693, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 657, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(657)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 657, durationMs: null, timecode: 10798.222, mime: 'audio/webm;codecs=opus', totalBytes: 78350, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 705, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(705)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 705, durationMs: null, timecode: 10977.292, mime: 'audio/webm;codecs=opus', totalBytes: 79055, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 705, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(705)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 705, durationMs: null, timecode: 10977.477, mime: 'audio/webm;codecs=opus', totalBytes: 79760, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 654, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(654)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 654, durationMs: null, timecode: 11157.978, mime: 'audio/webm;codecs=opus', totalBytes: 80414, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 654, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(654)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 654, durationMs: null, timecode: 11157.697, mime: 'audio/webm;codecs=opus', totalBytes: 81068, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 661, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(661)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 661, durationMs: null, timecode: 11337.988, mime: 'audio/webm;codecs=opus', totalBytes: 81729, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 661, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(661)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 661, durationMs: null, timecode: 11338.702, mime: 'audio/webm;codecs=opus', totalBytes: 82390, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 684, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(684)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 684, durationMs: null, timecode: 11518.728, mime: 'audio/webm;codecs=opus', totalBytes: 83074, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 684, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(684)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 684, durationMs: null, timecode: 11519.364, mime: 'audio/webm;codecs=opus', totalBytes: 83758, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 678, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(678)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 678, durationMs: null, timecode: 11700.307, mime: 'audio/webm;codecs=opus', totalBytes: 84436, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 678, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(678)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 678, durationMs: null, timecode: 11700.221, mime: 'audio/webm;codecs=opus', totalBytes: 85114, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 696, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(696)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 696, durationMs: null, timecode: 11877.736, mime: 'audio/webm;codecs=opus', totalBytes: 85810, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 696, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(696)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 696, durationMs: null, timecode: 11877.435, mime: 'audio/webm;codecs=opus', totalBytes: 86506, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 684, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(684)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 684, durationMs: null, timecode: 12058.291, mime: 'audio/webm;codecs=opus', totalBytes: 87190, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 684, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(684)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 684, durationMs: null, timecode: 12058.087, mime: 'audio/webm;codecs=opus', totalBytes: 87874, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 683, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(683)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 683, durationMs: null, timecode: 12238.003, mime: 'audio/webm;codecs=opus', totalBytes: 88557, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 683, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(683)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 683, durationMs: null, timecode: 12237.808, mime: 'audio/webm;codecs=opus', totalBytes: 89240, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 665, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(665)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 665, durationMs: null, timecode: 12418.244, mime: 'audio/webm;codecs=opus', totalBytes: 89905, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 665, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(665)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 665, durationMs: null, timecode: 12418.078, mime: 'audio/webm;codecs=opus', totalBytes: 90570, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 660, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(660)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 660, durationMs: null, timecode: 12597.15, mime: 'audio/webm;codecs=opus', totalBytes: 91230, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 660, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(660)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 660, durationMs: null, timecode: 12597.757, mime: 'audio/webm;codecs=opus', totalBytes: 91890, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 676, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(676)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 676, durationMs: null, timecode: 12778.955, mime: 'audio/webm;codecs=opus', totalBytes: 92566, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 676, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(676)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 676, durationMs: null, timecode: 12779.672, mime: 'audio/webm;codecs=opus', totalBytes: 93242, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 676, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(676)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 676, durationMs: null, timecode: 12958.17, mime: 'audio/webm;codecs=opus', totalBytes: 93918, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 676, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(676)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 676, durationMs: null, timecode: 12957.973, mime: 'audio/webm;codecs=opus', totalBytes: 94594, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 666, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(666)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 666, durationMs: null, timecode: 13138.278, mime: 'audio/webm;codecs=opus', totalBytes: 95260, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 666, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(666)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 666, durationMs: null, timecode: 13138.111, mime: 'audio/webm;codecs=opus', totalBytes: 95926, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 697, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(697)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 697, durationMs: null, timecode: 13317.594, mime: 'audio/webm;codecs=opus', totalBytes: 96623, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 697, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(697)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 697, durationMs: null, timecode: 13318.376, mime: 'audio/webm;codecs=opus', totalBytes: 97320, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 668, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(668)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 668, durationMs: null, timecode: 13498.554, mime: 'audio/webm;codecs=opus', totalBytes: 97988, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 668, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(668)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 668, durationMs: null, timecode: 13498.325, mime: 'audio/webm;codecs=opus', totalBytes: 98656, …}
-bootstrap.js?v=1760213721:86 [WS→UI] {"type":"assistant_chunk","turn_id":"f99b5808396f4a93b721d097a5f8b002","text":"Hey James, what would you like to accomplish today?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps"}
-bootstrap.js?v=1760213721:86 [WS→UI] {"type":"suggestions","turn_id":"f99b5808396f4a93b721d097a5f8b002","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"},{"text":"Explain the business value"}]}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 663, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(663)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 663, durationMs: null, timecode: 13677.73, mime: 'audio/webm;codecs=opus', totalBytes: 99319, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 663, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(663)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 663, durationMs: null, timecode: 13677.486, mime: 'audio/webm;codecs=opus', totalBytes: 99982, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 661, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(661)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 661, durationMs: null, timecode: 13857.657, mime: 'audio/webm;codecs=opus', totalBytes: 100643, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 661, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(661)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 661, durationMs: null, timecode: 13858.891, mime: 'audio/webm;codecs=opus', totalBytes: 101304, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 694, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(694)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 694, durationMs: null, timecode: 14037.773, mime: 'audio/webm;codecs=opus', totalBytes: 101998, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 694, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(694)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 694, durationMs: null, timecode: 14037.544, mime: 'audio/webm;codecs=opus', totalBytes: 102692, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 658, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(658)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 658, durationMs: null, timecode: 14217.452, mime: 'audio/webm;codecs=opus', totalBytes: 103350, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 658, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(658)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 658, durationMs: null, timecode: 14218.137, mime: 'audio/webm;codecs=opus', totalBytes: 104008, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 676, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(676)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 676, durationMs: null, timecode: 14398.136, mime: 'audio/webm;codecs=opus', totalBytes: 104684, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 676, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(676)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 676, durationMs: null, timecode: 14397.892, mime: 'audio/webm;codecs=opus', totalBytes: 105360, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 679, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(679)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 679, durationMs: null, timecode: 14577.826, mime: 'audio/webm;codecs=opus', totalBytes: 106039, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 679, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(679)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 679, durationMs: null, timecode: 14577.5, mime: 'audio/webm;codecs=opus', totalBytes: 106718, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 646, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(646)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 646, durationMs: null, timecode: 14759.342, mime: 'audio/webm;codecs=opus', totalBytes: 107364, …}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-ws.js?v=1760213721:527 [ws] sending audio chunk {bytes: 646, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760213721:4 [DBG] UI→WS ArrayBuffer(646)
-voice.js:387 [voice][trace:l0b_1] streamed audio chunk {bytes: 646, durationMs: null, timecode: 14759.961, mime: 'audio/webm;codecs=opus', totalBytes: 108010, …}
-voice.js:387 [voice][trace:l0b_1] post_final_hold_applied {event: 'post_final_hold_applied', holdMs: 600, holdUntil: 25890.100000023842, source: 'ws_final', traceId: 'l0b_1'}
-voice.js:387 [voice][trace:l0b_1] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'server_final', traceId: 'l0b_1'}
-voice.js:387 [voice][trace:l0b_1] post_final_hold_applied {event: 'post_final_hold_applied', holdMs: 600, holdUntil: 25890.700000047684, source: 'stop_recorder', traceId: 'l0b_1'}
-voice.js:387 [voice][trace:l0b_1] recorder_stop_invoked {event: 'recorder_stop_invoked', reason: 'server_final', traceId: 'l0b_1'}
-voice.js:383 [voice][trace:l0b_1] recorder.stop() invoked
-voice.js:387 [voice][trace:l0b_1] recorder stopped {bytesSent: 108010, mime: 'audio/webm;codecs=opus', traceId: 'l0b_1'}
-voice.js:387 [voice][trace:l0b_1] turn_close_signal {event: 'turn_close_signal', frame: {…}, bytesSent: 108010, traceId: 'l0b_1'}
-voice.js:387 [voice][trace:l0b_1] turn-end signal sent {bytesSent: 108010, traceId: 'l0b_1'}
-ws.js?v=1760213721:554 [DBG] UI→WS {type: 'CloseStream'}
-debug.js?v=1760213721:4 [DBG] UI→WS {type: 'CloseStream'}
-voice.js:387 [voice][trace:l0b_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: false, turnHintAwaitingWS: false, traceId: 'l0b_1'}
-debug.js?v=1760213721:4 [DBG] UI→WS {type: 'AudioStart', mime: 'audio/webm; codecs=opus'}
-voice.js:387 [voice][trace:l0b_1] AudioStart sent {mime: 'audio/webm; codecs=opus', attempt: 'immediate', traceId: 'l0b_1'}
-voice.js:387 [voice][trace:l0b_1] recorder primed {mime: 'audio/webm; codecs=opus', timeslice: 150, traceId: 'l0b_1'}
+bootstrap.js?v=1760219050:362 [AskChip] bootstrap loaded
+debug.js?v=1760219050:4 [DBG] debug:on Object
+bootstrap.js?v=1760219050:174 [Violation] 'click' handler took 184ms
+ws.js?v=1760219050:340 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760219050', version: '1760219050', flags: undefined, reconnectEnabled: true, sessionStarted: false}
+ws.js?v=1760219050:344 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760219050:209 [bootstrap] startOnce sending greet configure
+debug.js?v=1760219050:4 [DBG] UI→WS {type: 'Configure', session_id: '28ca13d2-dfc9-4153-b6ef-219555982afd', greet: true, reset: 1}
+bootstrap.js?v=1760219050:211 [bootstrap] startOnce greet configure sent — recorder setup will follow
+bootstrap.js?v=1760219050:86 [WS→UI] {"type":"ready","session_id":"28ca13d2-dfc9-4153-b6ef-219555982afd"}
+voice.js:74 [voice] mic_device_selected {event: 'mic_device_selected', label: 'Microphone Array (Intel® Smart Sound Technology for Digital Microphones)', sampleRate: 48000, channels: 1}
+bootstrap.js?v=1760219050:228 [bootstrap] startOnce mic initialized — about to arm VAD for voice turns
+voice.js:74 [voice] mic_start {event: 'mic_start', sampleRate: 48000, pollMs: 33}
+bootstrap.js?v=1760219050:230 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
+voice.js:74 [voice] vad_speech_start {event: 'vad_speech_start'}
+voice.js:370 [voice] recorder started {mime: 'audio/webm; codecs=opus', timeslice: 150}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2094, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2094)
+voice.js:309 [voice] streamed audio chunk {bytes: 2094}
+bootstrap.js?v=1760219050:86 [WS→UI] {"type":"state","phase":"paused"}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+bootstrap.js?v=1760219050:86 [WS→UI] {"type":"state","phase":"paused"}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+2bootstrap.js?v=1760219050:86 [WS→UI] {"type":"state","phase":"ready"}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:74 [voice] vad_speech_end {event: 'vad_speech_end', reason: 'vad_silence'}
+voice.js:74 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'vad_silence'}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 965, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(965)
+voice.js:309 [voice] streamed audio chunk {bytes: 965}
+voice.js:346 [voice] recorder stopped {bytesSent: 40733, mime: 'audio/webm; codecs=opus'}
+ws.js?v=1760219050:554 [DBG] UI→WS {type: 'CloseStream'}
+debug.js?v=1760219050:4 [DBG] UI→WS {type: 'CloseStream'}
+ws.js?v=1760219050:57 [ws] ASR result (partial) {final: false, chars: 9, text: 'Oh, shit.', frameType: 'Results'}
+ws.js?v=1760219050:57 [ws] ASR result (final) {final: true, chars: 9, text: 'Oh, shit.', frameType: 'Results'}
+app.js:48 [ui] user transcript bubble added {chars: 9, text: 'Oh, shit.'}
+voice.js:74 [voice] vad_speech_start {event: 'vad_speech_start'}
+voice.js:370 [voice] recorder started {mime: 'audio/webm; codecs=opus', timeslice: 150}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2094, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2094)
+voice.js:309 [voice] streamed audio chunk {bytes: 2094}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:57 [ws] ASR result (partial) {final: false, chars: 20, text: 'Some help with Flash', frameType: 'Results'}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760219050:57 [ws] ASR result (final) {final: true, chars: 27, text: 'Some help with flash blade.', frameType: 'Results'}
+app.js:48 [ui] user transcript bubble added {chars: 27, text: 'Some help with flash blade.'}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:309 [voice] streamed audio chunk {bytes: 2898}
+voice.js:74 [voice] vad_speech_end {event: 'vad_speech_end', reason: 'vad_silence'}
+voice.js:74 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'vad_silence'}
+ws.js?v=1760219050:527 [ws] sending audio chunk {bytes: 1931, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760219050:4 [DBG] UI→WS ArrayBuffer(1931)
+voice.js:309 [voice] streamed audio chunk {bytes: 1931}
+voice.js:346 [voice] recorder stopped {bytesSent: 38801, mime: 'audio/webm; codecs=opus'}
+ws.js?v=1760219050:554 [DBG] UI→WS {type: 'CloseStream'}
+debug.js?v=1760219050:4 [DBG] UI→WS {type: 'CloseStream'}
+voice.js:74 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
+ws.js?v=1760219050:554 [DBG] UI→WS {type: 'CloseStream'}
+debug.js?v=1760219050:4 [DBG] UI→WS {type: 'CloseStream'}
+voice.js:74 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
+bootstrap.js?v=1760219050:115 [WS close] {code: 1000, reason: 'normal closure'}
