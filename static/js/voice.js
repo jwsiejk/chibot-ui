@@ -626,6 +626,7 @@ function _stopRecorder(detail = null) {
     _logLifecycle('recorder_stop_invoked', {
       reason: detail?.reason || null,
     }, 'info');
+    try { console.debug('[voice] recorder.stop()'); } catch {}     
     recorder.stop();
   } catch {}
   // intentionally keep state.rec reference nullable here; onstop handler handles final close
@@ -884,6 +885,8 @@ function _onSpeechEndCommitted(detail = null) {
   const reason = detail?.reason || 'vad_silence';
   const now = performance.now ? performance.now() : Date.now();
   const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
+
+  try { console.debug('[voice] vad_speech_end'); } catch {}   
 
   if (state.bargeConfirmActive) {
     _clearBargeConfirm(true);
