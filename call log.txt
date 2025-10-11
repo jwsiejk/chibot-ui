@@ -1,681 +1,332 @@
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] = connection is CONNECTING
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < GET /ws/v1/chat?session_id=84892317-44f6-4c40-ad17-4d41e82076e2 HTTP/1.1
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < host: chibot-ui.onrender.com
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < accept-encoding: gzip, br
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < accept-language: en-US,en;q=0.9
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < cache-control: no-cache
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < cdn-loop: cloudflare; loops=1
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < cf-connecting-ip: 170.85.73.7
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < cf-ipcountry: US
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < cf-ray: 98ccb1074b906a50-EWR
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < cf-visitor: {"scheme":"https"}
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < connection: Upgrade
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < cookie: XSRF-TOKEN=830379b217bacad0e4fdce9aaf0b0689; session=.eJwNzEEOgyAQBdC7zNo0tDZVWPUmZMBPg2IhA6QL493rAd47yPoqwba84UuG5lGNk3aP--TY86LwDIuHZg7KqdesaaAiOcQE6_NeEhrINOkYqFcImYOwc0xXtf5qxLq9SxfUloU_uF2GzvMP4WsoJQ.aOoJJQ.PL16hjdYNBy1oVffQdtkhyJ5xL8
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < origin: https://chibot-ui.onrender.com
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < pragma: no-cache
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < render-cf-start-time-msec: 244
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < render-cf-start-time-sec: 1760168239
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < render-proxy-ttl: 4
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < rndr-id: 7f36adff-bc72-4865
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < sec-websocket-key: T3smRCLUiUVn2nq8ec4s9g==
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < sec-websocket-protocol: bearer, bearer.eyJzaWQiOiI4NDg5MjMxNy00NGY2LTRjNDAtYWQxNy00ZDQxZTgyMDc2ZTIiLCJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsImlhdCI6MTc2MDE2ODIzOSwiZXhwIjoxNzYwMTY4NTM5LCJqdGkiOiJDUlA0T2V1enZyVVBadGZkS0JPOHlBIn0.Yg1iOgS_9LVhqfbeg6sAyZ8-HWmSluLazgSGeMjgdtw
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < sec-websocket-version: 13
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < true-client-ip: 170.85.73.7
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < upgrade: websocket
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < x-forwarded-for: 170.85.73.7, 10.226.91.1
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < x-forwarded-proto: https
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < x-render-as-num: 22616
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < x-render-threat-score: 0
-[2025-10-11 07:37:19 +0000] [58] [INFO] 170.85.73.7:0 - "WebSocket /ws/v1/chat?session_id=84892317-44f6-4c40-ad17-4d41e82076e2" [accepted]
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] > HTTP/1.1 101 Switching Protocols
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] > Upgrade: websocket
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] > Connection: Upgrade
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] > Sec-WebSocket-Accept: A6j8LYQAujinrW0htko88XTXeMc=
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] > Sec-WebSocket-Protocol: bearer
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] > date: Sat, 11 Oct 2025 07:37:19 GMT
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] > server: uvicorn
-[2025-10-11 07:37:19 +0000] [58] [INFO] connection open
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] = connection is OPEN
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] > TEXT '{"type":"ready","session_id":"84892317-44f6-4c40-ad17-4d41e82076e2"}' [68 bytes]
-[2025-10-11 07:37:19 +0000] [58] [DEBUG] < TEXT '{"type":"Configure","session_id":"84892317-44f6..."greet":true,"reset":1}' [95 bytes]
-{"sid":"pending","enabled":true,"echo_ws":true,"event":"mic_capture_cfg","ts":1760168239.2894275}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","enabled":true,"echo_ws":true,"event":"mic_capture_cfg","ts":1760168239.289509}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","conn_id":"760cd5a6a36b41628f644bba9e6c9c9f","client_ip":"170.85.73.7","path":"/ws/v1/chat","query_string":"session_id=84892317-44f6-4c40-ad17-4d41e82076e2","event":"ws_conn_open","ts":1760168239.2898111}
-{"conn_id":"760cd5a6a36b41628f644bba9e6c9c9f","sid":"84892317-44f6-4c40-ad17-4d41e82076e2","active":1,"event":"ws_conn_active","ts":1760168239.289856}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","type":"Configure","event":"ws_json_recv","ts":1760168239.4016254}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","via":"Configure","event":"ws_greet_recv","ts":1760168239.401681}
-10.225.24.231:37934 - "GET /api/v1/health HTTP/1.1" 200
-10.225.24.231:37936 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-11 09:10:57 +0000] [58] [DEBUG] > server: uvicorn
+[2025-10-11 09:10:57 +0000] [58] [INFO] connection open
+[2025-10-11 09:10:57 +0000] [58] [DEBUG] = connection is OPEN
+[2025-10-11 09:10:57 +0000] [58] [DEBUG] > TEXT '{"type":"ready","session_id":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd"}' [68 bytes]
+[2025-10-11 09:10:57 +0000] [58] [DEBUG] < TEXT '{"type":"Configure","session_id":"6e5b2b3c-922a..."greet":true,"reset":1}' [95 bytes]
+{"sid":"pending","enabled":true,"echo_ws":true,"event":"mic_capture_cfg","ts":1760173857.7145119}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","enabled":true,"echo_ws":true,"event":"mic_capture_cfg","ts":1760173857.7145905}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","conn_id":"0b818ed5fe454d97a8ae64c164bc06d7","client_ip":"170.85.73.7","path":"/ws/v1/chat","query_string":"session_id=6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","event":"ws_conn_open","ts":1760173857.7149642}
+{"conn_id":"0b818ed5fe454d97a8ae64c164bc06d7","sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","active":1,"event":"ws_conn_active","ts":1760173857.7150059}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","type":"Configure","event":"ws_json_recv","ts":1760173857.827106}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","via":"Configure","event":"ws_greet_recv","ts":1760173857.8271618}
+10.225.25.233:36642 - "GET /api/v1/health HTTP/1.1" 200
 170.85.73.7:0 - "GET /static/js/voice/pre_roll_processor.js HTTP/1.1" 200
-10.225.24.231:48436 - "GET /api/v1/health HTTP/1.1" 200
-10.225.24.231:48444 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-11 07:37:30 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_chunk","turn_id":"ecbd55fce7...er_move":"offer_steps"}' [186 bytes]
-[2025-10-11 07:37:30 +0000] [58] [DEBUG] > TEXT '{"type":"suggestions","turn_id":"ecbd55fce7354c... the business value"}]}' [209 bytes]
-[2025-10-11 07:37:30 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_end","turn_id":"ecbd55fce7354c06a66513a2100c2465"}' [69 bytes]
-[2025-10-11 07:37:31 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"ecbd55fce7...CgQ="],"is_last":false}' [11051 bytes]
-[2025-10-11 07:37:31 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"ecbd55fce7...SZA="],"is_last":false}' [11051 bytes]
-[2025-10-11 07:37:31 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"ecbd55fce7...0Rg="],"is_last":false}' [11051 bytes]
-[2025-10-11 07:37:31 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"ecbd55fce7...qqo="],"is_last":false}' [11051 bytes]
-[2025-10-11 07:37:31 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"ecbd55fce7...qqqo="],"is_last":true}' [1078 bytes]
-[2025-10-11 07:37:31 +0000] [58] [DEBUG] > TEXT '{"type":"UtteranceEnd","turn_id":"ecbd55fce7354c06a66513a2100c2465"}' [68 bytes]
-[2025-10-11 07:37:31 +0000] [58] [DEBUG] > TEXT '{"type":"state","phase":"ready"}' [32 bytes]
-10.225.24.231:56400 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-11 07:37:36 +0000] [58] [DEBUG] < TEXT '{"type":"AudioStart","mime":"audio/webm;codecs=opus"}' [53 bytes]
-[2025-10-11 07:37:36 +0000] [58] [DEBUG] < BINARY 43 c3 81 3e 58 80 fb 03 3d 48 6c d2 56 0e 8b 52 ... 34 35 b9 54 ca 83 38 a3 [2898 bytes]
-[2025-10-11 07:37:36 +0000] [58] [DEBUG] < BINARY 43 c3 81 3f 0c 80 fb 03 01 75 4c 78 63 42 e0 c4 ... d7 b4 a5 49 92 3a 5e a3 [2898 bytes]
-[2025-10-11 07:37:36 +0000] [58] [DEBUG] > TEXT '{"type":"state","phase":"paused"}' [33 bytes]
-[2025-10-11 07:37:36 +0000] [58] [DEBUG] < BINARY 43 c3 81 3f c0 80 fb 03 dc 4c 63 18 5b 38 00 03 ... 67 d4 08 e1 01 51 25 a3 [2898 bytes]
-[2025-10-11 07:37:36 +0000] [58] [DEBUG] > TEXT '{"type":"state","phase":"ready"}' [32 bytes]
-[2025-10-11 07:37:36 +0000] [58] [DEBUG] < BINARY 43 c3 81 40 74 80 fb 03 d6 83 9e 5b 5a 15 75 94 ... 99 35 16 d1 17 e9 26 a3 [2898 bytes]
-[2025-10-11 07:37:36 +0000] [58] [DEBUG] < BINARY 43 c3 81 41 28 80 fb 03 5a de f4 0a 5d 26 b6 39 ... c7 a7 22 83 5f ac 74 a3 [2898 bytes]
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","type":"AudioStart","event":"ws_json_recv","ts":1760168256.0674274}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","mime":"audio/webm;codecs=opus","event":"turn_audio_start","ts":1760168256.0674956}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","mime":"audio/webm;codecs=opus","container":"webm","codec":"opus","containerized_opus":true,"gate_open":true,"guess_source":"meta","event":"ws_audio_hint","ts":1760168256.0675097}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168256.0675325}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","first8_hex":"43c3813e5880fb03","event":"audio_sig","ts":1760168256.0675435}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"first_bytes":2898,"event":"turn_start","ts":1760168256.0680404}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":1,"last_bytes":2898,"event":"mic_capture_append","ts":1760168256.0680802}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"queued":1,"queued_bytes":2898,"dg_state":"closed","connect_ready_reason":"audio_start_webm","event":"asr_connect_schedule","ts":1760168256.0681112}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"event":"ws_audio_provider_connecting","ts":1760168256.068127}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","transport":{"protocol":"websocket","container":"webm","codec":"opus","containerized_opus":true,"features":[]},"event":"asr_connect_begin","ts":1760168256.0682058}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":null,"already_open":false,"closing":false,"closed":false,"event":"dg_connect_begin","ts":1760168256.0683393}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"qs":"?interim_results=true&model=nova-2&punctuate=true&smart_format=true&tag=miccap-v4%3A84892317-44f6-4c40-ad17-4d41e82076e2&utterance_end_ms=3000&vad_events=true","containerized_opus":true,"audio_params_absent":true,"forced_containerized":false,"attempted_audio_params":null,"dropped_audio_params":null,"event":"dg_url_sanitized","ts":1760168256.068726}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"url":"wss://api.deepgram.com/v1/listen?tag=miccap-v4%3A84892317-44f6-4c40-ad17-4d41e82076e2&interim_results=true&vad_events=true&smart_format=true&punctuate=true&model=nova-2&utterance_end_ms=3000","container":"webm","codec":"opus","containerized_opus":true,"omitted_params":["sample_rate","encoding","channels"],"audio_params":null,"forced_containerized":false,"attempted_audio_params":null,"dropped_audio_params":null,"event":"asr_url","ts":1760168256.0687447}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"safe_url":"wss://api.deepgram.com/v1/listen?interim_results=true&model=nova-2&punctuate=true&smart_format=true&tag=miccap-v4%3A84892317-44f6-4c40-ad17-4d41e82076e2&utterance_end_ms=3000&vad_events=true","key_len":40,"subprotocols":null,"event":"dg_connect_attempt","ts":1760168256.0688372}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"event":"asr_connect_start","ts":1760168256.0688512}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168256.3525991}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":2,"last_bytes":2898,"event":"mic_capture_append","ts":1760168256.352666}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","keys":["features","type"],"event":"dg_config_sent","ts":1760168256.6592586}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"url":"wss://api.deepgram.com/v1/listen?tag=miccap-v4%3A84892317-44f6-4c40-ad17-4d41e82076e2&interim_results=true&vad_events=true&smart_format=true&punctuate=true&model=nova-2&utterance_end_ms=3000","tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","containerized":true,"event":"dg_open","ts":1760168256.6594367}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"elapsed_ms":590,"event":"asr_connect_ok","ts":1760168256.6594596}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","event":"asr_connect_ok","ts":1760168256.6594954}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"dg_type":"asr_open","chars":0,"event":"dg_message","ts":1760168256.6596973}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"delta_from_turn_ms":592,"event":"dg_asr_open","ts":1760168256.6597142}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":2,"dg_ready":true,"event":"ws_flush_request","ts":1760168256.6597464}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168256.6597655}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":2898,"event":"ws_audio_forward","ts":1760168256.6597826}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":2,"event":"dg_tx_enqueue","ts":1760168256.6597972}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":5796,"event":"ws_audio_forward","ts":1760168256.6598074}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":2,"flushed_chunks":2,"flushed_bytes":5796,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168256.6598172}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168256.6598911}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":3,"last_bytes":2898,"event":"mic_capture_append","ts":1760168256.6599183}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168256.6599455}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":3,"event":"dg_tx_enqueue","ts":1760168256.6599565}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":8694,"step":8192,"event":"ws_audio_forward_progress","ts":1760168256.659967}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":8694,"event":"ws_audio_forward","ts":1760168256.6599739}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168256.6599824}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168256.659994}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":4,"last_bytes":2898,"event":"mic_capture_append","ts":1760168256.6600082}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168256.6600235}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":4,"event":"dg_tx_enqueue","ts":1760168256.6600335}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":11592,"event":"ws_audio_forward","ts":1760168256.6600425}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168256.6600502}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":4,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168256.7197447}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"total_sent":8694,"total_forwarded":8694,"event":"dg_forward","ts":1760168256.7199895}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":11592,"sent_chunks":4,"ws_open":true,"open_evt":true,"first8_hex":"43c3813e5880fb03","event":"dg_flush_exit","ts":1760168256.7200637}
-[2025-10-11 07:37:36 +0000] [58] [DEBUG] < BINARY 43 c3 81 41 db 80 fb 03 16 90 2d c0 8f f9 ba c4 ... 3d f4 35 1e cd 7d 4d a3 [2898 bytes]
-[2025-10-11 07:37:37 +0000] [58] [DEBUG] < BINARY 43 c3 81 42 90 80 fb 03 67 bf 9c 96 83 23 08 54 ... 8e 4b 6c 12 72 46 b2 a3 [2898 bytes]
-[2025-10-11 07:37:37 +0000] [58] [DEBUG] < BINARY 43 c3 81 43 44 80 fb 03 5a a2 0f 77 94 13 d3 40 ... 9d ee 82 0f d7 7b f8 a3 [2898 bytes]
-[2025-10-11 07:37:37 +0000] [58] [DEBUG] < BINARY 43 c3 81 43 f8 80 fb 03 02 00 90 79 eb 07 d4 05 ... 4b b5 a3 e2 bd 81 e7 a3 [2898 bytes]
-[2025-10-11 07:37:37 +0000] [58] [DEBUG] < BINARY 43 c3 81 44 ac 80 fb 03 5a e1 59 34 f6 ca 97 76 ... dc be ab df 3e f5 35 a3 [2898 bytes]
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168256.7202253}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":5,"last_bytes":2898,"event":"mic_capture_append","ts":1760168256.7202911}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168256.7203746}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168256.720402}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":14490,"event":"ws_audio_forward","ts":1760168256.7204304}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168256.7204475}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168256.7205005}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381412880fb03","event":"dg_flush_exit","ts":1760168256.7205837}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168256.8996098}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":6,"last_bytes":2898,"event":"mic_capture_append","ts":1760168256.8996763}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168256.89975}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168256.8997831}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":17388,"step":8192,"event":"ws_audio_forward_progress","ts":1760168256.899821}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":17388,"event":"ws_audio_forward","ts":1760168256.8998313}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168256.8998418}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168256.899903}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":0,"total_sent":2898,"total_forwarded":17388,"event":"dg_forward","ts":1760168256.900044}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c38141db80fb03","event":"dg_flush_exit","ts":1760168256.9000633}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168257.0815978}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":7,"last_bytes":2898,"event":"mic_capture_append","ts":1760168257.0816472}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168257.0816967}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168257.0817168}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":20286,"event":"ws_audio_forward","ts":1760168257.0817437}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168257.0817554}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168257.0817983}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381429080fb03","event":"dg_flush_exit","ts":1760168257.0819206}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168257.208684}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":8,"last_bytes":2898,"event":"mic_capture_append","ts":1760168257.2087448}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168257.20881}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168257.2088313}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":23184,"event":"ws_audio_forward","ts":1760168257.2088614}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168257.208873}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168257.2089188}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381434480fb03","event":"dg_flush_exit","ts":1760168257.2090456}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168257.3890452}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":9,"last_bytes":2898,"event":"mic_capture_append","ts":1760168257.3891177}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168257.3891761}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168257.389201}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":26082,"step":8192,"event":"ws_audio_forward_progress","ts":1760168257.389237}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":26082,"event":"ws_audio_forward","ts":1760168257.3892512}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168257.3892667}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168257.3893576}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":0,"total_sent":2898,"total_forwarded":26082,"event":"dg_forward","ts":1760168257.3895037}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c38143f880fb03","event":"dg_flush_exit","ts":1760168257.3895283}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168257.5672853}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":10,"last_bytes":2898,"event":"mic_capture_append","ts":1760168257.5673807}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168257.5674422}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168257.56747}
-[2025-10-11 07:37:37 +0000] [58] [DEBUG] < BINARY 43 c3 81 45 60 80 fb 03 da ef d1 3c 15 9a ad 9b ... 49 8f 60 04 26 33 33 a3 [2898 bytes]
-[2025-10-11 07:37:37 +0000] [58] [DEBUG] < BINARY 43 c3 81 46 14 80 fb 03 40 92 ec 28 42 d2 31 a2 ... 62 52 7a a3 35 84 32 a3 [2898 bytes]
-[2025-10-11 07:37:38 +0000] [58] [DEBUG] < BINARY 43 c3 81 46 c8 80 fb 03 db 0d 8f 9d d3 ee 62 fc ... 7f dd 8d d5 18 75 0b a3 [2898 bytes]
-[2025-10-11 07:37:38 +0000] [58] [DEBUG] < BINARY 43 c3 81 47 7b 80 fb 03 d6 00 8f 17 78 9c a6 c7 ... 5f 58 27 a3 89 42 23 a3 [2898 bytes]
-[2025-10-11 07:37:38 +0000] [58] [DEBUG] < BINARY 43 c3 81 48 2f 80 fb 03 4f e0 f7 f1 d8 62 dd de ... 51 29 1e 2c 01 32 85 a3 [2898 bytes]
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":28980,"event":"ws_audio_forward","ts":1760168257.5675063}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168257.5675468}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168257.5676126}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c38144ac80fb03","event":"dg_flush_exit","ts":1760168257.5677586}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168257.7483675}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":11,"last_bytes":2898,"event":"mic_capture_append","ts":1760168257.7484179}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168257.748465}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168257.7484837}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":31878,"event":"ws_audio_forward","ts":1760168257.7485096}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168257.7485216}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168257.7485776}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381456080fb03","event":"dg_flush_exit","ts":1760168257.7487001}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168257.928277}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":12,"last_bytes":2898,"event":"mic_capture_append","ts":1760168257.9283864}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168257.9284518}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168257.9284747}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":34776,"step":8192,"event":"ws_audio_forward_progress","ts":1760168257.9285069}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":34776,"event":"ws_audio_forward","ts":1760168257.9285178}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168257.92853}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168257.928584}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":0,"total_sent":2898,"total_forwarded":34776,"event":"dg_forward","ts":1760168257.9287238}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381461480fb03","event":"dg_flush_exit","ts":1760168257.9287524}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168258.1162062}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":13,"last_bytes":2898,"event":"mic_capture_append","ts":1760168258.1162684}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168258.1163504}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168258.1163776}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":37674,"event":"ws_audio_forward","ts":1760168258.1164143}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168258.1164315}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168258.116492}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c38146c880fb03","event":"dg_flush_exit","ts":1760168258.1166408}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168258.2935297}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":14,"last_bytes":2898,"event":"mic_capture_append","ts":1760168258.293591}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168258.293652}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168258.2936769}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":40572,"event":"ws_audio_forward","ts":1760168258.2937117}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168258.2937286}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168258.2937808}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381477b80fb03","event":"dg_flush_exit","ts":1760168258.2939274}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168258.468493}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":15,"last_bytes":2898,"event":"mic_capture_append","ts":1760168258.468566}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168258.4686322}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168258.468661}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":43470,"step":8192,"event":"ws_audio_forward_progress","ts":1760168258.4687}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":43470,"event":"ws_audio_forward","ts":1760168258.468715}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168258.4687328}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168258.4687932}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":0,"total_sent":2898,"total_forwarded":43470,"event":"dg_forward","ts":1760168258.46895}
-[2025-10-11 07:37:38 +0000] [58] [DEBUG] < BINARY 43 c3 81 48 e3 80 fb 03 4f fa 55 55 90 62 75 de ... 08 46 6e b9 c8 2a 83 a3 [2898 bytes]
-[2025-10-11 07:37:38 +0000] [58] [DEBUG] < BINARY 43 c3 81 49 98 80 fb 03 5a 13 93 ce e4 14 56 27 ... 84 3f c0 dc 04 72 95 a3 [2898 bytes]
-[2025-10-11 07:37:39 +0000] [58] [DEBUG] < BINARY 43 c3 81 4a 4b 80 fb 03 dc d8 72 e8 66 88 2b 04 ... d7 e4 89 cf 06 20 a0 a3 [2898 bytes]
-[2025-10-11 07:37:39 +0000] [58] [DEBUG] < TEXT '{"type":"AudioStart","mime":"audio/webm; codecs=opus"}' [54 bytes]
-[2025-10-11 07:37:39 +0000] [58] [DEBUG] < BINARY 43 c3 81 4a ff 80 fb 03 5a 64 d6 a6 e0 60 b5 7e ... 3b 1c 1b db f9 3e 73 95 [2897 bytes]
-[2025-10-11 07:37:39 +0000] [58] [DEBUG] < TEXT '{"type":"CloseStream"}' [22 bytes]
-[2025-10-11 07:37:39 +0000] [58] [DEBUG] > TEXT '{"type":"keepalive","ts":1760168259376}' [39 bytes]
-[2025-10-11 07:37:39 +0000] [58] [DEBUG] % sending keepalive ping
-[2025-10-11 07:37:39 +0000] [58] [DEBUG] > PING d1 7f 6c 71 [binary, 4 bytes]
-[2025-10-11 07:37:39 +0000] [58] [DEBUG] < PONG d1 7f 6c 71 [binary, 4 bytes]
-[2025-10-11 07:37:39 +0000] [58] [DEBUG] % received keepalive pong
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381482f80fb03","event":"dg_flush_exit","ts":1760168258.4689782}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168258.649508}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":16,"last_bytes":2898,"event":"mic_capture_append","ts":1760168258.649572}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168258.6496358}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168258.6496642}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":46368,"event":"ws_audio_forward","ts":1760168258.6497023}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168258.6497223}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168258.6497817}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c38148e380fb03","event":"dg_flush_exit","ts":1760168258.6499455}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168258.8294394}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":17,"last_bytes":2898,"event":"mic_capture_append","ts":1760168258.8295043}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168258.8295646}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168258.829593}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":49266,"step":8192,"event":"ws_audio_forward_progress","ts":1760168258.8296318}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":49266,"event":"ws_audio_forward","ts":1760168258.8296463}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168258.8296616}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168258.829721}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":0,"total_sent":2898,"total_forwarded":49266,"event":"dg_forward","ts":1760168258.8298943}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381499880fb03","event":"dg_flush_exit","ts":1760168258.8299236}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168259.0093658}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":18,"last_bytes":2898,"event":"mic_capture_append","ts":1760168259.0094275}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168259.0094874}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168259.0095122}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":52164,"event":"ws_audio_forward","ts":1760168259.0095463}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168259.0095623}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168259.009615}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c3814a4b80fb03","event":"dg_flush_exit","ts":1760168259.0097616}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","type":"AudioStart","event":"ws_json_recv","ts":1760168259.193158}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","mime":"audio/webm; codecs=opus","event":"turn_audio_start","ts":1760168259.1932366}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","mime":"audio/webm; codecs=opus","container":"webm","codec":"opus","containerized_opus":true,"gate_open":true,"guess_source":"meta","event":"ws_audio_hint","ts":1760168259.1932545}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2897,"event":"ws_audio_chunk","ts":1760168259.1932752}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"chunks":19,"last_bytes":2897,"event":"mic_capture_append","ts":1760168259.1933284}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168259.1933825}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2897,"queued":1,"event":"dg_tx_enqueue","ts":1760168259.1934092}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2897,"buffered":true,"total":2897,"event":"ws_audio_forward","ts":1760168259.1934464}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2897,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168259.1934588}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","type":"CloseStream","event":"ws_json_recv","ts":1760168259.1934803}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","source":"CloseStream","bytes_forwarded":2897,"event":"ws_close_stream","ts":1760168259.1934943}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","next_turn_id":1,"event":"before_close_turn","ts":1760168259.1935053}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"event":"after_close_turn","ts":1760168259.1935241}
-{"turn_id":1,"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","source":"CloseStream","bytes_forwarded":2897,"event":"ws_close_stream_recv","ts":1760168259.193532}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"source":"client_close_stream","pending_guard":false,"final_seen":false,"buffered_chunks":0,"buffered_bytes":0,"pending_provider_final":false,"synthetic_expected":true,"pcm_bytes":55061,"event":"turn_commit","ts":1760168259.1935506}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"bytes_forwarded":2897,"event":"ws_close_stream_post_flush","ts":1760168259.1936035}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168259.1936436}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":2897,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c3814aff80fb03","event":"dg_flush_exit","ts":1760168259.1937659}
-10.225.24.231:56402 - "GET /api/v1/health HTTP/1.1" 200
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"bytes_forwarded":2897,"event":"ws_close_stream_finish_request","ts":1760168261.2427175}
-10.225.24.231:37890 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-11 07:37:47 +0000] [58] [DEBUG] < TEXT '{"type":"AudioStart","mime":"audio/webm;codecs=opus"}' [53 bytes]
-[2025-10-11 07:37:47 +0000] [58] [DEBUG] < BINARY 43 c3 81 20 1c 80 fb 03 d6 93 e1 66 c6 3d bb 7f ... f2 4c 99 29 1d a5 88 a3 [2898 bytes]
-[2025-10-11 07:37:47 +0000] [58] [DEBUG] < BINARY 43 c3 81 20 d0 80 fb 03 d7 db e5 6e 8b d1 aa f3 ... 0f 56 10 e6 8a 5d a2 a3 [2898 bytes]
-[2025-10-11 07:37:48 +0000] [58] [DEBUG] < BINARY 43 c3 81 21 84 80 fb 03 d7 df c0 90 f7 43 db dd ... ac ee 59 f0 8f e9 1f a3 [2898 bytes]
-[2025-10-11 07:37:48 +0000] [58] [DEBUG] < BINARY 43 c3 81 22 38 80 fb 03 53 15 ac 9c e2 e5 de 93 ... b4 df ad 57 ab 65 3c a3 [2898 bytes]
-[2025-10-11 07:37:48 +0000] [58] [DEBUG] < BINARY 43 c3 81 22 ec 80 fb 03 3d bf c1 07 77 27 a9 cc ... 27 77 fe dc dd fa ea a3 [2898 bytes]
-[2025-10-11 07:37:48 +0000] [58] [DEBUG] < BINARY 43 c3 81 23 a0 80 fb 03 71 9f c2 f6 9d 9b 1f 96 ... 16 ac 2e b9 a0 c9 39 a3 [2898 bytes]
-[2025-10-11 07:37:48 +0000] [58] [DEBUG] < BINARY 43 c3 81 24 54 80 fb 03 59 9a ab bc 83 ab 4b 23 ... 6f 5b 1b c7 5c 63 d1 a3 [2898 bytes]
-[2025-10-11 07:37:48 +0000] [58] [DEBUG] < BINARY 43 c3 81 25 08 80 fb 03 44 90 7f 6d 1b 05 4f 74 ... d2 00 e7 0c 8a 67 3a a3 [2898 bytes]
-[2025-10-11 07:37:49 +0000] [58] [DEBUG] < BINARY 43 c3 81 25 bc 80 fb 03 53 0c e5 48 74 db 33 a5 ... d6 7d 76 cb 23 c8 1f a3 [2898 bytes]
-[2025-10-11 07:37:49 +0000] [58] [DEBUG] < BINARY 43 c3 81 26 70 80 fb 03 ef da 40 65 1f 83 e3 5d ... 45 d6 7e 6f 0e 5c 83 a3 [2898 bytes]
-[2025-10-11 07:37:49 +0000] [58] [DEBUG] < BINARY 43 c3 81 27 24 80 fb 03 d7 6a 1d 67 59 20 0e 72 ... 12 3b 5b 6d 21 31 84 a3 [2898 bytes]
-[2025-10-11 07:37:49 +0000] [58] [DEBUG] < BINARY 43 c3 81 27 d8 80 fb 03 dc ed bb a2 f6 59 ec 7b ... c7 87 42 6b f2 e2 c4 a3 [2898 bytes]
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"linger_ms":8000,"wait_for_final":true,"drain_timeout_s":1.5,"event":"dg_close_drain_begin","ts":1760168267.2146184}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168267.214688}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":0,"sent_chunks":0,"ws_open":true,"open_evt":true,"first8_hex":null,"event":"dg_flush_exit","ts":1760168267.2147079}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":0,"first8_hex":null,"queued":0,"dropped_chunks":0,"dropped_bytes":0,"event":"dg_writer_drained","ts":1760168267.214821}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"event":"dg_send_close_stream","ts":1760168267.2148452}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"ws_open":false,"open_evt":true,"event":"dg_flush_enter","ts":1760168267.3959239}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":0,"sent_chunks":0,"ws_open":false,"open_evt":true,"first8_hex":null,"event":"dg_flush_exit","ts":1760168267.3959873}
-10.225.24.231:37894 - "GET /api/v1/health HTTP/1.1" 200
-10.225.24.231:37902 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-11 07:37:49 +0000] [58] [DEBUG] < BINARY 43 c3 81 28 8c 80 fb 03 5a 6f 40 13 5e b6 24 3d ... 2e e9 d8 59 20 02 8b a3 [2898 bytes]
-[2025-10-11 07:37:49 +0000] [58] [DEBUG] < BINARY 43 c3 81 29 40 80 fb 03 dc 4f cd 37 88 c5 32 02 ... 62 0d f7 d8 3d 42 9a a3 [2898 bytes]
-[2025-10-11 07:37:50 +0000] [58] [DEBUG] < BINARY 43 c3 81 29 f4 80 fb 03 dc db 22 51 49 89 a6 79 ... 84 bd 4f f3 a8 3a a9 a3 [2898 bytes]
-[2025-10-11 07:37:50 +0000] [58] [DEBUG] < BINARY 43 c3 81 2a a8 80 fb 03 df 4f 25 c3 31 16 99 0a ... 8b 5c 45 27 1a c5 bf a3 [2898 bytes]
-[2025-10-11 07:37:50 +0000] [58] [DEBUG] < BINARY 43 c3 81 2b 5c 80 fb 03 db 09 f6 a4 72 6c d9 05 ... 30 02 c0 fc 16 d4 7f a3 [2898 bytes]
-[2025-10-11 07:37:50 +0000] [58] [DEBUG] < BINARY 43 c3 81 2c 10 80 fb 03 d7 fd a5 7e 1a 1a ff 94 ... 33 38 dc 37 e8 7c c0 a3 [2898 bytes]
-[2025-10-11 07:37:50 +0000] [58] [DEBUG] < BINARY 43 c3 81 2c c4 80 fb 03 d7 fe b7 23 42 64 53 d0 ... 7d 80 b5 ea a9 c1 07 a3 [2898 bytes]
-[2025-10-11 07:37:51 +0000] [58] [DEBUG] < BINARY 43 c3 81 2d 78 80 fb 03 72 c1 5c 65 ed 4a 94 10 ... 40 54 4d 9a 0f 03 e3 a3 [2898 bytes]
-[2025-10-11 07:37:51 +0000] [58] [DEBUG] < BINARY 43 c3 81 2e 2c 80 fb 03 89 56 7b 6a 64 8e 88 0b ... e6 ea 86 86 d8 b7 86 a3 [2898 bytes]
-[2025-10-11 07:37:51 +0000] [58] [DEBUG] < BINARY 43 c3 81 2e e0 80 fb 03 74 cc d2 c6 3a fa c4 16 ... 3a 05 b3 37 c4 4a 61 a3 [2898 bytes]
-[2025-10-11 07:37:51 +0000] [58] [DEBUG] < BINARY 43 c3 81 2f 94 80 fb 03 f4 40 1f cc 3f 71 6e 71 ... 9d ac d5 14 4a db 76 a3 [2898 bytes]
-[2025-10-11 07:37:51 +0000] [58] [DEBUG] < BINARY 43 c3 81 30 48 80 fb 03 da c1 c2 86 6d 77 1d 7e ... 81 93 5e e8 17 77 e8 a3 [2898 bytes]
-[2025-10-11 07:37:51 +0000] [58] [DEBUG] < BINARY 43 c3 81 30 fc 80 fb 03 5a a1 63 80 39 76 95 d5 ... c9 c1 7f 7d f2 b3 ed a3 [2898 bytes]
-[2025-10-11 07:37:52 +0000] [58] [DEBUG] < BINARY 43 c3 81 31 b0 80 fb 03 d7 f2 d0 d9 a3 f7 06 4f ... 2d f4 e1 a3 9a a6 2b a3 [2898 bytes]
-[2025-10-11 07:37:52 +0000] [58] [DEBUG] < BINARY 43 c3 81 32 64 80 fb 03 f4 27 27 4e 2d 45 2b 16 ... e0 e2 a6 87 21 65 c4 a3 [2898 bytes]
-[2025-10-11 07:37:52 +0000] [58] [DEBUG] < BINARY 43 c3 81 33 18 80 fb 03 d6 f9 12 78 bf ee 7d 51 ... 12 48 05 7a 13 ba b0 a3 [2898 bytes]
-[2025-10-11 07:37:52 +0000] [58] [DEBUG] < BINARY 43 c3 81 33 cc 80 fb 03 82 1d 35 24 3e b5 50 64 ... 67 3f b4 a6 26 ad dd a3 [2898 bytes]
-[2025-10-11 07:37:52 +0000] [58] [DEBUG] < BINARY 43 c3 81 34 80 80 fb 03 da 7e 29 e9 57 9d 43 b3 ... 9c dd e5 c4 ec 60 ca a3 [2898 bytes]
-[2025-10-11 07:37:53 +0000] [58] [DEBUG] < BINARY 43 c3 81 35 34 80 fb 03 71 84 ab b1 6a 89 b7 33 ... 8f 3b 22 eb b5 83 f7 a3 [2898 bytes]
-[2025-10-11 07:37:53 +0000] [58] [DEBUG] < BINARY 43 c3 81 35 e8 80 fb 03 3e 02 39 61 7a 40 ff 01 ... 06 d5 c9 07 68 fa 68 a3 [2898 bytes]
-10.225.24.231:60142 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-11 07:37:59 +0000] [58] [DEBUG] > TEXT '{"type":"keepalive","ts":1760168279406}' [39 bytes]
-[2025-10-11 07:37:59 +0000] [58] [DEBUG] % sending keepalive ping
-[2025-10-11 07:37:59 +0000] [58] [DEBUG] > PING 18 ba f1 79 [binary, 4 bytes]
-10.225.24.231:60156 - "GET /api/v1/health HTTP/1.1" 200
-10.225.24.231:36158 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] > TEXT '{"type":"Results","channel":{"alternatives":[{"...nal":true},"turn_id":1}' [110 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] > TEXT '{"type":"UtteranceEnd","turn_id":1}' [35 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] > TEXT '{"type":"diagnostic_audio","turn_id":"1","mime"...s_last":false,"b64":""}' [115 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] > TEXT '{"type":"diagnostic_audio","turn_id":"1","mime"...OyJVi5h/POxwb2/k+c5U="}' [73530 bytes]
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158451151808,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","wait_for_final":true,"linger_ms":8000,"had_result":false,"drain_failed":false,"event":"dg_close","ts":1760168287.2530544}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"ok":true,"bytes_forwarded":2897,"event":"dg_tx_close","ts":1760168287.253128}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"final":true,"chars":0,"source":"synthetic","event":"ui_result_emit","ts":1760168287.2533555}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"reason":"dg_close_no_final","event":"ws_synthetic_final","ts":1760168287.2537363}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"reason":"dg_close_no_final","synthetic":true,"delta_start_ms":31186,"delta_asr_open_ms":30594,"delta_first_partial_ms":null,"transcript_chars":0,"event":"turn_finish","ts":1760168287.253763}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"bytes_forwarded":2897,"synthetic_emitted":true,"event":"ws_close_stream_complete","ts":1760168287.2537959}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"mic_chunks":19,"event":"mic_capture_block_enter","ts":1760168287.253835}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"bytes":55061,"chunks":19,"container":"webm","codec":"opus","containerized_opus":true,"event":"mic_capture_summary","ts":1760168287.2538629}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":1,"path":"/tmp/mic_84892317-44f6-4c40-ad17-4d41e82076e2_1.webm","bytes":55061,"mime":"audio/webm","event":"mic_capture_saved","ts":1760168287.2540634}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","type":"AudioStart","event":"ws_json_recv","ts":1760168287.255139}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","mime":"audio/webm;codecs=opus","event":"turn_audio_start","ts":1760168287.255179}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","mime":"audio/webm;codecs=opus","container":"webm","codec":"opus","containerized_opus":true,"gate_open":true,"guess_source":"meta","event":"ws_audio_hint","ts":1760168287.255209}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","frames_in":20,"bytes_total":57959,"event":"ws_bin_recv","ts":1760168287.2552278}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2552528}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"first_bytes":2898,"event":"turn_start","ts":1760168287.2555995}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":1,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2556415}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"queued":1,"queued_bytes":2898,"dg_state":"closed","connect_ready_reason":"audio_start_webm","event":"asr_connect_schedule","ts":1760168287.2556722}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"event":"ws_audio_provider_connecting","ts":1760168287.2556894}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2557027}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":2,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2557194}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":2,"event":"ws_audio_provider_connecting","ts":1760168287.2557328}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2557416}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":3,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2557552}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":3,"event":"ws_audio_provider_connecting","ts":1760168287.2557654}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.255774}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":4,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2557878}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":4,"event":"ws_audio_provider_connecting","ts":1760168287.2557979}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2558055}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":5,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.255818}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":5,"event":"ws_audio_provider_connecting","ts":1760168287.2558284}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2558362}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":6,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2558546}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":6,"event":"ws_audio_provider_connecting","ts":1760168287.255873}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2558868}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":7,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.255905}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":7,"event":"ws_audio_provider_connecting","ts":1760168287.2559195}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2559316}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":8,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.255951}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":8,"event":"ws_audio_provider_connecting","ts":1760168287.2559664}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.255981}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":9,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2560005}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":9,"event":"ws_audio_provider_connecting","ts":1760168287.2560167}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2560294}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":10,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2560492}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":10,"event":"ws_audio_provider_connecting","ts":1760168287.2560673}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2560804}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":11,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.256099}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":11,"event":"ws_audio_provider_connecting","ts":1760168287.2561164}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.25613}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":12,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.256149}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":12,"event":"ws_audio_provider_connecting","ts":1760168287.2561657}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.256179}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":13,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2561977}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":13,"event":"ws_audio_provider_connecting","ts":1760168287.2562137}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2562263}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":14,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2562468}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":14,"event":"ws_audio_provider_connecting","ts":1760168287.256263}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2562757}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":15,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2562957}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":15,"event":"ws_audio_provider_connecting","ts":1760168287.2563367}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2563505}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":16,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2563994}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queue_len":16,"dropped":0,"event":"ws_backpressure","ts":1760168287.2564268}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.2564476}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2564628}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":17,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2564838}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.2565084}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queue_len":16,"dropped":1,"event":"ws_backpressure","ts":1760168287.2565253}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.2565417}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2565558}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":18,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2565768}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.2565973}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.2566106}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2566242}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":19,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2566435}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.2566624}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.2566767}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2566893}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":20,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2567084}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.2567258}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.2567382}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","frames_in":40,"bytes_total":115919,"event":"ws_bin_recv","ts":1760168287.2567532}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2567685}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":21,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2567885}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.2568066}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.2568192}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2568316}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":22,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2568507}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.2568674}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.256879}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2568915}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":23,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2569098}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.256927}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.2569394}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.256952}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":24,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2569718}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.2569895}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.257001}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2570133}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":25,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2570338}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.2570486}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.257056}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2570634}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":26,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2570875}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.2570984}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.2571054}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2571125}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":27,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.257125}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.2571337}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.2571402}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.257147}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":28,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2571588}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.2571676}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.2571743}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.2571812}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":29,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2571938}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.2572029}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.2572093}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.257217}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":30,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2572286}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.2572374}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.2572439}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.257251}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":31,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.2572622}
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < BINARY 43 c3 81 36 9c 80 fb 03 51 36 72 f0 36 9a 38 36 ... c7 97 7d fc 69 e5 e5 a3 [2898 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < BINARY 43 c3 81 37 50 80 fb 03 52 9c a0 2f 3e a9 3c 9c ... 78 61 53 09 a4 05 36 a3 [2898 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < BINARY 43 c3 81 38 03 80 fb 03 7b bc d3 a0 23 77 57 2e ... fc 6f f8 b8 a3 38 22 a3 [2898 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < BINARY 43 c3 81 38 b8 80 fb 03 ec 09 40 a9 ce 8a 7a c6 ... 0e d8 cd 25 b3 90 01 a3 [2898 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < BINARY 43 c3 81 39 6c 80 fb 03 f4 02 92 94 dc 33 99 43 ... 6d 5b 7b 47 61 73 f5 a3 [2898 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < BINARY 43 c3 81 3a 20 80 fb 03 75 a6 3e 79 f1 14 21 57 ... f0 a8 99 67 62 ac 8f a3 [2898 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < BINARY 43 c3 81 3a d4 80 fb 03 5a e8 6d fe dc b3 ca 74 ... ba 0e 90 e1 4a c3 5d a3 [2898 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < BINARY 43 c3 81 3b 87 80 fb 03 51 fe b5 f5 65 ba 6c d3 ... 66 59 45 3e e8 0a 8b a3 [2898 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < BINARY 43 c3 81 3c 3c 80 fb 03 dc 32 8f e9 5b ef d0 83 ... 1a b9 e3 d4 f2 db 6f a3 [2898 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < BINARY 43 c3 81 3c f0 80 fb 03 5a 5d 93 ee 0f ce 06 16 ... 3f 7a 59 9f c8 bb a0 a3 [2898 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < TEXT '{"type":"AudioStart","mime":"audio/webm; codecs=opus"}' [54 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < BINARY 43 c3 81 3d a4 80 fb 03 dc db 35 78 2f b7 0b 6d ... 01 5c 48 89 1f c3 7e 65 [2897 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < TEXT '{"type":"CloseStream"}' [22 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] < PONG 18 ba f1 79 [binary, 4 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] > TEXT '{"type":"state","phase":"paused"}' [33 bytes]
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] % received keepalive pong
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.257271}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"event":"ws_audio_provider_connecting","ts":1760168287.257295}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","transport":{"protocol":"websocket","container":"webm","codec":"opus","containerized_opus":true,"features":[]},"event":"asr_connect_begin","ts":1760168287.2587059}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":null,"already_open":false,"closing":false,"closed":false,"event":"dg_connect_begin","ts":1760168287.2587802}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"qs":"?interim_results=true&model=nova-2&punctuate=true&smart_format=true&tag=miccap-v4%3A84892317-44f6-4c40-ad17-4d41e82076e2&utterance_end_ms=3000&vad_events=true","containerized_opus":true,"audio_params_absent":true,"forced_containerized":false,"attempted_audio_params":null,"dropped_audio_params":null,"event":"dg_url_sanitized","ts":1760168287.2589402}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"url":"wss://api.deepgram.com/v1/listen?tag=miccap-v4%3A84892317-44f6-4c40-ad17-4d41e82076e2&interim_results=true&vad_events=true&smart_format=true&punctuate=true&model=nova-2&utterance_end_ms=3000","container":"webm","codec":"opus","containerized_opus":true,"omitted_params":["sample_rate","encoding","channels"],"audio_params":null,"forced_containerized":false,"attempted_audio_params":null,"dropped_audio_params":null,"event":"asr_url","ts":1760168287.2589579}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"safe_url":"wss://api.deepgram.com/v1/listen?interim_results=true&model=nova-2&punctuate=true&smart_format=true&tag=miccap-v4%3A84892317-44f6-4c40-ad17-4d41e82076e2&utterance_end_ms=3000&vad_events=true","key_len":40,"subprotocols":null,"event":"dg_connect_attempt","ts":1760168287.2590141}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"event":"asr_connect_start","ts":1760168287.2590249}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.455959}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":32,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.456035}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dropped":1,"queued":16,"queued_bytes":46368,"event":"ws_audio_drop","ts":1760168287.4560778}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","keys":["features","type"],"event":"dg_config_sent","ts":1760168287.6385634}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"url":"wss://api.deepgram.com/v1/listen?tag=miccap-v4%3A84892317-44f6-4c40-ad17-4d41e82076e2&interim_results=true&vad_events=true&smart_format=true&punctuate=true&model=nova-2&utterance_end_ms=3000","tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","containerized":true,"event":"dg_open","ts":1760168287.6387112}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"elapsed_ms":379,"event":"asr_connect_ok","ts":1760168287.6387355}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","event":"asr_connect_ok","ts":1760168287.6387768}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"dg_type":"asr_open","chars":0,"event":"dg_message","ts":1760168287.6389673}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"delta_from_turn_ms":383,"event":"dg_asr_open","ts":1760168287.6389892}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"dg_ready":true,"event":"ws_flush_request","ts":1760168287.6390302}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760168287.6390524}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":2898,"event":"ws_audio_forward","ts":1760168287.6390731}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":2,"event":"dg_tx_enqueue","ts":1760168287.6390889}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":5796,"event":"ws_audio_forward","ts":1760168287.639102}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":3,"event":"dg_tx_enqueue","ts":1760168287.6391153}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":8694,"step":8192,"event":"ws_audio_forward_progress","ts":1760168287.6391275}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":8694,"event":"ws_audio_forward","ts":1760168287.6391373}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":4,"event":"dg_tx_enqueue","ts":1760168287.6391497}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":11592,"event":"ws_audio_forward","ts":1760168287.6391613}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":5,"event":"dg_tx_enqueue","ts":1760168287.6391742}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":14490,"event":"ws_audio_forward","ts":1760168287.639186}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":6,"event":"dg_tx_enqueue","ts":1760168287.639198}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":17388,"step":8192,"event":"ws_audio_forward_progress","ts":1760168287.63921}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":17388,"event":"ws_audio_forward","ts":1760168287.6392193}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":7,"event":"dg_tx_enqueue","ts":1760168287.639232}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":20286,"event":"ws_audio_forward","ts":1760168287.6392448}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":8,"event":"dg_tx_enqueue","ts":1760168287.639259}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":23184,"event":"ws_audio_forward","ts":1760168287.6392713}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":9,"event":"dg_tx_enqueue","ts":1760168287.6392834}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":26082,"step":8192,"event":"ws_audio_forward_progress","ts":1760168287.6392953}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":26082,"event":"ws_audio_forward","ts":1760168287.6393454}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":10,"event":"dg_tx_enqueue","ts":1760168287.6393583}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":28980,"event":"ws_audio_forward","ts":1760168287.6393673}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":11,"event":"dg_tx_enqueue","ts":1760168287.6393757}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":31878,"event":"ws_audio_forward","ts":1760168287.6393833}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":12,"event":"dg_tx_enqueue","ts":1760168287.6393907}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":34776,"step":8192,"event":"ws_audio_forward_progress","ts":1760168287.6393979}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":34776,"event":"ws_audio_forward","ts":1760168287.6394036}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":13,"event":"dg_tx_enqueue","ts":1760168287.6394107}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":37674,"event":"ws_audio_forward","ts":1760168287.6394436}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":14,"event":"dg_tx_enqueue","ts":1760168287.6394541}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":40572,"event":"ws_audio_forward","ts":1760168287.6394622}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":15,"event":"dg_tx_enqueue","ts":1760168287.6394699}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":43470,"step":8192,"event":"ws_audio_forward_progress","ts":1760168287.6394777}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":43470,"event":"ws_audio_forward","ts":1760168287.6394877}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":16,"event":"dg_tx_enqueue","ts":1760168287.6395018}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":46368,"event":"ws_audio_forward","ts":1760168287.639515}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":16,"flushed_chunks":16,"flushed_bytes":46368,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168287.6395297}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.639633}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":33,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.639672}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168287.6397107}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":17,"event":"dg_tx_enqueue","ts":1760168287.6397283}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":49266,"step":8192,"event":"ws_audio_forward_progress","ts":1760168287.639746}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":49266,"event":"ws_audio_forward","ts":1760168287.6397586}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168287.6397696}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.6397817}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":34,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.6397982}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168287.6398156}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":18,"event":"dg_tx_enqueue","ts":1760168287.6398249}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":52164,"event":"ws_audio_forward","ts":1760168287.6398337}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168287.639841}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.6398513}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":35,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.639865}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168287.6398785}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":19,"event":"dg_tx_enqueue","ts":1760168287.6398869}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":55062,"event":"ws_audio_forward","ts":1760168287.6398952}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168287.639902}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.6399114}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":36,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.639924}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168287.6399367}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":20,"event":"dg_tx_enqueue","ts":1760168287.639945}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":57960,"step":8192,"event":"ws_audio_forward_progress","ts":1760168287.639953}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":57960,"event":"ws_audio_forward","ts":1760168287.6399586}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168287.6399648}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.6399739}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":37,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.6399863}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168287.6399987}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":21,"event":"dg_tx_enqueue","ts":1760168287.640008}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":60858,"event":"ws_audio_forward","ts":1760168287.6400158}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168287.6400228}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.6400316}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":38,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.6400437}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168287.6400564}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":22,"event":"dg_tx_enqueue","ts":1760168287.640064}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":63756,"event":"ws_audio_forward","ts":1760168287.6400716}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168287.6400785}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.6400876}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":39,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.6400998}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168287.6401122}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":23,"event":"dg_tx_enqueue","ts":1760168287.64012}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":66654,"step":8192,"event":"ws_audio_forward_progress","ts":1760168287.6401277}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":66654,"event":"ws_audio_forward","ts":1760168287.6401336}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168287.6401403}
-[2025-10-11 07:38:07 +0000] [58] [DEBUG] > TEXT '{"type":"state","phase":"ready"}' [32 bytes]
-[2025-10-11 07:38:09 +0000] [58] [DEBUG] < TEXT '{"type":"AudioStart","mime":"audio/webm;codecs=opus"}' [53 bytes]
-[2025-10-11 07:38:09 +0000] [58] [DEBUG] < BINARY 43 c3 81 06 cc 80 fb 03 ef d3 dd f6 d6 c3 61 41 ... c0 4b 90 71 b0 27 99 a3 [2898 bytes]
-[2025-10-11 07:38:09 +0000] [58] [DEBUG] < BINARY 43 c3 81 07 80 80 fb 03 51 1c 2d 4f e1 f7 84 46 ... 11 16 02 aa ca 05 46 a3 [2898 bytes]
-[2025-10-11 07:38:09 +0000] [58] [DEBUG] < BINARY 43 c3 81 08 33 80 fb 03 70 ae 57 3b 5f 02 98 f4 ... 9b 5c 05 00 9d 42 e5 a3 [2898 bytes]
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.6401494}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":40,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.6401894}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168287.6402078}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":24,"event":"dg_tx_enqueue","ts":1760168287.6402168}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":69552,"event":"ws_audio_forward","ts":1760168287.6402252}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168287.6402326}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","frames_in":60,"bytes_total":173879,"event":"ws_bin_recv","ts":1760168287.6402502}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.6402686}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":41,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.6402895}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168287.6403372}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":25,"event":"dg_tx_enqueue","ts":1760168287.6403491}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":72450,"event":"ws_audio_forward","ts":1760168287.6403587}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168287.6403663}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"event":"ws_audio_chunk","ts":1760168287.6403759}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":42,"last_bytes":2898,"event":"mic_capture_append","ts":1760168287.6403904}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168287.6404052}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":26,"event":"dg_tx_enqueue","ts":1760168287.6404133}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes_total":75348,"step":8192,"event":"ws_audio_forward_progress","ts":1760168287.6404214}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"buffered":true,"total":75348,"event":"ws_audio_forward","ts":1760168287.6404274}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168287.6404343}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","type":"AudioStart","event":"ws_json_recv","ts":1760168287.6404564}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","mime":"audio/webm; codecs=opus","event":"turn_audio_start","ts":1760168287.6404774}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","mime":"audio/webm; codecs=opus","container":"webm","codec":"opus","containerized_opus":true,"gate_open":true,"guess_source":"meta","event":"ws_audio_hint","ts":1760168287.640485}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2897,"event":"ws_audio_chunk","ts":1760168287.6404948}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"chunks":43,"last_bytes":2897,"event":"mic_capture_append","ts":1760168287.6405084}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760168287.6405227}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2897,"queued":27,"event":"dg_tx_enqueue","ts":1760168287.6405315}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2897,"buffered":true,"total":2897,"event":"ws_audio_forward","ts":1760168287.6405404}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","queued":1,"flushed_chunks":1,"flushed_bytes":2897,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760168287.6405478}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","type":"CloseStream","event":"ws_json_recv","ts":1760168287.6405613}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","source":"CloseStream","bytes_forwarded":2897,"event":"ws_close_stream","ts":1760168287.6405728}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","next_turn_id":2,"event":"before_close_turn","ts":1760168287.6405826}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"event":"after_close_turn","ts":1760168287.6406057}
-{"turn_id":2,"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","source":"CloseStream","bytes_forwarded":2897,"event":"ws_close_stream_recv","ts":1760168287.6406138}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"source":"client_close_stream","pending_guard":false,"final_seen":false,"buffered_chunks":0,"buffered_bytes":0,"pending_provider_final":false,"synthetic_expected":true,"pcm_bytes":124613,"event":"turn_commit","ts":1760168287.6406322}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"bytes_forwarded":2897,"event":"ws_close_stream_post_flush","ts":1760168287.6406648}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":27,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168287.7264369}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":24,"total_sent":8694,"total_forwarded":8694,"event":"dg_forward","ts":1760168287.7266824}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":21,"total_sent":17388,"total_forwarded":17388,"event":"dg_forward","ts":1760168287.7267702}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":18,"total_sent":26082,"total_forwarded":26082,"event":"dg_forward","ts":1760168287.7268522}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":15,"total_sent":34776,"total_forwarded":34776,"event":"dg_forward","ts":1760168287.7269285}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":12,"total_sent":43470,"total_forwarded":43470,"event":"dg_forward","ts":1760168287.7270262}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":10,"total_sent":49266,"total_forwarded":49266,"event":"dg_forward","ts":1760168287.7270823}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":7,"total_sent":57960,"total_forwarded":57960,"event":"dg_forward","ts":1760168287.7271538}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":4,"total_sent":66654,"total_forwarded":66654,"event":"dg_forward","ts":1760168287.7273626}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":2898,"queued":1,"total_sent":75348,"total_forwarded":75348,"event":"dg_forward","ts":1760168287.727467}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":78245,"sent_chunks":27,"ws_open":true,"open_evt":true,"first8_hex":"43c3812b5c80fb03","event":"dg_flush_exit","ts":1760168287.7275279}
-10.225.24.231:36172 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-11 07:38:09 +0000] [58] [DEBUG] < BINARY 43 c3 81 08 e8 80 fb 03 76 39 14 93 ec 4f 0f 99 ... 7d d4 30 aa e9 19 fa a3 [2898 bytes]
-[2025-10-11 07:38:10 +0000] [58] [DEBUG] < BINARY 43 c3 81 09 9c 80 fb 03 5a c1 5b 10 b9 b6 4a 00 ... ce fd de d2 7e f1 fb a3 [2898 bytes]
-[2025-10-11 07:38:10 +0000] [58] [DEBUG] < BINARY 43 c3 81 0a 50 80 fb 03 eb ce d6 cd 95 83 76 ed ... 1e 71 21 33 0a da 39 a3 [2898 bytes]
-[2025-10-11 07:38:10 +0000] [58] [DEBUG] < BINARY 43 c3 81 0b 03 80 fb 03 f4 1e 87 cf 37 2d 7e 5c ... 5b 50 9e a6 68 5e 28 a3 [2898 bytes]
-[2025-10-11 07:38:10 +0000] [58] [DEBUG] < BINARY 43 c3 81 0b b8 80 fb 03 5e 9d 19 c4 77 02 a6 9a ... a4 54 ec fe ff af c1 a3 [2898 bytes]
-[2025-10-11 07:38:10 +0000] [58] [DEBUG] < BINARY 43 c3 81 0c 6c 80 fb 03 53 c6 53 ce 72 ea 0f aa ... ab 28 06 e0 50 b2 5b a3 [2898 bytes]
-[2025-10-11 07:38:10 +0000] [58] [DEBUG] < BINARY 43 c3 81 0d 20 80 fb 03 b1 56 b7 70 a4 18 a1 b5 ... a5 dd 7a 41 38 b4 f9 a3 [2898 bytes]
-[2025-10-11 07:38:11 +0000] [58] [DEBUG] < BINARY 43 c3 81 0d d4 80 fb 03 d6 b8 af 60 90 7c 71 42 ... cf 0d 8d 27 e0 4a 28 a3 [2898 bytes]
-[2025-10-11 07:38:11 +0000] [58] [DEBUG] < BINARY 43 c3 81 0e 88 80 fb 03 ec 19 bc c4 bf 95 3d 6b ... e4 70 4e ba ac ba 42 a3 [2898 bytes]
-[2025-10-11 07:38:11 +0000] [58] [DEBUG] < BINARY 43 c3 81 0f 3b 80 fb 03 f1 9c dc 03 7b 0e b6 23 ... ad f0 0e ca 12 42 b0 a3 [2898 bytes]
-[2025-10-11 07:38:11 +0000] [58] [DEBUG] < BINARY 43 c3 81 0f f0 80 fb 03 53 99 d7 99 c3 dd 39 90 ... 9f 7b 10 c1 02 9c 8c a3 [2898 bytes]
-[2025-10-11 07:38:11 +0000] [58] [DEBUG] < BINARY 43 c3 81 10 a4 80 fb 03 5a 6d cd df 27 38 27 ca ... c3 49 c7 45 25 d4 e7 a3 [2898 bytes]
-[2025-10-11 07:38:12 +0000] [58] [DEBUG] < BINARY 43 c3 81 11 58 80 fb 03 ec 13 6e 8d 5a e0 af 45 ... 84 ba f7 96 8d ac a5 a3 [2898 bytes]
-[2025-10-11 07:38:12 +0000] [58] [DEBUG] < BINARY 43 c3 81 12 0c 80 fb 03 da e7 f3 e0 5b 4d 35 31 ... 0b 41 11 6c 87 e3 e8 a3 [2898 bytes]
-[2025-10-11 07:38:12 +0000] [58] [DEBUG] < BINARY 43 c3 81 12 c0 80 fb 03 f0 63 07 e7 1d c5 81 ba ... fe f1 22 6c 00 c1 4f a3 [2898 bytes]
-[2025-10-11 07:38:12 +0000] [58] [DEBUG] < BINARY 43 c3 81 13 74 80 fb 03 b1 a7 98 b1 fe 1c 4e 20 ... 0c 32 2a 99 b9 af a6 a3 [2898 bytes]
-[2025-10-11 07:38:12 +0000] [58] [DEBUG] < BINARY 43 c3 81 14 28 80 fb 03 59 f0 ed 3e ff a6 be 78 ... 27 03 83 69 e8 42 e1 a3 [2898 bytes]
-[2025-10-11 07:38:12 +0000] [58] [DEBUG] < BINARY 43 c3 81 14 dc 80 fb 03 75 13 a4 61 ec ec 41 c1 ... 59 e1 fa aa dc 66 5d a3 [2898 bytes]
-[2025-10-11 07:38:13 +0000] [58] [DEBUG] < BINARY 43 c3 81 15 90 80 fb 03 78 8c d9 33 92 83 15 a0 ... 20 ec 8c 10 c0 de 37 a3 [2898 bytes]
-[2025-10-11 07:38:13 +0000] [58] [DEBUG] < BINARY 43 c3 81 16 43 80 fb 03 5b 1e 5a 07 7b 07 eb 8d ... 67 a9 b8 d0 37 b3 5b a3 [2898 bytes]
-[2025-10-11 07:38:13 +0000] [58] [DEBUG] < BINARY 43 c3 81 16 f8 80 fb 03 7f b7 9f d7 68 6a 72 b2 ... 0b 89 9c ae 7a b9 e2 a3 [2898 bytes]
-[2025-10-11 07:38:13 +0000] [58] [DEBUG] < BINARY 43 c3 81 17 ac 80 fb 03 d7 c7 26 66 19 2d bb 6f ... ef 20 ba 7c f5 f8 08 a3 [2898 bytes]
-[2025-10-11 07:38:13 +0000] [58] [DEBUG] < BINARY 43 c3 81 18 60 80 fb 03 53 02 f6 e2 e3 32 b3 e5 ... d9 2d ce 93 55 50 97 a3 [2898 bytes]
-[2025-10-11 07:38:13 +0000] [58] [DEBUG] < BINARY 43 c3 81 19 14 80 fb 03 f4 63 57 0b 5f 44 2e 88 ... f5 1f 74 82 d6 67 94 a3 [2898 bytes]
-[2025-10-11 07:38:14 +0000] [58] [DEBUG] < BINARY 43 c3 81 19 c8 80 fb 03 50 d0 3a 5a 93 1b 86 d0 ... 15 01 09 86 62 f6 23 a3 [2898 bytes]
-[2025-10-11 07:38:14 +0000] [58] [DEBUG] < BINARY 43 c3 81 1a 7c 80 fb 03 ec ce 65 7c a2 2c 51 a4 ... c8 9f aa 0f 87 cf b0 a3 [2898 bytes]
-[2025-10-11 07:38:14 +0000] [58] [DEBUG] < BINARY 43 c3 81 1b 30 80 fb 03 74 49 aa 4a b9 fc ad ab ... 30 83 e6 1b aa 8d 51 a3 [2898 bytes]
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"bytes_forwarded":2897,"event":"ws_close_stream_finish_request","ts":1760168289.71555}
-10.225.24.231:39516 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-11 07:38:14 +0000] [58] [DEBUG] < BINARY 43 c3 81 1b e4 80 fb 03 78 80 e8 bc 39 25 bf 1f ... 9e b3 ff 94 ff d1 ee a3 [2898 bytes]
-[2025-10-11 07:38:14 +0000] [58] [DEBUG] < BINARY 43 c3 81 1c 98 80 fb 03 5a 64 4f 1d 17 e2 36 e3 ... 94 1c ac 3d e3 43 87 a3 [2898 bytes]
-[2025-10-11 07:38:19 +0000] [58] [DEBUG] > TEXT '{"type":"keepalive","ts":1760168299423}' [39 bytes]
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"linger_ms":8000,"wait_for_final":true,"drain_timeout_s":1.5,"event":"dg_close_drain_begin","ts":1760168295.7469232}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760168295.746991}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":0,"sent_chunks":0,"ws_open":true,"open_evt":true,"first8_hex":null,"event":"dg_flush_exit","ts":1760168295.74701}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","bytes":0,"first8_hex":null,"queued":0,"dropped_chunks":0,"dropped_bytes":0,"event":"dg_writer_drained","ts":1760168295.7471063}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"event":"dg_send_close_stream","ts":1760168295.7471275}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"ws_open":false,"open_evt":true,"event":"dg_flush_enter","ts":1760168295.8675559}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","queued":0,"sent_bytes":0,"sent_chunks":0,"ws_open":false,"open_evt":true,"first8_hex":null,"event":"dg_flush_exit","ts":1760168295.8676023}
-10.225.24.231:39528 - "GET /api/v1/health HTTP/1.1" 200
-10.225.24.231:39530 - "GET /api/v1/health HTTP/1.1" 200
-10.225.24.231:55130 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-11 07:38:27 +0000] [58] [DEBUG] % sending keepalive ping
-[2025-10-11 07:38:27 +0000] [58] [DEBUG] > PING b6 88 57 19 [binary, 4 bytes]
-[2025-10-11 07:38:27 +0000] [58] [DEBUG] = connection is CLOSED
-10.225.24.231:55132 - "GET /api/v1/health HTTP/1.1" 200
-10.225.24.231:51794 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-11 07:38:37 +0000] [58] [DEBUG] x half-closing TCP connection
-[2025-10-11 07:38:37 +0000] [58] [INFO] connection closed
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","dg_id":135158934420880,"tag":"miccap-v4:84892317-44f6-4c40-ad17-4d41e82076e2","wait_for_final":true,"linger_ms":8000,"had_result":false,"drain_failed":false,"event":"dg_close","ts":1760168315.7721107}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"ok":true,"bytes_forwarded":2897,"event":"dg_tx_close","ts":1760168315.7721603}
-{"sid":"84892317-44f6-4c40-ad17-4d41e82076e2","turn_id":2,"final":true,"chars":0,"source":"synthetic","event":"ui_result_emit","ts":1760168315.7723348}
-{"conn_id":"760cd5a6a36b41628f644bba9e6c9c9f","sid":"84892317-44f6-4c40-ad17-4d41e82076e2","active":0,"source":"cleanup","event":"ws_conn_close","ts":1760168315.7724254}
-{"conn_id":"760cd5a6a36b41628f644bba9e6c9c9f","sid":"84892317-44f6-4c40-ad17-4d41e82076e2","duration":76.48293685913086,"had_disconnect":false,"event":"ws_conn_cleanup","ts":1760168315.7724464}
-10.225.24.231:51798 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-11 09:10:58 +0000] [58] [DEBUG] < TEXT '{"type":"AudioStart","mime":"audio/webm; codecs=opus"}' [54 bytes]
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","type":"AudioStart","event":"ws_json_recv","ts":1760173858.249431}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","mime":"audio/webm; codecs=opus","event":"turn_audio_start","ts":1760173858.2495084}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","mime":"audio/webm; codecs=opus","container":"webm","codec":"opus","containerized_opus":true,"gate_open":true,"guess_source":"meta","event":"ws_audio_hint","ts":1760173858.2495239}
+10.225.25.233:36646 - "GET /api/v1/health HTTP/1.1" 200
+10.225.25.233:36918 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-11 09:11:12 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_chunk","turn_id":"8abd59445e...er_move":"offer_steps"}' [188 bytes]
+[2025-10-11 09:11:12 +0000] [58] [DEBUG] > TEXT '{"type":"suggestions","turn_id":"8abd59445ebe43... the business value"}]}' [209 bytes]
+[2025-10-11 09:11:12 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_end","turn_id":"8abd59445ebe437da560e207638a6239"}' [69 bytes]
+10.225.25.233:36922 - "GET /api/v1/health HTTP/1.1" 200
+10.225.25.233:36920 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-11 09:11:13 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"8abd59445e...Ydc="],"is_last":false}' [11051 bytes]
+[2025-10-11 09:11:13 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"8abd59445e...QNU="],"is_last":false}' [11051 bytes]
+[2025-10-11 09:11:13 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"8abd59445e...u3s="],"is_last":false}' [11051 bytes]
+[2025-10-11 09:11:13 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"8abd59445e...ic4="],"is_last":false}' [11051 bytes]
+[2025-10-11 09:11:13 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"8abd59445e...VVVU="],"is_last":true}' [2750 bytes]
+[2025-10-11 09:11:13 +0000] [58] [DEBUG] > TEXT '{"type":"UtteranceEnd","turn_id":"8abd59445ebe437da560e207638a6239"}' [68 bytes]
+[2025-10-11 09:11:13 +0000] [58] [DEBUG] > TEXT '{"type":"state","phase":"ready"}' [32 bytes]
+[2025-10-11 09:11:17 +0000] [58] [DEBUG] < BINARY 43 c3 81 48 30 80 fb 03 b1 84 d1 a8 86 a6 c7 42 ... 64 48 e4 8e 66 1d 2d a3 [2898 bytes]
+[2025-10-11 09:11:17 +0000] [58] [DEBUG] < BINARY 43 c3 81 48 e3 80 fb 03 24 2d 8f a0 0e 0a 08 fe ... 67 b0 95 6a 55 bd af a3 [2898 bytes]
+[2025-10-11 09:11:17 +0000] [58] [DEBUG] < BINARY 43 c3 81 49 97 80 fb 03 c1 a3 55 5a 61 3f 23 70 ... 3c 72 09 8f ea 74 9c a3 [2898 bytes]
+[2025-10-11 09:11:17 +0000] [58] [DEBUG] > TEXT '{"type":"state","phase":"paused"}' [33 bytes]
+[2025-10-11 09:11:17 +0000] [58] [DEBUG] < BINARY 43 c3 81 4a 4b 80 fb 03 d6 d1 2d 00 bc 20 22 14 ... f2 90 ed cf 70 7c 02 a3 [2898 bytes]
+[2025-10-11 09:11:17 +0000] [58] [DEBUG] > TEXT '{"type":"state","phase":"ready"}' [32 bytes]
+[2025-10-11 09:11:17 +0000] [58] [DEBUG] < BINARY 43 c3 81 4a ff 80 fb 03 53 94 ed dc b0 1a c9 b3 ... 4f 7b 3d f7 d2 9c e7 a3 [2898 bytes]
+[2025-10-11 09:11:17 +0000] [58] [DEBUG] > TEXT '{"type":"keepalive","ts":1760173877780}' [39 bytes]
+[2025-10-11 09:11:17 +0000] [58] [DEBUG] % sending keepalive ping
+[2025-10-11 09:11:17 +0000] [58] [DEBUG] > PING 53 3c 19 d3 [binary, 4 bytes]
+[2025-10-11 09:11:17 +0000] [58] [DEBUG] < PONG 53 3c 19 d3 [binary, 4 bytes]
+[2025-10-11 09:11:17 +0000] [58] [DEBUG] % received keepalive pong
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173877.1193795}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","first8_hex":"43c381483080fb03","event":"audio_sig","ts":1760173877.1194243}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"first_bytes":2898,"event":"turn_start","ts":1760173877.1197135}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":1,"last_bytes":2898,"event":"mic_capture_append","ts":1760173877.1197586}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"queued":1,"queued_bytes":2898,"dg_state":"closed","connect_ready_reason":"audio_start_webm","event":"asr_connect_schedule","ts":1760173877.119792}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"event":"ws_audio_provider_connecting","ts":1760173877.1198077}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","transport":{"protocol":"websocket","container":"webm","codec":"opus","containerized_opus":true,"features":[]},"event":"asr_connect_begin","ts":1760173877.1199088}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":null,"already_open":false,"closing":false,"closed":false,"event":"dg_connect_begin","ts":1760173877.1200228}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"qs":"?interim_results=true&model=nova-2&punctuate=true&smart_format=true&tag=miccap-v4%3A6e5b2b3c-922a-42b2-9cfb-90da5569b2bd&utterance_end_ms=2000&vad_events=true","containerized_opus":true,"audio_params_absent":true,"forced_containerized":false,"attempted_audio_params":null,"dropped_audio_params":null,"event":"dg_url_sanitized","ts":1760173877.120415}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"url":"wss://api.deepgram.com/v1/listen?tag=miccap-v4%3A6e5b2b3c-922a-42b2-9cfb-90da5569b2bd&interim_results=true&vad_events=true&smart_format=true&punctuate=true&model=nova-2&utterance_end_ms=2000","container":"webm","codec":"opus","containerized_opus":true,"omitted_params":["sample_rate","encoding","channels"],"audio_params":null,"forced_containerized":false,"attempted_audio_params":null,"dropped_audio_params":null,"event":"asr_url","ts":1760173877.1204386}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"safe_url":"wss://api.deepgram.com/v1/listen?interim_results=true&model=nova-2&punctuate=true&smart_format=true&tag=miccap-v4%3A6e5b2b3c-922a-42b2-9cfb-90da5569b2bd&utterance_end_ms=2000&vad_events=true","key_len":40,"subprotocols":null,"event":"dg_connect_attempt","ts":1760173877.1205282}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"event":"asr_connect_start","ts":1760173877.1205447}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173877.47837}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":2,"last_bytes":2898,"event":"mic_capture_append","ts":1760173877.4784575}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","keys":["features","type"],"event":"dg_config_sent","ts":1760173877.8414164}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"url":"wss://api.deepgram.com/v1/listen?tag=miccap-v4%3A6e5b2b3c-922a-42b2-9cfb-90da5569b2bd&interim_results=true&vad_events=true&smart_format=true&punctuate=true&model=nova-2&utterance_end_ms=2000","tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","containerized":true,"event":"dg_open","ts":1760173877.8414996}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"elapsed_ms":720,"event":"asr_connect_ok","ts":1760173877.8415158}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","event":"asr_connect_ok","ts":1760173877.8415449}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"dg_type":"asr_open","chars":0,"event":"dg_message","ts":1760173877.8419054}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"delta_from_turn_ms":722,"event":"dg_asr_open","ts":1760173877.8419232}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":2,"dg_ready":true,"event":"ws_flush_request","ts":1760173877.8419528}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173877.841972}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":2898,"event":"ws_audio_forward","ts":1760173877.8419893}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":2,"event":"dg_tx_enqueue","ts":1760173877.8420043}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":5796,"event":"ws_audio_forward","ts":1760173877.8420146}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":2,"flushed_chunks":2,"flushed_bytes":5796,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173877.8420238}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173877.8422446}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":3,"last_bytes":2898,"event":"mic_capture_append","ts":1760173877.8422766}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173877.842304}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":3,"event":"dg_tx_enqueue","ts":1760173877.8423193}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes_total":8694,"step":8192,"event":"ws_audio_forward_progress","ts":1760173877.8423376}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":8694,"event":"ws_audio_forward","ts":1760173877.8423452}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173877.8423538}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173877.842366}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":4,"last_bytes":2898,"event":"mic_capture_append","ts":1760173877.842381}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173877.8423972}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":4,"event":"dg_tx_enqueue","ts":1760173877.842407}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":11592,"event":"ws_audio_forward","ts":1760173877.8424158}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173877.8424284}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173877.8424451}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":5,"last_bytes":2898,"event":"mic_capture_append","ts":1760173877.842467}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173877.8424942}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":5,"event":"dg_tx_enqueue","ts":1760173877.8425057}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":14490,"event":"ws_audio_forward","ts":1760173877.8425155}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173877.8425233}
+10.225.25.233:58246 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-11 09:11:17 +0000] [58] [DEBUG] < BINARY 43 c3 81 4b b3 80 fb 03 d7 54 e5 00 20 30 56 f2 ... c2 ff 93 28 ae da b6 a3 [2898 bytes]
+[2025-10-11 09:11:18 +0000] [58] [DEBUG] < BINARY 43 c3 81 4c 67 80 fb 03 73 5a 76 7f 66 a1 a0 1d ... 1e 17 16 be 69 ac db a3 [2898 bytes]
+[2025-10-11 09:11:18 +0000] [58] [DEBUG] < BINARY 43 c3 81 4d 1b 80 fb 03 d6 ef 4a a2 5f 05 7d b0 ... b8 a7 85 e6 22 6c e2 a3 [2898 bytes]
+[2025-10-11 09:11:18 +0000] [58] [DEBUG] < BINARY 43 c3 81 4d d0 80 fb 03 da 91 1a 3b 15 20 91 1e ... 2d a0 45 ba 7d 69 44 a3 [2898 bytes]
+[2025-10-11 09:11:18 +0000] [58] [DEBUG] < BINARY 43 c3 81 4e 83 80 fb 03 51 bc 15 68 b1 5c 4e f1 ... f1 27 a0 b3 ce aa c0 a3 [2898 bytes]
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":5,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173877.90089}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":2,"total_sent":8694,"total_forwarded":8694,"event":"dg_forward","ts":1760173877.9011166}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":14490,"sent_chunks":5,"ws_open":true,"open_evt":true,"first8_hex":"43c381483080fb03","event":"dg_flush_exit","ts":1760173877.9011846}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173877.9013507}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":6,"last_bytes":2898,"event":"mic_capture_append","ts":1760173877.9013834}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173877.9014163}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173877.9014325}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes_total":17388,"step":8192,"event":"ws_audio_forward_progress","ts":1760173877.9014537}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":17388,"event":"ws_audio_forward","ts":1760173877.901462}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173877.9014719}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173877.901509}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":0,"total_sent":2898,"total_forwarded":17388,"event":"dg_forward","ts":1760173877.9015658}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c3814bb380fb03","event":"dg_flush_exit","ts":1760173877.9015818}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173878.0817273}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":7,"last_bytes":2898,"event":"mic_capture_append","ts":1760173878.0817866}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173878.081845}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173878.0818977}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":20286,"event":"ws_audio_forward","ts":1760173878.08193}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173878.081942}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173878.0819845}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c3814c6780fb03","event":"dg_flush_exit","ts":1760173878.0821059}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173878.262472}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":8,"last_bytes":2898,"event":"mic_capture_append","ts":1760173878.2625587}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173878.262668}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173878.2627103}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":23184,"event":"ws_audio_forward","ts":1760173878.2627606}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173878.2627747}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173878.262815}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c3814d1b80fb03","event":"dg_flush_exit","ts":1760173878.2629566}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173878.444249}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":9,"last_bytes":2898,"event":"mic_capture_append","ts":1760173878.4443197}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173878.444379}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173878.4444015}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes_total":26082,"step":8192,"event":"ws_audio_forward_progress","ts":1760173878.4444332}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":26082,"event":"ws_audio_forward","ts":1760173878.444444}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173878.4444551}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173878.4445324}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":0,"total_sent":2898,"total_forwarded":26082,"event":"dg_forward","ts":1760173878.4446805}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c3814dd080fb03","event":"dg_flush_exit","ts":1760173878.444702}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173878.5742657}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":10,"last_bytes":2898,"event":"mic_capture_append","ts":1760173878.5743284}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173878.574392}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173878.5744147}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":28980,"event":"ws_audio_forward","ts":1760173878.5744486}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173878.574464}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173878.574515}
+[2025-10-11 09:11:18 +0000] [58] [DEBUG] < BINARY 43 c3 81 4f 37 80 fb 03 dc 16 11 84 bf e0 a4 5a ... 2e ec 3b bd d3 d9 58 a3 [2898 bytes]
+[2025-10-11 09:11:18 +0000] [58] [DEBUG] < BINARY 43 c3 81 4f eb 80 fb 03 17 53 a4 14 64 03 e8 f3 ... b5 3b 39 f5 04 12 e2 a3 [2898 bytes]
+[2025-10-11 09:11:19 +0000] [58] [DEBUG] < BINARY 43 c3 81 50 9f 80 fb 03 51 0d 46 8c 9c be ce e5 ... 0d 48 a7 5b f1 55 5e a3 [2898 bytes]
+[2025-10-11 09:11:19 +0000] [58] [DEBUG] < BINARY 43 c3 81 51 53 80 fb 03 3f 95 5d a1 ff 31 80 85 ... 82 36 51 dc 8f 38 4f a3 [2898 bytes]
+[2025-10-11 09:11:19 +0000] [58] [DEBUG] < BINARY 43 c3 81 52 07 80 fb 03 f2 46 1a 11 b5 a3 cc b3 ... a3 8c 11 f7 86 b6 5c a3 [2898 bytes]
+[2025-10-11 09:11:19 +0000] [58] [DEBUG] < BINARY 43 c3 81 52 bc 80 fb 03 53 e0 06 17 ba 18 ce c0 ... eb 2a 90 7e 56 42 41 a3 [2898 bytes]
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c3814e8380fb03","event":"dg_flush_exit","ts":1760173878.5746725}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173878.7556593}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":11,"last_bytes":2898,"event":"mic_capture_append","ts":1760173878.7557104}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173878.7557623}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173878.755782}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":31878,"event":"ws_audio_forward","ts":1760173878.755811}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173878.755823}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173878.7559063}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c3814f3780fb03","event":"dg_flush_exit","ts":1760173878.7560542}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173878.93406}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":12,"last_bytes":2898,"event":"mic_capture_append","ts":1760173878.934119}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173878.9341762}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173878.9342024}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes_total":34776,"step":8192,"event":"ws_audio_forward_progress","ts":1760173878.934236}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":34776,"event":"ws_audio_forward","ts":1760173878.9342487}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173878.934262}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173878.9343147}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":0,"total_sent":2898,"total_forwarded":34776,"event":"dg_forward","ts":1760173878.934471}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c3814feb80fb03","event":"dg_flush_exit","ts":1760173878.9344938}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173879.114835}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":13,"last_bytes":2898,"event":"mic_capture_append","ts":1760173879.1149282}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173879.1149902}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173879.1150167}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":37674,"event":"ws_audio_forward","ts":1760173879.1150537}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173879.1150706}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173879.1151264}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381509f80fb03","event":"dg_flush_exit","ts":1760173879.1152785}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173879.2947686}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":14,"last_bytes":2898,"event":"mic_capture_append","ts":1760173879.2948296}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173879.294913}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173879.2949412}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":40572,"event":"ws_audio_forward","ts":1760173879.294979}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173879.294997}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173879.2950566}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381515380fb03","event":"dg_flush_exit","ts":1760173879.295216}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173879.4771998}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":15,"last_bytes":2898,"event":"mic_capture_append","ts":1760173879.4772723}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173879.4773345}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173879.4773595}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes_total":43470,"step":8192,"event":"ws_audio_forward_progress","ts":1760173879.4773996}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":43470,"event":"ws_audio_forward","ts":1760173879.4774132}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173879.4774272}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173879.47748}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":0,"total_sent":2898,"total_forwarded":43470,"event":"dg_forward","ts":1760173879.4776251}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381520780fb03","event":"dg_flush_exit","ts":1760173879.4776487}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173879.6566586}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":16,"last_bytes":2898,"event":"mic_capture_append","ts":1760173879.656723}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173879.6567855}
+[2025-10-11 09:11:19 +0000] [58] [DEBUG] < BINARY 43 c3 81 53 6f 80 fb 03 ec 31 0c ef 2a 87 8c 87 ... cf 2b ea 6b 27 f8 09 a3 [2898 bytes]
+[2025-10-11 09:11:20 +0000] [58] [DEBUG] < BINARY 43 c3 81 54 23 80 fb 03 f0 39 10 cb 13 57 b8 bd ... 84 3e e3 45 bd ac 56 a3 [2898 bytes]
+[2025-10-11 09:11:20 +0000] [58] [DEBUG] < BINARY 43 c3 81 54 d7 80 fb 03 53 d9 1c e1 cb ef c7 23 ... a8 96 ac 20 90 92 a0 a3 [2898 bytes]
+[2025-10-11 09:11:20 +0000] [58] [DEBUG] < BINARY 43 c3 81 55 8b 80 fb 03 53 e5 25 e0 a2 61 9e 7a ... d2 f0 5a 09 17 1d cb a3 [2898 bytes]
+[2025-10-11 09:11:20 +0000] [58] [DEBUG] < BINARY 43 c3 81 56 3f 80 fb 03 b1 54 66 59 e4 94 44 0f ... d5 f8 14 7d 03 0a 5a a3 [2898 bytes]
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173879.65681}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":46368,"event":"ws_audio_forward","ts":1760173879.6569033}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173879.6569278}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173879.6569872}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c38152bc80fb03","event":"dg_flush_exit","ts":1760173879.657143}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173879.8362186}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":17,"last_bytes":2898,"event":"mic_capture_append","ts":1760173879.8362775}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173879.836336}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173879.8363614}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes_total":49266,"step":8192,"event":"ws_audio_forward_progress","ts":1760173879.8363972}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":49266,"event":"ws_audio_forward","ts":1760173879.836408}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173879.8364203}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173879.8364792}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":0,"total_sent":2898,"total_forwarded":49266,"event":"dg_forward","ts":1760173879.8366416}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381536f80fb03","event":"dg_flush_exit","ts":1760173879.8366652}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173880.0182273}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":18,"last_bytes":2898,"event":"mic_capture_append","ts":1760173880.0182912}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173880.0183542}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173880.0183797}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":52164,"event":"ws_audio_forward","ts":1760173880.0184171}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173880.0184333}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173880.018492}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381542380fb03","event":"dg_flush_exit","ts":1760173880.0186572}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173880.1970484}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":19,"last_bytes":2898,"event":"mic_capture_append","ts":1760173880.1971087}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173880.1971676}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173880.1971917}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":55062,"event":"ws_audio_forward","ts":1760173880.1972268}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173880.197243}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173880.197306}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c38154d780fb03","event":"dg_flush_exit","ts":1760173880.1974554}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","frames_in":20,"bytes_total":57960,"event":"ws_bin_recv","ts":1760173880.377829}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173880.377915}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":20,"last_bytes":2898,"event":"mic_capture_append","ts":1760173880.3779497}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173880.377998}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173880.378024}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes_total":57960,"step":8192,"event":"ws_audio_forward_progress","ts":1760173880.378059}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":57960,"event":"ws_audio_forward","ts":1760173880.3780684}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173880.3780782}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173880.3781226}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":0,"total_sent":2898,"total_forwarded":57960,"event":"dg_forward","ts":1760173880.3782444}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381558b80fb03","event":"dg_flush_exit","ts":1760173880.3782616}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173880.5586352}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":21,"last_bytes":2898,"event":"mic_capture_append","ts":1760173880.5586932}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173880.558753}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173880.5587769}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":60858,"event":"ws_audio_forward","ts":1760173880.55881}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173880.5588255}
+[2025-10-11 09:11:20 +0000] [58] [DEBUG] < BINARY 43 c3 81 56 f3 80 fb 03 51 9e d1 dc 3e 60 11 ef ... e9 5d 77 7a a3 90 71 a3 [2898 bytes]
+[2025-10-11 09:11:20 +0000] [58] [DEBUG] < TEXT '{"type":"AudioStart","mime":"audio/webm; codecs=opus"}' [54 bytes]
+[2025-10-11 09:11:20 +0000] [58] [DEBUG] < BINARY 43 c3 81 57 a7 80 fb 03 51 e9 2d ed ed 7b 5d 13 ... c6 e9 b5 46 68 df 70 38 [1931 bytes]
+[2025-10-11 09:11:20 +0000] [58] [DEBUG] < TEXT '{"type":"CloseStream"}' [22 bytes]
+[2025-10-11 09:11:20 +0000] [58] [DEBUG] < TEXT '{"type":"AudioStart","mime":"audio/webm; codecs=opus"}' [54 bytes]
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173880.558894}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c381563f80fb03","event":"dg_flush_exit","ts":1760173880.5590658}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"event":"ws_audio_chunk","ts":1760173880.7404609}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":22,"last_bytes":2898,"event":"mic_capture_append","ts":1760173880.740521}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173880.7405717}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"queued":1,"event":"dg_tx_enqueue","ts":1760173880.7405999}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":2898,"buffered":true,"total":63756,"event":"ws_audio_forward","ts":1760173880.7406294}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":2898,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173880.7406418}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173880.7406828}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":2898,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c38156f380fb03","event":"dg_flush_exit","ts":1760173880.7408302}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","type":"AudioStart","event":"ws_json_recv","ts":1760173880.8036275}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","mime":"audio/webm; codecs=opus","event":"turn_audio_start","ts":1760173880.8037028}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","mime":"audio/webm; codecs=opus","container":"webm","codec":"opus","containerized_opus":true,"gate_open":true,"guess_source":"meta","event":"ws_audio_hint","ts":1760173880.8037188}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":1931,"event":"ws_audio_chunk","ts":1760173880.805724}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"chunks":23,"last_bytes":1931,"event":"mic_capture_append","ts":1760173880.8057587}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"dg_ready":true,"event":"ws_flush_request","ts":1760173880.8058045}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":1931,"queued":1,"event":"dg_tx_enqueue","ts":1760173880.8058226}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":1931,"buffered":true,"total":1931,"event":"ws_audio_forward","ts":1760173880.8058484}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"flushed_chunks":1,"flushed_bytes":1931,"remaining":0,"remaining_bytes":0,"event":"ws_flush_done","ts":1760173880.805859}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":1,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173880.8059313}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":1931,"queued":0,"total_sent":1931,"total_forwarded":65687,"event":"dg_forward","ts":1760173880.8060539}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":1931,"sent_chunks":1,"ws_open":true,"open_evt":true,"first8_hex":"43c38157a780fb03","event":"dg_flush_exit","ts":1760173880.8060713}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","type":"CloseStream","event":"ws_json_recv","ts":1760173880.8620722}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","source":"CloseStream","bytes_forwarded":1931,"event":"ws_close_stream","ts":1760173880.8621397}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","next_turn_id":1,"event":"before_close_turn","ts":1760173880.8621767}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"event":"after_close_turn","ts":1760173880.8622077}
+{"turn_id":1,"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","source":"CloseStream","bytes_forwarded":1931,"event":"ws_close_stream_recv","ts":1760173880.8622224}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"source":"client_close_stream","pending_guard":false,"final_seen":false,"buffered_chunks":0,"buffered_bytes":0,"pending_provider_final":false,"synthetic_expected":true,"pcm_bytes":65687,"event":"turn_commit","ts":1760173880.8622558}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"bytes_forwarded":1931,"event":"ws_close_stream_post_flush","ts":1760173880.8623207}
+10.225.25.233:58248 - "GET /api/v1/health HTTP/1.1" 200
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"bytes_forwarded":1931,"event":"ws_close_stream_finish_request","ts":1760173882.9165218}
+10.225.25.233:38616 - "GET /api/v1/health HTTP/1.1" 200
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"linger_ms":8000,"wait_for_final":true,"drain_timeout_s":1.5,"event":"dg_close_drain_begin","ts":1760173888.828387}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"ws_open":true,"open_evt":true,"event":"dg_flush_enter","ts":1760173888.828465}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":0,"sent_chunks":0,"ws_open":true,"open_evt":true,"first8_hex":null,"event":"dg_flush_exit","ts":1760173888.828486}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","bytes":0,"first8_hex":null,"queued":0,"dropped_chunks":0,"dropped_bytes":0,"event":"dg_writer_drained","ts":1760173888.8286092}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"event":"dg_send_close_stream","ts":1760173888.8286376}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"ws_open":false,"open_evt":true,"event":"dg_flush_enter","ts":1760173889.0084934}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","queued":0,"sent_bytes":0,"sent_chunks":0,"ws_open":false,"open_evt":true,"first8_hex":null,"event":"dg_flush_exit","ts":1760173889.008549}
+10.225.25.233:38620 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-11 09:11:34 +0000] [58] [DEBUG] < BINARY 43 c3 81 34 80 80 fb 03 ab 0b 32 51 0d 61 16 12 ... a8 7f 19 b6 8f ac ae a3 [2898 bytes]
+[2025-10-11 09:11:34 +0000] [58] [DEBUG] < BINARY 43 c3 81 35 34 80 fb 03 d8 07 56 3b fc 8d 77 8e ... f6 44 ed 6b 36 1c c4 a3 [2898 bytes]
+[2025-10-11 09:11:34 +0000] [58] [DEBUG] < BINARY 43 c3 81 35 e8 80 fb 03 da e3 50 2c 7a 9a 99 05 ... eb d7 3a f2 3b cd bf a3 [2898 bytes]
+[2025-10-11 09:11:35 +0000] [58] [DEBUG] < BINARY 43 c3 81 36 9c 80 fb 03 d7 19 f8 2c b4 7e a9 74 ... 81 8b f1 00 27 e9 c2 a3 [2898 bytes]
+[2025-10-11 09:11:35 +0000] [58] [DEBUG] < BINARY 43 c3 81 37 50 80 fb 03 d7 eb d7 13 16 4a 74 5c ... 2d e7 25 de cc c4 83 a3 [2898 bytes]
+[2025-10-11 09:11:35 +0000] [58] [DEBUG] < BINARY 43 c3 81 38 04 80 fb 03 15 62 90 1a 42 d9 77 1f ... 6c c2 c4 1e 84 52 0a a3 [2898 bytes]
+[2025-10-11 09:11:35 +0000] [58] [DEBUG] < BINARY 43 c3 81 38 b8 80 fb 03 51 cd 93 d4 cf 94 9a 8d ... bc d4 6e 61 ed f9 77 a3 [2898 bytes]
+[2025-10-11 09:11:35 +0000] [58] [DEBUG] < BINARY 43 c3 81 39 6c 80 fb 03 5a ef e7 83 6c 91 f9 40 ... 60 07 ac 19 ab 0f 2a a3 [2898 bytes]
+[2025-10-11 09:11:36 +0000] [58] [DEBUG] < BINARY 43 c3 81 3a 20 80 fb 03 ad a6 97 47 bf bd 4d 40 ... 07 8f cc f7 24 62 49 a3 [2898 bytes]
+[2025-10-11 09:11:36 +0000] [58] [DEBUG] < BINARY 43 c3 81 3a d4 80 fb 03 5a 56 ec 50 5a 98 13 7f ... 73 0a ef b2 e7 76 9a a3 [2898 bytes]
+[2025-10-11 09:11:36 +0000] [58] [DEBUG] < BINARY 43 c3 81 3b 88 80 fb 03 53 5c ac 09 e3 f8 1b e0 ... b3 e7 67 42 fc 37 c8 a3 [2898 bytes]
+[2025-10-11 09:11:36 +0000] [58] [DEBUG] < BINARY 43 c3 81 3c 3c 80 fb 03 ef c3 15 20 ef 73 2f aa ... ef 74 67 60 f6 ae 2b a3 [2898 bytes]
+[2025-10-11 09:11:36 +0000] [58] [DEBUG] < BINARY 43 c3 81 3c f0 80 fb 03 5a 16 39 42 eb 30 bc 2b ... 33 73 a2 ab 0c d8 44 a3 [2898 bytes]
+[2025-10-11 09:11:36 +0000] [58] [DEBUG] < BINARY 43 c3 81 3d a4 80 fb 03 5b 57 1b 08 b0 40 94 32 ... 71 73 d4 92 98 72 e9 a3 [2898 bytes]
+[2025-10-11 09:11:36 +0000] [58] [DEBUG] < TEXT '{"type":"AudioStart","mime":"audio/webm; codecs=opus"}' [54 bytes]
+[2025-10-11 09:11:36 +0000] [58] [DEBUG] < BINARY 43 c3 81 3e 58 80 fb 03 6d 25 21 de 30 74 53 95 ... d5 34 e9 8f ed 1c dc dd [965 bytes]
+[2025-10-11 09:11:36 +0000] [58] [DEBUG] < TEXT '{"type":"CloseStream"}' [22 bytes]
+[2025-10-11 09:11:36 +0000] [58] [DEBUG] < TEXT '{"type":"AudioStart","mime":"audio/webm; codecs=opus"}' [54 bytes]
+[2025-10-11 09:11:37 +0000] [58] [DEBUG] > TEXT '{"type":"keepalive","ts":1760173897809}' [39 bytes]
+10.225.25.233:44766 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-11 09:11:37 +0000] [58] [DEBUG] % sending keepalive ping
+[2025-10-11 09:11:37 +0000] [58] [DEBUG] > PING 55 0b 23 ae [binary, 4 bytes]
+[2025-10-11 09:11:37 +0000] [58] [DEBUG] < PONG 55 0b 23 ae [binary, 4 bytes]
+[2025-10-11 09:11:37 +0000] [58] [DEBUG] % received keepalive pong
+10.225.25.233:44776 - "GET /api/v1/health HTTP/1.1" 200
+10.225.25.233:44792 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-11 09:11:45 +0000] [58] [DEBUG] < TEXT '{"type":"CloseStream"}' [22 bytes]
+[2025-10-11 09:11:45 +0000] [58] [DEBUG] < CLOSE 1000 (OK) user_end [10 bytes]
+[2025-10-11 09:11:45 +0000] [58] [DEBUG] = connection is CLOSING
+[2025-10-11 09:11:45 +0000] [58] [DEBUG] > CLOSE 1000 (OK) user_end [10 bytes]
+[2025-10-11 09:11:45 +0000] [58] [DEBUG] x half-closing TCP connection
+[2025-10-11 09:11:45 +0000] [58] [DEBUG] = connection is CLOSED
+[2025-10-11 09:11:45 +0000] [58] [INFO] connection closed
+10.225.25.233:39926 - "GET /api/v1/health HTTP/1.1" 200
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","dg_id":134330493951280,"tag":"miccap-v4:6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","wait_for_final":true,"linger_ms":8000,"had_result":false,"drain_failed":false,"event":"dg_close","ts":1760173908.8435154}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"ok":true,"bytes_forwarded":1931,"event":"dg_tx_close","ts":1760173908.8435676}
+{"sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","turn_id":1,"final":true,"chars":0,"source":"synthetic","event":"ui_result_emit","ts":1760173908.8437178}
+{"conn_id":"0b818ed5fe454d97a8ae64c164bc06d7","sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","active":0,"source":"cleanup","event":"ws_conn_close","ts":1760173908.8437982}
+{"conn_id":"0b818ed5fe454d97a8ae64c164bc06d7","sid":"6e5b2b3c-922a-42b2-9cfb-90da5569b2bd","duration":51.12923073768616,"had_disconnect":false,"event":"ws_conn_cleanup","ts":1760173908.8438218}
+10.225.25.233:39938 - "GET /api/v1/health HTTP/1.1" 200

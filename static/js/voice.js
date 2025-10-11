@@ -85,6 +85,7 @@ const state = {
   turnTraceBase: null,
   turnTraceSeq: 0,
   turnTraceId: null,
+  audioStopSent: false,
 };
 
 const BARGE_CONFIRM_DEFAULT_MS = 420;
@@ -979,6 +980,7 @@ async function _startRecorder() {
   state.chunkSendError = null;
   state.turnClosePromise = null;
   state.lastChunkAt = 0;
+  state.audioStopSent = false;
   _clearPendingEndTimer();
   state.recStartedAt = performance.now ? performance.now() : Date.now();
   state.finalized = false;
@@ -1133,6 +1135,15 @@ function _onSpeechEndCommitted(detail = null) {
   }
 
   _logLifecycle('vad_speech_end', { reason }, 'info');
+  if (!state.audioStopSent) {
+    try {
+      sendJSON({ type: 'AudioStop' });
+      state.audioStopSent = true;
+      _voiceLog('info', 'AudioStop sent');
+    } catch (err) {
+      _voiceLog('warn', 'failed to send AudioStop', { error: err?.message || err });
+    }
+  }
   _safeClearTurnTimer();
   _clearPendingEndTimer();
   _clearSafetyCloseTimer();
