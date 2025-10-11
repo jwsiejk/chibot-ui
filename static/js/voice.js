@@ -242,6 +242,7 @@ function _startGreetGateCalibrate(source = 'unknown') {
   _voiceLog('info', 'greet gate calibrating', {
     source,
     calibrateMs: durationMs,
+    ttsPlaying: !!state.ttsPlaying,
   });
   try {
     state.greetGateCalibrateTimer = setTimeout(() => {
@@ -275,6 +276,7 @@ function _handleGreetGateUtteranceEnd(detail = {}) {
   _voiceLog('debug', 'greet gate observed UtteranceEnd', {
     phase: state.greetGatePhase,
     reason: state.greetGateLastReason,
+    ttsPlaying: !!state.ttsPlaying,
   });
   _startGreetGateCalibrate('UtteranceEnd');
 }
@@ -312,6 +314,7 @@ function _handleGreetGateStateFrame(detail = {}) {
       stateField,
       phaseField,
       channelPhaseField,
+      ttsPlaying: !!state.ttsPlaying,
     });
     _startGreetGateCalibrate('ready_for_user');
   }
@@ -1394,6 +1397,13 @@ async function _onSpeechStartCommitted(detail = {}) {
     }
     if (state.greetGatePhase === 'pending') {
       const snrDb = Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null;
+      if (state.ttsPlaying) {
+        _voiceLog('info', 'speech start suppressed by greet gate while TTS playing', {
+          snrDb: roundTenths(snrDb),
+          ttsPlaying: true,
+        });
+        return;
+      }
       if (Number.isFinite(snrDb) && snrDb >= GREET_BARGE_MIN_SNR_DB) {
         _voiceLog('info', 'greet gate bypassed via barge-in', {
           snrDb: roundTenths(snrDb),
