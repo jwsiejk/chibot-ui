@@ -151,27 +151,54 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
     """
     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
 
-    # Detect containerized Opus from overrides (nested under _transport)
-    containerized = False
-    try:
-        if overrides and isinstance(overrides.get("_transport"), dict):
-            containerized = bool(overrides["_transport"].get("containerized_opus"))
-    except Exception:
-        containerized = False
+    overrides_dict: Optional[dict] = overrides if isinstance(overrides, dict) else None
+    transport: Optional[dict] = None
+    forced_reason: Optional[str] = None
+    requested_containerized: Optional[bool] = None
 
-    # Append conservative defaults ONLY when not containerized
-    if (not containerized) and ("encoding=" not in base):
-        sep = "&" if "?" in base else "?"
-        base = (
-            base
-            + sep
-            # RAW defaults; safe for legacy raw paths. If truly containerized, these will be stripped below.
-            + "encoding=opus&sample_rate=48000&channels=1"
-            + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true"
-        )
+    if overrides_dict is not None:
+        try:
+            candidate = overrides_dict.get("_transport")
+        except Exception:
+            candidate = None
+        if isinstance(candidate, dict):
+            transport = candidate
+        else:
+            transport = {}
+            overrides_dict["_transport"] = transport
+            forced_reason = "missing_transport" if candidate is None else "invalid_transport"
 
-    # Apply overrides into query string and clean up for containerized
-    effective_utterance_end_ms = 0
+    if transport is None and overrides_dict is not None:
+        transport = {}
+        overrides_dict["_transport"] = transport
+        forced_reason = forced_reason or "missing_transport"
+
+    if transport is not None:
+        try:
+            requested_containerized = transport.get("containerized_opus")
+        except Exception:
+            requested_containerized = None
+        if requested_containerized is not True:
+            transport["containerized_opus"] = True
+            transport["_containerized_forced"] = True
+            if requested_containerized is False:
+                forced_reason = "requested_false"
+            elif forced_reason is None:
+                forced_reason = "unspecified"
+        else:
+            transport.pop("_containerized_forced", None)
+
+    containerized = True
+
+    audio_param_keys = {"encoding", "sample_rate", "channels"}
+    attempted_audio_params: list[str] = []
+    dropped_audio_params: list[str] = []
+
+    if overrides_dict is not None:
+        for key in list(audio_param_keys):
+            if key in overrides_dict and overrides_dict[key] is not None:
+                attempted_audio_params.append(key)
+                overrides_dict.pop(key, None)
 
     try:
         import urllib.parse as _p
@@ -192,9 +219,6 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         # Allow top-level overrides (model, language, etc.)
         if overrides:
             for k in (
-                "encoding",
-                "sample_rate",
-                "channels",
                 "interim_results",
                 "smart_format",
                 "punctuate",
@@ -231,20 +255,10 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
 
         # If containerized, remove transport params regardless of how they got here
         if containerized:
-            for k in ("encoding", "sample_rate", "channels"):
+            for k in audio_param_keys:
                 if k in qd:
+                    dropped_audio_params.append(k)                    
                     qd.pop(k, None)
-        else:
-            # Non-containerized path: allow env overrides for raw parameters (no behavior change if unset)
-            enc = os.getenv("DG_RAW_ENCODING")
-            sr = os.getenv("DG_RAW_SAMPLE_RATE")
-            ch = os.getenv("DG_RAW_CHANNELS")
-            if enc:
-                qd["encoding"] = enc
-            if sr:
-                qd["sample_rate"] = sr
-            if ch:
-                qd["channels"] = ch
 
         # Ensure default feature flags are present without overwriting explicit overrides
         qd.setdefault("interim_results", "true")
@@ -306,13 +320,33 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         except Exception:
             overrides["_effective_utterance_end_ms"] = 0
 
-    return base
+        try:
+            transport = overrides.get("_transport")
+            if isinstance(transport, dict):
+                if dropped_audio_params:
+                    transport["_dropped_audio_params"] = sorted(set(dropped_audio_params))
+                elif "_dropped_audio_params" in transport:
+                    transport.pop("_dropped_audio_params", None)
+                if attempted_audio_params:
+                    transport["_attempted_audio_params"] = sorted(set(attempted_audio_params))
+                elif "_attempted_audio_params" in transport:
+                    transport.pop("_attempted_audio_params", None)
+        except Exception:
+            pass
 
+    if forced_reason or attempted_audio_params or dropped_audio_params:
+        logger.info(
+            "Deepgram containerized_opus active reason=%s attempted=%s dropped=%s",
+            forced_reason or "default",
+            attempted_audio_params or [],
+            dropped_audio_params or [],
+        )
+
+    return base
 
 def _auth_header() -> str:
     key, _ = _api_key_info()
     return f"Token {key}"
-
 
 def _initial_config(overrides: Optional[dict] = None) -> dict:
     """Build Configure payload with FEATURES ONLY (no audio/transport keys)."""
@@ -856,6 +890,17 @@ class DeepgramClient:
             self._url_tag = q.get("tag") or None
             transport = (self._cfg or {}).get("_transport", {}) or {}
             containerized = bool(transport.get("containerized_opus"))
+            forced_containerized = bool(transport.get("_containerized_forced"))
+
+            def _as_list(raw_val: Any) -> list[str]:
+                if isinstance(raw_val, (list, tuple, set)):
+                    return [str(item) for item in raw_val]
+                if raw_val is None:
+                    return []
+                return [str(raw_val)]
+
+            attempted_audio_params = _as_list(transport.get("_attempted_audio_params"))
+            dropped_audio_params = _as_list(transport.get("_dropped_audio_params"))            
             audio_param_keys = {"encoding", "sample_rate", "channels"}
             url_meta = {
                 "container": transport.get("container"),
@@ -863,6 +908,9 @@ class DeepgramClient:
                 "containerized_opus": containerized,
                 "omitted_params": None,
                 "audio_params": None,
+                "forced_containerized": forced_containerized,
+                "attempted_audio_params": attempted_audio_params or None,
+                "dropped_audio_params": dropped_audio_params or None,                
             }
             if containerized:
                 # These should be absent in containerized mode
@@ -907,6 +955,9 @@ class DeepgramClient:
                         qs=sanitized_qs,
                         containerized_opus=containerized,
                         audio_params_absent=audio_params_absent,
+                        forced_containerized=forced_containerized,
+                        attempted_audio_params=attempted_audio_params or None,
+                        dropped_audio_params=dropped_audio_params or None,                        
                     )
                 except Exception:
                     pass
@@ -920,16 +971,20 @@ class DeepgramClient:
                         containerized_opus=bool(url_meta.get("containerized_opus")),
                         omitted_params=url_meta.get("omitted_params"),
                         audio_params=url_meta.get("audio_params"),
+                        forced_containerized=url_meta.get("forced_containerized"),
+                        attempted_audio_params=url_meta.get("attempted_audio_params"),
+                        dropped_audio_params=url_meta.get("dropped_audio_params"),                        
                     )
                 except Exception:
                     pass
 
             # Keep existing human-readable info log
             logger.info(
-                "dg_ws_connect sid=%s url=%s containerized_opus=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
+                "dg_ws_connect sid=%s url=%s containerized_opus=%s forced=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
                 sid,
                 url,
                 containerized,
+                forced_containerized,                
                 q.get("encoding"),
                 q.get("sample_rate"),
                 q.get("channels"),
