@@ -1013,6 +1013,7 @@ class DeepgramClient:
                 try:
                     self._jlog(
                         "asr_url",
+                        sid=sid,
                         dg_id=self._dg_id,
                         url=url,
                         container=url_meta.get("container"),

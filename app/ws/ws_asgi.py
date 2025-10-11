@@ -644,6 +644,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         "containerized_opus": False,
         "features": [],
     }
+    FORWARD_PROGRESS_STEP = 8192
+    forwarded_total_bytes = [0]
+    forwarded_progress_next = [FORWARD_PROGRESS_STEP]
     sniffer = AudioContainerSniffer()
     audio_sig_logged = False
 
@@ -1223,6 +1226,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         turn_timing["first_partial"][0] = 0.0
         turn_timing["final"][0] = 0.0
         turn_finish_logged[0] = False
+        forwarded_total_bytes[0] = 0
+        forwarded_progress_next[0] = FORWARD_PROGRESS_STEP
 
     def _emit_no_audio_alert(reason: str) -> None:
         if no_audio_notified[0]:
@@ -1529,7 +1534,24 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             await dg.send(data)
             sent_any_audio[0] = True
             _cancel_no_audio_watch()
-            _jlog("ws_audio_forward", sid=sid, bytes=len(data), buffered=from_buffer)
+            chunk_len = len(data) if isinstance(data, (bytes, bytearray)) else 0
+            if chunk_len:
+                forwarded_total_bytes[0] += chunk_len
+                while forwarded_total_bytes[0] >= forwarded_progress_next[0]:
+                    _jlog(
+                        "ws_audio_forward_progress",
+                        sid=sid,
+                        bytes_total=forwarded_total_bytes[0],
+                        step=FORWARD_PROGRESS_STEP,
+                    )
+                    forwarded_progress_next[0] += FORWARD_PROGRESS_STEP
+            _jlog(
+                "ws_audio_forward",
+                sid=sid,
+                bytes=len(data),
+                buffered=from_buffer,
+                total=forwarded_total_bytes[0],
+            )
             return True
         except RuntimeError as e:
             if "deepgram_not_connected" in str(e).lower() and retry:
@@ -1805,6 +1827,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         webm_hint_gate[0] = _transport_enables_webm_hint(transport)
                         webm_sniff_gate[0] = False
                         sniffer_bytes_seen[0] = 0
+                        forwarded_total_bytes[0] = 0
+                        forwarded_progress_next[0] = FORWARD_PROGRESS_STEP
                         turn_connect_started[0] = False
                         # reset mic capture
                         mic_chunks.clear()
@@ -1845,6 +1869,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         containerized_opus=transport.get(
                                             "containerized_opus"
                                         ),
+                                        bytes_seen=sniffer_bytes_seen[0],
                                     )
                                 if (
                                     not webm_sniff_gate[0]
@@ -1883,6 +1908,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         containerized_opus=transport.get(
                                             "containerized_opus"
                                         ),
+                                        bytes_seen=sniffer_bytes_seen[0],
                                     )
                     except Exception:
                         pass
@@ -2007,6 +2033,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 mime = mime.strip()
                             except Exception:
                                 mime = ""
+                            forwarded_total_bytes[0] = 0
+                            forwarded_progress_next[0] = FORWARD_PROGRESS_STEP
                             with contextlib.suppress(Exception):
                                 sniffer.set_meta(mime or None)
                             detection = coerce_detection_from_meta(mime) if mime else None
@@ -2023,6 +2051,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             )
                             webm_hint_gate[0] = gate_from_mime
                             _jlog(
+                                "turn_audio_start",
+                                sid=sid,
+                                mime=mime or None,
+                            )
+                            _jlog(
                                 "ws_audio_hint",
                                 sid=sid,
                                 mime=mime or None,
@@ -2030,6 +2063,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 codec=transport.get("codec"),
                                 containerized_opus=transport.get("containerized_opus"),
                                 gate_open=gate_from_mime,
+                                guess_source="meta",
                             )
 
                         elif t == "greet":
@@ -2209,7 +2243,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             continue
 
                         elif t in {"CloseStream", "AudioStop"}:
-                            _jlog("ws_close_stream", sid=sid, source=t)
+                            _jlog(
+                                "ws_close_stream",
+                                sid=sid,
+                                source=t,
+                                bytes_forwarded=forwarded_total_bytes[0],
+                            )
                             nudges.cancel_idle_timers(sid)
 
                             # Always define this first so later 'if synthetic_emitted' is safe
@@ -2248,6 +2287,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     turn_id=turn_id,
                                     sid=sid,
                                     source=t,
+                                    bytes_forwarded=forwarded_total_bytes[0],
                                 )
                             turn_id_ref[0] = turn_id
 
@@ -2273,6 +2313,31 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 # If provider isn't ready yet but we have audio, try to connect now (bounded wait)
                                 if dg is None and (buffered_chunks or mic_chunks):
                                     gate_open, gate_reason = _connect_gate_state()
+                                    if (
+                                        not gate_open
+                                        and buffered_byte_total[0] > 0
+                                        and not transport.get("containerized_opus")
+                                    ):
+                                        gate_open = True
+                                        gate_reason = "forced_close_stream"
+                                        transport.setdefault(
+                                            "_attempted_audio_params", []
+                                        )
+                                        with contextlib.suppress(Exception):
+                                            if isinstance(
+                                                transport["_attempted_audio_params"], list
+                                            ):
+                                                transport["_attempted_audio_params"].append(
+                                                    "forced_close_stream"
+                                                )
+                                        _jlog(
+                                            "asr_connect_force",
+                                            sid=sid,
+                                            turn_id=turn_id_ref[0],
+                                            buffered=len(buffered_chunks),
+                                            buffered_bytes=buffered_byte_total[0],
+                                            reason="close_stream",
+                                        )
                                     if gate_open:
                                         if dg_connect_task is None:
                                             with contextlib.suppress(Exception):
@@ -2321,6 +2386,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     )
 
                                 await _flush_buffered_chunks()
+                                _jlog(
+                                    "ws_close_stream_post_flush",
+                                    sid=sid,
+                                    turn_id=turn_id,
+                                    bytes_forwarded=forwarded_total_bytes[0],
+                                )
 
                                 # Optional tiny settle after flush if no partials yet (helps very short clips)
                                 if not final_seen[0] and not asr_seen_partial[0]:
@@ -2410,6 +2481,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                 os.getenv("ASR_FINAL_GRACE_S", "0.30")
                                             )
                                         )  # ~300 ms grace
+                                        _jlog(
+                                            "ws_close_stream_finish_request",
+                                            sid=sid,
+                                            turn_id=turn_id,
+                                            bytes_forwarded=forwarded_total_bytes[0],
+                                        )
                                         await dg.close(wait_for_final=True)
                                         dg_close_ok = True
                                     except DeepgramDrainTimeoutError as exc:
@@ -2440,6 +2517,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                 sid=sid,
                                                 turn_id=turn_id,
                                                 ok=dg_close_ok,
+                                                bytes_forwarded=forwarded_total_bytes[0],
                                             )
                                     dg_state = "closed"
                                     try:
@@ -2515,6 +2593,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     elapsed is not None and elapsed >= no_audio_window_s
                                 ):
                                     _emit_no_audio_alert("close_stream")
+
+                            _jlog(
+                                "ws_close_stream_complete",
+                                sid=sid,
+                                turn_id=turn_id,
+                                bytes_forwarded=forwarded_total_bytes[0],
+                                synthetic_emitted=synthetic_emitted,
+                            )
 
                             if synthetic_emitted:
                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
