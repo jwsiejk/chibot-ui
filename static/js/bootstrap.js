@@ -206,8 +206,11 @@ async function startOnce(){
     //    audio hardware comes online.
     const sid = getSID();
     try {
+      console.log('[bootstrap] startOnce arming greet gate before greet configure');
       setGreetGateActive(true);
+      console.log('[bootstrap] startOnce greet gate armed — proceeding to configure greet');
       configure({ greet: true, reset: 1, session_id: sid });
+      console.log('[bootstrap] startOnce greet configure sent — recorder setup will follow');
     } catch (e) {
       console.warn('[bootstrap] WS configure failed, cannot greet', e);
       showBanner('Greet failed to send — check WS configure()');
@@ -224,7 +227,9 @@ async function startOnce(){
 
     try {
       const stream = await initMic(visualizerStream ?? undefined);
+      console.log('[bootstrap] startOnce mic initialized — about to arm VAD (greet gate should already be active)');
       await armVAD(stream);         // begins voice turns (one blob per user turn)
+      console.log('[bootstrap] startOnce VAD armed — recorder priming should now be able to observe greet gate state');
     } catch (e) {
       console.warn('[bootstrap] mic/VAD init failed', e);
       showBanner('Microphone unavailable — voice capture disabled.');

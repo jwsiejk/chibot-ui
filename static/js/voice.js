@@ -198,13 +198,22 @@ function _cancelGreetGate(reason = 'cancelled') {
 
 function _setGreetGateActive(active) {
   if (active) {
+    _voiceLog('debug', 'greet gate activation requested', {
+      alreadyActive: state.greetGateActive,
+      turnHintSent: state.turnHintSent,
+      turnHintAwaitingWS: state.turnHintAwaitingWS,
+    });
     _clearGreetGateWaiters(false);
     _resetGreetGateState();
     state.greetGateActive = true;
     state.greetGatePhase = 'pending';
     state.greetGateLastReason = 'armed';
     state.greetGateLastSignal = 'armed';
-    _voiceLog('info', 'greet gate armed');
+    _voiceLog('info', 'greet gate armed', {
+      greetGateActive: state.greetGateActive,
+      turnHintSent: state.turnHintSent,
+      turnHintAwaitingWS: state.turnHintAwaitingWS,
+    });
     _ensureWSListener();
     return;
   }
@@ -801,6 +810,12 @@ function _attemptAudioStartSend(mime) {
 }
 
 async function _ensureAudioStartSent() {
+  _voiceLog('debug', 'ensure AudioStart called', {
+    greetGateActive: state.greetGateActive,
+    greetGatePhase: state.greetGatePhase,
+    turnHintSent: state.turnHintSent,
+    turnHintAwaitingWS: state.turnHintAwaitingWS,
+  });
   if (state.turnHintSent) {
     return true;
   }
