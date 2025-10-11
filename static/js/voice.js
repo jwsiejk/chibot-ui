@@ -18,7 +18,7 @@ Citations for context (non-functional):
 */
 
 import { VAD } from './voice/vad.js';
-import { sendAudioChunk, sendCloseStream, sendJSON } from './ws_module.js';
+import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from './ws_module.js';
 import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
 
 // Public API (matches prior usage)
@@ -61,6 +61,8 @@ const state = {
   turnClosePromise: null,
   turnHintSent: false,
   turnHintMime: null,
+  turnHintPromise: null,
+  turnHintAwaitingWS: false,
   deviceLogged: false,
   // NEW: min-turn gating
   recStartedAt: 0,
@@ -531,29 +533,76 @@ function _enqueuePreRollBlobs() {
   return { count, durationMs, totalBytes };
 }
 
-function _ensureAudioStartSent() {
+function _attemptAudioStartSend(mime) {
+  try {
+    const result = sendJSON({ type: 'AudioStart', mime });
+    return result === true;
+  } catch (err) {
+    _voiceLog('warn', 'failed to send AudioStart hint', { error: err?.message || err });
+    return false;
+  }
+}
+
+async function _ensureAudioStartSent() {
   if (state.turnHintSent) {
     return true;
+  }
+
+  if (state.turnHintPromise) {
+    try {
+      return await state.turnHintPromise;
+    } catch (err) {
+      _voiceLog('warn', 'AudioStart pending promise rejected', { error: err?.message || err });
+      return false;
+    }
   }
 
   const recorderMime = (state.rec && state.rec.mimeType) || state.turnHintMime || REC_MIME;
   state.turnHintMime = recorderMime;
 
-  let sent = false;
-  try {
-    const result = sendJSON({ type: 'AudioStart', mime: recorderMime });
-    sent = result === true;
-  } catch (err) {
-    _voiceLog('warn', 'failed to send AudioStart hint', { error: err?.message || err });
-    sent = false;
-  }
+  const sendPromise = (async () => {
+    const sentImmediately = _attemptAudioStartSend(recorderMime);
+    if (sentImmediately) {
+      state.turnHintSent = true;
+      _voiceLog('info', 'AudioStart sent', { mime: recorderMime, attempt: 'immediate' });
+      return true;
+    }
 
-  if (sent) {
-    state.turnHintSent = true;
-    _voiceLog('info', 'AudioStart sent', { mime: recorderMime });
-  }
+    state.turnHintAwaitingWS = true;
+    _voiceLog('info', 'AudioStart deferred until WS ready', { mime: recorderMime });
 
-  return sent;
+    try {
+      await waitWSOpen();
+    } catch (err) {
+      _voiceLog('warn', 'waitWSOpen failed while sending AudioStart', { error: err?.message || err });
+      return false;
+    }
+
+    const sentAfterWait = _attemptAudioStartSend(recorderMime);
+    if (sentAfterWait) {
+      state.turnHintSent = true;
+      _voiceLog('info', 'AudioStart sent', { mime: recorderMime, attempt: 'post-wait' });
+      return true;
+    }
+
+    _voiceLog('warn', 'AudioStart send still failing after WS wait', { mime: recorderMime });
+    return false;
+  })();
+
+  state.turnHintPromise = sendPromise
+    .catch((err) => {
+      _voiceLog('warn', 'AudioStart send promise failed', { error: err?.message || err });
+      return false;
+    })
+    .finally(() => {
+      state.turnHintPromise = null;
+      state.turnHintAwaitingWS = false;
+      if (!state.turnHintSent) {
+        state.turnHintMime = null;
+      }
+    });
+
+  return state.turnHintPromise;
 }
 
 function _sendRecorderChunk(blob, meta = {}) {
@@ -561,13 +610,20 @@ function _sendRecorderChunk(blob, meta = {}) {
     return;
   }
 
-  _ensureAudioStartSent();
-
   const { preRoll = false, durationMs = null, timecode = null } = meta || {};
   const logLabel = preRoll ? 'streamed pre-roll chunk' : 'streamed audio chunk';
   state.chunkSendPromise = state.chunkSendPromise
     .catch(() => {})
     .then(async () => {
+      const handshakeOk = await _ensureAudioStartSent();
+      if (!handshakeOk) {
+        const detail = { mime: blob.type, preRoll, durationMs, timecode };
+        _voiceLog('warn', 'skipping audio chunk; AudioStart not confirmed', detail);
+        if (!state.chunkSendError) {
+          state.chunkSendError = new Error('AudioStart not confirmed');
+        }
+        return;
+      }
       try {
         await sendAudioChunk(blob);
         state.chunkBytesSent += blob.size;
@@ -593,7 +649,7 @@ function _sendRecorderChunk(blob, meta = {}) {
     });
 }
 
-function _primeRecorderForPreRoll(options = {}) {
+async function _primeRecorderForPreRoll(options = {}) {
   const { resetBuffer = true } = options || {};
   if (!state.stream) {
     return false;
@@ -629,6 +685,8 @@ function _primeRecorderForPreRoll(options = {}) {
   state.recStopShouldSend = false;
   state.turnHintSent = false;
   state.turnHintMime = null;
+  state.turnHintPromise = null;
+  state.turnHintAwaitingWS = false;
   if (resetBuffer) {
     _resetPreRollBuffer();
   }
@@ -639,6 +697,8 @@ function _primeRecorderForPreRoll(options = {}) {
     _clearSafetyCloseTimer();
     state.turnHintSent = false;
     state.turnHintMime = null;
+    state.turnHintPromise = null;
+    state.turnHintAwaitingWS = false;
     state.recStreaming = false;
     state.recStopping = false;
     state.recStopShouldSend = false;
@@ -678,10 +738,17 @@ function _primeRecorderForPreRoll(options = {}) {
       }
       _emitVoiceState('armed', finalDetail);
       if (state.vad && state.stream && state.stream.active) {
-        try { _primeRecorderForPreRoll(); } catch (err) { _voiceLog('warn', 'failed to re-prime recorder', { error: err?.message || err }); }
+        try { await _primeRecorderForPreRoll(); } catch (err) { _voiceLog('warn', 'failed to re-prime recorder', { error: err?.message || err }); }
       }
     }
   };
+
+  const audioStartReady = await _ensureAudioStartSent();
+  if (!audioStartReady) {
+    _voiceLog('warn', 'AudioStart not confirmed — recorder start deferred', { mime: recorder.mimeType });
+    state.rec = null;
+    return false;
+  }
 
   try {
     recorder.start(timeslice);
@@ -747,6 +814,8 @@ function _stopRecorder(detail = null) {
       state.rec = null;
       state.turnHintSent = false;
       state.turnHintMime = null;
+      state.turnHintPromise = null;
+      state.turnHintAwaitingWS = false;
       return;
     }
   }
@@ -755,6 +824,8 @@ function _stopRecorder(detail = null) {
     state.rec = null;
     state.turnHintSent = false;
     state.turnHintMime = null;
+    state.turnHintPromise = null;
+    state.turnHintAwaitingWS = false;
     return;
   }
 
@@ -762,6 +833,8 @@ function _stopRecorder(detail = null) {
     state.rec = null;
     state.turnHintSent = false;
     state.turnHintMime = null;
+    state.turnHintPromise = null;
+    state.turnHintAwaitingWS = false;
     return;
   }
 
@@ -784,6 +857,8 @@ function _stopRecorder(detail = null) {
   state.rec = null;
   state.turnHintSent = false;
   state.turnHintMime = null;
+  state.turnHintPromise = null;
+  state.turnHintAwaitingWS = false;
 }
 
 function _teardownVADOnly() {
@@ -880,17 +955,17 @@ async function _arm(stream = null, opts = {}) {
   });
   _emitVoiceState('armed');
 
-  _primeRecorderForPreRoll();
+  await _primeRecorderForPreRoll();
 
   return mic;
 }
 
 // ---- Recorder lifecycle -----------------------------------------------------
 
-function _startRecorder() {
+async function _startRecorder() {
   if (!state.stream) return false;
 
-  const primed = _primeRecorderForPreRoll({ resetBuffer: false });
+  const primed = await _primeRecorderForPreRoll({ resetBuffer: false });
   if (!primed || !state.rec || state.rec.state !== 'recording') {
     return false;
   }
@@ -912,10 +987,6 @@ function _startRecorder() {
   state.recStopping = false;
   state.recStopShouldSend = false;
   _ensureWSListener();
-
-  if (!state.turnHintSent) {
-    _ensureAudioStartSent();
-  }
 
   const preRollStats = _enqueuePreRollBlobs();
   if (preRollStats?.count) {
@@ -940,7 +1011,7 @@ function _startRecorder() {
   return true;
 }
 
-function _onSpeechStartCommitted() {
+async function _onSpeechStartCommitted() {
   const bufferedMsRaw = Number.isFinite(state.preRollDurationMs) ? state.preRollDurationMs : 0;
   const preRollBlobs = state.preRollBlobs || [];
   const totalBytes = preRollBlobs.reduce((sum, chunk) => sum + (chunk?.blob?.size || 0), 0);
@@ -1000,21 +1071,21 @@ function _onSpeechStartCommitted() {
   if (state.ttsPlaying && !state.bargeConfirmActive) {
     state.bargeConfirmActive = true;
     try { pausePlayback(); } catch {}
-    state.bargeConfirmTimer = setTimeout(() => {
-      state.bargeConfirmTimer = null;
-      if (!state.bargeConfirmActive) return;
-      if (state.vad && typeof state.vad.isRecording === 'function' && !state.vad.isRecording()) {
+      state.bargeConfirmTimer = setTimeout(async () => {
+        state.bargeConfirmTimer = null;
+        if (!state.bargeConfirmActive) return;
+        if (state.vad && typeof state.vad.isRecording === 'function' && !state.vad.isRecording()) {
+          state.bargeConfirmActive = false;
+          try { resumePlayback(); } catch {}
+          return;
+        }
         state.bargeConfirmActive = false;
-        try { resumePlayback(); } catch {}
-        return;
-      }
-      state.bargeConfirmActive = false;
-      _bargeIn();
-      const started = _startRecorder();
-      if (started) {
-        _emitVoiceState('recording');
-        return;
-      }
+        _bargeIn();
+        const started = await _startRecorder();
+        if (started) {
+          _emitVoiceState('recording');
+          return;
+        }
       _voiceLog('warn', 'recorder unavailable — reverting to typing');
       _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
     }, bargeConfirmMs);
@@ -1027,7 +1098,7 @@ function _onSpeechStartCommitted() {
 
   _bargeIn();
 
-  const started = _startRecorder();
+  const started = await _startRecorder();
   if (started) {
     _emitVoiceState('recording');
     return;

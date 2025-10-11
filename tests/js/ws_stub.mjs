@@ -11,7 +11,8 @@ export function bufferedAmount() { return 0; }
 export function configure() { return undefined; }
 export function sendJSON(...args) {
   const fn = hooks().onSendJSON;
-  return fn ? fn(...args) : undefined;
+  const result = fn ? fn(...args) : true;
+  return result === undefined ? true : result;
 }
 export function sendAudioChunk(...args) {
   const fn = hooks().onSendAudioChunk;

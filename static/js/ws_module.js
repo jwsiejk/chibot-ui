@@ -5,7 +5,18 @@ export const WS_MODULE_URL = `/static/js/ws.js${__wsSuffix}`;
 
 let cached = null;
 
-const wsModulePromise = import(WS_MODULE_URL).then((mod) => {
+const injectedModule = (typeof globalThis !== 'undefined' && globalThis.__TEST_WS_MODULE)
+  ? globalThis.__TEST_WS_MODULE
+  : null;
+
+if (injectedModule) {
+  cached = injectedModule;
+}
+
+const wsModulePromise = (cached
+  ? Promise.resolve(cached)
+  : import(WS_MODULE_URL)
+).then((mod) => {
   cached = mod;
   return mod;
 }).catch((err) => {
@@ -56,9 +67,17 @@ export function configure(...args) {
   wsModulePromise.then((mod) => { mod.configure?.(...args); }).catch(() => {});
 }
 
+/**
+ * Send a JSON frame through the shared WebSocket module.
+ *
+ * @returns {boolean} `true` if the frame was synchronously handed to the
+ * underlying socket. When the module has not finished loading (or any other
+ * synchronous failure occurs) the call returns `false` and **no frame is
+ * emitted**.
+ */
 export function sendJSON(...args) {
   if (moduleReady()) return moduleReady().sendJSON(...args);
-  wsModulePromise.then((mod) => { mod.sendJSON?.(...args); }).catch(() => {});
+  return false;
 }
 
 export function sendAudioChunk(...args) {

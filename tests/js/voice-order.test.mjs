@@ -51,6 +51,9 @@ Object.defineProperty(globalThis, 'navigator', {
 
 globalThis.__TEST_WS_HOOKS = {};
 
+const wsStubModule = await import('./ws_stub.mjs');
+globalThis.__TEST_WS_MODULE = wsStubModule;
+
 class FakeRecorder {
   constructor() {
     this.state = 'inactive';
@@ -84,7 +87,7 @@ test('final audio chunk drains before CloseStream and recorder can re-arm', asyn
   hooks.state.turnClosePromise = null;
   hooks.state.chunkSendPromise = Promise.resolve();
 
-  const started = hooks.startRecorder();
+  const started = await hooks.startRecorder();
   assert.equal(started, true, 'recorder should start with fake stream');
 
   const recorder = FakeRecorder.instances.at(-1);
@@ -142,7 +145,7 @@ test('final audio chunk drains before CloseStream and recorder can re-arm', asyn
   hooks.state.rec = null;
   hooks.state.chunkSendPromise = Promise.resolve();
 
-  const restarted = hooks.startRecorder();
+  const restarted = await hooks.startRecorder();
   assert.equal(restarted, true, 'recorder should re-arm after CloseStream');
 
   const restartedRecorder = FakeRecorder.instances.at(-1);

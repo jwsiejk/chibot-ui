@@ -50,6 +50,9 @@ globalThis.performance = {
 
 globalThis.__TEST_WS_HOOKS = {};
 
+const wsStubModule = await import('./ws_stub.mjs');
+globalThis.__TEST_WS_MODULE = wsStubModule;
+
 test('safety close timer emits CloseStream when no VAD end arrives', async () => {
   const voice = await import('../../static/js/voice.js');
   const hooks = voice.__TEST_ONLY__;

@@ -50,6 +50,9 @@ globalThis.performance = {
 
 globalThis.__TEST_WS_HOOKS = {};
 
+const wsStubModule = await import('./ws_stub.mjs');
+globalThis.__TEST_WS_MODULE = wsStubModule;
+
 class FakeRecorder {
   constructor() {
     this.state = 'inactive';
@@ -108,8 +111,11 @@ test('pre-roll audio is flushed before first live MediaRecorder chunk', async ()
     },
   };
 
-  const started = hooks.startRecorder();
+  const startPromise = hooks.startRecorder();
+  assert.equal(hooks.state.recStreaming, false, 'recorder should remain idle while AudioStart is pending');
+  const started = await startPromise;
   assert.equal(started, true, 'recorder should start with fake stream');
+  assert.equal(hooks.state.recStreaming, true, 'recorder should mark streaming only after AudioStart succeeds');
   assert.equal(hooks.state.preRollBlobs.length, 0, 'pre-roll buffer should clear once recorder starts');
 
   const recorder = FakeRecorder.instances.at(-1);
