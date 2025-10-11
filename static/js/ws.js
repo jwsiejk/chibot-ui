@@ -32,6 +32,39 @@ const _keepaliveState = {
   sawFirstDeepgram: false,
 };
 
+function _getActiveTurnTraceId() {
+  try {
+    if (typeof window === 'undefined') return null;
+    const id = window.__askchip_turn_trace_id;
+    return id ? String(id) : null;
+  } catch {
+    return null;
+  }
+}
+
+function _wsLog(level, message, detail = undefined) {
+  try {
+    const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+    if (!method) return;
+    const traceId = _getActiveTurnTraceId();
+    const prefix = traceId ? `[ws][trace:${traceId}]` : '[ws]';
+    if (detail === undefined) {
+      method.call(console, `${prefix} ${message}`);
+      return;
+    }
+    if (detail && typeof detail === 'object') {
+      const payload = traceId && detail.traceId !== traceId ? { ...detail, traceId } : detail;
+      method.call(console, `${prefix} ${message}`, payload);
+      return;
+    }
+    if (traceId) {
+      method.call(console, `${prefix} ${message}`, detail, `trace:${traceId}`);
+      return;
+    }
+    method.call(console, `${prefix} ${message}`, detail);
+  } catch {}
+}
+
 function _scheduleProviderFallback(){
   if (_keepaliveState.providerGateTimer){
     clearTimeout(_keepaliveState.providerGateTimer);
@@ -387,9 +420,14 @@ export function openWS(options = {}){
               (channel && typeof channel.is_final === 'boolean' && channel.is_final) ||
               (typeof obj.final === 'boolean' && obj.final) ||
               false;
-            try {
-              console.debug('[WS→UI Result]', { final: isFinal, text: transcript });
-            } catch {}
+            const chars = typeof transcript === 'string' ? transcript.length : 0;
+            const kind = isFinal ? 'final' : 'partial';
+            _wsLog('info', `ASR result (${kind})`, {
+              final: isFinal,
+              chars,
+              text: transcript || '',
+              frameType: t,
+            });
           }
           
           _handleProviderSignal(obj);

@@ -41,7 +41,7 @@ const REC_MIME = (typeof MediaRecorder !== 'undefined'
 const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
 const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
 const PRE_ROLL_MS = 250;            // ~0.25s of pre-roll audio
-const SAFETY_CLOSE_DELAY_MS = 2500; // ~2.5s grace after last chunk
+const SAFETY_CLOSE_DELAY_MS = 2200; // ~2.2s grace after last chunk
 
 const state = {
   stream: null,
@@ -80,6 +80,9 @@ const state = {
   recStopShouldSend: false,
   lastChunkAt: 0,
   safetyCloseTimer: null,
+  turnTraceBase: null,
+  turnTraceSeq: 0,
+  turnTraceId: null,
 };
 
 const BARGE_CONFIRM_DEFAULT_MS = 420;
@@ -108,12 +111,82 @@ function _emitVoiceState(state, detail = {}) {
   } catch {}
 }
 
+function _setActiveTurnTraceId(traceId) {
+  state.turnTraceId = traceId || null;
+  try { window.__askchip_turn_trace_id = state.turnTraceId; } catch {}
+}
+
+function _getActiveTurnTraceId() {
+  return state.turnTraceId || null;
+}
+
+function _ensureTurnTraceBase() {
+  if (!state.turnTraceBase) {
+    const entropy = Math.floor(Math.random() * 46656).toString(36).padStart(3, '0');
+    state.turnTraceBase = entropy;
+  }
+}
+
+function _beginTurnTrace(reason = 'turn_start') {
+  _ensureTurnTraceBase();
+  state.turnTraceSeq = (state.turnTraceSeq || 0) + 1;
+  const traceId = `${state.turnTraceBase}_${state.turnTraceSeq}`;
+  _setActiveTurnTraceId(traceId);
+  _voiceLog('info', 'turn trace started', { reason });
+  return traceId;
+}
+
+function _clearTurnTrace() {
+  if (!_getActiveTurnTraceId()) return;
+  _voiceLog('info', 'turn trace cleared');
+  _setActiveTurnTraceId(null);
+}
+
+function _withTrace(detail = {}) {
+  const traceId = _getActiveTurnTraceId();
+  if (!traceId) {
+    return detail;
+  }
+  if (detail && typeof detail === 'object') {
+    if (detail.traceId === traceId) {
+      return detail;
+    }
+    return { ...detail, traceId };
+  }
+  return { value: detail, traceId };
+}
+
+function _formatVoiceMessage(message) {
+  const traceId = _getActiveTurnTraceId();
+  const base = '[voice]';
+  return traceId ? `${base}[trace:${traceId}] ${message}` : `${base} ${message}`;
+}
+
+function _voiceLog(level, message, detail = undefined) {
+  try {
+    const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+    if (!method) return;
+    const formatted = _formatVoiceMessage(message);
+    if (detail === undefined) {
+      method.call(console, formatted);
+      return;
+    }
+    if (detail && typeof detail === 'object') {
+      method.call(console, formatted, _withTrace(detail));
+      return;
+    }
+    const traceId = _getActiveTurnTraceId();
+    if (traceId) {
+      method.call(console, `${formatted} trace:${traceId}`, detail);
+      return;
+    }
+    method.call(console, formatted, detail);
+  } catch {}
+}
+
 function _logLifecycle(event, detail = {}, level = 'debug') {
   const payload = { event, ...(detail && typeof detail === 'object' ? detail : { detail }) };
-  try {
-    const method = (typeof console[level] === 'function') ? level : 'log';
-    console[method]?.('[voice]', event, payload);
-  } catch {}
+  _voiceLog(level, event, payload);
   try {
     window.dispatchEvent(new CustomEvent('askchip-voice-lifecycle', { detail: payload }));
   } catch {}
@@ -146,6 +219,16 @@ function _armSafetyCloseTimer() {
 
   state.safetyCloseTimer = setTimeout(() => {
     state.safetyCloseTimer = null;
+    const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+      ? performance.now()
+      : Date.now();
+    const lastChunkAt = state.lastChunkAt || 0;
+    const idleMs = lastChunkAt ? Math.max(0, now - lastChunkAt) : delayMs;
+    _voiceLog('info', 'safety close', {
+      configuredDelayMs: delayMs,
+      idleMs,
+      bytesSent: state.chunkBytesSent,
+    });
     const pending = _closeTurnIfOpen();
     if (pending) {
       pending.catch(() => {});
@@ -199,13 +282,13 @@ function _ensureWSListener() {
     try {
       _stopRecorder({ reason: 'server_final' });
     } catch (err) {
-      try { console.warn('[voice] failed to stop recorder on server final', err); } catch {}
+      _voiceLog('warn', 'failed to stop recorder on server final', { error: err?.message || err });
     }
 
     try {
       await Promise.resolve(state.chunkSendPromise).catch(() => {});
     } catch (err) {
-      try { console.warn('[voice] chunk send did not settle after server final', err); } catch {}
+      _voiceLog('warn', 'chunk send did not settle after server final', { error: err?.message || err });
     }
   };
 
@@ -313,7 +396,9 @@ function _closeTurnIfOpen() {
   const closePromise = (async () => {
     try {
       const closeFrame = { type: 'CloseStream' };
-      _logLifecycle('turn_close_signal', { frame: closeFrame }, 'info');
+      const totalBytes = state.chunkBytesSent;
+      _logLifecycle('turn_close_signal', { frame: closeFrame, bytesSent: totalBytes }, 'info');
+      _voiceLog('info', 'turn-end signal sent', { bytesSent: totalBytes });
       await sendCloseStream();
     } finally {
       state.turnOpen = false;
@@ -344,7 +429,7 @@ async function _setupPreRollTap(ctx, source) {
     const moduleUrl = new URL('./voice/pre_roll_processor.js', import.meta.url);
     await worklet.addModule(moduleUrl);
   } catch (err) {
-    try { console.warn('[voice] failed to load pre-roll worklet', err); } catch {}
+    _voiceLog('warn', 'failed to load pre-roll worklet', { error: err?.message || err });
     return;
   }
 
@@ -367,7 +452,7 @@ async function _setupPreRollTap(ctx, source) {
     state.preRollNode = node;
     state.preRollGain = silentGain;
   } catch (err) {
-    try { console.warn('[voice] pre-roll worklet unavailable', err); } catch {}
+    _voiceLog('warn', 'pre-roll worklet unavailable', { error: err?.message || err });
     _teardownPreRollTap();
   }
 }
@@ -459,12 +544,13 @@ function _ensureAudioStartSent() {
     const result = sendJSON({ type: 'AudioStart', mime: recorderMime });
     sent = result === true;
   } catch (err) {
-    try { console.warn('[voice] failed to send AudioStart hint', err); } catch {}
+    _voiceLog('warn', 'failed to send AudioStart hint', { error: err?.message || err });
     sent = false;
   }
 
   if (sent) {
     state.turnHintSent = true;
+    _voiceLog('info', 'AudioStart sent', { mime: recorderMime });
   }
 
   return sent;
@@ -490,19 +576,19 @@ function _sendRecorderChunk(blob, meta = {}) {
           : Date.now();
         state.lastChunkAt = now;
         _armSafetyCloseTimer();
-        try {
-          console.debug('[voice]', logLabel, {
-            bytes: blob.size,
-            durationMs,
-            timecode,
-            mime: blob.type,
-          });
-        } catch {}
+        const totalBytes = state.chunkBytesSent;
+        const totalKb = Math.round((totalBytes / 1024) * 10) / 10;
+        _voiceLog('info', logLabel, {
+          bytes: blob.size,
+          durationMs,
+          timecode,
+          mime: blob.type,
+          totalBytes,
+          totalKb,
+        });
       } catch (err) {
         state.chunkSendError = err;
-        try {
-          console.warn('[voice] failed to stream audio chunk', err);
-        } catch {}
+        _voiceLog('warn', 'failed to stream audio chunk', { error: err?.message || err });
       }
     });
 }
@@ -513,7 +599,7 @@ function _primeRecorderForPreRoll(options = {}) {
     return false;
   }
   if (typeof MediaRecorder === 'undefined') {
-    console.warn('[voice] MediaRecorder not supported in this browser');
+    _voiceLog('warn', 'MediaRecorder not supported in this browser');
     state.rec = null;
     return false;
   }
@@ -531,7 +617,7 @@ function _primeRecorderForPreRoll(options = {}) {
     try {
       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
     } catch (fallbackErr) {
-      console.warn('[voice] MediaRecorder init failed', fallbackErr || primaryErr);
+      _voiceLog('warn', 'MediaRecorder init failed', { error: (fallbackErr || primaryErr)?.message || fallbackErr || primaryErr });
       state.rec = null;
       return false;
     }
@@ -563,30 +649,26 @@ function _primeRecorderForPreRoll(options = {}) {
         state.chunkSendError = state.chunkSendError || err;
       });
       if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
-        console.warn('[voice] recorded chunks too small', state.chunkBytesSent);
+        _voiceLog('warn', 'recorded chunks too small', { bytesSent: state.chunkBytesSent });
         finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
       }
     } catch (e) {
-      console.warn('[voice] send audio failed', e);
+      _voiceLog('warn', 'send audio failed', { error: e?.message || e });
       state.chunkSendError = state.chunkSendError || e;
     } finally {
       if (state.chunkSendError && !finalDetail) {
         finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
       }
       if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
-        try {
-          console.warn('[voice] recorder stopped with issues', {
-            bytesSent: state.chunkBytesSent,
-            error: state.chunkSendError,
-          });
-        } catch {}
+        _voiceLog('warn', 'recorder stopped with issues', {
+          bytesSent: state.chunkBytesSent,
+          error: state.chunkSendError?.message || state.chunkSendError || null,
+        });
       } else {
-        try {
-          console.debug('[voice] recorder stopped', {
-            bytesSent: state.chunkBytesSent,
-            mime: (recorder && recorder.mimeType) || REC_MIME,
-          });
-        } catch {}
+        _voiceLog('info', 'recorder stopped', {
+          bytesSent: state.chunkBytesSent,
+          mime: (recorder && recorder.mimeType) || REC_MIME,
+        });
       }
       const pendingClose = _closeTurnIfOpen();
       if (pendingClose) {
@@ -596,7 +678,7 @@ function _primeRecorderForPreRoll(options = {}) {
       }
       _emitVoiceState('armed', finalDetail);
       if (state.vad && state.stream && state.stream.active) {
-        try { _primeRecorderForPreRoll(); } catch (err) { try { console.warn('[voice] failed to re-prime recorder', err); } catch {} }
+        try { _primeRecorderForPreRoll(); } catch (err) { _voiceLog('warn', 'failed to re-prime recorder', { error: err?.message || err }); }
       }
     }
   };
@@ -604,11 +686,9 @@ function _primeRecorderForPreRoll(options = {}) {
   try {
     recorder.start(timeslice);
     state.preRollTimeslice = timeslice;
-    try {
-      console.debug('[voice] recorder primed', { mime: recorder.mimeType, timeslice });
-    } catch {}
+    _voiceLog('debug', 'recorder primed', { mime: recorder.mimeType, timeslice });
   } catch (err) {
-    console.warn('[voice] recorder start failed', err);
+    _voiceLog('warn', 'recorder start failed', { error: err?.message || err });
     state.rec = null;
     return false;
   }
@@ -697,7 +777,7 @@ function _stopRecorder(detail = null) {
     _logLifecycle('recorder_stop_invoked', {
       reason: detail?.reason || null,
     }, 'info');
-    try { console.debug('[voice] recorder.stop()'); } catch {}
+    _voiceLog('debug', 'recorder.stop() invoked');
     recorder.stop();
   } catch {}
   // intentionally keep state.rec reference nullable here; onstop handler handles final close
@@ -740,6 +820,7 @@ function _disarm() {
   state.finalized = false;
   state.postFinalHoldUntil = 0;
   _removeWSListener();
+  _clearTurnTrace();
   _emitVoiceState('idle');
 }
 
@@ -838,21 +919,17 @@ function _startRecorder() {
 
   const preRollStats = _enqueuePreRollBlobs();
   if (preRollStats?.count) {
-    try {
-      console.debug('[voice] flushed pre-roll buffer', {
-        chunks: preRollStats.count,
-        durationMs: preRollStats.durationMs,
-        bytes: preRollStats.totalBytes,
-      });
-    } catch {}
+    _voiceLog('debug', 'flushed pre-roll buffer', {
+      chunks: preRollStats.count,
+      durationMs: preRollStats.durationMs,
+      bytes: preRollStats.totalBytes,
+    });
   }
 
   state.turnOpen = true;
-  try {
-    console.debug('[voice] recorder streaming', {
-      mime: (state.rec && state.rec.mimeType) || REC_MIME,
-    });
-  } catch {}
+  _voiceLog('info', 'recorder streaming', {
+    mime: (state.rec && state.rec.mimeType) || REC_MIME,
+  });
 
   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
   _safeClearTurnTimer();
@@ -871,14 +948,6 @@ function _onSpeechStartCommitted() {
     if (!Number.isFinite(v)) return 0;
     return Math.round(v * 100) / 100;
   };
-  _logLifecycle('vad_speech_start', {
-    preRollBufferedMs: round(bufferedMsRaw),
-    preRollSentMs: round(Math.min(bufferedMsRaw, PRE_ROLL_MS)),
-    preRollChunks: preRollBlobs.length,
-    preRollBytes: totalBytes,
-    preRollEnabled: preRollBlobs.length > 0,
-    preRollMime: (state.rec && state.rec.mimeType) || REC_MIME,
-  });
 
   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
     ? performance.now()
@@ -910,6 +979,24 @@ function _onSpeechStartCommitted() {
     state.postFinalHoldUntil = 0;
   }
 
+  const traceActive = _getActiveTurnTraceId();
+  if (!state.recStreaming || !traceActive) {
+    _beginTurnTrace('speech_start');
+  }
+
+  _logLifecycle('vad_speech_start', {
+    preRollBufferedMs: round(bufferedMsRaw),
+    preRollSentMs: round(Math.min(bufferedMsRaw, PRE_ROLL_MS)),
+    preRollChunks: preRollBlobs.length,
+    preRollBytes: totalBytes,
+    preRollEnabled: preRollBlobs.length > 0,
+    preRollMime: (state.rec && state.rec.mimeType) || REC_MIME,
+  });
+  _voiceLog('info', 'speech started', {
+    preRollChunks: preRollBlobs.length,
+    preRollBytes: totalBytes,
+  });
+
   if (state.ttsPlaying && !state.bargeConfirmActive) {
     state.bargeConfirmActive = true;
     try { pausePlayback(); } catch {}
@@ -928,7 +1015,7 @@ function _onSpeechStartCommitted() {
         _emitVoiceState('recording');
         return;
       }
-      console.warn('[voice] recorder unavailable — reverting to typing');
+      _voiceLog('warn', 'recorder unavailable — reverting to typing');
       _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
     }, bargeConfirmMs);
     return;
@@ -946,7 +1033,7 @@ function _onSpeechStartCommitted() {
     return;
   }
 
-  console.warn('[voice] recorder unavailable — reverting to typing');
+  _voiceLog('warn', 'recorder unavailable — reverting to typing');
   _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
 }
 
@@ -955,7 +1042,7 @@ function _onSpeechEndCommitted(detail = null) {
   const now = performance.now ? performance.now() : Date.now();
   const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
 
-  try { console.debug('[voice] vad_speech_end'); } catch {}   
+  _voiceLog('info', 'speech ended', { source: 'vad', reason });
 
   if (state.bargeConfirmActive) {
     _clearBargeConfirm(true);
@@ -967,7 +1054,7 @@ function _onSpeechEndCommitted(detail = null) {
     const elapsed = Math.max(0, now - (state.recStartedAt || now));
     const wait = Math.max(0, minTurnMs - elapsed);
     if (wait > 0) {
-      try { console.debug('[voice] delaying VAD end', { waitMs: wait, elapsed }); } catch {}
+      _voiceLog('debug', 'delaying VAD end', { waitMs: wait, elapsed });
       _clearPendingEndTimer();
       state.pendingEndTimer = setTimeout(() => _onSpeechEndCommitted(detail), wait);
       return; // do not stop yet

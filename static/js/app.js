@@ -23,6 +23,39 @@ const _asrTurnState = {
 };
 const _asrCompletionWaiters = new Set();
 
+function _getActiveTurnTraceId() {
+  try {
+    if (typeof window === 'undefined') return null;
+    const id = window.__askchip_turn_trace_id;
+    return id ? String(id) : null;
+  } catch {
+    return null;
+  }
+}
+
+function _appLog(level, message, detail = undefined) {
+  try {
+    const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+    if (!method) return;
+    const traceId = _getActiveTurnTraceId();
+    const prefix = traceId ? `[ui][trace:${traceId}]` : '[ui]';
+    if (detail === undefined) {
+      method.call(console, `${prefix} ${message}`);
+      return;
+    }
+    if (detail && typeof detail === 'object') {
+      const payload = traceId && detail.traceId !== traceId ? { ...detail, traceId } : detail;
+      method.call(console, `${prefix} ${message}`, payload);
+      return;
+    }
+    if (traceId) {
+      method.call(console, `${prefix} ${message}`, detail, `trace:${traceId}`);
+      return;
+    }
+    method.call(console, `${prefix} ${message}`, detail);
+  } catch {}
+}
+
 try {
   window.addEventListener('chip-tts', (ev) => {
     const detail = ev?.detail || {};
@@ -295,6 +328,10 @@ function _commitUserPreview(){
     bubble.className = 'msg user';
     bubble.textContent = transcript;
     msgs.appendChild(bubble);
+    _appLog('info', 'user transcript bubble added', {
+      chars: transcript.length,
+      text: transcript,
+    });
     _userPreviewState.lastFinalText = transcript;
     _userPreviewState.ignoring = true;
     try { msgs.scrollTop = msgs.scrollHeight; } catch {}
