@@ -1,650 +1,113 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 5bef2030d42ca157ffb2437c5dcc2f66fbf26cc1..d0b87d4f52b0a48d93ad6837b6c81eb0e0cadd29 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -820,51 +820,50 @@ class DeepgramClient:
-         if self._ws:
-             logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
-             return
+diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
+index c34ec5ca4c6e9e49315fab8f906586c8547027e2..324ae86d400a820bb98f48a2a974e8cad9e8a694 100644
+--- a/static/js/bootstrap.js
++++ b/static/js/bootstrap.js
+@@ -1,29 +1,29 @@
+ // bootstrap.js
+ import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
+ import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
+-import { initMic, armVAD, disarmVAD, setGreetGateActive } from '/static/js/voice.js';
++import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
+ import { unlockAudio, stopPlayback } from '/static/js/audio.js';
+ import { getSID } from '/static/js/util/sid.js';
+ import * as App from '/static/js/app.js';
+ import * as Visualizer from '/static/js/visualizer.js';
  
-         url = _dg_url(self._cfg)
-         self._emit_diag("provider_open", active=True, url=url)
+ // /static/js/bootstrap.js — single owner of Start/End/Send + audio unlock + WS→UI wiring
  
-         containerized = False
-         safe_url = url
+ const $ = (s) => document.querySelector(s);
  
-         try:
-             # Diagnostic: parse params and emit compact JSON log that shows
-             # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
-             import urllib.parse as _p
+ let startInFlight = false;
+ let started = false;
  
-             parts = _p.urlsplit(url)
-             q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
-             self._url_tag = q.get("tag") or None
-             transport = (self._cfg or {}).get("_transport", {}) or {}
-             containerized = bool(transport.get("containerized_opus"))
-             url_meta = {
-                 "container": transport.get("container"),
-                 "codec": transport.get("codec"),
-                 "containerized_opus": containerized,
-                 "normalized_pcm": bool(transport.get("normalized_pcm")),
--                "raw_fallback": bool(transport.get("raw_fallback")),
-                 "omitted_params": None,
-                 "raw_params": None,
-             }
-             if containerized:
-                 # These should be absent in containerized mode
-                 omitted = []
-                 for k in ("encoding", "sample_rate", "channels"):
-                     if k not in q:
-                         omitted.append(k)
-                 url_meta["omitted_params"] = omitted
-             else:
-                 url_meta["raw_params"] = {
-                     "encoding": q.get("encoding"),
-                     "sample_rate": q.get("sample_rate"),
-                     "channels": q.get("channels"),
-                 }
+ // ----- Assistant text de-dupe (turn_id + text) -----
+ const _assistantSeen = new Set();
+ function _isAssistantTextFrame(d) {
+   const t = d?.type;
+   return t === 'assistant_text' || t === 'assistant_chunk' || t === 'assistant_final' || d?.role === 'assistant';
+ }
+ function _dedupeAssistant(d) {
+   // tolerate servers that send without turn_id (fallback to "na")
+   const turnId = d?.turn_id ?? 'na';
+   const text   = d?.text ?? d?.delta ?? d?.content ?? '';
+   const key    = `${turnId}::${text}`;
+   if (!text) return true; // empty texts don't render anyway
+   if (_assistantSeen.has(key)) return false;
+@@ -184,74 +184,72 @@ async function startOnce(){
  
-             # Build sanitized query string for telemetry without sensitive params
-             sanitized_pairs = []
-             raw_param_keys = {"encoding", "sample_rate", "channels"}
-             for key in sorted(q.keys()):
-                 if key is None:
-                     continue
-                 key_str = str(key)
-                 lower = key_str.lower()
-@@ -882,65 +881,63 @@ class DeepgramClient:
-                 safe_url = f"{safe_url}#{parts.fragment}"
-             raw_params_absent = all(param not in q for param in raw_param_keys)
+     // 0) Audio unlock so TTS is permitted by browser autoplay policies
+     try { await unlockAudio(); } catch {}
  
-             # Structured JSON log if _jlog is available (preferred for your admin viewer)
-             if callable(self._jlog):
-                 try:
-                     self._jlog(
-                         "dg_url_sanitized",
-                         sid=sid,
-                         dg_id=self._dg_id,
-                         qs=sanitized_qs,
-                         containerized_opus=containerized,
-                         raw_params_absent=raw_params_absent,
-                     )
-                 except Exception:
-                     pass
-                 try:
-                     self._jlog(
-                         "asr_url",
-                         dg_id=self._dg_id,
-                         url=url,
-                         container=url_meta.get("container"),
-                         codec=url_meta.get("codec"),
-                         containerized_opus=bool(url_meta.get("containerized_opus")),
-                         normalized_pcm=bool(url_meta.get("normalized_pcm")),
--                        raw_fallback=bool(url_meta.get("raw_fallback")),
-                         omitted_params=url_meta.get("omitted_params"),
-                         raw_params=url_meta.get("raw_params"),
-                     )
-                 except Exception:
-                     pass
+     // 1) Network/CSRF prep (kept for compatibility; harmless in WS-only mode)
+     try { installFetchInterceptor(); } catch {}
+     try { await ensureCSRF(); } catch {}
  
-             # Keep existing human-readable info log
-             logger.info(
--                "dg_ws_connect sid=%s url=%s containerized_opus=%s normalized_pcm=%s raw_fallback=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
-+                "dg_ws_connect sid=%s url=%s containerized_opus=%s normalized_pcm=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
-                 sid,
-                 url,
-                 containerized,
-                 url_meta.get("normalized_pcm"),
--                url_meta.get("raw_fallback"),
-                 q.get("encoding"),
-                 q.get("sample_rate"),
-                 q.get("channels"),
-             )
-         except Exception:
-             logger.info("Deepgram connect start sid=%s url=%s", sid, url)
- 
-         key_value, key_len = _api_key_info()
-         ws_headers = [("Authorization", f"Token {key_value}")]
-         del key_value
-         subprotocols = None
-         logger.info(
-             "Deepgram connect attempt sid=%s safe_url=%s key_len=%s subprotocols=%s",
-             sid,
-             safe_url,
-             key_len,
-             subprotocols,
-         )
-         if callable(self._jlog):
-             try:
-                 self._jlog(
-                     "dg_connect_attempt",
-                     sid=sid,
-                     dg_id=self._dg_id,
-                     safe_url=safe_url,
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index d90d1aafa8d63e14ada5d44c535f19b389e932e4..286aa7496627fc3d74161cd0a20fb35fcc9abd3e 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1,43 +1,34 @@
- # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
- from __future__ import annotations
- import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
- from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
- from collections import deque
- from app.services.audio.container_sniffer import (
-     AudioContainerSniffer,
-     coerce_detection_from_meta,
- )
--from app.services.audio.raw_fallback import (
--    DetectionSignal as RawDetectionSignal,
--    StreamMeta as RawStreamMeta,
--    StreamStats as RawStreamStats,
--    raw_fallback_disabled,
--    coerce_to_raw_config,
--    normalize_pcm_frame,
--    should_use_raw_fallback,
--)
- 
- from .schema_v1 import (
-     parse_client_json,
-     make_keepalive_ack,
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
- 
- # NEW: invoke LLM on final transcript
- from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
- from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
- from app.ws.barge import BargeState
- from app.ws.bus import bus
- 
- # Optional admin emitter
-@@ -310,51 +301,50 @@ async def _pump_bus_to_client(sid: str, send):
-                     }
-                 )
-             except Exception:
-                 await asyncio.sleep(0.01)
-     except asyncio.CancelledError:
-         pass
-     finally:
-         try:
-             if hasattr(bus, "unsubscribe"):
-                 bus.unsubscribe(sid, q)
-         except Exception:
-             pass
- 
- 
- async def _pump_dg_to_client(
-     dg: DeepgramClient,
-     send,
-     turn_id_ref,
-     final_seen,
-     pending_final_turns,
-     synthetic_final_turns,
-     completed_llm_turns,
-     sid: str,
-     asr_ready_evt: Optional[asyncio.Event] = None,
-     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
--    stream_stats: Optional[RawStreamStats] = None,
-     turn_timing: Optional[Dict[str, List[float]]] = None,
-     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
- ):
-     """Relay Deepgram events to client and, on final, kick LLM turn."""
-     try:
-         async for ev in dg.events():
-             et = (ev.get("type") or "").lower()
-             if et == "asr_open":
-                 delta_ms = None
-                 now_ts = time.time()
-                 if turn_timing is not None:
-                     try:
-                         holder = turn_timing.setdefault("dg_open", [0.0])
-                         holder[0] = now_ts
-                         start_ts = turn_timing.get("start", [0.0])[0]
-                         if start_ts:
-                             delta_ms = int((now_ts - start_ts) * 1000)
-                     except Exception:
-                         pass
-                 _jlog(
-                     "dg_asr_open",
-                     sid=sid,
-                     turn_id=turn_id_ref[0],
-                     delta_from_turn_ms=delta_ms,
-                 )
-@@ -500,85 +490,77 @@ async def _pump_dg_to_client(
-                                 )
-                         else:
-                             completed_llm_turns.add(turn_id_for_event)
- 
-                             async def _bg_turn(meta_payload=meta_overrides):
-                                 try:
-                                     await asyncio.to_thread(
-                                         run_ws_user_turn,
-                                         sid,
-                                         text,
-                                         None,
-                                         meta_overrides=meta_payload,
-                                     )
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-                                         await _ws_send_json(
-                                             send,
-                                             make_error(
-                                                 "llm_turn_fail", e.__class__.__name__
-                                             ),
-                                         )
- 
-                             asyncio.create_task(_bg_turn())
- 
-             elif et == "asr_error":
--                if stream_stats is not None:
--                    try:
--                        stream_stats.note_provider_error()
--                    except Exception:
--                        pass
-                 err = _clip_text(str(ev.get("error") or "unknown"), 160)
-                 _jlog("dg_asr_error", sid=sid, turn_id=turn_id_ref[0], error=err)
-                 try:
-                     _admin_emit and _admin_emit("asr:error", session_id=sid, error=err)
-                 except Exception:
-                     pass
-                 await _ws_send_json(send, make_error("asr_error", err))
-     except asyncio.CancelledError:
-         return
-     except Exception as e:
-         with contextlib.suppress(Exception):
-             await _ws_send_json(send, make_error("relay_fail", e.__class__.__name__))
- 
- 
- # ------------------------------ main WS impl ------------------------------
- 
- 
- async def _ws_chat_asgi_impl(scope, receive, send):
-     # Session-scoped transport flags for ASR
-     transport = {
-         "protocol": "websocket",
-         "container": None,
-         "codec": None,
-         "containerized_opus": False,
-         "features": [],
+     // 2) WS first — verify actually OPEN or abort
+     const ok = await ensureWsOpenOrFail(5000);
+     if (!ok){
+       showBanner('WebSocket did not open — greet aborted.');
+       setDot('ready');
+       if (startBtn) startBtn.disabled = false;
+       startInFlight = false;
+       return;
      }
-     sniffer = AudioContainerSniffer()
--    stream_meta = RawStreamMeta()
--    stream_stats = RawStreamStats(meta=stream_meta)
--    fallback_detection: Optional[RawDetectionSignal] = None
-     audio_sig_logged = False
  
-     MIC_CAPTURE = _env_truth("MIC_CAPTURE", False)
-     MIC_ECHO_WS = _env_truth("MIC_ECHO_WS", False)
+     // 3) Wire WS → UI events exactly once
+     wireWSEventsOnce();
  
-     _jlog("mic_capture_cfg", sid="pending", enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
+     // 4) WS-only greet using the SAME session id as WS — fire ASAP so text arrives while
+     //    audio hardware comes online.
+     const sid = getSID();
+     try {
+-      console.log('[bootstrap] startOnce arming greet gate before greet configure');
+-      setGreetGateActive(true);
+-      console.log('[bootstrap] startOnce greet gate armed — proceeding to configure greet');
++      console.log('[bootstrap] startOnce sending greet configure');
+       configure({ greet: true, reset: 1, session_id: sid });
+       console.log('[bootstrap] startOnce greet configure sent — recorder setup will follow');
+     } catch (e) {
+       console.warn('[bootstrap] WS configure failed, cannot greet', e);
+       showBanner('Greet failed to send — check WS configure()');
+       throw e;
+     }
  
-     raw_query = (scope.get("query_string") or b"").decode("utf-8", "ignore")
+     // 5) Mic permission + arm echo-aware VAD (voice-first path)
+     let visualizerStream = null;
+     try {
+       visualizerStream = await Visualizer.start();
+     } catch (e) {
+       console.warn('[bootstrap] visualizer init failed', e);
+     }
  
-     try:
-         _admin_emit and _admin_emit(
-             "ws_handshake_enter",
-             path=scope.get("path"),
-             raw_query=raw_query,
-         )
-     except Exception:
-         pass
+     try {
+       const stream = await initMic(visualizerStream ?? undefined);
+-      console.log('[bootstrap] startOnce mic initialized — about to arm VAD (greet gate should already be active)');
++      console.log('[bootstrap] startOnce mic initialized — about to arm VAD for voice turns');
+       await armVAD(stream);         // begins voice turns (one blob per user turn)
+-      console.log('[bootstrap] startOnce VAD armed — recorder priming should now be able to observe greet gate state');
++      console.log('[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
+     } catch (e) {
+       console.warn('[bootstrap] mic/VAD init failed', e);
+       showBanner('Microphone unavailable — voice capture disabled.');
+       setStatusText('Voice capture unavailable');
+       try {
+         window.dispatchEvent(new CustomEvent('askchip-voice', {
+           detail: { state: 'idle', label: 'Voice capture unavailable' }
+         }));
+       } catch {}
+       try { Visualizer.stop({ reset: true }); } catch {}
+       _disableButtons();
+       if (endBtn) endBtn.disabled = true;
+       if (startBtn) startBtn.disabled = false;
+       setDot('ready');
+       started = false;
+       try { window.__askchip_session_started = false; } catch {}
+       try { closeWS(1000, 'mic_unavailable'); } catch {}
+       startInFlight = false;
+       return;
+     }
  
-     if scope.get("type") != "websocket":
-         await send({"type": "http.response.start", "status": 404, "headers": []})
-         await send({"type": "http.response.body", "body": b"not found"})
-         return
- 
-     sid = _get_session_id(scope)
-     conn_id = uuid.uuid4().hex
-@@ -952,141 +934,99 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                     "ws_synthetic_final_skip_duplicate",
-                     sid=sid,
-                     turn_id=turn_id,
-                     reason=reason,
-                 )
-             return False
-         final_seen[0] = True
-         payload = make_results(turn_id, transcript=transcript, is_final=True)
-         payload["type"] = "Results"
-         await _ws_send_json(send, payload)
-         utterance_payload = make_utterance_end(turn_id)
-         utterance_payload["type"] = "UtteranceEnd"
-         await _ws_send_json(send, utterance_payload)
-         with contextlib.suppress(Exception):
-             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
-         _log_turn_finish(
-             turn_id,
-             reason=reason,
-             synthetic=True,
-             transcript_chars=len(transcript or ""),
-         )
-         completed_llm_turns.discard(turn_id)
-         return True
- 
-     async def _ensure_dg_connected() -> bool:
--        nonlocal dg, rx_task, dg_connect_task, dg_state, fallback_detection
-+        nonlocal dg, rx_task, dg_connect_task, dg_state
- 
-         if not _has_deepgram_key():
-             with contextlib.suppress(Exception):
-                 _jlog("asr_connect_skip", sid=sid, reason="no_api_key")
-             return False
- 
-         if dg_state == "open" and dg is not None:
-             return True
- 
-         if dg_state == "connecting" and dg_connect_task is not None:
-             with contextlib.suppress(Exception):
-                 _jlog("asr_connect_wait", sid=sid, reason="existing_task")
-             with contextlib.suppress(Exception):
-                 await dg_connect_task
-             return dg_state == "open" and dg is not None
- 
-         connect_result = {"ok": False}
- 
-         async def _connect() -> None:
--            nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result, fallback_detection
-+            nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
-             try:
-                 dg_state = "connecting"
-                 with contextlib.suppress(Exception):
-                     asr_ready_evt.clear()
- 
--                if not raw_fallback_disabled() and should_use_raw_fallback(
--                    fallback_detection, stream_stats
--                ):
--                    if not stream_stats.forced_fallback:
--                        stream_stats.force_fallback()
--                        overrides = coerce_to_raw_config(stream_meta)
--                        for key, value in overrides.items():
--                            if key == "_transport":
--                                continue
--                            cfg[key] = value
--                        transport.update(overrides.get("_transport", {}))
--                        fallback_detection = RawDetectionSignal(
--                            container="raw",
--                            codec="pcm",
--                            containerized=False,
--                            source="raw_fallback",
--                        )
--                        stream_stats.note_detection(fallback_detection)
--                        with contextlib.suppress(Exception):
--                            _jlog(
--                                "raw_fallback_applied",
--                                sid=sid,
--                                sample_rate=transport.get("sample_rate"),
--                                channels=transport.get("channels"),
--                            )
--                        if buffered_chunks:
--                            normalized_buffer: Deque[bytes] = deque()
--                            for existing in list(buffered_chunks):
--                                normalized = normalize_pcm_frame(existing, stream_meta)
--                                if normalized != existing:
--                                    stream_stats.note_jitter_slip()
--                                normalized_buffer.append(normalized)
--                            buffered_chunks.clear()
--                            buffered_chunks.extend(normalized_buffer)
--                        if MIC_CAPTURE and mic_chunks:
--                            for idx, existing in enumerate(list(mic_chunks)):
--                                normalized = normalize_pcm_frame(existing, stream_meta)
--                                if normalized != existing:
--                                    stream_stats.note_jitter_slip()
--                                mic_chunks[idx] = normalized
--
-                 cfg["_transport"] = transport
-                 cfg["_jlog"] = _jlog
-                 cfg.setdefault("session_id", sid)
-                 cfg["_url_tag"] = f"{WS_ASGI_BUILD}:{sid}"
-                 _jlog("asr_connect_begin", sid=sid, transport=transport)
-                 client = DeepgramClient(cfg)
-                 dg = client
-                 await client.connect()
-                 dg_state = "open"
-                 connect_result["ok"] = True
-                 turn_id_ref[0] = buf.turn_seq + 1
-                 rx_task = asyncio.create_task(
-                     _pump_dg_to_client(
-                         client,
-                         send,
-                         turn_id_ref,
-                         final_seen,
-                         pending_final_turns,
-                         synthetic_final_turns,
-                         completed_llm_turns,
-                         sid,
-                         asr_ready_evt,
-                         _flush_buffered_chunks,
--                        stream_stats,
-                         turn_timing,
-                         _log_turn_finish,
-                     )
-                 )
-                 _jlog("asr_connect_ok", sid=sid)
-             except Exception as e:
-                 dg_state = "closed"
-                 dg = None
-                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
-                 with contextlib.suppress(Exception):
-                     await _ws_send_json(
-                         send, make_error("asr_connect_fail", type(e).__name__)
-                     )
-                 with contextlib.suppress(Exception):
-                     _admin_emit and _admin_emit(
-                         "asr:error", session_id=sid, error=f"connect:{type(e).__name__}"
-                     )
-             finally:
-                 dg_connect_task = None
- 
-         dg_connect_task = asyncio.create_task(_connect())
-         with contextlib.suppress(Exception):
-             await dg_connect_task
-         return connect_result["ok"]
- 
-@@ -1310,134 +1250,116 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 target_turn = latest
-                             if target_turn:
-                                 try:
-                                     bus.cancel_turn(sid, target_turn)
-                                 except Exception:
-                                     pass
-                             try:
-                                 bus.broadcast(sid, {"type": "state", "phase": "ready"})
-                             except Exception:
-                                 pass
- 
-                         with contextlib.suppress(Exception):
-                             barge.start(
-                                 confirm_ms=confirm_ms,
-                                 on_commit=_on_barge_commit,
-                                 send_state=_send_barge_state,
-                             )
-                         turn_id_ref[0] = buf.turn_seq + 1
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-                             completed_llm_turns.discard(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
--                        stream_stats.reset_turn()
-                         turn_connect_started[0] = False
-                         # reset mic capture
-                         mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
-                         _reset_turn_metrics(now)
-                         _schedule_no_audio_watch(turn_id_ref[0])
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "turn_start",
-                                 sid=sid,
-                                 turn_id=turn_id_ref[0],
-                                 first_bytes=len(raw_chunk),
-                             )
-                     # Detect container early using raw bytes
- 
-                     # Detect container early
-                     try:
-                         if transport.get("container") is None and raw_chunk:
-                             det = sniffer.feed(raw_chunk)
-                             if det:
-                                 container = getattr(det, "container", None)
-                                 codec = getattr(det, "codec", None)
-                                 containerized = bool(
-                                     getattr(det, "containerized", codec == "opus")
-                                 )
-                                 transport["container"] = container
-                                 transport["codec"] = codec
-                                 transport["containerized_opus"] = containerized
--                                fallback_detection = RawDetectionSignal(
--                                    container=container,
--                                    codec=codec,
--                                    containerized=containerized,
--                                    source="sniffer",
--                                )
--                                stream_stats.note_detection(fallback_detection)
--                                stream_meta.encoding = "opus"
-                                 _jlog(
-                                     "sniffer_detect",
-                                     sid=sid,
-                                     container=transport.get("container"),
-                                     codec=transport.get("codec"),
-                                     containerized_opus=transport.get(
-                                         "containerized_opus"
-                                     ),
-                                 )
-                             else:
-                                 meta_det = coerce_detection_from_meta(
-                                     getattr(sniffer, "meta", lambda: None)()
-                                 )
-                                 if meta_det and getattr(meta_det, "container", None):
-                                     container = getattr(meta_det, "container", None)
-                                     codec = getattr(meta_det, "codec", None)
-                                     containerized = bool(
-                                         getattr(
-                                             meta_det, "containerized", codec == "opus"
-                                         )
-                                     )
-                                     transport["container"] = container
-                                     transport["codec"] = codec
-                                     transport["containerized_opus"] = containerized
--                                    fallback_detection = RawDetectionSignal(
--                                        container=container,
--                                        codec=codec,
--                                        containerized=containerized,
--                                        source="mime",
--                                    )
--                                    stream_stats.note_detection(fallback_detection)
--                                    stream_meta.encoding = "opus"
-                                     _jlog(
-                                         "sniffer_detect",
-                                         sid=sid,
-                                         container=transport.get("container"),
-                                         codec=transport.get("codec"),
-                                         containerized_opus=transport.get(
-                                             "containerized_opus"
-                                         ),
-                                     )
-                     except Exception:
-                         pass
- 
--                    chunk = stream_stats.observe_frame(raw_chunk)
--
-+                    chunk = raw_chunk
-                     buf.append(chunk)
- 
-                     # capture bytes for diagnostic playback
-                     if MIC_CAPTURE:
-                         mic_chunks.append(chunk)
-                         mic_last_ts[0] = now
-                     _jlog(
-                         "mic_capture_append",
-                         sid=sid,
-                         turn_id=turn_id_ref[0],
-                         chunks=len(mic_chunks),
-                         last_bytes=len(chunk),
-                     )
- 
-                     if not _has_deepgram_key():
-                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
-                         continue
- 
-                     # Stage early frames
-                     if chunk:
-                         buffered_chunks.append(chunk)
-                         dropped_now = 0
-                         if len(buffered_chunks) > max_buffered_chunks:
-                             dropped_now = len(buffered_chunks) - max_buffered_chunks
-                             for _ in range(dropped_now):
-@@ -1515,60 +1437,50 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                             audio_on = bool(
-                                                 (cfg_now or {}).get(
-                                                     "feature_audio", True
-                                                 )
-                                             )
-                                             _admin_emit(
-                                                 "greet:resp",
-                                                 label="greet:resp",
-                                                 session_id=sid,
-                                                 turn_id=tid,
-                                                 audio_scheduled=audio_on,
-                                             )
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-                                         await _ws_send_json(
-                                             send,
-                                             make_error(
-                                                 "greet_fail", e.__class__.__name__
-                                             ),
-                                         )
- 
-                             asyncio.create_task(_bg())
- 
-                         elif t == "Configure":
-                             cfg.update(obj or {})
--                            stream_meta.apply_config(obj or {})
--                            enc_lower = (obj.get("encoding") or "").strip().lower()
--                            if enc_lower == "pcm":
--                                fallback_detection = RawDetectionSignal(
--                                    container="raw",
--                                    codec="pcm",
--                                    containerized=False,
--                                    source="configure",
--                                )
--                                stream_stats.note_detection(fallback_detection)
-                             if obj.get("reset"):
-                                 with contextlib.suppress(Exception):
-                                     clear_greet_turn_cache(sid)
-                                 with contextlib.suppress(Exception):
-                                     _admin_emit and _admin_emit(
-                                         "greet:reset",
-                                         route="/ws/v1/chat",
-                                         label="greet:reset",
-                                         session_id=sid,
-                                     )
-                             if obj.get("greet"):
-                                 _jlog("ws_greet_recv", sid=sid, via="Configure")
- 
-                                 async def _bg2():
-                                     try:
-                                         from app.services.streaming import run_ws_greet
- 
-                                         tid = await asyncio.to_thread(run_ws_greet, sid)
-                                         with contextlib.suppress(Exception):
-                                             if _admin_emit:
-                                                 cfg_now = db.get_config()
-                                                 audio_on = bool(
-                                                     (cfg_now or {}).get(
-                                                         "feature_audio", True
-                                                     )
+     // Watchdog: if no assistant frames within 6s after sending WS greet, warn
+     let gotAssistant = false;
+     let markAssistantRemove = false;
+     const markAssistant = (ev) => {

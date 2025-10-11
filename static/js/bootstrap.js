@@ -1,7 +1,7 @@
 // bootstrap.js
 import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
 import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
-import { initMic, armVAD, disarmVAD, setGreetGateActive } from '/static/js/voice.js';
+import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
 import { unlockAudio, stopPlayback } from '/static/js/audio.js';
 import { getSID } from '/static/js/util/sid.js';
 import * as App from '/static/js/app.js';
@@ -206,9 +206,7 @@ async function startOnce(){
     //    audio hardware comes online.
     const sid = getSID();
     try {
-      console.log('[bootstrap] startOnce arming greet gate before greet configure');
-      setGreetGateActive(true);
-      console.log('[bootstrap] startOnce greet gate armed — proceeding to configure greet');
+      console.log('[bootstrap] startOnce sending greet configure');
       configure({ greet: true, reset: 1, session_id: sid });
       console.log('[bootstrap] startOnce greet configure sent — recorder setup will follow');
     } catch (e) {
@@ -227,9 +225,9 @@ async function startOnce(){
 
     try {
       const stream = await initMic(visualizerStream ?? undefined);
-      console.log('[bootstrap] startOnce mic initialized — about to arm VAD (greet gate should already be active)');
+      console.log('[bootstrap] startOnce mic initialized — about to arm VAD for voice turns');
       await armVAD(stream);         // begins voice turns (one blob per user turn)
-      console.log('[bootstrap] startOnce VAD armed — recorder priming should now be able to observe greet gate state');
+      console.log('[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
     } catch (e) {
       console.warn('[bootstrap] mic/VAD init failed', e);
       showBanner('Microphone unavailable — voice capture disabled.');
