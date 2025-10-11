@@ -2551,34 +2551,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                                     if raw:
                                         base_dir = os.getenv("TMPDIR") or "/tmp"
-                                        if transport.get("containerized_opus"):
-                                            # Containerized Opus → save WebM bytes as-is
-                                            out_path = os.path.join(
-                                                base_dir, f"mic_{sid}_{turn_id}.webm"
-                                            )
-                                            mime = "audio/webm"
-                                            with open(out_path, "wb") as f:
-                                                f.write(raw)
-                                            data_to_echo = raw
-                                        else:
-                                            # Raw PCM → wrap in a WAV header for easy playback
-                                            rate = int(
-                                                os.getenv("DG_RAW_SAMPLE_RATE", "48000")
-                                            )
-                                            ch = int(os.getenv("DG_RAW_CHANNELS", "1"))
-                                            wav = _wav_with_header(
-                                                raw,
-                                                sample_rate=rate,
-                                                channels=ch,
-                                                bits_per_sample=16,
-                                            )
-                                            out_path = os.path.join(
-                                                base_dir, f"mic_{sid}_{turn_id}.wav"
-                                            )
-                                            mime = "audio/wav"
-                                            with open(out_path, "wb") as f:
-                                                f.write(wav)
-                                            data_to_echo = wav
+                                        # Always treat captures as containerized Opus
+                                        out_path = os.path.join(
+                                            base_dir, f"mic_{sid}_{turn_id}.webm"
+                                        )
+                                        mime = "audio/webm"
+                                        with open(out_path, "wb") as f:
+                                            f.write(raw)
+                                        data_to_echo = raw
 
                                         _jlog(
                                             "mic_capture_saved",

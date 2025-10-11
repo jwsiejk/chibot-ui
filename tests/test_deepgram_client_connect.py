@@ -601,18 +601,23 @@ def test_close_after_send_timeout_logs_queue_drained(monkeypatch, caplog):
 
 def test_dg_url_tag_includes_session(monkeypatch):
     monkeypatch.delenv("DG_URL_TAG", raising=False)
-    url = dg_mod._dg_url({"session_id": "user$sess", "_transport": {"containerized_opus": False}})
+    overrides = {"session_id": "user$sess", "_transport": {"containerized_opus": False}}
+    url = dg_mod._dg_url(overrides)
     qs = parse_qs(urlparse(url).query)
     assert qs.get("tag"), url
     assert qs["tag"][0] == "sid:user_sess"
+    assert overrides["_transport"]["containerized_opus"] is True
+    assert overrides["_transport"].get("_containerized_forced") is True
 
 
 def test_dg_url_tag_combines_env_and_override(monkeypatch):
     monkeypatch.setenv("DG_URL_TAG", "build42")
-    url = dg_mod._dg_url({"_url_tag": "custom tag!!", "_transport": {"containerized_opus": True}})
+    overrides = {"_url_tag": "custom tag!!", "_transport": {"containerized_opus": True}}
+    url = dg_mod._dg_url(overrides)
     qs = parse_qs(urlparse(url).query)
     assert qs.get("tag"), url
     assert qs["tag"][0] == "build42:custom_tag__"
+    assert "_containerized_forced" not in overrides["_transport"]
 
 
 def test_structured_logs_cover_open_forward_close(monkeypatch):

@@ -1,110 +1,23 @@
-diff --git a/static/js/ws.js b/static/js/ws.js
-index 0dc02aa8a35e73dfd486da84d9559129bceec1e2..b95f1aebae516e49f1603d2cab171f095c09ccd4 100644
---- a/static/js/ws.js
-+++ b/static/js/ws.js
-@@ -357,50 +357,63 @@ export function openWS(options = {}){
-         // If we closed before receiving server "ready", a transient connect race happened.
-         if (!_gotReady){
-           _scheduleReconnect();
-         } else {
-           // If already "ready", only reconnect if session is active
-           _scheduleReconnect();
-         }
-       }
+diff --git a/tests_phase3_5/test_containerized_opus_url_extra.py b/tests_phase3_5/test_containerized_opus_url_extra.py
+index ffacf6dbfd31cb4272141bc3914d2fb4ba97ff8f..5915692e2cd4bf11362e5ed8d0dea28801681e17 100644
+--- a/tests_phase3_5/test_containerized_opus_url_extra.py
++++ b/tests_phase3_5/test_containerized_opus_url_extra.py
+@@ -1,9 +1,13 @@
+ import os
+ from app.services.streaming_asr.deepgram_client import _dg_url
  
-       try {
-         window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }}));
-       } catch {}
-       if (!shouldReconnect) {
-         return;
-       }
-     };
- 
-     ws.onerror = (e) => console.warn('[ws] error', e);
- 
-     ws.onmessage = (ev) => {
-       try{
-         if (typeof ev.data === 'string'){
-           const obj = JSON.parse(ev.data);
-           const t = obj && obj.type;
- 
-+          if (t === 'Result' || t === 'Results') {
-+            const channel = obj && obj.channel;
-+            const alternatives = channel && channel.alternatives;
-+            const transcript = alternatives && alternatives[0] && alternatives[0].transcript;
-+            const isFinal =
-+              (channel && typeof channel.is_final === 'boolean' && channel.is_final) ||
-+              (typeof obj.final === 'boolean' && obj.final) ||
-+              false;
-+            try {
-+              console.debug('[WS→UI Result]', { final: isFinal, text: transcript });
-+            } catch {}
-+          }
-+
-           _handleProviderSignal(obj);
- 
-           if (t === 'ready') {
-             _gotReady = true;
-             // small audio unlock nudge on first ready (harmless if already unlocked)
-             try { unlockAudio().catch(()=>{}); } catch {}
-           }
- 
-           // Re-emit as DOM events so UI can respond
-           window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
- 
-           // --- Audio routing (WS-only) ---------------------------------------
-           if (t === 'assistant_audio') {
-             // Server provides { mime, audio_chunks:[], is_last }
-             playStream(obj);
-             return;
-           }
-           if (t === 'UtteranceEnd') {
-             // Authoritative end-of-utterance: drain and endOfStream
-             audioEnd();
-             return;
-           }
- 
-           // --- Other control/info messages -----------------------------------
-           if (t === 'KeepAliveAck'){
-diff --git a/static/js/ws.js b/static/js/ws.js
-index 0dc02aa8a35e73dfd486da84d9559129bceec1e2..b95f1aebae516e49f1603d2cab171f095c09ccd4 100644
---- a/static/js/ws.js
-+++ b/static/js/ws.js
-@@ -479,36 +492,37 @@ export async function sendAudioChunk(blob){
-     _lastUserSendTs = Date.now();
-   }catch(e){
-     console.warn('[ws] sendAudioChunk error', e);
-   } finally {
-     _scheduleKeepaliveResume(_KEEPALIVE_REASON_UPLOAD, _KEEPALIVE_RESUME_AFTER_UPLOAD_MS);
-   }
- }
- 
- 
- export async function sendCloseStream(){
-   // Drain the WS send buffer before closing the user turn.
-   try{
-     const deadline = Date.now() + 1500; // up to ~1.5s drain budget
-     // small sleep helper
-     const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
-     // allow two cycles to ensure MediaRecorder 'stop' enqueued the last blob
-     await sleep(20);
-     await sleep(20);
-     // drain bufferedAmount down near zero, without blocking forever
-     while (isOpen() && bufferedAmount() > 0 && Date.now() < deadline){
-       await sleep(20);
-     }
-   }catch(e){
-     console.warn('[ws] sendCloseStream drain failed', e);
-   } finally {
-+    try { console.debug('[DBG] UI→WS', { type: 'CloseStream' }); } catch {}
-     sendJSON({ type: "CloseStream" });
-   }
- }
- 
- 
- export function configure(opts = {}){
-   // ensure session id is included if caller forgot
-   const sid = getSID();
-   const payload = { type: "Configure", session_id: sid, ...opts };
-   sendJSON(payload);
- }
+-def test_non_containerized_includes_encoding_sr_channels(monkeypatch):
++def test_missing_transport_defaults_to_containerized(monkeypatch):
+     monkeypatch.setenv("DG_TEST_MODE", "1")
+-    url = _dg_url({"_transport": {"containerized_opus": False}})
+-    assert "encoding=opus" in url
+-    assert "sample_rate=48000" in url
+-    assert "channels=1" in url
++    overrides = {}
++    url = _dg_url(overrides)
++    assert "encoding=" not in url
++    assert "sample_rate=" not in url
++    assert "channels=" not in url
++    transport = overrides.get("_transport")
++    assert transport and transport.get("containerized_opus") is True
++    assert transport.get("_containerized_forced") is True

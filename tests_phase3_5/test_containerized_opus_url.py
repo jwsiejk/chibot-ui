@@ -12,7 +12,8 @@ def test_containerized_omits_sr_channels(monkeypatch):
     assert "encoding=" not in url
     assert "endpointing=" not in url
     assert "interim_results=true" in url
-    assert "utterance_end_ms=2000" in url
+    assert "utterance_end_ms=3000" in url
+    assert "_containerized_forced" not in overrides["_transport"]
 
 
 def test_containerized_interim_false_drops_utterance_end(monkeypatch):
@@ -26,15 +27,18 @@ def test_containerized_interim_false_drops_utterance_end(monkeypatch):
     assert "utterance_end_ms=" not in url
     assert "sample_rate=" not in url
     assert "channels=" not in url
+    assert "_containerized_forced" not in overrides["_transport"]
 
-def test_non_containerized_includes_sr_channels(monkeypatch):
+
+def test_requested_raw_is_forced_to_containerized(monkeypatch):
     monkeypatch.setenv("DG_TEST_MODE", "1")
     overrides = {"_transport": {"containerized_opus": False}}
     url = _dg_url(overrides)
-    assert "sample_rate=48000" in url
-    assert "channels=1" in url
-    assert "endpointing=" not in url
-    assert "utterance_end_ms=2000" in url
+    assert "sample_rate=" not in url
+    assert "channels=" not in url
+    assert "encoding=" not in url
+    assert overrides["_transport"]["containerized_opus"] is True
+    assert overrides["_transport"].get("_containerized_forced") is True
 
 
 def test_containerized_strips_explicit_audio_params(monkeypatch):
@@ -49,6 +53,12 @@ def test_containerized_strips_explicit_audio_params(monkeypatch):
     assert "encoding=" not in url
     assert "sample_rate=" not in url
     assert "channels=" not in url
+    assert overrides["_transport"].get("_attempted_audio_params") == [
+        "channels",
+        "encoding",
+        "sample_rate",
+    ]
+    assert "_dropped_audio_params" not in overrides["_transport"]
 
 
 def test_containerized_ignores_env_raw_overrides(monkeypatch):
@@ -61,6 +71,7 @@ def test_containerized_ignores_env_raw_overrides(monkeypatch):
     assert "encoding=" not in url
     assert "sample_rate=" not in url
     assert "channels=" not in url
+    assert overrides["_transport"].get("_containerized_forced") is None
 
     # Clean up for future tests
     monkeypatch.delenv("DG_RAW_ENCODING", raising=False)
