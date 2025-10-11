@@ -284,14 +284,25 @@ function _handleGreetGateStateFrame(detail = {}) {
   if (!state.greetGateActive) return;
   const channelReady = _valueIsReadyFlag(detail?.channel?.ready_for_user);
   const ready = _valueIsReadyFlag(detail?.ready_for_user) || channelReady;
-  const stateField = typeof detail?.state === 'string' ? detail.state.toLowerCase() : '';
-  const explicitReady = stateField === 'ready_for_user' || stateField === 'ready';
+  const normalizePhase = (value) => {
+    if (typeof value !== 'string') return '';
+    return value.trim().toLowerCase();
+  };
+  const stateField = normalizePhase(detail?.state);
+  const phaseField = normalizePhase(detail?.phase);
+  const channelPhaseField = normalizePhase(detail?.channel?.phase);
+  const explicitReady = ['ready_for_user', 'ready'].some((target) =>
+    stateField === target || phaseField === target || channelPhaseField === target
+  );
   if (ready || explicitReady) {
     _voiceLog('debug', 'greet gate observed ready state', {
       phase: state.greetGatePhase,
       channelReady,
       ready,
       explicitReady,
+      stateField,
+      phaseField,
+      channelPhaseField,
     });
     _startGreetGateCalibrate('ready_for_user');
   }

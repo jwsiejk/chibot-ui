@@ -1,474 +1,59 @@
-diff --git a/static/js/admin_console.js b/static/js/admin_console.js
-index 1af89a18e41a590dfdd3f759a2b08aff659a439d..1cbfb4c587ffc5a74e207e1880f73d2024045546 100644
---- a/static/js/admin_console.js
-+++ b/static/js/admin_console.js
-@@ -1,27 +1,27 @@
- import { openWS, waitWSOpen, closeWS, configure } from './ws_module.js';
--import { initMic, armVAD, disarmVAD } from './voice.js';
-+import { initMic, armVAD, disarmVAD, setGreetGateActive } from './voice.js';
- import { unlockAudio } from './audio.js';
- import { getSID } from './util/sid.js';
- 
- const STEP_DEFS = [
-   {
-     id: 'ws',
-     title: 'Establish production connection',
-     role: 'system',
-     description: 'Open a live /ws/v1/chat socket with the same bearer subprotocol and CSRF protections the main app uses.',
-   },
-   {
-     id: 'greet',
-     title: 'Chip handshake',
-     role: 'system',
-     description: 'Send a Configure greet frame and wait for Chip to answer so we know the routing path is alive.',
-   },
-   {
-     id: 'user',
-     title: 'Your turn: capture voice sample',
-     role: 'you',
-     description: 'Run the full production microphone + VAD pipeline. When the card lights up, say the diagnostic phrase exactly as written.',
-   },
-   {
-     id: 'asr',
-     title: 'Speech-to-text + Admin log trace',
-@@ -205,50 +205,51 @@ async function runDiagnostic(state) {
-       disarmVAD();
-       setStepStatus(state, 'user', 'pending', 'Microphone granted. Waiting for Chip to greet…');
- 
-       // Start live mic meter as soon as we have a stream (no effect on VAD).
-       const barEl = document.getElementById('mic-level-bar');
-       const dbEl  = document.getElementById('mic-level-db');
-       state.stopMeter = startMicMeter(micStream, { barEl, dbEl });
-     } catch (err) {
-       setSpeakState(state, 'error');
-       setStepStatus(state, 'user', 'error', `Microphone access failed: ${err?.message || err}`);
-       throw new Error('Microphone permission denied');
-     }
- 
-     setStepStatus(state, 'ws', 'active', 'Opening WebSocket channel to /ws/v1/chat…');
-     const ws = await ensureWsOpen();
-     state.ws = ws;
-     setStepStatus(state, 'ws', 'done', 'WebSocket connected.');
-     logAdminEvent(state, 'step_ws_ok');
- 
-     state.wsListener = (ev) => handleWSFrame(state, ev?.detail || {});
-     window.addEventListener('askchip-ws', state.wsListener);
- 
-     state.sse = startAdminSSE(state, (evt) => handleAdminEvent(state, evt));
-     updateASRStatus(state, { status: 'pending', message: 'Waiting for speech activity…' });
- 
-+    setGreetGateActive(true);
-     configure({ greet: true, reset: 1, session_id: state.sid, metadata: { origin: 'admin_voice_diagnostic' } });
-     setStepStatus(state, 'greet', 'active', 'Configure greet sent. Waiting for Chip to answer…');
-     logAdminEvent(state, 'step_greet_sent');
- 
-     const greetFrame = await waitForGreeting(state, GREET_TIMEOUT_MS);
-     setStepStatus(state, 'greet', 'done', summarizeAssistantFrame(greetFrame));
-     logAdminEvent(state, 'step_greet_ok', { frame_type: greetFrame?.type || greetFrame?.label || 'assistant' });
-     window.__askchip_session_started = true;
- 
-     // Wait for the greet TTS to finish so echo/NS settles, then arm VAD.
-     try { await waitForUtteranceEndOnce(8000); } catch {}
-     await delay(250);
- 
-     setStepStatus(state, 'user', 'active', 'Arming VAD. Speak when the card below says recording.');
-     setSpeakState(state, 'ready');
-     try {
-       if (micStream) await armVAD(micStream);
-       else await armVAD();
-     } catch (err) {
-       setSpeakState(state, 'error');
-       setStepStatus(state, 'user', 'error', `Failed to arm microphone: ${err?.message || err}`);
-       throw new Error('Failed to arm microphone');
-     }
- 
-     const turnResult = await waitForUserTurn(state, 15000);
-diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
-index df990edf35a23d83703c80142cc86dfa88410117..d9f63f2a5cab4e80d6140e373e7b0a0a995760e1 100644
---- a/static/js/bootstrap.js
-+++ b/static/js/bootstrap.js
-@@ -1,29 +1,29 @@
- // bootstrap.js
- import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
- import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
--import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
-+import { initMic, armVAD, disarmVAD, setGreetGateActive } from '/static/js/voice.js';
- import { unlockAudio, stopPlayback } from '/static/js/audio.js';
- import { getSID } from '/static/js/util/sid.js';
- import * as App from '/static/js/app.js';
- import * as Visualizer from '/static/js/visualizer.js';
- 
- // /static/js/bootstrap.js — single owner of Start/End/Send + audio unlock + WS→UI wiring
- 
- const $ = (s) => document.querySelector(s);
- 
- let startInFlight = false;
- let started = false;
- 
- // ----- Assistant text de-dupe (turn_id + text) -----
- const _assistantSeen = new Set();
- function _isAssistantTextFrame(d) {
-   const t = d?.type;
-   return t === 'assistant_text' || t === 'assistant_chunk' || t === 'assistant_final' || d?.role === 'assistant';
- }
- function _dedupeAssistant(d) {
-   // tolerate servers that send without turn_id (fallback to "na")
-   const turnId = d?.turn_id ?? 'na';
-   const text   = d?.text ?? d?.delta ?? d?.content ?? '';
-   const key    = `${turnId}::${text}`;
-   if (!text) return true; // empty texts don't render anyway
-   if (_assistantSeen.has(key)) return false;
-@@ -184,50 +184,51 @@ async function startOnce(){
- 
-     // 0) Audio unlock so TTS is permitted by browser autoplay policies
-     try { await unlockAudio(); } catch {}
- 
-     // 1) Network/CSRF prep (kept for compatibility; harmless in WS-only mode)
-     try { installFetchInterceptor(); } catch {}
-     try { await ensureCSRF(); } catch {}
- 
-     // 2) WS first — verify actually OPEN or abort
-     const ok = await ensureWsOpenOrFail(5000);
-     if (!ok){
-       showBanner('WebSocket did not open — greet aborted.');
-       setDot('ready');
-       if (startBtn) startBtn.disabled = false;
-       startInFlight = false;
-       return;
-     }
- 
-     // 3) Wire WS → UI events exactly once
-     wireWSEventsOnce();
- 
-     // 4) WS-only greet using the SAME session id as WS — fire ASAP so text arrives while
-     //    audio hardware comes online.
-     const sid = getSID();
-     try {
-+      setGreetGateActive(true);
-       configure({ greet: true, reset: 1, session_id: sid });
-     } catch (e) {
-       console.warn('[bootstrap] WS configure failed, cannot greet', e);
-       showBanner('Greet failed to send — check WS configure()');
-       throw e;
-     }
- 
-     // 5) Mic permission + arm echo-aware VAD (voice-first path)
-     let visualizerStream = null;
-     try {
-       visualizerStream = await Visualizer.start();
-     } catch (e) {
-       console.warn('[bootstrap] visualizer init failed', e);
-     }
- 
-     try {
-       const stream = await initMic(visualizerStream ?? undefined);
-       await armVAD(stream);         // begins voice turns (one blob per user turn)
-     } catch (e) {
-       console.warn('[bootstrap] mic/VAD init failed', e);
-       showBanner('Microphone unavailable — voice capture disabled.');
-       setStatusText('Voice capture unavailable');
-       try {
-         window.dispatchEvent(new CustomEvent('askchip-voice', {
-           detail: { state: 'idle', label: 'Voice capture unavailable' }
 diff --git a/static/js/voice.js b/static/js/voice.js
-index 31409f96a11d3ad0e0dbadbaf64904fca3f006c4..2872461bf1998c2ca682956a147f04766af847e2 100644
+index 2872461bf1998c2ca682956a147f04766af847e2..423266d00e64004018c176d991e7c5f07854de96 100644
 --- a/static/js/voice.js
 +++ b/static/js/voice.js
-@@ -6,134 +6,319 @@ Citations for context (non-functional):
+@@ -262,58 +262,69 @@ function _waitForGreetGate() {
  
- /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
-    Goals satisfied:
-     • Echo-aware VAD (threshold boost while TTS is playing)
-     • Streaming Opus blobs per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
-     • Soft barge-in: pause Chip TTS on committed speech start
-     • Turn timeout (safety), robust errors, clean session end
-     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
- 
-    Notes:
-     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
-     • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
- */
- 
- import { VAD } from './voice/vad.js';
- import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from './ws_module.js';
- import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
- 
- // Public API (matches prior usage)
- export async function initMic(stream = null) { return await _ensureMic(stream); }
- export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
- export function disarmVAD() { _disarm(); }
- export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
- export function bargeIn() { _bargeIn(); }         // keeps API parity
- export function setVadBoost(_v) { /* kept for API parity; no-op */ }
-+export function setGreetGateActive(active = true) { _setGreetGateActive(!!active); }
- 
- // ---- Internal state ---------------------------------------------------------
- 
- // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
- const REC_MIME = (typeof MediaRecorder !== 'undefined'
-   && typeof MediaRecorder.isTypeSupported === 'function'
-   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
-   ? 'audio/ogg; codecs=opus'
-   : 'audio/webm; codecs=opus';
- 
- const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
- const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
- const PRE_ROLL_MS = 250;            // ~0.25s of pre-roll audio
- const SAFETY_CLOSE_DELAY_MS = 2200; // ~2.2s grace after last chunk
-+const GREET_BARGE_MIN_SNR_DB = 8;
-+const GREET_CALIBRATE_DEFAULT_MS = 500;
-+const GREET_CALIBRATE_MIN_MS = 400;
-+const GREET_CALIBRATE_MAX_MS = 600;
- 
- const state = {
-   stream: null,
-   ctx: null,
-   source: null,
-   analyser: null,
-   highpass: null,
-   noiseGate: null,
-   limiter: null,
-   vad: null,
-   rec: null,
-   finalized: false,
-   postFinalHoldUntil: 0,
-   wsListener: null,
-   chunkSendPromise: Promise.resolve(),
-   chunkBytesSent: 0,
-   chunkSendError: null,
-   turnTimer: null,
-   turnOpen: false,   // track whether a turn is currently open server-side
-   turnClosePromise: null,
-   turnHintSent: false,
-   turnHintMime: null,
-   turnHintPromise: null,
-   turnHintAwaitingWS: false,
-   deviceLogged: false,
-   // NEW: min-turn gating
-   recStartedAt: 0,
-   pendingEndTimer: null,
-   ttsPlaying: false,
-   bargeConfirmTimer: null,
-   bargeConfirmActive: false,
-   // Pre-roll tap state
-   preRollNode: null,
-   preRollGain: null,
-   preRollBlobs: [],
-   preRollDurationMs: 0,
-   preRollLastTimecode: null,
-   preRollTimeslice: 150,
-   recStreaming: false,
-   recStopping: false,
-   recStopShouldSend: false,
-   lastChunkAt: 0,
-   safetyCloseTimer: null,
-   turnTraceBase: null,
-   turnTraceSeq: 0,
-   turnTraceId: null,
-   audioStopSent: false,
-   vadMetrics: null,
-+  greetGateActive: false,
-+  greetGatePhase: 'idle',
-+  greetGateWaiters: [],
-+  greetGateCalibrateTimer: null,
-+  greetGateCalibrateUntil: 0,
-+  greetGateCalibrateLastMs: null,
-+  greetGateCalibrateMs: GREET_CALIBRATE_DEFAULT_MS,
-+  greetGateCalibrateMinMs: GREET_CALIBRATE_MIN_MS,
-+  greetGateCalibrateMaxMs: GREET_CALIBRATE_MAX_MS,
-+  greetGateLastSignal: null,
-+  greetGateLastReason: null,
- };
- 
- const BARGE_CONFIRM_DEFAULT_MS = 420;
- let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
- try {
-   const cfg = window.__askchip_config || {};
-   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
-     bargeConfirmMs = cfg.barge_confirm_ms;
-   }
- } catch {}
- bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
- 
- try {
-   window.addEventListener('chip-tts', (ev) => {
-     const detail = ev?.detail || {};
-     const playing = String(detail.state || '').toLowerCase() === 'playing';
-     state.ttsPlaying = playing;
+ function _handleGreetGateUtteranceEnd(detail = {}) {
+   if (!state.greetGateActive) return;
+   state.ttsPlaying = false;
+   _voiceLog('debug', 'greet gate observed UtteranceEnd', {
+     phase: state.greetGatePhase,
+     reason: state.greetGateLastReason,
    });
- } catch {}
+   _startGreetGateCalibrate('UtteranceEnd');
+ }
  
- // ---- Helpers ----------------------------------------------------------------
+ function _valueIsReadyFlag(value) {
+   if (value === true) return true;
+   if (value === 1) return true;
+   if (typeof value === 'string') {
+     const lowered = value.trim().toLowerCase();
+     if (lowered === 'true' || lowered === '1' || lowered === 'yes') return true;
+   }
+   return false;
+ }
  
-+function _clearGreetGateWaiters(result = false) {
-+  const waiters = Array.isArray(state.greetGateWaiters) ? state.greetGateWaiters : [];
-+  state.greetGateWaiters = [];
-+  for (const waiter of waiters) {
-+    try { waiter(result); } catch {}
-+  }
-+}
-+
-+function _clearGreetGateCalibrateTimer() {
-+  if (state.greetGateCalibrateTimer) {
-+    try { clearTimeout(state.greetGateCalibrateTimer); } catch {}
-+  }
-+  state.greetGateCalibrateTimer = null;
-+  state.greetGateCalibrateUntil = 0;
-+  state.greetGateCalibrateLastMs = null;
-+}
-+
-+function _resetGreetGateState() {
-+  _clearGreetGateCalibrateTimer();
-+  state.greetGatePhase = 'idle';
-+  state.greetGateLastSignal = null;
-+}
-+
-+function _resolveGreetGateCalibrateMs() {
-+  const fallback = Number.isFinite(state.greetGateCalibrateMs)
-+    ? state.greetGateCalibrateMs
-+    : GREET_CALIBRATE_DEFAULT_MS;
-+  const minBase = Number.isFinite(state.greetGateCalibrateMinMs)
-+    ? state.greetGateCalibrateMinMs
-+    : GREET_CALIBRATE_MIN_MS;
-+  const maxBase = Number.isFinite(state.greetGateCalibrateMaxMs)
-+    ? state.greetGateCalibrateMaxMs
-+    : GREET_CALIBRATE_MAX_MS;
-+  const raw = Number(optsFromGlobal('greet_gate_calibrate_ms', fallback));
-+  const min = Math.min(minBase, maxBase);
-+  const max = Math.max(minBase, maxBase);
-+  const target = Number.isFinite(raw) ? raw : fallback;
-+  return Math.max(min, Math.min(max, target));
-+}
-+
-+function _completeGreetGate(reason = 'open') {
-+  if (!state.greetGateActive) {
-+    _resetGreetGateState();
-+    return;
-+  }
-+  _voiceLog('info', 'greet gate released', { reason });
-+  state.greetGateActive = false;
-+  state.greetGatePhase = 'open';
-+  state.greetGateLastReason = reason;
-+  _clearGreetGateCalibrateTimer();
-+  _clearGreetGateWaiters(true);
-+  _resetGreetGateState();
-+}
-+
-+function _cancelGreetGate(reason = 'cancelled') {
-+  if (!state.greetGateActive) {
-+    _resetGreetGateState();
-+    return;
-+  }
-+  _voiceLog('info', 'greet gate cancelled', { reason });
-+  state.greetGateActive = false;
-+  state.greetGatePhase = 'cancelled';
-+  state.greetGateLastReason = reason;
-+  _clearGreetGateCalibrateTimer();
-+  _clearGreetGateWaiters(false);
-+  _resetGreetGateState();
-+}
-+
-+function _setGreetGateActive(active) {
-+  if (active) {
-+    _clearGreetGateWaiters(false);
-+    _resetGreetGateState();
-+    state.greetGateActive = true;
-+    state.greetGatePhase = 'pending';
-+    state.greetGateLastReason = 'armed';
-+    state.greetGateLastSignal = 'armed';
-+    _voiceLog('info', 'greet gate armed');
-+    _ensureWSListener();
-+    return;
-+  }
-+  if (state.greetGateActive) {
-+    _completeGreetGate('manual_release');
-+  } else {
-+    _resetGreetGateState();
-+  }
-+}
-+
-+function _startGreetGateCalibrate(source = 'unknown') {
-+  if (!state.greetGateActive) return;
-+  if (state.greetGatePhase === 'calibrating' && state.greetGateCalibrateTimer) {
-+    state.greetGateLastSignal = source;
-+    return;
-+  }
-+  const durationMs = _resolveGreetGateCalibrateMs();
-+  const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-+    ? performance.now()
-+    : Date.now();
-+  _clearGreetGateCalibrateTimer();
-+  state.greetGatePhase = 'calibrating';
-+  state.greetGateLastSignal = source;
-+  state.greetGateCalibrateLastMs = durationMs;
-+  state.greetGateCalibrateUntil = now + durationMs;
-+  _voiceLog('info', 'greet gate calibrating', {
-+    source,
-+    calibrateMs: durationMs,
-+  });
-+  try {
-+    state.greetGateCalibrateTimer = setTimeout(() => {
-+      state.greetGateCalibrateTimer = null;
-+      state.greetGateCalibrateUntil = 0;
-+      _completeGreetGate('calibrated');
-+    }, durationMs);
-+  } catch (err) {
-+    _voiceLog('warn', 'failed to start greet calibrate timer', { error: err?.message || err });
-+    _completeGreetGate('calibrate_timer_failed');
-+  }
-+}
-+
-+function _waitForGreetGate() {
-+  if (!state.greetGateActive) {
-+    return null;
-+  }
-+  if (state.greetGatePhase !== 'pending' && state.greetGatePhase !== 'calibrating') {
-+    return null;
-+  }
-+  return new Promise((resolve) => {
-+    state.greetGateWaiters.push((result) => {
-+      resolve(result !== false);
-+    });
-+  });
-+}
-+
-+function _handleGreetGateUtteranceEnd(detail = {}) {
-+  if (!state.greetGateActive) return;
-+  state.ttsPlaying = false;
-+  _voiceLog('debug', 'greet gate observed UtteranceEnd', {
-+    phase: state.greetGatePhase,
-+    reason: state.greetGateLastReason,
-+  });
-+  _startGreetGateCalibrate('UtteranceEnd');
-+}
-+
-+function _valueIsReadyFlag(value) {
-+  if (value === true) return true;
-+  if (value === 1) return true;
-+  if (typeof value === 'string') {
-+    const lowered = value.trim().toLowerCase();
-+    if (lowered === 'true' || lowered === '1' || lowered === 'yes') return true;
-+  }
-+  return false;
-+}
-+
-+function _handleGreetGateStateFrame(detail = {}) {
-+  if (!state.greetGateActive) return;
-+  const channelReady = _valueIsReadyFlag(detail?.channel?.ready_for_user);
-+  const ready = _valueIsReadyFlag(detail?.ready_for_user) || channelReady;
-+  const stateField = typeof detail?.state === 'string' ? detail.state.toLowerCase() : '';
-+  const explicitReady = stateField === 'ready_for_user' || stateField === 'ready';
-+  if (ready || explicitReady) {
-+    _voiceLog('debug', 'greet gate observed ready state', {
-+      phase: state.greetGatePhase,
-+      channelReady,
-+      ready,
-+      explicitReady,
-+    });
-+    _startGreetGateCalibrate('ready_for_user');
-+  }
-+}
-+
+ function _handleGreetGateStateFrame(detail = {}) {
+   if (!state.greetGateActive) return;
+   const channelReady = _valueIsReadyFlag(detail?.channel?.ready_for_user);
+   const ready = _valueIsReadyFlag(detail?.ready_for_user) || channelReady;
+-  const stateField = typeof detail?.state === 'string' ? detail.state.toLowerCase() : '';
+-  const explicitReady = stateField === 'ready_for_user' || stateField === 'ready';
++  const normalizePhase = (value) => {
++    if (typeof value !== 'string') return '';
++    return value.trim().toLowerCase();
++  };
++  const stateField = normalizePhase(detail?.state);
++  const phaseField = normalizePhase(detail?.phase);
++  const channelPhaseField = normalizePhase(detail?.channel?.phase);
++  const explicitReady = ['ready_for_user', 'ready'].some((target) =>
++    stateField === target || phaseField === target || channelPhaseField === target
++  );
+   if (ready || explicitReady) {
+     _voiceLog('debug', 'greet gate observed ready state', {
+       phase: state.greetGatePhase,
+       channelReady,
+       ready,
+       explicitReady,
++      stateField,
++      phaseField,
++      channelPhaseField,
+     });
+     _startGreetGateCalibrate('ready_for_user');
+   }
+ }
+ 
  function _emitVoiceState(state, detail = {}) {
    try {
      window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
@@ -489,426 +74,37 @@ index 31409f96a11d3ad0e0dbadbaf64904fca3f006c4..2872461bf1998c2ca682956a147f0476
      const entropy = Math.floor(Math.random() * 46656).toString(36).padStart(3, '0');
      state.turnTraceBase = entropy;
    }
- }
- 
- function _beginTurnTrace(reason = 'turn_start') {
-   _ensureTurnTraceBase();
-   state.turnTraceSeq = (state.turnTraceSeq || 0) + 1;
-@@ -259,50 +444,55 @@ function _armSafetyCloseTimer() {
-   }, delayMs);
- }
- 
- function _clearBargeConfirm(resume = false) {
-   if (state.bargeConfirmTimer) {
-     try { clearTimeout(state.bargeConfirmTimer); } catch {}
-     state.bargeConfirmTimer = null;
-   }
-   if (state.bargeConfirmActive) {
-     state.bargeConfirmActive = false;
-     if (resume) {
-       try { resumePlayback(); } catch {}
-     }
-   }
- }
- 
- function _ensureWSListener() {
-   if (state.wsListener || typeof window === 'undefined') {
-     return;
-   }
-   const handler = async (ev) => {
-     const detail = ev?.detail || {};
-     const type = detail?.type;
-     const typeNorm = typeof type === 'string' ? type.toLowerCase() : '';
- 
-+    if (typeNorm === 'utteranceend') {
-+      _handleGreetGateUtteranceEnd(detail);
-+    }
-+    _handleGreetGateStateFrame(detail);
-+
-     let isFinal = false;
-     if (typeNorm === 'utteranceend') {
-       isFinal = true;
-     } else if (typeNorm === 'results' || typeNorm === 'result') {
-       const channelFinal = detail?.channel?.is_final === true;
-       const payloadFinal = detail?.is_final === true;
-       isFinal = channelFinal || payloadFinal;
-     }
- 
-     if (!isFinal || state.finalized) {
-       return;
-     }
- 
-     _applyPostFinalHold('ws_final');
- 
-     const recorder = state.rec;
-     const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state !== 'inactive');
-     if (!isRecording) {
-       return;
-     }
- 
-     try {
-       _stopRecorder({ reason: 'server_final' });
-     } catch (err) {
-       _voiceLog('warn', 'failed to stop recorder on server final', { error: err?.message || err });
-@@ -595,50 +785,63 @@ function _attemptAudioStartSend(mime) {
-     return result === true;
-   } catch (err) {
-     _voiceLog('warn', 'failed to send AudioStart hint', { error: err?.message || err });
-     return false;
-   }
- }
- 
- async function _ensureAudioStartSent() {
-   if (state.turnHintSent) {
-     return true;
-   }
- 
-   if (state.turnHintPromise) {
-     try {
-       return await state.turnHintPromise;
-     } catch (err) {
-       _voiceLog('warn', 'AudioStart pending promise rejected', { error: err?.message || err });
-       return false;
-     }
-   }
- 
-   const recorderMime = (state.rec && state.rec.mimeType) || state.turnHintMime || REC_MIME;
-   state.turnHintMime = recorderMime;
- 
-   const sendPromise = (async () => {
-+    const gateWait = _waitForGreetGate();
-+    if (gateWait) {
-+      _voiceLog('debug', 'AudioStart waiting for greet gate', {
-+        phase: state.greetGatePhase,
-+        active: state.greetGateActive,
-+      });
-+      const allowed = await gateWait;
-+      if (!allowed) {
-+        _voiceLog('warn', 'AudioStart aborted before greet gate release');
-+        return false;
-+      }
-+    }
-+
-     const sentImmediately = _attemptAudioStartSend(recorderMime);
-     if (sentImmediately) {
-       state.turnHintSent = true;
-       _voiceLog('info', 'AudioStart sent', { mime: recorderMime, attempt: 'immediate' });
-       return true;
-     }
- 
-     state.turnHintAwaitingWS = true;
-     _voiceLog('info', 'AudioStart deferred until WS ready', { mime: recorderMime });
- 
-     try {
-       await waitWSOpen();
-     } catch (err) {
-       _voiceLog('warn', 'waitWSOpen failed while sending AudioStart', { error: err?.message || err });
-       return false;
-     }
- 
-     const sentAfterWait = _attemptAudioStartSend(recorderMime);
-     if (sentAfterWait) {
-       state.turnHintSent = true;
-       _voiceLog('info', 'AudioStart sent', { mime: recorderMime, attempt: 'post-wait' });
-       return true;
-     }
- 
-     _voiceLog('warn', 'AudioStart send still failing after WS wait', { mime: recorderMime });
-@@ -937,50 +1140,51 @@ function _teardownAudioGraph() {
-   state.limiter = null;
-   state.analyser = null;
-   state.ctx = null;
-   state.deviceLogged = false;
-   state.finalized = false;
-   state.postFinalHoldUntil = 0;
-   state.vadMetrics = null;
-   _removeWSListener();
- }
- 
- function _disarm() {
-   _safeClearTurnTimer();
-   _clearPendingEndTimer();
-   _clearSafetyCloseTimer();
-   _clearBargeConfirm(false);
-   _stopRecorder({ reason: 'manual_disarm' });
-   _teardownVADOnly();
-   state.turnOpen = false; // ensure local state is clean
-   state.turnClosePromise = null;
-   state.recStartedAt = 0;
-   state.lastChunkAt = 0;
-   state.ttsPlaying = false;
-   state.finalized = false;
-   state.postFinalHoldUntil = 0;
-   state.vadMetrics = null;
-+  _cancelGreetGate('disarm');
-   _removeWSListener();
-   _clearTurnTrace();
-   _emitVoiceState('idle');
- }
- 
- function _bargeIn() {
-   // Soft barge-in: pause audio locally
-   _clearBargeConfirm(false);
-   try { stopPlayback(); } catch {}
-   // If a prior ASR turn is somehow still open, politely close it.
-   // (Harmless if no turn is open; guarded to avoid duplicate closes.)
-   const pendingClose = _closeTurnIfOpen();
-   if (pendingClose) {
-     pendingClose.catch(() => {});
-   }
- }
- 
- // ---- VAD wiring -------------------------------------------------------------
- 
- async function _arm(stream = null, opts = {}) {
-   const mic = stream || await _ensureMic();
- 
-   // Build / rebuild VAD
-   _teardownVADOnly();
- 
-@@ -1132,50 +1336,74 @@ async function _onSpeechStartCommitted(detail = {}) {
-     state.postFinalHoldUntil = 0;
-   }
- 
-   const traceActive = _getActiveTurnTraceId();
-   if (!state.recStreaming || !traceActive) {
-     _beginTurnTrace('speech_start');
-   }
- 
-   _logLifecycle('vad_speech_start', {
-     preRollBufferedMs: round(bufferedMsRaw),
-     preRollSentMs: round(Math.min(bufferedMsRaw, PRE_ROLL_MS)),
-     preRollChunks: preRollBlobs.length,
-     preRollBytes: totalBytes,
-     preRollEnabled: preRollBlobs.length > 0,
-     preRollMime: (state.rec && state.rec.mimeType) || REC_MIME,
-     snrDb: roundTenths(metrics?.snrDb),
-     noiseFloorDb: roundTenths(metrics?.noiseFloorDb),
-     thresholdStartDb: roundTenths(metrics?.thresholds?.startDb),
-   });
-   _voiceLog('info', 'speech started', {
-     preRollChunks: preRollBlobs.length,
-     preRollBytes: totalBytes,
-     snrDb: roundTenths(metrics?.snrDb),
-   });
- 
-+  if (state.greetGateActive) {
-+    if (state.greetGatePhase === 'calibrating') {
-+      _voiceLog('info', 'speech start suppressed during greet calibration', {
-+        calibrateUntil: state.greetGateCalibrateUntil,
-+        snrDb: roundTenths(metrics?.snrDb),
-+      });
-+      return;
-+    }
-+    if (state.greetGatePhase === 'pending') {
-+      const snrDb = Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null;
-+      if (Number.isFinite(snrDb) && snrDb >= GREET_BARGE_MIN_SNR_DB) {
-+        _voiceLog('info', 'greet gate bypassed via barge-in', {
-+          snrDb: roundTenths(snrDb),
-+        });
-+        _completeGreetGate('barge_in');
-+      } else {
-+        _voiceLog('info', 'speech start suppressed by greet gate', {
-+          snrDb: roundTenths(metrics?.snrDb),
-+        });
-+        return;
-+      }
-+    }
-+  }
-+
-   if (state.ttsPlaying && !state.bargeConfirmActive) {
-     state.bargeConfirmActive = true;
-     try { pausePlayback(); } catch {}
-       state.bargeConfirmTimer = setTimeout(async () => {
-         state.bargeConfirmTimer = null;
-         if (!state.bargeConfirmActive) return;
-         if (state.vad && typeof state.vad.isRecording === 'function' && !state.vad.isRecording()) {
-           state.bargeConfirmActive = false;
-           try { resumePlayback(); } catch {}
-           return;
-         }
-         state.bargeConfirmActive = false;
-         _bargeIn();
-         const started = await _startRecorder();
-         if (started) {
-           _emitVoiceState('recording');
-           return;
-         }
-       _voiceLog('warn', 'recorder unavailable — reverting to typing');
-       _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
-     }, bargeConfirmMs);
-     return;
-   }
- 
-   if (state.bargeConfirmActive) {
-@@ -1270,26 +1498,28 @@ function _applyPostFinalHold(source = 'unknown') {
-   const nextUntil = Math.max(targetUntil, previousUntil);
-   const wasFinalized = !!state.finalized;
- 
-   state.finalized = true;
-   state.postFinalHoldUntil = nextUntil;
- 
-   if (!wasFinalized || nextUntil !== previousUntil) {
-     _logLifecycle('post_final_hold_applied', {
-       holdMs,
-       holdUntil: nextUntil,
-       source,
-     });
-   }
- 
-   return nextUntil;
- }
- 
- export const __TEST_ONLY__ = {
-   state,
-   startRecorder: _startRecorder,
-   stopRecorder: _stopRecorder,
-   ensureWSListener: _ensureWSListener,
-   closeTurnIfOpen: _closeTurnIfOpen,
-   sendRecorderChunk: _sendRecorderChunk,
-   clearSafetyCloseTimer: _clearSafetyCloseTimer,
-+  onSpeechStartCommitted: _onSpeechStartCommitted,
-+  onSpeechEndCommitted: _onSpeechEndCommitted,
- };
 diff --git a/tests/js/voice-greet-gate.test.mjs b/tests/js/voice-greet-gate.test.mjs
-new file mode 100644
-index 0000000000000000000000000000000000000000..da14661e4241fb9b48606f59a3af7491f723b4b7
---- /dev/null
+index da14661e4241fb9b48606f59a3af7491f723b4b7..00302df364ff832827ac6d16dbca51bd390d7d33 100644
+--- a/tests/js/voice-greet-gate.test.mjs
 +++ b/tests/js/voice-greet-gate.test.mjs
-@@ -0,0 +1,209 @@
-+import { test } from 'node:test';
-+import assert from 'node:assert/strict';
-+import { Blob as NodeBlob } from 'node:buffer';
-+
-+if (typeof Blob === 'undefined') {
-+  globalThis.Blob = NodeBlob;
-+}
-+
-+const listenerMap = new Map();
-+
-+class TestCustomEvent {
-+  constructor(type, init = {}) {
-+    this.type = type;
-+    this.detail = init.detail;
-+  }
-+}
-+
-+globalThis.CustomEvent = TestCustomEvent;
-+
-+const windowStub = {
-+  __askchip_config: {},
-+  addEventListener(type, handler) {
-+    if (!listenerMap.has(type)) listenerMap.set(type, new Set());
-+    listenerMap.get(type).add(handler);
-+  },
-+  removeEventListener(type, handler) {
-+    const set = listenerMap.get(type);
-+    if (!set) return;
-+    set.delete(handler);
-+    if (set.size === 0) listenerMap.delete(type);
-+  },
-+  dispatchEvent(event) {
-+    const set = listenerMap.get(event.type);
-+    if (!set) return true;
-+    for (const handler of Array.from(set)) {
-+      handler(event);
-+    }
-+    return true;
-+  },
-+};
-+
-+windowStub.CustomEvent = TestCustomEvent;
-+windowStub.dispatchEvent = windowStub.dispatchEvent.bind(windowStub);
-+
-+globalThis.window = windowStub;
-+
-+globalThis.performance = {
-+  now: () => Date.now(),
-+};
-+
-+globalThis.__TEST_WS_HOOKS = {};
-+
-+const wsStubModule = await import('./ws_stub.mjs');
-+globalThis.__TEST_WS_MODULE = wsStubModule;
-+
-+class FakeRecorder {
-+  constructor() {
-+    this.state = 'inactive';
-+    this.mimeType = 'audio/webm; codecs=opus';
-+    this.ondataavailable = null;
-+    this.onstop = null;
-+    this.stopCalled = false;
-+    FakeRecorder.instances.push(this);
-+  }
-+
-+  start() {
-+    this.state = 'recording';
-+  }
-+
-+  stop() {
-+    this.state = 'inactive';
-+    this.stopCalled = true;
-+  }
-+}
-+
-+FakeRecorder.instances = [];
-+
-+globalThis.MediaRecorder = FakeRecorder;
-+
-+async function setupVoiceModule() {
-+  const voice = await import('../../static/js/voice.js');
-+  const hooks = voice.__TEST_ONLY__;
-+  const wsModule = await import('../../static/js/ws_module.js');
-+  await wsModule.getWSModule();
-+  return { voice, hooks };
-+}
-+
-+function resetHooks(hooks) {
-+  hooks.state.turnOpen = false;
-+  hooks.state.turnClosePromise = null;
-+  hooks.state.chunkSendPromise = Promise.resolve();
-+  hooks.state.chunkBytesSent = 0;
-+  hooks.state.chunkSendError = null;
-+  hooks.state.turnTimer = null;
-+  hooks.state.pendingEndTimer = null;
-+  hooks.state.safetyCloseTimer = null;
-+  hooks.state.turnHintSent = false;
-+  hooks.state.turnHintMime = null;
-+  hooks.state.turnHintPromise = null;
-+  hooks.state.turnHintAwaitingWS = false;
-+  hooks.state.rec = null;
-+  hooks.state.recStreaming = false;
-+  hooks.state.stream = { active: true };
-+  hooks.state.preRollBlobs = [];
-+  hooks.state.preRollDurationMs = 0;
-+  hooks.state.wsListener = null;
-+  hooks.state.greetGateActive = false;
-+  hooks.state.greetGatePhase = 'idle';
-+  hooks.state.greetGateWaiters = [];
-+  hooks.state.greetGateCalibrateTimer = null;
-+  hooks.state.greetGateCalibrateUntil = 0;
-+  hooks.state.greetGateCalibrateLastMs = null;
-+}
-+
-+async function cleanup(hooks, voice) {
-+  const recorder = FakeRecorder.instances.at(-1);
-+  hooks.stopRecorder({ reason: 'test_cleanup' });
-+  if (recorder && typeof recorder.onstop === 'function') {
-+    await recorder.onstop();
-+  }
-+  if (hooks.state.turnTimer) {
-+    clearTimeout(hooks.state.turnTimer);
-+    hooks.state.turnTimer = null;
-+  }
-+  hooks.state.wsListener = null;
-+  hooks.state.chunkSendPromise = Promise.resolve();
-+  FakeRecorder.instances = [];
-+  globalThis.__TEST_WS_HOOKS = {};
-+  voice.setGreetGateActive(false);
-+  listenerMap.clear();
-+}
-+
-+test('AudioStart waits for greet gate release after UtteranceEnd calibration', async () => {
+@@ -152,50 +152,93 @@ test('AudioStart waits for greet gate release after UtteranceEnd calibration', a
+       return true;
+     },
+   };
+ 
+   voice.setGreetGateActive(true);
+ 
+   const startPromise = hooks.startRecorder();
+   await Promise.resolve();
+   assert.equal(transportEvents.length, 0, 'AudioStart should not send before greet gate release');
+ 
+   window.dispatchEvent(new CustomEvent('askchip-ws', { detail: { type: 'UtteranceEnd' } }));
+ 
+   await new Promise((resolve) => setTimeout(resolve, 15));
+ 
+   const started = await startPromise;
+   assert.equal(started, true, 'recorder should start after greet gate release');
+   await hooks.state.chunkSendPromise;
+ 
+   const audioStartEvents = transportEvents.filter((ev) => ev.kind === 'json' && ev.payload?.type === 'AudioStart');
+   assert.ok(audioStartEvents.length >= 1, 'AudioStart must be emitted after greet gate opens');
+   assert.ok(audioStartEvents[0].payload.mime, 'AudioStart payload should include MIME');
+ 
+   await cleanup(hooks, voice);
+ });
+ 
++test('greet gate opens when ready phase frame is received', async () => {
 +  const { voice, hooks } = await setupVoiceModule();
 +  resetHooks(hooks);
 +
@@ -937,51 +133,42 @@ index 0000000000000000000000000000000000000000..da14661e4241fb9b48606f59a3af7491
 +  await Promise.resolve();
 +  assert.equal(transportEvents.length, 0, 'AudioStart should not send before greet gate release');
 +
-+  window.dispatchEvent(new CustomEvent('askchip-ws', { detail: { type: 'UtteranceEnd' } }));
++  window.dispatchEvent(new CustomEvent('askchip-ws', { detail: { type: 'state', phase: 'ready' } }));
 +
 +  await new Promise((resolve) => setTimeout(resolve, 15));
 +
 +  const started = await startPromise;
-+  assert.equal(started, true, 'recorder should start after greet gate release');
++  assert.equal(started, true, 'recorder should start after ready phase');
 +  await hooks.state.chunkSendPromise;
 +
 +  const audioStartEvents = transportEvents.filter((ev) => ev.kind === 'json' && ev.payload?.type === 'AudioStart');
 +  assert.ok(audioStartEvents.length >= 1, 'AudioStart must be emitted after greet gate opens');
-+  assert.ok(audioStartEvents[0].payload.mime, 'AudioStart payload should include MIME');
 +
 +  await cleanup(hooks, voice);
 +});
 +
-+test('greet gate allows barge-in when SNR meets minimum', async () => {
-+  const { voice, hooks } = await setupVoiceModule();
-+  resetHooks(hooks);
-+
-+  const preRollBlob = new Blob(['pre'], { type: 'audio/webm; codecs=opus' });
-+  hooks.state.preRollBlobs = [{ blob: preRollBlob, durationMs: 25, timecode: 25 }];
-+  hooks.state.preRollDurationMs = 25;
-+  hooks.state.ttsPlaying = false;
-+
-+  const transportEvents = [];
-+  globalThis.__TEST_WS_HOOKS = {
-+    onSendJSON: (payload) => {
-+      transportEvents.push({ kind: 'json', payload });
-+      return true;
-+    },
-+    onSendAudioChunk: (blob) => {
-+      transportEvents.push({ kind: 'chunk', payload: blob });
-+      return true;
-+    },
-+  };
-+
-+  voice.setGreetGateActive(true);
-+
-+  await hooks.onSpeechStartCommitted({ snrDb: 12, thresholds: { startDb: -40 } });
-+  await hooks.state.chunkSendPromise;
-+
-+  const audioStartEvents = transportEvents.filter((ev) => ev.kind === 'json' && ev.payload?.type === 'AudioStart');
-+  assert.ok(audioStartEvents.length >= 1, 'AudioStart should emit during qualified barge-in');
-+  assert.equal(hooks.state.greetGateActive, false, 'greet gate should release after barge-in');
-+
-+  await cleanup(hooks, voice);
-+});
-+
+ test('greet gate allows barge-in when SNR meets minimum', async () => {
+   const { voice, hooks } = await setupVoiceModule();
+   resetHooks(hooks);
+ 
+   const preRollBlob = new Blob(['pre'], { type: 'audio/webm; codecs=opus' });
+   hooks.state.preRollBlobs = [{ blob: preRollBlob, durationMs: 25, timecode: 25 }];
+   hooks.state.preRollDurationMs = 25;
+   hooks.state.ttsPlaying = false;
+ 
+   const transportEvents = [];
+   globalThis.__TEST_WS_HOOKS = {
+     onSendJSON: (payload) => {
+       transportEvents.push({ kind: 'json', payload });
+       return true;
+     },
+     onSendAudioChunk: (blob) => {
+       transportEvents.push({ kind: 'chunk', payload: blob });
+       return true;
+     },
+   };
+ 
+   voice.setGreetGateActive(true);
+ 
+   await hooks.onSpeechStartCommitted({ snrDb: 12, thresholds: { startDb: -40 } });
+   await hooks.state.chunkSendPromise;

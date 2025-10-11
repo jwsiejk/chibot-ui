@@ -174,6 +174,49 @@ test('AudioStart waits for greet gate release after UtteranceEnd calibration', a
   await cleanup(hooks, voice);
 });
 
+test('greet gate opens when ready phase frame is received', async () => {
+  const { voice, hooks } = await setupVoiceModule();
+  resetHooks(hooks);
+
+  const preRollBlob = new Blob(['pre'], { type: 'audio/webm; codecs=opus' });
+  hooks.state.preRollBlobs = [{ blob: preRollBlob, durationMs: 25, timecode: 25 }];
+  hooks.state.preRollDurationMs = 25;
+  hooks.state.greetGateCalibrateMinMs = 5;
+  hooks.state.greetGateCalibrateMaxMs = 20;
+  hooks.state.greetGateCalibrateMs = 10;
+
+  const transportEvents = [];
+  globalThis.__TEST_WS_HOOKS = {
+    onSendJSON: (payload) => {
+      transportEvents.push({ kind: 'json', payload });
+      return true;
+    },
+    onSendAudioChunk: (blob) => {
+      transportEvents.push({ kind: 'chunk', payload: blob });
+      return true;
+    },
+  };
+
+  voice.setGreetGateActive(true);
+
+  const startPromise = hooks.startRecorder();
+  await Promise.resolve();
+  assert.equal(transportEvents.length, 0, 'AudioStart should not send before greet gate release');
+
+  window.dispatchEvent(new CustomEvent('askchip-ws', { detail: { type: 'state', phase: 'ready' } }));
+
+  await new Promise((resolve) => setTimeout(resolve, 15));
+
+  const started = await startPromise;
+  assert.equal(started, true, 'recorder should start after ready phase');
+  await hooks.state.chunkSendPromise;
+
+  const audioStartEvents = transportEvents.filter((ev) => ev.kind === 'json' && ev.payload?.type === 'AudioStart');
+  assert.ok(audioStartEvents.length >= 1, 'AudioStart must be emitted after greet gate opens');
+
+  await cleanup(hooks, voice);
+});
+
 test('greet gate allows barge-in when SNR meets minimum', async () => {
   const { voice, hooks } = await setupVoiceModule();
   resetHooks(hooks);
