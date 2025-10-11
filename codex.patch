@@ -1,267 +1,110 @@
-diff --git a/static/js/app.js b/static/js/app.js
-index aee6b6a9aa45c238ee134f054272787e12fd6416..788572040d6bb276560ead6100b222c1f5c2fc0d 100644
---- a/static/js/app.js
-+++ b/static/js/app.js
-@@ -1,90 +1,136 @@
- // /static/js/app.js — chat helpers only (imports constrained by spec)
- import { closeWS, sendCloseStream, sendJSON } from './ws_module.js';
- import { getSID } from '/static/js/util/sid.js';
- import { renderSuggestions } from '/static/js/suggestions.js';
- 
- // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
- // Exports: onEnd, onSend, handleAssistantFrame
- 
- const $  = (s)=>document.querySelector(s);
- 
- const ASR_TIMEOUT_MS = 10_000;
-+const ASR_FINALIZATION_TIMEOUT_MS = 2_000;
- let _sessionReadyAt = 0;
- let _awaitingFirstAsr = false;
- let _noAsrTimeout = null;
- let _noAsrNotified = false;
- let _lastAsrLatencyMs = null;
- let _ttsPlaying = false;
- const _asrTurnState = {
-   activeId: null,
-   complete: false,
-   utteranceEnded: false,
- };
-+const _asrCompletionWaiters = new Set();
- 
- try {
-   window.addEventListener('chip-tts', (ev) => {
-     const detail = ev?.detail || {};
-     const playing = String(detail.state || '').toLowerCase() === 'playing';
-     _ttsPlaying = playing;
-     if (playing) {
-       _clearAsrTimeout();
-     }
-   });
- } catch {}
- 
- function _clearAsrTimeout(){
-   if (_noAsrTimeout){
-     clearTimeout(_noAsrTimeout);
-     _noAsrTimeout = null;
-   }
- }
- 
- function _resetAsrTracking(){
-   _clearAsrTimeout();
-   _awaitingFirstAsr = false;
-   _noAsrNotified = false;
-   _sessionReadyAt = 0;
-   _lastAsrLatencyMs = null;
-   _resetAsrTurnState();
- }
- 
- function _resetAsrTurnState(){
-   _asrTurnState.activeId = null;
-   _asrTurnState.complete = false;
-   _asrTurnState.utteranceEnded = false;
-+  _flushAsrCompletionWaiters('reset');
- }
- 
- function _ensureActiveAsrTurn(turnId){
-   if (turnId == null) return;
-   if (_asrTurnState.activeId !== turnId){
-     _asrTurnState.activeId = turnId;
-     _asrTurnState.complete = false;
-     _asrTurnState.utteranceEnded = false;
-   }
- }
- 
-+function _hasAsrFinalEvent(){
-+  return !!(_asrTurnState.complete || _asrTurnState.utteranceEnded);
-+}
-+
-+function _flushAsrCompletionWaiters(reason){
-+  if (!_asrCompletionWaiters.size) return;
-+  const waiters = Array.from(_asrCompletionWaiters);
-+  _asrCompletionWaiters.clear();
-+  waiters.forEach((waiter) => {
-+    if (waiter?.timer) {
-+      clearTimeout(waiter.timer);
-+      waiter.timer = null;
-+    }
-+    try {
-+      waiter?.resolve?.(reason);
-+    } catch {}
-+  });
-+}
-+
-+function _notifyAsrCompletion(reason){
-+  if (!_hasAsrFinalEvent()) return;
-+  _flushAsrCompletionWaiters(reason);
-+}
-+
-+function _waitForAsrCompletion(timeoutMs){
-+  if (_hasAsrFinalEvent()) {
-+    return Promise.resolve('already_final');
-+  }
-+  return new Promise((resolve) => {
-+    const waiter = { resolve, timer: null };
-+    if (typeof timeoutMs === 'number' && timeoutMs >= 0) {
-+      waiter.timer = setTimeout(() => {
-+        if (_asrCompletionWaiters.delete(waiter)) {
-+          try {
-+            resolve('timeout');
-+          } catch {}
-+        }
-+      }, timeoutMs);
-+    }
-+    _asrCompletionWaiters.add(waiter);
-+  });
-+}
-+
- function _extractAsrTurnId(frame){
-   return (
-     frame?.turn_id ??
-     frame?.channel?.turn_id ??
-     frame?.turnId ??
-     frame?.channel?.turnId ??
-     null
-   );
- }
- 
- function _isAsrFinalFrame(frame){
-   return !!(
-     frame?.channel?.is_final ??
-     frame?.is_final ??
-     frame?.final ??
-     false
-   );
- }
- 
- function _scheduleAsrWatchdog(){
-   _clearAsrTimeout();
-   _awaitingFirstAsr = true;
-   _noAsrNotified = false;
-   _sessionReadyAt = Date.now();
-   _lastAsrLatencyMs = null;
-@@ -389,66 +435,68 @@ export function handleAssistantFrame(d){
-     const msg = `Error: ${(d.code||'')}${d.message ? ' ' + d.message : ''}`.trim();
-     showBanner(msg || 'An error occurred.');
-     return;
-   }
- 
-   if (t === 'session_end') {
-     _handleSessionEnd(d);
-     return;
-   }
- 
-   // Lightweight state hints (non-invasive)
-   if (t === 'assistant_audio') setDot('speaking');
-   if (t === 'UtteranceEnd') {
-     const turnId = _extractAsrTurnId(d);
-     if (turnId != null) _ensureActiveAsrTurn(turnId);
-     const matchesActive = turnId == null
-       ? _asrTurnState.activeId == null
-       : _asrTurnState.activeId === turnId;
-     if (matchesActive && _asrTurnState.utteranceEnded) {
-       return;
-     }
-     _finalizeUserPreview({ resetIgnore: true });
-     setDot('ready');
-     if (matchesActive) {
-       _asrTurnState.utteranceEnded = true;
-+      _notifyAsrCompletion('utterance_end');
-     }
-   }
- 
-   if ((typeNorm === 'results' || typeNorm === 'result') && d.nlu === undefined){
-     const turnId = _extractAsrTurnId(d);
-     if (turnId != null) _ensureActiveAsrTurn(turnId);
-     const matchesActive = turnId == null
-       ? _asrTurnState.activeId == null
-       : _asrTurnState.activeId === turnId;
-     const isFinal = _isAsrFinalFrame(d);
-     if (matchesActive && isFinal && _asrTurnState.complete) {
-       return;
-     }
-     _renderUserTranscript(d);
-     if (matchesActive && isFinal) {
-       _asrTurnState.complete = true;
-+      _notifyAsrCompletion('final_result');
-     }
-     return;
-   }
- 
-   if (t === 'suggestions'){
-     const items = Array.isArray(d.items) ? d.items : [];
-     let key = '[]';
-     try { key = JSON.stringify(items ?? []); } catch { key = '[]'; }
-     if (key !== _lastSuggestionsKey){
-       _lastSuggestionsKey = key;
-       try { renderSuggestions(items, _handleSuggestionClick); } catch (err) {
-         console.warn('[handleAssistantFrame] renderSuggestions failed', err);
+diff --git a/static/js/ws.js b/static/js/ws.js
+index 0dc02aa8a35e73dfd486da84d9559129bceec1e2..b95f1aebae516e49f1603d2cab171f095c09ccd4 100644
+--- a/static/js/ws.js
++++ b/static/js/ws.js
+@@ -357,50 +357,63 @@ export function openWS(options = {}){
+         // If we closed before receiving server "ready", a transient connect race happened.
+         if (!_gotReady){
+           _scheduleReconnect();
+         } else {
+           // If already "ready", only reconnect if session is active
+           _scheduleReconnect();
+         }
        }
-     }
-     return;
-   }
  
-   if (_isAssistantTextFrame(d)) {
-     if (!_dedupeAssistant(d)) return;
-   }
-   // (other frame types can be handled here as needed)
- }
+       try {
+         window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }}));
+       } catch {}
+       if (!shouldReconnect) {
+         return;
+       }
+     };
  
- /* ---------------- Send (WS-only) ---------------- */
+     ws.onerror = (e) => console.warn('[ws] error', e);
  
-@@ -495,53 +543,54 @@ export async function onSend(overrideText){
-       showBanner('Message failed to send over WebSocket.');
-       return;
-     }
+     ws.onmessage = (ev) => {
+       try{
+         if (typeof ev.data === 'string'){
+           const obj = JSON.parse(ev.data);
+           const t = obj && obj.type;
  
-     setDot('thinking');
++          if (t === 'Result' || t === 'Results') {
++            const channel = obj && obj.channel;
++            const alternatives = channel && channel.alternatives;
++            const transcript = alternatives && alternatives[0] && alternatives[0].transcript;
++            const isFinal =
++              (channel && typeof channel.is_final === 'boolean' && channel.is_final) ||
++              (typeof obj.final === 'boolean' && obj.final) ||
++              false;
++            try {
++              console.debug('[WS→UI Result]', { final: isFinal, text: transcript });
++            } catch {}
++          }
++
+           _handleProviderSignal(obj);
  
-     // Clear composer after send
-     if (input){
-       try { input.value = ''; } catch {}
-     }
+           if (t === 'ready') {
+             _gotReady = true;
+             // small audio unlock nudge on first ready (harmless if already unlocked)
+             try { unlockAudio().catch(()=>{}); } catch {}
+           }
  
-   } catch (e){
-     console.warn('[onSend] error', e);
-   }
- }
+           // Re-emit as DOM events so UI can respond
+           window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
  
- /* ---------------- End session (graceful) ---------------- */
+           // --- Audio routing (WS-only) ---------------------------------------
+           if (t === 'assistant_audio') {
+             // Server provides { mime, audio_chunks:[], is_last }
+             playStream(obj);
+             return;
+           }
+           if (t === 'UtteranceEnd') {
+             // Authoritative end-of-utterance: drain and endOfStream
+             audioEnd();
+             return;
+           }
  
- let ending = false;
- 
- export async function onEnd(){
-   if (ending) return;
-   ending = true;
-   try {
-     _clearSuggestions();
-+    const finalFrameWait = _waitForAsrCompletion(ASR_FINALIZATION_TIMEOUT_MS);
-     // Politely signal end of stream over WS, then close with code 1000
--    try { sendCloseStream(); } catch {}
--    await new Promise(r => setTimeout(r, 100));
-+    try { await sendCloseStream(); } catch {}
-+    try { await finalFrameWait; } catch {}
- 
-     try { closeWS(1000, 'user_end'); } catch {}
- 
-     // Rotate the session so the next Start is clean (correct key)
-     try { localStorage.removeItem('chip.sid'); } catch {}
- 
-     // Notify others (bootstrap etc.)
-     try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
- 
-     // Update UI
-     disableForEnded();
-     showBanner('Session ended. Press Start to begin a new one.');
- 
-     // Clear any bootstrap “session started” latch
-     window.__askchip_session_started = false;
- 
+           // --- Other control/info messages -----------------------------------
+           if (t === 'KeepAliveAck'){
+diff --git a/static/js/ws.js b/static/js/ws.js
+index 0dc02aa8a35e73dfd486da84d9559129bceec1e2..b95f1aebae516e49f1603d2cab171f095c09ccd4 100644
+--- a/static/js/ws.js
++++ b/static/js/ws.js
+@@ -479,36 +492,37 @@ export async function sendAudioChunk(blob){
+     _lastUserSendTs = Date.now();
+   }catch(e){
+     console.warn('[ws] sendAudioChunk error', e);
    } finally {
-     ending = false;
+     _scheduleKeepaliveResume(_KEEPALIVE_REASON_UPLOAD, _KEEPALIVE_RESUME_AFTER_UPLOAD_MS);
    }
  }
  
- try {
-   window.addEventListener('askchip-session-ended', () => {
-     _clearSuggestions();
-     _resetAsrTracking();
+ 
+ export async function sendCloseStream(){
+   // Drain the WS send buffer before closing the user turn.
+   try{
+     const deadline = Date.now() + 1500; // up to ~1.5s drain budget
+     // small sleep helper
+     const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
+     // allow two cycles to ensure MediaRecorder 'stop' enqueued the last blob
+     await sleep(20);
+     await sleep(20);
+     // drain bufferedAmount down near zero, without blocking forever
+     while (isOpen() && bufferedAmount() > 0 && Date.now() < deadline){
+       await sleep(20);
+     }
+   }catch(e){
+     console.warn('[ws] sendCloseStream drain failed', e);
+   } finally {
++    try { console.debug('[DBG] UI→WS', { type: 'CloseStream' }); } catch {}
+     sendJSON({ type: "CloseStream" });
+   }
+ }
+ 
+ 
+ export function configure(opts = {}){
+   // ensure session id is included if caller forgot
+   const sid = getSID();
+   const payload = { type: "Configure", session_id: sid, ...opts };
+   sendJSON(payload);
+ }

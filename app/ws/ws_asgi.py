@@ -494,6 +494,15 @@ async def _pump_dg_to_client(
                 seq = ev.get("seq")
                 if isinstance(seq, int):
                     meta["seq"] = seq
+            log_type = et
+            if et == "user_partial":
+                log_type = "partial"
+            elif et == "user_final":
+                log_type = "final"
+            elif "vad" in et:
+                log_type = "vad"
+            meta["dg_type"] = log_type
+            meta.setdefault("chars", 0)
             _jlog("dg_message", **meta)
             if et == "asr_open":
                 delta_ms = None
@@ -584,6 +593,14 @@ async def _pump_dg_to_client(
                     pass
 
                 if not is_final:
+                    with contextlib.suppress(Exception):
+                        _jlog(
+                            "ui_result_emit",
+                            sid=sid,
+                            turn_id=turn_id_for_event,
+                            final=False,
+                            chars=len(text or ""),
+                        )
                     await _ws_send_json(
                         send,
                         make_results(
@@ -1011,6 +1028,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 is_final=True,
             ),
         )
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ui_result_emit",
+                sid=sid,
+                turn_id=turn_id_for_event,
+                final=True,
+                chars=len(text or ""),
+            )
 
         with contextlib.suppress(Exception):
             _log_turn_finish(turn_id_for_event, "provider_final", False, len(text))
@@ -1321,6 +1346,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         final_seen[0] = True
         payload = make_results(turn_id, transcript=transcript, is_final=True)
         payload["type"] = "Results"
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ui_result_emit",
+                sid=sid,
+                turn_id=turn_id,
+                final=True,
+                chars=len(transcript or ""),
+                source="synthetic",
+            )
         await _ws_send_json(send, payload)
         utterance_payload = make_utterance_end(turn_id)
         utterance_payload["type"] = "UtteranceEnd"
@@ -2174,8 +2208,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 nudges.cancel_idle_timers(sid)
                             continue
 
-                        elif t == "CloseStream":
-                            _jlog("ws_close_stream", sid=sid)
+                        elif t in {"CloseStream", "AudioStop"}:
+                            _jlog("ws_close_stream", sid=sid, source=t)
                             nudges.cancel_idle_timers(sid)
 
                             # Always define this first so later 'if synthetic_emitted' is safe
@@ -2208,6 +2242,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 turn_id = turn_id_ref[0] or (buf.turn_seq + 1)
                                 _pcm = None
                             _jlog("after_close_turn", sid=sid, turn_id=turn_id)
+                            with contextlib.suppress(Exception):
+                                _jlog(
+                                    "ws_close_stream_recv",
+                                    turn_id=turn_id,
+                                    sid=sid,
+                                    source=t,
+                                )
                             turn_id_ref[0] = turn_id
 
                             _note_turn_commit(
@@ -2362,6 +2403,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     drain_timeout_exc: Optional[
                                         DeepgramDrainTimeoutError
                                     ] = None
+                                    dg_close_ok = False
                                     try:
                                         await asyncio.sleep(
                                             float(
@@ -2369,6 +2411,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             )
                                         )  # ~300 ms grace
                                         await dg.close(wait_for_final=True)
+                                        dg_close_ok = True
                                     except DeepgramDrainTimeoutError as exc:
                                         drain_timeout_exc = exc
                                         _jlog(
@@ -2390,6 +2433,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             sid=sid,
                                             err=type(exc).__name__,
                                         )
+                                    finally:
+                                        with contextlib.suppress(Exception):
+                                            _jlog(
+                                                "dg_tx_close",
+                                                sid=sid,
+                                                turn_id=turn_id,
+                                                ok=dg_close_ok,
+                                            )
                                     dg_state = "closed"
                                     try:
                                         set_asr_stream_open(sid, False)
