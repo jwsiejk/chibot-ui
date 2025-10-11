@@ -462,6 +462,7 @@ async def _pump_dg_to_client(
     schedule_user_final: Optional[Callable[[int, str], Awaitable[None]]] = None,
     turn_timing: Optional[Dict[str, List[float]]] = None,
     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
+    cancel_turn_start_timeout: Optional[Callable[[], None]] = None,
 ):
     """Relay Deepgram events to client and, on final, kick LLM turn."""
     try:
@@ -545,6 +546,9 @@ async def _pump_dg_to_client(
                 text = (ev.get("text") or "").strip()
                 turn_id_for_event = turn_id_ref[0]
                 if is_final:
+                    if cancel_turn_start_timeout:
+                        with contextlib.suppress(Exception):
+                            cancel_turn_start_timeout()
                     next_turn_id = None
                     try:
                         next_turn_id = pending_final_turns.popleft()
@@ -878,6 +882,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     buffered_chunks: Deque[bytes] = deque()
     buffered_byte_total = [0]
     sent_any_audio = [False]
+    turn_start_timeout_task: List[Optional[asyncio.Task]] = [None]
+    turn_start_timeout_turn_id = [0]
+    try:
+        turn_start_timeout_s = float(
+            os.getenv("WS_TURN_START_TIMEOUT_S", "2.5") or "0"
+        )
+    except Exception:
+        turn_start_timeout_s = 2.5
+    if turn_start_timeout_s < 0:
+        turn_start_timeout_s = 0.0
     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
     no_audio_notified = [False]
     no_audio_turn_id = [0]
@@ -1229,6 +1243,122 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         forwarded_total_bytes[0] = 0
         forwarded_progress_next[0] = FORWARD_PROGRESS_STEP
 
+    def _cancel_turn_start_timeout() -> None:
+        task = turn_start_timeout_task[0]
+        if task and not task.done():
+            if task is not asyncio.current_task():
+                task.cancel()
+        turn_start_timeout_task[0] = None
+        turn_start_timeout_turn_id[0] = 0
+
+    async def _handle_turn_start_timeout(turn_id: int) -> None:
+        nonlocal dg, dg_state, rx_task, dg_connect_task
+
+        if sent_any_audio[0] or final_seen[0]:
+            return
+        if buffered_byte_total[0] > 0:
+            return
+        since_first_ms = None
+        if mic_first_ts[0]:
+            since_first_ms = int(max(0.0, (time.time() - mic_first_ts[0]) * 1000))
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ws_turn_start_timeout",  # structured log for ops
+                sid=sid,
+                turn_id=turn_id,
+                timeout_s=turn_start_timeout_s,
+                mic_chunks=len(mic_chunks),
+                buffered=len(buffered_chunks),
+                since_first_ms=since_first_ms,
+            )
+        if _admin_emit:
+            with contextlib.suppress(Exception):
+                _admin_emit(
+                    "turn_start_timeout",
+                    session_id=sid,
+                    turn_id=turn_id,
+                    timeout_s=turn_start_timeout_s,
+                    mic_chunks=len(mic_chunks),
+                    buffered_chunks=len(buffered_chunks),
+                    since_first_chunk_ms=since_first_ms,
+                )
+
+        _emit_no_audio_alert("turn_start_timeout")
+
+        if dg_connect_task is not None and not dg_connect_task.done():
+            dg_connect_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await dg_connect_task
+            dg_connect_task = None
+            dg_state = "closed"
+        turn_connect_started[0] = False
+
+        close_ok = None
+        if dg is not None:
+            try:
+                await dg.close(wait_for_final=False)
+                close_ok = True
+            except Exception as exc:
+                close_ok = False
+                _jlog(
+                    "ws_turn_start_timeout_dg_close_error",
+                    sid=sid,
+                    turn_id=turn_id,
+                    err=type(exc).__name__,
+                )
+            finally:
+                dg_state = "closed"
+                try:
+                    set_asr_stream_open(sid, False)
+                except Exception:
+                    pass
+                relay_task = rx_task
+                rx_task = None
+                if relay_task is not None:
+                    relay_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await relay_task
+                dg = None
+                with contextlib.suppress(Exception):
+                    asr_ready_evt.clear()
+                with contextlib.suppress(Exception):
+                    _jlog(
+                        "dg_tx_close",
+                        sid=sid,
+                        turn_id=turn_id,
+                        ok=(close_ok is True),
+                        bytes_forwarded=forwarded_total_bytes[0],
+                        source="turn_start_timeout",
+                    )
+
+        if not final_seen[0]:
+            emitted = await _emit_synthetic_final(turn_id, "turn_start_timeout")
+            if emitted:
+                with contextlib.suppress(ValueError):
+                    pending_final_turns.remove(turn_id)
+                synthetic_final_turns.add(turn_id)
+
+    def _schedule_turn_start_timeout(turn_id: int) -> None:
+        if turn_start_timeout_s <= 0:
+            return
+        _cancel_turn_start_timeout()
+        turn_start_timeout_turn_id[0] = turn_id
+
+        async def _watch() -> None:
+            try:
+                await asyncio.sleep(turn_start_timeout_s)
+                if turn_start_timeout_turn_id[0] != turn_id:
+                    return
+                await _handle_turn_start_timeout(turn_id)
+            except asyncio.CancelledError:
+                pass
+            finally:
+                if turn_start_timeout_turn_id[0] == turn_id:
+                    turn_start_timeout_turn_id[0] = 0
+                turn_start_timeout_task[0] = None
+
+        turn_start_timeout_task[0] = asyncio.create_task(_watch())
+
     def _emit_no_audio_alert(reason: str) -> None:
         if no_audio_notified[0]:
             return
@@ -1279,6 +1409,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if task and not task.done():
             task.cancel()
         no_audio_watch_task[0] = None
+        _cancel_turn_start_timeout()
 
     def _schedule_no_audio_watch(turn_id: int) -> None:
         if no_audio_window_s <= 0:
@@ -1438,6 +1569,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         _handle_provider_final,
                         turn_timing,
                         _log_turn_finish,
+                        cancel_turn_start_timeout=_cancel_turn_start_timeout,
                     )
                 )
                 _jlog("asr_connect_ok", sid=sid)
@@ -1836,6 +1968,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         mic_last_ts[0] = now
                         _reset_turn_metrics(now)
                         _schedule_no_audio_watch(turn_id_ref[0])
+                        _schedule_turn_start_timeout(turn_id_ref[0])
                         with contextlib.suppress(Exception):
                             _jlog(
                                 "turn_start",
@@ -2249,6 +2382,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 source=t,
                                 bytes_forwarded=forwarded_total_bytes[0],
                             )
+                            _cancel_turn_start_timeout()
                             nudges.cancel_idle_timers(sid)
 
                             # Always define this first so later 'if synthetic_emitted' is safe
