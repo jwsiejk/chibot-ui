@@ -320,7 +320,7 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         except Exception:
             overrides["_effective_utterance_end_ms"] = 0
 
-            try:
+        try:
             transport = overrides.get("_transport")
             if isinstance(transport, dict):
                 if dropped_audio_params:
