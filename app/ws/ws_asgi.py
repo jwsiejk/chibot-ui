@@ -467,6 +467,34 @@ async def _pump_dg_to_client(
     try:
         async for ev in dg.events():
             et = (ev.get("type") or "").lower()
+            meta: Dict[str, Any] = {
+                "sid": sid,
+                "turn_id": turn_id_ref[0],
+                "dg_type": et,
+            }
+            if isinstance(ev, dict):
+                if "text" in ev:
+                    try:
+                        txt = (ev.get("text") or "")
+                        meta["chars"] = len(txt)
+                        meta["preview"] = _clip_text(str(txt))
+                    except Exception:
+                        pass
+                if "error" in ev:
+                    try:
+                        meta["error"] = _clip_text(str(ev.get("error")), 120)
+                    except Exception:
+                        pass
+                flags = ev.get("flags") or ev.get("dg_flags")
+                if isinstance(flags, (list, tuple)):
+                    try:
+                        meta["flags"] = list(flags)[:4]
+                    except Exception:
+                        pass
+                seq = ev.get("seq")
+                if isinstance(seq, int):
+                    meta["seq"] = seq
+            _jlog("dg_message", **meta)
             if et == "asr_open":
                 delta_ms = None
                 now_ts = time.time()

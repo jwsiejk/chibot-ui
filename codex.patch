@@ -1,168 +1,83 @@
-diff --git a/static/js/voice.js b/static/js/voice.js
-index e9b48790ae8ce90fb8a8ad73e8e399a278e66abf..77199cf5d9a561264ad26f1f4873460bd91034f8 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -257,50 +257,52 @@ async function _ensureMic(externalStream = null) {
-       channels: settings.channelCount ?? settings.channels ?? ctx?.destination?.channelCount ?? 1,
-     };
-     _logLifecycle('mic_device_selected', detail);
-     state.deviceLogged = true;
-   }
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 26b704fea93a825e0e770dbaa636188a80881cfd..c83287a727512d37ca16aa5c10206de0b840d446 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -445,50 +445,78 @@ async def _pump_bus_to_client(sid: str, send):
+             if hasattr(bus, "unsubscribe"):
+                 bus.unsubscribe(sid, q)
+         except Exception:
+             pass
  
-   return stream;
- }
  
- function _safeClearTurnTimer() {
-   if (state.turnTimer) { clearTimeout(state.turnTimer); state.turnTimer = null; }
- }
- 
- function _closeTurnIfOpen() {
-   if (!state.turnOpen && !state.turnClosePromise) {
-     return null;
-   }
-   if (state.turnClosePromise) {
-     return state.turnClosePromise;
-   }
-   if (!state.turnOpen) {
-     return null;
-   }
-   const closePromise = (async () => {
-     try {
-+      const closeFrame = { type: 'CloseStream' };
-+      _logLifecycle('turn_close_signal', { frame: closeFrame }, 'info');
-       await sendCloseStream();
-     } finally {
-       state.turnOpen = false;
-       state.turnClosePromise = null;
-     }
-   })();
-   state.turnClosePromise = closePromise;
-   return closePromise;
- }
- 
- async function _setupPreRollTap(ctx, source) {
-   _teardownPreRollTap();
- 
-   if (!ctx || !source) {
-     _resetPreRollBuffer();
-     return;
-   }
- 
-   _resetPreRollBuffer();
- 
-   const worklet = ctx.audioWorklet;
-   if (!worklet || typeof worklet.addModule !== 'function') {
-     // AudioWorklet unavailable; gracefully degrade without pre-roll.
-     return;
-   }
-@@ -597,51 +599,56 @@ function _stopRecorder(detail = null) {
-       state.turnHintSent = false;
-       return;
-     }
-   }
- 
-   if (!recorder) {
-     state.rec = null;
-     state.turnHintSent = false;
-     return;
-   }
- 
-   if (recorder.state === 'inactive') {
-     state.rec = null;
-     state.turnHintSent = false;
-     return;
-   }
- 
-   const shouldSendFinal = !!state.recStreaming;
-   state.recStopShouldSend = shouldSendFinal;
-   state.recStopping = true;
-   state.recStreaming = false;
-   if (!shouldSendFinal) {
-     _resetPreRollBuffer();
-   }
- 
--  try { recorder.stop(); } catch {}
-+  try {
-+    _logLifecycle('recorder_stop_invoked', {
-+      reason: detail?.reason || null,
-+    }, 'info');
-+    recorder.stop();
-+  } catch {}
-   // intentionally keep state.rec reference nullable here; onstop handler handles final close
-   state.rec = null;
-   state.turnHintSent = false;
- }
- 
- function _teardownVADOnly() {
-   try { state.vad && state.vad.stop(); } catch {}
-   state.vad = null;
- }
- 
- function _teardownAudioGraph() {
-   _teardownPreRollTap();
-   try { state.source && state.source.disconnect(); } catch {}
-   try { state.analyser && state.analyser.disconnect(); } catch {}
-   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
-   state.source = null;
-   state.analyser = null;
-   state.ctx = null;
-   state.deviceLogged = false;
-   state.finalized = false;
-   state.postFinalHoldUntil = 0;
-   _removeWSListener();
- }
- 
- function _disarm() {
-@@ -872,51 +879,51 @@ function _onSpeechStartCommitted() {
-   _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
- }
- 
- function _onSpeechEndCommitted(detail = null) {
-   const reason = detail?.reason || 'vad_silence';
-   const now = performance.now ? performance.now() : Date.now();
-   const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
- 
-   if (state.bargeConfirmActive) {
-     _clearBargeConfirm(true);
-   }
- 
-   // If we haven't recorded at least minTurnMs, delay honoring VAD-end.
-   // Only applies while recorder is actually running.
-   if (state.rec && typeof state.rec.state === 'string' && state.rec.state === 'recording') {
-     const elapsed = Math.max(0, now - (state.recStartedAt || now));
-     const wait = Math.max(0, minTurnMs - elapsed);
-     if (wait > 0) {
-       try { console.debug('[voice] delaying VAD end', { waitMs: wait, elapsed }); } catch {}
-       _clearPendingEndTimer();
-       state.pendingEndTimer = setTimeout(() => _onSpeechEndCommitted(detail), wait);
-       return; // do not stop yet
-     }
-   }
- 
--  _logLifecycle('vad_speech_end', { reason });
-+  _logLifecycle('vad_speech_end', { reason }, 'info');
-   _safeClearTurnTimer();
-   _clearPendingEndTimer();
-   _stopRecorder({ reason });
-   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
- }
- 
- // ---- Utilities --------------------------------------------------------------
- 
- function optsFromGlobal(key, fallback) {
-   // Allow admin-configurable values to seep in (if app exposes them)
-   try {
-     const cfg = window.__askchip_config || {};
-     if (key in cfg) return cfg[key];
-   } catch {}
-   return fallback;
- }
- 
- function _applyPostFinalHold(source = 'unknown') {
-   const rawHold = Number(optsFromGlobal('post_final_hold_ms', 600));
-   const holdMs = Number.isFinite(rawHold) ? Math.max(0, rawHold) : 0;
-   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-     ? performance.now()
-     : Date.now();
-   const targetUntil = now + holdMs;
-   const previousUntil = state.postFinalHoldUntil || 0;
+ async def _pump_dg_to_client(
+     dg: DeepgramClient,
+     send,
+     turn_id_ref,
+     final_seen,
+     pending_final_turns,
+     synthetic_final_turns,
+     completed_llm_turns,
+     sid: str,
+     asr_ready_evt: Optional[asyncio.Event] = None,
+     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
+     schedule_user_final: Optional[Callable[[int, str], Awaitable[None]]] = None,
+     turn_timing: Optional[Dict[str, List[float]]] = None,
+     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
+ ):
+     """Relay Deepgram events to client and, on final, kick LLM turn."""
+     try:
+         async for ev in dg.events():
+             et = (ev.get("type") or "").lower()
++            meta: Dict[str, Any] = {
++                "sid": sid,
++                "turn_id": turn_id_ref[0],
++                "dg_type": et,
++            }
++            if isinstance(ev, dict):
++                if "text" in ev:
++                    try:
++                        txt = (ev.get("text") or "")
++                        meta["chars"] = len(txt)
++                        meta["preview"] = _clip_text(str(txt))
++                    except Exception:
++                        pass
++                if "error" in ev:
++                    try:
++                        meta["error"] = _clip_text(str(ev.get("error")), 120)
++                    except Exception:
++                        pass
++                flags = ev.get("flags") or ev.get("dg_flags")
++                if isinstance(flags, (list, tuple)):
++                    try:
++                        meta["flags"] = list(flags)[:4]
++                    except Exception:
++                        pass
++                seq = ev.get("seq")
++                if isinstance(seq, int):
++                    meta["seq"] = seq
++            _jlog("dg_message", **meta)
+             if et == "asr_open":
+                 delta_ms = None
+                 now_ts = time.time()
+                 if turn_timing is not None:
+                     try:
+                         holder = turn_timing.setdefault("dg_open", [0.0])
+                         holder[0] = now_ts
+                         start_ts = turn_timing.get("start", [0.0])[0]
+                         if start_ts:
+                             delta_ms = int((now_ts - start_ts) * 1000)
+                     except Exception:
+                         pass
+                 _jlog(
+                     "dg_asr_open",
+                     sid=sid,
+                     turn_id=turn_id_ref[0],
+                     delta_from_turn_ms=delta_ms,
+                 )
+                 try:
+                     if asr_ready_evt and not asr_ready_evt.is_set():
+                         asr_ready_evt.set()
+                 except Exception:
+                     pass
+                 try:
+                     _admin_emit and _admin_emit("asr:start", session_id=sid)
