@@ -1061,6 +1061,44 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     reason=reason,
                 )
 
+    def _emit_empty_final_nudge(
+        turn_id_for_event: int,
+        *,
+        source: str,
+        reason: Optional[str],
+        bytes_forwarded: Optional[int] = None,
+    ) -> None:
+        fallback_text = "Sorry, I didn’t catch that. Could you say that again?"
+        try:
+            from app.services.streaming import make_assistant_frames
+
+            meta_stub = {"source": "nudge_empty_final", "channel": "ws"}
+            prepared_meta_fallback, _, _ = prepare_turn_metadata(
+                fallback_text, dict(meta_stub)
+            )
+            make_assistant_frames(
+                fallback_text,
+                sid,
+                meta=prepared_meta_fallback,
+                broadcast_immediately=True,
+            )
+        except Exception:
+            pass
+
+        with contextlib.suppress(Exception):
+            log_fields: Dict[str, Any] = {
+                "sid": sid,
+                "turn_id": turn_id_for_event,
+                "source": source,
+                "reason": reason,
+            }
+            if bytes_forwarded is not None:
+                try:
+                    log_fields["bytes_forwarded"] = int(bytes_forwarded)
+                except Exception:
+                    log_fields["bytes_forwarded"] = bytes_forwarded
+            _jlog("empty_final_nudge", **log_fields)
+
     async def _emit_user_final_payload(turn_id_for_event: int, text: str) -> None:
         if final_seen[0]:
             with contextlib.suppress(Exception):
@@ -1152,25 +1190,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             pass
 
         if not text:
-            # Handle empty finals gracefully: send a brief nudge so the user hears feedback.
-            try:
-                from app.services.streaming import make_assistant_frames, schedule_frames
-                fallback_text = "Sorry, I didn’t catch that. Could you say that again?"
-                meta_stub = {"source": "nudge_empty_final", "channel": "ws"}
-                prepared_meta_fallback, _, _ = prepare_turn_metadata(
-                    fallback_text, dict(meta_stub)
-                )
-                _tid_f, frames_f = make_assistant_frames(
-                    fallback_text,
-                    sid,
-                    meta=prepared_meta_fallback,
-                    broadcast_immediately=True,
-                )
-                # Optionally, you could wait for TTS completion; we avoid blocking the WS loop.
-            except Exception:
-                pass
-            with contextlib.suppress(Exception):
-                _jlog("empty_final_nudge", sid=sid, turn_id=turn_id_for_event)
+            _emit_empty_final_nudge(
+                turn_id_for_event,
+                source=final_source or "provider_final",
+                reason=final_reason or "empty_final",
+                bytes_forwarded=(
+                    forwarded_total_bytes[0] if forwarded_total_bytes[0] else None
+                ),
+            )
             with contextlib.suppress(Exception):
                 _jlog(
                     "schedule_run_ws_user_turn",
@@ -1640,6 +1667,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             note_utterance_end(sid)
         with contextlib.suppress(Exception):
             set_recorder_active(sid, False)
+        if not transcript and forwarded_total_bytes[0] > 0:
+            _emit_empty_final_nudge(
+                turn_id,
+                source="synthetic_final",
+                reason=reason,
+                bytes_forwarded=forwarded_total_bytes[0],
+            )
         with contextlib.suppress(Exception):
             _jlog(
                 "schedule_run_ws_user_turn",
