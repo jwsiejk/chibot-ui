@@ -41,6 +41,7 @@ const REC_MIME = (typeof MediaRecorder !== 'undefined'
 const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
 const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
 const PRE_ROLL_MS = 250;            // ~0.25s of pre-roll audio
+const SAFETY_CLOSE_DELAY_MS = 2500; // ~2.5s grace after last chunk
 
 const state = {
   stream: null,
@@ -77,6 +78,8 @@ const state = {
   recStreaming: false,
   recStopping: false,
   recStopShouldSend: false,
+  lastChunkAt: 0,
+  safetyCloseTimer: null,
 };
 
 const BARGE_CONFIRM_DEFAULT_MS = 420;
@@ -121,6 +124,33 @@ function _clearPendingEndTimer() {
     try { clearTimeout(state.pendingEndTimer); } catch {}
     state.pendingEndTimer = null;
   }
+}
+
+function _clearSafetyCloseTimer() {
+  if (state.safetyCloseTimer) {
+    try { clearTimeout(state.safetyCloseTimer); } catch {}
+    state.safetyCloseTimer = null;
+  }
+}
+
+function _armSafetyCloseTimer() {
+  const shouldArm = state.turnOpen || state.recStreaming;
+  if (!shouldArm) {
+    return;
+  }
+
+  const rawDelay = Number(optsFromGlobal('chunk_safety_timeout_ms', SAFETY_CLOSE_DELAY_MS));
+  const delayMs = Number.isFinite(rawDelay) ? Math.max(0, rawDelay) : SAFETY_CLOSE_DELAY_MS;
+
+  _clearSafetyCloseTimer();
+
+  state.safetyCloseTimer = setTimeout(() => {
+    state.safetyCloseTimer = null;
+    const pending = _closeTurnIfOpen();
+    if (pending) {
+      pending.catch(() => {});
+    }
+  }, delayMs);
 }
 
 function _clearBargeConfirm(resume = false) {
@@ -270,6 +300,7 @@ function _safeClearTurnTimer() {
 }
 
 function _closeTurnIfOpen() {
+  _clearSafetyCloseTimer();
   if (!state.turnOpen && !state.turnClosePromise) {
     return null;
   }
@@ -454,6 +485,11 @@ function _sendRecorderChunk(blob, meta = {}) {
       try {
         await sendAudioChunk(blob);
         state.chunkBytesSent += blob.size;
+        const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+          ? performance.now()
+          : Date.now();
+        state.lastChunkAt = now;
+        _armSafetyCloseTimer();
         try {
           console.debug('[voice]', logLabel, {
             bytes: blob.size,
@@ -514,6 +550,7 @@ function _primeRecorderForPreRoll(options = {}) {
   const timeslice = state.preRollTimeslice || 150;
   recorder.ondataavailable = _handleRecorderData;
   recorder.onstop = async () => {
+    _clearSafetyCloseTimer();
     state.turnHintSent = false;
     state.turnHintMime = null;
     state.recStreaming = false;
@@ -614,6 +651,7 @@ function _handleRecorderData(event) {
 }
 
 function _stopRecorder(detail = null) {
+  _clearSafetyCloseTimer();
   const recorder = state.rec;
   const wasActive = !!recorder && recorder.state !== 'inactive';
   const payload = Object.assign({
@@ -690,12 +728,14 @@ function _teardownAudioGraph() {
 function _disarm() {
   _safeClearTurnTimer();
   _clearPendingEndTimer();
+  _clearSafetyCloseTimer();
   _clearBargeConfirm(false);
   _stopRecorder({ reason: 'manual_disarm' });
   _teardownVADOnly();
   state.turnOpen = false; // ensure local state is clean
   state.turnClosePromise = null;
   state.recStartedAt = 0;
+  state.lastChunkAt = 0;
   state.ttsPlaying = false;
   state.finalized = false;
   state.postFinalHoldUntil = 0;
@@ -782,6 +822,7 @@ function _startRecorder() {
   state.chunkBytesSent = 0;
   state.chunkSendError = null;
   state.turnClosePromise = null;
+  state.lastChunkAt = 0;
   _clearPendingEndTimer();
   state.recStartedAt = performance.now ? performance.now() : Date.now();
   state.finalized = false;
@@ -936,6 +977,7 @@ function _onSpeechEndCommitted(detail = null) {
   _logLifecycle('vad_speech_end', { reason }, 'info');
   _safeClearTurnTimer();
   _clearPendingEndTimer();
+  _clearSafetyCloseTimer();
   _stopRecorder({ reason });
   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
 }
@@ -982,4 +1024,6 @@ export const __TEST_ONLY__ = {
   stopRecorder: _stopRecorder,
   ensureWSListener: _ensureWSListener,
   closeTurnIfOpen: _closeTurnIfOpen,
+  sendRecorderChunk: _sendRecorderChunk,
+  clearSafetyCloseTimer: _clearSafetyCloseTimer,
 };
