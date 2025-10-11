@@ -459,7 +459,9 @@ async def _pump_dg_to_client(
     sid: str,
     asr_ready_evt: Optional[asyncio.Event] = None,
     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
-    schedule_user_final: Optional[Callable[[int, str], Awaitable[None]]] = None,
+    schedule_user_final: Optional[
+        Callable[[int, str, Optional[str]], Awaitable[None]]
+    ] = None,
     turn_timing: Optional[Dict[str, List[float]]] = None,
     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
     cancel_turn_start_timeout: Optional[Callable[[], None]] = None,
@@ -503,6 +505,11 @@ async def _pump_dg_to_client(
             elif "vad" in et:
                 log_type = "vad"
             meta["dg_type"] = log_type
+            if et == "user_final" and ev.get("final_reason"):
+                try:
+                    meta["final_reason"] = ev.get("final_reason")
+                except Exception:
+                    pass
             meta.setdefault("chars", 0)
             _jlog("dg_message", **meta)
             if et == "asr_open":
@@ -590,6 +597,24 @@ async def _pump_dg_to_client(
                     chars=len(text),
                     preview=_clip_text(text),
                 )
+                log_payload = {
+                    "sid": sid,
+                    "turn_id": turn_id_for_event,
+                    "chars": len(text or ""),
+                    "had_text": bool(text),
+                }
+                seq_val = ev.get("seq")
+                if isinstance(seq_val, int):
+                    log_payload["seq"] = seq_val
+                if not is_final:
+                    with contextlib.suppress(Exception):
+                        _jlog("dg_interim", **log_payload)
+                else:
+                    final_reason_val = ev.get("final_reason") or None
+                    if final_reason_val:
+                        log_payload["final_reason"] = final_reason_val
+                    with contextlib.suppress(Exception):
+                        _jlog("dg_final", **log_payload)
                 try:
                     if et == "user_partial":
                         _admin_emit and _admin_emit("asr:first_partial", session_id=sid)
@@ -617,7 +642,11 @@ async def _pump_dg_to_client(
                 else:
                     if schedule_user_final is not None:
                         try:
-                            await schedule_user_final(turn_id_for_event, text)
+                            await schedule_user_final(
+                                turn_id_for_event,
+                                text,
+                                ev.get("final_reason"),
+                            )
                         except Exception:
                             pass
 
@@ -877,6 +906,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         "final": [0.0],
     }
     turn_finish_logged = [False]
+    turn_overlap_logged = [False]
 
     # Turn-scoped buffering + state
     buffered_chunks: Deque[bytes] = deque()
@@ -944,7 +974,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     mic_last_ts = [0.0]
 
     # Deferred provider final guard state
-    pending_user_final: Dict[str, Any] = {"payload": None, "ts": 0.0}
+    pending_user_final: Dict[str, Any] = {
+        "payload": None,
+        "ts": 0.0,
+        "source": None,
+        "final_reason": None,
+    }
     pending_user_final_task: List[Optional[asyncio.Task]] = [None]
 
     def _note_turn_commit(
@@ -971,7 +1006,22 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     def _resolve_final_guard_window_s() -> float:
         """Resolve how long to wait after a provider final before committing it to the client."""
         try:
-            raw_val = os.getenv("WS_FINAL_GUARD_MS", "900") or "0"
+            raw_val = os.getenv("WS_FINAL_GUARD_MS")
+            if raw_val is None or raw_val == "":
+                effective = None
+                try:
+                    effective = int(str(cfg.get("_effective_utterance_end_ms") or 0))
+                except Exception:
+                    effective = None
+                if effective and effective > 0:
+                    clamp = min(effective, 2000)
+                    if clamp != effective:
+                        try:
+                            cfg["_effective_utterance_end_ms"] = clamp
+                        except Exception:
+                            pass
+                    return max(0, clamp) / 1000.0
+                raw_val = "900"
             env_val = int(raw_val)
         except Exception:
             env_val = 600
@@ -1000,6 +1050,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         _cancel_pending_user_final_task(reason)
         pending_user_final["payload"] = None
         pending_user_final["ts"] = 0.0
+        pending_user_final["source"] = None
+        pending_user_final["final_reason"] = None
         if payload:
             with contextlib.suppress(Exception):
                 _jlog(
@@ -1025,8 +1077,24 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             text_chars=len(text or ""),
         )
         final_seen[0] = True
+        final_source = pending_user_final.get("source") or "provider_final"
+        final_reason = pending_user_final.get("final_reason")
         pending_user_final["payload"] = None
         pending_user_final["ts"] = 0.0
+        pending_user_final["source"] = None
+        pending_user_final["final_reason"] = None
+        turn_overlap_logged[0] = False
+
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ui_user_final_bridge",
+                sid=sid,
+                turn_id=turn_id_for_event,
+                chars=len(text or ""),
+                had_result=bool(text),
+                source=final_source,
+                reason=final_reason,
+            )
 
         if turn_timing is not None and text:
             try:
@@ -1058,6 +1126,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             _log_turn_finish(turn_id_for_event, "provider_final", False, len(text))
 
         await _ws_send_json(send, make_utterance_end(turn_id_for_event))
+
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ui_utterance_end",
+                sid=sid,
+                turn_id=turn_id_for_event,
+                actor="user",
+                source=final_source,
+                reason=final_reason,
+                synthetic=False,
+            )
 
         try:
             note_utterance_end(sid)
@@ -1092,6 +1171,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 pass
             with contextlib.suppress(Exception):
                 _jlog("empty_final_nudge", sid=sid, turn_id=turn_id_for_event)
+            with contextlib.suppress(Exception):
+                _jlog(
+                    "schedule_run_ws_user_turn",
+                    sid=sid,
+                    turn_id=turn_id_for_event,
+                    source=final_source,
+                    reason=final_reason or "empty_final",
+                    scheduled=False,
+                    had_result=False,
+                )
             return
 
 
@@ -1132,7 +1221,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 dialog_nlu_pre,
                 universal_pre,
                 policy_pre,
-            )
+                )
 
             if turn_id_for_event in completed_llm_turns:
                 with contextlib.suppress(Exception):
@@ -1140,6 +1229,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         "llm_turn_skip_duplicate",
                         sid=sid,
                         turn_id=turn_id_for_event,
+                    )
+                with contextlib.suppress(Exception):
+                    _jlog(
+                        "schedule_run_ws_user_turn",
+                        sid=sid,
+                        turn_id=turn_id_for_event,
+                        source=final_source,
+                        reason=final_reason or "duplicate_final",
+                        scheduled=False,
+                        had_result=bool(text),
                     )
             else:
                 completed_llm_turns.add(turn_id_for_event)
@@ -1158,9 +1257,20 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             await _ws_send_json(
                                 send,
                                 make_error("llm_turn_fail", e.__class__.__name__),
-                            )
+                        )
 
                 asyncio.create_task(_bg_turn())
+
+                with contextlib.suppress(Exception):
+                    _jlog(
+                        "schedule_run_ws_user_turn",
+                        sid=sid,
+                        turn_id=turn_id_for_event,
+                        source=final_source,
+                        reason=final_reason or "provider_final",
+                        scheduled=True,
+                        had_result=True,
+                    )
 
         with contextlib.suppress(Exception):
             _jlog(
@@ -1218,11 +1328,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 reason=reason,
             )
 
-    async def _handle_provider_final(turn_id_for_event: int, text: str) -> None:
+    async def _handle_provider_final(
+        turn_id_for_event: int, text: str, final_reason: Optional[str] = None
+    ) -> None:
         if final_seen[0]:
             return
         pending_user_final["payload"] = (turn_id_for_event, text)
         pending_user_final["ts"] = time.time()
+        pending_user_final["source"] = "provider_final"
+        pending_user_final["final_reason"] = final_reason
         guard_window_s = _resolve_final_guard_window_s()
         _note_turn_commit(
             turn_id_for_event,
@@ -1480,6 +1594,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             transcript_chars=len(transcript or ""),
         )
         final_seen[0] = True
+        turn_overlap_logged[0] = False
         payload = make_results(turn_id, transcript=transcript, is_final=True)
         payload["type"] = "Results"
         with contextlib.suppress(Exception):
@@ -1496,7 +1611,25 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         utterance_payload["type"] = "UtteranceEnd"
         await _ws_send_json(send, utterance_payload)
         with contextlib.suppress(Exception):
+            _jlog(
+                "ui_utterance_end",
+                sid=sid,
+                turn_id=turn_id,
+                actor="user",
+                source="synthetic_final",
+                reason=reason,
+                synthetic=True,
+            )
+        with contextlib.suppress(Exception):
             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ui_user_final_synthetic",
+                sid=sid,
+                turn_id=turn_id,
+                reason=reason,
+                chars=len(transcript or ""),
+            )
         _log_turn_finish(
             turn_id,
             reason=reason,
@@ -1507,6 +1640,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             note_utterance_end(sid)
         with contextlib.suppress(Exception):
             set_recorder_active(sid, False)
+        with contextlib.suppress(Exception):
+            _jlog(
+                "schedule_run_ws_user_turn",
+                sid=sid,
+                turn_id=turn_id,
+                source="synthetic_final",
+                reason=reason,
+                scheduled=False,
+                had_result=bool(transcript),
+            )
         completed_llm_turns.discard(turn_id)
         return True
 
@@ -2101,6 +2244,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     # Ensure provider connection
                     gate_open, gate_reason = _connect_gate_state()
                     if (
+                        not gate_open
+                        and not transport.get("containerized_opus")
+                    ):
+                        gate_open = True
+                        gate_reason = gate_reason or "raw_audio"
+                    if (
                         not turn_connect_started[0]
                         and dg_state == "closed"
                         and gate_open
@@ -2168,6 +2317,18 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 mime = ""
                             forwarded_total_bytes[0] = 0
                             forwarded_progress_next[0] = FORWARD_PROGRESS_STEP
+                            if (
+                                not final_seen[0]
+                                and not turn_overlap_logged[0]
+                                and (turn_id_ref[0] or 0) > 0
+                            ):
+                                with contextlib.suppress(Exception):
+                                    _jlog(
+                                        "turn_overlap_detected",
+                                        sid=sid,
+                                        prev_turn_id=turn_id_ref[0],
+                                    )
+                                turn_overlap_logged[0] = True
                             with contextlib.suppress(Exception):
                                 sniffer.set_meta(mime or None)
                             detection = coerce_detection_from_meta(mime) if mime else None
@@ -2376,6 +2537,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             continue
 
                         elif t in {"CloseStream", "AudioStop"}:
+                            if t == "AudioStop":
+                                with contextlib.suppress(Exception):
+                                    _jlog(
+                                        "vad_speech_end",
+                                        sid=sid,
+                                        turn_id=turn_id_ref[0] or None,
+                                        pending_final=not final_seen[0],
+                                    )
                             _jlog(
                                 "ws_close_stream",
                                 sid=sid,

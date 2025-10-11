@@ -295,7 +295,7 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
 
         # Provide a sensible default for utterance_end_ms (2s) unless explicitly overridden
-        qd.setdefault("utterance_end_ms", os.getenv("DEEPGRAM_UTTERANCE_END_MS", "3000"))
+        qd.setdefault("utterance_end_ms", os.getenv("DEEPGRAM_UTTERANCE_END_MS", "2000"))
 
         interim_val = qd.get("interim_results")
         interim_false = False
@@ -1671,9 +1671,14 @@ class DeepgramClient:
                     "transcript",
                     "partialtranscript",
                     "speech.update",
+                    "utteranceend",
                 ):
+                    if evt_type == "utteranceend" and self._final_event.is_set():
+                        continue
                     text = ""
                     is_final = False
+                    final_reason: Optional[str] = None
+                    final_reason_detail: Optional[str] = None
 
                     # Prefer channel.* first (typical DG shape)
                     channel = msg.get("channel") or {}
@@ -1698,6 +1703,31 @@ class DeepgramClient:
                         or bool(msg.get("speech_final"))
                         or (evt_type in ("utteranceend", "UtteranceEnd"))
                     )
+                    if is_final:
+                        endpointing = None
+                        if isinstance(channel, dict):
+                            endpointing = channel.get("endpointing")
+                        if isinstance(endpointing, dict):
+                            endpoint_type = endpointing.get("type")
+                            if isinstance(endpoint_type, str) and endpoint_type:
+                                final_reason_detail = endpoint_type
+                        for key in ("reason", "end_reason", "speech_final_reason"):
+                            val = msg.get(key)
+                            if isinstance(val, str) and val:
+                                final_reason_detail = val
+                                break
+                        if evt_type == "utteranceend" or msg.get("utterance_end"):
+                            final_reason = "utterance_end"
+                        if not final_reason and isinstance(final_reason_detail, str):
+                            lowered = final_reason_detail.strip().lower()
+                            if "utterance" in lowered:
+                                final_reason = "utterance_end"
+                            elif "endpoint" in lowered:
+                                final_reason = "utterance_end"
+                        if self._closing and not final_reason:
+                            final_reason = "close_stream"
+                        if not final_reason:
+                            final_reason = "provider_final"
 
                     if text:
                         self._last_transcript = text
@@ -1723,12 +1753,15 @@ class DeepgramClient:
                         active=True,
                     )
                     try:
-                        await self._ev_queue.put(
-                            {
-                                "type": "user_final" if is_final else "user_partial",
-                                "text": text,
-                            }
-                        )
+                        payload = {
+                            "type": "user_final" if is_final else "user_partial",
+                            "text": text,
+                        }
+                        if is_final:
+                            payload["final_reason"] = final_reason
+                            if final_reason_detail:
+                                payload["final_reason_detail"] = final_reason_detail
+                        await self._ev_queue.put(payload)
                     except Exception:
                         pass
 
