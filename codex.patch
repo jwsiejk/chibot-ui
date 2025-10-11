@@ -1,112 +1,164 @@
 diff --git a/static/js/voice.js b/static/js/voice.js
-index 5433f769107f7f2b5b33e0053d6d7a9d505ac63d..aaa8b1a02ad97e8480bc53d5c2cb9e2fb47884b5 100644
+index aaa8b1a02ad97e8480bc53d5c2cb9e2fb47884b5..db7b601fd324fd95aaa9550bcf885d5ef0b91037 100644
 --- a/static/js/voice.js
 +++ b/static/js/voice.js
-@@ -63,50 +63,51 @@ const state = {
-   turnHintMime: null,
-   turnHintPromise: null,
-   turnHintAwaitingWS: false,
-   deviceLogged: false,
-   // NEW: min-turn gating
-   recStartedAt: 0,
-   pendingEndTimer: null,
-   ttsPlaying: false,
-   bargeConfirmTimer: null,
-   bargeConfirmActive: false,
-   // Pre-roll tap state
-   preRollNode: null,
-   preRollGain: null,
-   preRollBlobs: [],
-   preRollDurationMs: 0,
-   preRollLastTimecode: null,
-   preRollTimeslice: 150,
-   recStreaming: false,
-   recStopping: false,
-   recStopShouldSend: false,
-   lastChunkAt: 0,
-   safetyCloseTimer: null,
-   turnTraceBase: null,
-   turnTraceSeq: 0,
-   turnTraceId: null,
-+  audioStopSent: false,
- };
- 
- const BARGE_CONFIRM_DEFAULT_MS = 420;
- let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
- try {
-   const cfg = window.__askchip_config || {};
-   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
-     bargeConfirmMs = cfg.barge_confirm_ms;
-   }
- } catch {}
- bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
- 
- try {
-   window.addEventListener('chip-tts', (ev) => {
-     const detail = ev?.detail || {};
-     const playing = String(detail.state || '').toLowerCase() === 'playing';
-     state.ttsPlaying = playing;
-   });
- } catch {}
- 
- // ---- Helpers ----------------------------------------------------------------
- 
- function _emitVoiceState(state, detail = {}) {
-   try {
-     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
-@@ -957,50 +958,51 @@ async function _arm(stream = null, opts = {}) {
- 
-   await _primeRecorderForPreRoll();
- 
-   return mic;
+@@ -173,87 +173,103 @@ function _voiceLog(level, message, detail = undefined) {
+     if (detail === undefined) {
+       method.call(console, formatted);
+       return;
+     }
+     if (detail && typeof detail === 'object') {
+       method.call(console, formatted, _withTrace(detail));
+       return;
+     }
+     const traceId = _getActiveTurnTraceId();
+     if (traceId) {
+       method.call(console, `${formatted} trace:${traceId}`, detail);
+       return;
+     }
+     method.call(console, formatted, detail);
+   } catch {}
  }
  
- // ---- Recorder lifecycle -----------------------------------------------------
+ function _logLifecycle(event, detail = {}, level = 'debug') {
+   const payload = { event, ...(detail && typeof detail === 'object' ? detail : { detail }) };
+   _voiceLog(level, event, payload);
+   try {
+     window.dispatchEvent(new CustomEvent('askchip-voice-lifecycle', { detail: payload }));
+   } catch {}
+ }
  
- async function _startRecorder() {
-   if (!state.stream) return false;
++function _maybeSendAudioStop(detail = {}) {
++  if (state.audioStopSent) {
++    return false;
++  }
++  try {
++    sendJSON({ type: 'AudioStop' });
++    state.audioStopSent = true;
++    _voiceLog('info', 'AudioStop sent', detail && typeof detail === 'object' ? detail : { detail });
++    return true;
++  } catch (err) {
++    _voiceLog('warn', 'failed to send AudioStop', { error: err?.message || err, ...(detail && typeof detail === 'object' ? detail : { detail }) });
++    return false;
++  }
++}
++
+ function _clearPendingEndTimer() {
+   if (state.pendingEndTimer) {
+     try { clearTimeout(state.pendingEndTimer); } catch {}
+     state.pendingEndTimer = null;
+   }
+ }
  
-   const primed = await _primeRecorderForPreRoll({ resetBuffer: false });
-   if (!primed || !state.rec || state.rec.state !== 'recording') {
+ function _clearSafetyCloseTimer() {
+   if (state.safetyCloseTimer) {
+     try { clearTimeout(state.safetyCloseTimer); } catch {}
+     state.safetyCloseTimer = null;
+   }
+ }
+ 
+ function _armSafetyCloseTimer() {
+   const shouldArm = state.turnOpen || state.recStreaming;
+   if (!shouldArm) {
+     return;
+   }
+ 
+   const rawDelay = Number(optsFromGlobal('chunk_safety_timeout_ms', SAFETY_CLOSE_DELAY_MS));
+   const delayMs = Number.isFinite(rawDelay) ? Math.max(0, rawDelay) : SAFETY_CLOSE_DELAY_MS;
+ 
+   _clearSafetyCloseTimer();
+ 
+   state.safetyCloseTimer = setTimeout(() => {
+     state.safetyCloseTimer = null;
+     const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+       ? performance.now()
+       : Date.now();
+     const lastChunkAt = state.lastChunkAt || 0;
+     const idleMs = lastChunkAt ? Math.max(0, now - lastChunkAt) : delayMs;
+     _voiceLog('info', 'safety close', {
+       configuredDelayMs: delayMs,
+       idleMs,
+       bytesSent: state.chunkBytesSent,
+     });
++    _maybeSendAudioStop({ reason: 'safety_timeout', idleMs, configuredDelayMs: delayMs });
+     const pending = _closeTurnIfOpen();
+     if (pending) {
+       pending.catch(() => {});
+     }
+   }, delayMs);
+ }
+ 
+ function _clearBargeConfirm(resume = false) {
+   if (state.bargeConfirmTimer) {
+     try { clearTimeout(state.bargeConfirmTimer); } catch {}
+     state.bargeConfirmTimer = null;
+   }
+   if (state.bargeConfirmActive) {
+     state.bargeConfirmActive = false;
+     if (resume) {
+       try { resumePlayback(); } catch {}
+     }
+   }
+ }
+ 
+ function _ensureWSListener() {
+   if (state.wsListener || typeof window === 'undefined') {
+     return;
+   }
+   const handler = async (ev) => {
+@@ -610,50 +626,51 @@ function _sendRecorderChunk(blob, meta = {}) {
+   if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
+     return;
+   }
+ 
+   const { preRoll = false, durationMs = null, timecode = null } = meta || {};
+   const logLabel = preRoll ? 'streamed pre-roll chunk' : 'streamed audio chunk';
+   state.chunkSendPromise = state.chunkSendPromise
+     .catch(() => {})
+     .then(async () => {
+       const handshakeOk = await _ensureAudioStartSent();
+       if (!handshakeOk) {
+         const detail = { mime: blob.type, preRoll, durationMs, timecode };
+         _voiceLog('warn', 'skipping audio chunk; AudioStart not confirmed', detail);
+         if (!state.chunkSendError) {
+           state.chunkSendError = new Error('AudioStart not confirmed');
+         }
+         return;
+       }
+       try {
+         await sendAudioChunk(blob);
+         state.chunkBytesSent += blob.size;
+         const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+           ? performance.now()
+           : Date.now();
+         state.lastChunkAt = now;
++        state.audioStopSent = false;
+         _armSafetyCloseTimer();
+         const totalBytes = state.chunkBytesSent;
+         const totalKb = Math.round((totalBytes / 1024) * 10) / 10;
+         _voiceLog('info', logLabel, {
+           bytes: blob.size,
+           durationMs,
+           timecode,
+           mime: blob.type,
+           totalBytes,
+           totalKb,
+         });
+       } catch (err) {
+         state.chunkSendError = err;
+         _voiceLog('warn', 'failed to stream audio chunk', { error: err?.message || err });
+       }
+     });
+ }
+ 
+ async function _primeRecorderForPreRoll(options = {}) {
+   const { resetBuffer = true } = options || {};
+   if (!state.stream) {
      return false;
    }
- 
-   if (state.recStreaming) {
-     return true;
-   }
- 
-   state.chunkSendPromise = Promise.resolve();
-   state.chunkBytesSent = 0;
-   state.chunkSendError = null;
-   state.turnClosePromise = null;
-   state.lastChunkAt = 0;
-+  state.audioStopSent = false;
-   _clearPendingEndTimer();
-   state.recStartedAt = performance.now ? performance.now() : Date.now();
-   state.finalized = false;
-   state.postFinalHoldUntil = 0;
-   state.recStreaming = true;
-   state.recStopping = false;
-   state.recStopShouldSend = false;
-   _ensureWSListener();
- 
-   const preRollStats = _enqueuePreRollBlobs();
-   if (preRollStats?.count) {
-     _voiceLog('debug', 'flushed pre-roll buffer', {
-       chunks: preRollStats.count,
-       durationMs: preRollStats.durationMs,
-       bytes: preRollStats.totalBytes,
-     });
-   }
- 
-   state.turnOpen = true;
-   _voiceLog('info', 'recorder streaming', {
-     mime: (state.rec && state.rec.mimeType) || REC_MIME,
-   });
- 
-   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
-   _safeClearTurnTimer();
-@@ -1111,50 +1113,59 @@ async function _onSpeechStartCommitted() {
+   if (typeof MediaRecorder === 'undefined') {
+     _voiceLog('warn', 'MediaRecorder not supported in this browser');
+@@ -1113,59 +1130,51 @@ async function _onSpeechStartCommitted() {
  function _onSpeechEndCommitted(detail = null) {
    const reason = detail?.reason || 'vad_silence';
    const now = performance.now ? performance.now() : Date.now();
@@ -132,15 +184,16 @@ index 5433f769107f7f2b5b33e0053d6d7a9d505ac63d..aaa8b1a02ad97e8480bc53d5c2cb9e2f
    }
  
    _logLifecycle('vad_speech_end', { reason }, 'info');
-+  if (!state.audioStopSent) {
-+    try {
-+      sendJSON({ type: 'AudioStop' });
-+      state.audioStopSent = true;
-+      _voiceLog('info', 'AudioStop sent');
-+    } catch (err) {
-+      _voiceLog('warn', 'failed to send AudioStop', { error: err?.message || err });
-+    }
-+  }
+-  if (!state.audioStopSent) {
+-    try {
+-      sendJSON({ type: 'AudioStop' });
+-      state.audioStopSent = true;
+-      _voiceLog('info', 'AudioStop sent');
+-    } catch (err) {
+-      _voiceLog('warn', 'failed to send AudioStop', { error: err?.message || err });
+-    }
+-  }
++  _maybeSendAudioStop({ reason });
    _safeClearTurnTimer();
    _clearPendingEndTimer();
    _clearSafetyCloseTimer();

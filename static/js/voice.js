@@ -195,6 +195,21 @@ function _logLifecycle(event, detail = {}, level = 'debug') {
   } catch {}
 }
 
+function _maybeSendAudioStop(detail = {}) {
+  if (state.audioStopSent) {
+    return false;
+  }
+  try {
+    sendJSON({ type: 'AudioStop' });
+    state.audioStopSent = true;
+    _voiceLog('info', 'AudioStop sent', detail && typeof detail === 'object' ? detail : { detail });
+    return true;
+  } catch (err) {
+    _voiceLog('warn', 'failed to send AudioStop', { error: err?.message || err, ...(detail && typeof detail === 'object' ? detail : { detail }) });
+    return false;
+  }
+}
+
 function _clearPendingEndTimer() {
   if (state.pendingEndTimer) {
     try { clearTimeout(state.pendingEndTimer); } catch {}
@@ -232,6 +247,7 @@ function _armSafetyCloseTimer() {
       idleMs,
       bytesSent: state.chunkBytesSent,
     });
+    _maybeSendAudioStop({ reason: 'safety_timeout', idleMs, configuredDelayMs: delayMs });
     const pending = _closeTurnIfOpen();
     if (pending) {
       pending.catch(() => {});
@@ -632,6 +648,7 @@ function _sendRecorderChunk(blob, meta = {}) {
           ? performance.now()
           : Date.now();
         state.lastChunkAt = now;
+        state.audioStopSent = false;
         _armSafetyCloseTimer();
         const totalBytes = state.chunkBytesSent;
         const totalKb = Math.round((totalBytes / 1024) * 10) / 10;
@@ -1135,15 +1152,7 @@ function _onSpeechEndCommitted(detail = null) {
   }
 
   _logLifecycle('vad_speech_end', { reason }, 'info');
-  if (!state.audioStopSent) {
-    try {
-      sendJSON({ type: 'AudioStop' });
-      state.audioStopSent = true;
-      _voiceLog('info', 'AudioStop sent');
-    } catch (err) {
-      _voiceLog('warn', 'failed to send AudioStop', { error: err?.message || err });
-    }
-  }
+  _maybeSendAudioStop({ reason });
   _safeClearTurnTimer();
   _clearPendingEndTimer();
   _clearSafetyCloseTimer();
