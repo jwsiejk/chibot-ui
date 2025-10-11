@@ -461,7 +461,7 @@ export function handleAssistantFrame(d){
     }
   }
 
-  if ((typeNorm === 'results' || typeNorm === 'result') && d.nlu === undefined){
+  if (typeNorm === 'result' || typeNorm === 'results'){
     const turnId = _extractAsrTurnId(d);
     if (turnId != null) _ensureActiveAsrTurn(turnId);
     const matchesActive = turnId == null
