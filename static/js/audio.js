@@ -12,6 +12,9 @@ let _player = null;
 let _el = null;
 let _lastTtsState = 'ended';
 
+const TTS_IDLE_VOLUME = 1.0;
+const TTS_ATTENUATED_VOLUME = 0.5; // ~6 dB reduction to limit mic bleed
+
 const DEFAULT_MIME = 'audio/webm; codecs="opus"';
 
 function _emitTtsState(state) {
@@ -43,8 +46,15 @@ function ensureEl() {
   _el.autoplay = true;
   // _el.playsInline = true; // optional (mobile)
   try {
-    _el.addEventListener('playing', () => _emitTtsState('playing'));
-    const onEnd = () => _emitTtsState('ended');
+    _el.volume = TTS_IDLE_VOLUME;
+    _el.addEventListener('playing', () => {
+      _el.volume = TTS_ATTENUATED_VOLUME;
+      _emitTtsState('playing');
+    });
+    const onEnd = () => {
+      _el.volume = TTS_IDLE_VOLUME;
+      _emitTtsState('ended');
+    };
     _el.addEventListener('pause', onEnd);
     _el.addEventListener('ended', onEnd);
   } catch {}
@@ -105,6 +115,7 @@ export function audioTeardown() {
 export function stopPlayback() {
   try { _player?.stop(); } catch {}
   try { ensureEl().pause(); } catch {}
+  try { ensureEl().volume = TTS_IDLE_VOLUME; } catch {}
   _emitTtsState('ended');
 }
 
@@ -117,6 +128,7 @@ export function pausePlayback() {
     const el = ensureEl();
     if (!el.paused) {
       el.pause();
+      el.volume = TTS_IDLE_VOLUME;
       _emitTtsState('ended');
     }
   } catch {}

@@ -1,26 +1,56 @@
 // static/js/voice/vad.js
 // Lightweight RMS-based VAD tuned for conversational UX.
 // Features:
-//  • Start/stop thresholds with minimum durations
-//  • Echo-aware start gating (boost thresholds while TTS is playing)
-//  • Emits onSpeechStart / onSpeechEnd callbacks
+//  • Rolling noise-floor tracking with adaptive thresholds (dB offsets)
+//  • Echo-aware gating (raise thresholds while TTS is active)
+//  • Emits onSpeechStart / onSpeechEnd callbacks with metrics
 //  • Safe timers; idempotent start/stop
 
+const EPSILON = 1e-8;
+const CLAMP_MIN_DB = -120;
+const CLAMP_MAX_DB = -10;
+
+const rmsToDb = (rms) => 20 * Math.log10(Math.max(EPSILON, rms));
+const dbToRms = (db) => Math.pow(10, db / 20);
+const clampDb = (db) => Math.min(CLAMP_MAX_DB, Math.max(CLAMP_MIN_DB, db));
+
 /** @typedef {{
- *   startRms: number,         // baseline start threshold (RMS)
- *   stopRms: number,          // baseline stop threshold (RMS)
- *   minSpeechMs: number,      // how long RMS must stay >= startRms to commit start
- *   minSilenceMs: number,     // how long RMS must stay <  stopRms to commit end
- *   pollMs: number,           // VAD polling interval
- *   echoBoostStart: number,   // multiplier on startRms while echoStateFn() is true
- *   echoBoostStop: number,    // multiplier on stopRms  while echoStateFn() is true
- *   echoStateFn?: ()=>boolean // returns true when TTS is playing
+ *   minSpeechMs?: number,
+ *   minSilenceMs?: number,
+ *   pollMs?: number,
+ *   cooldownMs?: number,
+ *   startDbOffset?: number,
+ *   stopDbOffset?: number,
+ *   minStartDb?: number,
+ *   minStopDb?: number,
+ *   echoBoostStartDb?: number,
+ *   echoBoostStopDb?: number,
+ *   noiseFloorAlpha?: number,
+ *   noiseFloorRiseAlpha?: number,
+ *   noiseFloorGuardDb?: number,
+ *   noiseFloorHangMs?: number,
+ *   initialNoiseFloorDb?: number,
+ *   startRms?: number,          // legacy absolute fallback
+ *   stopRms?: number,           // legacy absolute fallback
+ *   echoStateFn?: ()=>boolean,
  * }} VADOptions
  */
 
 /** @typedef {{
- *   onSpeechStart?: ()=>void,
- *   onSpeechEnd?: ()=>void,
+ *   rms?: number,
+ *   rmsDb?: number,
+ *   noiseFloorDb?: number,
+ *   snrDb?: number,
+ *   peakDb?: number,
+ *   speechDurationMs?: number,
+ *   thresholds?: { startDb?: number, stopDb?: number },
+ *   reason?: string,
+ * }} VADDetail
+ */
+
+/** @typedef {{
+ *   onSpeechStart?: (detail: VADDetail) => void,
+ *   onSpeechEnd?: (detail: VADDetail) => void,
  * }} VADCallbacks
  */
 
@@ -33,15 +63,22 @@ export class VAD {
   constructor(analyser, opts, cbs) {
     this.analyser = analyser;
     this.opts = Object.assign({
-      startRms: 0.015,       // ~ -36 dBFS
-      stopRms: 0.010,        // ~ -40 dBFS
-      minSpeechMs: 220,
-      minSilenceMs: 420,
+      minSpeechMs: 280,
+      minSilenceMs: 300,
       pollMs: 33,
-      echoBoostStart: 1.5,
-      echoBoostStop: 1.3,
-      echoStateFn: null,
       cooldownMs: 380,
+      startDbOffset: 10,
+      stopDbOffset: 6,
+      minStartDb: -65,
+      minStopDb: -70,
+      echoBoostStartDb: 8,
+      echoBoostStopDb: 6,
+      noiseFloorAlpha: 0.05,
+      noiseFloorRiseAlpha: 0.01,
+      noiseFloorGuardDb: 3,
+      noiseFloorHangMs: 600,
+      initialNoiseFloorDb: -72,
+      echoStateFn: null,
     }, opts || {});
     this.cbs = cbs || {};
     this._buf = new Float32Array(this.analyser.fftSize || 2048);
@@ -50,6 +87,17 @@ export class VAD {
     this._aboveSince = 0;
     this._belowSince = 0;
     this._cooldownUntil = 0;
+    this._speechStartedAt = 0;
+    this._activeDetail = null;
+    this._activeNoiseFloorDb = null;
+    this._noiseFloorDb = clampDb(
+      Number.isFinite(this.opts.initialNoiseFloorDb)
+        ? this.opts.initialNoiseFloorDb
+        : -72
+    );
+    this._lastNoiseUpdate = 0;
+    this._legacyStartDb = Number.isFinite(this.opts.startRms) ? rmsToDb(this.opts.startRms) : null;
+    this._legacyStopDb = Number.isFinite(this.opts.stopRms) ? rmsToDb(this.opts.stopRms) : null;
   }
 
   _rms() {
@@ -62,21 +110,105 @@ export class VAD {
     return Math.sqrt(sum / this._buf.length);
   }
 
+  _makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb) {
+    const snrDb = (Number.isFinite(rmsDb) && Number.isFinite(noiseFloorDb))
+      ? rmsDb - noiseFloorDb
+      : null;
+    return {
+      rms,
+      rmsDb,
+      noiseFloorDb,
+      snrDb,
+      thresholds: { startDb, stopDb },
+    };
+  }
+
+  _updateNoiseFloor(rmsDb, now, baseStartDb) {
+    if (!Number.isFinite(rmsDb)) return;
+    if (!Number.isFinite(this._noiseFloorDb)) {
+      this._noiseFloorDb = clampDb(rmsDb);
+      this._lastNoiseUpdate = now;
+      return;
+    }
+
+    const guard = Number.isFinite(this.opts.noiseFloorGuardDb) ? this.opts.noiseFloorGuardDb : 3;
+    const hangMs = Number.isFinite(this.opts.noiseFloorHangMs) ? this.opts.noiseFloorHangMs : 600;
+    const alphaDown = Number.isFinite(this.opts.noiseFloorAlpha) ? this.opts.noiseFloorAlpha : 0.05;
+    const alphaUp = Number.isFinite(this.opts.noiseFloorRiseAlpha) ? this.opts.noiseFloorRiseAlpha : 0.01;
+
+    if (rmsDb <= baseStartDb - guard) {
+      this._noiseFloorDb = clampDb(this._noiseFloorDb + alphaDown * (rmsDb - this._noiseFloorDb));
+      this._lastNoiseUpdate = now;
+    } else if (now - this._lastNoiseUpdate >= hangMs) {
+      this._noiseFloorDb = clampDb(this._noiseFloorDb + alphaUp * (rmsDb - this._noiseFloorDb));
+      this._lastNoiseUpdate = now;
+    }
+  }
+
+  _computeThresholds(noiseFloorDb, echoActive) {
+    const baseStart = clampDb(
+      Math.max(
+        this.opts.minStartDb ?? -65,
+        noiseFloorDb + (this.opts.startDbOffset ?? 10)
+      )
+    );
+    const baseStop = clampDb(
+      Math.max(
+        this.opts.minStopDb ?? -70,
+        noiseFloorDb + (this.opts.stopDbOffset ?? 6)
+      )
+    );
+
+    let startDb = baseStart;
+    let stopDb = baseStop;
+
+    if (Number.isFinite(this._legacyStartDb)) {
+      startDb = Math.max(startDb, this._legacyStartDb);
+    }
+    if (Number.isFinite(this._legacyStopDb)) {
+      stopDb = Math.max(stopDb, this._legacyStopDb);
+    }
+
+    if (echoActive) {
+      startDb += this.opts.echoBoostStartDb ?? 0;
+      stopDb += this.opts.echoBoostStopDb ?? 0;
+    }
+
+    return {
+      startDb: clampDb(startDb),
+      stopDb: clampDb(stopDb),
+      baseStartDb: baseStart,
+    };
+  }
+
   start() {
     this.stop(); // idempotent
     this._aboveSince = 0;
     this._belowSince = 0;
     this._cooldownUntil = 0;
-    const { pollMs } = this.opts;
+    this._speechStartedAt = 0;
+    this._activeDetail = null;
+    this._activeNoiseFloorDb = null;
+
+    const pollMs = Number.isFinite(this.opts.pollMs) ? this.opts.pollMs : 33;
 
     this._timer = setInterval(() => {
       const rms = this._rms();
-      const now = performance.now();
+      const rmsDb = rmsToDb(rms);
+      const now = (typeof performance !== 'undefined' && performance?.now)
+        ? performance.now()
+        : Date.now();
       const inCooldown = now < this._cooldownUntil;
       const echo = this.opts.echoStateFn ? !!this.opts.echoStateFn() : false;
 
-      const startR = this.opts.startRms * (echo ? this.opts.echoBoostStart : 1);
-      const stopR  = this.opts.stopRms  * (echo ? this.opts.echoBoostStop  : 1);
+      const noiseFloorDb = Number.isFinite(this._noiseFloorDb) ? this._noiseFloorDb : rmsDb;
+      const { startDb, stopDb, baseStartDb } = this._computeThresholds(noiseFloorDb, echo);
+      const startR = dbToRms(startDb);
+      const stopR = dbToRms(stopDb);
+
+      if (!this._recording) {
+        this._updateNoiseFloor(rmsDb, now, baseStartDb);
+      }
 
       if (!this._recording) {
         if (inCooldown) {
@@ -85,22 +217,62 @@ export class VAD {
         }
         if (rms >= startR) {
           if (!this._aboveSince) this._aboveSince = now;
-          if (now - this._aboveSince >= this.opts.minSpeechMs) {
+          if (now - this._aboveSince >= (this.opts.minSpeechMs ?? 0)) {
             this._recording = true;
             this._belowSince = 0;
-            try { this.cbs.onSpeechStart && this.cbs.onSpeechStart(); } catch {}
+            this._speechStartedAt = now;
+            this._activeDetail = this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
+            this._activeNoiseFloorDb = noiseFloorDb;
+            try {
+              this.cbs.onSpeechStart && this.cbs.onSpeechStart({
+                ...this._activeDetail,
+                peakDb: this._activeDetail?.rmsDb,
+                speechDurationMs: 0,
+              });
+            } catch {}
           }
         } else {
           this._aboveSince = 0;
         }
       } else {
+        if (Number.isFinite(rmsDb) && (!this._activeDetail || rmsDb > (this._activeDetail.rmsDb ?? -Infinity))) {
+          this._activeDetail = this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
+        }
+        if (Number.isFinite(noiseFloorDb)) {
+          if (!Number.isFinite(this._activeNoiseFloorDb)) {
+            this._activeNoiseFloorDb = noiseFloorDb;
+          } else {
+            this._activeNoiseFloorDb = Math.min(this._activeNoiseFloorDb, noiseFloorDb);
+          }
+        }
+
         if (rms < stopR) {
           if (!this._belowSince) this._belowSince = now;
-          if (now - this._belowSince >= this.opts.minSilenceMs) {
+          if (now - this._belowSince >= (this.opts.minSilenceMs ?? 0)) {
             this._recording = false;
             this._aboveSince = 0;
             this._cooldownUntil = now + Math.max(0, this.opts.cooldownMs || 0);
-            try { this.cbs.onSpeechEnd && this.cbs.onSpeechEnd(); } catch {}
+
+            const duration = Math.max(0, now - (this._speechStartedAt || now));
+            const active = this._activeDetail || this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
+            const noiseRef = Number.isFinite(this._activeNoiseFloorDb) ? this._activeNoiseFloorDb : noiseFloorDb;
+            const peakDb = Number.isFinite(active?.rmsDb) ? active.rmsDb : rmsDb;
+            const snrDb = (Number.isFinite(peakDb) && Number.isFinite(noiseRef)) ? peakDb - noiseRef : active?.snrDb;
+            const detail = {
+              ...active,
+              noiseFloorDb: noiseRef,
+              snrDb,
+              peakDb,
+              speechDurationMs: duration,
+            };
+
+            try {
+              this.cbs.onSpeechEnd && this.cbs.onSpeechEnd(detail);
+            } catch {}
+
+            this._activeDetail = null;
+            this._activeNoiseFloorDb = null;
+            this._speechStartedAt = 0;
           }
         } else {
           this._belowSince = 0;
@@ -115,6 +287,9 @@ export class VAD {
     this._aboveSince = 0;
     this._belowSince = 0;
     this._cooldownUntil = 0;
+    this._speechStartedAt = 0;
+    this._activeDetail = null;
+    this._activeNoiseFloorDb = null;
   }
 
   isRecording() { return this._recording; }

@@ -1,64 +1,1080 @@
+diff --git a/static/js/audio.js b/static/js/audio.js
+index 0cf5c3fe64ea0b21f8c488fcf92d96cdca886145..85f3bdc7f288789d96e3d4b8dd28a9cb02fb9b0e 100644
+--- a/static/js/audio.js
++++ b/static/js/audio.js
+@@ -1,72 +1,82 @@
+ // static/js/audio.js — unified playback (MSE chunked by MIME) + unlockAudio
+ // Backwards compatible:
+ //   • playStream(chunks, mime?)            // legacy
+ //   • playStream(frameObject)              // { mime, audio_chunks:[], is_last }
+ // New helpers:
+ //   • audioEnd() — mark natural end-of-utterance (drain then endOfStream)
+ //   • audioTeardown() — hard reset pipeline (optional)
+ 
+ import { ChunkedAudioPlayer } from './audio_player.js';
+ 
+ let _player = null;
+ let _el = null;
+ let _lastTtsState = 'ended';
+ 
++const TTS_IDLE_VOLUME = 1.0;
++const TTS_ATTENUATED_VOLUME = 0.5; // ~6 dB reduction to limit mic bleed
++
+ const DEFAULT_MIME = 'audio/webm; codecs="opus"';
+ 
+ function _emitTtsState(state) {
+   if (!state || state === _lastTtsState) return;
+   _lastTtsState = state;
+   try {
+     window.dispatchEvent(new CustomEvent('chip-tts', { detail: { state } }));
+   } catch {}
+ }
+ 
+ export async function unlockAudio() {
+   try {
+     const AC = window.AudioContext || window.webkitAudioContext;
+     if (!AC) return;
+     const ctx = new AC();
+     if (ctx.state === 'suspended') await ctx.resume();
+     const o = ctx.createOscillator();
+     const g = ctx.createGain();
+     g.gain.value = 0.00001;
+     o.connect(g).connect(ctx.destination);
+     o.start();
+     o.stop(ctx.currentTime + 0.01);
+   } catch (_) {}
+ }
+ 
+ function ensureEl() {
+   if (_el) return _el;
+   _el = new Audio();
+   _el.autoplay = true;
+   // _el.playsInline = true; // optional (mobile)
+   try {
+-    _el.addEventListener('playing', () => _emitTtsState('playing'));
+-    const onEnd = () => _emitTtsState('ended');
++    _el.volume = TTS_IDLE_VOLUME;
++    _el.addEventListener('playing', () => {
++      _el.volume = TTS_ATTENUATED_VOLUME;
++      _emitTtsState('playing');
++    });
++    const onEnd = () => {
++      _el.volume = TTS_IDLE_VOLUME;
++      _emitTtsState('ended');
++    };
+     _el.addEventListener('pause', onEnd);
+     _el.addEventListener('ended', onEnd);
+   } catch {}
+   return _el;
+ }
+ 
+ function ensurePlayer(mime) {
+   ensureEl();
+   const m = mime || DEFAULT_MIME;
+   if (!_player) _player = new ChunkedAudioPlayer(_el, m);
+   _player.setMime(m);
+   return _player;
+ }
+ 
+ // Accepts WS frame ({mime, audio_chunks, is_last}) OR legacy (chunks, mime?)
+ export function playStream(frameOrChunks, maybeMime) {
+   try {
+     // --- New frame shape ----------------------------------------------------
+     if (frameOrChunks && typeof frameOrChunks === 'object' && !Array.isArray(frameOrChunks)) {
+       const frame = frameOrChunks;
+       const mime = frame.mime || maybeMime || DEFAULT_MIME;
+       const p = ensurePlayer(mime);
+       const list = Array.isArray(frame.audio_chunks) ? frame.audio_chunks : [];
+       for (const c of list) {
+         if (!c) continue;
+@@ -83,57 +93,59 @@ export function playStream(frameOrChunks, maybeMime) {
+     if (!list.length) return;
+     const mime = maybeMime || DEFAULT_MIME;
+     const p = ensurePlayer(mime);
+     for (const c of list) {
+       if (!c) continue;
+       if (typeof c === 'string') p.appendBase64(c);
+       else if (c instanceof Uint8Array) p.appendBytes(c);
+       else if (Array.isArray(c)) p.appendBytes(new Uint8Array(c));
+     }
+   } catch (e) {
+     console.warn('[audio] playStream error', e);
+   }
+ }
+ 
+ export function audioEnd() {
+   try { _player?.end(); } catch {}
+ }
+ 
+ export function audioTeardown() {
+   try { _player?.teardown(); } catch {}
+ }
+ 
+ export function stopPlayback() {
+   try { _player?.stop(); } catch {}
+   try { ensureEl().pause(); } catch {}
++  try { ensureEl().volume = TTS_IDLE_VOLUME; } catch {}
+   _emitTtsState('ended');
+ }
+ 
+ export function isPlaying() {
+   try { return !!(_el && !_el.paused); } catch { return false; }
+ }
+ 
+ export function pausePlayback() {
+   try {
+     const el = ensureEl();
+     if (!el.paused) {
+       el.pause();
++      el.volume = TTS_IDLE_VOLUME;
+       _emitTtsState('ended');
+     }
+   } catch {}
+ }
+ 
+ export function resumePlayback() {
+   try {
+     const el = ensureEl();
+     if (el.paused) {
+       const rv = el.play();
+       if (rv && typeof rv.then === 'function') {
+         rv.then(() => _emitTtsState('playing')).catch(() => {});
+       } else {
+         _emitTtsState('playing');
+       }
+     }
+   } catch {}
+ }
+ 
+ export function setVisemeCallback(_fn) { /* no-op in 2D */ }
 diff --git a/static/js/voice.js b/static/js/voice.js
-index db7b601fd324fd95aaa9550bcf885d5ef0b91037..db56839e785d52438629c046feb5ee58342eb17c 100644
+index db56839e785d52438629c046feb5ee58342eb17c..31409f96a11d3ad0e0dbadbaf64904fca3f006c4 100644
 --- a/static/js/voice.js
 +++ b/static/js/voice.js
-@@ -503,52 +503,58 @@ function _computePreRollDuration(timecode) {
-     if (Number.isFinite(last)) {
-       duration = Math.max(0, timecode - last);
-     } else if (timecode > 0) {
-       duration = timecode;
+@@ -26,88 +26,92 @@ export async function initMic(stream = null) { return await _ensureMic(stream);
+ export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
+ export function disarmVAD() { _disarm(); }
+ export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
+ export function bargeIn() { _bargeIn(); }         // keeps API parity
+ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+ 
+ // ---- Internal state ---------------------------------------------------------
+ 
+ // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   && typeof MediaRecorder.isTypeSupported === 'function'
+   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
+   ? 'audio/ogg; codecs=opus'
+   : 'audio/webm; codecs=opus';
+ 
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+ const PRE_ROLL_MS = 250;            // ~0.25s of pre-roll audio
+ const SAFETY_CLOSE_DELAY_MS = 2200; // ~2.2s grace after last chunk
+ 
+ const state = {
+   stream: null,
+   ctx: null,
+   source: null,
+   analyser: null,
++  highpass: null,
++  noiseGate: null,
++  limiter: null,
+   vad: null,
+   rec: null,
+   finalized: false,
+   postFinalHoldUntil: 0,
+   wsListener: null,
+   chunkSendPromise: Promise.resolve(),
+   chunkBytesSent: 0,
+   chunkSendError: null,
+   turnTimer: null,
+   turnOpen: false,   // track whether a turn is currently open server-side
+   turnClosePromise: null,
+   turnHintSent: false,
+   turnHintMime: null,
+   turnHintPromise: null,
+   turnHintAwaitingWS: false,
+   deviceLogged: false,
+   // NEW: min-turn gating
+   recStartedAt: 0,
+   pendingEndTimer: null,
+   ttsPlaying: false,
+   bargeConfirmTimer: null,
+   bargeConfirmActive: false,
+   // Pre-roll tap state
+   preRollNode: null,
+   preRollGain: null,
+   preRollBlobs: [],
+   preRollDurationMs: 0,
+   preRollLastTimecode: null,
+   preRollTimeslice: 150,
+   recStreaming: false,
+   recStopping: false,
+   recStopShouldSend: false,
+   lastChunkAt: 0,
+   safetyCloseTimer: null,
+   turnTraceBase: null,
+   turnTraceSeq: 0,
+   turnTraceId: null,
+   audioStopSent: false,
++  vadMetrics: null,
+ };
+ 
+ const BARGE_CONFIRM_DEFAULT_MS = 420;
+ let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
+ try {
+   const cfg = window.__askchip_config || {};
+   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
+     bargeConfirmMs = cfg.barge_confirm_ms;
+   }
+ } catch {}
+ bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
+ 
+ try {
+   window.addEventListener('chip-tts', (ev) => {
+     const detail = ev?.detail || {};
+     const playing = String(detail.state || '').toLowerCase() === 'playing';
+     state.ttsPlaying = playing;
+   });
+ } catch {}
+ 
+ // ---- Helpers ----------------------------------------------------------------
+ 
+ function _emitVoiceState(state, detail = {}) {
+   try {
+     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
+@@ -348,60 +352,89 @@ async function _ensureMic(externalStream = null) {
+         autoGainControl: false
+       }
+     };
+ 
+     _logLifecycle('mic_request_perm', { constraints });
+     try {
+       // Request a clean mono stream with echo/noise controls
+       stream = await navigator.mediaDevices.getUserMedia(constraints);
+       _logLifecycle('mic_perm_granted');
+     } catch (err) {
+       _logLifecycle('mic_perm_denied', {
+         name: err?.name,
+         message: err?.message,
+         constraints,
+       }, 'warn');
+       throw err;
      }
-     state.preRollLastTimecode = timecode;
    }
-   if (!Number.isFinite(duration) || duration <= 0) {
-     duration = timeslice || PRE_ROLL_MS;
+ 
+   // Build WebAudio chain
+   const AC = window.AudioContext || window.webkitAudioContext;
+   const ctx = new AC({ sampleRate: 48000 });
+   if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
+ 
+   const source = ctx.createMediaStreamSource(stream);
++
++  // Front-end conditioning chain: high-pass -> light gate -> limiter -> analyser
++  const highpass = ctx.createBiquadFilter();
++  highpass.type = 'highpass';
++  highpass.frequency.value = 80; // Trim HVAC / handling rumble
++  highpass.Q.value = Math.SQRT1_2;
++
++  const noiseGate = ctx.createDynamicsCompressor();
++  noiseGate.threshold.value = -60;   // close gently on low-level room tone
++  noiseGate.knee.value = 15;
++  noiseGate.ratio.value = 12;
++  noiseGate.attack.value = 0.02;
++  noiseGate.release.value = 0.18;
++
++  const limiter = ctx.createDynamicsCompressor();
++  limiter.threshold.value = -6;      // prevent spikes from re-triggering VAD
++  limiter.knee.value = 0;
++  limiter.ratio.value = 20;
++  limiter.attack.value = 0.003;
++  limiter.release.value = 0.08;
++
+   const analyser = ctx.createAnalyser();
+   analyser.fftSize = 2048;
+   analyser.smoothingTimeConstant = 0.06;          // LESS twitchy (was 0.03)
+-  source.connect(analyser);
++
++  source.connect(highpass);
++  highpass.connect(noiseGate);
++  noiseGate.connect(limiter);
++  limiter.connect(analyser);
++
+   await _setupPreRollTap(ctx, source);
+ 
+   state.stream = stream;
+   state.ctx = ctx;
+   state.source = source;
+   state.analyser = analyser;
++  state.highpass = highpass;
++  state.noiseGate = noiseGate;
++  state.limiter = limiter;
+ 
+   if (!state.deviceLogged) {
+     const [track] = stream.getAudioTracks();
+     let settings = {};
+     try { settings = track?.getSettings?.() || {}; } catch {}
+     const detail = {
+       label: (track?.label && track.label.trim()) || settings.label || settings.deviceId || 'unknown',
+       sampleRate: settings.sampleRate ?? ctx?.sampleRate ?? null,
+       channels: settings.channelCount ?? settings.channels ?? ctx?.destination?.channelCount ?? 1,
+     };
+     _logLifecycle('mic_device_selected', detail);
+     state.deviceLogged = true;
    }
-   return duration;
+ 
+   return stream;
  }
  
- function _bufferPreRollChunk(entry) {
-   if (!entry || !entry.blob) {
-     return;
+ function _safeClearTurnTimer() {
+   if (state.turnTimer) { clearTimeout(state.turnTimer); state.turnTimer = null; }
+ }
+ 
+ function _closeTurnIfOpen() {
+   _clearSafetyCloseTimer();
+   if (!state.turnOpen && !state.turnClosePromise) {
+     return null;
+@@ -670,51 +703,51 @@ function _sendRecorderChunk(blob, meta = {}) {
+         state.chunkSendError = err;
+         _voiceLog('warn', 'failed to stream audio chunk', { error: err?.message || err });
+       }
+     });
+ }
+ 
+ async function _primeRecorderForPreRoll(options = {}) {
+   const { resetBuffer = true } = options || {};
+   if (!state.stream) {
+     return false;
    }
-   const chunk = {
-     blob: entry.blob,
-     durationMs: Number.isFinite(entry.durationMs) ? Math.max(0, entry.durationMs) : 0,
-     timecode: Number.isFinite(entry.timecode) ? entry.timecode : null,
-   };
-   state.preRollBlobs.push(chunk);
-   state.preRollDurationMs += chunk.durationMs;
-   while (state.preRollDurationMs > PRE_ROLL_MS && state.preRollBlobs.length > 1) {
--    const removed = state.preRollBlobs.shift();
-+    // Preserve the very first blob because it contains the container header. Dropping
-+    // it causes downstream consumers to miss the WebM/OGG signature and reject the
-+    // stream. Instead, trim from the oldest *non-header* chunk.
-+    const removed = state.preRollBlobs.splice(1, 1)[0];
-     state.preRollDurationMs -= removed?.durationMs || 0;
-+    if (state.preRollBlobs.length <= 1) {
-+      break;
-+    }
+   if (typeof MediaRecorder === 'undefined') {
+     _voiceLog('warn', 'MediaRecorder not supported in this browser');
+     state.rec = null;
+     return false;
    }
-   if (state.preRollDurationMs < 0) {
-     state.preRollDurationMs = 0;
+   if (state.rec && state.rec.state === 'recording') {
+     if (resetBuffer) {
+       _resetPreRollBuffer();
+     }
+     return true;
+   }
+ 
+   let recorder;
+   try {
+-    recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
++    recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 32000 });
+   } catch (primaryErr) {
+     try {
+       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
+     } catch (fallbackErr) {
+       _voiceLog('warn', 'MediaRecorder init failed', { error: (fallbackErr || primaryErr)?.message || fallbackErr || primaryErr });
+       state.rec = null;
+       return false;
+     }
+   }
+ 
+   state.rec = recorder;
+   state.recStreaming = false;
+   state.recStopping = false;
+   state.recStopShouldSend = false;
+   state.turnHintSent = false;
+   state.turnHintMime = null;
+   state.turnHintPromise = null;
+   state.turnHintAwaitingWS = false;
+   if (resetBuffer) {
+     _resetPreRollBuffer();
+   }
+ 
+   const timeslice = state.preRollTimeslice || 150;
+   recorder.ondataavailable = _handleRecorderData;
+   recorder.onstop = async () => {
+@@ -871,125 +904,143 @@ function _stopRecorder(detail = null) {
+   }
+ 
+   try {
+     _logLifecycle('recorder_stop_invoked', {
+       reason: detail?.reason || null,
+     }, 'info');
+     _voiceLog('debug', 'recorder.stop() invoked');
+     recorder.stop();
+   } catch {}
+   // intentionally keep state.rec reference nullable here; onstop handler handles final close
+   state.rec = null;
+   state.turnHintSent = false;
+   state.turnHintMime = null;
+   state.turnHintPromise = null;
+   state.turnHintAwaitingWS = false;
+ }
+ 
+ function _teardownVADOnly() {
+   try { state.vad && state.vad.stop(); } catch {}
+   state.vad = null;
+ }
+ 
+ function _teardownAudioGraph() {
+   _teardownPreRollTap();
+   try { state.source && state.source.disconnect(); } catch {}
++  try { state.highpass && state.highpass.disconnect(); } catch {}
++  try { state.noiseGate && state.noiseGate.disconnect(); } catch {}
++  try { state.limiter && state.limiter.disconnect(); } catch {}
+   try { state.analyser && state.analyser.disconnect(); } catch {}
+   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
+   state.source = null;
++  state.highpass = null;
++  state.noiseGate = null;
++  state.limiter = null;
+   state.analyser = null;
+   state.ctx = null;
+   state.deviceLogged = false;
+   state.finalized = false;
+   state.postFinalHoldUntil = 0;
++  state.vadMetrics = null;
+   _removeWSListener();
+ }
+ 
+ function _disarm() {
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   _clearSafetyCloseTimer();
+   _clearBargeConfirm(false);
+   _stopRecorder({ reason: 'manual_disarm' });
+   _teardownVADOnly();
+   state.turnOpen = false; // ensure local state is clean
+   state.turnClosePromise = null;
+   state.recStartedAt = 0;
+   state.lastChunkAt = 0;
+   state.ttsPlaying = false;
+   state.finalized = false;
+   state.postFinalHoldUntil = 0;
++  state.vadMetrics = null;
+   _removeWSListener();
+   _clearTurnTrace();
+   _emitVoiceState('idle');
+ }
+ 
+ function _bargeIn() {
+   // Soft barge-in: pause audio locally
+   _clearBargeConfirm(false);
+   try { stopPlayback(); } catch {}
+   // If a prior ASR turn is somehow still open, politely close it.
+   // (Harmless if no turn is open; guarded to avoid duplicate closes.)
+   const pendingClose = _closeTurnIfOpen();
+   if (pendingClose) {
+     pendingClose.catch(() => {});
    }
  }
  
- function _enqueuePreRollBlobs() {
-   const queued = state.preRollBlobs ? [...state.preRollBlobs] : [];
-   const durationMs = queued.reduce((sum, chunk) => sum + (chunk?.durationMs || 0), 0);
-   const totalBytes = queued.reduce((sum, chunk) => sum + (chunk?.blob?.size || 0), 0);
-   const count = queued.length;
-   _resetPreRollBuffer();
-   for (const chunk of queued) {
-     if (!chunk?.blob) continue;
-     _sendRecorderChunk(chunk.blob, {
-       preRoll: true,
-       durationMs: chunk.durationMs,
-       timecode: chunk.timecode,
+ // ---- VAD wiring -------------------------------------------------------------
+ 
+ async function _arm(stream = null, opts = {}) {
+   const mic = stream || await _ensureMic();
+ 
+   // Build / rebuild VAD
+   _teardownVADOnly();
+ 
+   // Merge runtime globals so admins can tune without rebuilds:
+   let globalVad = {};
+   try { globalVad = (window.__askchip_config && window.__askchip_config.vad) || {}; } catch {}
+   const cfg = { ...globalVad, ...opts };
+ 
+   const pollMs = cfg.pollMs ?? 33;
+   const vad = new VAD(
+     state.analyser,
+     {
+       // Tunables (admin-configurable via opts or window.__askchip_config.vad)
+-      startRms: cfg.startRms ?? 0.012,
+-      stopRms:  cfg.stopRms  ?? 0.006,   // LOWER = less twitchy end
+-      minSpeechMs: cfg.minSpeechMs ?? 220,
+-      minSilenceMs: cfg.minSilenceMs ?? 900, // HIGHER = needs longer quiet
+       pollMs,
+-      echoBoostStart: cfg.echoBoostStart ?? 1.5,
+-      echoBoostStop:  cfg.echoBoostStop  ?? 1.3,
++      minSpeechMs: cfg.minSpeechMs ?? 280,
++      minSilenceMs: cfg.minSilenceMs ?? 300,
++      cooldownMs: cfg.cooldownMs ?? 380,
++      startDbOffset: cfg.startDbOffset ?? 10,
++      stopDbOffset: cfg.stopDbOffset ?? 6,
++      minStartDb: cfg.minStartDb ?? -65,
++      minStopDb: cfg.minStopDb ?? -70,
++      echoBoostStartDb: cfg.echoBoostStartDb ?? 8,
++      echoBoostStopDb: cfg.echoBoostStopDb ?? 6,
++      noiseFloorAlpha: cfg.noiseFloorAlpha ?? 0.05,
++      noiseFloorRiseAlpha: cfg.noiseFloorRiseAlpha ?? 0.01,
++      noiseFloorGuardDb: cfg.noiseFloorGuardDb ?? 3,
++      noiseFloorHangMs: cfg.noiseFloorHangMs ?? 600,
++      initialNoiseFloorDb: cfg.initialNoiseFloorDb,
++      startRms: cfg.startRms,
++      stopRms: cfg.stopRms,
+       echoStateFn: () => {
+         // treat "TTS is playing" as echo present
+         try { return !!ttsIsPlaying(); } catch { return false; }
+       }
+     },
+     {
+-      onSpeechStart: _onSpeechStartCommitted,
+-      onSpeechEnd: _onSpeechEndCommitted,
++      onSpeechStart: (detail) => _onSpeechStartCommitted(detail),
++      onSpeechEnd: (detail) => _onSpeechEndCommitted(detail),
+     }
+   );
+ 
+   state.vad = vad;
+   state.vad.start();
+   _logLifecycle('mic_start', {
+     sampleRate: state.ctx?.sampleRate,
+     pollMs,
+   });
+   _emitVoiceState('armed');
+ 
+   await _primeRecorderForPreRoll();
+ 
+   return mic;
+ }
+ 
+ // ---- Recorder lifecycle -----------------------------------------------------
+ 
+ async function _startRecorder() {
+   if (!state.stream) return false;
+ 
+   const primed = await _primeRecorderForPreRoll({ resetBuffer: false });
+   if (!primed || !state.rec || state.rec.state !== 'recording') {
+     return false;
+   }
+@@ -1014,172 +1065,203 @@ async function _startRecorder() {
+   _ensureWSListener();
+ 
+   const preRollStats = _enqueuePreRollBlobs();
+   if (preRollStats?.count) {
+     _voiceLog('debug', 'flushed pre-roll buffer', {
+       chunks: preRollStats.count,
+       durationMs: preRollStats.durationMs,
+       bytes: preRollStats.totalBytes,
      });
    }
-   return { count, durationMs, totalBytes };
+ 
+   state.turnOpen = true;
+   _voiceLog('info', 'recorder streaming', {
+     mime: (state.rec && state.rec.mimeType) || REC_MIME,
+   });
+ 
+   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
+   _safeClearTurnTimer();
+   state.turnTimer = setTimeout(() => {
+     try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
+   }, limitMs);
+ 
+   return true;
  }
  
- function _attemptAudioStartSend(mime) {
+-async function _onSpeechStartCommitted() {
++async function _onSpeechStartCommitted(detail = {}) {
++  const metrics = (detail && typeof detail === 'object') ? detail : {};
++  state.vadMetrics = { ...metrics, phase: 'start' };
+   const bufferedMsRaw = Number.isFinite(state.preRollDurationMs) ? state.preRollDurationMs : 0;
+   const preRollBlobs = state.preRollBlobs || [];
+   const totalBytes = preRollBlobs.reduce((sum, chunk) => sum + (chunk?.blob?.size || 0), 0);
+   const round = (v) => {
+     if (!Number.isFinite(v)) return 0;
+     return Math.round(v * 100) / 100;
+   };
++  const roundTenths = (v) => {
++    if (!Number.isFinite(v)) return null;
++    return Math.round(v * 10) / 10;
++  };
+ 
+   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+     ? performance.now()
+     : Date.now();
+   const holdUntil = state.postFinalHoldUntil || 0;
+ 
+   if (state.finalized) {
+     if (now < holdUntil) {
+       _logLifecycle('vad_speech_start_suppressed', {
+         reason: 'post_final_hold_finalized',
+         holdUntil,
+         now,
+       });
+       return;
+     }
+     state.finalized = false;
+   }
+ 
+   if (now < holdUntil) {
+     _logLifecycle('vad_speech_start_suppressed', {
+       reason: 'post_final_hold',
+       holdUntil,
+       now,
+     });
+     return;
+   }
+ 
+   if (state.postFinalHoldUntil) {
+     state.postFinalHoldUntil = 0;
+   }
+ 
+   const traceActive = _getActiveTurnTraceId();
+   if (!state.recStreaming || !traceActive) {
+     _beginTurnTrace('speech_start');
+   }
+ 
+   _logLifecycle('vad_speech_start', {
+     preRollBufferedMs: round(bufferedMsRaw),
+     preRollSentMs: round(Math.min(bufferedMsRaw, PRE_ROLL_MS)),
+     preRollChunks: preRollBlobs.length,
+     preRollBytes: totalBytes,
+     preRollEnabled: preRollBlobs.length > 0,
+     preRollMime: (state.rec && state.rec.mimeType) || REC_MIME,
++    snrDb: roundTenths(metrics?.snrDb),
++    noiseFloorDb: roundTenths(metrics?.noiseFloorDb),
++    thresholdStartDb: roundTenths(metrics?.thresholds?.startDb),
+   });
+   _voiceLog('info', 'speech started', {
+     preRollChunks: preRollBlobs.length,
+     preRollBytes: totalBytes,
++    snrDb: roundTenths(metrics?.snrDb),
+   });
+ 
+   if (state.ttsPlaying && !state.bargeConfirmActive) {
+     state.bargeConfirmActive = true;
+     try { pausePlayback(); } catch {}
+       state.bargeConfirmTimer = setTimeout(async () => {
+         state.bargeConfirmTimer = null;
+         if (!state.bargeConfirmActive) return;
+         if (state.vad && typeof state.vad.isRecording === 'function' && !state.vad.isRecording()) {
+           state.bargeConfirmActive = false;
+           try { resumePlayback(); } catch {}
+           return;
+         }
+         state.bargeConfirmActive = false;
+         _bargeIn();
+         const started = await _startRecorder();
+         if (started) {
+           _emitVoiceState('recording');
+           return;
+         }
+       _voiceLog('warn', 'recorder unavailable — reverting to typing');
+       _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+     }, bargeConfirmMs);
+     return;
+   }
+ 
+   if (state.bargeConfirmActive) {
+     return;
+   }
+ 
+   _bargeIn();
+ 
+   const started = await _startRecorder();
+   if (started) {
+     _emitVoiceState('recording');
+     return;
+   }
+ 
+   _voiceLog('warn', 'recorder unavailable — reverting to typing');
+   _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+ }
+ 
+ function _onSpeechEndCommitted(detail = null) {
+-  const reason = detail?.reason || 'vad_silence';
++  const metrics = (detail && typeof detail === 'object') ? detail : {};
++  const reason = (detail && typeof detail === 'object' && detail.reason)
++    ? detail.reason
++    : (typeof detail === 'string' ? detail : 'vad_silence');
+   const now = performance.now ? performance.now() : Date.now();
+   const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
+ 
+-  _voiceLog('info', 'speech ended', { source: 'vad', reason });
++  state.vadMetrics = { ...metrics, phase: 'end' };
++
++  const roundTenths = (v) => {
++    if (!Number.isFinite(v)) return null;
++    return Math.round(v * 10) / 10;
++  };
++
++  _voiceLog('info', 'speech ended', {
++    source: 'vad',
++    reason,
++    snrDb: roundTenths(metrics?.snrDb),
++    durationMs: Number.isFinite(metrics?.speechDurationMs) ? Math.round(metrics.speechDurationMs) : null,
++  });
+ 
+   if (state.bargeConfirmActive) {
+     _clearBargeConfirm(true);
+   }
+ 
+   // If we haven't recorded at least minTurnMs, delay honoring VAD-end.
+   // Only applies while recorder is actually running.
+   if (state.rec && typeof state.rec.state === 'string' && state.rec.state === 'recording') {
+     const elapsed = Math.max(0, now - (state.recStartedAt || now));
+     const wait = Math.max(0, minTurnMs - elapsed);
+     if (wait > 0) {
+       _voiceLog('debug', 'delaying VAD end', { waitMs: wait, elapsed });
+       _clearPendingEndTimer();
+       state.pendingEndTimer = setTimeout(() => _onSpeechEndCommitted(detail), wait);
+       return; // do not stop yet
+     }
+   }
+ 
+-  _logLifecycle('vad_speech_end', { reason }, 'info');
++  _logLifecycle('vad_speech_end', {
++    reason,
++    snrDb: roundTenths(metrics?.snrDb),
++    noiseFloorDb: roundTenths(metrics?.noiseFloorDb),
++    speechDurationMs: Number.isFinite(metrics?.speechDurationMs) ? Math.round(metrics.speechDurationMs) : null,
++    thresholdStopDb: roundTenths(metrics?.thresholds?.stopDb),
++  }, 'info');
+   _maybeSendAudioStop({ reason });
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   _clearSafetyCloseTimer();
+   _stopRecorder({ reason });
+   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
+ }
+ 
+ // ---- Utilities --------------------------------------------------------------
+ 
+ function optsFromGlobal(key, fallback) {
+   // Allow admin-configurable values to seep in (if app exposes them)
    try {
+     const cfg = window.__askchip_config || {};
+     if (key in cfg) return cfg[key];
+   } catch {}
+   return fallback;
+ }
+ 
+ function _applyPostFinalHold(source = 'unknown') {
+   const rawHold = Number(optsFromGlobal('post_final_hold_ms', 600));
+   const holdMs = Number.isFinite(rawHold) ? Math.max(0, rawHold) : 0;
+   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+     ? performance.now()
+     : Date.now();
+diff --git a/static/js/voice/vad.js b/static/js/voice/vad.js
+index ac962dc8568dee76bfd3dc092a00fe534448360c..6e252f9c2305c318d92d24aff01d94cf9f8af8de 100644
+--- a/static/js/voice/vad.js
++++ b/static/js/voice/vad.js
+@@ -1,122 +1,297 @@
+ // static/js/voice/vad.js
+ // Lightweight RMS-based VAD tuned for conversational UX.
+ // Features:
+-//  • Start/stop thresholds with minimum durations
+-//  • Echo-aware start gating (boost thresholds while TTS is playing)
+-//  • Emits onSpeechStart / onSpeechEnd callbacks
++//  • Rolling noise-floor tracking with adaptive thresholds (dB offsets)
++//  • Echo-aware gating (raise thresholds while TTS is active)
++//  • Emits onSpeechStart / onSpeechEnd callbacks with metrics
+ //  • Safe timers; idempotent start/stop
+ 
++const EPSILON = 1e-8;
++const CLAMP_MIN_DB = -120;
++const CLAMP_MAX_DB = -10;
++
++const rmsToDb = (rms) => 20 * Math.log10(Math.max(EPSILON, rms));
++const dbToRms = (db) => Math.pow(10, db / 20);
++const clampDb = (db) => Math.min(CLAMP_MAX_DB, Math.max(CLAMP_MIN_DB, db));
++
+ /** @typedef {{
+- *   startRms: number,         // baseline start threshold (RMS)
+- *   stopRms: number,          // baseline stop threshold (RMS)
+- *   minSpeechMs: number,      // how long RMS must stay >= startRms to commit start
+- *   minSilenceMs: number,     // how long RMS must stay <  stopRms to commit end
+- *   pollMs: number,           // VAD polling interval
+- *   echoBoostStart: number,   // multiplier on startRms while echoStateFn() is true
+- *   echoBoostStop: number,    // multiplier on stopRms  while echoStateFn() is true
+- *   echoStateFn?: ()=>boolean // returns true when TTS is playing
++ *   minSpeechMs?: number,
++ *   minSilenceMs?: number,
++ *   pollMs?: number,
++ *   cooldownMs?: number,
++ *   startDbOffset?: number,
++ *   stopDbOffset?: number,
++ *   minStartDb?: number,
++ *   minStopDb?: number,
++ *   echoBoostStartDb?: number,
++ *   echoBoostStopDb?: number,
++ *   noiseFloorAlpha?: number,
++ *   noiseFloorRiseAlpha?: number,
++ *   noiseFloorGuardDb?: number,
++ *   noiseFloorHangMs?: number,
++ *   initialNoiseFloorDb?: number,
++ *   startRms?: number,          // legacy absolute fallback
++ *   stopRms?: number,           // legacy absolute fallback
++ *   echoStateFn?: ()=>boolean,
+  * }} VADOptions
+  */
+ 
+ /** @typedef {{
+- *   onSpeechStart?: ()=>void,
+- *   onSpeechEnd?: ()=>void,
++ *   rms?: number,
++ *   rmsDb?: number,
++ *   noiseFloorDb?: number,
++ *   snrDb?: number,
++ *   peakDb?: number,
++ *   speechDurationMs?: number,
++ *   thresholds?: { startDb?: number, stopDb?: number },
++ *   reason?: string,
++ * }} VADDetail
++ */
++
++/** @typedef {{
++ *   onSpeechStart?: (detail: VADDetail) => void,
++ *   onSpeechEnd?: (detail: VADDetail) => void,
+  * }} VADCallbacks
+  */
+ 
+ export class VAD {
+   /**
+    * @param {AnalyserNode} analyser
+    * @param {VADOptions} opts
+    * @param {VADCallbacks} cbs
+    */
+   constructor(analyser, opts, cbs) {
+     this.analyser = analyser;
+     this.opts = Object.assign({
+-      startRms: 0.015,       // ~ -36 dBFS
+-      stopRms: 0.010,        // ~ -40 dBFS
+-      minSpeechMs: 220,
+-      minSilenceMs: 420,
++      minSpeechMs: 280,
++      minSilenceMs: 300,
+       pollMs: 33,
+-      echoBoostStart: 1.5,
+-      echoBoostStop: 1.3,
+-      echoStateFn: null,
+       cooldownMs: 380,
++      startDbOffset: 10,
++      stopDbOffset: 6,
++      minStartDb: -65,
++      minStopDb: -70,
++      echoBoostStartDb: 8,
++      echoBoostStopDb: 6,
++      noiseFloorAlpha: 0.05,
++      noiseFloorRiseAlpha: 0.01,
++      noiseFloorGuardDb: 3,
++      noiseFloorHangMs: 600,
++      initialNoiseFloorDb: -72,
++      echoStateFn: null,
+     }, opts || {});
+     this.cbs = cbs || {};
+     this._buf = new Float32Array(this.analyser.fftSize || 2048);
+     this._timer = null;
+     this._recording = false;
+     this._aboveSince = 0;
+     this._belowSince = 0;
+     this._cooldownUntil = 0;
++    this._speechStartedAt = 0;
++    this._activeDetail = null;
++    this._activeNoiseFloorDb = null;
++    this._noiseFloorDb = clampDb(
++      Number.isFinite(this.opts.initialNoiseFloorDb)
++        ? this.opts.initialNoiseFloorDb
++        : -72
++    );
++    this._lastNoiseUpdate = 0;
++    this._legacyStartDb = Number.isFinite(this.opts.startRms) ? rmsToDb(this.opts.startRms) : null;
++    this._legacyStopDb = Number.isFinite(this.opts.stopRms) ? rmsToDb(this.opts.stopRms) : null;
+   }
+ 
+   _rms() {
+     this.analyser.getFloatTimeDomainData(this._buf);
+     let sum = 0;
+     for (let i = 0; i < this._buf.length; i++) {
+       const v = this._buf[i];
+       sum += v * v;
+     }
+     return Math.sqrt(sum / this._buf.length);
+   }
+ 
++  _makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb) {
++    const snrDb = (Number.isFinite(rmsDb) && Number.isFinite(noiseFloorDb))
++      ? rmsDb - noiseFloorDb
++      : null;
++    return {
++      rms,
++      rmsDb,
++      noiseFloorDb,
++      snrDb,
++      thresholds: { startDb, stopDb },
++    };
++  }
++
++  _updateNoiseFloor(rmsDb, now, baseStartDb) {
++    if (!Number.isFinite(rmsDb)) return;
++    if (!Number.isFinite(this._noiseFloorDb)) {
++      this._noiseFloorDb = clampDb(rmsDb);
++      this._lastNoiseUpdate = now;
++      return;
++    }
++
++    const guard = Number.isFinite(this.opts.noiseFloorGuardDb) ? this.opts.noiseFloorGuardDb : 3;
++    const hangMs = Number.isFinite(this.opts.noiseFloorHangMs) ? this.opts.noiseFloorHangMs : 600;
++    const alphaDown = Number.isFinite(this.opts.noiseFloorAlpha) ? this.opts.noiseFloorAlpha : 0.05;
++    const alphaUp = Number.isFinite(this.opts.noiseFloorRiseAlpha) ? this.opts.noiseFloorRiseAlpha : 0.01;
++
++    if (rmsDb <= baseStartDb - guard) {
++      this._noiseFloorDb = clampDb(this._noiseFloorDb + alphaDown * (rmsDb - this._noiseFloorDb));
++      this._lastNoiseUpdate = now;
++    } else if (now - this._lastNoiseUpdate >= hangMs) {
++      this._noiseFloorDb = clampDb(this._noiseFloorDb + alphaUp * (rmsDb - this._noiseFloorDb));
++      this._lastNoiseUpdate = now;
++    }
++  }
++
++  _computeThresholds(noiseFloorDb, echoActive) {
++    const baseStart = clampDb(
++      Math.max(
++        this.opts.minStartDb ?? -65,
++        noiseFloorDb + (this.opts.startDbOffset ?? 10)
++      )
++    );
++    const baseStop = clampDb(
++      Math.max(
++        this.opts.minStopDb ?? -70,
++        noiseFloorDb + (this.opts.stopDbOffset ?? 6)
++      )
++    );
++
++    let startDb = baseStart;
++    let stopDb = baseStop;
++
++    if (Number.isFinite(this._legacyStartDb)) {
++      startDb = Math.max(startDb, this._legacyStartDb);
++    }
++    if (Number.isFinite(this._legacyStopDb)) {
++      stopDb = Math.max(stopDb, this._legacyStopDb);
++    }
++
++    if (echoActive) {
++      startDb += this.opts.echoBoostStartDb ?? 0;
++      stopDb += this.opts.echoBoostStopDb ?? 0;
++    }
++
++    return {
++      startDb: clampDb(startDb),
++      stopDb: clampDb(stopDb),
++      baseStartDb: baseStart,
++    };
++  }
++
+   start() {
+     this.stop(); // idempotent
+     this._aboveSince = 0;
+     this._belowSince = 0;
+     this._cooldownUntil = 0;
+-    const { pollMs } = this.opts;
++    this._speechStartedAt = 0;
++    this._activeDetail = null;
++    this._activeNoiseFloorDb = null;
++
++    const pollMs = Number.isFinite(this.opts.pollMs) ? this.opts.pollMs : 33;
+ 
+     this._timer = setInterval(() => {
+       const rms = this._rms();
+-      const now = performance.now();
++      const rmsDb = rmsToDb(rms);
++      const now = (typeof performance !== 'undefined' && performance?.now)
++        ? performance.now()
++        : Date.now();
+       const inCooldown = now < this._cooldownUntil;
+       const echo = this.opts.echoStateFn ? !!this.opts.echoStateFn() : false;
+ 
+-      const startR = this.opts.startRms * (echo ? this.opts.echoBoostStart : 1);
+-      const stopR  = this.opts.stopRms  * (echo ? this.opts.echoBoostStop  : 1);
++      const noiseFloorDb = Number.isFinite(this._noiseFloorDb) ? this._noiseFloorDb : rmsDb;
++      const { startDb, stopDb, baseStartDb } = this._computeThresholds(noiseFloorDb, echo);
++      const startR = dbToRms(startDb);
++      const stopR = dbToRms(stopDb);
++
++      if (!this._recording) {
++        this._updateNoiseFloor(rmsDb, now, baseStartDb);
++      }
+ 
+       if (!this._recording) {
+         if (inCooldown) {
+           this._aboveSince = 0;
+           return;
+         }
+         if (rms >= startR) {
+           if (!this._aboveSince) this._aboveSince = now;
+-          if (now - this._aboveSince >= this.opts.minSpeechMs) {
++          if (now - this._aboveSince >= (this.opts.minSpeechMs ?? 0)) {
+             this._recording = true;
+             this._belowSince = 0;
+-            try { this.cbs.onSpeechStart && this.cbs.onSpeechStart(); } catch {}
++            this._speechStartedAt = now;
++            this._activeDetail = this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
++            this._activeNoiseFloorDb = noiseFloorDb;
++            try {
++              this.cbs.onSpeechStart && this.cbs.onSpeechStart({
++                ...this._activeDetail,
++                peakDb: this._activeDetail?.rmsDb,
++                speechDurationMs: 0,
++              });
++            } catch {}
+           }
+         } else {
+           this._aboveSince = 0;
+         }
+       } else {
++        if (Number.isFinite(rmsDb) && (!this._activeDetail || rmsDb > (this._activeDetail.rmsDb ?? -Infinity))) {
++          this._activeDetail = this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
++        }
++        if (Number.isFinite(noiseFloorDb)) {
++          if (!Number.isFinite(this._activeNoiseFloorDb)) {
++            this._activeNoiseFloorDb = noiseFloorDb;
++          } else {
++            this._activeNoiseFloorDb = Math.min(this._activeNoiseFloorDb, noiseFloorDb);
++          }
++        }
++
+         if (rms < stopR) {
+           if (!this._belowSince) this._belowSince = now;
+-          if (now - this._belowSince >= this.opts.minSilenceMs) {
++          if (now - this._belowSince >= (this.opts.minSilenceMs ?? 0)) {
+             this._recording = false;
+             this._aboveSince = 0;
+             this._cooldownUntil = now + Math.max(0, this.opts.cooldownMs || 0);
+-            try { this.cbs.onSpeechEnd && this.cbs.onSpeechEnd(); } catch {}
++
++            const duration = Math.max(0, now - (this._speechStartedAt || now));
++            const active = this._activeDetail || this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
++            const noiseRef = Number.isFinite(this._activeNoiseFloorDb) ? this._activeNoiseFloorDb : noiseFloorDb;
++            const peakDb = Number.isFinite(active?.rmsDb) ? active.rmsDb : rmsDb;
++            const snrDb = (Number.isFinite(peakDb) && Number.isFinite(noiseRef)) ? peakDb - noiseRef : active?.snrDb;
++            const detail = {
++              ...active,
++              noiseFloorDb: noiseRef,
++              snrDb,
++              peakDb,
++              speechDurationMs: duration,
++            };
++
++            try {
++              this.cbs.onSpeechEnd && this.cbs.onSpeechEnd(detail);
++            } catch {}
++
++            this._activeDetail = null;
++            this._activeNoiseFloorDb = null;
++            this._speechStartedAt = 0;
+           }
+         } else {
+           this._belowSince = 0;
+         }
+       }
+     }, pollMs);
+   }
+ 
+   stop() {
+     if (this._timer) { clearInterval(this._timer); this._timer = null; }
+     this._recording = false;
+     this._aboveSince = 0;
+     this._belowSince = 0;
+     this._cooldownUntil = 0;
++    this._speechStartedAt = 0;
++    this._activeDetail = null;
++    this._activeNoiseFloorDb = null;
+   }
+ 
+   isRecording() { return this._recording; }
+ }
+ 
