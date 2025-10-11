@@ -1,135 +1,145 @@
-diff --git a/static/js/admin_console.js b/static/js/admin_console.js
-index 4a5b28306a2b5a0274fadbda2389869e46840ec3..1af89a18e41a590dfdd3f759a2b08aff659a439d 100644
---- a/static/js/admin_console.js
-+++ b/static/js/admin_console.js
-@@ -1025,80 +1025,82 @@ function setStepStatus(state, stepId, status, detail) {
- }
- 
- function setSpeakState(state, mode) {
-   if (!state.speakCard || !state.speakStateEl) return;
-   state.speakCard.dataset.mode = mode;
-   state.speakStateEl.textContent = SPEAK_LABELS[mode] || SPEAK_LABELS.idle;
- }
- 
- function appendLog(el, line) {
-   if (!el || !line) return;
-   el.textContent = el.textContent ? `${el.textContent}\n${line}` : line;
-   if (el.textContent.length > 14000) {
-     el.textContent = el.textContent.slice(-14000);
-   }
-   el.scrollTop = el.scrollHeight;
-   try { console.info('[admin-diagnostics]', line); } catch {}
- }
- 
- function timestamp() {
-   const t = new Date().toISOString();
-   return t.split('T')[1].replace('Z', '').slice(0, 8);
- }
- 
- function describeFrame(frame) {
-   const type = frame?.type || frame?.label || 'unknown';
-+  const typeNorm = typeof type === 'string' ? type.toLowerCase() : '';
-   if (type === 'assistant_audio') {
-     const chunks = Array.isArray(frame.audio_chunks) ? frame.audio_chunks.length : 0;
-     return `${type} chunks=${chunks}${frame.is_last ? ' (last)' : ''}`;
-   }
--  if (type === 'Results' || type === 'results' || type === 'transcript') {
-+  if (typeNorm === 'results' || typeNorm === 'result' || typeNorm === 'transcript') {
-     const text = extractTranscript(frame);
-     const final = isTranscriptFinal(frame) ? ' final' : '';
-     return `${type}${final}${text ? ` text="${text}"` : ''}`;
-   }
-   if (type === 'assistant_chunk' || type === 'assistant_text' || type === 'assistant_final') {
-     const text = extractAssistantText(frame);
-     return text ? `${type}: ${text}` : type;
-   }
-   if (type === 'Error') {
-     return `Error ${frame.code || ''} ${frame.message || ''}`.trim();
-   }
-   return type;
- }
- 
- function isAssistantFrame(frame) {
-   const type = frame?.type || frame?.label || '';
-   if (!type) return false;
-   if (type.startsWith('assistant')) return true;
-   if (frame?.role === 'assistant') return true;
-   return false;
- }
- 
- function isTranscriptFrame(frame) {
-   const type = frame?.type || frame?.label || '';
--  return type === 'Results' || type === 'results' || type === 'transcript';
-+  const typeNorm = typeof type === 'string' ? type.toLowerCase() : '';
-+  return typeNorm === 'results' || typeNorm === 'result' || typeNorm === 'transcript';
- }
- 
- function extractTranscript(frame) {
-   try {
-     return (
-       frame?.channel?.alternatives?.[0]?.transcript ||
-       frame?.alternatives?.[0]?.transcript ||
-       frame?.transcript ||
-       ''
-     ).trim();
-   } catch {
-     return '';
-   }
- }
- 
- function isTranscriptFinal(frame) {
-   try {
-     return Boolean(
-       frame?.channel?.is_final ||
-       frame?.is_final ||
-       frame?.final
-     );
-   } catch {
-     return false;
-   }
 diff --git a/static/js/app.js b/static/js/app.js
-index 4de2db3510c3f7a446c80f9c67a239c94dbfe3f4..aee6b6a9aa45c238ee134f054272787e12fd6416 100644
+index aee6b6a9aa45c238ee134f054272787e12fd6416..788572040d6bb276560ead6100b222c1f5c2fc0d 100644
 --- a/static/js/app.js
 +++ b/static/js/app.js
-@@ -351,91 +351,92 @@ function _dedupeAssistant(d){
+@@ -1,90 +1,136 @@
+ // /static/js/app.js — chat helpers only (imports constrained by spec)
+ import { closeWS, sendCloseStream, sendJSON } from './ws_module.js';
+ import { getSID } from '/static/js/util/sid.js';
+ import { renderSuggestions } from '/static/js/suggestions.js';
+ 
+ // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
+ // Exports: onEnd, onSend, handleAssistantFrame
+ 
+ const $  = (s)=>document.querySelector(s);
+ 
+ const ASR_TIMEOUT_MS = 10_000;
++const ASR_FINALIZATION_TIMEOUT_MS = 2_000;
+ let _sessionReadyAt = 0;
+ let _awaitingFirstAsr = false;
+ let _noAsrTimeout = null;
+ let _noAsrNotified = false;
+ let _lastAsrLatencyMs = null;
+ let _ttsPlaying = false;
+ const _asrTurnState = {
+   activeId: null,
+   complete: false,
+   utteranceEnded: false,
+ };
++const _asrCompletionWaiters = new Set();
+ 
+ try {
+   window.addEventListener('chip-tts', (ev) => {
+     const detail = ev?.detail || {};
+     const playing = String(detail.state || '').toLowerCase() === 'playing';
+     _ttsPlaying = playing;
+     if (playing) {
+       _clearAsrTimeout();
+     }
+   });
+ } catch {}
+ 
+ function _clearAsrTimeout(){
+   if (_noAsrTimeout){
+     clearTimeout(_noAsrTimeout);
+     _noAsrTimeout = null;
+   }
  }
  
- let _lastSuggestionsKey = null;
- 
- function _clearSuggestions(){
-   const wrap = document.getElementById('suggestions');
-   if (!wrap) return;
-   try { wrap.innerHTML = ''; } catch {}
-   _lastSuggestionsKey = null;
+ function _resetAsrTracking(){
+   _clearAsrTimeout();
+   _awaitingFirstAsr = false;
+   _noAsrNotified = false;
+   _sessionReadyAt = 0;
+   _lastAsrLatencyMs = null;
+   _resetAsrTurnState();
  }
  
- function _handleSuggestionClick(text){
-   if (!window.__askchip_session_started) return;
-   const suggestion = (text || '').trim();
-   if (!suggestion) return;
-   const input = $('#composer');
-   if (input) {
-     try { input.value = suggestion; } catch {}
-   }
-   try { onSend(suggestion); } catch (err) { console.warn('[suggestion click] send failed', err); }
+ function _resetAsrTurnState(){
+   _asrTurnState.activeId = null;
+   _asrTurnState.complete = false;
+   _asrTurnState.utteranceEnded = false;
++  _flushAsrCompletionWaiters('reset');
  }
  
- export function handleAssistantFrame(d){
-   if (!d) return;
-   const t = d.type;
-+  const typeNorm = typeof t === 'string' ? t.toLowerCase() : '';
- 
-   if (t === 'ready') {
-     if (!_ttsPlaying) _scheduleAsrWatchdog();
+ function _ensureActiveAsrTurn(turnId){
+   if (turnId == null) return;
+   if (_asrTurnState.activeId !== turnId){
+     _asrTurnState.activeId = turnId;
+     _asrTurnState.complete = false;
+     _asrTurnState.utteranceEnded = false;
    }
+ }
  
-   if (t === 'no_audio_detected') {
-     _notifyNoAsr('server', d);
-     return;
-   }
++function _hasAsrFinalEvent(){
++  return !!(_asrTurnState.complete || _asrTurnState.utteranceEnded);
++}
++
++function _flushAsrCompletionWaiters(reason){
++  if (!_asrCompletionWaiters.size) return;
++  const waiters = Array.from(_asrCompletionWaiters);
++  _asrCompletionWaiters.clear();
++  waiters.forEach((waiter) => {
++    if (waiter?.timer) {
++      clearTimeout(waiter.timer);
++      waiter.timer = null;
++    }
++    try {
++      waiter?.resolve?.(reason);
++    } catch {}
++  });
++}
++
++function _notifyAsrCompletion(reason){
++  if (!_hasAsrFinalEvent()) return;
++  _flushAsrCompletionWaiters(reason);
++}
++
++function _waitForAsrCompletion(timeoutMs){
++  if (_hasAsrFinalEvent()) {
++    return Promise.resolve('already_final');
++  }
++  return new Promise((resolve) => {
++    const waiter = { resolve, timer: null };
++    if (typeof timeoutMs === 'number' && timeoutMs >= 0) {
++      waiter.timer = setTimeout(() => {
++        if (_asrCompletionWaiters.delete(waiter)) {
++          try {
++            resolve('timeout');
++          } catch {}
++        }
++      }, timeoutMs);
++    }
++    _asrCompletionWaiters.add(waiter);
++  });
++}
++
+ function _extractAsrTurnId(frame){
+   return (
+     frame?.turn_id ??
+     frame?.channel?.turn_id ??
+     frame?.turnId ??
+     frame?.channel?.turnId ??
+     null
+   );
+ }
  
-   // Surface server errors to the UI banner
-   if (t === 'Error') {
+ function _isAsrFinalFrame(frame){
+   return !!(
+     frame?.channel?.is_final ??
+     frame?.is_final ??
+     frame?.final ??
+     false
+   );
+ }
+ 
+ function _scheduleAsrWatchdog(){
+   _clearAsrTimeout();
+   _awaitingFirstAsr = true;
+   _noAsrNotified = false;
+   _sessionReadyAt = Date.now();
+   _lastAsrLatencyMs = null;
+@@ -389,66 +435,68 @@ export function handleAssistantFrame(d){
      const msg = `Error: ${(d.code||'')}${d.message ? ' ' + d.message : ''}`.trim();
      showBanner(msg || 'An error occurred.');
      return;
@@ -155,11 +165,11 @@ index 4de2db3510c3f7a446c80f9c67a239c94dbfe3f4..aee6b6a9aa45c238ee134f054272787e
      setDot('ready');
      if (matchesActive) {
        _asrTurnState.utteranceEnded = true;
++      _notifyAsrCompletion('utterance_end');
      }
    }
  
--  if (t === 'Results' && d.nlu === undefined){
-+  if ((typeNorm === 'results' || typeNorm === 'result') && d.nlu === undefined){
+   if ((typeNorm === 'results' || typeNorm === 'result') && d.nlu === undefined){
      const turnId = _extractAsrTurnId(d);
      if (turnId != null) _ensureActiveAsrTurn(turnId);
      const matchesActive = turnId == null
@@ -172,6 +182,7 @@ index 4de2db3510c3f7a446c80f9c67a239c94dbfe3f4..aee6b6a9aa45c238ee134f054272787e
      _renderUserTranscript(d);
      if (matchesActive && isFinal) {
        _asrTurnState.complete = true;
++      _notifyAsrCompletion('final_result');
      }
      return;
    }
@@ -185,66 +196,72 @@ index 4de2db3510c3f7a446c80f9c67a239c94dbfe3f4..aee6b6a9aa45c238ee134f054272787e
        try { renderSuggestions(items, _handleSuggestionClick); } catch (err) {
          console.warn('[handleAssistantFrame] renderSuggestions failed', err);
        }
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 77199cf5d9a561264ad26f1f4873460bd91034f8..6fcdf0c2e5973135a7f912c1324f9153d535626b 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -120,55 +120,56 @@ function _clearPendingEndTimer() {
-     try { clearTimeout(state.pendingEndTimer); } catch {}
-     state.pendingEndTimer = null;
-   }
- }
- 
- function _clearBargeConfirm(resume = false) {
-   if (state.bargeConfirmTimer) {
-     try { clearTimeout(state.bargeConfirmTimer); } catch {}
-     state.bargeConfirmTimer = null;
-   }
-   if (state.bargeConfirmActive) {
-     state.bargeConfirmActive = false;
-     if (resume) {
-       try { resumePlayback(); } catch {}
      }
-   }
- }
- 
- function _ensureWSListener() {
-   if (state.wsListener || typeof window === 'undefined') {
      return;
    }
-   const handler = async (ev) => {
-     const detail = ev?.detail || {};
-     const type = detail?.type;
-+    const typeNorm = typeof type === 'string' ? type.toLowerCase() : '';
  
-     let isFinal = false;
--    if (type === 'UtteranceEnd') {
-+    if (typeNorm === 'utteranceend') {
-       isFinal = true;
--    } else if (type === 'Results') {
-+    } else if (typeNorm === 'results' || typeNorm === 'result') {
-       const channelFinal = detail?.channel?.is_final === true;
-       const payloadFinal = detail?.is_final === true;
-       isFinal = channelFinal || payloadFinal;
-     }
+   if (_isAssistantTextFrame(d)) {
+     if (!_dedupeAssistant(d)) return;
+   }
+   // (other frame types can be handled here as needed)
+ }
  
-     if (!isFinal || state.finalized) {
+ /* ---------------- Send (WS-only) ---------------- */
+ 
+@@ -495,53 +543,54 @@ export async function onSend(overrideText){
+       showBanner('Message failed to send over WebSocket.');
        return;
      }
  
-     _applyPostFinalHold('ws_final');
+     setDot('thinking');
  
-     const recorder = state.rec;
-     const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state !== 'inactive');
-     if (!isRecording) {
-       return;
+     // Clear composer after send
+     if (input){
+       try { input.value = ''; } catch {}
      }
  
-     try {
-       _stopRecorder({ reason: 'server_final' });
-     } catch (err) {
-       try { console.warn('[voice] failed to stop recorder on server final', err); } catch {}
-     }
+   } catch (e){
+     console.warn('[onSend] error', e);
+   }
+ }
  
-     try {
-       await Promise.resolve(state.chunkSendPromise).catch(() => {});
+ /* ---------------- End session (graceful) ---------------- */
+ 
+ let ending = false;
+ 
+ export async function onEnd(){
+   if (ending) return;
+   ending = true;
+   try {
+     _clearSuggestions();
++    const finalFrameWait = _waitForAsrCompletion(ASR_FINALIZATION_TIMEOUT_MS);
+     // Politely signal end of stream over WS, then close with code 1000
+-    try { sendCloseStream(); } catch {}
+-    await new Promise(r => setTimeout(r, 100));
++    try { await sendCloseStream(); } catch {}
++    try { await finalFrameWait; } catch {}
+ 
+     try { closeWS(1000, 'user_end'); } catch {}
+ 
+     // Rotate the session so the next Start is clean (correct key)
+     try { localStorage.removeItem('chip.sid'); } catch {}
+ 
+     // Notify others (bootstrap etc.)
+     try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
+ 
+     // Update UI
+     disableForEnded();
+     showBanner('Session ended. Press Start to begin a new one.');
+ 
+     // Clear any bootstrap “session started” latch
+     window.__askchip_session_started = false;
+ 
+   } finally {
+     ending = false;
+   }
+ }
+ 
+ try {
+   window.addEventListener('askchip-session-ended', () => {
+     _clearSuggestions();
+     _resetAsrTracking();

@@ -9,6 +9,7 @@ import { renderSuggestions } from '/static/js/suggestions.js';
 const $  = (s)=>document.querySelector(s);
 
 const ASR_TIMEOUT_MS = 10_000;
+const ASR_FINALIZATION_TIMEOUT_MS = 2_000;
 let _sessionReadyAt = 0;
 let _awaitingFirstAsr = false;
 let _noAsrTimeout = null;
@@ -20,6 +21,7 @@ const _asrTurnState = {
   complete: false,
   utteranceEnded: false,
 };
+const _asrCompletionWaiters = new Set();
 
 try {
   window.addEventListener('chip-tts', (ev) => {
@@ -52,6 +54,7 @@ function _resetAsrTurnState(){
   _asrTurnState.activeId = null;
   _asrTurnState.complete = false;
   _asrTurnState.utteranceEnded = false;
+  _flushAsrCompletionWaiters('reset');
 }
 
 function _ensureActiveAsrTurn(turnId){
@@ -61,6 +64,49 @@ function _ensureActiveAsrTurn(turnId){
     _asrTurnState.complete = false;
     _asrTurnState.utteranceEnded = false;
   }
+}
+
+function _hasAsrFinalEvent(){
+  return !!(_asrTurnState.complete || _asrTurnState.utteranceEnded);
+}
+
+function _flushAsrCompletionWaiters(reason){
+  if (!_asrCompletionWaiters.size) return;
+  const waiters = Array.from(_asrCompletionWaiters);
+  _asrCompletionWaiters.clear();
+  waiters.forEach((waiter) => {
+    if (waiter?.timer) {
+      clearTimeout(waiter.timer);
+      waiter.timer = null;
+    }
+    try {
+      waiter?.resolve?.(reason);
+    } catch {}
+  });
+}
+
+function _notifyAsrCompletion(reason){
+  if (!_hasAsrFinalEvent()) return;
+  _flushAsrCompletionWaiters(reason);
+}
+
+function _waitForAsrCompletion(timeoutMs){
+  if (_hasAsrFinalEvent()) {
+    return Promise.resolve('already_final');
+  }
+  return new Promise((resolve) => {
+    const waiter = { resolve, timer: null };
+    if (typeof timeoutMs === 'number' && timeoutMs >= 0) {
+      waiter.timer = setTimeout(() => {
+        if (_asrCompletionWaiters.delete(waiter)) {
+          try {
+            resolve('timeout');
+          } catch {}
+        }
+      }, timeoutMs);
+    }
+    _asrCompletionWaiters.add(waiter);
+  });
 }
 
 function _extractAsrTurnId(frame){
@@ -411,6 +457,7 @@ export function handleAssistantFrame(d){
     setDot('ready');
     if (matchesActive) {
       _asrTurnState.utteranceEnded = true;
+      _notifyAsrCompletion('utterance_end');
     }
   }
 
@@ -427,6 +474,7 @@ export function handleAssistantFrame(d){
     _renderUserTranscript(d);
     if (matchesActive && isFinal) {
       _asrTurnState.complete = true;
+      _notifyAsrCompletion('final_result');
     }
     return;
   }
@@ -517,9 +565,10 @@ export async function onEnd(){
   ending = true;
   try {
     _clearSuggestions();
+    const finalFrameWait = _waitForAsrCompletion(ASR_FINALIZATION_TIMEOUT_MS);
     // Politely signal end of stream over WS, then close with code 1000
-    try { sendCloseStream(); } catch {}
-    await new Promise(r => setTimeout(r, 100));
+    try { await sendCloseStream(); } catch {}
+    try { await finalFrameWait; } catch {}
 
     try { closeWS(1000, 'user_end'); } catch {}
 
