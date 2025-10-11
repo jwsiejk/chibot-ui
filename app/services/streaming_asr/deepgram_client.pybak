@@ -58,6 +58,20 @@ def _sanitize_tag(val: Optional[str], *, limit: int = 64) -> Optional[str]:
     return txt[:limit]
 
 
+def _coerce_bool(val: Any) -> Optional[bool]:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    if isinstance(val, str):
+        txt = val.strip().lower()
+        if txt in {"1", "true", "yes", "on"}:
+            return True
+        if txt in {"0", "false", "no", "off", ""}:
+            return False
+    return None
+
+
 logger = logging.getLogger(__name__)
 
 _DG_KEY_PROBED = False
@@ -151,26 +165,55 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
     """
     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
 
-    # Detect containerized Opus from overrides (nested under _transport)
-    containerized = False
-    try:
-        if overrides and isinstance(overrides.get("_transport"), dict):
-            containerized = bool(overrides["_transport"].get("containerized_opus"))
-    except Exception:
-        containerized = False
+    overrides_dict: Optional[dict] = overrides if isinstance(overrides, dict) else None
+    transport: Optional[dict] = None
+    forced_reason: Optional[str] = None
+    requested_containerized: Optional[bool] = None
 
-    # Append conservative defaults ONLY when not containerized
-    if (not containerized) and ("encoding=" not in base):
-        sep = "&" if "?" in base else "?"
-        base = (
-            base
-            + sep
-            # RAW defaults; safe for legacy raw paths. If truly containerized, these will be stripped below.
-            + "encoding=opus&sample_rate=48000&channels=1"
-            + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true"
-        )
+    if overrides_dict is not None:
+        try:
+            candidate = overrides_dict.get("_transport")
+        except Exception:
+            candidate = None
+        if isinstance(candidate, dict):
+            transport = candidate
+        else:
+            transport = {}
+            overrides_dict["_transport"] = transport
+            forced_reason = "missing_transport" if candidate is None else "invalid_transport"
 
-    # Apply overrides into query string and clean up for containerized
+    if transport is None and overrides_dict is not None:
+        transport = {}
+        overrides_dict["_transport"] = transport
+        forced_reason = forced_reason or "missing_transport"
+
+    if transport is not None:
+        try:
+            requested_containerized = transport.get("containerized_opus")
+        except Exception:
+            requested_containerized = None
+        if requested_containerized is not True:
+            transport["containerized_opus"] = True
+            transport["_containerized_forced"] = True
+            if requested_containerized is False:
+                forced_reason = "requested_false"
+            elif forced_reason is None:
+                forced_reason = "unspecified"
+        else:
+            transport.pop("_containerized_forced", None)
+
+    containerized = True
+
+    audio_param_keys = {"encoding", "sample_rate", "channels"}
+    attempted_audio_params: list[str] = []
+    dropped_audio_params: list[str] = []
+
+    if overrides_dict is not None:
+        for key in list(audio_param_keys):
+            if key in overrides_dict and overrides_dict[key] is not None:
+                attempted_audio_params.append(key)
+                overrides_dict.pop(key, None)
+
     try:
         import urllib.parse as _p
 
@@ -190,9 +233,6 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         # Allow top-level overrides (model, language, etc.)
         if overrides:
             for k in (
-                "encoding",
-                "sample_rate",
-                "channels",
                 "interim_results",
                 "smart_format",
                 "punctuate",
@@ -229,20 +269,10 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
 
         # If containerized, remove transport params regardless of how they got here
         if containerized:
-            for k in ("encoding", "sample_rate", "channels"):
+            for k in audio_param_keys:
                 if k in qd:
+                    dropped_audio_params.append(k)                    
                     qd.pop(k, None)
-        else:
-            # Non-containerized path: allow env overrides for raw parameters (no behavior change if unset)
-            enc = os.getenv("DG_RAW_ENCODING")
-            sr = os.getenv("DG_RAW_SAMPLE_RATE")
-            ch = os.getenv("DG_RAW_CHANNELS")
-            if enc:
-                qd["encoding"] = enc
-            if sr:
-                qd["sample_rate"] = sr
-            if ch:
-                qd["channels"] = ch
 
         # Ensure default feature flags are present without overwriting explicit overrides
         qd.setdefault("interim_results", "true")
@@ -265,7 +295,7 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
 
         # Provide a sensible default for utterance_end_ms (2s) unless explicitly overridden
-        qd.setdefault("utterance_end_ms", "2000")
+        qd.setdefault("utterance_end_ms", os.getenv("DEEPGRAM_UTTERANCE_END_MS", "2000"))
 
         interim_val = qd.get("interim_results")
         interim_false = False
@@ -280,6 +310,14 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             interim_false = False
         if interim_false:
             qd.pop("utterance_end_ms", None)
+            effective_utterance_end_ms = 0
+        else:
+            try:
+                val = qd.get("utterance_end_ms")
+                if val is not None:
+                    effective_utterance_end_ms = int(str(val))
+            except Exception:
+                effective_utterance_end_ms = 0
 
         query = _p.urlencode(qd)
         base = _p.urlunsplit(
@@ -288,13 +326,41 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
     except Exception:
         pass
 
-    return base
+    if isinstance(overrides, dict):
+        try:
+            overrides["_effective_utterance_end_ms"] = int(
+                effective_utterance_end_ms or 0
+            )
+        except Exception:
+            overrides["_effective_utterance_end_ms"] = 0
 
+        try:
+            transport = overrides.get("_transport")
+            if isinstance(transport, dict):
+                if dropped_audio_params:
+                    transport["_dropped_audio_params"] = sorted(set(dropped_audio_params))
+                elif "_dropped_audio_params" in transport:
+                    transport.pop("_dropped_audio_params", None)
+                if attempted_audio_params:
+                    transport["_attempted_audio_params"] = sorted(set(attempted_audio_params))
+                elif "_attempted_audio_params" in transport:
+                    transport.pop("_attempted_audio_params", None)
+        except Exception:
+            pass
+
+    if forced_reason or attempted_audio_params or dropped_audio_params:
+        logger.info(
+            "Deepgram containerized_opus active reason=%s attempted=%s dropped=%s",
+            forced_reason or "default",
+            attempted_audio_params or [],
+            dropped_audio_params or [],
+        )
+
+    return base
 
 def _auth_header() -> str:
     key, _ = _api_key_info()
     return f"Token {key}"
-
 
 def _initial_config(overrides: Optional[dict] = None) -> dict:
     """Build Configure payload with FEATURES ONLY (no audio/transport keys)."""
@@ -434,6 +500,7 @@ class DeepgramClient:
         self._first_real_sent: bool = False
         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
         self._last_chunk_ts: float = 0.0
+        self._last_transcript: str = ""
 
         # Tunables
         self._linger_ms: int = int(
@@ -447,6 +514,23 @@ class DeepgramClient:
         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
         self._open_gate_warned: bool = False
 
+        env_bypass = _coerce_bool(os.getenv("DG_DEBUG_BYPASS_OPEN_GATE"))
+        cfg_bypass: Optional[bool] = None
+        if isinstance(self._cfg, dict):
+            for key in ("_debug_bypass_open_gate", "debug_bypass_open_gate"):
+                try:
+                    cfg_bypass = _coerce_bool(self._cfg.get(key))
+                except Exception:
+                    cfg_bypass = None
+                if cfg_bypass is not None:
+                    break
+        if cfg_bypass is not None:
+            self._debug_bypass_open_gate: bool = cfg_bypass
+        elif env_bypass is not None:
+            self._debug_bypass_open_gate = env_bypass
+        else:
+            self._debug_bypass_open_gate = False
+
         # Keepalive
         self._keepalive_task: Optional[asyncio.Task] = None
         self._keepalive_interval: float = float(
@@ -458,6 +542,11 @@ class DeepgramClient:
 
         # Serialize outbound websocket sends to avoid concurrent writer errors
         self._send_lock = asyncio.Lock()
+
+        # Forward logging control
+        self._forward_log_step: int = 8192
+        self._forward_log_next_threshold: int = self._forward_log_step
+        self._forwarded_total_bytes: int = 0
 
     def _diag_payload(self, **extra: Any) -> dict:
         payload: dict[str, Any] = {"provider": "deepgram"}
@@ -658,6 +747,13 @@ class DeepgramClient:
                 0,
             )
             return 0, None
+        transport_cfg = {}
+        try:
+            transport_cfg = (self._cfg or {}).get("_transport") or {}
+        except Exception:
+            transport_cfg = {}
+        containerized = bool(transport_cfg.get("containerized_opus"))
+
         # Wait until socket open — don't raise; just give it a short chance
         await self.wait_socket_open(
             timeout=float(os.getenv("DG_OPEN_MICRO_WAIT_S", "0.75"))
@@ -689,17 +785,15 @@ class DeepgramClient:
             return 0, None
         # Ensure we've passed the ready/open gate
         if not self._open_evt.is_set():
-            try:
-                await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
-            except asyncio.TimeoutError:
-                pass
-
-        transport_cfg = {}
-        try:
-            transport_cfg = (self._cfg or {}).get("_transport") or {}
-        except Exception:
-            transport_cfg = {}
-        containerized = bool(transport_cfg.get("containerized_opus"))
+            if containerized and self._debug_bypass_open_gate:
+                logger.debug(
+                    "Deepgram bypassing open gate sid=%s containerized=%s", sid, containerized
+                )
+            else:
+                try:
+                    await asyncio.wait_for(self._open_evt.wait(), timeout=self._open_wait_s)
+                except asyncio.TimeoutError:
+                    pass
 
         sid = self._sid_for_log()
         total_sent = 0
@@ -710,16 +804,17 @@ class DeepgramClient:
             if ws is None:
                 break
             data = self._tx_queue[0]
+            chunk_bytes = len(data)
             # Drop tiny preamble once (RAW only)
             if (
                 not containerized
                 and (not self._first_real_sent)
-                and len(data) < self._min_valid_bytes
+                and chunk_bytes < self._min_valid_bytes
             ):
                 logger.debug(
                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
                     sid,
-                    len(data),
+                    chunk_bytes,
                     self._min_valid_bytes,
                 )
                 self._tx_queue.popleft()
@@ -730,26 +825,33 @@ class DeepgramClient:
                 self._first_real_sent = True
                 self._last_chunk_ts = time.time()
                 self._tx_queue.popleft()
-                total_sent += len(data)
+                total_sent += chunk_bytes
                 sent_chunks += 1
                 if first_chunk is None:
                     first_chunk = data
                 logger.debug(
                     "Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
                     sid,
-                    len(data),
+                    chunk_bytes,
                     len(self._tx_queue),
                 )
-                if callable(self._jlog):
+                self._forwarded_total_bytes += chunk_bytes
+                threshold_hit = False
+                if self._forwarded_total_bytes >= self._forward_log_next_threshold:
+                    threshold_hit = True
+                    while self._forwarded_total_bytes >= self._forward_log_next_threshold:
+                        self._forward_log_next_threshold += self._forward_log_step
+                if threshold_hit and callable(self._jlog):
                     try:
                         self._jlog(
                             "dg_forward",
                             sid=sid,
                             dg_id=self._dg_id,
                             tag=self._url_tag,
-                            bytes=len(data),
+                            bytes=chunk_bytes,
                             queued=len(self._tx_queue),
                             total_sent=total_sent,
+                            total_forwarded=self._forwarded_total_bytes,
                         )
                     except Exception:
                         pass
@@ -837,32 +939,42 @@ class DeepgramClient:
             self._url_tag = q.get("tag") or None
             transport = (self._cfg or {}).get("_transport", {}) or {}
             containerized = bool(transport.get("containerized_opus"))
+            forced_containerized = bool(transport.get("_containerized_forced"))
+
+            def _as_list(raw_val: Any) -> list[str]:
+                if isinstance(raw_val, (list, tuple, set)):
+                    return [str(item) for item in raw_val]
+                if raw_val is None:
+                    return []
+                return [str(raw_val)]
+
+            attempted_audio_params = _as_list(transport.get("_attempted_audio_params"))
+            dropped_audio_params = _as_list(transport.get("_dropped_audio_params"))            
+            audio_param_keys = {"encoding", "sample_rate", "channels"}
             url_meta = {
                 "container": transport.get("container"),
                 "codec": transport.get("codec"),
                 "containerized_opus": containerized,
-                "normalized_pcm": bool(transport.get("normalized_pcm")),
-                "raw_fallback": bool(transport.get("raw_fallback")),
                 "omitted_params": None,
-                "raw_params": None,
+                "audio_params": None,
+                "forced_containerized": forced_containerized,
+                "attempted_audio_params": attempted_audio_params or None,
+                "dropped_audio_params": dropped_audio_params or None,                
             }
             if containerized:
                 # These should be absent in containerized mode
-                omitted = []
-                for k in ("encoding", "sample_rate", "channels"):
-                    if k not in q:
-                        omitted.append(k)
+                omitted = [key for key in audio_param_keys if key not in q]
                 url_meta["omitted_params"] = omitted
             else:
-                url_meta["raw_params"] = {
-                    "encoding": q.get("encoding"),
-                    "sample_rate": q.get("sample_rate"),
-                    "channels": q.get("channels"),
+                sent_params = {
+                    key: q.get(key)
+                    for key in audio_param_keys
+                    if key in q
                 }
+                url_meta["audio_params"] = sent_params or None
 
             # Build sanitized query string for telemetry without sensitive params
             sanitized_pairs = []
-            raw_param_keys = {"encoding", "sample_rate", "channels"}
             for key in sorted(q.keys()):
                 if key is None:
                     continue
@@ -870,7 +982,7 @@ class DeepgramClient:
                 lower = key_str.lower()
                 if "key" in lower or "token" in lower or "secret" in lower:
                     continue
-                if containerized and key_str in raw_param_keys:
+                if containerized and key_str in audio_param_keys:
                     continue
                 sanitized_pairs.append((key_str, q[key]))
             sanitized_query = _p.urlencode(sanitized_pairs, doseq=True)
@@ -880,7 +992,7 @@ class DeepgramClient:
                 safe_url = f"{safe_url}?{sanitized_query}"
             if parts.fragment:
                 safe_url = f"{safe_url}#{parts.fragment}"
-            raw_params_absent = all(param not in q for param in raw_param_keys)
+            audio_params_absent = all(param not in q for param in audio_param_keys)
 
             # Structured JSON log if _jlog is available (preferred for your admin viewer)
             if callable(self._jlog):
@@ -891,34 +1003,38 @@ class DeepgramClient:
                         dg_id=self._dg_id,
                         qs=sanitized_qs,
                         containerized_opus=containerized,
-                        raw_params_absent=raw_params_absent,
+                        audio_params_absent=audio_params_absent,
+                        forced_containerized=forced_containerized,
+                        attempted_audio_params=attempted_audio_params or None,
+                        dropped_audio_params=dropped_audio_params or None,                        
                     )
                 except Exception:
                     pass
                 try:
                     self._jlog(
                         "asr_url",
+                        sid=sid,
                         dg_id=self._dg_id,
                         url=url,
                         container=url_meta.get("container"),
                         codec=url_meta.get("codec"),
                         containerized_opus=bool(url_meta.get("containerized_opus")),
-                        normalized_pcm=bool(url_meta.get("normalized_pcm")),
-                        raw_fallback=bool(url_meta.get("raw_fallback")),
                         omitted_params=url_meta.get("omitted_params"),
-                        raw_params=url_meta.get("raw_params"),
+                        audio_params=url_meta.get("audio_params"),
+                        forced_containerized=url_meta.get("forced_containerized"),
+                        attempted_audio_params=url_meta.get("attempted_audio_params"),
+                        dropped_audio_params=url_meta.get("dropped_audio_params"),                        
                     )
                 except Exception:
                     pass
 
             # Keep existing human-readable info log
             logger.info(
-                "dg_ws_connect sid=%s url=%s containerized_opus=%s normalized_pcm=%s raw_fallback=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
+                "dg_ws_connect sid=%s url=%s containerized_opus=%s forced=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
                 sid,
                 url,
                 containerized,
-                url_meta.get("normalized_pcm"),
-                url_meta.get("raw_fallback"),
+                forced_containerized,                
                 q.get("encoding"),
                 q.get("sample_rate"),
                 q.get("channels"),
@@ -1555,9 +1671,14 @@ class DeepgramClient:
                     "transcript",
                     "partialtranscript",
                     "speech.update",
+                    "utteranceend",
                 ):
+                    if evt_type == "utteranceend" and self._final_event.is_set():
+                        continue
                     text = ""
                     is_final = False
+                    final_reason: Optional[str] = None
+                    final_reason_detail: Optional[str] = None
 
                     # Prefer channel.* first (typical DG shape)
                     channel = msg.get("channel") or {}
@@ -1582,9 +1703,37 @@ class DeepgramClient:
                         or bool(msg.get("speech_final"))
                         or (evt_type in ("utteranceend", "UtteranceEnd"))
                     )
+                    if is_final:
+                        endpointing = None
+                        if isinstance(channel, dict):
+                            endpointing = channel.get("endpointing")
+                        if isinstance(endpointing, dict):
+                            endpoint_type = endpointing.get("type")
+                            if isinstance(endpoint_type, str) and endpoint_type:
+                                final_reason_detail = endpoint_type
+                        for key in ("reason", "end_reason", "speech_final_reason"):
+                            val = msg.get(key)
+                            if isinstance(val, str) and val:
+                                final_reason_detail = val
+                                break
+                        if evt_type == "utteranceend" or msg.get("utterance_end"):
+                            final_reason = "utterance_end"
+                        if not final_reason and isinstance(final_reason_detail, str):
+                            lowered = final_reason_detail.strip().lower()
+                            if "utterance" in lowered:
+                                final_reason = "utterance_end"
+                            elif "endpoint" in lowered:
+                                final_reason = "utterance_end"
+                        if self._closing and not final_reason:
+                            final_reason = "close_stream"
+                        if not final_reason:
+                            final_reason = "provider_final"
 
-                    # No usable text in this message; keep listening
-                    if not text:
+                    if text:
+                        self._last_transcript = text
+                    elif is_final:
+                        text = self._last_transcript or ""
+                    else:
                         continue
 
                     # Seeing a result also implies the upstream is functioning
@@ -1604,18 +1753,22 @@ class DeepgramClient:
                         active=True,
                     )
                     try:
-                        await self._ev_queue.put(
-                            {
-                                "type": "user_final" if is_final else "user_partial",
-                                "text": text,
-                            }
-                        )
+                        payload = {
+                            "type": "user_final" if is_final else "user_partial",
+                            "text": text,
+                        }
+                        if is_final:
+                            payload["final_reason"] = final_reason
+                            if final_reason_detail:
+                                payload["final_reason_detail"] = final_reason_detail
+                        await self._ev_queue.put(payload)
                     except Exception:
                         pass
 
                     if is_final:
                         self._any_result = True
                         self._final_event.set()
+                        self._last_transcript = ""
                         continue
 
                 elif evt_type in ("error", "close"):

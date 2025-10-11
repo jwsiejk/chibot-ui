@@ -1,186 +1,74 @@
 diff --git a/static/js/voice.js b/static/js/voice.js
-index 3477a31d021537d5930bdea7e67572d14073b980..f36de6181465446e92304aa9c7ef99af29bb98bb 100644
+index f36de6181465446e92304aa9c7ef99af29bb98bb..b302a940ca92d855abcf935b36ecc035c6e48144 100644
 --- a/static/js/voice.js
 +++ b/static/js/voice.js
-@@ -220,120 +220,123 @@ function _setGreetGateActive(active) {
-   if (state.greetGateActive) {
-     _completeGreetGate('manual_release');
-   } else {
-     _resetGreetGateState();
-   }
- }
- 
- function _startGreetGateCalibrate(source = 'unknown') {
-   if (!state.greetGateActive) return;
-   if (state.greetGatePhase === 'calibrating' && state.greetGateCalibrateTimer) {
-     state.greetGateLastSignal = source;
-     return;
-   }
-   const durationMs = _resolveGreetGateCalibrateMs();
-   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-     ? performance.now()
-     : Date.now();
-   _clearGreetGateCalibrateTimer();
-   state.greetGatePhase = 'calibrating';
-   state.greetGateLastSignal = source;
-   state.greetGateCalibrateLastMs = durationMs;
-   state.greetGateCalibrateUntil = now + durationMs;
-   _voiceLog('info', 'greet gate calibrating', {
-     source,
-     calibrateMs: durationMs,
-+    ttsPlaying: !!state.ttsPlaying,
-   });
-   try {
-     state.greetGateCalibrateTimer = setTimeout(() => {
-       state.greetGateCalibrateTimer = null;
-       state.greetGateCalibrateUntil = 0;
-       _completeGreetGate('calibrated');
-     }, durationMs);
-   } catch (err) {
-     _voiceLog('warn', 'failed to start greet calibrate timer', { error: err?.message || err });
-     _completeGreetGate('calibrate_timer_failed');
-   }
- }
- 
- function _waitForGreetGate() {
-   if (!state.greetGateActive) {
-     return null;
-   }
-   if (state.greetGatePhase !== 'pending' && state.greetGatePhase !== 'calibrating') {
-     return null;
-   }
-   return new Promise((resolve) => {
-     state.greetGateWaiters.push((result) => {
-       resolve(result !== false);
-     });
-   });
- }
- 
- function _handleGreetGateUtteranceEnd(detail = {}) {
-   if (!state.greetGateActive) return;
-   state.ttsPlaying = false;
-   _voiceLog('debug', 'greet gate observed UtteranceEnd', {
-     phase: state.greetGatePhase,
-     reason: state.greetGateLastReason,
-+    ttsPlaying: !!state.ttsPlaying,
-   });
-   _startGreetGateCalibrate('UtteranceEnd');
- }
- 
- function _valueIsReadyFlag(value) {
-   if (value === true) return true;
-   if (value === 1) return true;
-   if (typeof value === 'string') {
-     const lowered = value.trim().toLowerCase();
-     if (lowered === 'true' || lowered === '1' || lowered === 'yes') return true;
-   }
-   return false;
- }
- 
- function _handleGreetGateStateFrame(detail = {}) {
-   if (!state.greetGateActive) return;
-   const channelReady = _valueIsReadyFlag(detail?.channel?.ready_for_user);
-   const ready = _valueIsReadyFlag(detail?.ready_for_user) || channelReady;
-   const normalizePhase = (value) => {
-     if (typeof value !== 'string') return '';
-     return value.trim().toLowerCase();
-   };
-   const stateField = normalizePhase(detail?.state);
-   const phaseField = normalizePhase(detail?.phase);
-   const channelPhaseField = normalizePhase(detail?.channel?.phase);
-   const explicitReady = ['ready_for_user', 'ready'].some((target) =>
-     stateField === target || phaseField === target || channelPhaseField === target
-   );
-   if (ready || explicitReady) {
-     _voiceLog('debug', 'greet gate observed ready state', {
-       phase: state.greetGatePhase,
-       channelReady,
-       ready,
-       explicitReady,
-       stateField,
-       phaseField,
-       channelPhaseField,
-+      ttsPlaying: !!state.ttsPlaying,
-     });
-     _startGreetGateCalibrate('ready_for_user');
-   }
- }
- 
- function _emitVoiceState(state, detail = {}) {
-   try {
-     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
-   } catch {}
- }
- 
- function _setActiveTurnTraceId(traceId) {
-   state.turnTraceId = traceId || null;
-   try { window.__askchip_turn_trace_id = state.turnTraceId; } catch {}
- }
- 
- function _getActiveTurnTraceId() {
-   return state.turnTraceId || null;
- }
- 
- function _ensureTurnTraceBase() {
-   if (!state.turnTraceBase) {
-     const entropy = Math.floor(Math.random() * 46656).toString(36).padStart(3, '0');
-     state.turnTraceBase = entropy;
-   }
-@@ -1372,50 +1375,57 @@ async function _onSpeechStartCommitted(detail = {}) {
-     preRollSentMs: round(Math.min(bufferedMsRaw, PRE_ROLL_MS)),
-     preRollChunks: preRollBlobs.length,
-     preRollBytes: totalBytes,
-     preRollEnabled: preRollBlobs.length > 0,
-     preRollMime: (state.rec && state.rec.mimeType) || REC_MIME,
-     snrDb: roundTenths(metrics?.snrDb),
-     noiseFloorDb: roundTenths(metrics?.noiseFloorDb),
-     thresholdStartDb: roundTenths(metrics?.thresholds?.startDb),
-   });
-   _voiceLog('info', 'speech started', {
-     preRollChunks: preRollBlobs.length,
-     preRollBytes: totalBytes,
-     snrDb: roundTenths(metrics?.snrDb),
-   });
- 
-   if (state.greetGateActive) {
-     if (state.greetGatePhase === 'calibrating') {
-       _voiceLog('info', 'speech start suppressed during greet calibration', {
-         calibrateUntil: state.greetGateCalibrateUntil,
-         snrDb: roundTenths(metrics?.snrDb),
-       });
-       return;
-     }
-     if (state.greetGatePhase === 'pending') {
-       const snrDb = Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null;
-+      if (state.ttsPlaying) {
-+        _voiceLog('info', 'speech start suppressed by greet gate while TTS playing', {
-+          snrDb: roundTenths(snrDb),
-+          ttsPlaying: true,
-+        });
-+        return;
-+      }
-       if (Number.isFinite(snrDb) && snrDb >= GREET_BARGE_MIN_SNR_DB) {
-         _voiceLog('info', 'greet gate bypassed via barge-in', {
-           snrDb: roundTenths(snrDb),
+@@ -1010,55 +1010,64 @@ async function _primeRecorderForPreRoll(options = {}) {
+       }
+       if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
+         _voiceLog('warn', 'recorder stopped with issues', {
+           bytesSent: state.chunkBytesSent,
+           error: state.chunkSendError?.message || state.chunkSendError || null,
          });
-         _completeGreetGate('barge_in');
        } else {
-         _voiceLog('info', 'speech start suppressed by greet gate', {
-           snrDb: roundTenths(metrics?.snrDb),
+         _voiceLog('info', 'recorder stopped', {
+           bytesSent: state.chunkBytesSent,
+           mime: (recorder && recorder.mimeType) || REC_MIME,
          });
-         return;
+       }
+       const pendingClose = _closeTurnIfOpen();
+       if (pendingClose) {
+         try {
+           await pendingClose;
+         } catch {}
+       }
+       _emitVoiceState('armed', finalDetail);
+       if (state.vad && state.stream && state.stream.active) {
+         try { await _primeRecorderForPreRoll(); } catch (err) { _voiceLog('warn', 'failed to re-prime recorder', { error: err?.message || err }); }
        }
      }
+   };
+ 
+-  const audioStartReady = await _ensureAudioStartSent();
+-  if (!audioStartReady) {
+-    _voiceLog('warn', 'AudioStart not confirmed — recorder start deferred', { mime: recorder.mimeType });
+-    state.rec = null;
+-    return false;
++  const greetGateBlockingHandshake = state.greetGateActive
++    && (state.greetGatePhase === 'pending' || state.greetGatePhase === 'calibrating');
++  if (greetGateBlockingHandshake && !state.turnHintSent) {
++    _voiceLog('debug', 'AudioStart handshake deferred until greet gate release', {
++      mime: recorder.mimeType,
++      greetGatePhase: state.greetGatePhase,
++    });
++  } else {
++    const audioStartReady = await _ensureAudioStartSent();
++    if (!audioStartReady) {
++      _voiceLog('warn', 'AudioStart not confirmed — recorder start deferred', { mime: recorder.mimeType });
++      state.rec = null;
++      return false;
++    }
    }
  
-   if (state.ttsPlaying && !state.bargeConfirmActive) {
-     state.bargeConfirmActive = true;
-     try { pausePlayback(); } catch {}
-       state.bargeConfirmTimer = setTimeout(async () => {
-         state.bargeConfirmTimer = null;
-         if (!state.bargeConfirmActive) return;
-         if (state.vad && typeof state.vad.isRecording === 'function' && !state.vad.isRecording()) {
-           state.bargeConfirmActive = false;
-           try { resumePlayback(); } catch {}
-           return;
-         }
+   try {
+     recorder.start(timeslice);
+     state.preRollTimeslice = timeslice;
+     _voiceLog('debug', 'recorder primed', { mime: recorder.mimeType, timeslice });
+   } catch (err) {
+     _voiceLog('warn', 'recorder start failed', { error: err?.message || err });
+     state.rec = null;
+     return false;
+   }
+ 
+   return true;
+ }
+ 
+ function _handleRecorderData(event) {
+   if (!event) {
+     return;
+   }
+   if (state.finalized) {
+     return;
+   }
+   const blob = event.data;
+   if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
+     return;

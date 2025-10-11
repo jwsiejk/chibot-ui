@@ -7,15 +7,6 @@ from app.services.audio.container_sniffer import (
     AudioContainerSniffer,
     coerce_detection_from_meta,
 )
-from app.services.audio.raw_fallback import (
-    DetectionSignal as RawDetectionSignal,
-    StreamMeta as RawStreamMeta,
-    StreamStats as RawStreamStats,
-    raw_fallback_disabled,
-    coerce_to_raw_config,
-    normalize_pcm_frame,
-    should_use_raw_fallback,
-)
 
 from .schema_v1 import (
     parse_client_json,
@@ -35,10 +26,25 @@ from app.services.greet_idempotency import clear_greet_turn_cache
 from app.metrics import ws_metrics
 
 # NEW: invoke LLM on final transcript
-from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
+from app.services.streaming import (
+    run_ws_user_turn,
+    prepare_turn_metadata,
+    summarize_policy_metadata,
+    wait_for_tts_completion,
+    wait_for_listen_ready,
+)  # NEW
 from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
 from app.ws.barge import BargeState
 from app.ws.bus import bus
+from app.policy import nudges
+from app.session_state import (
+    note_partial,
+    note_utterance_end,
+    set_asr_stream_open,
+    set_phase,
+    set_recorder_active,
+    should_emit_phase,
+)
 
 # Optional admin emitter
 try:
@@ -49,6 +55,27 @@ except Exception:
 
 ACTIVE_WS: dict[str, dict[str, Any]] = {}
 ACTIVE_WS_LOCK = asyncio.Lock()
+
+
+def _transport_enables_webm_hint(transport_meta: Optional[Dict[str, Any]]) -> bool:
+    """Return True when existing transport metadata should keep the WebM gate open."""
+
+    if not isinstance(transport_meta, dict):
+        return False
+
+    def _normalize(value: Any) -> str:
+        try:
+            return str(value or "").strip().lower()
+        except Exception:
+            return ""
+
+    container = _normalize(transport_meta.get("container"))
+    codec = _normalize(transport_meta.get("codec"))
+
+    return container == "webm" and codec == "opus"
+
+
+CONNECT_GATE_OBSERVER: Optional[Callable[[bool, Optional[str]], None]] = None
 
 WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
 try:
@@ -102,6 +129,49 @@ def _dumps(obj) -> str:
     import json as _json
 
     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
+def _should_emit_barge_phase(sid: str, phase: str) -> bool:
+    """Return True if the barge phase changed and should be broadcast."""
+    if not phase:
+        return False
+
+    try:
+        if not should_emit_phase(sid, phase):
+            with contextlib.suppress(Exception):
+                set_phase(sid, phase)
+            return False
+        with contextlib.suppress(Exception):
+            set_phase(sid, phase, emitted=True)
+    except Exception:
+        return False
+
+    return True
+
+
+def _broadcast_barge_state_frame(sid: str, phase: str) -> Optional[Dict[str, Any]]:
+    """Broadcast a barge state frame to session subscribers if it changed."""
+    if not phase:
+        return None
+
+    if not _should_emit_barge_phase(sid, phase):
+        return None
+
+    if phase == "paused":
+        try:
+            set_recorder_active(sid, True)
+        except Exception:
+            pass
+        nudges.cancel_idle_timers(sid, source="ws_state_paused")
+
+    frame: Dict[str, Any] = {"type": "state", "phase": phase}
+
+    try:
+        bus.broadcast(sid, frame)
+    except Exception:
+        pass
+
+    return frame
 
 
 def _emit_admin_nlu_event(text: str,
@@ -180,6 +250,63 @@ def _emit_admin_nlu_event(text: str,
         admin_cb("nlu", **payload)
     except Exception:
         pass
+
+
+def _build_meta_overrides(prepared_meta: Optional[Dict[str, Any]],
+                          dialog_nlu: Optional[Dict[str, Any]],
+                          universal: Optional[Dict[str, Any]],
+                          policy: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    base = prepared_meta if isinstance(prepared_meta, dict) else {}
+    overrides: Dict[str, Any] = {}
+
+    def _set(key: str, value: Any) -> None:
+        if value is None:
+            return
+        try:
+            overrides[key] = copy.deepcopy(value)
+        except Exception:
+            overrides[key] = value
+
+    if isinstance(dialog_nlu, dict) and dialog_nlu:
+        _set("nlu", dialog_nlu)
+        _set("dialog_nlu", dialog_nlu)
+    else:
+        if isinstance(base.get("nlu"), dict):
+            _set("nlu", base["nlu"])
+        if isinstance(base.get("dialog_nlu"), dict):
+            _set("dialog_nlu", base["dialog_nlu"])
+
+    if isinstance(universal, dict) and universal:
+        _set("universal", universal)
+    elif isinstance(base.get("universal"), dict):
+        _set("universal", base["universal"])
+
+    for key in (
+        "action",
+        "dialog_action",
+        "frame",
+        "show_suggestions",
+        "dialog_show_suggestions",
+        "dialog_verbosity",
+        "verbosity",
+        "policy_chips",
+        "policy_confidence_band",
+        "planner_confidence_band",
+    ):
+        if key in base:
+            _set(key, base[key])
+
+    policy_obj: Optional[Dict[str, Any]] = policy if isinstance(policy, dict) else None
+    if policy_obj is None and isinstance(base.get("dialog_policy"), dict):
+        policy_obj = base["dialog_policy"]
+
+    if policy_obj is not None:
+        _set("dialog_policy", policy_obj)
+        summary = summarize_policy_metadata(policy_obj)
+        for key, value in summary.items():
+            _set(key, value)
+
+    return overrides or None
 
 
 def _get_session_id(scope) -> str:
@@ -332,14 +459,59 @@ async def _pump_dg_to_client(
     sid: str,
     asr_ready_evt: Optional[asyncio.Event] = None,
     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
-    stream_stats: Optional[RawStreamStats] = None,
+    schedule_user_final: Optional[
+        Callable[[int, str, Optional[str]], Awaitable[None]]
+    ] = None,
     turn_timing: Optional[Dict[str, List[float]]] = None,
     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
+    cancel_turn_start_timeout: Optional[Callable[[], None]] = None,
 ):
     """Relay Deepgram events to client and, on final, kick LLM turn."""
     try:
         async for ev in dg.events():
             et = (ev.get("type") or "").lower()
+            meta: Dict[str, Any] = {
+                "sid": sid,
+                "turn_id": turn_id_ref[0],
+                "dg_type": et,
+            }
+            if isinstance(ev, dict):
+                if "text" in ev:
+                    try:
+                        txt = (ev.get("text") or "")
+                        meta["chars"] = len(txt)
+                        meta["preview"] = _clip_text(str(txt))
+                    except Exception:
+                        pass
+                if "error" in ev:
+                    try:
+                        meta["error"] = _clip_text(str(ev.get("error")), 120)
+                    except Exception:
+                        pass
+                flags = ev.get("flags") or ev.get("dg_flags")
+                if isinstance(flags, (list, tuple)):
+                    try:
+                        meta["flags"] = list(flags)[:4]
+                    except Exception:
+                        pass
+                seq = ev.get("seq")
+                if isinstance(seq, int):
+                    meta["seq"] = seq
+            log_type = et
+            if et == "user_partial":
+                log_type = "partial"
+            elif et == "user_final":
+                log_type = "final"
+            elif "vad" in et:
+                log_type = "vad"
+            meta["dg_type"] = log_type
+            if et == "user_final" and ev.get("final_reason"):
+                try:
+                    meta["final_reason"] = ev.get("final_reason")
+                except Exception:
+                    pass
+            meta.setdefault("chars", 0)
+            _jlog("dg_message", **meta)
             if et == "asr_open":
                 delta_ms = None
                 now_ts = time.time()
@@ -381,6 +553,9 @@ async def _pump_dg_to_client(
                 text = (ev.get("text") or "").strip()
                 turn_id_for_event = turn_id_ref[0]
                 if is_final:
+                    if cancel_turn_start_timeout:
+                        with contextlib.suppress(Exception):
+                            cancel_turn_start_timeout()
                     next_turn_id = None
                     try:
                         next_turn_id = pending_final_turns.popleft()
@@ -396,6 +571,7 @@ async def _pump_dg_to_client(
                         synthetic_final_turns.discard(next_turn_id)
                     turn_id_for_event = next_turn_id
                 if not is_final:
+                    nudges.cancel_idle_timers(sid, source="asr_partial")
                     try:
                         asr_seen_partial[0] = True
                     except Exception:
@@ -409,6 +585,10 @@ async def _pump_dg_to_client(
                                 first_holder[0] = time.time()
                         except Exception:
                             pass
+                    try:
+                        note_partial(sid)
+                    except Exception:
+                        pass
                 _jlog(
                     "dg_transcript",
                     sid=sid,
@@ -417,116 +597,60 @@ async def _pump_dg_to_client(
                     chars=len(text),
                     preview=_clip_text(text),
                 )
+                log_payload = {
+                    "sid": sid,
+                    "turn_id": turn_id_for_event,
+                    "chars": len(text or ""),
+                    "had_text": bool(text),
+                }
+                seq_val = ev.get("seq")
+                if isinstance(seq_val, int):
+                    log_payload["seq"] = seq_val
+                if not is_final:
+                    with contextlib.suppress(Exception):
+                        _jlog("dg_interim", **log_payload)
+                else:
+                    final_reason_val = ev.get("final_reason") or None
+                    if final_reason_val:
+                        log_payload["final_reason"] = final_reason_val
+                    with contextlib.suppress(Exception):
+                        _jlog("dg_final", **log_payload)
                 try:
                     if et == "user_partial":
                         _admin_emit and _admin_emit("asr:first_partial", session_id=sid)
                 except Exception:
                     pass
 
-                await _ws_send_json(
-                    send,
-                    make_results(
-                        turn_id_for_event,
-                        transcript=text,
-                        confidence=0.0,
-                        is_final=is_final,
-                    ),
-                )
-
-                if is_final:
-                    final_seen[0] = True
-                    if turn_timing is not None and text:
-                        try:
-                            first_holder = turn_timing.setdefault(
-                                "first_partial", [0.0]
-                            )
-                            if not first_holder[0]:
-                                first_holder[0] = time.time()
-                        except Exception:
-                            pass
-                    if on_turn_finish:
-                        try:
-                            on_turn_finish(
-                                turn_id_for_event, "provider_final", False, len(text)
-                            )
-                        except Exception:
-                            pass
-                    await _ws_send_json(send, make_utterance_end(turn_id_for_event))
-                    try:
-                        _admin_emit and _admin_emit("asr:final", session_id=sid)
-                    except Exception:
-                        pass
-
-                    if text:
-                        dialog_nlu_pre: Dict[str, Any] = {}
-                        universal_pre: Dict[str, Any] = {}
-                        meta_stub = {"source": "user_ws", "channel": "ws"}
-                        try:
-                            prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
-                                text, dict(meta_stub)
-                            )
-                            if isinstance(dialog_nlu_raw, dict):
-                                dialog_nlu_pre = dict(dialog_nlu_raw)
-                            if isinstance(prepared_meta, dict):
-                                raw_universal = prepared_meta.get("universal") or {}
-                                if isinstance(raw_universal, dict):
-                                    universal_pre = _ensure_universal_fields(raw_universal)
-                        except Exception:
-                            dialog_nlu_pre = {}
-                            universal_pre = {}
-
-                        _emit_admin_nlu_event(
-                            text,
-                            sid,
-                            dialog_nlu=dialog_nlu_pre,
-                            universal=universal_pre,
+                if not is_final:
+                    with contextlib.suppress(Exception):
+                        _jlog(
+                            "ui_result_emit",
+                            sid=sid,
+                            turn_id=turn_id_for_event,
+                            final=False,
+                            chars=len(text or ""),
                         )
-
-                        meta_overrides: Optional[Dict[str, Any]] = None
-                        if dialog_nlu_pre or universal_pre:
-                            meta_overrides = {}
-                            if dialog_nlu_pre:
-                                meta_overrides["nlu"] = dict(dialog_nlu_pre)
-                                meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
-                            if universal_pre:
-                                meta_overrides["universal"] = dict(universal_pre)
-
-                        if turn_id_for_event in completed_llm_turns:
-                            with contextlib.suppress(Exception):
-                                _jlog(
-                                    "llm_turn_skip_duplicate",
-                                    sid=sid,
-                                    turn_id=turn_id_for_event,
-                                )
-                        else:
-                            completed_llm_turns.add(turn_id_for_event)
-
-                            async def _bg_turn(meta_payload=meta_overrides):
-                                try:
-                                    await asyncio.to_thread(
-                                        run_ws_user_turn,
-                                        sid,
-                                        text,
-                                        None,
-                                        meta_overrides=meta_payload,
-                                    )
-                                except Exception as e:
-                                    with contextlib.suppress(Exception):
-                                        await _ws_send_json(
-                                            send,
-                                            make_error(
-                                                "llm_turn_fail", e.__class__.__name__
-                                            ),
-                                        )
-
-                            asyncio.create_task(_bg_turn())
+                    await _ws_send_json(
+                        send,
+                        make_results(
+                            turn_id_for_event,
+                            transcript=text,
+                            confidence=0.0,
+                            is_final=False,
+                        ),
+                    )
+                else:
+                    if schedule_user_final is not None:
+                        try:
+                            await schedule_user_final(
+                                turn_id_for_event,
+                                text,
+                                ev.get("final_reason"),
+                            )
+                        except Exception:
+                            pass
 
             elif et == "asr_error":
-                if stream_stats is not None:
-                    try:
-                        stream_stats.note_provider_error()
-                    except Exception:
-                        pass
                 err = _clip_text(str(ev.get("error") or "unknown"), 160)
                 _jlog("dg_asr_error", sid=sid, turn_id=turn_id_ref[0], error=err)
                 try:
@@ -553,10 +677,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         "containerized_opus": False,
         "features": [],
     }
+    FORWARD_PROGRESS_STEP = 8192
+    forwarded_total_bytes = [0]
+    forwarded_progress_next = [FORWARD_PROGRESS_STEP]
     sniffer = AudioContainerSniffer()
-    stream_meta = RawStreamMeta()
-    stream_stats = RawStreamStats(meta=stream_meta)
-    fallback_detection: Optional[RawDetectionSignal] = None
     audio_sig_logged = False
 
     MIC_CAPTURE = _env_truth("MIC_CAPTURE", False)
@@ -758,33 +882,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return
 
     cfg: Dict[str, Any] = {}
-    loop = asyncio.get_running_loop()
     barge = BargeState()
 
     def _send_barge_state(phase: str) -> None:
-        if not phase:
-            return
-        frame = {"type": "state", "phase": phase}
-        try:
-            bus.broadcast(sid, frame)
-        except Exception:
-            pass
-        try:
-            if loop.is_closed():
-                return
-            payload = dict(frame)
-            try:
-                running = asyncio.get_running_loop()
-            except RuntimeError:
-                running = None
-            if running is loop:
-                asyncio.create_task(_ws_send_json(send, payload))
-            else:
-                loop.call_soon_threadsafe(
-                    asyncio.create_task, _ws_send_json(send, payload)
-                )
-        except Exception:
-            pass
+        _broadcast_barge_state_frame(sid, phase)
 
     buf = TurnBuffer()
     dg: Optional[DeepgramClient] = None
@@ -795,6 +896,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     pending_final_turns: Deque[int] = deque()
     completed_llm_turns: Set[int] = set()
     synthetic_final_turns: Set[int] = set()
+    turn_commit_logged: Set[int] = set()
     final_seen = [False]
     asr_seen_partial = [False]
     turn_timing: Dict[str, List[float]] = {
@@ -804,10 +906,22 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         "final": [0.0],
     }
     turn_finish_logged = [False]
+    turn_overlap_logged = [False]
 
     # Turn-scoped buffering + state
     buffered_chunks: Deque[bytes] = deque()
+    buffered_byte_total = [0]
     sent_any_audio = [False]
+    turn_start_timeout_task: List[Optional[asyncio.Task]] = [None]
+    turn_start_timeout_turn_id = [0]
+    try:
+        turn_start_timeout_s = float(
+            os.getenv("WS_TURN_START_TIMEOUT_S", "2.5") or "0"
+        )
+    except Exception:
+        turn_start_timeout_s = 2.5
+    if turn_start_timeout_s < 0:
+        turn_start_timeout_s = 0.0
     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
     no_audio_notified = [False]
     no_audio_turn_id = [0]
@@ -830,11 +944,436 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     backpressure_last_queue_len = 0
     backpressure_emit_interval = 1.0
     turn_connect_started = [False]
+    webm_hint_gate = [False]
+    webm_sniff_gate = [False]
+    sniffer_bytes_seen = [0]
+    SNIFFER_GATE_BUDGET = 10 * 1024
+
+    def _connect_gate_state() -> tuple[bool, Optional[str]]:
+        gate_open = False
+        gate_reason: Optional[str] = None
+        if webm_hint_gate[0]:
+            gate_open = True
+            gate_reason = "audio_start_webm"
+        elif webm_sniff_gate[0]:
+            gate_open = True
+            gate_reason = "sniff_webm"
+
+        observer = CONNECT_GATE_OBSERVER
+        if callable(observer):
+            try:
+                observer(gate_open, gate_reason)
+            except Exception:
+                pass
+
+        return gate_open, gate_reason
 
     # NEW: per-turn mic capture state
     mic_chunks: List[bytes] = []
     mic_first_ts = [0.0]
     mic_last_ts = [0.0]
+
+    # Deferred provider final guard state
+    pending_user_final: Dict[str, Any] = {
+        "payload": None,
+        "ts": 0.0,
+        "source": None,
+        "final_reason": None,
+    }
+    pending_user_final_task: List[Optional[asyncio.Task]] = [None]
+
+    def _note_turn_commit(
+        turn_id: Optional[int], *, source: str, **extra_fields: Any
+    ) -> None:
+        if turn_id is None:
+            return
+        if turn_id in turn_commit_logged:
+            return
+        turn_commit_logged.add(turn_id)
+        fields: Dict[str, Any] = {
+            "sid": sid,
+            "turn_id": turn_id,
+            "source": source,
+            "pending_guard": bool(pending_user_final.get("payload")),
+            "final_seen": bool(final_seen[0]),
+        }
+        for key, value in extra_fields.items():
+            if value is not None:
+                fields[key] = value
+        with contextlib.suppress(Exception):
+            _jlog("turn_commit", **fields)
+
+    def _resolve_final_guard_window_s() -> float:
+        """Resolve how long to wait after a provider final before committing it to the client."""
+        try:
+            raw_val = os.getenv("WS_FINAL_GUARD_MS")
+            if raw_val is None or raw_val == "":
+                effective = None
+                try:
+                    effective = int(str(cfg.get("_effective_utterance_end_ms") or 0))
+                except Exception:
+                    effective = None
+                if effective and effective > 0:
+                    clamp = min(effective, 2000)
+                    if clamp != effective:
+                        try:
+                            cfg["_effective_utterance_end_ms"] = clamp
+                        except Exception:
+                            pass
+                    return max(0, clamp) / 1000.0
+                raw_val = "900"
+            env_val = int(raw_val)
+        except Exception:
+            env_val = 600
+        # Return seconds (clamped to >= 0)
+        try:
+            return max(0, env_val) / 1000.0
+        except Exception:
+            return 0.6      
+
+    def _cancel_pending_user_final_task(reason: str = "cancel") -> None:
+        task = pending_user_final_task[0]
+        if task and not task.done():
+            payload = pending_user_final.get("payload")
+            with contextlib.suppress(Exception):
+                _jlog(
+                    "ws_final_guard_cancel",
+                    sid=sid,
+                    turn_id=(payload or (None,))[0],
+                    reason=reason,
+                )
+            task.cancel()
+        pending_user_final_task[0] = None
+
+    def _clear_pending_user_final(reason: str = "clear") -> None:
+        payload = pending_user_final.get("payload")
+        _cancel_pending_user_final_task(reason)
+        pending_user_final["payload"] = None
+        pending_user_final["ts"] = 0.0
+        pending_user_final["source"] = None
+        pending_user_final["final_reason"] = None
+        if payload:
+            with contextlib.suppress(Exception):
+                _jlog(
+                    "ws_final_guard_cleared",
+                    sid=sid,
+                    turn_id=payload[0],
+                    reason=reason,
+                )
+
+    def _emit_empty_final_nudge(
+        turn_id_for_event: int,
+        *,
+        source: str,
+        reason: Optional[str],
+        bytes_forwarded: Optional[int] = None,
+    ) -> None:
+        fallback_text = "Sorry, I didn’t catch that. Could you say that again?"
+        try:
+            from app.services.streaming import make_assistant_frames
+
+            meta_stub = {"source": "nudge_empty_final", "channel": "ws"}
+            prepared_meta_fallback, _, _ = prepare_turn_metadata(
+                fallback_text, dict(meta_stub)
+            )
+            make_assistant_frames(
+                fallback_text,
+                sid,
+                meta=prepared_meta_fallback,
+                broadcast_immediately=True,
+            )
+        except Exception:
+            pass
+
+        with contextlib.suppress(Exception):
+            log_fields: Dict[str, Any] = {
+                "sid": sid,
+                "turn_id": turn_id_for_event,
+                "source": source,
+                "reason": reason,
+            }
+            if bytes_forwarded is not None:
+                try:
+                    log_fields["bytes_forwarded"] = int(bytes_forwarded)
+                except Exception:
+                    log_fields["bytes_forwarded"] = bytes_forwarded
+            _jlog("empty_final_nudge", **log_fields)
+
+    async def _emit_user_final_payload(turn_id_for_event: int, text: str) -> None:
+        if final_seen[0]:
+            with contextlib.suppress(Exception):
+                _jlog(
+                    "ws_final_guard_skip_duplicate",
+                    sid=sid,
+                    turn_id=turn_id_for_event,
+                )
+            return
+
+        _note_turn_commit(
+            turn_id_for_event,
+            source="provider_final",
+            text_chars=len(text or ""),
+        )
+        final_seen[0] = True
+        final_source = pending_user_final.get("source") or "provider_final"
+        final_reason = pending_user_final.get("final_reason")
+        pending_user_final["payload"] = None
+        pending_user_final["ts"] = 0.0
+        pending_user_final["source"] = None
+        pending_user_final["final_reason"] = None
+        turn_overlap_logged[0] = False
+
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ui_user_final_bridge",
+                sid=sid,
+                turn_id=turn_id_for_event,
+                chars=len(text or ""),
+                had_result=bool(text),
+                source=final_source,
+                reason=final_reason,
+            )
+
+        if turn_timing is not None and text:
+            try:
+                first_holder = turn_timing.setdefault("first_partial", [0.0])
+                if not first_holder[0]:
+                    first_holder[0] = time.time()
+            except Exception:
+                pass
+
+        await _ws_send_json(
+            send,
+            make_results(
+                turn_id_for_event,
+                transcript=text,
+                confidence=0.0,
+                is_final=True,
+            ),
+        )
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ui_result_emit",
+                sid=sid,
+                turn_id=turn_id_for_event,
+                final=True,
+                chars=len(text or ""),
+            )
+
+        with contextlib.suppress(Exception):
+            _log_turn_finish(turn_id_for_event, "provider_final", False, len(text))
+
+        await _ws_send_json(send, make_utterance_end(turn_id_for_event))
+
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ui_utterance_end",
+                sid=sid,
+                turn_id=turn_id_for_event,
+                actor="user",
+                source=final_source,
+                reason=final_reason,
+                synthetic=False,
+            )
+
+        try:
+            note_utterance_end(sid)
+        except Exception:
+            pass
+        try:
+            set_recorder_active(sid, False)
+        except Exception:
+            pass
+        try:
+            _admin_emit and _admin_emit("asr:final", session_id=sid)
+        except Exception:
+            pass
+
+        if not text:
+            _emit_empty_final_nudge(
+                turn_id_for_event,
+                source=final_source or "provider_final",
+                reason=final_reason or "empty_final",
+                bytes_forwarded=(
+                    forwarded_total_bytes[0] if forwarded_total_bytes[0] else None
+                ),
+            )
+            with contextlib.suppress(Exception):
+                _jlog(
+                    "schedule_run_ws_user_turn",
+                    sid=sid,
+                    turn_id=turn_id_for_event,
+                    source=final_source,
+                    reason=final_reason or "empty_final",
+                    scheduled=False,
+                    had_result=False,
+                )
+            return
+
+
+        if text:
+            dialog_nlu_pre: Dict[str, Any] = {}
+            universal_pre: Dict[str, Any] = {}
+            policy_pre: Dict[str, Any] = {}
+            prepared_meta: Dict[str, Any] = {}
+            meta_stub = {"source": "user_ws", "channel": "ws"}
+            try:
+                prepared_meta_raw, dialog_nlu_raw, policy_raw = prepare_turn_metadata(
+                    text, dict(meta_stub)
+                )
+                if isinstance(prepared_meta_raw, dict):
+                    prepared_meta = dict(prepared_meta_raw)
+                    raw_universal = prepared_meta.get("universal") or {}
+                    if isinstance(raw_universal, dict):
+                        universal_pre = _ensure_universal_fields(raw_universal)
+                if isinstance(dialog_nlu_raw, dict):
+                    dialog_nlu_pre = dict(dialog_nlu_raw)
+                if isinstance(policy_raw, dict):
+                    policy_pre = dict(policy_raw)
+            except Exception:
+                prepared_meta = {}
+                dialog_nlu_pre = {}
+                universal_pre = {}
+                policy_pre = {}
+
+            _emit_admin_nlu_event(
+                text,
+                sid,
+                dialog_nlu=dialog_nlu_pre,
+                universal=universal_pre,
+            )
+
+            meta_overrides = _build_meta_overrides(
+                prepared_meta,
+                dialog_nlu_pre,
+                universal_pre,
+                policy_pre,
+                )
+
+            if turn_id_for_event in completed_llm_turns:
+                with contextlib.suppress(Exception):
+                    _jlog(
+                        "llm_turn_skip_duplicate",
+                        sid=sid,
+                        turn_id=turn_id_for_event,
+                    )
+                with contextlib.suppress(Exception):
+                    _jlog(
+                        "schedule_run_ws_user_turn",
+                        sid=sid,
+                        turn_id=turn_id_for_event,
+                        source=final_source,
+                        reason=final_reason or "duplicate_final",
+                        scheduled=False,
+                        had_result=bool(text),
+                    )
+            else:
+                completed_llm_turns.add(turn_id_for_event)
+
+                async def _bg_turn(meta_payload=meta_overrides):
+                    try:
+                        await asyncio.to_thread(
+                            run_ws_user_turn,
+                            sid,
+                            text,
+                            None,
+                            meta_overrides=meta_payload,
+                        )
+                    except Exception as e:
+                        with contextlib.suppress(Exception):
+                            await _ws_send_json(
+                                send,
+                                make_error("llm_turn_fail", e.__class__.__name__),
+                        )
+
+                asyncio.create_task(_bg_turn())
+
+                with contextlib.suppress(Exception):
+                    _jlog(
+                        "schedule_run_ws_user_turn",
+                        sid=sid,
+                        turn_id=turn_id_for_event,
+                        source=final_source,
+                        reason=final_reason or "provider_final",
+                        scheduled=True,
+                        had_result=True,
+                    )
+
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ws_final_guard_emit",
+                sid=sid,
+                turn_id=turn_id_for_event,
+                guard_wait_s=_resolve_final_guard_window_s(),
+            )
+
+    def _schedule_pending_user_final_guard(reason: str) -> None:
+        payload = pending_user_final.get("payload")
+        if not payload:
+            return
+
+        guard_window_s = _resolve_final_guard_window_s()
+
+        _cancel_pending_user_final_task(f"{reason}:reschedule")
+
+        async def _wait_and_emit() -> None:
+            try:
+                guard_s = _resolve_final_guard_window_s()
+                if guard_s <= 0:
+                    await _emit_user_final_payload(*payload)
+                    return
+                while True:
+                    guard_s = _resolve_final_guard_window_s()
+                    if guard_s <= 0:
+                        break
+                    last_ts = mic_last_ts[0]
+                    if last_ts <= 0:
+                        remaining = guard_s
+                    else:
+                        elapsed = max(0.0, time.time() - last_ts)
+                        remaining = guard_s - elapsed
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(max(0.05, remaining / 2), 0.25))
+                current = pending_user_final.get("payload")
+                if not current:
+                    return
+                await _emit_user_final_payload(*current)
+            except asyncio.CancelledError:
+                raise
+            finally:
+                if pending_user_final_task[0] is asyncio.current_task():
+                    pending_user_final_task[0] = None
+
+        pending_user_final_task[0] = asyncio.create_task(_wait_and_emit())
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ws_final_guard_schedule",
+                sid=sid,
+                turn_id=payload[0],
+                guard_s=guard_window_s,
+                reason=reason,
+            )
+
+    async def _handle_provider_final(
+        turn_id_for_event: int, text: str, final_reason: Optional[str] = None
+    ) -> None:
+        if final_seen[0]:
+            return
+        pending_user_final["payload"] = (turn_id_for_event, text)
+        pending_user_final["ts"] = time.time()
+        pending_user_final["source"] = "provider_final"
+        pending_user_final["final_reason"] = final_reason
+        guard_window_s = _resolve_final_guard_window_s()
+        _note_turn_commit(
+            turn_id_for_event,
+            source="provider_final",
+            guard_s=guard_window_s,
+            text_chars=len(text or ""),
+            buffered_chunks=len(buffered_chunks),
+            buffered_bytes=buffered_byte_total[0],
+        )
+        _schedule_pending_user_final_guard("provider_final")
 
     def _reset_turn_metrics(start_ts: float) -> None:
         turn_timing["start"][0] = start_ts
@@ -842,6 +1381,124 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         turn_timing["first_partial"][0] = 0.0
         turn_timing["final"][0] = 0.0
         turn_finish_logged[0] = False
+        forwarded_total_bytes[0] = 0
+        forwarded_progress_next[0] = FORWARD_PROGRESS_STEP
+
+    def _cancel_turn_start_timeout() -> None:
+        task = turn_start_timeout_task[0]
+        if task and not task.done():
+            if task is not asyncio.current_task():
+                task.cancel()
+        turn_start_timeout_task[0] = None
+        turn_start_timeout_turn_id[0] = 0
+
+    async def _handle_turn_start_timeout(turn_id: int) -> None:
+        nonlocal dg, dg_state, rx_task, dg_connect_task
+
+        if sent_any_audio[0] or final_seen[0]:
+            return
+        if buffered_byte_total[0] > 0:
+            return
+        since_first_ms = None
+        if mic_first_ts[0]:
+            since_first_ms = int(max(0.0, (time.time() - mic_first_ts[0]) * 1000))
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ws_turn_start_timeout",  # structured log for ops
+                sid=sid,
+                turn_id=turn_id,
+                timeout_s=turn_start_timeout_s,
+                mic_chunks=len(mic_chunks),
+                buffered=len(buffered_chunks),
+                since_first_ms=since_first_ms,
+            )
+        if _admin_emit:
+            with contextlib.suppress(Exception):
+                _admin_emit(
+                    "turn_start_timeout",
+                    session_id=sid,
+                    turn_id=turn_id,
+                    timeout_s=turn_start_timeout_s,
+                    mic_chunks=len(mic_chunks),
+                    buffered_chunks=len(buffered_chunks),
+                    since_first_chunk_ms=since_first_ms,
+                )
+
+        _emit_no_audio_alert("turn_start_timeout")
+
+        if dg_connect_task is not None and not dg_connect_task.done():
+            dg_connect_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await dg_connect_task
+            dg_connect_task = None
+            dg_state = "closed"
+        turn_connect_started[0] = False
+
+        close_ok = None
+        if dg is not None:
+            try:
+                await dg.close(wait_for_final=False)
+                close_ok = True
+            except Exception as exc:
+                close_ok = False
+                _jlog(
+                    "ws_turn_start_timeout_dg_close_error",
+                    sid=sid,
+                    turn_id=turn_id,
+                    err=type(exc).__name__,
+                )
+            finally:
+                dg_state = "closed"
+                try:
+                    set_asr_stream_open(sid, False)
+                except Exception:
+                    pass
+                relay_task = rx_task
+                rx_task = None
+                if relay_task is not None:
+                    relay_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await relay_task
+                dg = None
+                with contextlib.suppress(Exception):
+                    asr_ready_evt.clear()
+                with contextlib.suppress(Exception):
+                    _jlog(
+                        "dg_tx_close",
+                        sid=sid,
+                        turn_id=turn_id,
+                        ok=(close_ok is True),
+                        bytes_forwarded=forwarded_total_bytes[0],
+                        source="turn_start_timeout",
+                    )
+
+        if not final_seen[0]:
+            emitted = await _emit_synthetic_final(turn_id, "turn_start_timeout")
+            if emitted:
+                with contextlib.suppress(ValueError):
+                    pending_final_turns.remove(turn_id)
+                synthetic_final_turns.add(turn_id)
+
+    def _schedule_turn_start_timeout(turn_id: int) -> None:
+        if turn_start_timeout_s <= 0:
+            return
+        _cancel_turn_start_timeout()
+        turn_start_timeout_turn_id[0] = turn_id
+
+        async def _watch() -> None:
+            try:
+                await asyncio.sleep(turn_start_timeout_s)
+                if turn_start_timeout_turn_id[0] != turn_id:
+                    return
+                await _handle_turn_start_timeout(turn_id)
+            except asyncio.CancelledError:
+                pass
+            finally:
+                if turn_start_timeout_turn_id[0] == turn_id:
+                    turn_start_timeout_turn_id[0] = 0
+                turn_start_timeout_task[0] = None
+
+        turn_start_timeout_task[0] = asyncio.create_task(_watch())
 
     def _emit_no_audio_alert(reason: str) -> None:
         if no_audio_notified[0]:
@@ -893,6 +1550,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if task and not task.done():
             task.cancel()
         no_audio_watch_task[0] = None
+        _cancel_turn_start_timeout()
 
     def _schedule_no_audio_watch(turn_id: int) -> None:
         if no_audio_window_s <= 0:
@@ -946,6 +1604,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     async def _emit_synthetic_final(
         turn_id: int, reason: str, transcript: str = ""
     ) -> bool:
+        _clear_pending_user_final("synthetic_final")
         if final_seen[0]:
             with contextlib.suppress(Exception):
                 _jlog(
@@ -955,26 +1614,81 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     reason=reason,
                 )
             return False
+        _note_turn_commit(
+            turn_id,
+            source="synthetic_final",
+            reason=reason,
+            transcript_chars=len(transcript or ""),
+        )
         final_seen[0] = True
+        turn_overlap_logged[0] = False
         payload = make_results(turn_id, transcript=transcript, is_final=True)
         payload["type"] = "Results"
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ui_result_emit",
+                sid=sid,
+                turn_id=turn_id,
+                final=True,
+                chars=len(transcript or ""),
+                source="synthetic",
+            )
         await _ws_send_json(send, payload)
         utterance_payload = make_utterance_end(turn_id)
         utterance_payload["type"] = "UtteranceEnd"
         await _ws_send_json(send, utterance_payload)
         with contextlib.suppress(Exception):
+            _jlog(
+                "ui_utterance_end",
+                sid=sid,
+                turn_id=turn_id,
+                actor="user",
+                source="synthetic_final",
+                reason=reason,
+                synthetic=True,
+            )
+        with contextlib.suppress(Exception):
             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
+        with contextlib.suppress(Exception):
+            _jlog(
+                "ui_user_final_synthetic",
+                sid=sid,
+                turn_id=turn_id,
+                reason=reason,
+                chars=len(transcript or ""),
+            )
         _log_turn_finish(
             turn_id,
             reason=reason,
             synthetic=True,
             transcript_chars=len(transcript or ""),
         )
+        with contextlib.suppress(Exception):
+            note_utterance_end(sid)
+        with contextlib.suppress(Exception):
+            set_recorder_active(sid, False)
+        if not transcript and forwarded_total_bytes[0] > 0:
+            _emit_empty_final_nudge(
+                turn_id,
+                source="synthetic_final",
+                reason=reason,
+                bytes_forwarded=forwarded_total_bytes[0],
+            )
+        with contextlib.suppress(Exception):
+            _jlog(
+                "schedule_run_ws_user_turn",
+                sid=sid,
+                turn_id=turn_id,
+                source="synthetic_final",
+                reason=reason,
+                scheduled=False,
+                had_result=bool(transcript),
+            )
         completed_llm_turns.discard(turn_id)
         return True
 
     async def _ensure_dg_connected() -> bool:
-        nonlocal dg, rx_task, dg_connect_task, dg_state, fallback_detection
+        nonlocal dg, rx_task, dg_connect_task, dg_state
 
         if not _has_deepgram_key():
             with contextlib.suppress(Exception):
@@ -994,61 +1708,26 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         connect_result = {"ok": False}
 
         async def _connect() -> None:
-            nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result, fallback_detection
+            nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
             try:
                 dg_state = "connecting"
                 with contextlib.suppress(Exception):
                     asr_ready_evt.clear()
 
-                if not raw_fallback_disabled() and should_use_raw_fallback(
-                    fallback_detection, stream_stats
-                ):
-                    if not stream_stats.forced_fallback:
-                        stream_stats.force_fallback()
-                        overrides = coerce_to_raw_config(stream_meta)
-                        for key, value in overrides.items():
-                            if key == "_transport":
-                                continue
-                            cfg[key] = value
-                        transport.update(overrides.get("_transport", {}))
-                        fallback_detection = RawDetectionSignal(
-                            container="raw",
-                            codec="pcm",
-                            containerized=False,
-                            source="raw_fallback",
-                        )
-                        stream_stats.note_detection(fallback_detection)
-                        with contextlib.suppress(Exception):
-                            _jlog(
-                                "raw_fallback_applied",
-                                sid=sid,
-                                sample_rate=transport.get("sample_rate"),
-                                channels=transport.get("channels"),
-                            )
-                        if buffered_chunks:
-                            normalized_buffer: Deque[bytes] = deque()
-                            for existing in list(buffered_chunks):
-                                normalized = normalize_pcm_frame(existing, stream_meta)
-                                if normalized != existing:
-                                    stream_stats.note_jitter_slip()
-                                normalized_buffer.append(normalized)
-                            buffered_chunks.clear()
-                            buffered_chunks.extend(normalized_buffer)
-                        if MIC_CAPTURE and mic_chunks:
-                            for idx, existing in enumerate(list(mic_chunks)):
-                                normalized = normalize_pcm_frame(existing, stream_meta)
-                                if normalized != existing:
-                                    stream_stats.note_jitter_slip()
-                                mic_chunks[idx] = normalized
-
                 cfg["_transport"] = transport
                 cfg["_jlog"] = _jlog
                 cfg.setdefault("session_id", sid)
                 cfg["_url_tag"] = f"{WS_ASGI_BUILD}:{sid}"
+                nudges.cancel_idle_timers(sid, source="asr_connect_begin")
                 _jlog("asr_connect_begin", sid=sid, transport=transport)
                 client = DeepgramClient(cfg)
                 dg = client
                 await client.connect()
+                nudges.cancel_idle_timers(sid, source="asr_connect_ok")
+                try:
+                    set_asr_stream_open(sid, True)
+                except Exception:
+                    pass
                 dg_state = "open"
                 connect_result["ok"] = True
                 turn_id_ref[0] = buf.turn_seq + 1
@@ -1064,15 +1743,20 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         sid,
                         asr_ready_evt,
                         _flush_buffered_chunks,
-                        stream_stats,
+                        _handle_provider_final,
                         turn_timing,
                         _log_turn_finish,
+                        cancel_turn_start_timeout=_cancel_turn_start_timeout,
                     )
                 )
                 _jlog("asr_connect_ok", sid=sid)
             except Exception as e:
                 dg_state = "closed"
                 dg = None
+                try:
+                    set_asr_stream_open(sid, False)
+                except Exception:
+                    pass
                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
                 with contextlib.suppress(Exception):
                     await _ws_send_json(
@@ -1084,6 +1768,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     )
             finally:
                 dg_connect_task = None
+                try:
+                    set_asr_stream_open(sid, dg_state == "open")
+                except Exception:
+                    pass
 
         dg_connect_task = asyncio.create_task(_connect())
         with contextlib.suppress(Exception):
@@ -1155,7 +1843,24 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             await dg.send(data)
             sent_any_audio[0] = True
             _cancel_no_audio_watch()
-            _jlog("ws_audio_forward", sid=sid, bytes=len(data), buffered=from_buffer)
+            chunk_len = len(data) if isinstance(data, (bytes, bytearray)) else 0
+            if chunk_len:
+                forwarded_total_bytes[0] += chunk_len
+                while forwarded_total_bytes[0] >= forwarded_progress_next[0]:
+                    _jlog(
+                        "ws_audio_forward_progress",
+                        sid=sid,
+                        bytes_total=forwarded_total_bytes[0],
+                        step=FORWARD_PROGRESS_STEP,
+                    )
+                    forwarded_progress_next[0] += FORWARD_PROGRESS_STEP
+            _jlog(
+                "ws_audio_forward",
+                sid=sid,
+                bytes=len(data),
+                buffered=from_buffer,
+                total=forwarded_total_bytes[0],
+            )
             return True
         except RuntimeError as e:
             if "deepgram_not_connected" in str(e).lower() and retry:
@@ -1193,6 +1898,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             ok = await _send_chunk(chunk, from_buffer=True)
             if ok:
                 buffered_chunks.popleft()
+                if chunk_len:
+                    buffered_byte_total[0] = max(0, buffered_byte_total[0] - chunk_len)
                 flushed_chunks += 1
                 flushed_bytes += chunk_len
                 continue
@@ -1205,6 +1912,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 flushed_chunks=flushed_chunks,
                 flushed_bytes=flushed_bytes,
                 remaining=len(buffered_chunks),
+                remaining_bytes=buffered_byte_total[0],
             )
         _maybe_emit_backpressure(len(buffered_chunks))
         if not buffered_chunks:
@@ -1287,7 +1995,74 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                     raw_chunk = chunk
 
-                    if buf.is_empty():
+                    if (
+                        raw_chunk
+                        and not sent_any_audio[0]
+                        and raw_chunk[:4] == b"RIFF"
+                    ):
+                        with contextlib.suppress(Exception):
+                            _jlog(
+                                "wav_preroll_ignored",
+                                sid=sid,
+                                bytes=len(raw_chunk),
+                                first8_hex=raw_chunk[:8].hex(),
+                            )
+                        continue
+
+                    if final_seen[0]:
+                        previous_turn_id = turn_id_ref[0]
+                        removed_pending = 0
+                        while True:
+                            try:
+                                pending_final_turns.remove(previous_turn_id)
+                                removed_pending += 1
+                            except ValueError:
+                                break
+                        synthetic_final_turns.discard(previous_turn_id)
+                        _clear_pending_user_final("late_audio")
+                        _cancel_no_audio_watch()
+                        buffered_before = len(buffered_chunks)
+                        mic_before = len(mic_chunks)
+                        closed_turn_id = None
+                        if not buf.is_empty():
+                            try:
+                                closed_turn_id, _ = buf.close_turn()
+                                turn_id_ref[0] = closed_turn_id
+                            except Exception:
+                                closed_turn_id = None
+                        else:
+                            turn_id_ref[0] = buf.turn_seq
+                        buffered_chunks.clear()
+                        buffered_byte_total[0] = 0
+                        webm_hint_gate[0] = _transport_enables_webm_hint(transport)
+                        webm_sniff_gate[0] = False
+                        sniffer_bytes_seen[0] = 0
+                        mic_chunks.clear()
+                        mic_first_ts[0] = now
+                        mic_last_ts[0] = now
+                        sent_any_audio[0] = False
+                        asr_seen_partial[0] = False
+                        turn_connect_started[0] = False
+                        final_seen[0] = False
+                        _reset_turn_metrics(now)
+                        with contextlib.suppress(Exception):
+                            _jlog(
+                                "late_audio_after_final",
+                                sid=sid,
+                                turn_id=previous_turn_id,
+                                removed_pending=removed_pending,
+                                closed_turn_id=closed_turn_id,
+                                buffered_before=buffered_before,
+                                mic_before=mic_before,
+                            )
+
+                    pending_final_payload = pending_user_final.get("payload")
+                    if buf.is_empty() and not pending_final_payload:
+                        nudges.cancel_idle_timers(sid, source="turn_start")
+                        try:
+                            set_recorder_active(sid, True)
+                        except Exception:
+                            pass
                         # New audio turn
                         current_assistant_turn = None
                         try:
@@ -1300,7 +2075,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         except Exception:
                             confirm_ms = 420
 
-                        def _on_barge_commit() -> None:
+                        def _on_barge_commit():
                             target_turn = current_assistant_turn
                             try:
                                 latest = bus.current_assistant_turn(sid)
@@ -1308,16 +2083,41 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 latest = None
                             if latest:
                                 target_turn = latest
-                            if target_turn:
+
+                            wait_turn = target_turn
+                            if wait_turn:
                                 try:
-                                    bus.cancel_turn(sid, target_turn)
+                                    bus.cancel_turn(sid, wait_turn)
                                 except Exception:
                                     pass
-                            try:
-                                bus.broadcast(sid, {"type": "state", "phase": "ready"})
-                            except Exception:
-                                pass
 
+                            try:
+                                wait_timeout = float(cfg.get("tts_cancel_wait_s", 3.0) or 0.0)
+                            except Exception:
+                                wait_timeout = 3.0
+                            try:
+                                listen_timeout = float(cfg.get("barge_listen_ready_wait_s", 1.0) or 0.0)
+                            except Exception:
+                                listen_timeout = 1.0
+
+                            def _wait_ready() -> None:
+                                try:
+                                    wait_for_tts_completion(
+                                        sid,
+                                        wait_turn,
+                                        timeout=None if wait_timeout <= 0 else wait_timeout,
+                                    )
+                                except Exception:
+                                    pass
+                                try:
+                                    wait_for_listen_ready(
+                                        sid,
+                                        timeout=max(0.0, listen_timeout),
+                                    )
+                                except Exception:
+                                    pass
+
+                            return _wait_ready
                         with contextlib.suppress(Exception):
                             barge.start(
                                 confirm_ms=confirm_ms,
@@ -1332,7 +2132,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         asr_seen_partial[0] = False
                         sent_any_audio[0] = False
                         buffered_chunks.clear()
-                        stream_stats.reset_turn()
+                        buffered_byte_total[0] = 0
+                        webm_hint_gate[0] = _transport_enables_webm_hint(transport)
+                        webm_sniff_gate[0] = False
+                        sniffer_bytes_seen[0] = 0
+                        forwarded_total_bytes[0] = 0
+                        forwarded_progress_next[0] = FORWARD_PROGRESS_STEP
                         turn_connect_started[0] = False
                         # reset mic capture
                         mic_chunks.clear()
@@ -1340,6 +2145,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         mic_last_ts[0] = now
                         _reset_turn_metrics(now)
                         _schedule_no_audio_watch(turn_id_ref[0])
+                        _schedule_turn_start_timeout(turn_id_ref[0])
                         with contextlib.suppress(Exception):
                             _jlog(
                                 "turn_start",
@@ -1351,7 +2157,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                     # Detect container early
                     try:
-                        if transport.get("container") is None and raw_chunk:
+                        if raw_chunk:
+                            bytes_before = sniffer_bytes_seen[0]
+                            sniffer_bytes_seen[0] += len(raw_chunk)
                             det = sniffer.feed(raw_chunk)
                             if det:
                                 container = getattr(det, "container", None)
@@ -1359,27 +2167,35 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 containerized = bool(
                                     getattr(det, "containerized", codec == "opus")
                                 )
-                                transport["container"] = container
-                                transport["codec"] = codec
-                                transport["containerized_opus"] = containerized
-                                fallback_detection = RawDetectionSignal(
-                                    container=container,
-                                    codec=codec,
-                                    containerized=containerized,
-                                    source="sniffer",
-                                )
-                                stream_stats.note_detection(fallback_detection)
-                                stream_meta.encoding = "opus"
-                                _jlog(
-                                    "sniffer_detect",
-                                    sid=sid,
-                                    container=transport.get("container"),
-                                    codec=transport.get("codec"),
-                                    containerized_opus=transport.get(
-                                        "containerized_opus"
-                                    ),
-                                )
-                            else:
+                                if transport.get("container") is None:
+                                    transport["container"] = container
+                                    transport["codec"] = codec
+                                    transport["containerized_opus"] = containerized
+                                    _jlog(
+                                        "sniffer_detect",
+                                        sid=sid,
+                                        container=transport.get("container"),
+                                        codec=transport.get("codec"),
+                                        containerized_opus=transport.get(
+                                            "containerized_opus"
+                                        ),
+                                        bytes_seen=sniffer_bytes_seen[0],
+                                    )
+                                if (
+                                    not webm_sniff_gate[0]
+                                    and container == "webm"
+                                    and codec == "opus"
+                                    and bytes_before < SNIFFER_GATE_BUDGET
+                                ):
+                                    webm_sniff_gate[0] = True
+                                    with contextlib.suppress(Exception):
+                                        _jlog(
+                                            "sniffer_gate_open",
+                                            sid=sid,
+                                            reason="sniff_webm",
+                                            bytes_seen=sniffer_bytes_seen[0],
+                                        )
+                            elif transport.get("container") is None:
                                 meta_det = coerce_detection_from_meta(
                                     getattr(sniffer, "meta", lambda: None)()
                                 )
@@ -1394,14 +2210,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     transport["container"] = container
                                     transport["codec"] = codec
                                     transport["containerized_opus"] = containerized
-                                    fallback_detection = RawDetectionSignal(
-                                        container=container,
-                                        codec=codec,
-                                        containerized=containerized,
-                                        source="mime",
-                                    )
-                                    stream_stats.note_detection(fallback_detection)
-                                    stream_meta.encoding = "opus"
                                     _jlog(
                                         "sniffer_detect",
                                         sid=sid,
@@ -1410,18 +2218,19 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         containerized_opus=transport.get(
                                             "containerized_opus"
                                         ),
+                                        bytes_seen=sniffer_bytes_seen[0],
                                     )
                     except Exception:
                         pass
 
-                    chunk = stream_stats.observe_frame(raw_chunk)
+                    chunk = raw_chunk
 
                     buf.append(chunk)
 
                     # capture bytes for diagnostic playback
+                    mic_last_ts[0] = now
                     if MIC_CAPTURE:
                         mic_chunks.append(chunk)
-                        mic_last_ts[0] = now
                     _jlog(
                         "mic_capture_append",
                         sid=sid,
@@ -1429,6 +2238,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         chunks=len(mic_chunks),
                         last_bytes=len(chunk),
                     )
+                    nudges.cancel_idle_timers(sid, source="mic_capture")
+
+                    if pending_user_final.get("payload"):
+                        _schedule_pending_user_final_guard("audio")
 
                     if not _has_deepgram_key():
                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
@@ -1436,21 +2249,45 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                     # Stage early frames
                     if chunk:
+                        chunk_len = len(chunk) if isinstance(chunk, (bytes, bytearray)) else 0
                         buffered_chunks.append(chunk)
+                        if chunk_len:
+                            buffered_byte_total[0] += chunk_len
                         dropped_now = 0
                         if len(buffered_chunks) > max_buffered_chunks:
                             dropped_now = len(buffered_chunks) - max_buffered_chunks
                             for _ in range(dropped_now):
                                 if not buffered_chunks:
                                     break
-                                buffered_chunks.popleft()
+                                dropped_chunk = buffered_chunks.popleft()
+                                if isinstance(dropped_chunk, (bytes, bytearray)):
+                                    buffered_byte_total[0] = max(
+                                        0, buffered_byte_total[0] - len(dropped_chunk)
+                                    )
                             _jlog(
-                                "ws_audio_drop", sid=sid, dropped=dropped_now, queued=len(buffered_chunks)
+                                "ws_audio_drop",
+                                sid=sid,
+                                dropped=dropped_now,
+                                queued=len(buffered_chunks),
+                                queued_bytes=buffered_byte_total[0],
                             )
-                        _maybe_emit_backpressure(len(buffered_chunks), dropped_now=dropped_now)
+                        _maybe_emit_backpressure(
+                            len(buffered_chunks), dropped_now=dropped_now
+                        )
 
                     # Ensure provider connection
-                    if not turn_connect_started[0] and dg_state == "closed":
+                    gate_open, gate_reason = _connect_gate_state()
+                    if (
+                        not gate_open
+                        and not transport.get("containerized_opus")
+                    ):
+                        gate_open = True
+                        gate_reason = gate_reason or "raw_audio"
+                    if (
+                        not turn_connect_started[0]
+                        and dg_state == "closed"
+                        and gate_open
+                    ):
                         turn_connect_started[0] = True
                         if dg_connect_task is None:
                             with contextlib.suppress(Exception):
@@ -1459,7 +2296,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     sid=sid,
                                     turn_id=turn_id_ref[0],
                                     queued=len(buffered_chunks),
+                                    queued_bytes=buffered_byte_total[0],
                                     dg_state=dg_state,
+                                    connect_ready_reason=gate_reason,
                                 )
                             dg_connect_task = asyncio.create_task(
                                 _ensure_dg_connected()
@@ -1501,6 +2340,60 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         if t == "KeepAlive":
                             await _ws_send_json(send, make_keepalive_ack())
 
+                        elif t == "AudioStart":
+                            mime = (
+                                (obj.get("mime") or obj.get("mime_type") or obj.get("contentType"))
+                                or ""
+                            )
+                            try:
+                                mime = mime.strip()
+                            except Exception:
+                                mime = ""
+                            forwarded_total_bytes[0] = 0
+                            forwarded_progress_next[0] = FORWARD_PROGRESS_STEP
+                            if (
+                                not final_seen[0]
+                                and not turn_overlap_logged[0]
+                                and (turn_id_ref[0] or 0) > 0
+                            ):
+                                with contextlib.suppress(Exception):
+                                    _jlog(
+                                        "turn_overlap_detected",
+                                        sid=sid,
+                                        prev_turn_id=turn_id_ref[0],
+                                    )
+                                turn_overlap_logged[0] = True
+                            with contextlib.suppress(Exception):
+                                sniffer.set_meta(mime or None)
+                            detection = coerce_detection_from_meta(mime) if mime else None
+                            if detection is not None:
+                                transport["container"] = getattr(detection, "container", None)
+                                transport["codec"] = getattr(detection, "codec", None)
+                                transport["containerized_opus"] = bool(
+                                    getattr(detection, "containerized", True)
+                                )
+                            gate_from_mime = bool(
+                                detection
+                                and getattr(detection, "container", None) == "webm"
+                                and getattr(detection, "codec", None) == "opus"
+                            )
+                            webm_hint_gate[0] = gate_from_mime
+                            _jlog(
+                                "turn_audio_start",
+                                sid=sid,
+                                mime=mime or None,
+                            )
+                            _jlog(
+                                "ws_audio_hint",
+                                sid=sid,
+                                mime=mime or None,
+                                container=transport.get("container"),
+                                codec=transport.get("codec"),
+                                containerized_opus=transport.get("containerized_opus"),
+                                gate_open=gate_from_mime,
+                                guess_source="meta",
+                            )
+
                         elif t == "greet":
                             _jlog("ws_greet_recv", sid=sid)
 
@@ -1537,16 +2430,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                         elif t == "Configure":
                             cfg.update(obj or {})
-                            stream_meta.apply_config(obj or {})
                             enc_lower = (obj.get("encoding") or "").strip().lower()
                             if enc_lower == "pcm":
-                                fallback_detection = RawDetectionSignal(
-                                    container="raw",
-                                    codec="pcm",
-                                    containerized=False,
-                                    source="configure",
-                                )
-                                stream_stats.note_detection(fallback_detection)
+                                transport["container"] = "raw"
+                                transport["codec"] = "pcm"
+                                transport["containerized_opus"] = False
                             if obj.get("reset"):
                                 with contextlib.suppress(Exception):
                                     clear_greet_turn_cache(sid)
@@ -1617,21 +2505,30 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 corr=bool(corr),
                             )
 
+                            nudges.cancel_idle_timers(sid)
+
                             dialog_nlu_pre: Dict[str, Any] = {}
                             universal_pre: Dict[str, Any] = {}
+                            policy_pre: Dict[str, Any] = {}
+                            prepared_meta: Dict[str, Any] = {}
                             try:
-                                prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
+                                prepared_meta_raw, dialog_nlu_raw, policy_raw = prepare_turn_metadata(
                                     text, {"source": "user_ws", "channel": "ws"}
                                 )
-                                if isinstance(dialog_nlu_raw, dict):
-                                    dialog_nlu_pre = dict(dialog_nlu_raw)
-                                if isinstance(prepared_meta, dict):
+                                if isinstance(prepared_meta_raw, dict):
+                                    prepared_meta = dict(prepared_meta_raw)
                                     raw_universal = prepared_meta.get("universal") or {}
                                     if isinstance(raw_universal, dict):
                                         universal_pre = _ensure_universal_fields(raw_universal)
+                                if isinstance(dialog_nlu_raw, dict):
+                                    dialog_nlu_pre = dict(dialog_nlu_raw)
+                                if isinstance(policy_raw, dict):
+                                    policy_pre = dict(policy_raw)
                             except Exception:
+                                prepared_meta = {}
                                 dialog_nlu_pre = {}
                                 universal_pre = {}
+                                policy_pre = {}
 
                             _emit_admin_nlu_event(
                                 text,
@@ -1640,14 +2537,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 universal=universal_pre,
                             )
 
-                            meta_overrides: Optional[Dict[str, Any]] = None
-                            if dialog_nlu_pre or universal_pre:
-                                meta_overrides = {}
-                                if dialog_nlu_pre:
-                                    meta_overrides["nlu"] = dict(dialog_nlu_pre)
-                                    meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
-                                if universal_pre:
-                                    meta_overrides["universal"] = dict(universal_pre)
+                            meta_overrides = _build_meta_overrides(
+                                prepared_meta,
+                                dialog_nlu_pre,
+                                universal_pre,
+                                policy_pre,
+                            )
 
                             async def _bg_user():
                                 try:
@@ -1669,8 +2564,29 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                             asyncio.create_task(_bg_user())
 
-                        elif t == "CloseStream":
-                            _jlog("ws_close_stream", sid=sid)
+                        elif t == "activity":
+                            kind = (obj.get("kind") or "").strip().lower()
+                            if kind in {"speech", "text", "chip"}:
+                                nudges.cancel_idle_timers(sid)
+                            continue
+
+                        elif t in {"CloseStream", "AudioStop"}:
+                            if t == "AudioStop":
+                                with contextlib.suppress(Exception):
+                                    _jlog(
+                                        "vad_speech_end",
+                                        sid=sid,
+                                        turn_id=turn_id_ref[0] or None,
+                                        pending_final=not final_seen[0],
+                                    )
+                            _jlog(
+                                "ws_close_stream",
+                                sid=sid,
+                                source=t,
+                                bytes_forwarded=forwarded_total_bytes[0],
+                            )
+                            _cancel_turn_start_timeout()
+                            nudges.cancel_idle_timers(sid)
 
                             # Always define this first so later 'if synthetic_emitted' is safe
                             synthetic_emitted = False
@@ -1702,20 +2618,83 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 turn_id = turn_id_ref[0] or (buf.turn_seq + 1)
                                 _pcm = None
                             _jlog("after_close_turn", sid=sid, turn_id=turn_id)
+                            with contextlib.suppress(Exception):
+                                _jlog(
+                                    "ws_close_stream_recv",
+                                    turn_id=turn_id,
+                                    sid=sid,
+                                    source=t,
+                                    bytes_forwarded=forwarded_total_bytes[0],
+                                )
                             turn_id_ref[0] = turn_id
+
+                            _note_turn_commit(
+                                turn_id,
+                                source="client_close_stream",
+                                buffered_chunks=len(buffered_chunks),
+                                buffered_bytes=buffered_byte_total[0],
+                                pending_provider_final=bool(
+                                    pending_user_final.get("payload")
+                                ),
+                                synthetic_expected=(
+                                    not bool(pending_user_final.get("payload"))
+                                    and not final_seen[0]
+                                ),
+                                pcm_bytes=len(_pcm)
+                                if isinstance(_pcm, (bytes, bytearray))
+                                else None,
+                            )
 
                             # ---- THEN finish the ASR turn (unchanged logic) ----
                             if _has_deepgram_key():
                                 # If provider isn't ready yet but we have audio, try to connect now (bounded wait)
                                 if dg is None and (buffered_chunks or mic_chunks):
-                                    if dg_connect_task is None:
-                                        dg_connect_task = asyncio.create_task(
-                                            _ensure_dg_connected()
+                                    gate_open, gate_reason = _connect_gate_state()
+                                    if (
+                                        not gate_open
+                                        and buffered_byte_total[0] > 0
+                                        and not transport.get("containerized_opus")
+                                    ):
+                                        gate_open = True
+                                        gate_reason = "forced_close_stream"
+                                        transport.setdefault(
+                                            "_attempted_audio_params", []
                                         )
-                                    with contextlib.suppress(asyncio.TimeoutError):
-                                        await asyncio.wait_for(
-                                            asr_ready_evt.wait(), timeout=1.2
+                                        with contextlib.suppress(Exception):
+                                            if isinstance(
+                                                transport["_attempted_audio_params"], list
+                                            ):
+                                                transport["_attempted_audio_params"].append(
+                                                    "forced_close_stream"
+                                                )
+                                        _jlog(
+                                            "asr_connect_force",
+                                            sid=sid,
+                                            turn_id=turn_id_ref[0],
+                                            buffered=len(buffered_chunks),
+                                            buffered_bytes=buffered_byte_total[0],
+                                            reason="close_stream",
                                         )
+                                    if gate_open:
+                                        if dg_connect_task is None:
+                                            with contextlib.suppress(Exception):
+                                                _jlog(
+                                                    "asr_connect_schedule",
+                                                    sid=sid,
+                                                    turn_id=turn_id_ref[0],
+                                                    queued=len(buffered_chunks),
+                                                    queued_bytes=buffered_byte_total[0],
+                                                    dg_state=dg_state,
+                                                    connect_ready_reason=gate_reason,
+                                                    via="close_stream",
+                                                )
+                                            dg_connect_task = asyncio.create_task(
+                                                _ensure_dg_connected()
+                                            )
+                                        with contextlib.suppress(asyncio.TimeoutError):
+                                            await asyncio.wait_for(
+                                                asr_ready_evt.wait(), timeout=1.2
+                                            )
 
                                 # If we have buffered chunks but ASR not ready yet, give it a moment then flush.
                                 if buffered_chunks and not asr_ready_evt.is_set():
@@ -1744,6 +2723,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     )
 
                                 await _flush_buffered_chunks()
+                                _jlog(
+                                    "ws_close_stream_post_flush",
+                                    sid=sid,
+                                    turn_id=turn_id,
+                                    bytes_forwarded=forwarded_total_bytes[0],
+                                )
 
                                 # Optional tiny settle after flush if no partials yet (helps very short clips)
                                 if not final_seen[0] and not asr_seen_partial[0]:
@@ -1826,13 +2811,21 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     drain_timeout_exc: Optional[
                                         DeepgramDrainTimeoutError
                                     ] = None
+                                    dg_close_ok = False
                                     try:
                                         await asyncio.sleep(
                                             float(
                                                 os.getenv("ASR_FINAL_GRACE_S", "0.30")
                                             )
                                         )  # ~300 ms grace
+                                        _jlog(
+                                            "ws_close_stream_finish_request",
+                                            sid=sid,
+                                            turn_id=turn_id,
+                                            bytes_forwarded=forwarded_total_bytes[0],
+                                        )
                                         await dg.close(wait_for_final=True)
+                                        dg_close_ok = True
                                     except DeepgramDrainTimeoutError as exc:
                                         drain_timeout_exc = exc
                                         _jlog(
@@ -1854,7 +2847,20 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             sid=sid,
                                             err=type(exc).__name__,
                                         )
+                                    finally:
+                                        with contextlib.suppress(Exception):
+                                            _jlog(
+                                                "dg_tx_close",
+                                                sid=sid,
+                                                turn_id=turn_id,
+                                                ok=dg_close_ok,
+                                                bytes_forwarded=forwarded_total_bytes[0],
+                                            )
                                     dg_state = "closed"
+                                    try:
+                                        set_asr_stream_open(sid, False)
+                                    except Exception:
+                                        pass
                                     _relay_task = rx_task
                                     rx_task = None
                                     if _relay_task:
@@ -1925,6 +2931,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 ):
                                     _emit_no_audio_alert("close_stream")
 
+                            _jlog(
+                                "ws_close_stream_complete",
+                                sid=sid,
+                                turn_id=turn_id,
+                                bytes_forwarded=forwarded_total_bytes[0],
+                                synthetic_emitted=synthetic_emitted,
+                            )
+
                             if synthetic_emitted:
                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
                                 final_seen[0] = False
@@ -1960,34 +2974,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                                     if raw:
                                         base_dir = os.getenv("TMPDIR") or "/tmp"
-                                        if transport.get("containerized_opus"):
-                                            # Containerized Opus → save WebM bytes as-is
-                                            out_path = os.path.join(
-                                                base_dir, f"mic_{sid}_{turn_id}.webm"
-                                            )
-                                            mime = "audio/webm"
-                                            with open(out_path, "wb") as f:
-                                                f.write(raw)
-                                            data_to_echo = raw
-                                        else:
-                                            # Raw PCM → wrap in a WAV header for easy playback
-                                            rate = int(
-                                                os.getenv("DG_RAW_SAMPLE_RATE", "48000")
-                                            )
-                                            ch = int(os.getenv("DG_RAW_CHANNELS", "1"))
-                                            wav = _wav_with_header(
-                                                raw,
-                                                sample_rate=rate,
-                                                channels=ch,
-                                                bits_per_sample=16,
-                                            )
-                                            out_path = os.path.join(
-                                                base_dir, f"mic_{sid}_{turn_id}.wav"
-                                            )
-                                            mime = "audio/wav"
-                                            with open(out_path, "wb") as f:
-                                                f.write(wav)
-                                            data_to_echo = wav
+                                        # Always treat captures as containerized Opus
+                                        out_path = os.path.join(
+                                            base_dir, f"mic_{sid}_{turn_id}.webm"
+                                        )
+                                        mime = "audio/webm"
+                                        with open(out_path, "wb") as f:
+                                            f.write(raw)
+                                        data_to_echo = raw
 
                                         _jlog(
                                             "mic_capture_saved",
@@ -2010,6 +3004,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         err=type(e).__name__,
                                     )
 
+                            buffered_byte_total[0] = 0
+                            webm_hint_gate[0] = False
+                            webm_sniff_gate[0] = False
+                            sniffer_bytes_seen[0] = 0
+
                         else:
                             # Unknown type already filtered by schema; no-op to future-proof.
                             pass
@@ -2024,6 +3023,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 pass
 
     finally:
+        with contextlib.suppress(Exception):
+            _clear_pending_user_final("shutdown")
         with contextlib.suppress(Exception):
             _cancel_no_audio_watch()
         await _remove_active_ws_entry("cleanup")
@@ -2053,6 +3054,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         with contextlib.suppress(Exception):
             if dg is not None:
                 await dg.close(wait_for_final=False)
+                try:
+                    set_asr_stream_open(sid, False)
+                except Exception:
+                    pass
         with contextlib.suppress(Exception):
             bus_task.cancel()
             await bus_task
