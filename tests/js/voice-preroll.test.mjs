@@ -77,6 +77,8 @@ globalThis.MediaRecorder = FakeRecorder;
 test('pre-roll audio is flushed before first live MediaRecorder chunk', async () => {
   const voice = await import('../../static/js/voice.js');
   const hooks = voice.__TEST_ONLY__;
+  const wsModule = await import('../../static/js/ws_module.js');
+  await wsModule.getWSModule();
 
   hooks.state.stream = { active: true };
   hooks.state.turnOpen = false;
@@ -90,9 +92,16 @@ test('pre-roll audio is flushed before first live MediaRecorder chunk', async ()
   hooks.state.preRollDurationMs = 25;
 
   const transportEvents = [];
+  let shouldFailJSON = true;
   globalThis.__TEST_WS_HOOKS = {
     onSendJSON: (payload) => {
-      transportEvents.push({ kind: 'json', payload });
+      const ok = !shouldFailJSON;
+      transportEvents.push({ kind: 'json', payload, ok });
+      if (shouldFailJSON) {
+        shouldFailJSON = false;
+        return false;
+      }
+      return true;
     },
     onSendAudioChunk: (blob) => {
       transportEvents.push({ kind: 'chunk', payload: blob });
@@ -112,10 +121,19 @@ test('pre-roll audio is flushed before first live MediaRecorder chunk', async ()
 
   await hooks.state.chunkSendPromise;
 
-  assert.ok(transportEvents.length >= 3, 'AudioStart and two chunks should be emitted');
-  assert.equal(transportEvents[0]?.kind, 'json', 'AudioStart must be sent before audio chunks');
-  assert.equal(transportEvents[0]?.payload?.type, 'AudioStart', 'AudioStart frame should be emitted');
-  assert.equal(transportEvents[0]?.payload?.mime, recorder.mimeType, 'AudioStart must include recorder MIME');
+  const jsonEvents = transportEvents.filter((ev) => ev.kind === 'json');
+  assert.equal(jsonEvents.length, 2, 'AudioStart should be attempted twice when the first send fails');
+  assert.equal(jsonEvents[0]?.payload?.type, 'AudioStart', 'AudioStart frame should be emitted on the first attempt');
+  assert.equal(jsonEvents[1]?.payload?.type, 'AudioStart', 'AudioStart frame should be retried after failure');
+  assert.equal(jsonEvents[0]?.ok, false, 'First AudioStart attempt should fail');
+  assert.equal(jsonEvents[1]?.ok, true, 'Second AudioStart attempt should succeed');
+  assert.equal(jsonEvents[1]?.payload?.mime, recorder.mimeType, 'AudioStart retry must include recorder MIME');
+
+  const firstChunkIndex = transportEvents.findIndex((ev) => ev.kind === 'chunk');
+  const successfulAudioStartIndex = transportEvents.findIndex((ev) => ev.kind === 'json' && ev.ok);
+  assert.ok(successfulAudioStartIndex >= 0, 'Successful AudioStart must be observed');
+  assert.ok(firstChunkIndex >= 0, 'Audio chunk must be observed');
+  assert.ok(successfulAudioStartIndex < firstChunkIndex, 'Successful AudioStart must precede the first audio chunk');
 
   const chunkEvents = transportEvents.filter((ev) => ev.kind === 'chunk');
   assert.equal(chunkEvents.length, 2, 'both pre-roll and live chunks should be sent');

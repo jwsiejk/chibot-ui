@@ -59,6 +59,7 @@ const state = {
   turnOpen: false,   // track whether a turn is currently open server-side
   turnClosePromise: null,
   turnHintSent: false,
+  turnHintMime: null,
   deviceLogged: false,
   // NEW: min-turn gating
   recStartedAt: 0,
@@ -414,10 +415,37 @@ function _enqueuePreRollBlobs() {
   return { count, durationMs, totalBytes };
 }
 
+function _ensureAudioStartSent() {
+  if (state.turnHintSent) {
+    return true;
+  }
+
+  const recorderMime = (state.rec && state.rec.mimeType) || state.turnHintMime || REC_MIME;
+  state.turnHintMime = recorderMime;
+
+  let sent = false;
+  try {
+    const result = sendJSON({ type: 'AudioStart', mime: recorderMime });
+    sent = result === true;
+  } catch (err) {
+    try { console.warn('[voice] failed to send AudioStart hint', err); } catch {}
+    sent = false;
+  }
+
+  if (sent) {
+    state.turnHintSent = true;
+  }
+
+  return sent;
+}
+
 function _sendRecorderChunk(blob, meta = {}) {
   if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
     return;
   }
+
+  _ensureAudioStartSent();
+
   const { preRoll = false, durationMs = null, timecode = null } = meta || {};
   const logLabel = preRoll ? 'streamed pre-roll chunk' : 'streamed audio chunk';
   state.chunkSendPromise = state.chunkSendPromise
@@ -478,6 +506,7 @@ function _primeRecorderForPreRoll(options = {}) {
   state.recStopping = false;
   state.recStopShouldSend = false;
   state.turnHintSent = false;
+  state.turnHintMime = null;
   if (resetBuffer) {
     _resetPreRollBuffer();
   }
@@ -486,6 +515,7 @@ function _primeRecorderForPreRoll(options = {}) {
   recorder.ondataavailable = _handleRecorderData;
   recorder.onstop = async () => {
     state.turnHintSent = false;
+    state.turnHintMime = null;
     state.recStreaming = false;
     state.recStopping = false;
     state.recStopShouldSend = false;
@@ -598,6 +628,7 @@ function _stopRecorder(detail = null) {
     if (!recorder || recorder.state === 'inactive') {
       state.rec = null;
       state.turnHintSent = false;
+      state.turnHintMime = null;
       return;
     }
   }
@@ -605,12 +636,14 @@ function _stopRecorder(detail = null) {
   if (!recorder) {
     state.rec = null;
     state.turnHintSent = false;
+    state.turnHintMime = null;
     return;
   }
 
   if (recorder.state === 'inactive') {
     state.rec = null;
     state.turnHintSent = false;
+    state.turnHintMime = null;
     return;
   }
 
@@ -626,12 +659,13 @@ function _stopRecorder(detail = null) {
     _logLifecycle('recorder_stop_invoked', {
       reason: detail?.reason || null,
     }, 'info');
-    try { console.debug('[voice] recorder.stop()'); } catch {}     
+    try { console.debug('[voice] recorder.stop()'); } catch {}
     recorder.stop();
   } catch {}
   // intentionally keep state.rec reference nullable here; onstop handler handles final close
   state.rec = null;
   state.turnHintSent = false;
+  state.turnHintMime = null;
 }
 
 function _teardownVADOnly() {
@@ -758,13 +792,7 @@ function _startRecorder() {
   _ensureWSListener();
 
   if (!state.turnHintSent) {
-    const recorderMime = (state.rec && state.rec.mimeType) || REC_MIME;
-    try {
-      sendJSON({ type: 'AudioStart', mime: recorderMime });
-    } catch (err) {
-      try { console.warn('[voice] failed to send AudioStart hint', err); } catch {}
-    }
-    state.turnHintSent = true;
+    _ensureAudioStartSent();
   }
 
   const preRollStats = _enqueuePreRollBlobs();
