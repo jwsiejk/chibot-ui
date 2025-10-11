@@ -842,7 +842,6 @@ class DeepgramClient:
                 "codec": transport.get("codec"),
                 "containerized_opus": containerized,
                 "normalized_pcm": bool(transport.get("normalized_pcm")),
-                "raw_fallback": bool(transport.get("raw_fallback")),
                 "omitted_params": None,
                 "raw_params": None,
             }
@@ -904,7 +903,6 @@ class DeepgramClient:
                         codec=url_meta.get("codec"),
                         containerized_opus=bool(url_meta.get("containerized_opus")),
                         normalized_pcm=bool(url_meta.get("normalized_pcm")),
-                        raw_fallback=bool(url_meta.get("raw_fallback")),
                         omitted_params=url_meta.get("omitted_params"),
                         raw_params=url_meta.get("raw_params"),
                     )
@@ -913,12 +911,11 @@ class DeepgramClient:
 
             # Keep existing human-readable info log
             logger.info(
-                "dg_ws_connect sid=%s url=%s containerized_opus=%s normalized_pcm=%s raw_fallback=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
+                "dg_ws_connect sid=%s url=%s containerized_opus=%s normalized_pcm=%s sent_encoding=%s sent_sample_rate=%s sent_channels=%s",
                 sid,
                 url,
                 containerized,
                 url_meta.get("normalized_pcm"),
-                url_meta.get("raw_fallback"),
                 q.get("encoding"),
                 q.get("sample_rate"),
                 q.get("channels"),
