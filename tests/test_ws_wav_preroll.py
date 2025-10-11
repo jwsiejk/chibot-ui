@@ -195,3 +195,25 @@ def test_audio_start_hint_controls_connect(monkeypatch):
     assert transport.get("containerized_opus") is True
     assert transport.get("container") == "webm"
     assert transport.get("codec") == "opus"
+
+
+def test_webm_hint_gate_remains_open(monkeypatch):
+    webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
+    gate_events = []
+
+    def _observe(open_state: bool, reason: Optional[str]):
+        gate_events.append((open_state, reason))
+
+    monkeypatch.setattr(ws_asgi, "CONNECT_GATE_OBSERVER", _observe, raising=False)
+
+    result = _run_ws_session(
+        monkeypatch,
+        webm_chunk,
+        audio_start_mime="audio/webm; codecs=opus",
+    )
+
+    assert any(open_state and reason == "audio_start_webm" for open_state, reason in gate_events)
+
+    log_events = [entry.get("event") for entry in result["logs"]]
+    assert "asr_connect_schedule" in log_events
+    assert "fallback_no_audio" not in log_events

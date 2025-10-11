@@ -56,6 +56,27 @@ except Exception:
 ACTIVE_WS: dict[str, dict[str, Any]] = {}
 ACTIVE_WS_LOCK = asyncio.Lock()
 
+
+def _transport_enables_webm_hint(transport_meta: Optional[Dict[str, Any]]) -> bool:
+    """Return True when existing transport metadata should keep the WebM gate open."""
+
+    if not isinstance(transport_meta, dict):
+        return False
+
+    def _normalize(value: Any) -> str:
+        try:
+            return str(value or "").strip().lower()
+        except Exception:
+            return ""
+
+    container = _normalize(transport_meta.get("container"))
+    codec = _normalize(transport_meta.get("codec"))
+
+    return container == "webm" and codec == "opus"
+
+
+CONNECT_GATE_OBSERVER: Optional[Callable[[bool, Optional[str]], None]] = None
+
 WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
 try:
     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
@@ -836,11 +857,23 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     SNIFFER_GATE_BUDGET = 10 * 1024
 
     def _connect_gate_state() -> tuple[bool, Optional[str]]:
+        gate_open = False
+        gate_reason: Optional[str] = None
         if webm_hint_gate[0]:
-            return True, "audio_start_webm"
-        if webm_sniff_gate[0]:
-            return True, "sniff_webm"
-        return False, None
+            gate_open = True
+            gate_reason = "audio_start_webm"
+        elif webm_sniff_gate[0]:
+            gate_open = True
+            gate_reason = "sniff_webm"
+
+        observer = CONNECT_GATE_OBSERVER
+        if callable(observer):
+            try:
+                observer(gate_open, gate_reason)
+            except Exception:
+                pass
+
+        return gate_open, gate_reason
 
     # NEW: per-turn mic capture state
     mic_chunks: List[bytes] = []
@@ -1566,7 +1599,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             turn_id_ref[0] = buf.turn_seq
                         buffered_chunks.clear()
                         buffered_byte_total[0] = 0
-                        webm_hint_gate[0] = False
+                        webm_hint_gate[0] = _transport_enables_webm_hint(transport)
                         webm_sniff_gate[0] = False
                         sniffer_bytes_seen[0] = 0
                         mic_chunks.clear()
@@ -1665,7 +1698,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         sent_any_audio[0] = False
                         buffered_chunks.clear()
                         buffered_byte_total[0] = 0
-                        webm_hint_gate[0] = False
+                        webm_hint_gate[0] = _transport_enables_webm_hint(transport)
                         webm_sniff_gate[0] = False
                         sniffer_bytes_seen[0] = 0
                         turn_connect_started[0] = False

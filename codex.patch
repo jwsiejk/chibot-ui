@@ -1,21 +1,80 @@
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 66c488ef8e7149929d78dddb9ae6bec2d257522c..8197054b6f983ec895c69b8a398bb8284aff5b08 100644
+index 8197054b6f983ec895c69b8a398bb8284aff5b08..26b704fea93a825e0e770dbaa636188a80881cfd 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -801,64 +801,68 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         "dg_open": [0.0],
-         "first_partial": [0.0],
-         "final": [0.0],
-     }
-     turn_finish_logged = [False]
+@@ -34,50 +34,71 @@ from app.services.streaming import (
+     wait_for_listen_ready,
+ )  # NEW
+ from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+ from app.ws.barge import BargeState
+ from app.ws.bus import bus
+ from app.policy import nudges
+ from app.session_state import (
+     note_partial,
+     note_utterance_end,
+     set_asr_stream_open,
+     set_phase,
+     set_recorder_active,
+     should_emit_phase,
+ )
  
-     # Turn-scoped buffering + state
-     buffered_chunks: Deque[bytes] = deque()
-     buffered_byte_total = [0]
-     sent_any_audio = [False]
-     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
-     no_audio_notified = [False]
-     no_audio_turn_id = [0]
+ # Optional admin emitter
+ try:
+     from app.api_v1.admin import _emit as _admin_emit
+ except Exception:
+     _admin_emit = None
+ 
+ 
+ ACTIVE_WS: dict[str, dict[str, Any]] = {}
+ ACTIVE_WS_LOCK = asyncio.Lock()
+ 
++
++def _transport_enables_webm_hint(transport_meta: Optional[Dict[str, Any]]) -> bool:
++    """Return True when existing transport metadata should keep the WebM gate open."""
++
++    if not isinstance(transport_meta, dict):
++        return False
++
++    def _normalize(value: Any) -> str:
++        try:
++            return str(value or "").strip().lower()
++        except Exception:
++            return ""
++
++    container = _normalize(transport_meta.get("container"))
++    codec = _normalize(transport_meta.get("codec"))
++
++    return container == "webm" and codec == "opus"
++
++
++CONNECT_GATE_OBSERVER: Optional[Callable[[bool, Optional[str]], None]] = None
++
+ WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
+ try:
+     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
+ except Exception:
+     pass
+ 
+ # ------------------------------ small helpers ------------------------------
+ 
+ 
+ def _client_ip_from_scope(scope) -> str:
+     try:
+         c = scope.get("client") or ()
+         if isinstance(c, (list, tuple)) and c:
+             return str(c[0])
+     except Exception:
+         pass
+     try:
+         hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
+         xff = hdrs.get("x-forwarded-for", "").split(",")[0].strip()
+         if xff:
+             return xff
+     except Exception:
+         pass
+     return "unknown"
+ 
+@@ -814,55 +835,67 @@ async def _ws_chat_asgi_impl(scope, receive, send):
      try:
          no_audio_window_s = float(
              os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
@@ -28,12 +87,6 @@ index 66c488ef8e7149929d78dddb9ae6bec2d257522c..8197054b6f983ec895c69b8a398bb828
      asr_ready_evt: asyncio.Event = asyncio.Event()
      asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
      max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
--    try:
--        connect_buffer_threshold = int(os.getenv("ASR_CONNECT_BUFFER_BYTES", str(10 * 1024)))
--    except Exception:
--        connect_buffer_threshold = 10 * 1024
--    if connect_buffer_threshold < 0:
--        connect_buffer_threshold = 0
      ws_frames_in = 0
      ws_bytes_in = 0
      backpressure_drop_count = 0
@@ -41,18 +94,33 @@ index 66c488ef8e7149929d78dddb9ae6bec2d257522c..8197054b6f983ec895c69b8a398bb828
      backpressure_last_queue_len = 0
      backpressure_emit_interval = 1.0
      turn_connect_started = [False]
--    format_hint_received = [False]
-+    webm_hint_gate = [False]
-+    webm_sniff_gate = [False]
-+    sniffer_bytes_seen = [0]
-+    SNIFFER_GATE_BUDGET = 10 * 1024
+     webm_hint_gate = [False]
+     webm_sniff_gate = [False]
+     sniffer_bytes_seen = [0]
+     SNIFFER_GATE_BUDGET = 10 * 1024
+ 
+     def _connect_gate_state() -> tuple[bool, Optional[str]]:
++        gate_open = False
++        gate_reason: Optional[str] = None
+         if webm_hint_gate[0]:
+-            return True, "audio_start_webm"
+-        if webm_sniff_gate[0]:
+-            return True, "sniff_webm"
+-        return False, None
++            gate_open = True
++            gate_reason = "audio_start_webm"
++        elif webm_sniff_gate[0]:
++            gate_open = True
++            gate_reason = "sniff_webm"
 +
-+    def _connect_gate_state() -> tuple[bool, Optional[str]]:
-+        if webm_hint_gate[0]:
-+            return True, "audio_start_webm"
-+        if webm_sniff_gate[0]:
-+            return True, "sniff_webm"
-+        return False, None
++        observer = CONNECT_GATE_OBSERVER
++        if callable(observer):
++            try:
++                observer(gate_open, gate_reason)
++            except Exception:
++                pass
++
++        return gate_open, gate_reason
  
      # NEW: per-turn mic capture state
      mic_chunks: List[bytes] = []
@@ -78,7 +146,7 @@ index 66c488ef8e7149929d78dddb9ae6bec2d257522c..8197054b6f983ec895c69b8a398bb828
  
      def _cancel_pending_user_final_task(reason: str = "cancel") -> None:
          task = pending_user_final_task[0]
-@@ -1540,51 +1544,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+@@ -1544,51 +1577,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                      if final_seen[0]:
                          previous_turn_id = turn_id_ref[0]
                          removed_pending = 0
@@ -104,10 +172,10 @@ index 66c488ef8e7149929d78dddb9ae6bec2d257522c..8197054b6f983ec895c69b8a398bb828
                              turn_id_ref[0] = buf.turn_seq
                          buffered_chunks.clear()
                          buffered_byte_total[0] = 0
--                        format_hint_received[0] = False
-+                        webm_hint_gate[0] = False
-+                        webm_sniff_gate[0] = False
-+                        sniffer_bytes_seen[0] = 0
+-                        webm_hint_gate[0] = False
++                        webm_hint_gate[0] = _transport_enables_webm_hint(transport)
+                         webm_sniff_gate[0] = False
+                         sniffer_bytes_seen[0] = 0
                          mic_chunks.clear()
                          mic_first_ts[0] = now
                          mic_last_ts[0] = now
@@ -131,9 +199,7 @@ index 66c488ef8e7149929d78dddb9ae6bec2d257522c..8197054b6f983ec895c69b8a398bb828
                      if buf.is_empty() and not pending_final_payload:
                          nudges.cancel_idle_timers(sid, source="turn_start")
                          try:
-                             set_recorder_active(sid, True)
-                         except Exception:
-@@ -1637,90 +1643,109 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+@@ -1643,51 +1676,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                      pass
                                  try:
                                      wait_for_listen_ready(
@@ -159,10 +225,10 @@ index 66c488ef8e7149929d78dddb9ae6bec2d257522c..8197054b6f983ec895c69b8a398bb828
                          sent_any_audio[0] = False
                          buffered_chunks.clear()
                          buffered_byte_total[0] = 0
--                        format_hint_received[0] = False
-+                        webm_hint_gate[0] = False
-+                        webm_sniff_gate[0] = False
-+                        sniffer_bytes_seen[0] = 0
+-                        webm_hint_gate[0] = False
++                        webm_hint_gate[0] = _transport_enables_webm_hint(transport)
+                         webm_sniff_gate[0] = False
+                         sniffer_bytes_seen[0] = 0
                          turn_connect_started[0] = False
                          # reset mic capture
                          mic_chunks.clear()
@@ -181,369 +247,60 @@ index 66c488ef8e7149929d78dddb9ae6bec2d257522c..8197054b6f983ec895c69b8a398bb828
  
                      # Detect container early
                      try:
--                        if transport.get("container") is None and raw_chunk:
-+                        if raw_chunk:
-+                            bytes_before = sniffer_bytes_seen[0]
-+                            sniffer_bytes_seen[0] += len(raw_chunk)
+                         if raw_chunk:
+                             bytes_before = sniffer_bytes_seen[0]
+                             sniffer_bytes_seen[0] += len(raw_chunk)
                              det = sniffer.feed(raw_chunk)
                              if det:
-                                 container = getattr(det, "container", None)
-                                 codec = getattr(det, "codec", None)
-                                 containerized = bool(
-                                     getattr(det, "containerized", codec == "opus")
-                                 )
--                                transport["container"] = container
--                                transport["codec"] = codec
--                                transport["containerized_opus"] = containerized
--                                _jlog(
--                                    "sniffer_detect",
--                                    sid=sid,
--                                    container=transport.get("container"),
--                                    codec=transport.get("codec"),
--                                    containerized_opus=transport.get(
--                                        "containerized_opus"
--                                    ),
--                                )
--                            else:
-+                                if transport.get("container") is None:
-+                                    transport["container"] = container
-+                                    transport["codec"] = codec
-+                                    transport["containerized_opus"] = containerized
-+                                    _jlog(
-+                                        "sniffer_detect",
-+                                        sid=sid,
-+                                        container=transport.get("container"),
-+                                        codec=transport.get("codec"),
-+                                        containerized_opus=transport.get(
-+                                            "containerized_opus"
-+                                        ),
-+                                    )
-+                                if (
-+                                    not webm_sniff_gate[0]
-+                                    and container == "webm"
-+                                    and codec == "opus"
-+                                    and bytes_before < SNIFFER_GATE_BUDGET
-+                                ):
-+                                    webm_sniff_gate[0] = True
-+                                    with contextlib.suppress(Exception):
-+                                        _jlog(
-+                                            "sniffer_gate_open",
-+                                            sid=sid,
-+                                            reason="sniff_webm",
-+                                            bytes_seen=sniffer_bytes_seen[0],
-+                                        )
-+                            elif transport.get("container") is None:
-                                 meta_det = coerce_detection_from_meta(
-                                     getattr(sniffer, "meta", lambda: None)()
-                                 )
-                                 if meta_det and getattr(meta_det, "container", None):
-                                     container = getattr(meta_det, "container", None)
-                                     codec = getattr(meta_det, "codec", None)
-                                     containerized = bool(
-                                         getattr(
-                                             meta_det, "containerized", codec == "opus"
-                                         )
-                                     )
-                                     transport["container"] = container
-                                     transport["codec"] = codec
-                                     transport["containerized_opus"] = containerized
-                                     _jlog(
-                                         "sniffer_detect",
-                                         sid=sid,
-                                         container=transport.get("container"),
-                                         codec=transport.get("codec"),
-                                         containerized_opus=transport.get(
-                                             "containerized_opus"
-                                         ),
-                                     )
-                     except Exception:
-                         pass
-@@ -1756,84 +1781,67 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                         if chunk_len:
-                             buffered_byte_total[0] += chunk_len
-                         dropped_now = 0
-                         if len(buffered_chunks) > max_buffered_chunks:
-                             dropped_now = len(buffered_chunks) - max_buffered_chunks
-                             for _ in range(dropped_now):
-                                 if not buffered_chunks:
-                                     break
-                                 dropped_chunk = buffered_chunks.popleft()
-                                 if isinstance(dropped_chunk, (bytes, bytearray)):
-                                     buffered_byte_total[0] = max(
-                                         0, buffered_byte_total[0] - len(dropped_chunk)
-                                     )
-                             _jlog(
-                                 "ws_audio_drop",
-                                 sid=sid,
-                                 dropped=dropped_now,
-                                 queued=len(buffered_chunks),
-                                 queued_bytes=buffered_byte_total[0],
-                             )
-                         _maybe_emit_backpressure(
-                             len(buffered_chunks), dropped_now=dropped_now
-                         )
+diff --git a/tests/test_ws_wav_preroll.py b/tests/test_ws_wav_preroll.py
+index f4bc93b730ab205bc26e802a71f4d4f3631baa89..53d2d1475e64324232f190a9b4ac703bd501f61e 100644
+--- a/tests/test_ws_wav_preroll.py
++++ b/tests/test_ws_wav_preroll.py
+@@ -173,25 +173,47 @@ def test_webm_chunk_larger_than_window(monkeypatch):
+ def test_audio_start_hint_controls_connect(monkeypatch):
+     webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
+     result = _run_ws_session(
+         monkeypatch,
+         webm_chunk,
+         audio_start_mime="audio/webm; codecs=opus",
+     )
  
-                     # Ensure provider connection
--                    connect_ready = format_hint_received[0] or bool(
--                        transport.get("containerized_opus")
--                    )
--                    if (
--                        not connect_ready
--                        and connect_buffer_threshold > 0
--                        and buffered_byte_total[0] >= connect_buffer_threshold
--                    ):
--                        connect_ready = True
--
-+                    gate_open, gate_reason = _connect_gate_state()
-                     if (
-                         not turn_connect_started[0]
-                         and dg_state == "closed"
--                        and connect_ready
-+                        and gate_open
-                     ):
-                         turn_connect_started[0] = True
-                         if dg_connect_task is None:
-                             with contextlib.suppress(Exception):
-                                 _jlog(
-                                     "asr_connect_schedule",
-                                     sid=sid,
-                                     turn_id=turn_id_ref[0],
-                                     queued=len(buffered_chunks),
-                                     queued_bytes=buffered_byte_total[0],
-                                     dg_state=dg_state,
--                                    connect_ready_reason=(
--                                        "hint"
--                                        if format_hint_received[0]
--                                        else (
--                                            "detected"
--                                            if transport.get("containerized_opus")
--                                            else "buffer_threshold"
--                                        )
--                                    ),
-+                                    connect_ready_reason=gate_reason,
-                                 )
-                             dg_connect_task = asyncio.create_task(
-                                 _ensure_dg_connected()
-                             )
-                     elif dg_state == "connecting":
-                         pass
+     logs = result["logs"]
+     hint_index = next(
+         i for i, entry in enumerate(logs) if entry.get("event") == "ws_audio_hint"
+     )
+     schedule_index = next(
+         i for i, entry in enumerate(logs) if entry.get("event") == "asr_connect_schedule"
+     )
  
-                     # Flush when ready
-                     if dg is not None:
-                         if not asr_ready_evt.is_set():
-                             try:
-                                 await asyncio.wait_for(
-                                     asr_ready_evt.wait(), timeout=asr_ready_wait_s
-                                 )
-                             except asyncio.TimeoutError:
-                                 _jlog("asr_not_ready_timeout", sid=sid)
-                         if len(buffered_chunks) >= max_buffered_chunks:
-                             await _flush_buffered_chunks()
-                         await _flush_buffered_chunks()
-                     else:
-                         _jlog(
-                             "ws_audio_provider_connecting",
-                             sid=sid,
-                             queued=len(buffered_chunks),
-                         )
-@@ -1849,58 +1857,64 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                         if _admin_emit:
-                             with contextlib.suppress(Exception):
-                                 _admin_emit("ws_json_recv", sid=sid, type=t)
+     assert schedule_index > hint_index
  
-                         if t == "KeepAlive":
-                             await _ws_send_json(send, make_keepalive_ack())
- 
-                         elif t == "AudioStart":
-                             mime = (
-                                 (obj.get("mime") or obj.get("mime_type") or obj.get("contentType"))
-                                 or ""
-                             )
-                             try:
-                                 mime = mime.strip()
-                             except Exception:
-                                 mime = ""
-                             with contextlib.suppress(Exception):
-                                 sniffer.set_meta(mime or None)
-                             detection = coerce_detection_from_meta(mime) if mime else None
-                             if detection is not None:
-                                 transport["container"] = getattr(detection, "container", None)
-                                 transport["codec"] = getattr(detection, "codec", None)
-                                 transport["containerized_opus"] = bool(
-                                     getattr(detection, "containerized", True)
-                                 )
--                            format_hint_received[0] = True
-+                            gate_from_mime = bool(
-+                                detection
-+                                and getattr(detection, "container", None) == "webm"
-+                                and getattr(detection, "codec", None) == "opus"
-+                            )
-+                            webm_hint_gate[0] = gate_from_mime
-                             _jlog(
-                                 "ws_audio_hint",
-                                 sid=sid,
-                                 mime=mime or None,
-                                 container=transport.get("container"),
-                                 codec=transport.get("codec"),
-                                 containerized_opus=transport.get("containerized_opus"),
-+                                gate_open=gate_from_mime,
-                             )
- 
-                         elif t == "greet":
-                             _jlog("ws_greet_recv", sid=sid)
- 
-                             async def _bg():
-                                 try:
-                                     from app.services.streaming import run_ws_greet
- 
-                                     tid = await asyncio.to_thread(run_ws_greet, sid)
-                                     with contextlib.suppress(Exception):
-                                         if _admin_emit:
-                                             cfg_now = db.get_config()
-                                             audio_on = bool(
-                                                 (cfg_now or {}).get(
-                                                     "feature_audio", True
-                                                 )
-                                             )
-                                             _admin_emit(
-                                                 "greet:resp",
-                                                 label="greet:resp",
-                                                 session_id=sid,
-                                                 turn_id=tid,
-                                                 audio_scheduled=audio_on,
-                                             )
-@@ -2075,58 +2089,71 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                         sid=sid,
-                                         turn_id=turn_id_ref[0],
-                                         first_bytes=0,
-                                         empty_turn=True,
-                                     )
- 
-                             # --- Get a turn_id (with guard logs) ---
-                             _jlog(
-                                 "before_close_turn",
-                                 sid=sid,
-                                 next_turn_id=buf.turn_seq + 1,
-                             )
-                             try:
-                                 turn_id, _pcm = buf.close_turn()
-                             except Exception as e:
-                                 _jlog("close_turn_fail", sid=sid, err=type(e).__name__)
-                                 turn_id = turn_id_ref[0] or (buf.turn_seq + 1)
-                                 _pcm = None
-                             _jlog("after_close_turn", sid=sid, turn_id=turn_id)
-                             turn_id_ref[0] = turn_id
- 
-                             # ---- THEN finish the ASR turn (unchanged logic) ----
-                             if _has_deepgram_key():
-                                 # If provider isn't ready yet but we have audio, try to connect now (bounded wait)
-                                 if dg is None and (buffered_chunks or mic_chunks):
--                                    if dg_connect_task is None:
--                                        dg_connect_task = asyncio.create_task(
--                                            _ensure_dg_connected()
--                                        )
--                                    with contextlib.suppress(asyncio.TimeoutError):
--                                        await asyncio.wait_for(
--                                            asr_ready_evt.wait(), timeout=1.2
--                                        )
-+                                    gate_open, gate_reason = _connect_gate_state()
-+                                    if gate_open:
-+                                        if dg_connect_task is None:
-+                                            with contextlib.suppress(Exception):
-+                                                _jlog(
-+                                                    "asr_connect_schedule",
-+                                                    sid=sid,
-+                                                    turn_id=turn_id_ref[0],
-+                                                    queued=len(buffered_chunks),
-+                                                    queued_bytes=buffered_byte_total[0],
-+                                                    dg_state=dg_state,
-+                                                    connect_ready_reason=gate_reason,
-+                                                    via="close_stream",
-+                                                )
-+                                            dg_connect_task = asyncio.create_task(
-+                                                _ensure_dg_connected()
-+                                            )
-+                                        with contextlib.suppress(asyncio.TimeoutError):
-+                                            await asyncio.wait_for(
-+                                                asr_ready_evt.wait(), timeout=1.2
-+                                            )
- 
-                                 # If we have buffered chunks but ASR not ready yet, give it a moment then flush.
-                                 if buffered_chunks and not asr_ready_evt.is_set():
-                                     if (
-                                         dg_state == "connecting"
-                                         and dg_connect_task is not None
-                                     ):
-                                         with contextlib.suppress(Exception):
-                                             await asyncio.wait_for(
-                                                 dg_connect_task,
-                                                 timeout=asr_ready_wait_s,
-                                             )
-                                     with contextlib.suppress(asyncio.TimeoutError):
-                                         await asyncio.wait_for(
-                                             asr_ready_evt.wait(),
-                                             timeout=asr_ready_wait_s,
-                                         )
- 
-                                 # Flush any staged audio first
-                                 await _flush_buffered_chunks()
- 
-                                 # Give ASR a brief chance to be "ready", then flush again
-                                 with contextlib.suppress(asyncio.TimeoutError):
-                                     await asyncio.wait_for(
-                                         asr_ready_evt.wait(), timeout=1.0
-@@ -2382,51 +2409,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                                 f.write(wav)
-                                             data_to_echo = wav
- 
-                                         _jlog(
-                                             "mic_capture_saved",
-                                             sid=sid,
-                                             turn_id=turn_id,
-                                             path=out_path,
-                                             bytes=len(raw),
-                                             mime=mime,
-                                         )
- 
-                                         if MIC_ECHO_WS:
-                                             # Send the audio back over WS so the client can play it
-                                             await _ws_send_diagnostic_audio(
-                                                 send, turn_id, mime, data_to_echo
-                                             )
-                                 except Exception as e:
-                                     _jlog(
-                                         "mic_capture_fail",
-                                         sid=sid,
-                                         err=type(e).__name__,
-                                     )
- 
-                             buffered_byte_total[0] = 0
--                            format_hint_received[0] = False
-+                            webm_hint_gate[0] = False
-+                            webm_sniff_gate[0] = False
-+                            sniffer_bytes_seen[0] = 0
- 
-                         else:
-                             # Unknown type already filtered by schema; no-op to future-proof.
-                             pass
- 
-                     except ValueError as e:
-                         await _ws_send_json(send, make_error("bad_message", str(e)))
-                 else:
-                     # websocket.receive without text/bytes
-                     pass
-             else:
-                 # Other ASGI events are ignored
-                 pass
- 
-     finally:
-         with contextlib.suppress(Exception):
-             _clear_pending_user_final("shutdown")
-         with contextlib.suppress(Exception):
-             _cancel_no_audio_watch()
-         await _remove_active_ws_entry("cleanup")
-         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_conn_cleanup",
-                 conn_id=conn_id,
+     begin_entry = next(
+         entry for entry in logs if entry.get("event") == "asr_connect_begin"
+     )
+     transport = begin_entry.get("transport") or {}
+     assert transport.get("containerized_opus") is True
+     assert transport.get("container") == "webm"
+     assert transport.get("codec") == "opus"
++
++
++def test_webm_hint_gate_remains_open(monkeypatch):
++    webm_chunk = b"\x1aE\xdf\xa3OPUSDATA"
++    gate_events = []
++
++    def _observe(open_state: bool, reason: Optional[str]):
++        gate_events.append((open_state, reason))
++
++    monkeypatch.setattr(ws_asgi, "CONNECT_GATE_OBSERVER", _observe, raising=False)
++
++    result = _run_ws_session(
++        monkeypatch,
++        webm_chunk,
++        audio_start_mime="audio/webm; codecs=opus",
++    )
++
++    assert any(open_state and reason == "audio_start_webm" for open_state, reason in gate_events)
++
++    log_events = [entry.get("event") for entry in result["logs"]]
++    assert "asr_connect_schedule" in log_events
++    assert "fallback_no_audio" not in log_events
