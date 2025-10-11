@@ -525,8 +525,14 @@ function _bufferPreRollChunk(entry) {
   state.preRollBlobs.push(chunk);
   state.preRollDurationMs += chunk.durationMs;
   while (state.preRollDurationMs > PRE_ROLL_MS && state.preRollBlobs.length > 1) {
-    const removed = state.preRollBlobs.shift();
+    // Preserve the very first blob because it contains the container header. Dropping
+    // it causes downstream consumers to miss the WebM/OGG signature and reject the
+    // stream. Instead, trim from the oldest *non-header* chunk.
+    const removed = state.preRollBlobs.splice(1, 1)[0];
     state.preRollDurationMs -= removed?.durationMs || 0;
+    if (state.preRollBlobs.length <= 1) {
+      break;
+    }
   }
   if (state.preRollDurationMs < 0) {
     state.preRollDurationMs = 0;

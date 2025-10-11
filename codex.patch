@@ -1,368 +1,64 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 97b5b7cac0bae5f887fb4b8b080a0bd7135f9208..06da96574c0bb8cbe25208df8c4128ee913cc375 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1039,50 +1039,88 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 _jlog(
-                     "ws_final_guard_cancel",
-                     sid=sid,
-                     turn_id=(payload or (None,))[0],
-                     reason=reason,
-                 )
-             task.cancel()
-         pending_user_final_task[0] = None
+diff --git a/static/js/voice.js b/static/js/voice.js
+index db7b601fd324fd95aaa9550bcf885d5ef0b91037..db56839e785d52438629c046feb5ee58342eb17c 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -503,52 +503,58 @@ function _computePreRollDuration(timecode) {
+     if (Number.isFinite(last)) {
+       duration = Math.max(0, timecode - last);
+     } else if (timecode > 0) {
+       duration = timecode;
+     }
+     state.preRollLastTimecode = timecode;
+   }
+   if (!Number.isFinite(duration) || duration <= 0) {
+     duration = timeslice || PRE_ROLL_MS;
+   }
+   return duration;
+ }
  
-     def _clear_pending_user_final(reason: str = "clear") -> None:
-         payload = pending_user_final.get("payload")
-         _cancel_pending_user_final_task(reason)
-         pending_user_final["payload"] = None
-         pending_user_final["ts"] = 0.0
-         pending_user_final["source"] = None
-         pending_user_final["final_reason"] = None
-         if payload:
-             with contextlib.suppress(Exception):
-                 _jlog(
-                     "ws_final_guard_cleared",
-                     sid=sid,
-                     turn_id=payload[0],
-                     reason=reason,
-                 )
+ function _bufferPreRollChunk(entry) {
+   if (!entry || !entry.blob) {
+     return;
+   }
+   const chunk = {
+     blob: entry.blob,
+     durationMs: Number.isFinite(entry.durationMs) ? Math.max(0, entry.durationMs) : 0,
+     timecode: Number.isFinite(entry.timecode) ? entry.timecode : null,
+   };
+   state.preRollBlobs.push(chunk);
+   state.preRollDurationMs += chunk.durationMs;
+   while (state.preRollDurationMs > PRE_ROLL_MS && state.preRollBlobs.length > 1) {
+-    const removed = state.preRollBlobs.shift();
++    // Preserve the very first blob because it contains the container header. Dropping
++    // it causes downstream consumers to miss the WebM/OGG signature and reject the
++    // stream. Instead, trim from the oldest *non-header* chunk.
++    const removed = state.preRollBlobs.splice(1, 1)[0];
+     state.preRollDurationMs -= removed?.durationMs || 0;
++    if (state.preRollBlobs.length <= 1) {
++      break;
++    }
+   }
+   if (state.preRollDurationMs < 0) {
+     state.preRollDurationMs = 0;
+   }
+ }
  
-+    def _emit_empty_final_nudge(
-+        turn_id_for_event: int,
-+        *,
-+        source: str,
-+        reason: Optional[str],
-+        bytes_forwarded: Optional[int] = None,
-+    ) -> None:
-+        fallback_text = "Sorry, I didn’t catch that. Could you say that again?"
-+        try:
-+            from app.services.streaming import make_assistant_frames
-+
-+            meta_stub = {"source": "nudge_empty_final", "channel": "ws"}
-+            prepared_meta_fallback, _, _ = prepare_turn_metadata(
-+                fallback_text, dict(meta_stub)
-+            )
-+            make_assistant_frames(
-+                fallback_text,
-+                sid,
-+                meta=prepared_meta_fallback,
-+                broadcast_immediately=True,
-+            )
-+        except Exception:
-+            pass
-+
-+        with contextlib.suppress(Exception):
-+            log_fields: Dict[str, Any] = {
-+                "sid": sid,
-+                "turn_id": turn_id_for_event,
-+                "source": source,
-+                "reason": reason,
-+            }
-+            if bytes_forwarded is not None:
-+                try:
-+                    log_fields["bytes_forwarded"] = int(bytes_forwarded)
-+                except Exception:
-+                    log_fields["bytes_forwarded"] = bytes_forwarded
-+            _jlog("empty_final_nudge", **log_fields)
-+
-     async def _emit_user_final_payload(turn_id_for_event: int, text: str) -> None:
-         if final_seen[0]:
-             with contextlib.suppress(Exception):
-                 _jlog(
-                     "ws_final_guard_skip_duplicate",
-                     sid=sid,
-                     turn_id=turn_id_for_event,
-                 )
-             return
+ function _enqueuePreRollBlobs() {
+   const queued = state.preRollBlobs ? [...state.preRollBlobs] : [];
+   const durationMs = queued.reduce((sum, chunk) => sum + (chunk?.durationMs || 0), 0);
+   const totalBytes = queued.reduce((sum, chunk) => sum + (chunk?.blob?.size || 0), 0);
+   const count = queued.length;
+   _resetPreRollBuffer();
+   for (const chunk of queued) {
+     if (!chunk?.blob) continue;
+     _sendRecorderChunk(chunk.blob, {
+       preRoll: true,
+       durationMs: chunk.durationMs,
+       timecode: chunk.timecode,
+     });
+   }
+   return { count, durationMs, totalBytes };
+ }
  
-         _note_turn_commit(
-             turn_id_for_event,
-             source="provider_final",
-             text_chars=len(text or ""),
-         )
-         final_seen[0] = True
-         final_source = pending_user_final.get("source") or "provider_final"
-         final_reason = pending_user_final.get("final_reason")
-         pending_user_final["payload"] = None
-         pending_user_final["ts"] = 0.0
-         pending_user_final["source"] = None
-         pending_user_final["final_reason"] = None
-         turn_overlap_logged[0] = False
- 
-         with contextlib.suppress(Exception):
-@@ -1130,69 +1168,58 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ui_utterance_end",
-                 sid=sid,
-                 turn_id=turn_id_for_event,
-                 actor="user",
-                 source=final_source,
-                 reason=final_reason,
-                 synthetic=False,
-             )
- 
-         try:
-             note_utterance_end(sid)
-         except Exception:
-             pass
-         try:
-             set_recorder_active(sid, False)
-         except Exception:
-             pass
-         try:
-             _admin_emit and _admin_emit("asr:final", session_id=sid)
-         except Exception:
-             pass
- 
-         if not text:
--            # Handle empty finals gracefully: send a brief nudge so the user hears feedback.
--            try:
--                from app.services.streaming import make_assistant_frames, schedule_frames
--                fallback_text = "Sorry, I didn’t catch that. Could you say that again?"
--                meta_stub = {"source": "nudge_empty_final", "channel": "ws"}
--                prepared_meta_fallback, _, _ = prepare_turn_metadata(
--                    fallback_text, dict(meta_stub)
--                )
--                _tid_f, frames_f = make_assistant_frames(
--                    fallback_text,
--                    sid,
--                    meta=prepared_meta_fallback,
--                    broadcast_immediately=True,
--                )
--                # Optionally, you could wait for TTS completion; we avoid blocking the WS loop.
--            except Exception:
--                pass
--            with contextlib.suppress(Exception):
--                _jlog("empty_final_nudge", sid=sid, turn_id=turn_id_for_event)
-+            _emit_empty_final_nudge(
-+                turn_id_for_event,
-+                source=final_source or "provider_final",
-+                reason=final_reason or "empty_final",
-+                bytes_forwarded=(
-+                    forwarded_total_bytes[0] if forwarded_total_bytes[0] else None
-+                ),
-+            )
-             with contextlib.suppress(Exception):
-                 _jlog(
-                     "schedule_run_ws_user_turn",
-                     sid=sid,
-                     turn_id=turn_id_for_event,
-                     source=final_source,
-                     reason=final_reason or "empty_final",
-                     scheduled=False,
-                     had_result=False,
-                 )
-             return
- 
- 
-         if text:
-             dialog_nlu_pre: Dict[str, Any] = {}
-             universal_pre: Dict[str, Any] = {}
-             policy_pre: Dict[str, Any] = {}
-             prepared_meta: Dict[str, Any] = {}
-             meta_stub = {"source": "user_ws", "channel": "ws"}
-             try:
-                 prepared_meta_raw, dialog_nlu_raw, policy_raw = prepare_turn_metadata(
-                     text, dict(meta_stub)
-                 )
-                 if isinstance(prepared_meta_raw, dict):
-                     prepared_meta = dict(prepared_meta_raw)
-@@ -1618,50 +1645,57 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 actor="user",
-                 source="synthetic_final",
-                 reason=reason,
-                 synthetic=True,
-             )
-         with contextlib.suppress(Exception):
-             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ui_user_final_synthetic",
-                 sid=sid,
-                 turn_id=turn_id,
-                 reason=reason,
-                 chars=len(transcript or ""),
-             )
-         _log_turn_finish(
-             turn_id,
-             reason=reason,
-             synthetic=True,
-             transcript_chars=len(transcript or ""),
-         )
-         with contextlib.suppress(Exception):
-             note_utterance_end(sid)
-         with contextlib.suppress(Exception):
-             set_recorder_active(sid, False)
-+        if not transcript and forwarded_total_bytes[0] > 0:
-+            _emit_empty_final_nudge(
-+                turn_id,
-+                source="synthetic_final",
-+                reason=reason,
-+                bytes_forwarded=forwarded_total_bytes[0],
-+            )
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "schedule_run_ws_user_turn",
-                 sid=sid,
-                 turn_id=turn_id,
-                 source="synthetic_final",
-                 reason=reason,
-                 scheduled=False,
-                 had_result=bool(transcript),
-             )
-         completed_llm_turns.discard(turn_id)
-         return True
- 
-     async def _ensure_dg_connected() -> bool:
-         nonlocal dg, rx_task, dg_connect_task, dg_state
- 
-         if not _has_deepgram_key():
-             with contextlib.suppress(Exception):
-                 _jlog("asr_connect_skip", sid=sid, reason="no_api_key")
-             return False
- 
-         if dg_state == "open" and dg is not None:
-             return True
- 
-         if dg_state == "connecting" and dg_connect_task is not None:
-diff --git a/tests/test_ws_synthetic_final_nudge.py b/tests/test_ws_synthetic_final_nudge.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..53d05784487e1f6bcd90788324e8feb6151ded14
---- /dev/null
-+++ b/tests/test_ws_synthetic_final_nudge.py
-@@ -0,0 +1,133 @@
-+import asyncio
-+import json
-+from collections import deque
-+
-+import app.services.streaming as streaming
-+from app.ws import ws_asgi
-+
-+
-+class _RecordingDeepgram:
-+    instances = []
-+
-+    def __init__(self, cfg=None):
-+        self.sent_chunks = []
-+        self._queue: asyncio.Queue = asyncio.Queue()
-+        self._open = False
-+        self.__class__.instances.append(self)
-+
-+    async def connect(self):
-+        self._open = True
-+        await self._queue.put({"type": "asr_open"})
-+
-+    def is_open(self):
-+        return self._open
-+
-+    async def events(self):
-+        while True:
-+            ev = await self._queue.get()
-+            if ev is None:
-+                break
-+            yield ev
-+
-+    async def send(self, chunk: bytes):
-+        self.sent_chunks.append(bytes(chunk))
-+
-+    async def close(self, wait_for_final: bool = True, **_):
-+        self._open = False
-+        await self._queue.put(None)
-+
-+
-+def test_synthetic_final_triggers_empty_nudge(monkeypatch):
-+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
-+    monkeypatch.setenv("DG_LINGER_MS", "0")
-+    monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
-+
-+    _RecordingDeepgram.instances = []
-+
-+    fallback_calls = []
-+    fallback_text = "Sorry, I didn’t catch that. Could you say that again?"
-+
-+    def fake_make_assistant_frames(seed_text, session_id, meta=None, **kwargs):
-+        frames = [
-+            {"type": "assistant_chunk", "turn_id": "assist-turn", "text": seed_text},
-+            {"type": "assistant_end", "turn_id": "assist-turn"},
-+        ]
-+        fallback_calls.append(
-+            {
-+                "seed_text": seed_text,
-+                "meta": dict(meta or {}),
-+                "kwargs": dict(kwargs),
-+            }
-+        )
-+        if kwargs.get("broadcast_immediately", True):
-+            for frame in frames:
-+                ws_asgi.bus.broadcast(session_id, frame)
-+        return "assist-turn", frames
-+
-+    monkeypatch.setattr(streaming, "make_assistant_frames", fake_make_assistant_frames)
-+    monkeypatch.setattr(ws_asgi, "DeepgramClient", _RecordingDeepgram)
-+    monkeypatch.setattr(ws_asgi, "_admin_emit", None)
-+    monkeypatch.setattr(ws_asgi, "_emit_admin_nlu_event", lambda *a, **k: None)
-+
-+    log_events = []
-+
-+    def _capture_jlog(event: str, **fields):
-+        entry = dict(fields)
-+        entry.setdefault("event", event)
-+        log_events.append(entry)
-+
-+    monkeypatch.setattr(ws_asgi, "_jlog", _capture_jlog)
-+
-+    sid = "s-synthetic-empty"
-+    audio_chunk = b"\x01" * 320
-+
-+    events = deque(
-+        [
-+            {
-+                "type": "websocket.receive",
-+                "text": json.dumps({"type": "AudioStart", "mime": "audio/wav"}),
-+            },
-+            {"type": "websocket.receive", "bytes": audio_chunk},
-+            {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
-+            {"type": "websocket.disconnect"},
-+        ]
-+    )
-+
-+    sent_messages = []
-+
-+    async def _receive():
-+        return events.popleft() if events else {"type": "websocket.disconnect"}
-+
-+    async def _send(msg):
-+        sent_messages.append(msg)
-+
-+    scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": f"session_id={sid}".encode()}
-+
-+    loop = asyncio.new_event_loop()
-+    asyncio.set_event_loop(loop)
-+    try:
-+        loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-+        loop.run_until_complete(asyncio.sleep(0.05))
-+    finally:
-+        asyncio.set_event_loop(None)
-+        loop.close()
-+
-+    assert _RecordingDeepgram.instances, "Deepgram client should be instantiated"
-+    dg_client = _RecordingDeepgram.instances[0]
-+    assert dg_client.sent_chunks and len(dg_client.sent_chunks[0]) == len(audio_chunk)
-+
-+    payloads = [
-+        json.loads(msg["text"])
-+        for msg in sent_messages
-+        if msg.get("type") == "websocket.send" and msg.get("text")
-+    ]
-+    result_payload = next(p for p in payloads if p.get("type") == "Results")
-+    assert result_payload["channel"]["alternatives"][0]["transcript"] == ""
-+    assert any(p.get("type") == "UtteranceEnd" for p in payloads)
-+
-+    assert any(call["seed_text"] == fallback_text for call in fallback_calls)
-+    nudge_log = next(entry for entry in log_events if entry.get("event") == "empty_final_nudge")
-+    assert nudge_log.get("source") == "synthetic_final"
-+    assert nudge_log.get("bytes_forwarded", 0) > 0
-+
+ function _attemptAudioStartSend(mime) {
+   try {
