@@ -1,5 +1,5 @@
 import { openWS, waitWSOpen, closeWS, configure } from './ws_module.js';
-import { initMic, armVAD, disarmVAD } from './voice.js';
+import { initMic, armVAD, disarmVAD, setGreetGateActive } from './voice.js';
 import { unlockAudio } from './audio.js';
 import { getSID } from './util/sid.js';
 
@@ -227,6 +227,7 @@ async function runDiagnostic(state) {
     state.sse = startAdminSSE(state, (evt) => handleAdminEvent(state, evt));
     updateASRStatus(state, { status: 'pending', message: 'Waiting for speech activity…' });
 
+    setGreetGateActive(true);
     configure({ greet: true, reset: 1, session_id: state.sid, metadata: { origin: 'admin_voice_diagnostic' } });
     setStepStatus(state, 'greet', 'active', 'Configure greet sent. Waiting for Chip to answer…');
     logAdminEvent(state, 'step_greet_sent');

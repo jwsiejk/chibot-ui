@@ -28,6 +28,7 @@ export function disarmVAD() { _disarm(); }
 export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
 export function bargeIn() { _bargeIn(); }         // keeps API parity
 export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+export function setGreetGateActive(active = true) { _setGreetGateActive(!!active); }
 
 // ---- Internal state ---------------------------------------------------------
 
@@ -42,6 +43,10 @@ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
 const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
 const PRE_ROLL_MS = 250;            // ~0.25s of pre-roll audio
 const SAFETY_CLOSE_DELAY_MS = 2200; // ~2.2s grace after last chunk
+const GREET_BARGE_MIN_SNR_DB = 8;
+const GREET_CALIBRATE_DEFAULT_MS = 500;
+const GREET_CALIBRATE_MIN_MS = 400;
+const GREET_CALIBRATE_MAX_MS = 600;
 
 const state = {
   stream: null,
@@ -90,6 +95,17 @@ const state = {
   turnTraceId: null,
   audioStopSent: false,
   vadMetrics: null,
+  greetGateActive: false,
+  greetGatePhase: 'idle',
+  greetGateWaiters: [],
+  greetGateCalibrateTimer: null,
+  greetGateCalibrateUntil: 0,
+  greetGateCalibrateLastMs: null,
+  greetGateCalibrateMs: GREET_CALIBRATE_DEFAULT_MS,
+  greetGateCalibrateMinMs: GREET_CALIBRATE_MIN_MS,
+  greetGateCalibrateMaxMs: GREET_CALIBRATE_MAX_MS,
+  greetGateLastSignal: null,
+  greetGateLastReason: null,
 };
 
 const BARGE_CONFIRM_DEFAULT_MS = 420;
@@ -111,6 +127,175 @@ try {
 } catch {}
 
 // ---- Helpers ----------------------------------------------------------------
+
+function _clearGreetGateWaiters(result = false) {
+  const waiters = Array.isArray(state.greetGateWaiters) ? state.greetGateWaiters : [];
+  state.greetGateWaiters = [];
+  for (const waiter of waiters) {
+    try { waiter(result); } catch {}
+  }
+}
+
+function _clearGreetGateCalibrateTimer() {
+  if (state.greetGateCalibrateTimer) {
+    try { clearTimeout(state.greetGateCalibrateTimer); } catch {}
+  }
+  state.greetGateCalibrateTimer = null;
+  state.greetGateCalibrateUntil = 0;
+  state.greetGateCalibrateLastMs = null;
+}
+
+function _resetGreetGateState() {
+  _clearGreetGateCalibrateTimer();
+  state.greetGatePhase = 'idle';
+  state.greetGateLastSignal = null;
+}
+
+function _resolveGreetGateCalibrateMs() {
+  const fallback = Number.isFinite(state.greetGateCalibrateMs)
+    ? state.greetGateCalibrateMs
+    : GREET_CALIBRATE_DEFAULT_MS;
+  const minBase = Number.isFinite(state.greetGateCalibrateMinMs)
+    ? state.greetGateCalibrateMinMs
+    : GREET_CALIBRATE_MIN_MS;
+  const maxBase = Number.isFinite(state.greetGateCalibrateMaxMs)
+    ? state.greetGateCalibrateMaxMs
+    : GREET_CALIBRATE_MAX_MS;
+  const raw = Number(optsFromGlobal('greet_gate_calibrate_ms', fallback));
+  const min = Math.min(minBase, maxBase);
+  const max = Math.max(minBase, maxBase);
+  const target = Number.isFinite(raw) ? raw : fallback;
+  return Math.max(min, Math.min(max, target));
+}
+
+function _completeGreetGate(reason = 'open') {
+  if (!state.greetGateActive) {
+    _resetGreetGateState();
+    return;
+  }
+  _voiceLog('info', 'greet gate released', { reason });
+  state.greetGateActive = false;
+  state.greetGatePhase = 'open';
+  state.greetGateLastReason = reason;
+  _clearGreetGateCalibrateTimer();
+  _clearGreetGateWaiters(true);
+  _resetGreetGateState();
+}
+
+function _cancelGreetGate(reason = 'cancelled') {
+  if (!state.greetGateActive) {
+    _resetGreetGateState();
+    return;
+  }
+  _voiceLog('info', 'greet gate cancelled', { reason });
+  state.greetGateActive = false;
+  state.greetGatePhase = 'cancelled';
+  state.greetGateLastReason = reason;
+  _clearGreetGateCalibrateTimer();
+  _clearGreetGateWaiters(false);
+  _resetGreetGateState();
+}
+
+function _setGreetGateActive(active) {
+  if (active) {
+    _clearGreetGateWaiters(false);
+    _resetGreetGateState();
+    state.greetGateActive = true;
+    state.greetGatePhase = 'pending';
+    state.greetGateLastReason = 'armed';
+    state.greetGateLastSignal = 'armed';
+    _voiceLog('info', 'greet gate armed');
+    _ensureWSListener();
+    return;
+  }
+  if (state.greetGateActive) {
+    _completeGreetGate('manual_release');
+  } else {
+    _resetGreetGateState();
+  }
+}
+
+function _startGreetGateCalibrate(source = 'unknown') {
+  if (!state.greetGateActive) return;
+  if (state.greetGatePhase === 'calibrating' && state.greetGateCalibrateTimer) {
+    state.greetGateLastSignal = source;
+    return;
+  }
+  const durationMs = _resolveGreetGateCalibrateMs();
+  const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+    ? performance.now()
+    : Date.now();
+  _clearGreetGateCalibrateTimer();
+  state.greetGatePhase = 'calibrating';
+  state.greetGateLastSignal = source;
+  state.greetGateCalibrateLastMs = durationMs;
+  state.greetGateCalibrateUntil = now + durationMs;
+  _voiceLog('info', 'greet gate calibrating', {
+    source,
+    calibrateMs: durationMs,
+  });
+  try {
+    state.greetGateCalibrateTimer = setTimeout(() => {
+      state.greetGateCalibrateTimer = null;
+      state.greetGateCalibrateUntil = 0;
+      _completeGreetGate('calibrated');
+    }, durationMs);
+  } catch (err) {
+    _voiceLog('warn', 'failed to start greet calibrate timer', { error: err?.message || err });
+    _completeGreetGate('calibrate_timer_failed');
+  }
+}
+
+function _waitForGreetGate() {
+  if (!state.greetGateActive) {
+    return null;
+  }
+  if (state.greetGatePhase !== 'pending' && state.greetGatePhase !== 'calibrating') {
+    return null;
+  }
+  return new Promise((resolve) => {
+    state.greetGateWaiters.push((result) => {
+      resolve(result !== false);
+    });
+  });
+}
+
+function _handleGreetGateUtteranceEnd(detail = {}) {
+  if (!state.greetGateActive) return;
+  state.ttsPlaying = false;
+  _voiceLog('debug', 'greet gate observed UtteranceEnd', {
+    phase: state.greetGatePhase,
+    reason: state.greetGateLastReason,
+  });
+  _startGreetGateCalibrate('UtteranceEnd');
+}
+
+function _valueIsReadyFlag(value) {
+  if (value === true) return true;
+  if (value === 1) return true;
+  if (typeof value === 'string') {
+    const lowered = value.trim().toLowerCase();
+    if (lowered === 'true' || lowered === '1' || lowered === 'yes') return true;
+  }
+  return false;
+}
+
+function _handleGreetGateStateFrame(detail = {}) {
+  if (!state.greetGateActive) return;
+  const channelReady = _valueIsReadyFlag(detail?.channel?.ready_for_user);
+  const ready = _valueIsReadyFlag(detail?.ready_for_user) || channelReady;
+  const stateField = typeof detail?.state === 'string' ? detail.state.toLowerCase() : '';
+  const explicitReady = stateField === 'ready_for_user' || stateField === 'ready';
+  if (ready || explicitReady) {
+    _voiceLog('debug', 'greet gate observed ready state', {
+      phase: state.greetGatePhase,
+      channelReady,
+      ready,
+      explicitReady,
+    });
+    _startGreetGateCalibrate('ready_for_user');
+  }
+}
 
 function _emitVoiceState(state, detail = {}) {
   try {
@@ -280,6 +465,11 @@ function _ensureWSListener() {
     const detail = ev?.detail || {};
     const type = detail?.type;
     const typeNorm = typeof type === 'string' ? type.toLowerCase() : '';
+
+    if (typeNorm === 'utteranceend') {
+      _handleGreetGateUtteranceEnd(detail);
+    }
+    _handleGreetGateStateFrame(detail);
 
     let isFinal = false;
     if (typeNorm === 'utteranceend') {
@@ -617,6 +807,19 @@ async function _ensureAudioStartSent() {
   state.turnHintMime = recorderMime;
 
   const sendPromise = (async () => {
+    const gateWait = _waitForGreetGate();
+    if (gateWait) {
+      _voiceLog('debug', 'AudioStart waiting for greet gate', {
+        phase: state.greetGatePhase,
+        active: state.greetGateActive,
+      });
+      const allowed = await gateWait;
+      if (!allowed) {
+        _voiceLog('warn', 'AudioStart aborted before greet gate release');
+        return false;
+      }
+    }
+
     const sentImmediately = _attemptAudioStartSend(recorderMime);
     if (sentImmediately) {
       state.turnHintSent = true;
@@ -959,6 +1162,7 @@ function _disarm() {
   state.finalized = false;
   state.postFinalHoldUntil = 0;
   state.vadMetrics = null;
+  _cancelGreetGate('disarm');
   _removeWSListener();
   _clearTurnTrace();
   _emitVoiceState('idle');
@@ -1154,6 +1358,30 @@ async function _onSpeechStartCommitted(detail = {}) {
     snrDb: roundTenths(metrics?.snrDb),
   });
 
+  if (state.greetGateActive) {
+    if (state.greetGatePhase === 'calibrating') {
+      _voiceLog('info', 'speech start suppressed during greet calibration', {
+        calibrateUntil: state.greetGateCalibrateUntil,
+        snrDb: roundTenths(metrics?.snrDb),
+      });
+      return;
+    }
+    if (state.greetGatePhase === 'pending') {
+      const snrDb = Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null;
+      if (Number.isFinite(snrDb) && snrDb >= GREET_BARGE_MIN_SNR_DB) {
+        _voiceLog('info', 'greet gate bypassed via barge-in', {
+          snrDb: roundTenths(snrDb),
+        });
+        _completeGreetGate('barge_in');
+      } else {
+        _voiceLog('info', 'speech start suppressed by greet gate', {
+          snrDb: roundTenths(metrics?.snrDb),
+        });
+        return;
+      }
+    }
+  }
+
   if (state.ttsPlaying && !state.bargeConfirmActive) {
     state.bargeConfirmActive = true;
     try { pausePlayback(); } catch {}
@@ -1292,4 +1520,6 @@ export const __TEST_ONLY__ = {
   closeTurnIfOpen: _closeTurnIfOpen,
   sendRecorderChunk: _sendRecorderChunk,
   clearSafetyCloseTimer: _clearSafetyCloseTimer,
+  onSpeechStartCommitted: _onSpeechStartCommitted,
+  onSpeechEndCommitted: _onSpeechEndCommitted,
 };

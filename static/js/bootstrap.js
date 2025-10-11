@@ -1,7 +1,7 @@
 // bootstrap.js
 import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
 import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
-import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
+import { initMic, armVAD, disarmVAD, setGreetGateActive } from '/static/js/voice.js';
 import { unlockAudio, stopPlayback } from '/static/js/audio.js';
 import { getSID } from '/static/js/util/sid.js';
 import * as App from '/static/js/app.js';
@@ -206,6 +206,7 @@ async function startOnce(){
     //    audio hardware comes online.
     const sid = getSID();
     try {
+      setGreetGateActive(true);
       configure({ greet: true, reset: 1, session_id: sid });
     } catch (e) {
       console.warn('[bootstrap] WS configure failed, cannot greet', e);
