@@ -320,6 +320,7 @@ async function _arm(stream = null, opts = {}) {
     // Tunables (admin-configurable via opts or window.__askchip_config.vad)
     minSpeechMs: _resolveNumber(cfg.minSpeechMs, 360),
     minSilenceMs: _resolveNumber(cfg.minSilenceMs, 900),
+     
     pollMs,
     startDbOffset: baseThresholdDb !== null ? baseThresholdDb : 10,
     stopDbOffset: exitThresholdDb !== null ? exitThresholdDb : 6,
