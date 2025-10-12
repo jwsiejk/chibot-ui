@@ -124,6 +124,9 @@ try {
     const ttsState = typeof rawState === 'string' ? rawState.toLowerCase() : '';
     if (ttsState === 'playing') {
       state.postTtsHoldUntil = _now() + POST_TTS_HOLDOFF_MS;
+      if (state.eligibility === 'blocked_pregreet') {
+        state.eligibility = 'holdoff';
+      }
       return;
     }
     if (!ttsState || ttsState === 'ended' || ttsState === 'stopped' || ttsState === 'idle' || ttsState === 'paused') {
