@@ -124,7 +124,16 @@ try {
     const ttsState = typeof rawState === 'string' ? rawState.toLowerCase() : '';
     if (ttsState === 'playing') {
       state.postTtsHoldUntil = _now() + POST_TTS_HOLDOFF_MS;
-      if (state.eligibility === 'blocked_pregreet') {
+
+      const isPrime = detail && detail.prime === true;
+      const playbackConfirmed = (() => {
+        if (detail && (detail.confirmed === true || detail.playbackConfirmed === true)) {
+          return true;
+        }
+        try { return !!ttsIsPlaying(); } catch { return false; }
+      })();
+
+      if (!isPrime && playbackConfirmed && state.eligibility === 'blocked_pregreet') {
         state.eligibility = 'holdoff';
       }
       return;

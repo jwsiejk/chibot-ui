@@ -1,8 +1,69 @@
+diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
+index 7532295e94a85d07a4a1d523d6cfd35ca69cf3ad..e5d137951578cc40fa4126edeb0624bca8fee478 100644
+--- a/static/js/bootstrap.js
++++ b/static/js/bootstrap.js
+@@ -197,51 +197,55 @@ async function startOnce(){
+ 
+     // 1) Network/CSRF prep (kept for compatibility; harmless in WS-only mode)
+     try { installFetchInterceptor(); } catch {}
+     try { await ensureCSRF(); } catch {}
+ 
+     // 2) WS first — verify actually OPEN or abort
+     const ok = await ensureWsOpenOrFail(5000);
+     if (!ok){
+       showBanner('WebSocket did not open — greet aborted.');
+       setDot('ready');
+       if (startBtn) startBtn.disabled = false;
+       startInFlight = false;
+       return;
+     }
+ 
+     // 3) Wire WS → UI events exactly once
+     wireWSEventsOnce();
+ 
+     // 4) WS-only greet using the SAME session id as WS — fire ASAP so text arrives while
+     //    audio hardware comes online.
+     const sid = getSID();
+     try {
+       _console('log', '[bootstrap] startOnce sending greet configure');
+       configure({ greet: true, reset: 1, session_id: sid });
+       _console('log', '[bootstrap] startOnce greet configure sent — recorder setup will follow');
+-      try { window.dispatchEvent(new CustomEvent('chip-tts', { detail: { state: 'playing' } })); } catch {}
++      try {
++        window.dispatchEvent(new CustomEvent('chip-tts', {
++          detail: { state: 'playing', prime: true }
++        }));
++      } catch {}
+       // ^^ This “primes” holdoff if your server’s first audio event is delayed;
+       // when real assistant_audio arrives, your existing listener will extend the hold.
+     } catch (e) {
+       _console('warn', '[bootstrap] WS configure failed, cannot greet', e);
+       showBanner('Greet failed to send — check WS configure()');
+       throw e;
+     }
+ 
+     // 5) Mic permission + arm echo-aware VAD (voice-first path)
+     let visualizerStream = null;
+     try {
+       visualizerStream = await Visualizer.start();
+     } catch (e) {
+       _console('warn', '[bootstrap] visualizer init failed', e);
+     }
+ 
+     try {
+       const stream = await initMic(visualizerStream ?? undefined);
+       _console('log', '[bootstrap] startOnce mic initialized — about to arm VAD for voice turns');
+       await armVAD(stream);         // begins voice turns (one blob per user turn)
+       _console('log', '[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
+     } catch (e) {
+       _console('warn', '[bootstrap] mic/VAD init failed', e);
+       showBanner('Microphone unavailable — voice capture disabled.');
+       setStatusText('Voice capture unavailable');
 diff --git a/static/js/voice.js b/static/js/voice.js
-index 7ef8269ebc1485e48396924a2f11f3dcda6b40af..47ce8f9709e84e76609089bc4ae96a21f3982ad9 100644
+index 47ce8f9709e84e76609089bc4ae96a21f3982ad9..86d29551b481918677951d94811f7849d632bc65 100644
 --- a/static/js/voice.js
 +++ b/static/js/voice.js
-@@ -102,50 +102,53 @@ function _now() {
+@@ -102,51 +102,60 @@ function _now() {
  }
  
  function _clearPendingEndTimer() {
@@ -28,9 +89,19 @@ index 7ef8269ebc1485e48396924a2f11f3dcda6b40af..47ce8f9709e84e76609089bc4ae96a21
      const ttsState = typeof rawState === 'string' ? rawState.toLowerCase() : '';
      if (ttsState === 'playing') {
        state.postTtsHoldUntil = _now() + POST_TTS_HOLDOFF_MS;
-+      if (state.eligibility === 'blocked_pregreet') {
-+        state.eligibility = 'holdoff';
-+      }
+-      if (state.eligibility === 'blocked_pregreet') {
++
++      const isPrime = detail && detail.prime === true;
++      const playbackConfirmed = (() => {
++        if (detail && (detail.confirmed === true || detail.playbackConfirmed === true)) {
++          return true;
++        }
++        try { return !!ttsIsPlaying(); } catch { return false; }
++      })();
++
++      if (!isPrime && playbackConfirmed && state.eligibility === 'blocked_pregreet') {
+         state.eligibility = 'holdoff';
+       }
        return;
      }
      if (!ttsState || ttsState === 'ended' || ttsState === 'stopped' || ttsState === 'idle' || ttsState === 'paused') {
@@ -54,5 +125,151 @@ index 7ef8269ebc1485e48396924a2f11f3dcda6b40af..47ce8f9709e84e76609089bc4ae96a21
    return null;
  }
  
- function _resolveNumber(value, fallback) {
-   const num = _toFiniteNumber(value);
+diff --git a/tests/js/voice-post-tts-hold.test.mjs b/tests/js/voice-post-tts-hold.test.mjs
+index 83ebddef29f5c1c28aaac3aa8170d35216b3fb16..a593aab0790507655527e9b077c26bc7f45df174 100644
+--- a/tests/js/voice-post-tts-hold.test.mjs
++++ b/tests/js/voice-post-tts-hold.test.mjs
+@@ -75,75 +75,108 @@ class AudioStub {
+     this.paused = true;
+     this._emit('pause');
+   }
+ 
+   play() {
+     this.paused = false;
+     this._emit('playing');
+   }
+ 
+   _emit(type) {
+     const set = this._listeners.get(type);
+     if (!set) return;
+     for (const handler of Array.from(set)) {
+       try { handler(); } catch {}
+     }
+   }
+ }
+ 
+ globalThis.Audio = AudioStub;
+ 
+ globalThis.__TEST_WS_HOOKS = {};
+ const wsStubModule = await import('./ws_stub.mjs');
+ globalThis.__TEST_WS_MODULE = wsStubModule;
+ 
+ const voiceModule = await import('../../static/js/voice.js');
++const audioModule = await import('../../static/js/audio.js');
+ const hooks = voiceModule.__TEST_ONLY__;
+ 
+ function resetState() {
+   hooks.state.postTtsHoldUntil = 0;
+   if (hooks.state.postTtsHoldTimer) {
+     clearTimeout(hooks.state.postTtsHoldTimer);
+     hooks.state.postTtsHoldTimer = null;
+   }
+   hooks.state.turnOpen = false;
+   hooks.state.stream = null;
+ }
+ 
+ resetState();
+ 
+-test('speech start waits for post-TTS hold before barging', async () => {
+-  resetState();
+-  hooks.state.turnOpen = true;
+-
+-  const closeEvents = [];
+-  globalThis.__TEST_WS_HOOKS = {
+-    onSendCloseStream: () => {
+-      closeEvents.push({ at: nowValue });
+-      return true;
+-    },
+-  };
+-
+-  nowValue = 0;
+-  window.dispatchEvent(new CustomEvent('chip-tts', { detail: { state: 'playing' } }));
+-  assert.ok(hooks.state.postTtsHoldUntil > nowValue, 'hold window should be scheduled on playing');
+-
+-  nowValue = hooks.state.postTtsHoldUntil - 10;
+-  hooks.onSpeechStartCommitted();
+-
+-  assert.equal(closeEvents.length, 0, 'barge-in should be deferred while hold is active');
+-  assert.ok(hooks.state.postTtsHoldTimer, 'a retry timer should be scheduled while hold is active');
+-
+-  setTimeout(() => {
+-    nowValue = hooks.state.postTtsHoldUntil + 5;
+-  }, 5);
+-
+-  await new Promise((resolve) => setTimeout(resolve, 25));
+-
+-  assert.equal(closeEvents.length, 1, 'barge-in should occur once the hold expires');
+-  assert.equal(hooks.state.turnOpen, false, 'turn should be closed by barge-in');
+-  assert.equal(hooks.state.postTtsHoldTimer, null, 'retry timer should be cleared after firing');
+-
+-  globalThis.__TEST_WS_HOOKS = {};
+-  listenerMap.clear();
+-  resetState();
++test('post-TTS hold behaviour', async (t) => {
++  await t.test('speech start waits for post-TTS hold before barging', async () => {
++    resetState();
++    hooks.state.turnOpen = true;
++
++    const closeEvents = [];
++    globalThis.__TEST_WS_HOOKS = {
++      onSendCloseStream: () => {
++        closeEvents.push({ at: nowValue });
++        return true;
++      },
++    };
++
++    nowValue = 0;
++    audioModule.resumePlayback();
++    assert.equal(audioModule.isPlaying(), true, 'audio module should report playing');
++    assert.equal(hooks.state.eligibility, 'holdoff', 'eligibility should move to holdoff when playback starts');
++    assert.ok(hooks.state.postTtsHoldUntil > nowValue, 'hold window should be scheduled on playing');
++
++    const holdUntil = hooks.state.postTtsHoldUntil;
++    audioModule.stopPlayback();
++    assert.equal(audioModule.isPlaying(), false, 'audio module should report stopped before retrying');
++    hooks.state.postTtsHoldUntil = holdUntil;
++    hooks.state.eligibility = 'eligible';
++
++    nowValue = hooks.state.postTtsHoldUntil - 10;
++    hooks.onSpeechStartCommitted();
++
++    assert.equal(closeEvents.length, 0, 'barge-in should be deferred while hold is active');
++    assert.ok(hooks.state.postTtsHoldTimer, 'a retry timer should be scheduled while hold is active');
++
++    setTimeout(() => {
++      nowValue = hooks.state.postTtsHoldUntil + 5;
++    }, 5);
++
++    await new Promise((resolve) => setTimeout(resolve, 25));
++
++    assert.equal(closeEvents.length, 1, 'barge-in should occur once the hold expires');
++    assert.equal(hooks.state.turnOpen, false, 'turn should be closed by barge-in');
++    assert.equal(hooks.state.postTtsHoldTimer, null, 'retry timer should be cleared after firing');
++
++    globalThis.__TEST_WS_HOOKS = {};
++    resetState();
++    audioModule.stopPlayback();
++  });
++
++  await t.test('prime playing events do not unlock eligibility until playback confirms', async () => {
++    resetState();
++    hooks.state.eligibility = 'blocked_pregreet';
++    nowValue = 0;
++
++    window.dispatchEvent(new CustomEvent('chip-tts', { detail: { state: 'playing', prime: true } }));
++
++    assert.equal(hooks.state.eligibility, 'blocked_pregreet', 'eligibility should stay blocked on prime events');
++    assert.ok(hooks.state.postTtsHoldUntil > 0, 'prime events should still extend the hold window');
++
++    audioModule.resumePlayback();
++    assert.equal(audioModule.isPlaying(), true, 'audio module should report playing after resume');
++    await new Promise((resolve) => setTimeout(resolve, 0));
++
++    assert.equal(hooks.state.eligibility, 'holdoff', 'eligibility should update once playback is active');
++    audioModule.stopPlayback();
++  });
++
++  t.after(() => {
++    listenerMap.clear();
++  });
+ });

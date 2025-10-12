@@ -97,6 +97,7 @@ const wsStubModule = await import('./ws_stub.mjs');
 globalThis.__TEST_WS_MODULE = wsStubModule;
 
 const voiceModule = await import('../../static/js/voice.js');
+const audioModule = await import('../../static/js/audio.js');
 const hooks = voiceModule.__TEST_ONLY__;
 
 function resetState() {
@@ -111,39 +112,71 @@ function resetState() {
 
 resetState();
 
-test('speech start waits for post-TTS hold before barging', async () => {
-  resetState();
-  hooks.state.turnOpen = true;
+test('post-TTS hold behaviour', async (t) => {
+  await t.test('speech start waits for post-TTS hold before barging', async () => {
+    resetState();
+    hooks.state.turnOpen = true;
 
-  const closeEvents = [];
-  globalThis.__TEST_WS_HOOKS = {
-    onSendCloseStream: () => {
-      closeEvents.push({ at: nowValue });
-      return true;
-    },
-  };
+    const closeEvents = [];
+    globalThis.__TEST_WS_HOOKS = {
+      onSendCloseStream: () => {
+        closeEvents.push({ at: nowValue });
+        return true;
+      },
+    };
 
-  nowValue = 0;
-  window.dispatchEvent(new CustomEvent('chip-tts', { detail: { state: 'playing' } }));
-  assert.ok(hooks.state.postTtsHoldUntil > nowValue, 'hold window should be scheduled on playing');
+    nowValue = 0;
+    audioModule.resumePlayback();
+    assert.equal(audioModule.isPlaying(), true, 'audio module should report playing');
+    assert.equal(hooks.state.eligibility, 'holdoff', 'eligibility should move to holdoff when playback starts');
+    assert.ok(hooks.state.postTtsHoldUntil > nowValue, 'hold window should be scheduled on playing');
 
-  nowValue = hooks.state.postTtsHoldUntil - 10;
-  hooks.onSpeechStartCommitted();
+    const holdUntil = hooks.state.postTtsHoldUntil;
+    audioModule.stopPlayback();
+    assert.equal(audioModule.isPlaying(), false, 'audio module should report stopped before retrying');
+    hooks.state.postTtsHoldUntil = holdUntil;
+    hooks.state.eligibility = 'eligible';
 
-  assert.equal(closeEvents.length, 0, 'barge-in should be deferred while hold is active');
-  assert.ok(hooks.state.postTtsHoldTimer, 'a retry timer should be scheduled while hold is active');
+    nowValue = hooks.state.postTtsHoldUntil - 10;
+    hooks.onSpeechStartCommitted();
 
-  setTimeout(() => {
-    nowValue = hooks.state.postTtsHoldUntil + 5;
-  }, 5);
+    assert.equal(closeEvents.length, 0, 'barge-in should be deferred while hold is active');
+    assert.ok(hooks.state.postTtsHoldTimer, 'a retry timer should be scheduled while hold is active');
 
-  await new Promise((resolve) => setTimeout(resolve, 25));
+    setTimeout(() => {
+      nowValue = hooks.state.postTtsHoldUntil + 5;
+    }, 5);
 
-  assert.equal(closeEvents.length, 1, 'barge-in should occur once the hold expires');
-  assert.equal(hooks.state.turnOpen, false, 'turn should be closed by barge-in');
-  assert.equal(hooks.state.postTtsHoldTimer, null, 'retry timer should be cleared after firing');
+    await new Promise((resolve) => setTimeout(resolve, 25));
 
-  globalThis.__TEST_WS_HOOKS = {};
-  listenerMap.clear();
-  resetState();
+    assert.equal(closeEvents.length, 1, 'barge-in should occur once the hold expires');
+    assert.equal(hooks.state.turnOpen, false, 'turn should be closed by barge-in');
+    assert.equal(hooks.state.postTtsHoldTimer, null, 'retry timer should be cleared after firing');
+
+    globalThis.__TEST_WS_HOOKS = {};
+    resetState();
+    audioModule.stopPlayback();
+  });
+
+  await t.test('prime playing events do not unlock eligibility until playback confirms', async () => {
+    resetState();
+    hooks.state.eligibility = 'blocked_pregreet';
+    nowValue = 0;
+
+    window.dispatchEvent(new CustomEvent('chip-tts', { detail: { state: 'playing', prime: true } }));
+
+    assert.equal(hooks.state.eligibility, 'blocked_pregreet', 'eligibility should stay blocked on prime events');
+    assert.ok(hooks.state.postTtsHoldUntil > 0, 'prime events should still extend the hold window');
+
+    audioModule.resumePlayback();
+    assert.equal(audioModule.isPlaying(), true, 'audio module should report playing after resume');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(hooks.state.eligibility, 'holdoff', 'eligibility should update once playback is active');
+    audioModule.stopPlayback();
+  });
+
+  t.after(() => {
+    listenerMap.clear();
+  });
 });

@@ -219,7 +219,11 @@ async function startOnce(){
       _console('log', '[bootstrap] startOnce sending greet configure');
       configure({ greet: true, reset: 1, session_id: sid });
       _console('log', '[bootstrap] startOnce greet configure sent — recorder setup will follow');
-      try { window.dispatchEvent(new CustomEvent('chip-tts', { detail: { state: 'playing' } })); } catch {}
+      try {
+        window.dispatchEvent(new CustomEvent('chip-tts', {
+          detail: { state: 'playing', prime: true }
+        }));
+      } catch {}
       // ^^ This “primes” holdoff if your server’s first audio event is delayed;
       // when real assistant_audio arrives, your existing listener will extend the hold.
     } catch (e) {
