@@ -28,6 +28,50 @@ def _require_admin() -> None:
 _LOG_Q = deque(maxlen=1000)
 _STEP = 0
 
+
+def _admin_sse_enabled() -> bool:
+    return bool(os.environ.get("ENABLE_ADMIN_SSE")) and bool(os.environ.get("ADMIN_SSE_E2E_KEY"))
+
+
+def _extract_admin_token(payload: dict | None = None) -> str | None:
+    """Return a token supplied via query/header/payload for SSE admin access."""
+
+    candidates: list[str] = []
+
+    query_token = request.args.get("k")
+    if isinstance(query_token, str) and query_token.strip():
+        candidates.append(query_token.strip())
+
+    header_token = request.headers.get("X-Admin-SSE-Token") or request.headers.get("X-Admin-Token")
+    if isinstance(header_token, str) and header_token.strip():
+        candidates.append(header_token.strip())
+
+    auth_header = request.headers.get("Authorization", "")
+    if isinstance(auth_header, str) and auth_header.lower().startswith("bearer "):
+        bearer = auth_header[7:].strip()
+        if bearer:
+            candidates.append(bearer)
+
+    if isinstance(payload, dict):
+        token_value = payload.get("token")
+        if isinstance(token_value, str) and token_value.strip():
+            candidates.append(token_value.strip())
+
+    for candidate in candidates:
+        if candidate:
+            return candidate
+    return None
+
+
+def _has_valid_admin_token(payload: dict | None = None) -> bool:
+    if not _admin_sse_enabled():
+        return False
+    expected = (os.environ.get("ADMIN_SSE_E2E_KEY") or "").strip()
+    if not expected:
+        return False
+    provided = _extract_admin_token(payload)
+    return bool(provided) and provided == expected
+
 def _emit(kind: str, *, label: str | None = None, route: str | None = None, **fields) -> bool:
     """Append an admin log event (and bump step)."""
     try:
@@ -58,21 +102,12 @@ def logs_sse():
     """
 
     # ── replaces the single `_require_admin()` call ──
-    enable = bool(os.environ.get("ENABLE_ADMIN_SSE"))
-    token = (request.args.get("k") or "").strip()
-    token_ok = bool(os.environ.get("ADMIN_SSE_E2E_KEY")) and token == os.environ.get("ADMIN_SSE_E2E_KEY")
-
-    if not enable:
+    if not bool(os.environ.get("ENABLE_ADMIN_SSE")):
         # feature disabled unless explicitly enabled
         abort(404)
 
-    try:
-        # prefer real admin if available (uses your existing helper)
+    if not _has_valid_admin_token():
         _require_admin()
-    except Exception:
-        # fallback to URL token for e2e runner
-        if not token_ok:
-            abort(403)
     # ─────────────────────────────────────────────────
 
     live = str(request.args.get("live") or "").lower() in ("1", "true", "yes")
@@ -97,14 +132,21 @@ def logs_sse():
 @bp.post("/log")
 def logs_append():
     """Append a custom admin log event from the UI diagnostic tools."""
-    _require_admin()
-    payload = request.get_json(silent=True) or {}
+    payload_obj = request.get_json(silent=True)
+    payload_dict = payload_obj if isinstance(payload_obj, dict) else {}
 
-    kind = (payload.get("kind") or "admin_diag").strip() if isinstance(payload.get("kind"), str) else "admin_diag"
-    label = payload.get("label") if isinstance(payload.get("label"), str) else None
-    route = payload.get("route") if isinstance(payload.get("route"), str) else None
+    if not _has_valid_admin_token(payload_dict):
+        _require_admin()
 
-    extra = {k: v for k, v in payload.items() if k not in {"kind", "label", "route"}}
+    filtered_payload = {k: v for k, v in payload_dict.items() if k != "token"}
+
+    kind = (filtered_payload.get("kind") or "admin_diag").strip() if isinstance(filtered_payload.get("kind"), str) else "admin_diag"
+    label = filtered_payload.get("label") if isinstance(filtered_payload.get("label"), str) else None
+    route = filtered_payload.get("route") if isinstance(filtered_payload.get("route"), str) else None
+
+    extra = {k: v for k, v in filtered_payload.items() if k not in {"kind", "label", "route"}}
+    if "payload" not in extra:
+        extra["payload"] = filtered_payload
 
     ok = False
     try:
