@@ -1,6 +1,11 @@
 [
   {
     "ok": false,
+    "selector": "--start-eval",
+    "text": "window.startCall && window.startCall()"
+  },
+  {
+    "ok": false,
     "error": "locator.click: Timeout 1500ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /^start$/i }).first()\u001b",
     "selector": "getByRole(button /^start$/i)",
     "text": "/^start$/i",

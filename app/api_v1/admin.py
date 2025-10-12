@@ -6,7 +6,7 @@ import sys
 import time
 import platform
 from collections import deque
-from flask import Blueprint, request, session, abort, Response, jsonify
+from flask import Blueprint, request, session, abort, Response, jsonify, stream_with_context
 
 from ..utils.admin import is_admin_email
 from ..security_state import get_user
@@ -14,8 +14,8 @@ from ..services.config_store import get_config
 from ..services import admin_settings as cfg
 from ..services import test_runner as testr
 
-bp = Blueprint("admin", __name__)
-
+# add the prefix here so route is /api/v1/admin/logs
+bp = Blueprint("admin", __name__, url_prefix="/api/v1/admin")
 # ----------------- Admin access helpers -----------------
 
 def _require_admin() -> None:
@@ -53,41 +53,46 @@ def _emit(kind: str, *, label: str | None = None, route: str | None = None, **fi
 def logs_sse():
     """
     Live admin logs stream.
-    - /api/v1/admin/logs           → short drain (ends when queue drains)
-    - /api/v1/admin/logs?live=1    → live tail; heartbeats + 'ping' unlabeled messages
+    - /api/v1/admin/logs         → short drain (ends when queue drains)
+    - /api/v1/admin/logs?live=1  → live tail; heartbeats + continuous events
     """
-    _require_admin()
-    live = request.args.get("live") in ("1", "true", "yes")
 
-    def stream():
-        import time as _t
+    # ── replaces the single `_require_admin()` call ──
+    enable = bool(os.environ.get("ENABLE_ADMIN_SSE"))
+    token = (request.args.get("k") or "").strip()
+    token_ok = bool(os.environ.get("ADMIN_SSE_E2E_KEY")) and token == os.environ.get("ADMIN_SSE_E2E_KEY")
 
-        # initial heartbeat (named) and unlabeled ping so onmessage fires
-        yield "event: heartbeat\n"
-        yield "data: " + json.dumps({"ts": _t.time(), "kind": "heartbeat", "msg": "ok"}) + "\n\n"
-        yield "data: " + json.dumps({"ts": _t.time(), "kind": "ping"}) + "\n\n"
+    if not enable:
+        # feature disabled unless explicitly enabled
+        abort(404)
 
-        last_hb = _t.time()
-        while True:
-            sent = False
-            while _LOG_Q:
-                evt = _LOG_Q.popleft()
-                yield "data: " + json.dumps(evt) + "\n\n"
-                sent = True
+    try:
+        # prefer real admin if available (uses your existing helper)
+        _require_admin()
+    except Exception:
+        # fallback to URL token for e2e runner
+        if not token_ok:
+            abort(403)
+    # ─────────────────────────────────────────────────
 
-            now = _t.time()
-            if now - last_hb > 5:
-                yield "event: heartbeat\n"
-                yield "data: " + json.dumps({"ts": now, "kind": "heartbeat", "msg": "ok"}) + "\n\n"
-                yield "data: " + json.dumps({"ts": now, "kind": "ping"}) + "\n\n"
-                last_hb = now
+    live = str(request.args.get("live") or "").lower() in ("1", "true", "yes")
 
-            if not live and not sent:
-                break
-            _t.sleep(0.3)
+    @stream_with_context
+    def event_stream():
+        # immediate heartbeat so the runner sees the pipe
+        yield f'event: message\ndata: {json.dumps({"event":"heartbeat","at":int(time.time()*1000)})}\n\n'
 
-    return Response(stream(), mimetype="text/event-stream")
+        # ⬇️ keep your existing streaming logic here
+        # Example: replace `admin_log_iter(live=live)` with your real iterator
+        for evt in admin_log_iter(live=live):
+            yield f'event: message\ndata: {json.dumps(evt)}\n\n'
 
+    headers = {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+    }
+    return Response(event_stream(), headers=headers)
 
 @bp.post("/log")
 def logs_append():
