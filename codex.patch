@@ -1,164 +1,350 @@
 diff --git a/app/services/streaming.py b/app/services/streaming.py
-index e77325cc73cb5c8c40a2a1e478843d7c84c75bce..1b74f7812eeddc5604274b30f8c152f0e4fff8b2 100644
+index 1b74f7812eeddc5604274b30f8c152f0e4fff8b2..28ad66bc9b9812fd10c137f97fc28464cd3ec428 100644
 --- a/app/services/streaming.py
 +++ b/app/services/streaming.py
-@@ -2811,50 +2811,59 @@ def schedule_tts_audio(session_id: str,
+@@ -96,50 +96,106 @@ def _signal_tts_completion(session_id: str, turn_key: str) -> None:
  
-     if not audio_payload:
-         state['error'] = 'empty_audio'
-         _log("tts.synth.error", error='empty_audio', override=audio_override)
+ 
+ def wait_for_tts_completion(session_id: str,
+                             turn_id: Optional[str] = None,
+                             *,
+                             timeout: Optional[float] = None) -> bool:
+     with _TTS_COMPLETION_LOCK:
+         session_events = _TTS_COMPLETION_EVENTS.get(session_id)
+         if not session_events:
+             event = None
+         else:
+             lookup_key: Optional[str]
+             if turn_id:
+                 lookup_key = _tts_event_key(turn_id)
+             else:
+                 lookup_key = _TTS_LATEST_TURN.get(session_id)
+             event = session_events.get(lookup_key) if lookup_key else None
+     if event is None:
+         return True
+     try:
+         return bool(event.wait(timeout))
+     except Exception:
          return False
  
-     completion_event = _prepare_tts_completion_event(session_id, turn_key)
  
-     payload_for_stream = audio_payload
- 
-     def _run():
-         total_audio_bytes = 0
-         chunk_count = 0
-         chunk_bytes_sent = 0
-         canceled = False
-         truncated = False
-         utterance_end_sent = False
-         max_frames = 256  # guardrail
- 
-         def _emit_utterance_end(reason: str) -> None:
-             nonlocal utterance_end_sent
-             if utterance_end_sent:
-                 _log("tts.utterance_end.skip", reason=reason, already_sent=True)
-                 return
-             _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
-+            try:
-+                _admin_emit(
-+                    'UtteranceEnd',
-+                    session_id=session_id,
-+                    turn_id=safe_turn_id,
-+                    reason=reason,
-+                )
-+            except Exception:
-+                pass
-             try:
-                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
-             except Exception:
-                 pass
-             utterance_end_sent = True
- 
-         stream_payload = audio_bytes if audio_override else payload_for_stream
-         try:
-             # Small pacing delay if requested
-             if delay_ms and delay_ms > 0:
-                 _t.sleep(max(0, delay_ms) / 1000.0)
- 
-             total_audio_bytes = len(stream_payload or b"")
- 
-             try:
-                 _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
-             except Exception:
-                 pass
- 
-             # Chunk and broadcast
-             mv = memoryview(stream_payload)
-             idx = 0
-             first_sent = False
- 
-             while idx < len(mv):
-diff --git a/tests/test_ws_two_turn_regression.py b/tests/test_ws_two_turn_regression.py
-index fe82717d528b553a92bab4acef30b9847d7c41b9..7859127500adabd96b10c13aca7d7996f443cfb2 100644
---- a/tests/test_ws_two_turn_regression.py
-+++ b/tests/test_ws_two_turn_regression.py
-@@ -157,84 +157,95 @@ def test_schedule_frames_tracks_current_assistant_turn(monkeypatch):
-         calls.append((sid_arg, tid_arg))
-         orig_note(sid_arg, tid_arg)
- 
-     monkeypatch.setattr(bus, "note_assistant_turn", _capture_note)
- 
-     q = bus.subscribe(sid)
-     try:
-         schedule_frames(sid, frames)
-         q.get(timeout=1.0)
-         q.get(timeout=1.0)
-     finally:
-         bus.unsubscribe(sid, q)
-         bus.note_assistant_turn(sid, None)
-         bus._canceled.discard((sid, "turn-42"))
- 
-     assert (sid, "turn-42") in calls
-     assert (sid, None) in calls
- 
- 
- def test_schedule_tts_audio_truncation_emits_single_utterance_end(monkeypatch):
-     sid = "s-tts-truncation"
-     turn_id = "turn-truncate"
- 
-     # Capture structured logs to confirm duplicate suppression fires.
-     logs = []
-+    admin_events = []
- 
-     def _capture_log(kind, **fields):
-         logs.append((kind, fields))
- 
-     monkeypatch.setattr(streaming, "_jlog", _capture_log)
-+    monkeypatch.setattr(streaming, "_admin_emit", lambda event, **payload: admin_events.append((event, payload)))
- 
-     q = bus.subscribe(sid)
-     try:
-         # Force the guard by exceeding the max frame count with 1-byte chunks.
-         audio_bytes = b"a" * 300
-         scheduled = streaming.schedule_tts_audio(
-             sid,
-             "hello",
-             turn_id=turn_id,
-             audio_bytes=audio_bytes,
-             chunk_bytes=1,
-         )
-         assert scheduled, "TTS scheduling should succeed for override payloads"
- 
-         frames = []
-         idle_streak = 0
-         deadline = time.time() + 5
-         while time.time() < deadline and idle_streak < 3:
-             try:
-                 frames.append(q.get(timeout=0.1))
-                 idle_streak = 0
-             except Empty:
-                 idle_streak += 1
- 
-         utterance_ends = [fr for fr in frames if fr.get("type") == "UtteranceEnd"]
-         assert len(utterance_ends) == 1, f"expected single UtteranceEnd, saw {len(utterance_ends)}"
- 
-         skip_logs = [kind for kind, payload in logs if kind == "tts.utterance_end.skip"]
-         assert skip_logs, "expected duplicate suppression log"
++def _clean_session_goal(goal: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
++    """Return a normalized session goal payload safe for meta/admin emission."""
 +
-+        admin_utterance_events = [payload for event, payload in admin_events if event == "UtteranceEnd"]
-+        assert admin_utterance_events == [
-+            {
-+                "session_id": sid,
-+                "turn_id": turn_id,
-+                "reason": "truncated_guard",
-+            }
-+        ], f"unexpected admin UtteranceEnd events: {admin_utterance_events}"
-     finally:
-         bus.unsubscribe(sid, q)
-         bus.note_assistant_turn(sid, None)
-         bus._canceled.discard((sid, turn_id))
++    cleaned: Dict[str, Any] = {
++        "phase": None,
++        "depth": None,
++        "delivery_pref": None,
++        "working_intent": None,
++        "entities": {"products": [], "keywords": []},
++        "confirmed": [],
++    }
++
++    if not isinstance(goal, Mapping):
++        return cleaned
++
++    for key in ("phase", "depth", "delivery_pref", "working_intent"):
++        if key in goal:
++            cleaned[key] = goal.get(key)
++
++    entities = goal.get("entities")
++    if isinstance(entities, Mapping):
++        for name in ("products", "keywords"):
++            raw_items = entities.get(name)
++            bucket: List[str] = []
++            if isinstance(raw_items, Iterable) and not isinstance(raw_items, (str, bytes)):
++                seen = set()
++                for item in raw_items:
++                    text = str(item or "").strip()
++                    if not text:
++                        continue
++                    lowered = text.lower()
++                    if lowered in seen:
++                        continue
++                    seen.add(lowered)
++                    bucket.append(text)
++            cleaned["entities"][name] = bucket
++
++    confirmed = goal.get("confirmed")
++    if isinstance(confirmed, Iterable) and not isinstance(confirmed, (str, bytes)):
++        deduped: List[str] = []
++        seen_conf = set()
++        for item in confirmed:
++            text = str(item or "").strip()
++            if not text:
++                continue
++            if text in seen_conf:
++                continue
++            deduped.append(text)
++            seen_conf.add(text)
++        cleaned["confirmed"] = deduped
++    elif isinstance(confirmed, str) and confirmed.strip():
++        cleaned["confirmed"] = [confirmed.strip()]
++
++    return cleaned
++
++
+ def is_listen_ready(session_id: str) -> bool:
+     try:
+         st = get_session_state(session_id)
+     except Exception:
+         return True
+     try:
+         recorder_active = bool(getattr(st, "recorder_active", False))
+         asr_open = bool(getattr(st, "asr_stream_open", False))
+     except Exception:
+         return True
+     return recorder_active or asr_open
  
  
- def test_ws_barge_commit_cancels_turn(monkeypatch):
-     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+ def wait_for_listen_ready(session_id: str,
+                           *,
+                           timeout: float = 1.0,
+                           poll_interval: float = 0.05) -> bool:
+     if is_listen_ready(session_id):
+         return True
+     deadline = _t.time() + max(0.0, float(timeout))
+     interval = max(0.01, float(poll_interval))
+     while _t.time() < deadline:
+         _t.sleep(interval)
+         if is_listen_ready(session_id):
+             return True
+@@ -1345,51 +1401,72 @@ def prepare_turn_metadata(seed_text: str,
+             universal = _interpret_universal(
+                 seed_text,
+                 meta=target_meta,
+                 dialog_nlu=dialog_nlu,
+                 config=cfg,
+             )
+         except Exception:
+             universal = _ensure_universal_fields(None)
+     target_meta["universal"] = universal
  
-     sid = "s-barge-commit"
-     bus.note_assistant_turn(sid, "turn-commit")
+     session_id = _extract_session_id(target_meta)
+     session_goal = None
+     if session_id:
+         try:
+             session_goal = db.update_session_goal(
+                 session_id,
+                 phase=universal.get("phase"),
+                 depth=universal.get("depth"),
+                 delivery_pref=universal.get("delivery_pref"),
+                 working_intent=dialog_nlu.get("intent") or universal.get("intent_hint"),
+                 entities=universal.get("entities"),
+             )
+         except Exception:
+             session_goal = db.get_session_goal(session_id)
+         if session_goal:
+-            target_meta["session_goal"] = copy.deepcopy(session_goal)
++            cleaned_goal = _clean_session_goal(session_goal)
++            target_meta["session_goal"] = copy.deepcopy(cleaned_goal)
++            admin_cb = _admin_emit if callable(_admin_emit) else None
++            if admin_cb:
++                payload = copy.deepcopy(cleaned_goal)
++                payload["event"] = "session_goal"
++                payload["session_id"] = session_id or target_meta.get("session_id")
++                turn_id_value = target_meta.get("turn_id")
++                if not turn_id_value and isinstance(incoming_meta, dict):
++                    turn_id_value = incoming_meta.get("turn_id")
++                if turn_id_value:
++                    payload["turn_id"] = turn_id_value
++                depth_label = payload.get("depth")
++                try:
++                    depth_label_str = str(depth_label).strip() if depth_label is not None else ""
++                except Exception:
++                    depth_label_str = ""
++                label_value = f"session_goal:{depth_label_str or 'unset'}"
++                try:
++                    admin_cb("session_goal", label=label_value, **payload)
++                except Exception:
++                    pass
  
-     cancel_calls = []
-     orig_cancel = bus.cancel_turn
+     raw_policy = pick_dialog_policy(dialog_nlu, universal, session_goal=session_goal) or {}
+     policy = dict(raw_policy)
+     if policy.get("action") and "teacher_move" not in policy:
+         policy["teacher_move"] = policy["action"]
  
-     def _capture_cancel(sid_arg, tid_arg):
-         cancel_calls.append((sid_arg, tid_arg))
-         orig_cancel(sid_arg, tid_arg)
+     if telemetry:
+         confidence_value: Optional[float]
+         try:
+             confidence_raw = universal.get("confidence") if isinstance(universal, Mapping) else None
+             confidence_value = float(confidence_raw) if isinstance(confidence_raw, (int, float)) else None
+         except Exception:
+             confidence_value = None
+         planner_features = _planner_feature_summary(dialog_nlu, universal)
+         telemetry.log_planner_decision(
+             confidence=confidence_value,
+             band=policy.get("confidence_band"),
+             teacher_move=policy.get("teacher_move") or policy.get("action"),
+             top_features=planner_features or None,
+         )
  
-     monkeypatch.setattr(bus, "cancel_turn", _capture_cancel)
+     action = target_meta.get(_DIALOG_ACTION_KEY) or target_meta.get("action")
+     if not action:
+         action = policy.get("action") or policy.get("teacher_move") or "respond"
+     canonical_action = _ACTION_ALIASES.get(str(action or "").strip().lower(), action)
+diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
+index 0d5f4fd7ce0b0a885d2b97d89bc79a9171c386c4..ef81bb5d6329b6fae8353fd19917e38a8d96fbcb 100644
+--- a/tests/test_streaming_ws_fallbacks.py
++++ b/tests/test_streaming_ws_fallbacks.py
+@@ -1,32 +1,33 @@
+ import asyncio
+ import hashlib
+ import importlib
+ import json
+ import types
+ import uuid
+ from collections import deque
++from unittest.mock import Mock
  
-     start_results = []
-     orig_start = ws_asgi.BargeState.start
+ import pytest
+ 
+ import app.personas.prompt_builder as prompt_builder
+ 
+ from app.services import streaming
+ from app.ws import ws_asgi
+ from app.session_state import set_phase
+ 
+ 
+ def _test_client():
+     mod = importlib.import_module("app")
+     if hasattr(mod, "create_app"):
+         flask_app = mod.create_app()
+     else:
+         flask_app = mod.app
+     flask_app.config["TESTING"] = True
+     return flask_app.test_client()
+ 
+ 
+ def _csrf_token(client):
+     resp = client.get("/api/v1/csrf")
+     return resp.headers.get("X-CSRF-Token")
+ 
+ 
+@@ -453,50 +454,126 @@ def test_make_assistant_frames_health_check_allows_legacy(monkeypatch):
+     assert tid == "health"
+     assert legacy_calls and legacy_calls[0][0] == "status"
+ 
+ 
+ def test_prepare_turn_metadata_injects_fields(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     seed_meta = {"source": "http_chat"}
+     prepared, labels, policy = streaming.prepare_turn_metadata("How do I deploy?", seed_meta)
+ 
+     assert prepared is seed_meta
+     assert isinstance(prepared.get("nlu"), dict)
+     assert isinstance(prepared.get("dialog_nlu"), dict)
+     assert isinstance(prepared.get("universal"), dict)
+     assert prepared["action"]
+     assert prepared["dialog_action"] == prepared["action"]
+     assert prepared["verbosity"] in {"brief", "normal", "medium"}
+     assert prepared["dialog_verbosity"] == prepared["verbosity"]
+     assert prepared["show_suggestions"] is policy["show_suggestions"]
+     assert prepared["dialog_show_suggestions"] is policy["show_suggestions"]
+     assert prepared["dialog_policy"]["show_suggestions"] is policy["show_suggestions"]
+     assert isinstance(labels, dict) and labels.get("intent")
+     assert isinstance(policy, dict)
+ 
+ 
++def test_prepare_turn_metadata_emits_session_goal_admin_event(monkeypatch):
++    _stub_config(monkeypatch)
++
++    sid = "session-sg-basic"
++    streaming.db.memory.setdefault("sessions", {}).pop(sid, None)
++
++    mock_emit = Mock()
++
++    monkeypatch.setattr(streaming, "_admin_emit", mock_emit)
++    monkeypatch.setattr(streaming, "classify", lambda seed, meta: {"intent": "goal.depth"})
++
++    def fake_interpret(seed_text, meta=None, dialog_nlu=None, config=None):
++        return {
++            "phase": "discover",
++            "depth": "deep_dive",
++            "delivery_pref": "detailed",
++            "entities": {"products": ["Widget", "widget"]},
++        }
++
++    monkeypatch.setattr(streaming, "_interpret_universal", fake_interpret)
++
++    meta = {"session_id": sid, "turn_id": "turn-1"}
++    prepared, _, _ = streaming.prepare_turn_metadata("select depth", meta)
++
++    assert prepared["session_goal"]["depth"] == "deep_dive"
++    assert mock_emit.call_count == 1
++    args, payload = mock_emit.call_args
++    assert args == ("session_goal",)
++    assert payload["event"] == "session_goal"
++    assert payload["session_id"] == sid
++    assert payload["depth"] == "deep_dive"
++    assert payload["confirmed"].count("depth") == 1
++    assert payload["confirmed"].count("product") == 1
++
++
++def test_prepare_turn_metadata_session_goal_dedupes_confirmations(monkeypatch):
++    _stub_config(monkeypatch)
++
++    sid = "session-sg-dedup"
++    streaming.db.memory.setdefault("sessions", {}).pop(sid, None)
++
++    mock_emit = Mock()
++
++    monkeypatch.setattr(streaming, "_admin_emit", mock_emit)
++    monkeypatch.setattr(streaming, "classify", lambda seed, meta: {"intent": "goal.depth"})
++
++    call_counter = {"count": 0}
++
++    def fake_interpret(seed_text, meta=None, dialog_nlu=None, config=None):
++        call_counter["count"] += 1
++        base = {
++            "phase": "discover",
++            "depth": "deep_dive",
++            "entities": {"keywords": ["Roadmap"]},
++        }
++        if call_counter["count"] > 1:
++            base["delivery_pref"] = "concise"
++        return base
++
++    monkeypatch.setattr(streaming, "_interpret_universal", fake_interpret)
++
++    meta = {"session_id": sid, "turn_id": "turn-1"}
++    first_prepared, _, _ = streaming.prepare_turn_metadata("first", dict(meta))
++    streaming.prepare_turn_metadata("second", first_prepared)
++
++    assert mock_emit.call_count == 2
++    first_args, first_payload = mock_emit.call_args_list[0]
++    second_args, second_payload = mock_emit.call_args_list[1]
++    assert first_args == ("session_goal",)
++    assert second_args == ("session_goal",)
++    assert first_payload["confirmed"].count("depth") == 1
++    assert second_payload["confirmed"].count("depth") == 1
++    assert "delivery_pref" not in first_payload["confirmed"]
++    assert "delivery_pref" in second_payload["confirmed"]
++
++
+ def test_run_ws_user_turn_emits_action_metadata_once(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
+     monkeypatch.setattr(streaming, "kb_search", lambda *a, **k: [])
+     monkeypatch.setattr(streaming, "_get_persona_for_session", lambda sid: {"id": "chip"})
+ 
+     class DummyProvider:
+         def generate_reply(self, *args, **kwargs):
+             return "Hello!"
+ 
+     monkeypatch.setattr(streaming, "get_provider", lambda cfg: DummyProvider())
+     monkeypatch.setattr(streaming, "_broadcast_frames", lambda *a, **k: None)
+     monkeypatch.setattr(streaming, "schedule_frames", lambda *a, **k: None)
+     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
+ 
+     captured = []
+ 
+     def fake_admin_emit(event, **payload):
+         captured.append((event, payload))
+ 
+     monkeypatch.setattr(streaming, "_admin_emit", fake_admin_emit)
+ 
+     monkeypatch.setattr(streaming, "_should_skip_legacy", lambda *_: False)
  

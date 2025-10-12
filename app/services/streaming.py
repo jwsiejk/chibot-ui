@@ -118,6 +118,62 @@ def wait_for_tts_completion(session_id: str,
         return False
 
 
+def _clean_session_goal(goal: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Return a normalized session goal payload safe for meta/admin emission."""
+
+    cleaned: Dict[str, Any] = {
+        "phase": None,
+        "depth": None,
+        "delivery_pref": None,
+        "working_intent": None,
+        "entities": {"products": [], "keywords": []},
+        "confirmed": [],
+    }
+
+    if not isinstance(goal, Mapping):
+        return cleaned
+
+    for key in ("phase", "depth", "delivery_pref", "working_intent"):
+        if key in goal:
+            cleaned[key] = goal.get(key)
+
+    entities = goal.get("entities")
+    if isinstance(entities, Mapping):
+        for name in ("products", "keywords"):
+            raw_items = entities.get(name)
+            bucket: List[str] = []
+            if isinstance(raw_items, Iterable) and not isinstance(raw_items, (str, bytes)):
+                seen = set()
+                for item in raw_items:
+                    text = str(item or "").strip()
+                    if not text:
+                        continue
+                    lowered = text.lower()
+                    if lowered in seen:
+                        continue
+                    seen.add(lowered)
+                    bucket.append(text)
+            cleaned["entities"][name] = bucket
+
+    confirmed = goal.get("confirmed")
+    if isinstance(confirmed, Iterable) and not isinstance(confirmed, (str, bytes)):
+        deduped: List[str] = []
+        seen_conf = set()
+        for item in confirmed:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            if text in seen_conf:
+                continue
+            deduped.append(text)
+            seen_conf.add(text)
+        cleaned["confirmed"] = deduped
+    elif isinstance(confirmed, str) and confirmed.strip():
+        cleaned["confirmed"] = [confirmed.strip()]
+
+    return cleaned
+
+
 def is_listen_ready(session_id: str) -> bool:
     try:
         st = get_session_state(session_id)
@@ -1367,7 +1423,28 @@ def prepare_turn_metadata(seed_text: str,
         except Exception:
             session_goal = db.get_session_goal(session_id)
         if session_goal:
-            target_meta["session_goal"] = copy.deepcopy(session_goal)
+            cleaned_goal = _clean_session_goal(session_goal)
+            target_meta["session_goal"] = copy.deepcopy(cleaned_goal)
+            admin_cb = _admin_emit if callable(_admin_emit) else None
+            if admin_cb:
+                payload = copy.deepcopy(cleaned_goal)
+                payload["event"] = "session_goal"
+                payload["session_id"] = session_id or target_meta.get("session_id")
+                turn_id_value = target_meta.get("turn_id")
+                if not turn_id_value and isinstance(incoming_meta, dict):
+                    turn_id_value = incoming_meta.get("turn_id")
+                if turn_id_value:
+                    payload["turn_id"] = turn_id_value
+                depth_label = payload.get("depth")
+                try:
+                    depth_label_str = str(depth_label).strip() if depth_label is not None else ""
+                except Exception:
+                    depth_label_str = ""
+                label_value = f"session_goal:{depth_label_str or 'unset'}"
+                try:
+                    admin_cb("session_goal", label=label_value, **payload)
+                except Exception:
+                    pass
 
     raw_policy = pick_dialog_policy(dialog_nlu, universal, session_goal=session_goal) or {}
     policy = dict(raw_policy)

@@ -5,6 +5,7 @@ import json
 import types
 import uuid
 from collections import deque
+from unittest.mock import Mock
 
 import pytest
 
@@ -473,6 +474,82 @@ def test_prepare_turn_metadata_injects_fields(monkeypatch):
     assert prepared["dialog_policy"]["show_suggestions"] is policy["show_suggestions"]
     assert isinstance(labels, dict) and labels.get("intent")
     assert isinstance(policy, dict)
+
+
+def test_prepare_turn_metadata_emits_session_goal_admin_event(monkeypatch):
+    _stub_config(monkeypatch)
+
+    sid = "session-sg-basic"
+    streaming.db.memory.setdefault("sessions", {}).pop(sid, None)
+
+    mock_emit = Mock()
+
+    monkeypatch.setattr(streaming, "_admin_emit", mock_emit)
+    monkeypatch.setattr(streaming, "classify", lambda seed, meta: {"intent": "goal.depth"})
+
+    def fake_interpret(seed_text, meta=None, dialog_nlu=None, config=None):
+        return {
+            "phase": "discover",
+            "depth": "deep_dive",
+            "delivery_pref": "detailed",
+            "entities": {"products": ["Widget", "widget"]},
+        }
+
+    monkeypatch.setattr(streaming, "_interpret_universal", fake_interpret)
+
+    meta = {"session_id": sid, "turn_id": "turn-1"}
+    prepared, _, _ = streaming.prepare_turn_metadata("select depth", meta)
+
+    assert prepared["session_goal"]["depth"] == "deep_dive"
+    assert mock_emit.call_count == 1
+    args, payload = mock_emit.call_args
+    assert args == ("session_goal",)
+    assert payload["event"] == "session_goal"
+    assert payload["session_id"] == sid
+    assert payload["depth"] == "deep_dive"
+    assert payload["confirmed"].count("depth") == 1
+    assert payload["confirmed"].count("product") == 1
+
+
+def test_prepare_turn_metadata_session_goal_dedupes_confirmations(monkeypatch):
+    _stub_config(monkeypatch)
+
+    sid = "session-sg-dedup"
+    streaming.db.memory.setdefault("sessions", {}).pop(sid, None)
+
+    mock_emit = Mock()
+
+    monkeypatch.setattr(streaming, "_admin_emit", mock_emit)
+    monkeypatch.setattr(streaming, "classify", lambda seed, meta: {"intent": "goal.depth"})
+
+    call_counter = {"count": 0}
+
+    def fake_interpret(seed_text, meta=None, dialog_nlu=None, config=None):
+        call_counter["count"] += 1
+        base = {
+            "phase": "discover",
+            "depth": "deep_dive",
+            "entities": {"keywords": ["Roadmap"]},
+        }
+        if call_counter["count"] > 1:
+            base["delivery_pref"] = "concise"
+        return base
+
+    monkeypatch.setattr(streaming, "_interpret_universal", fake_interpret)
+
+    meta = {"session_id": sid, "turn_id": "turn-1"}
+    first_prepared, _, _ = streaming.prepare_turn_metadata("first", dict(meta))
+    streaming.prepare_turn_metadata("second", first_prepared)
+
+    assert mock_emit.call_count == 2
+    first_args, first_payload = mock_emit.call_args_list[0]
+    second_args, second_payload = mock_emit.call_args_list[1]
+    assert first_args == ("session_goal",)
+    assert second_args == ("session_goal",)
+    assert first_payload["confirmed"].count("depth") == 1
+    assert second_payload["confirmed"].count("depth") == 1
+    assert "delivery_pref" not in first_payload["confirmed"]
+    assert "delivery_pref" in second_payload["confirmed"]
 
 
 def test_run_ws_user_turn_emits_action_metadata_once(monkeypatch):
