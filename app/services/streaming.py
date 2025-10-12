@@ -2834,6 +2834,15 @@ def schedule_tts_audio(session_id: str,
                 return
             _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
             try:
+                _admin_emit(
+                    'UtteranceEnd',
+                    session_id=session_id,
+                    turn_id=safe_turn_id,
+                    reason=reason,
+                )
+            except Exception:
+                pass
+            try:
                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
             except Exception:
                 pass

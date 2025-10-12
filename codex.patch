@@ -1,247 +1,164 @@
 diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 1d6f85e329a69779a591c132513b77f86a350fc9..e77325cc73cb5c8c40a2a1e478843d7c84c75bce 100644
+index e77325cc73cb5c8c40a2a1e478843d7c84c75bce..1b74f7812eeddc5604274b30f8c152f0e4fff8b2 100644
 --- a/app/services/streaming.py
 +++ b/app/services/streaming.py
-@@ -1008,58 +1008,72 @@ def _call_foundation_llm(messages: List[Dict[str, str]],
+@@ -2811,50 +2811,59 @@ def schedule_tts_audio(session_id: str,
  
- def _call_foundation_with_retry(messages: List[Dict[str, str]],
-                                 cfg: Dict[str, Any],
-                                 telemetry: Optional[NluLoggingContext] = None) -> Tuple[str, Dict[str, Any]]:
-     primary, primary_info = _call_foundation_llm(messages, cfg, telemetry=telemetry)
-     human = humanize_text(primary)
-     info = dict(primary_info)
-     if human:
-         info.setdefault("preview", " ".join(human.split()[:8]))
-     if not human:
-         return human, info
-     if not sounds_botty(human):
-         return human, info
-     try:
-         strict_msgs = _apply_system_shim(messages, STRICT_SYSTEM_SHIM)
-         strict_reply, strict_info = _call_foundation_llm(strict_msgs, cfg, telemetry=telemetry)
-         strict_human = humanize_text(strict_reply)
-         if strict_human:
-             strict_info.setdefault("preview", " ".join(strict_human.split()[:8]))
-             return strict_human, strict_info
-     except Exception:
-         pass
-     return human, info
+     if not audio_payload:
+         state['error'] = 'empty_audio'
+         _log("tts.synth.error", error='empty_audio', override=audio_override)
+         return False
  
+     completion_event = _prepare_tts_completion_event(session_id, turn_key)
  
--def _broadcast_frames(session_id: str, frames: List[Dict], turn_id: str) -> None:
-+def _broadcast_frames(session_id: str,
-+                      frames: List[Dict],
-+                      turn_id: Optional[str] = None) -> None:
-     try:
-         for fr in frames:
-             bus.broadcast(session_id, fr)
--            if fr.get('type') == 'assistant_chunk':
--                _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(turn_id))
--            elif fr.get('type') == 'assistant_end':
--                _admin_emit('assistant_end', session_id=session_id, turn_id=str(turn_id))
-+            if not isinstance(fr, dict):
-+                continue
-+            ftype = fr.get('type')
-+            admin_turn_id = fr.get('turn_id')
-+            if admin_turn_id is None:
-+                admin_turn_id = turn_id
-+            if ftype == 'assistant_chunk':
-+                if admin_turn_id is not None:
-+                    _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(admin_turn_id))
-+                else:
-+                    _admin_emit('assistant_chunk', session_id=session_id)
-+            elif ftype == 'assistant_end':
-+                if admin_turn_id is not None:
-+                    _admin_emit('assistant_end', session_id=session_id, turn_id=str(admin_turn_id))
-+                else:
-+                    _admin_emit('assistant_end', session_id=session_id)
-     except Exception:
-         pass
+     payload_for_stream = audio_payload
  
- 
- def _suggestion_cap(default: int = 4) -> int:
-     cap = SUGGESTION_MAX if SUGGESTION_MAX is not None else default
-     try:
-         cap_int = int(cap)
-     except Exception:
-         return default
-     return max(0, cap_int)
- 
- 
- def _normalize_suggestion_item(raw: Any) -> str:
-     if isinstance(raw, str):
-         return raw.strip()
-     if isinstance(raw, dict):
-         for key in ("text", "label", "title"):
-             val = raw.get(key)
-             if isinstance(val, str):
-                 return val.strip()
-         for val in raw.values():
-             if isinstance(val, str):
-                 return val.strip()
-     try:
-@@ -2989,64 +3003,70 @@ def _update_assistant_turn_state(session_id: str,
- 
- def _apply_assistant_turn_state(session_id: str, frames: Iterable[Dict[str, Any]]) -> None:
-     current_turn_id: Optional[str] = None
-     for frame in frames:
-         current_turn_id = _update_assistant_turn_state(session_id, frame, current_turn_id)
- 
- 
- def schedule_frames(session_id: str,
-                     frames: List[Dict],
-                     delay_ms: int = 0,
-                     correlation_user_msg_id: Optional[str] = None) -> None:
-     """
-     Optionally schedule frames with a delay (for pacing). Ensures an assistant_end is emitted.
-     Non-blocking: runs in a background thread.
-     """
      def _run():
+         total_audio_bytes = 0
+         chunk_count = 0
+         chunk_bytes_sent = 0
+         canceled = False
+         truncated = False
+         utterance_end_sent = False
+         max_frames = 256  # guardrail
+ 
+         def _emit_utterance_end(reason: str) -> None:
+             nonlocal utterance_end_sent
+             if utterance_end_sent:
+                 _log("tts.utterance_end.skip", reason=reason, already_sent=True)
+                 return
+             _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
++            try:
++                _admin_emit(
++                    'UtteranceEnd',
++                    session_id=session_id,
++                    turn_id=safe_turn_id,
++                    reason=reason,
++                )
++            except Exception:
++                pass
+             try:
+                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
+             except Exception:
+                 pass
+             utterance_end_sent = True
+ 
+         stream_payload = audio_bytes if audio_override else payload_for_stream
          try:
+             # Small pacing delay if requested
              if delay_ms and delay_ms > 0:
                  _t.sleep(max(0, delay_ms) / 1000.0)
-             current_turn_id = None
-             for fr in frames:
-                 try:
-                     # Belt-and-suspenders: never let legacy stamps slip through on rebroadcast.
-                     if isinstance(fr, dict) and fr.get('type') == 'assistant_chunk' and 'text' in fr:
-                         fr['text'] = _scrub_debug_stamps(fr['text'])
-+                    if correlation_user_msg_id and isinstance(fr, dict) and 'correlation_user_msg_id' not in fr:
-+                        fr['correlation_user_msg_id'] = correlation_user_msg_id
-+                    turn_id_for_admin: Optional[str] = None
-+                    if isinstance(fr, dict):
-+                        turn_id_for_admin = fr.get('turn_id') or current_turn_id
-                     current_turn_id = _update_assistant_turn_state(session_id, fr, current_turn_id)
--                    bus.broadcast(session_id, fr)
-+                    _broadcast_frames(session_id, [fr], turn_id_for_admin)
-                 except Exception:
-                     pass
-             # Ensure an assistant_end terminator exists
-             if not any(fr.get('type') in ('assistant_end', 'end') for fr in frames):
-                 end_fr = {'type': 'assistant_end', 'turn_id': frames[-1].get('turn_id') if frames else None}
-                 if current_turn_id and not end_fr.get('turn_id'):
-                     end_fr['turn_id'] = current_turn_id
-                 if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
-                     end_fr['correlation_user_msg_id'] = correlation_user_msg_id
-                 try:
-+                    turn_id_for_admin = end_fr.get('turn_id') or current_turn_id
-                     _apply_assistant_turn_state(session_id, [end_fr])
--                    bus.broadcast(session_id, end_fr)
-+                    _broadcast_frames(session_id, [end_fr], turn_id_for_admin)
-                 except Exception:
-                     pass
-         finally:
+ 
+             total_audio_bytes = len(stream_payload or b"")
+ 
              try:
-                 _admin_emit('schedule_frames_done', session_id=session_id)
+                 _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
              except Exception:
                  pass
  
-     threading.Thread(target=_run, daemon=True).start()
+             # Chunk and broadcast
+             mv = memoryview(stream_payload)
+             idx = 0
+             first_sent = False
+ 
+             while idx < len(mv):
+diff --git a/tests/test_ws_two_turn_regression.py b/tests/test_ws_two_turn_regression.py
+index fe82717d528b553a92bab4acef30b9847d7c41b9..7859127500adabd96b10c13aca7d7996f443cfb2 100644
+--- a/tests/test_ws_two_turn_regression.py
++++ b/tests/test_ws_two_turn_regression.py
+@@ -157,84 +157,95 @@ def test_schedule_frames_tracks_current_assistant_turn(monkeypatch):
+         calls.append((sid_arg, tid_arg))
+         orig_note(sid_arg, tid_arg)
+ 
+     monkeypatch.setattr(bus, "note_assistant_turn", _capture_note)
+ 
+     q = bus.subscribe(sid)
+     try:
+         schedule_frames(sid, frames)
+         q.get(timeout=1.0)
+         q.get(timeout=1.0)
+     finally:
+         bus.unsubscribe(sid, q)
+         bus.note_assistant_turn(sid, None)
+         bus._canceled.discard((sid, "turn-42"))
+ 
+     assert (sid, "turn-42") in calls
+     assert (sid, None) in calls
  
  
- # ---- WS orchestration helpers (centralize greet/user pipelines) ----
+ def test_schedule_tts_audio_truncation_emits_single_utterance_end(monkeypatch):
+     sid = "s-tts-truncation"
+     turn_id = "turn-truncate"
  
- def _emit_ws_outage(session_id: str,
-                     turn_id: str,
-                     *,
-                     correlation_user_msg_id: Optional[str] = None) -> List[Dict[str, Any]]:
-     frames: List[Dict[str, Any]] = []
-     chunk: Dict[str, Any] = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': _WS_PIPELINE_MESSAGE,
-         'kb_hits': 0,
-         'note': _WS_PIPELINE_UNAVAILABLE_NOTE,
-     }
-diff --git a/tests/test_phase1_streaming.py b/tests/test_phase1_streaming.py
-index dcc8003ac405a7f7901ca4f2fd06ca8297aa4b49..e82ca33ddb86f38a1097494e9624eddd9425cf52 100644
---- a/tests/test_phase1_streaming.py
-+++ b/tests/test_phase1_streaming.py
-@@ -1,48 +1,87 @@
- import json
-+import threading
- from app.asgi_gateway import app as flask_app
-+from app.api_v1 import greet as greet_api
-+from app.services import streaming as streaming
+     # Capture structured logs to confirm duplicate suppression fires.
+     logs = []
++    admin_events = []
  
- def _sse_messages(resp_data: bytes):
-     text = resp_data.decode('utf-8', errors='ignore')
-     events = []
-     for block in [b.strip() for b in text.split('\n\n') if b.strip()]:
-         if block.startswith(':'):
-             continue
-         for line in block.split('\n'):
-             if line.startswith('data: '):
-                 payload = line[len('data: '):]
-                 try:
-                     events.append(json.loads(payload))
-                 except Exception:
-                     pass
-     return events
+     def _capture_log(kind, **fields):
+         logs.append((kind, fields))
  
- def test_greet_stream_sequence():
-     client = flask_app.test_client()
-     stream = client.get('/ws/v1/chat?session_id=t1')
-     g = client.get('/api/v1/greet?session_id=t1')
-     assert g.status_code == 200
-     data = stream.data
-     events = _sse_messages(data)
-     types = [e.get('type') for e in events]
-     order = [t for t in types if t in ('state','text','audio_chunk','suggestions','end')]
-     assert order[0] == 'state'
-     assert 'text' in order
-     assert 'audio_chunk' in order
-     assert 'suggestions' in order
-     assert 'end' in order
-     assert order[-1] == 'state'
+     monkeypatch.setattr(streaming, "_jlog", _capture_log)
++    monkeypatch.setattr(streaming, "_admin_emit", lambda event, **payload: admin_events.append((event, payload)))
  
- def test_chat_turn_and_interrupt():
-     client = flask_app.test_client()
-     stream = client.get('/ws/v1/chat?session_id=t2')
-     rv = client.post('/api/v1/chat', json={'session_id':'t2','text':'hello'})
-     assert rv.status_code == 200
-     tid = rv.get_json()['turn_id']
-     rv2 = client.post('/api/v1/chat', json={'session_id':'t2','cmd':'interrupt','turn_id':tid})
-     assert rv2.status_code == 200 and rv2.get_json()['interrupted'] is True
-     data = stream.data
-     events = _sse_messages(data)
-     ready_states = [e for e in events if e.get('type')=='state' and e.get('phase')=='ready']
-     assert ready_states, "Expected at least one ready state after interrupt"
-     ended_tids = [e.get('turn_id') for e in events if e.get('type')=='end']
-     assert tid not in ended_tids
+     q = bus.subscribe(sid)
+     try:
+         # Force the guard by exceeding the max frame count with 1-byte chunks.
+         audio_bytes = b"a" * 300
+         scheduled = streaming.schedule_tts_audio(
+             sid,
+             "hello",
+             turn_id=turn_id,
+             audio_bytes=audio_bytes,
+             chunk_bytes=1,
+         )
+         assert scheduled, "TTS scheduling should succeed for override payloads"
+ 
+         frames = []
+         idle_streak = 0
+         deadline = time.time() + 5
+         while time.time() < deadline and idle_streak < 3:
+             try:
+                 frames.append(q.get(timeout=0.1))
+                 idle_streak = 0
+             except Empty:
+                 idle_streak += 1
+ 
+         utterance_ends = [fr for fr in frames if fr.get("type") == "UtteranceEnd"]
+         assert len(utterance_ends) == 1, f"expected single UtteranceEnd, saw {len(utterance_ends)}"
+ 
+         skip_logs = [kind for kind, payload in logs if kind == "tts.utterance_end.skip"]
+         assert skip_logs, "expected duplicate suppression log"
 +
-+
-+def test_greet_admin_emits_single_assistant_end(monkeypatch):
-+    client = flask_app.test_client()
-+    sid = 'admin-greet-sse'
-+
-+    monkeypatch.setenv('OPENAI_API_KEY', 'sk-test')
-+
-+    events = []
-+    done = threading.Event()
-+
-+    def fake_make_assistant_frames(seed_text, session_id, **kwargs):
-+        frames = [
-+            {'type': 'assistant_chunk', 'turn_id': 'turn-admin', 'text': 'hello', 'kb_hits': 0},
-+        ]
-+        return 'turn-admin', frames
-+
-+    def fake_admin_emit(kind, **payload):
-+        events.append((kind, payload))
-+        if kind == 'schedule_frames_done':
-+            done.set()
-+        return True
-+
-+    monkeypatch.setattr(streaming, 'make_assistant_frames', fake_make_assistant_frames)
-+    monkeypatch.setattr(streaming, 'schedule_tts_audio', lambda *a, **k: False)
-+    monkeypatch.setattr(streaming, '_admin_emit', fake_admin_emit)
-+    monkeypatch.setattr(greet_api, '_admin_emit', fake_admin_emit)
-+    monkeypatch.setattr(streaming.bus, 'broadcast', lambda *a, **k: None)
-+    monkeypatch.setattr(streaming.bus, 'note_assistant_turn', lambda *a, **k: None)
-+
-+    resp = client.get(f'/api/v1/greet?session_id={sid}')
-+    assert resp.status_code == 200
-+    assert done.wait(2.0), 'schedule_frames_done event did not arrive'
-+
-+    assistant_end_events = [payload for kind, payload in events if kind == 'assistant_end']
-+    assert len(assistant_end_events) == 1, f'assistant_end emitted {len(assistant_end_events)} times'
++        admin_utterance_events = [payload for event, payload in admin_events if event == "UtteranceEnd"]
++        assert admin_utterance_events == [
++            {
++                "session_id": sid,
++                "turn_id": turn_id,
++                "reason": "truncated_guard",
++            }
++        ], f"unexpected admin UtteranceEnd events: {admin_utterance_events}"
+     finally:
+         bus.unsubscribe(sid, q)
+         bus.note_assistant_turn(sid, None)
+         bus._canceled.discard((sid, turn_id))
+ 
+ 
+ def test_ws_barge_commit_cancels_turn(monkeypatch):
+     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+ 
+     sid = "s-barge-commit"
+     bus.note_assistant_turn(sid, "turn-commit")
+ 
+     cancel_calls = []
+     orig_cancel = bus.cancel_turn
+ 
+     def _capture_cancel(sid_arg, tid_arg):
+         cancel_calls.append((sid_arg, tid_arg))
+         orig_cancel(sid_arg, tid_arg)
+ 
+     monkeypatch.setattr(bus, "cancel_turn", _capture_cancel)
+ 
+     start_results = []
+     orig_start = ws_asgi.BargeState.start
+ 

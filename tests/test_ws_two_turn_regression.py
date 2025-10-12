@@ -179,11 +179,13 @@ def test_schedule_tts_audio_truncation_emits_single_utterance_end(monkeypatch):
 
     # Capture structured logs to confirm duplicate suppression fires.
     logs = []
+    admin_events = []
 
     def _capture_log(kind, **fields):
         logs.append((kind, fields))
 
     monkeypatch.setattr(streaming, "_jlog", _capture_log)
+    monkeypatch.setattr(streaming, "_admin_emit", lambda event, **payload: admin_events.append((event, payload)))
 
     q = bus.subscribe(sid)
     try:
@@ -213,6 +215,15 @@ def test_schedule_tts_audio_truncation_emits_single_utterance_end(monkeypatch):
 
         skip_logs = [kind for kind, payload in logs if kind == "tts.utterance_end.skip"]
         assert skip_logs, "expected duplicate suppression log"
+
+        admin_utterance_events = [payload for event, payload in admin_events if event == "UtteranceEnd"]
+        assert admin_utterance_events == [
+            {
+                "session_id": sid,
+                "turn_id": turn_id,
+                "reason": "truncated_guard",
+            }
+        ], f"unexpected admin UtteranceEnd events: {admin_utterance_events}"
     finally:
         bus.unsubscribe(sid, q)
         bus.note_assistant_turn(sid, None)
