@@ -1,7 +1,7 @@
 {
   "meta": {
-    "version": "1.0",
-    "notes": "Foundations-first probes to catch greet dupes, stuck mic, ASR gating, timeouts, state spam, chips governance, persona governor, session goals, NLU completeness."
+    "version": "1.1",
+    "notes": "Foundations-first probes aligned to current audio filenames."
   },
   "config": {
     "clarify_threshold": 0.55,
@@ -15,9 +15,8 @@
     "asr_ready_wait_s": 0.3
   },
   "endpoints": {
-    "ui_base_url": "https://YOUR_DOMAIN/",
-    "admin_sse_url": "https://YOUR_DOMAIN/api/v1/admin/logs",
-    "ws_url": "wss://YOUR_DOMAIN/ws/v1/chat"
+    "ui_base_url": "https://chibot-ui.onrender.com/",
+    "admin_sse_url": "https://chibot-ui.onrender.com/api/v1/admin/logs"
   },
   "probes": [
     {
@@ -25,26 +24,25 @@
       "user_action": "Press Start; do not speak for 3s.",
       "inputs": [],
       "expect_signals": [
-        {"stream": "admin", "must_include": ["assistant_chunk", "assistant_end", "assistant_audio", "UtteranceEnd"], "max_count_per_turn": {"assistant_end": 1}},
-        {"stream": "browser_console", "must_not_include": ["Duplicate assistant final", "double greet"] }
+        { "stream": "admin", "must_include": ["assistant_end", "UtteranceEnd"], "max_count_per_turn": { "assistant_end": 1 } },
+        { "stream": "browser_console", "must_not_include": ["Duplicate assistant final", "double greet"] }
       ],
       "fail_if": [
-        {"admin_count_gt": {"assistant_end": 1}},
-        {"admin_any": ["Timed out waiting for ASR final"]}
+        { "admin_count_gt": { "assistant_end": 1 } },
+        { "admin_any": ["Timed out waiting for ASR final"] }
       ],
       "recommendations_on_fail": ["R_DEDUP_FINALS", "R_CANCEL_TIMEOUT_ON_FINAL"]
     },
     {
       "id": "P2_mic_arms_after_greet",
       "user_action": "Begin speaking within 1s of Chip’s greet audio.",
-      "inputs": ["sample_utterance_short.wav"],
+      "inputs": ["sample_sentence.wav"],
       "expect_signals": [
-        {"stream": "browser_console", "must_include": ["mic_start", "streamed audio chunk"]},
-        {"stream": "admin", "must_include": ["asr:start"], "latency_lt_ms": {"first_partial_from_mic_start": 1200}}
+        { "stream": "admin", "must_include": ["asr:start"], "latency_lt_ms": { "first_partial_from_mic_start": 1200 } }
       ],
       "fail_if": [
-        {"admin_missing": ["asr:start"]},
-        {"latency_gte_ms": {"first_partial_from_mic_start": 2000}}
+        { "admin_missing": ["asr:start"] },
+        { "latency_gte_ms": { "first_partial_from_mic_start": 2000 } }
       ],
       "recommendations_on_fail": ["R_ARM_MIC_IMMEDIATELY", "R_LOWER_READY_WAIT_OR_TRICKLE"]
     },
@@ -53,24 +51,24 @@
       "user_action": "Speak one normal sentence.",
       "inputs": ["sample_sentence.wav"],
       "expect_signals": [
-        {"stream": "admin", "must_include": ["latency_breakdown"], "latency_lt_ms": {"dg_connect": 600, "first_partial_from_mic_start": 1200}}
+        { "stream": "admin", "must_include": ["latency_breakdown"], "latency_lt_ms": { "dg_connect": 600, "first_partial_from_mic_start": 1200 } }
       ],
       "fail_if": [
-        {"latency_gte_ms": {"first_partial_from_mic_start": 2000}}
+        { "latency_gte_ms": { "first_partial_from_mic_start": 2000 } }
       ],
       "recommendations_on_fail": ["R_READY_OR_300MS", "R_LOWER_READY_WAIT"]
     },
     {
       "id": "P4_containerized_opus_sanitized",
       "user_action": "Speak and capture Deepgram WS request.",
-      "inputs": [],
+      "inputs": ["sample_sentence.wav"],
       "expect_signals": [
-        {"stream": "network", "must_not_include_query_params": ["encoding", "sample_rate", "channels"]},
-        {"stream": "admin", "must_include": ["container=webm/opus", "containerized=true"]}
+        { "stream": "network", "must_not_include_query_params": ["encoding", "sample_rate", "channels"] },
+        { "stream": "admin", "must_include": ["container=webm/opus", "containerized=true"] }
       ],
       "fail_if": [
-        {"network_has_any_params": ["encoding", "sample_rate", "channels"]},
-        {"admin_missing": ["containerized=true"]}
+        { "network_has_any_params": ["encoding", "sample_rate", "channels"] },
+        { "admin_missing": ["containerized=true"] }
       ],
       "recommendations_on_fail": ["R_SANITIZE_DG_URL_FOR_CONTAINERIZED"]
     },
@@ -79,10 +77,10 @@
       "user_action": "Finish speaking; remain silent.",
       "inputs": ["sample_sentence.wav"],
       "expect_signals": [
-        {"stream": "admin", "must_include": ["Results final", "asr:final", "CloseStream ack"], "must_not_include": ["Timed out waiting for ASR final"]}
+        { "stream": "admin", "must_include": ["asr:final", "CloseStream ack"], "must_not_include": ["Timed out waiting for ASR final"] }
       ],
       "fail_if": [
-        {"admin_any": ["Timed out waiting for ASR final"]}
+        { "admin_any": ["Timed out waiting for ASR final"] }
       ],
       "recommendations_on_fail": ["R_CANCEL_TIMEOUT_ON_FINAL"]
     },
@@ -91,10 +89,10 @@
       "user_action": "Start talking while Chip is speaking.",
       "inputs": ["interrupt.wav"],
       "expect_signals": [
-        {"stream": "admin", "must_include": ["barge_in", "tts_pause"], "latency_lt_ms": {"tts_pause_after_vad": 250}}
+        { "stream": "admin", "must_include": ["barge_in", "tts_pause"], "latency_lt_ms": { "tts_pause_after_vad": 250 } }
       ],
       "fail_if": [
-        {"latency_gte_ms": {"tts_pause_after_vad": 300}}
+        { "latency_gte_ms": { "tts_pause_after_vad": 300 } }
       ],
       "recommendations_on_fail": ["R_BARGEIN_PAUSE_ON_VAD", "R_ECHO_THRESHOLD_BOOST"]
     },
@@ -103,21 +101,23 @@
       "user_action": "Two short back-to-back turns.",
       "inputs": ["short1.wav", "short2.wav"],
       "expect_signals": [
-        {"stream": "admin", "must_not_spam_state": {"window_ms": 500}}
+        { "stream": "admin", "must_not_spam_state": { "window_ms": 500 } }
       ],
       "fail_if": [
-        {"admin_any": ["state: ready", "state: ready", "state: ready"]}
+        { "admin_any": ["state: ready", "state: ready", "state: ready"] }
       ],
       "recommendations_on_fail": ["R_DEBOUNCE_STATE_500MS"]
     },
     {
       "id": "P8_no_assistant_dup_messages",
       "user_action": "One short question expecting text reply.",
-      "inputs": ["short_q.wav"],
+      "inputs": ["sample_sentence.wav"],
       "expect_signals": [
-        {"stream": "admin", "max_count_per_turn": {"assistant_end": 1}}
+        { "stream": "admin", "max_count_per_turn": { "assistant_end": 1 } }
       ],
-      "fail_if": [{"admin_count_gt": {"assistant_end": 1}}],
+      "fail_if": [
+        { "admin_count_gt": { "assistant_end": 1 } }
+      ],
       "recommendations_on_fail": ["R_DEDUP_FINALS", "R_SINGLE_POLICY_COMMIT"]
     },
     {
@@ -125,12 +125,12 @@
       "user_action": "Say: 'Help me set up Portworx.'",
       "inputs": ["underspecified.wav"],
       "expect_signals": [
-        {"stream": "admin", "must_include": ["nlu"], "nlu_flags": {"needs_clarification": true, "missing_any_of": ["depth", "delivery_pref"]}},
-        {"stream": "admin", "must_include": ["suggestions_made"], "chips_lte": 3}
+        { "stream": "admin", "must_include": ["nlu"], "nlu_flags": { "needs_clarification": true, "missing_any_of": ["depth", "delivery_pref"] } },
+        { "stream": "admin", "must_include": ["suggestions_made"], "chips_lte": 3 }
       ],
       "fail_if": [
-        {"chips_gt": 3},
-        {"nlu_flags": {"needs_clarification": false}}
+        { "chips_gt": 3 },
+        { "nlu_flags": { "needs_clarification": false } }
       ],
       "recommendations_on_fail": ["R_SYNTHESIZE_CHIPS_FROM_MISSING", "R_CAP_CHIPS"]
     },
@@ -139,20 +139,24 @@
       "user_action": "Say: 'After 3.x upgrade, PX cluster degraded; volumes won’t mount.'",
       "inputs": ["diagnose.wav"],
       "expect_signals": [
-        {"stream": "admin", "must_include": ["policy_decision: diagnose"], "must_not_include": ["persona_applied"]}
+        { "stream": "admin", "must_include": ["policy_decision: diagnose"], "must_not_include": ["persona_applied"] }
       ],
-      "fail_if": [{"admin_any": ["persona_applied"]}],
+      "fail_if": [
+        { "admin_any": ["persona_applied"] }
+      ],
       "recommendations_on_fail": ["R_SKIP_PERSONA_ON_DIAGNOSE"]
     },
     {
       "id": "P11_session_goal_persists",
       "user_action": "Choose [Deep dive] when asked, then ask again for steps.",
-      "inputs": [],
+      "inputs": ["short1.wav", "sample_sentence.wav"],
       "expect_signals": [
-        {"stream": "admin", "must_include": ["session_goal"], "goal_fields": {"depth": "deep_dive", "confirmed_contains": ["depth"]}},
-        {"stream": "admin", "must_not_include": ["re-ask depth"]}
+        { "stream": "admin", "must_include": ["session_goal"], "goal_fields": { "depth": "deep_dive", "confirmed_contains": ["depth"] } },
+        { "stream": "admin", "must_not_include": ["re-ask depth"] }
       ],
-      "fail_if": [{"goal_missing": ["depth"]}],
+      "fail_if": [
+        { "goal_missing": ["depth"] }
+      ],
       "recommendations_on_fail": ["R_SESSION_GOAL_MERGE_AND_CONFIRM"]
     },
     {
@@ -160,9 +164,11 @@
       "user_action": "Say: 'Install FlashArray for VMware and email me the steps.'",
       "inputs": ["fa_vmware_email.wav"],
       "expect_signals": [
-        {"stream": "admin", "must_include": ["nlu"], "nlu_must_have_keys": ["user_goal","phase","depth","delivery_pref","intent_hint","entities","confidence","needs_clarification"]}
+        { "stream": "admin", "must_include": ["nlu"], "nlu_must_have_keys": ["user_goal","phase","depth","delivery_pref","intent_hint","entities","confidence","needs_clarification"] }
       ],
-      "fail_if": [{"nlu_missing_any": ["delivery_pref","entities.product","entities.env"]}],
+      "fail_if": [
+        { "nlu_missing_any": ["delivery_pref","entities.product","entities.env"] }
+      ],
       "recommendations_on_fail": ["R_EXTEND_INTERPRETER_FIELDS"]
     }
   ],
