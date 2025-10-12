@@ -191,6 +191,32 @@ def _emit_admin_nlu_event(text: str,
     if isinstance(products, list):
         slots_dict.setdefault("products", list(products))
 
+    canonical_universal: Dict[str, Any] = {}
+    if isinstance(universal, dict):
+        try:
+            canonical_universal = _ensure_universal_fields(universal)
+        except Exception:
+            canonical_universal = dict(universal)
+
+    universal_defaults = _ensure_universal_fields({})
+
+    def _resolved_value(key: str, default: Any = None) -> Any:
+        for source in (canonical_universal, dialog_nlu):
+            if isinstance(source, dict) and key in source:
+                return source.get(key)
+        return universal_defaults.get(key, default)
+
+    missing_value = _resolved_value("missing", universal_defaults.get("missing", []))
+    if isinstance(missing_value, list):
+        missing_payload = _safe_copy(missing_value)
+    elif missing_value is None:
+        missing_payload = []
+    else:
+        try:
+            missing_payload = list(missing_value)
+        except Exception:
+            missing_payload = [missing_value]
+
     payload = {
         "event": "nlu",
         "intent": dialog_nlu.get("intent"),
@@ -198,9 +224,58 @@ def _emit_admin_nlu_event(text: str,
         "slots": slots_dict,
         "text": text,
         "session_id": sid,
+        "needs_clarification": bool(_resolved_value("needs_clarification", False)),
+        "missing": missing_payload,
+        "phase": _resolved_value("phase"),
+        "depth": _resolved_value("depth"),
+        "delivery_pref": _resolved_value("delivery_pref"),
+        "intent_hint": _resolved_value("intent_hint"),
     }
-    if isinstance(universal, dict):
-        payload["universal"] = _safe_copy(universal)
+    if canonical_universal:
+        payload["universal"] = _safe_copy(canonical_universal)
+
+    entities_payload: Dict[str, Any] = {}
+    universal_entities = canonical_universal.get("entities") if isinstance(canonical_universal, dict) else None
+    if isinstance(universal_entities, dict):
+        try:
+            entities_payload.update(_safe_copy(universal_entities))
+        except Exception:
+            entities_payload.update(universal_entities)
+
+    dialog_entities = dialog_nlu.get("entities") if isinstance(dialog_nlu, dict) else None
+    if isinstance(dialog_entities, dict):
+        for key, value in dialog_entities.items():
+            entities_payload[key] = _safe_copy(value)
+
+    dialog_products = dialog_nlu.get("products") if isinstance(dialog_nlu, dict) else None
+    if isinstance(dialog_products, list):
+        entities_payload["products"] = list(dialog_products)
+        if dialog_products:
+            entities_payload.setdefault("product", dialog_products[0])
+
+    if "products" not in entities_payload:
+        entities_payload["products"] = []
+
+    if "product" not in entities_payload:
+        products = entities_payload.get("products")
+        if isinstance(products, list) and products:
+            entities_payload["product"] = products[0]
+        else:
+            entities_payload["product"] = None
+
+    if "env" not in entities_payload:
+        env_candidate = None
+        if isinstance(dialog_entities, dict):
+            env_candidate = dialog_entities.get("env")
+        if env_candidate is None and isinstance(dialog_nlu, dict):
+            env_candidate = dialog_nlu.get("env")
+        entities_payload["env"] = env_candidate
+
+    if "keywords" not in entities_payload:
+        keywords = canonical_universal.get("entities", {}).get("keywords") if isinstance(canonical_universal.get("entities"), dict) else None
+        entities_payload["keywords"] = list(keywords or [])
+
+    payload["entities"] = _safe_copy(entities_payload)
 
     try:
         admin_cb("nlu", **payload)
