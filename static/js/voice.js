@@ -61,6 +61,8 @@ const state = {
   pendingEndTimer: null,
   postTtsHoldUntil: 0,
   postTtsHoldTimer: null,
+  eligibility: 'blocked_pregreet', // 'blocked_pregreet' | 'holdoff' | 'eligible'
+  refractoryUntil: 0, 
 };
 
 let _overrideEchoSignatureFn = null;
@@ -127,6 +129,7 @@ try {
     if (!ttsState || ttsState === 'ended' || ttsState === 'stopped' || ttsState === 'idle' || ttsState === 'paused') {
       state.postTtsHoldUntil = 0;
       _clearPostTtsHoldTimer();
+      if (state.eligibility === 'holdoff') state.eligibility = 'eligible'; 
     }
   });
 } catch {}
@@ -256,14 +259,27 @@ function _teardownAudioGraph() {
 }
 
 function _disarm() {
+  // 1) Hard stop + clear all timers
   _safeClearTurnTimer();
   _clearPendingEndTimer();
+  _clearPostTtsHoldTimer();
+
+  // 2) Stop capture/VAD cleanly
   _stopRecorder({ reason: 'manual_disarm' });
   _teardownVADOnly();
-  state.turnOpen = false; // ensure local state is clean
+
+  // 3) Reset local state
+  state.turnOpen = false;
   state.recStartedAt = 0;
-  _clearPostTtsHoldTimer();
-  state.postTtsHoldUntil = 0;
+
+  // 4) Block any pre-greet starts, and enforce a refractory lockout
+  //    Use your configured cooldown (default 900ms) so we can't instantly re-arm.
+  const cooldown = _resolveNumber(cfg.cooldownMs, 900);
+  state.refractoryUntil = Date.now() + cooldown;  // prevent immediate re-starts
+  state.postTtsHoldUntil = 0;                     // no pending hold
+  state.eligibility = 'blocked_pregreet';         // require greet/tts to begin before starts are allowed
+
+  // 5) Final UI state
   _emitVoiceState('idle');
 }
 
@@ -320,7 +336,7 @@ async function _arm(stream = null, opts = {}) {
     // Tunables (admin-configurable via opts or window.__askchip_config.vad)
     minSpeechMs: _resolveNumber(cfg.minSpeechMs, 360),
     minSilenceMs: _resolveNumber(cfg.minSilenceMs, 900),
-     
+    cooldownMs:  _resolveNumber(cfg.cooldownMs, 900),     
     pollMs,
     startDbOffset: baseThresholdDb !== null ? baseThresholdDb : 10,
     stopDbOffset: exitThresholdDb !== null ? exitThresholdDb : 6,
@@ -514,7 +530,16 @@ function _startRecorder() {
   return true;
 }
 
+function _canStartSpeech() {
+  if (Date.now() < state.refractoryUntil) return false;     // hard refractory
+  if (typeof ttsIsPlaying === 'function' && ttsIsPlaying()) return false; // never start while TTS plays
+  if (state.eligibility === 'blocked_pregreet') return false; // wait until greet has actually started
+  if (state.eligibility === 'holdoff' && _now() < state.postTtsHoldUntil) return false; // during post-TTS hold
+  return true;
+} 
+
 function _onSpeechStartCommitted() {
+  if (!_canStartSpeech()) return; 
   const now = _now();
   const holdUntil = state.postTtsHoldUntil || 0;
   const wait = Math.max(0, holdUntil - now);

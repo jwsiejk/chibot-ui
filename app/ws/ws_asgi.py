@@ -285,28 +285,58 @@ async def _ws_send_diagnostic_audio(send, turn_id: int, mime: str, data: bytes) 
 
 # ------------------------------ bus pumpers ------------------------------
 
-
 async def _pump_bus_to_client(sid: str, send):
-    """Forward frames from StreamBus to the WS client as JSON."""
+    """Forward frames from StreamBus to the WS client as JSON, suppressing duplicate assistant finals."""
     import json as _json
+    import asyncio
+    import contextlib
     from queue import Empty
     from app.ws.bus import bus
+
+    # Session-scoped guard: only one assistant final per turn_id
+    assistant_finals_sent: set[int] = set()
 
     q = bus.subscribe(sid)
     try:
         while True:
             try:
-                fr = q.get(timeout=0.05)
+                fr = q.get(timeout=0.05)  # 'fr' is already a dict from the bus
             except Empty:
                 await asyncio.sleep(0.01)
                 continue
+
+            # --- Duplicate assistant-final suppression ---
+            try:
+                msg_type = (fr.get("type") or "").lower()
+                is_results = msg_type == "results"
+                role_like = (fr.get("role") or fr.get("source") or fr.get("speaker") or "").lower()
+                is_assistant = role_like == "assistant"
+                is_final = bool(fr.get("is_final"))
+                turn_id = fr.get("turn_id")
+            except Exception:
+                is_results = False
+                is_assistant = False
+                is_final = False
+                turn_id = None
+
+            if is_results and is_assistant and is_final and isinstance(turn_id, int):
+                if turn_id in assistant_finals_sent:
+                    with contextlib.suppress(Exception):
+                        # Optional: if your bus has a logger
+                        bus.log("dup_answer_suppressed", sid=sid, turn_id=turn_id)  # type: ignore[attr-defined]
+                    # Skip forwarding this duplicate final
+                    await asyncio.sleep(0)  # yield control
+                    continue
+                assistant_finals_sent.add(turn_id)
+                with contextlib.suppress(Exception):
+                    bus.log("assistant_final_forwarded", sid=sid, turn_id=turn_id)  # type: ignore[attr-defined]
+            # --- /Duplicate assistant-final suppression ---
+
             try:
                 await send(
                     {
                         "type": "websocket.send",
-                        "text": _json.dumps(
-                            fr, separators=(",", ":"), ensure_ascii=False
-                        ),
+                        "text": _json.dumps(fr, separators=(",", ":"), ensure_ascii=False),
                     }
                 )
             except Exception:
@@ -314,12 +344,9 @@ async def _pump_bus_to_client(sid: str, send):
     except asyncio.CancelledError:
         pass
     finally:
-        try:
+        with contextlib.suppress(Exception):
             if hasattr(bus, "unsubscribe"):
                 bus.unsubscribe(sid, q)
-        except Exception:
-            pass
-
 
 async def _pump_dg_to_client(
     dg: DeepgramClient,
@@ -378,36 +405,69 @@ async def _pump_dg_to_client(
         effective_ms=effective_guard,
     )
 
-    async def _emit_user_final_payload(
-        turn_id_for_event: int, text: str, *, final_reason: str = "provider_final"
-    ) -> None:
-        final_seen[0] = True
-        now_ts = time.time()
-        if turn_timing is not None:
-            with contextlib.suppress(Exception):
-                turn_timing.setdefault("final", [0.0])[0] = now_ts
-                if text:
-                    first_holder = turn_timing.setdefault("first_partial", [0.0])
-                    if not first_holder[0]:
-                        first_holder[0] = now_ts
-        await _ws_send_json(
-            send,
-            make_results(
-                turn_id_for_event,
-                transcript=text,
-                confidence=0.0,
-                is_final=True,
-            ),
-        )
-        if on_turn_finish:
-            with contextlib.suppress(Exception):
-                on_turn_finish(turn_id_for_event, final_reason, False, len(text))
-        await _ws_send_json(send, make_utterance_end(turn_id_for_event))
+async def _emit_user_final_payload(
+    turn_id_for_event: int, text: str, *, final_reason: str = "provider_final"
+) -> None:
+    final_seen[0] = True
+    now_ts = time.time()
+
+    if turn_timing is not None:
         with contextlib.suppress(Exception):
-            if _admin_emit:
-                _admin_emit("asr:final", session_id=sid)
-        if not text:
-            return
+            turn_timing.setdefault("final", [0.0])[0] = now_ts
+            if text:
+                first_holder = turn_timing.setdefault("first_partial", [0.0])
+                if not first_holder[0]:
+                    first_holder[0] = now_ts
+
+    # --- Null-turn suppression: drop empty/noisy finals ---
+    text_str = (text or "").strip()
+    voiced_ms = 0
+    with contextlib.suppress(Exception):
+        if isinstance(turn_timing, dict):
+            voiced_ms = int(turn_timing.get("voiced_ms", [0])[0] or 0)
+
+    min_chars = int(os.getenv("NULL_TURN_MIN_CHARS", "5"))
+    min_voiced = int(os.getenv("NULL_TURN_MIN_VOICED_MS", "600"))
+
+    if len(text_str) < min_chars and voiced_ms < min_voiced:
+        _jlog(
+            "null_turn_suppressed",
+            sid=sid,
+            turn_id=turn_id_for_event,
+            voiced_ms=voiced_ms,
+            text_len=len(text_str),
+            final_reason=final_reason,
+        )
+        with contextlib.suppress(Exception):
+            await _ws_send_json(send, make_utterance_end(turn_id_for_event))
+        return
+    # --- /Null-turn suppression ---
+
+    await _ws_send_json(
+        send,
+        make_results(
+            turn_id_for_event,
+            transcript=text_str,
+            confidence=0.0,
+            is_final=True,
+        ),
+    )
+
+    if on_turn_finish:
+        with contextlib.suppress(Exception):
+            on_turn_finish(turn_id_for_event, final_reason, False, len(text_str))
+
+    await _ws_send_json(send, make_utterance_end(turn_id_for_event))
+
+    with contextlib.suppress(Exception):
+        if _admin_emit:
+            _admin_emit("asr:final", session_id=sid)
+
+    if not text_str:
+        return
+
+    # ... rest of your existing logic after the final (metadata/NLU/etc.) ...
+
         dialog_nlu_pre: Dict[str, Any] = {}
         universal_pre: Dict[str, Any] = {}
         meta_stub = {"source": "user_ws", "channel": "ws"}
