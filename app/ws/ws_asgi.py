@@ -30,6 +30,7 @@ from app.metrics import ws_metrics
 from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
 from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
 from app.ws.barge import BargeState
+from app.ws.confirm_window import ConfirmWindow
 from app.ws.bus import bus
 
 # Optional admin emitter
@@ -333,6 +334,7 @@ async def _pump_dg_to_client(
     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
     turn_timing: Optional[Dict[str, List[float]]] = None,
     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
+    on_asr_partial: Optional[Callable[[Dict[str, Any]], None]] = None,
 ):
     """Relay Deepgram events to client and, on final, kick LLM turn."""
     try:
@@ -407,6 +409,12 @@ async def _pump_dg_to_client(
                                 first_holder[0] = time.time()
                         except Exception:
                             pass
+                if (not is_final) and on_asr_partial:
+                    try:
+                        on_asr_partial(ev)
+                    except Exception:
+                        pass
+
                 _jlog(
                     "dg_transcript",
                     sid=sid,
@@ -826,6 +834,210 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     mic_first_ts = [0.0]
     mic_last_ts = [0.0]
 
+    # Local confirmation gating
+    try:
+        confirm_min_ms = int(cfg.get("confirm_ms", 420) or 420)
+    except Exception:
+        confirm_min_ms = 420
+    confirm_min_ms = max(0, confirm_min_ms)
+    try:
+        confirm_max_ms = int(cfg.get("confirm_max_ms", confirm_min_ms + 600) or (confirm_min_ms + 600))
+    except Exception:
+        confirm_max_ms = confirm_min_ms + 600
+    if confirm_max_ms < confirm_min_ms:
+        confirm_max_ms = confirm_min_ms
+    try:
+        confirm_gap_ms = float(cfg.get("confirm_max_gap_ms", 180.0) or 180.0)
+    except Exception:
+        confirm_gap_ms = 180.0
+    try:
+        confirm_min_tokens = max(1, int(cfg.get("confirm_min_tokens", 2) or 2))
+    except Exception:
+        confirm_min_tokens = 2
+    try:
+        confirm_min_conf = float(cfg.get("confirm_min_confidence", 0.5) or 0.5)
+    except Exception:
+        confirm_min_conf = 0.5
+    try:
+        confirm_snr_db = float(cfg.get("confirm_min_snr_db", 8.0) or 8.0)
+    except Exception:
+        confirm_snr_db = 8.0
+
+    confirm_window_ref: List[Optional[ConfirmWindow]] = [None]
+    confirm_timeout_task: List[Optional[asyncio.Task]] = [None]
+    confirm_timeout_cancelled: List[asyncio.Task] = []
+    local_vad_meta_sent = [False]
+
+    def _cancel_confirm_timeout() -> None:
+        task = confirm_timeout_task[0]
+        if task:
+            task.cancel()
+            confirm_timeout_cancelled.append(task)
+        confirm_timeout_task[0] = None
+
+    def _emit_local_vad_signal(now_ts: float) -> None:
+        if local_vad_meta_sent[0]:
+            return
+        local_vad_meta_sent[0] = True
+        payload = {
+            "type": "meta",
+            "turn_id": turn_id_ref[0],
+            "meta": {"local_vad": "start", "ts": int(now_ts * 1000)},
+        }
+        with contextlib.suppress(Exception):
+            _jlog(
+                "local_vad_start",
+                sid=sid,
+                turn_id=turn_id_ref[0],
+                ts_ms=int(now_ts * 1000),
+            )
+        with contextlib.suppress(Exception):
+            bus.broadcast(sid, payload)
+        try:
+            if loop.is_closed():
+                return
+            try:
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if running is loop:
+                asyncio.create_task(_ws_send_json(send, payload))
+            else:
+                loop.call_soon_threadsafe(
+                    asyncio.create_task, _ws_send_json(send, payload)
+                )
+        except Exception:
+            pass
+
+    def _schedule_confirm_timeout(window: ConfirmWindow) -> None:
+        _cancel_confirm_timeout()
+
+        wait_s = max(0.0, window.max_duration_ms / 1000.0)
+
+        async def _timeout() -> None:
+            try:
+                await asyncio.sleep(wait_s)
+                if confirm_window_ref[0] is not window:
+                    return
+                decision = window.timeout(time.time())
+                if decision.action == "commit":
+                    metrics = decision.metrics or {}
+                    reason = metrics.get("reason") or "timeout_commit"
+                    _finalize_confirm_commit(reason, metrics, window)
+                elif decision.action == "abort":
+                    metrics = decision.metrics or {}
+                    reason = metrics.get("reason") or "timeout"
+                    _finalize_confirm_abort(reason, metrics, window)
+            except asyncio.CancelledError:
+                return
+
+        confirm_timeout_task[0] = asyncio.create_task(_timeout())
+
+    def _finalize_confirm_commit(
+        trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
+    ) -> None:
+        if confirm_window_ref[0] is not window:
+            return
+        _cancel_confirm_timeout()
+        confirm_window_ref[0] = None
+        data = {k: v for k, v in (metrics or {}).items() if v is not None}
+        data.setdefault("reason", trigger)
+        data.setdefault("snr_enabled", window.snr_enabled)
+        _jlog("confirm_commit", sid=sid, **data)
+        if barge.is_paused():
+            try:
+                barge.commit(_send_barge_state)
+            except Exception:
+                pass
+
+    def _finalize_confirm_abort(
+        trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
+    ) -> None:
+        if confirm_window_ref[0] is not window:
+            return
+        _cancel_confirm_timeout()
+        confirm_window_ref[0] = None
+        data = {k: v for k, v in (metrics or {}).items() if v is not None}
+        data.setdefault("reason", trigger)
+        data.setdefault("snr_enabled", window.snr_enabled)
+        _jlog("confirm_abort", sid=sid, **data)
+        if barge.is_paused():
+            try:
+                barge.cancel(_send_barge_state)
+            except Exception:
+                pass
+
+    def _start_confirm_window(now_ts: float) -> None:
+        window = ConfirmWindow(
+            min_duration_ms=confirm_min_ms,
+            max_duration_ms=confirm_max_ms,
+            max_gap_ms=confirm_gap_ms,
+            min_tokens=confirm_min_tokens,
+            min_confidence=confirm_min_conf,
+            snr_threshold_db=confirm_snr_db,
+            snr_enabled=not bool(transport.get("containerized_opus")),
+        )
+        window.start(now_ts)
+        confirm_window_ref[0] = window
+        local_vad_meta_sent[0] = False
+        _emit_local_vad_signal(now_ts)
+        _jlog(
+            "confirm_start",
+            sid=sid,
+            turn_id=turn_id_ref[0],
+            min_ms=confirm_min_ms,
+            max_ms=confirm_max_ms,
+            max_gap_ms=confirm_gap_ms,
+            min_tokens=confirm_min_tokens,
+            min_confidence=confirm_min_conf,
+            snr_threshold_db=confirm_snr_db,
+        )
+        _schedule_confirm_timeout(window)
+
+    def _handle_confirm_chunk(chunk: bytes, now_ts: float) -> None:
+        window = confirm_window_ref[0]
+        if not window:
+            return
+        window.set_snr_enabled(not bool(transport.get("containerized_opus")))
+        decision = window.observe_chunk(chunk, now_ts)
+        if decision.action == "commit" and decision.metrics is not None:
+            _finalize_confirm_commit(
+                decision.metrics.get("reason") or "chunk", decision.metrics, window
+            )
+        elif decision.action == "abort" and decision.metrics is not None:
+            _finalize_confirm_abort(
+                decision.metrics.get("reason") or "chunk", decision.metrics, window
+            )
+
+    def _handle_confirm_partial(ev: Dict[str, Any]) -> None:
+        window = confirm_window_ref[0]
+        if not window:
+            return
+        now_ts = time.time()
+        decision = window.observe_partial(
+            ev.get("token_count"), ev.get("confidence"), now_ts
+        )
+        if decision.action == "commit" and decision.metrics is not None:
+            _finalize_confirm_commit(
+                decision.metrics.get("reason") or "partial",
+                decision.metrics,
+                window,
+            )
+        elif decision.action == "abort" and decision.metrics is not None:
+            _finalize_confirm_abort(
+                decision.metrics.get("reason") or "partial",
+                decision.metrics,
+                window,
+            )
+
+    def _ensure_confirm_closed(reason: str) -> None:
+        window = confirm_window_ref[0]
+        if not window:
+            return
+        decision = window.cancel(reason, time.time())
+        if decision.action == "abort" and decision.metrics is not None:
+            _finalize_confirm_abort(reason, decision.metrics, window)
+
     def _reset_turn_metrics(start_ts: float) -> None:
         turn_timing["start"][0] = start_ts
         turn_timing["dg_open"][0] = 0.0
@@ -1015,6 +1227,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         _flush_buffered_chunks,
                         turn_timing,
                         _log_turn_finish,
+                        _handle_confirm_partial,
                     )
                 )
                 _jlog("asr_connect_ok", sid=sid)
@@ -1266,13 +1479,22 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             except Exception:
                                 pass
 
-                        with contextlib.suppress(Exception):
-                            barge.start(
+                        barge_started = False
+                        try:
+                            barge_started = barge.start(
                                 confirm_ms=confirm_ms,
                                 on_commit=_on_barge_commit,
                                 send_state=_send_barge_state,
+                                auto_commit=False,
                             )
+                        except Exception:
+                            barge_started = False
                         turn_id_ref[0] = buf.turn_seq + 1
+                        if barge_started:
+                            _start_confirm_window(now)
+                        else:
+                            confirm_window_ref[0] = None
+                            local_vad_meta_sent[0] = False
                         with contextlib.suppress(Exception):
                             pending_final_turns.append(turn_id_ref[0])
                             completed_llm_turns.discard(turn_id_ref[0])
@@ -1359,6 +1581,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         chunks=len(mic_chunks),
                         last_bytes=len(chunk),
                     )
+
+                    _handle_confirm_chunk(raw_chunk, now)
 
                     if not _has_deepgram_key():
                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
@@ -1594,6 +1818,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                             # Always define this first so later 'if synthetic_emitted' is safe
                             synthetic_emitted = False
+
+                            _ensure_confirm_closed("close_stream")
 
                             if buf.is_empty():
                                 # Empty turn closure; synthesize ids + reset final tracking.
@@ -1850,6 +2076,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 final_seen[0] = False
 
                             if barge.is_paused():
+                                _ensure_confirm_closed("cleanup")
                                 with contextlib.suppress(Exception):
                                     barge.cancel(_send_barge_state)
                                 await asyncio.sleep(0)
@@ -1944,6 +2171,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 pass
 
     finally:
+        _ensure_confirm_closed("shutdown")
+        _cancel_confirm_timeout()
         with contextlib.suppress(Exception):
             _cancel_no_audio_watch()
         await _remove_active_ws_entry("cleanup")
@@ -1979,6 +2208,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         with contextlib.suppress(Exception):
             ping_task.cancel()
             await ping_task
+        for task in list(confirm_timeout_cancelled):
+            with contextlib.suppress(Exception):
+                await task
+        confirm_timeout_cancelled.clear()
         with contextlib.suppress(Exception):
             await send(
                 {"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"}

@@ -62,3 +62,33 @@ def test_nudge_suggestions_email_and_admin_sse(monkeypatch):
     # Users & Memory
     ls=c.get('/api/v1/admin/sessions').get_json()['sessions']
     assert any(s['id']==sid for s in ls)
+
+
+def test_confirm_window_gap_abort_path():
+    from app.ws.confirm_window import ConfirmWindow
+    import struct
+
+    win = ConfirmWindow(min_duration_ms=400, max_duration_ms=900, max_gap_ms=150, snr_threshold_db=4.0)
+    start = 0.0
+    win.start(start)
+    chunk = struct.pack("<80h", *([1000] * 80))
+    win.observe_chunk(chunk, start + 0.05)
+    decision = win.observe_chunk(chunk, start + 0.26)
+    assert decision.action == "abort"
+    metrics = decision.metrics or {}
+    assert metrics.get("reason") == "gap"
+
+
+def test_confirm_window_timeout_abort_path():
+    from app.ws.confirm_window import ConfirmWindow
+    import struct
+
+    win = ConfirmWindow(min_duration_ms=300, max_duration_ms=320, snr_threshold_db=4.0)
+    start = 0.0
+    win.start(start)
+    chunk = struct.pack("<80h", *([850] * 80))
+    win.observe_chunk(chunk, start + 0.1)
+    decision = win.timeout(start + 0.5)
+    assert decision.action == "abort"
+    metrics = decision.metrics or {}
+    assert metrics.get("reason") == "timeout"

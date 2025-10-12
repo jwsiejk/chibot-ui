@@ -160,6 +160,15 @@ def _clip_text(txt: str, limit: int = 120) -> str:
         return ""
 
 
+def _safe_float(val):
+    try:
+        if val is None:
+            return None
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
 def _dg_url(overrides: Optional[dict] = None) -> str:
     """Return the Deepgram listen URL with safe defaults.
 
@@ -1591,18 +1600,54 @@ class DeepgramClient:
                     # Prefer channel.* first (typical DG shape)
                     channel = msg.get("channel") or {}
                     alts = channel.get("alternatives")
+                    confidence = None
+                    token_count = 0
                     if isinstance(alts, list) and alts:
-                        text = (alts[0].get("transcript") or "").strip()
+                        first_alt = alts[0]
+                        text = (first_alt.get("transcript") or "").strip()
+                        confidence = _safe_float(first_alt.get("confidence"))
+                        words = first_alt.get("words")
+                        if isinstance(words, list):
+                            token_count = len(
+                                [
+                                    w
+                                    for w in words
+                                    if isinstance(w, dict)
+                                    and (w.get("word") or "").strip()
+                                ]
+                            )
 
                     # Fallback: top-level alternatives (some messages)
                     if not text:
                         top_alts = msg.get("alternatives")
                         if isinstance(top_alts, list) and top_alts:
-                            text = (top_alts[0].get("transcript") or "").strip()
+                            first_alt = top_alts[0]
+                            text = (first_alt.get("transcript") or "").strip()
+                            if confidence is None:
+                                confidence = _safe_float(first_alt.get("confidence"))
+                            if not token_count:
+                                words = first_alt.get("words")
+                                if isinstance(words, list):
+                                    token_count = len(
+                                        [
+                                            w
+                                            for w in words
+                                            if isinstance(w, dict)
+                                            and (w.get("word") or "").strip()
+                                        ]
+                                    )
 
                     # Fallback: top-level transcript (some messages)
                     if not text and isinstance(msg.get("transcript"), str):
                         text = (msg.get("transcript") or "").strip()
+
+                    if confidence is None:
+                        confidence = _safe_float(
+                            channel.get("confidence") or msg.get("confidence")
+                        )
+
+                    if not token_count and text:
+                        token_count = len([tok for tok in text.split() if tok])
 
                     # Finalness can be on channel or top-level, or implied by event type
                     is_final = (
@@ -1633,12 +1678,15 @@ class DeepgramClient:
                         active=True,
                     )
                     try:
-                        await self._ev_queue.put(
-                            {
-                                "type": "user_final" if is_final else "user_partial",
-                                "text": text,
-                            }
-                        )
+                        payload = {
+                            "type": "user_final" if is_final else "user_partial",
+                            "text": text,
+                        }
+                        if confidence is not None:
+                            payload["confidence"] = confidence
+                        if token_count:
+                            payload["token_count"] = token_count
+                        await self._ev_queue.put(payload)
                     except Exception:
                         pass
 

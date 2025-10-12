@@ -81,3 +81,42 @@ def test_one_ws_per_tab_guard_still_present():
     guard.release(key)
     assert guard.acquire(key) is True
 
+
+def test_confirm_window_commits_after_valid_partial():
+    from app.ws.confirm_window import ConfirmWindow
+    import struct
+
+    win = ConfirmWindow(
+        min_duration_ms=400,
+        max_duration_ms=900,
+        max_gap_ms=400,
+        snr_threshold_db=4.0,
+    )
+    start = 0.0
+    win.start(start)
+    loud_chunk = struct.pack("<80h", *([1200] * 80))
+
+    assert win.observe_chunk(loud_chunk, start + 0.12).action is None
+    assert win.observe_partial(3, 0.7, start + 0.28).action is None
+    decision = win.observe_chunk(loud_chunk, start + 0.45)
+    assert decision.action == "commit"
+    metrics = decision.metrics or {}
+    assert metrics.get("reason") == "chunk"
+    assert metrics.get("partial_tokens") == 3
+
+
+def test_confirm_window_aborts_on_low_confidence_partial():
+    from app.ws.confirm_window import ConfirmWindow
+    import struct
+
+    win = ConfirmWindow(min_duration_ms=350, max_duration_ms=900, snr_threshold_db=4.0)
+    start = 0.0
+    win.start(start)
+    chunk = struct.pack("<80h", *([900] * 80))
+
+    win.observe_chunk(chunk, start + 0.1)
+    decision = win.observe_partial(3, 0.3, start + 0.2)
+    assert decision.action == "abort"
+    metrics = decision.metrics or {}
+    assert metrics.get("reason") == "partial_low_confidence"
+
