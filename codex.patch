@@ -1,142 +1,247 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index de813f88d2cc5e24874a76b2dd74a6b8938fce97..29da98050a6bb331fff43fc38871add213477ddb 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -169,60 +169,135 @@ def _emit_admin_nlu_event(text: str,
-     if universal is not None and not isinstance(universal, dict):
-         universal = None
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index 1d6f85e329a69779a591c132513b77f86a350fc9..e77325cc73cb5c8c40a2a1e478843d7c84c75bce 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -1008,58 +1008,72 @@ def _call_foundation_llm(messages: List[Dict[str, str]],
  
-     def _safe_copy(value: Any) -> Any:
+ def _call_foundation_with_retry(messages: List[Dict[str, str]],
+                                 cfg: Dict[str, Any],
+                                 telemetry: Optional[NluLoggingContext] = None) -> Tuple[str, Dict[str, Any]]:
+     primary, primary_info = _call_foundation_llm(messages, cfg, telemetry=telemetry)
+     human = humanize_text(primary)
+     info = dict(primary_info)
+     if human:
+         info.setdefault("preview", " ".join(human.split()[:8]))
+     if not human:
+         return human, info
+     if not sounds_botty(human):
+         return human, info
+     try:
+         strict_msgs = _apply_system_shim(messages, STRICT_SYSTEM_SHIM)
+         strict_reply, strict_info = _call_foundation_llm(strict_msgs, cfg, telemetry=telemetry)
+         strict_human = humanize_text(strict_reply)
+         if strict_human:
+             strict_info.setdefault("preview", " ".join(strict_human.split()[:8]))
+             return strict_human, strict_info
+     except Exception:
+         pass
+     return human, info
+ 
+ 
+-def _broadcast_frames(session_id: str, frames: List[Dict], turn_id: str) -> None:
++def _broadcast_frames(session_id: str,
++                      frames: List[Dict],
++                      turn_id: Optional[str] = None) -> None:
+     try:
+         for fr in frames:
+             bus.broadcast(session_id, fr)
+-            if fr.get('type') == 'assistant_chunk':
+-                _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(turn_id))
+-            elif fr.get('type') == 'assistant_end':
+-                _admin_emit('assistant_end', session_id=session_id, turn_id=str(turn_id))
++            if not isinstance(fr, dict):
++                continue
++            ftype = fr.get('type')
++            admin_turn_id = fr.get('turn_id')
++            if admin_turn_id is None:
++                admin_turn_id = turn_id
++            if ftype == 'assistant_chunk':
++                if admin_turn_id is not None:
++                    _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(admin_turn_id))
++                else:
++                    _admin_emit('assistant_chunk', session_id=session_id)
++            elif ftype == 'assistant_end':
++                if admin_turn_id is not None:
++                    _admin_emit('assistant_end', session_id=session_id, turn_id=str(admin_turn_id))
++                else:
++                    _admin_emit('assistant_end', session_id=session_id)
+     except Exception:
+         pass
+ 
+ 
+ def _suggestion_cap(default: int = 4) -> int:
+     cap = SUGGESTION_MAX if SUGGESTION_MAX is not None else default
+     try:
+         cap_int = int(cap)
+     except Exception:
+         return default
+     return max(0, cap_int)
+ 
+ 
+ def _normalize_suggestion_item(raw: Any) -> str:
+     if isinstance(raw, str):
+         return raw.strip()
+     if isinstance(raw, dict):
+         for key in ("text", "label", "title"):
+             val = raw.get(key)
+             if isinstance(val, str):
+                 return val.strip()
+         for val in raw.values():
+             if isinstance(val, str):
+                 return val.strip()
+     try:
+@@ -2989,64 +3003,70 @@ def _update_assistant_turn_state(session_id: str,
+ 
+ def _apply_assistant_turn_state(session_id: str, frames: Iterable[Dict[str, Any]]) -> None:
+     current_turn_id: Optional[str] = None
+     for frame in frames:
+         current_turn_id = _update_assistant_turn_state(session_id, frame, current_turn_id)
+ 
+ 
+ def schedule_frames(session_id: str,
+                     frames: List[Dict],
+                     delay_ms: int = 0,
+                     correlation_user_msg_id: Optional[str] = None) -> None:
+     """
+     Optionally schedule frames with a delay (for pacing). Ensures an assistant_end is emitted.
+     Non-blocking: runs in a background thread.
+     """
+     def _run():
          try:
-             return copy.deepcopy(value)
-         except Exception:
-             return value
+             if delay_ms and delay_ms > 0:
+                 _t.sleep(max(0, delay_ms) / 1000.0)
+             current_turn_id = None
+             for fr in frames:
+                 try:
+                     # Belt-and-suspenders: never let legacy stamps slip through on rebroadcast.
+                     if isinstance(fr, dict) and fr.get('type') == 'assistant_chunk' and 'text' in fr:
+                         fr['text'] = _scrub_debug_stamps(fr['text'])
++                    if correlation_user_msg_id and isinstance(fr, dict) and 'correlation_user_msg_id' not in fr:
++                        fr['correlation_user_msg_id'] = correlation_user_msg_id
++                    turn_id_for_admin: Optional[str] = None
++                    if isinstance(fr, dict):
++                        turn_id_for_admin = fr.get('turn_id') or current_turn_id
+                     current_turn_id = _update_assistant_turn_state(session_id, fr, current_turn_id)
+-                    bus.broadcast(session_id, fr)
++                    _broadcast_frames(session_id, [fr], turn_id_for_admin)
+                 except Exception:
+                     pass
+             # Ensure an assistant_end terminator exists
+             if not any(fr.get('type') in ('assistant_end', 'end') for fr in frames):
+                 end_fr = {'type': 'assistant_end', 'turn_id': frames[-1].get('turn_id') if frames else None}
+                 if current_turn_id and not end_fr.get('turn_id'):
+                     end_fr['turn_id'] = current_turn_id
+                 if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
+                     end_fr['correlation_user_msg_id'] = correlation_user_msg_id
+                 try:
++                    turn_id_for_admin = end_fr.get('turn_id') or current_turn_id
+                     _apply_assistant_turn_state(session_id, [end_fr])
+-                    bus.broadcast(session_id, end_fr)
++                    _broadcast_frames(session_id, [end_fr], turn_id_for_admin)
+                 except Exception:
+                     pass
+         finally:
+             try:
+                 _admin_emit('schedule_frames_done', session_id=session_id)
+             except Exception:
+                 pass
  
-     slots_dict: Dict[str, Any] = {}
-     extra_slots = dialog_nlu.get("slots")
-     if isinstance(extra_slots, dict):
-         try:
-             slots_dict.update(_safe_copy(extra_slots))
-         except Exception:
-             slots_dict.update(extra_slots)
-     entities = dialog_nlu.get("entities")
-     if isinstance(entities, dict):
-         slots_dict.setdefault("entities", _safe_copy(entities))
-     elif isinstance(entities, list):
-         slots_dict.setdefault("entities", _safe_copy(entities))
-     products = dialog_nlu.get("products")
-     if isinstance(products, list):
-         slots_dict.setdefault("products", list(products))
+     threading.Thread(target=_run, daemon=True).start()
  
-+    canonical_universal: Dict[str, Any] = {}
-+    if isinstance(universal, dict):
-+        try:
-+            canonical_universal = _ensure_universal_fields(universal)
-+        except Exception:
-+            canonical_universal = dict(universal)
-+
-+    universal_defaults = _ensure_universal_fields({})
-+
-+    def _resolved_value(key: str, default: Any = None) -> Any:
-+        for source in (canonical_universal, dialog_nlu):
-+            if isinstance(source, dict) and key in source:
-+                return source.get(key)
-+        return universal_defaults.get(key, default)
-+
-+    missing_value = _resolved_value("missing", universal_defaults.get("missing", []))
-+    if isinstance(missing_value, list):
-+        missing_payload = _safe_copy(missing_value)
-+    elif missing_value is None:
-+        missing_payload = []
-+    else:
-+        try:
-+            missing_payload = list(missing_value)
-+        except Exception:
-+            missing_payload = [missing_value]
-+
-     payload = {
-         "event": "nlu",
-         "intent": dialog_nlu.get("intent"),
-         "confidence": dialog_nlu.get("confidence"),
-         "slots": slots_dict,
-         "text": text,
-         "session_id": sid,
-+        "needs_clarification": bool(_resolved_value("needs_clarification", False)),
-+        "missing": missing_payload,
-+        "phase": _resolved_value("phase"),
-+        "depth": _resolved_value("depth"),
-+        "delivery_pref": _resolved_value("delivery_pref"),
-+        "intent_hint": _resolved_value("intent_hint"),
+ 
+ # ---- WS orchestration helpers (centralize greet/user pipelines) ----
+ 
+ def _emit_ws_outage(session_id: str,
+                     turn_id: str,
+                     *,
+                     correlation_user_msg_id: Optional[str] = None) -> List[Dict[str, Any]]:
+     frames: List[Dict[str, Any]] = []
+     chunk: Dict[str, Any] = {
+         'type': 'assistant_chunk',
+         'turn_id': turn_id,
+         'text': _WS_PIPELINE_MESSAGE,
+         'kb_hits': 0,
+         'note': _WS_PIPELINE_UNAVAILABLE_NOTE,
      }
--    if isinstance(universal, dict):
--        payload["universal"] = _safe_copy(universal)
-+    if canonical_universal:
-+        payload["universal"] = _safe_copy(canonical_universal)
-+
-+    entities_payload: Dict[str, Any] = {}
-+    universal_entities = canonical_universal.get("entities") if isinstance(canonical_universal, dict) else None
-+    if isinstance(universal_entities, dict):
-+        try:
-+            entities_payload.update(_safe_copy(universal_entities))
-+        except Exception:
-+            entities_payload.update(universal_entities)
-+
-+    dialog_entities = dialog_nlu.get("entities") if isinstance(dialog_nlu, dict) else None
-+    if isinstance(dialog_entities, dict):
-+        for key, value in dialog_entities.items():
-+            entities_payload[key] = _safe_copy(value)
-+
-+    dialog_products = dialog_nlu.get("products") if isinstance(dialog_nlu, dict) else None
-+    if isinstance(dialog_products, list):
-+        entities_payload["products"] = list(dialog_products)
-+        if dialog_products:
-+            entities_payload.setdefault("product", dialog_products[0])
-+
-+    if "products" not in entities_payload:
-+        entities_payload["products"] = []
-+
-+    if "product" not in entities_payload:
-+        products = entities_payload.get("products")
-+        if isinstance(products, list) and products:
-+            entities_payload["product"] = products[0]
-+        else:
-+            entities_payload["product"] = None
-+
-+    if "env" not in entities_payload:
-+        env_candidate = None
-+        if isinstance(dialog_entities, dict):
-+            env_candidate = dialog_entities.get("env")
-+        if env_candidate is None and isinstance(dialog_nlu, dict):
-+            env_candidate = dialog_nlu.get("env")
-+        entities_payload["env"] = env_candidate
-+
-+    if "keywords" not in entities_payload:
-+        keywords = canonical_universal.get("entities", {}).get("keywords") if isinstance(canonical_universal.get("entities"), dict) else None
-+        entities_payload["keywords"] = list(keywords or [])
-+
-+    payload["entities"] = _safe_copy(entities_payload)
+diff --git a/tests/test_phase1_streaming.py b/tests/test_phase1_streaming.py
+index dcc8003ac405a7f7901ca4f2fd06ca8297aa4b49..e82ca33ddb86f38a1097494e9624eddd9425cf52 100644
+--- a/tests/test_phase1_streaming.py
++++ b/tests/test_phase1_streaming.py
+@@ -1,48 +1,87 @@
+ import json
++import threading
+ from app.asgi_gateway import app as flask_app
++from app.api_v1 import greet as greet_api
++from app.services import streaming as streaming
  
-     try:
-         admin_cb("nlu", **payload)
-     except Exception:
-         pass
+ def _sse_messages(resp_data: bytes):
+     text = resp_data.decode('utf-8', errors='ignore')
+     events = []
+     for block in [b.strip() for b in text.split('\n\n') if b.strip()]:
+         if block.startswith(':'):
+             continue
+         for line in block.split('\n'):
+             if line.startswith('data: '):
+                 payload = line[len('data: '):]
+                 try:
+                     events.append(json.loads(payload))
+                 except Exception:
+                     pass
+     return events
  
+ def test_greet_stream_sequence():
+     client = flask_app.test_client()
+     stream = client.get('/ws/v1/chat?session_id=t1')
+     g = client.get('/api/v1/greet?session_id=t1')
+     assert g.status_code == 200
+     data = stream.data
+     events = _sse_messages(data)
+     types = [e.get('type') for e in events]
+     order = [t for t in types if t in ('state','text','audio_chunk','suggestions','end')]
+     assert order[0] == 'state'
+     assert 'text' in order
+     assert 'audio_chunk' in order
+     assert 'suggestions' in order
+     assert 'end' in order
+     assert order[-1] == 'state'
  
- def _get_session_id(scope) -> str:
-     try:
-         raw = (scope.get("query_string") or b"").decode("utf-8", "ignore")
-         if raw:
-             for pair in raw.split("&"):
-                 if not pair or "=" not in pair:
-                     continue
-                 k, v = pair.split("=", 1)
-                 if k == "session_id":
-                     return v or "default"
-     except Exception:
-         pass
-     return "default"
- 
- 
- def _has_deepgram_key() -> bool:
-     return bool((os.getenv("DEEPGRAM_API_KEY") or "").strip())
- 
+ def test_chat_turn_and_interrupt():
+     client = flask_app.test_client()
+     stream = client.get('/ws/v1/chat?session_id=t2')
+     rv = client.post('/api/v1/chat', json={'session_id':'t2','text':'hello'})
+     assert rv.status_code == 200
+     tid = rv.get_json()['turn_id']
+     rv2 = client.post('/api/v1/chat', json={'session_id':'t2','cmd':'interrupt','turn_id':tid})
+     assert rv2.status_code == 200 and rv2.get_json()['interrupted'] is True
+     data = stream.data
+     events = _sse_messages(data)
+     ready_states = [e for e in events if e.get('type')=='state' and e.get('phase')=='ready']
+     assert ready_states, "Expected at least one ready state after interrupt"
+     ended_tids = [e.get('turn_id') for e in events if e.get('type')=='end']
+     assert tid not in ended_tids
++
++
++def test_greet_admin_emits_single_assistant_end(monkeypatch):
++    client = flask_app.test_client()
++    sid = 'admin-greet-sse'
++
++    monkeypatch.setenv('OPENAI_API_KEY', 'sk-test')
++
++    events = []
++    done = threading.Event()
++
++    def fake_make_assistant_frames(seed_text, session_id, **kwargs):
++        frames = [
++            {'type': 'assistant_chunk', 'turn_id': 'turn-admin', 'text': 'hello', 'kb_hits': 0},
++        ]
++        return 'turn-admin', frames
++
++    def fake_admin_emit(kind, **payload):
++        events.append((kind, payload))
++        if kind == 'schedule_frames_done':
++            done.set()
++        return True
++
++    monkeypatch.setattr(streaming, 'make_assistant_frames', fake_make_assistant_frames)
++    monkeypatch.setattr(streaming, 'schedule_tts_audio', lambda *a, **k: False)
++    monkeypatch.setattr(streaming, '_admin_emit', fake_admin_emit)
++    monkeypatch.setattr(greet_api, '_admin_emit', fake_admin_emit)
++    monkeypatch.setattr(streaming.bus, 'broadcast', lambda *a, **k: None)
++    monkeypatch.setattr(streaming.bus, 'note_assistant_turn', lambda *a, **k: None)
++
++    resp = client.get(f'/api/v1/greet?session_id={sid}')
++    assert resp.status_code == 200
++    assert done.wait(2.0), 'schedule_frames_done event did not arrive'
++
++    assistant_end_events = [payload for kind, payload in events if kind == 'assistant_end']
++    assert len(assistant_end_events) == 1, f'assistant_end emitted {len(assistant_end_events)} times'

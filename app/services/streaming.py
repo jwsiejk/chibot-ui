@@ -1030,14 +1030,28 @@ def _call_foundation_with_retry(messages: List[Dict[str, str]],
     return human, info
 
 
-def _broadcast_frames(session_id: str, frames: List[Dict], turn_id: str) -> None:
+def _broadcast_frames(session_id: str,
+                      frames: List[Dict],
+                      turn_id: Optional[str] = None) -> None:
     try:
         for fr in frames:
             bus.broadcast(session_id, fr)
-            if fr.get('type') == 'assistant_chunk':
-                _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(turn_id))
-            elif fr.get('type') == 'assistant_end':
-                _admin_emit('assistant_end', session_id=session_id, turn_id=str(turn_id))
+            if not isinstance(fr, dict):
+                continue
+            ftype = fr.get('type')
+            admin_turn_id = fr.get('turn_id')
+            if admin_turn_id is None:
+                admin_turn_id = turn_id
+            if ftype == 'assistant_chunk':
+                if admin_turn_id is not None:
+                    _admin_emit('assistant_chunk', session_id=session_id, turn_id=str(admin_turn_id))
+                else:
+                    _admin_emit('assistant_chunk', session_id=session_id)
+            elif ftype == 'assistant_end':
+                if admin_turn_id is not None:
+                    _admin_emit('assistant_end', session_id=session_id, turn_id=str(admin_turn_id))
+                else:
+                    _admin_emit('assistant_end', session_id=session_id)
     except Exception:
         pass
 
@@ -3011,8 +3025,13 @@ def schedule_frames(session_id: str,
                     # Belt-and-suspenders: never let legacy stamps slip through on rebroadcast.
                     if isinstance(fr, dict) and fr.get('type') == 'assistant_chunk' and 'text' in fr:
                         fr['text'] = _scrub_debug_stamps(fr['text'])
+                    if correlation_user_msg_id and isinstance(fr, dict) and 'correlation_user_msg_id' not in fr:
+                        fr['correlation_user_msg_id'] = correlation_user_msg_id
+                    turn_id_for_admin: Optional[str] = None
+                    if isinstance(fr, dict):
+                        turn_id_for_admin = fr.get('turn_id') or current_turn_id
                     current_turn_id = _update_assistant_turn_state(session_id, fr, current_turn_id)
-                    bus.broadcast(session_id, fr)
+                    _broadcast_frames(session_id, [fr], turn_id_for_admin)
                 except Exception:
                     pass
             # Ensure an assistant_end terminator exists
@@ -3023,8 +3042,9 @@ def schedule_frames(session_id: str,
                 if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
                     end_fr['correlation_user_msg_id'] = correlation_user_msg_id
                 try:
+                    turn_id_for_admin = end_fr.get('turn_id') or current_turn_id
                     _apply_assistant_turn_state(session_id, [end_fr])
-                    bus.broadcast(session_id, end_fr)
+                    _broadcast_frames(session_id, [end_fr], turn_id_for_admin)
                 except Exception:
                     pass
         finally:

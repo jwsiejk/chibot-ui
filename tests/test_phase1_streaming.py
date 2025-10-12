@@ -1,5 +1,8 @@
 import json
+import threading
 from app.asgi_gateway import app as flask_app
+from app.api_v1 import greet as greet_api
+from app.services import streaming as streaming
 
 def _sse_messages(resp_data: bytes):
     text = resp_data.decode('utf-8', errors='ignore')
@@ -46,3 +49,39 @@ def test_chat_turn_and_interrupt():
     assert ready_states, "Expected at least one ready state after interrupt"
     ended_tids = [e.get('turn_id') for e in events if e.get('type')=='end']
     assert tid not in ended_tids
+
+
+def test_greet_admin_emits_single_assistant_end(monkeypatch):
+    client = flask_app.test_client()
+    sid = 'admin-greet-sse'
+
+    monkeypatch.setenv('OPENAI_API_KEY', 'sk-test')
+
+    events = []
+    done = threading.Event()
+
+    def fake_make_assistant_frames(seed_text, session_id, **kwargs):
+        frames = [
+            {'type': 'assistant_chunk', 'turn_id': 'turn-admin', 'text': 'hello', 'kb_hits': 0},
+        ]
+        return 'turn-admin', frames
+
+    def fake_admin_emit(kind, **payload):
+        events.append((kind, payload))
+        if kind == 'schedule_frames_done':
+            done.set()
+        return True
+
+    monkeypatch.setattr(streaming, 'make_assistant_frames', fake_make_assistant_frames)
+    monkeypatch.setattr(streaming, 'schedule_tts_audio', lambda *a, **k: False)
+    monkeypatch.setattr(streaming, '_admin_emit', fake_admin_emit)
+    monkeypatch.setattr(greet_api, '_admin_emit', fake_admin_emit)
+    monkeypatch.setattr(streaming.bus, 'broadcast', lambda *a, **k: None)
+    monkeypatch.setattr(streaming.bus, 'note_assistant_turn', lambda *a, **k: None)
+
+    resp = client.get(f'/api/v1/greet?session_id={sid}')
+    assert resp.status_code == 200
+    assert done.wait(2.0), 'schedule_frames_done event did not arrive'
+
+    assistant_end_events = [payload for kind, payload in events if kind == 'assistant_end']
+    assert len(assistant_end_events) == 1, f'assistant_end emitted {len(assistant_end_events)} times'
