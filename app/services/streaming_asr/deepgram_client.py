@@ -197,6 +197,8 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         )
 
     # Apply overrides into query string and clean up for containerized
+    effective_utterance_end_ms = 0
+
     try:
         import urllib.parse as _p
 
@@ -290,8 +292,10 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         if "model" not in qd:
             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
 
-        # Provide a sensible default for utterance_end_ms (2s) unless explicitly overridden
-        qd.setdefault("utterance_end_ms", "2000")
+        # Provide a sensible default for utterance_end_ms unless explicitly overridden
+        qd.setdefault(
+            "utterance_end_ms", os.getenv("DEEPGRAM_UTTERANCE_END_MS", "3000")
+        )
 
         interim_val = qd.get("interim_results")
         interim_false = False
@@ -306,6 +310,14 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             interim_false = False
         if interim_false:
             qd.pop("utterance_end_ms", None)
+            effective_utterance_end_ms = 0
+        else:
+            try:
+                val = qd.get("utterance_end_ms")
+                if val is not None:
+                    effective_utterance_end_ms = int(str(val))
+            except Exception:
+                effective_utterance_end_ms = 0
 
         query = _p.urlencode(qd)
         base = _p.urlunsplit(
@@ -313,6 +325,14 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
         )
     except Exception:
         pass
+
+    if isinstance(overrides, dict):
+        try:
+            overrides["_effective_utterance_end_ms"] = int(
+                effective_utterance_end_ms or 0
+            )
+        except Exception:
+            overrides["_effective_utterance_end_ms"] = 0
 
     return base
 
@@ -473,6 +493,7 @@ class DeepgramClient:
         self._first_real_sent: bool = False
         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
         self._last_chunk_ts: float = 0.0
+        self._last_transcript: str = ""
 
         # Tunables
         self._linger_ms: int = int(
@@ -1657,8 +1678,37 @@ class DeepgramClient:
                         or (evt_type in ("utteranceend", "UtteranceEnd"))
                     )
 
+                    final_reason = None
+                    final_reason_detail = None
+                    if is_final:
+                        speech = msg.get("speech")
+                        endpointing = None
+                        if isinstance(speech, dict):
+                            endpointing = speech.get("endpointing")
+                        if isinstance(endpointing, dict):
+                            final_reason_detail = endpointing.get("type")
+                        for key in ("reason", "end_reason", "speech_final_reason"):
+                            val = msg.get(key)
+                            if isinstance(val, str) and val:
+                                final_reason_detail = val
+                                break
+                        if evt_type == "utteranceend" or msg.get("utterance_end"):
+                            final_reason = "utterance_end"
+                        if not final_reason and isinstance(final_reason_detail, str):
+                            lowered = final_reason_detail.strip().lower()
+                            if "utterance" in lowered or "endpoint" in lowered:
+                                final_reason = "utterance_end"
+                        if self._closing and not final_reason:
+                            final_reason = "close_stream"
+                        if not final_reason:
+                            final_reason = "provider_final"
+
                     # No usable text in this message; keep listening
-                    if not text:
+                    if text:
+                        self._last_transcript = text
+                    elif is_final:
+                        text = self._last_transcript or ""
+                    else:
                         continue
 
                     # Seeing a result also implies the upstream is functioning
@@ -1682,6 +1732,10 @@ class DeepgramClient:
                             "type": "user_final" if is_final else "user_partial",
                             "text": text,
                         }
+                        if is_final:
+                            payload["final_reason"] = final_reason
+                            if final_reason_detail:
+                                payload["final_reason_detail"] = final_reason_detail
                         if confidence is not None:
                             payload["confidence"] = confidence
                         if token_count:
@@ -1693,6 +1747,7 @@ class DeepgramClient:
                     if is_final:
                         self._any_result = True
                         self._final_event.set()
+                        self._last_transcript = ""
                         continue
 
                 elif evt_type in ("error", "close"):

@@ -217,7 +217,7 @@ def test_default_guard_waits_for_deepgram_default(monkeypatch):
 
         main_task = loop.create_task(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
 
-        loop.run_until_complete(asyncio.sleep(1.5))
+        loop.run_until_complete(asyncio.sleep(2.5))
         interim_payloads = _json_payloads(sent)
         interim_finals = [
             p
@@ -229,7 +229,7 @@ def test_default_guard_waits_for_deepgram_default(monkeypatch):
 
         before_len = len(sent)
 
-        loop.run_until_complete(asyncio.sleep(1.0))
+        loop.run_until_complete(asyncio.sleep(1.2))
         new_payloads = _json_payloads(sent[before_len:])
         finals_after = [
             p
@@ -250,7 +250,7 @@ def test_default_guard_waits_for_deepgram_default(monkeypatch):
     assert llm_calls, "LLM turn should still run after guarded final"
     assert _DefaultGuardDeepgram.instances, "Deepgram client should be instantiated"
     assert (
-        _DefaultGuardDeepgram.instances[0].guard_ms == 2000
+        _DefaultGuardDeepgram.instances[0].guard_ms == 3000
     ), "Default guard should use Deepgram default"
 
 
