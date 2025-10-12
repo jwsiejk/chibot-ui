@@ -205,3 +205,95 @@ def test_close_stream_with_existing_final_does_not_emit_synthetic(monkeypatch):
     finals = [p for p in payloads if p.get("type") == "Results" and p.get("channel", {}).get("is_final")]
 
     assert len(finals) == 1, "Only provider final should be emitted when already observed"
+
+
+def test_close_stream_ack_reaches_admin_log(monkeypatch):
+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
+    monkeypatch.setenv("DG_LINGER_MS", "0")
+    monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
+
+    admin_events = []
+
+    def _capture_admin(event, **payload):
+        admin_events.append((event, payload))
+
+    monkeypatch.setattr(ws_asgi, "_admin_emit", _capture_admin)
+
+    class _AdminDiagDeepgram:
+        instances = []
+
+        def __init__(self, cfg=None):
+            self.__class__.instances.append(self)
+            self._cfg = cfg or {}
+            self._open_sent = False
+
+        async def connect(self):
+            return
+
+        def is_open(self):
+            return True
+
+        async def events(self):
+            if not self._open_sent:
+                self._open_sent = True
+                yield {"type": "asr_open"}
+            return
+
+        async def send(self, _chunk):
+            return
+
+        async def close(self, wait_for_final: bool = True, **_):
+            hook = self._cfg.get("_diag_hook")
+            assert callable(hook), "Deepgram diag hook should be provided"
+            payload = {
+                "provider": "deepgram",
+                "session_id": self._cfg.get("session_id"),
+                "tag": self._cfg.get("_url_tag"),
+                "status": "ok",
+                "drain_failed": False,
+            }
+            hook(
+                "CloseStream ack",
+                **{k: v for k, v in payload.items() if v is not None},
+            )
+
+    monkeypatch.setattr(ws_asgi, "DeepgramClient", _AdminDiagDeepgram)
+
+    events = deque(
+        [
+            {"type": "websocket.receive", "bytes": b"\x00\x01"},
+            {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
+            {"type": "websocket.disconnect"},
+        ]
+    )
+
+    sent = []
+
+    async def _receive():
+        return events.popleft() if events else {"type": "websocket.disconnect"}
+
+    async def _send(msg):
+        sent.append(msg)
+
+    scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
+        loop.run_until_complete(asyncio.sleep(0.05))
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+    ack_events = [
+        payload
+        for event, payload in admin_events
+        if event == "asr:diag" and payload.get("label") == "CloseStream ack"
+    ]
+
+    assert ack_events, f"expected CloseStream ack admin event, saw {admin_events}"
+    ack_payload = ack_events[0]
+    assert ack_payload.get("status") == "ok"
+    assert ack_payload.get("session_id") == "default"

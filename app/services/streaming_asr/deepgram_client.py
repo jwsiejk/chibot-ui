@@ -1480,6 +1480,19 @@ class DeepgramClient:
                 except Exception:
                     pass
 
+            ack_payload = {
+                "status": "ok" if not drain_failed else "drain_timeout",
+                "dg_id": self._dg_id,
+                "wait_for_final": wait_for_final,
+                "linger_ms": linger_ms,
+                "had_result": self._had_result(),
+                "drain_failed": drain_failed,
+                "queued_chunks": dropped_chunks,
+                "queued_bytes": dropped_bytes,
+                "drain_wait_timeout": drain_wait_timeout,
+            }
+            self._emit_diag("CloseStream ack", **ack_payload)
+
             if drain_failed:
                 drain_exc = DeepgramDrainTimeoutError(
                     sid,

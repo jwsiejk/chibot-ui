@@ -1532,6 +1532,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 cfg["_jlog"] = _jlog
                 cfg.setdefault("session_id", sid)
                 cfg["_url_tag"] = f"{WS_ASGI_BUILD}:{sid}"
+
+                def _diag_hook(label: str, **payload: Any) -> None:
+                    payload_copy = dict(payload) if payload else {}
+                    admin_cb = _admin_emit if callable(_admin_emit) else None
+                    if admin_cb:
+                        try:
+                            admin_cb("asr:diag", label=label, **payload_copy)
+                        except Exception:
+                            pass
+
+                cfg["_diag_hook"] = _diag_hook
                 _jlog("asr_connect_begin", sid=sid, transport=transport)
                 client = DeepgramClient(cfg)
                 dg = client

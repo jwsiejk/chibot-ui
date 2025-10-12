@@ -475,6 +475,34 @@ def test_keepalive_waits_for_flush_and_close(monkeypatch):
     asyncio.run(run())
 
 
+def test_close_emits_close_stream_ack_diag(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+
+    diag_events: list[tuple[str, dict]] = []
+
+    def _capture_diag(label: str, **payload):
+        diag_events.append((label, payload))
+
+    async def run():
+        client = dg_mod.DeepgramClient({"session_id": "sid-close", "_diag_hook": _capture_diag})
+        client._ws = DummyWS()
+        client._open_evt.set()
+        client._final_event.set()
+        await client.close(wait_for_final=False)
+        return client
+
+    client = asyncio.run(run())
+
+    ack_payloads = [payload for label, payload in diag_events if label == "CloseStream ack"]
+    assert ack_payloads, f"expected CloseStream ack diag event, saw {diag_events}"
+    ack_payload = ack_payloads[0]
+    assert ack_payload.get("status") == "ok", f"unexpected ack status: {ack_payload}"
+    assert ack_payload.get("drain_failed") is False
+    assert ack_payload.get("session_id") == "sid-close"
+    assert ack_payload.get("provider") == "deepgram"
+    assert isinstance(client._dg_id, int)
+
+
 def test_send_times_out_and_raises_runtime_error(monkeypatch, caplog):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
