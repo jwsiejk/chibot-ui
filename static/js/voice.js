@@ -41,6 +41,7 @@ const REC_MIME = (typeof MediaRecorder !== 'undefined'
 
 const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
 const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+const POST_TTS_HOLDOFF_MS = 600;    // grace window after Chip begins speaking
 
 const state = {
   stream: null,
@@ -58,6 +59,8 @@ const state = {
   // NEW: min-turn gating
   recStartedAt: 0,
   pendingEndTimer: null,
+  postTtsHoldUntil: 0,
+  postTtsHoldTimer: null,
 };
 
 let _overrideEchoSignatureFn = null;
@@ -87,12 +90,50 @@ function _logLifecycle(event, detail = {}, level = 'debug') {
   } catch {}
 }
 
+function _now() {
+  try {
+    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+      return performance.now();
+    }
+  } catch {}
+  return Date.now();
+}
+
 function _clearPendingEndTimer() {
   if (state.pendingEndTimer) {
     try { clearTimeout(state.pendingEndTimer); } catch {}
     state.pendingEndTimer = null;
   }
 }
+
+function _clearPostTtsHoldTimer() {
+  const hadTimer = !!state.postTtsHoldTimer;
+  if (hadTimer) {
+    try { clearTimeout(state.postTtsHoldTimer); } catch {}
+  }
+  state.postTtsHoldTimer = null;
+  return hadTimer;
+}
+
+try {
+  window.addEventListener('chip-tts', (ev) => {
+    const detail = ev?.detail || {};
+    const rawState = detail.state;
+    const ttsState = typeof rawState === 'string' ? rawState.toLowerCase() : '';
+    if (ttsState === 'playing') {
+      state.postTtsHoldUntil = _now() + POST_TTS_HOLDOFF_MS;
+      return;
+    }
+    if (!ttsState || ttsState === 'ended' || ttsState === 'stopped' || ttsState === 'idle' || ttsState === 'paused') {
+      state.postTtsHoldUntil = 0;
+      if (_clearPostTtsHoldTimer()) {
+        setTimeout(() => {
+          try { _onSpeechStartCommitted(); } catch {}
+        }, 0);
+      }
+    }
+  });
+} catch {}
 
 function _toFiniteNumber(value) {
   if (typeof value === 'number') {
@@ -225,10 +266,14 @@ function _disarm() {
   _teardownVADOnly();
   state.turnOpen = false; // ensure local state is clean
   state.recStartedAt = 0;
+  _clearPostTtsHoldTimer();
+  state.postTtsHoldUntil = 0;
   _emitVoiceState('idle');
 }
 
 function _bargeIn() {
+  _clearPostTtsHoldTimer();
+  state.postTtsHoldUntil = 0;
   // Soft barge-in: pause audio locally
   try { stopPlayback(); } catch {}
   // If a prior ASR turn is somehow still open, politely close it.
@@ -473,6 +518,20 @@ function _startRecorder() {
 }
 
 function _onSpeechStartCommitted() {
+  const now = _now();
+  const holdUntil = state.postTtsHoldUntil || 0;
+  const wait = Math.max(0, holdUntil - now);
+  if (wait > 0) {
+    _clearPostTtsHoldTimer();
+    state.postTtsHoldTimer = setTimeout(() => {
+      state.postTtsHoldTimer = null;
+      try { _onSpeechStartCommitted(); } catch {}
+    }, wait);
+    return;
+  }
+
+  _clearPostTtsHoldTimer();
+  state.postTtsHoldUntil = 0;
   _logLifecycle('vad_speech_start');
   // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
   _bargeIn();
@@ -528,6 +587,7 @@ export const __TEST_ONLY__ = {
   startRecorder: _startRecorder,
   stopRecorder: _stopRecorder,
   logLifecycle: _logLifecycle,
+  onSpeechStartCommitted: _onSpeechStartCommitted,
   setEchoSignatureOverride(fn) {
     _overrideEchoSignatureFn = typeof fn === 'function' ? fn : null;
   },
