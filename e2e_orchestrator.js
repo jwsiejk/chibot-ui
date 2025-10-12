@@ -47,6 +47,65 @@ async function collectAdminSSEInPage(page, { url, ms }) {
   }, { url, ms });
 }
 
+async function startAdminCollector(page, url) {
+  await page.evaluate((adminUrl) => {
+    if (window.__adminCollector?.source) {
+      try { window.__adminCollector.source.close(); } catch {}
+    }
+
+    const logs = [];
+    const collector = {
+      startedAt: Date.now(),
+      source: null,
+      logs,
+      lastError: null
+    };
+
+    window.__adminLogs = logs;
+    window.__adminCollector = collector;
+
+    try {
+      const es = new EventSource(adminUrl, { withCredentials: true });
+      collector.source = es;
+      es.onmessage = (event) => {
+        if (!window.__adminLogs) window.__adminLogs = logs;
+        try {
+          logs.push(JSON.parse(event.data));
+        } catch {
+          logs.push({ raw: event.data });
+        }
+      };
+      es.onerror = () => { collector.lastError = 'eventsource_error'; };
+      window.addEventListener('beforeunload', () => { try { es.close(); } catch {}; });
+    } catch (err) {
+      collector.lastError = err?.message || String(err);
+    }
+  }, url);
+}
+
+async function harvestAdminLogs(page) {
+  const logs = await page.evaluate(() => {
+    const data = Array.isArray(window.__adminLogs) ? window.__adminLogs.slice() : [];
+    return { data, error: window.__adminCollector?.lastError || null };
+  });
+  if (logs.error) {
+    return logs.data.concat([{ event: 'collector_error', message: logs.error }]);
+  }
+  return logs.data;
+}
+
+async function stopAdminCollector(page) {
+  await page.evaluate(() => {
+    const collector = window.__adminCollector;
+    if (!collector) return;
+    if (collector.source) {
+      try { collector.source.close(); } catch {}
+    }
+    collector.stoppedAt = Date.now();
+    collector.source = null;
+  });
+}
+
 // ---- UI dump (buttons + clickables + DOM) ----
 async function dumpUI(page, dumpDir){
   const out = [];
@@ -79,6 +138,36 @@ async function dumpUI(page, dumpDir){
   }
   fs.writeFileSync(path.join(dumpDir, 'ui_buttons.json'), JSON.stringify(out,null,2));
   fs.writeFileSync(path.join(dumpDir, 'dom.html'), await page.content());
+}
+
+async function checkDomExpectations(page, expectDom, artifactsDir, probeId){
+  if (!expectDom || !Array.isArray(expectDom.any_of) || !expectDom.any_of.length) return [];
+  const selectors = expectDom.any_of;
+  const timeout = expectDom.timeout_ms ?? 5000;
+
+  try {
+    await page.waitForFunction((sels) => {
+      return sels.some(sel => {
+        try {
+          const el = document.querySelector(sel);
+          if (!el) return false;
+          const style = window.getComputedStyle(el);
+          if (style && (style.visibility === 'hidden' || style.display === 'none')) return false;
+          const rect = el.getBoundingClientRect();
+          return !!(rect.width || rect.height);
+        } catch {
+          return false;
+        }
+      });
+    }, selectors, { timeout });
+    return [];
+  } catch (err) {
+    const dir = path.join(artifactsDir, probeId);
+    ensureDir(dir);
+    try { await page.screenshot({ path: path.join(dir, 'expect_dom_failure.png'), fullPage: true }); } catch {}
+    try { fs.writeFileSync(path.join(dir, 'expect_dom_failure.html'), await page.content()); } catch {}
+    return [`DOM expectation not met: none of [${selectors.join(', ')}] appeared within ${timeout}ms`];
+  }
 }
 
 // ---- Start clickers ----
