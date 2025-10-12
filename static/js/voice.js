@@ -126,11 +126,7 @@ try {
     }
     if (!ttsState || ttsState === 'ended' || ttsState === 'stopped' || ttsState === 'idle' || ttsState === 'paused') {
       state.postTtsHoldUntil = 0;
-      if (_clearPostTtsHoldTimer()) {
-        setTimeout(() => {
-          try { _onSpeechStartCommitted(); } catch {}
-        }, 0);
-      }
+      _clearPostTtsHoldTimer();
     }
   });
 } catch {}
