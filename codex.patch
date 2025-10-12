@@ -1,339 +1,287 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index eaec2213a6a978d2a2c1013f1b7e6d7a4a3c9182..cb55455c08fd1e74d0b6f7cbb597ccbde90aefb1 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -1458,50 +1458,63 @@ class DeepgramClient:
-                     try:
-                         task.cancel()
-                     except Exception:
-                         pass
-             finally:
-                 self._closed = True
-                 self._closing = False
-                 await self._stop_keepalive()
- 
-             self._logger.info("Deepgram close complete sid=%s", sid)
-             if callable(self._jlog):
-                 try:
-                     self._jlog(
-                         "dg_close",
-                         sid=sid,
-                         dg_id=self._dg_id,
-                         tag=self._url_tag,
-                         wait_for_final=wait_for_final,
-                         linger_ms=linger_ms,
-                         had_result=self._had_result(),
-                         drain_failed=drain_failed,
-                     )
-                 except Exception:
-                     pass
- 
-+            ack_payload = {
-+                "status": "ok" if not drain_failed else "drain_timeout",
-+                "dg_id": self._dg_id,
-+                "wait_for_final": wait_for_final,
-+                "linger_ms": linger_ms,
-+                "had_result": self._had_result(),
-+                "drain_failed": drain_failed,
-+                "queued_chunks": dropped_chunks,
-+                "queued_bytes": dropped_bytes,
-+                "drain_wait_timeout": drain_wait_timeout,
-+            }
-+            self._emit_diag("CloseStream ack", **ack_payload)
-+
-             if drain_failed:
-                 drain_exc = DeepgramDrainTimeoutError(
-                     sid,
-                     queued_chunks=dropped_chunks,
-                     queued_bytes=dropped_bytes,
-                     wait_timeout=drain_wait_timeout,
-                 )
-         finally:
-             if not self._diag_end_emitted:
-                 self._emit_diag(
-                     "end",
-                     active=False,
-                     had_result=self._had_result(),
-                     drain_failed=drain_failed,
-                     queued_chunks=dropped_chunks,
-                     queued_bytes=dropped_bytes,
-                     wait_timeout=drain_wait_timeout,
-                 )
-                 self._diag_end_emitted = True
- 
-         if drain_exc:
-             self._emit_diag(
-                 "asr_error",
-                 error="drain_timeout",
-                 queued_chunks=dropped_chunks,
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 29da98050a6bb331fff43fc38871add213477ddb..935f0f32a3b66074dfc15a5db618a75283c34392 100644
+index 935f0f32a3b66074dfc15a5db618a75283c34392..7840cb67a9c270493ec2ad3d9129a81645abdae4 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -1510,50 +1510,61 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             return False
+@@ -18,50 +18,140 @@ from .schema_v1 import (
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
+ from app.config import load_settings
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
  
-         if dg_state == "open" and dg is not None:
-             return True
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
+ from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+ from app.ws.barge import BargeState
+ from app.ws.confirm_window import ConfirmWindow
+ from app.ws.bus import bus
  
-         if dg_state == "connecting" and dg_connect_task is not None:
-             with contextlib.suppress(Exception):
-                 _jlog("asr_connect_wait", sid=sid, reason="existing_task")
-             with contextlib.suppress(Exception):
-                 await dg_connect_task
-             return dg_state == "open" and dg is not None
- 
-         connect_result = {"ok": False}
- 
-         async def _connect() -> None:
-             nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
-             try:
-                 dg_state = "connecting"
-                 with contextlib.suppress(Exception):
-                     asr_ready_evt.clear()
- 
-                 cfg["_transport"] = transport
-                 cfg["_jlog"] = _jlog
-                 cfg.setdefault("session_id", sid)
-                 cfg["_url_tag"] = f"{WS_ASGI_BUILD}:{sid}"
-+
-+                def _diag_hook(label: str, **payload: Any) -> None:
-+                    payload_copy = dict(payload) if payload else {}
-+                    admin_cb = _admin_emit if callable(_admin_emit) else None
-+                    if admin_cb:
-+                        try:
-+                            admin_cb("asr:diag", label=label, **payload_copy)
-+                        except Exception:
-+                            pass
-+
-+                cfg["_diag_hook"] = _diag_hook
-                 _jlog("asr_connect_begin", sid=sid, transport=transport)
-                 client = DeepgramClient(cfg)
-                 dg = client
-                 await client.connect()
-                 dg_state = "open"
-                 connect_result["ok"] = True
-                 turn_id_ref[0] = buf.turn_seq + 1
-                 rx_task = asyncio.create_task(
-                     _pump_dg_to_client(
-                         client,
-                         send,
-                         turn_id_ref,
-                         final_seen,
-                         pending_final_turns,
-                         synthetic_final_turns,
-                         completed_llm_turns,
-                         sid,
-                         asr_ready_evt,
-                         _flush_buffered_chunks,
-                         turn_timing,
-                         _log_turn_finish,
-                         _handle_confirm_partial,
-                         final_guard_hooks={
-                             "reset_ref": final_guard_reset_ref,
-                             "local_vad_ref": final_guard_local_vad_ref,
-diff --git a/tests/test_deepgram_client_connect.py b/tests/test_deepgram_client_connect.py
-index 638b96944450eea9036973b78a64ccb6ee9c19f0..d5b75cb3ca5e89d3b8a49d53d9d3131f405ddbf2 100644
---- a/tests/test_deepgram_client_connect.py
-+++ b/tests/test_deepgram_client_connect.py
-@@ -453,50 +453,78 @@ def test_keepalive_waits_for_flush_and_close(monkeypatch):
-             if isinstance(payload, str) and json.loads(payload).get("type") == "CloseStream":
-                 break
-             release.set()
-             guard_ws.hold_next_send()
- 
-         await asyncio.sleep(0.05)
-         assert client._keepalive_task and not client._keepalive_task.done()
- 
-         mid_close_keepalives = await wait_for_keepalives(post_flush_keepalives + 1)
- 
-         release.set()
- 
-         await asyncio.sleep(0.05)
-         assert client._keepalive_task and not client._keepalive_task.done()
- 
-         client._final_event.set()
-         await asyncio.wait_for(close_task, timeout=0.5)
- 
-         await asyncio.sleep(0.05)
-         assert guard_ws.open is False
-         assert client._keepalive_task is None
- 
-     asyncio.run(run())
+ # Optional admin emitter
+ try:
+     from app.api_v1.admin import _emit as _admin_emit
+ except Exception:
+     _admin_emit = None
  
  
-+def test_close_emits_close_stream_ack_diag(monkeypatch):
-+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
-+
-+    diag_events: list[tuple[str, dict]] = []
-+
-+    def _capture_diag(label: str, **payload):
-+        diag_events.append((label, payload))
-+
-+    async def run():
-+        client = dg_mod.DeepgramClient({"session_id": "sid-close", "_diag_hook": _capture_diag})
-+        client._ws = DummyWS()
-+        client._open_evt.set()
-+        client._final_event.set()
-+        await client.close(wait_for_final=False)
-+        return client
-+
-+    client = asyncio.run(run())
-+
-+    ack_payloads = [payload for label, payload in diag_events if label == "CloseStream ack"]
-+    assert ack_payloads, f"expected CloseStream ack diag event, saw {diag_events}"
-+    ack_payload = ack_payloads[0]
-+    assert ack_payload.get("status") == "ok", f"unexpected ack status: {ack_payload}"
-+    assert ack_payload.get("drain_failed") is False
-+    assert ack_payload.get("session_id") == "sid-close"
-+    assert ack_payload.get("provider") == "deepgram"
-+    assert isinstance(client._dg_id, int)
-+
-+
- def test_send_times_out_and_raises_runtime_error(monkeypatch, caplog):
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
-     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
- 
-     caplog.set_level(logging.WARNING)
- 
-     async def run():
-         client = dg_mod.DeepgramClient()
-         client._ws = DummyWS()
-         client._open_wait_s = 0.0
-         client._min_valid_bytes = 1
- 
-         with pytest.raises(RuntimeError) as exc1:
-             await client.send(b"a" * 4)
-         assert "deepgram_not_connected" in str(exc1.value)
- 
-         with pytest.raises(RuntimeError) as exc2:
-             await client.send(b"b" * 4)
-         assert "deepgram_not_connected" in str(exc2.value)
- 
-         # Ensure no queue residue from failed attempts.
-         assert list(client._tx_queue) == []
-         assert not client._open_evt.is_set()
- 
-         return client
-diff --git a/tests/test_ws_close_stream_timeout.py b/tests/test_ws_close_stream_timeout.py
-index efef13d92514eb6ca418d47c306ed868786600c4..e8481c4b0865cf152c52cef613b8fb158dad9df3 100644
---- a/tests/test_ws_close_stream_timeout.py
-+++ b/tests/test_ws_close_stream_timeout.py
-@@ -183,25 +183,117 @@ def test_close_stream_with_existing_final_does_not_emit_synthetic(monkeypatch):
-                 return
-             channel = payload.get("channel") or {}
-             if payload.get("type") == "Results" and channel.get("is_final"):
-                 final_sent_evt.set()
- 
-     scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
- 
-     loop = asyncio.new_event_loop()
-     asyncio.set_event_loop(loop)
-     try:
-         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-         loop.run_until_complete(asyncio.sleep(0.05))
-     finally:
-         asyncio.set_event_loop(None)
-         loop.close()
- 
-     payloads = [
-         json.loads(m["text"])
-         for m in sent
-         if m.get("type") == "websocket.send" and m.get("text")
-     ]
- 
-     finals = [p for p in payloads if p.get("type") == "Results" and p.get("channel", {}).get("is_final")]
- 
-     assert len(finals) == 1, "Only provider final should be emitted when already observed"
-+
-+
-+def test_close_stream_ack_reaches_admin_log(monkeypatch):
-+    monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
-+    monkeypatch.setenv("DG_LINGER_MS", "0")
-+    monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
-+
-+    admin_events = []
-+
-+    def _capture_admin(event, **payload):
-+        admin_events.append((event, payload))
-+
-+    monkeypatch.setattr(ws_asgi, "_admin_emit", _capture_admin)
-+
-+    class _AdminDiagDeepgram:
-+        instances = []
-+
-+        def __init__(self, cfg=None):
-+            self.__class__.instances.append(self)
-+            self._cfg = cfg or {}
-+            self._open_sent = False
-+
-+        async def connect(self):
-+            return
-+
-+        def is_open(self):
-+            return True
-+
-+        async def events(self):
-+            if not self._open_sent:
-+                self._open_sent = True
-+                yield {"type": "asr_open"}
-+            return
-+
-+        async def send(self, _chunk):
-+            return
-+
-+        async def close(self, wait_for_final: bool = True, **_):
-+            hook = self._cfg.get("_diag_hook")
-+            assert callable(hook), "Deepgram diag hook should be provided"
-+            payload = {
-+                "provider": "deepgram",
-+                "session_id": self._cfg.get("session_id"),
-+                "tag": self._cfg.get("_url_tag"),
-+                "status": "ok",
-+                "drain_failed": False,
-+            }
-+            hook(
-+                "CloseStream ack",
-+                **{k: v for k, v in payload.items() if v is not None},
-+            )
-+
-+    monkeypatch.setattr(ws_asgi, "DeepgramClient", _AdminDiagDeepgram)
-+
-+    events = deque(
-+        [
-+            {"type": "websocket.receive", "bytes": b"\x00\x01"},
-+            {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
-+            {"type": "websocket.disconnect"},
-+        ]
-+    )
-+
-+    sent = []
-+
-+    async def _receive():
-+        return events.popleft() if events else {"type": "websocket.disconnect"}
-+
-+    async def _send(msg):
-+        sent.append(msg)
-+
-+    scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
-+
-+    loop = asyncio.new_event_loop()
-+    asyncio.set_event_loop(loop)
++def _current_assistant_turn_id(sid: str) -> Optional[str]:
 +    try:
-+        loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-+        loop.run_until_complete(asyncio.sleep(0.05))
-+    finally:
-+        asyncio.set_event_loop(None)
-+        loop.close()
++        turn = bus.current_assistant_turn(sid)
++    except Exception:
++        return None
++    if turn is None:
++        return None
++    try:
++        return str(turn)
++    except Exception:
++        return None
 +
-+    ack_events = [
-+        payload
-+        for event, payload in admin_events
-+        if event == "asr:diag" and payload.get("label") == "CloseStream ack"
++
++def _lookup_tts_state(sid: str, turn_id: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
++    try:
++        tts_tbl = db.memory.get("tts_status") or {}
++        session_tbl = tts_tbl.get(sid) or {}
++    except Exception:
++        return None, None
++
++    keys_to_try = []
++    if turn_id:
++        keys_to_try.append(str(turn_id))
++    else:
++        keys_to_try.append("greet")
++
++    # Fallback: consider any active (not done) entry
++    for key, value in session_tbl.items():
++        if key not in keys_to_try and isinstance(value, dict):
++            if not value.get("done") and (value.get("started") or value.get("first_chunk")):
++                keys_to_try.append(key)
++
++    for key in keys_to_try:
++        state = session_tbl.get(key)
++        if isinstance(state, dict):
++            return dict(state), key
++
++    return None, None
++
++
++def _is_tts_active(state: Optional[Dict[str, Any]]) -> bool:
++    if not isinstance(state, dict):
++        return False
++    if state.get("error"):
++        return False
++    if state.get("done"):
++        return False
++    return bool(state.get("started") or state.get("first_chunk"))
++
++
++def _emit_barge_admin_events(sid: str,
++                              phase: Optional[str],
++                              previous_phase: Optional[str]) -> None:
++    if not phase:
++        return
++    admin_cb = globals().get("_admin_emit")
++    if not callable(admin_cb):
++        return
++
++    turn_id = _current_assistant_turn_id(sid)
++    tts_state, tts_key = _lookup_tts_state(sid, turn_id)
++
++    payload: Dict[str, Any] = {
++        "session_id": sid,
++        "sid": sid,
++        "phase": phase,
++    }
++    if turn_id is not None:
++        payload["turn_id"] = turn_id
++    if previous_phase:
++        payload["previous_phase"] = previous_phase
++    if tts_key:
++        payload["tts_turn_key"] = tts_key
++    if tts_state is not None:
++        payload["tts_state"] = tts_state
++
++    if phase == "paused" and previous_phase != "paused":
++        admin_cb("barge_in", **payload)
++        if _is_tts_active(tts_state):
++            admin_cb("tts_pause", **payload)
++    elif phase == "assistant_speaking" and previous_phase == "paused":
++        admin_cb("barge_resume", **payload)
++        if _is_tts_active(tts_state):
++            admin_cb("tts_resume", **payload)
++    elif phase == "ready" and previous_phase == "paused":
++        admin_cb("barge_commit", **payload)
++        if _is_tts_active(tts_state):
++            admin_cb("tts_cancel", **payload)
++
++
+ ACTIVE_WS: dict[str, dict[str, Any]] = {}
+ ACTIVE_WS_LOCK = asyncio.Lock()
+ 
+ WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
+ 
+ _SETTINGS = load_settings()
+ _ADVANCED_LOGGING_ENABLED = bool(
+     getattr(_SETTINGS, "advanced_logging_enabled", True)
+ )
+ try:
+     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
+ except Exception:
+     pass
+ 
+ # ------------------------------ small helpers ------------------------------
+ 
+ 
+ def _client_ip_from_scope(scope) -> str:
+     try:
+         c = scope.get("client") or ()
+         if isinstance(c, (list, tuple)) and c:
+             return str(c[0])
+     except Exception:
+         pass
+     try:
+@@ -1035,59 +1125,67 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
+                     )
+                 except Exception:
+                     break
+         except asyncio.CancelledError:
+             pass
+ 
+     ping_task = asyncio.create_task(_ping_loop())
+ 
+     try:
+         await _ws_send_json(send, {"type": "ready", "session_id": sid})
+     except Exception:
+         with contextlib.suppress(Exception):
+             await send(
+                 {
+                     "type": "websocket.close",
+                     "code": 1011,
+                     "reason": "initial_ready_failed",
+                 }
+             )
+         return
+ 
+     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
+     loop = asyncio.get_running_loop()
+     barge = BargeState()
++    last_barge_phase = [None]
+ 
+     def _send_barge_state(phase: str) -> None:
+         if not phase:
+             return
+         frame = {"type": "state", "phase": phase}
+         try:
+             bus.broadcast(sid, frame)
+         except Exception:
+             pass
++
++        try:
++            prev = last_barge_phase[0]
++            _emit_barge_admin_events(sid, phase, prev)
++            last_barge_phase[0] = phase
++        except Exception:
++            pass
+         try:
+             if loop.is_closed():
+                 return
+             payload = dict(frame)
+             try:
+                 running = asyncio.get_running_loop()
+             except RuntimeError:
+                 running = None
+             if running is loop:
+                 asyncio.create_task(_ws_send_json(send, payload))
+             else:
+                 loop.call_soon_threadsafe(
+                     asyncio.create_task, _ws_send_json(send, payload)
+                 )
+         except Exception:
+             pass
+ 
+     buf = TurnBuffer()
+     dg: Optional[DeepgramClient] = None
+     rx_task: Optional[asyncio.Task] = None
+     dg_connect_task: Optional[asyncio.Task] = None
+     dg_state: str = "closed"
+     turn_id_ref = [0]
+     pending_final_turns: Deque[int] = deque()
+     completed_llm_turns: Set[int] = set()
+diff --git a/tests/phase3/test_barge_admin_events.py b/tests/phase3/test_barge_admin_events.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a5caadcc23f1d14e9905dd95650664894b828337
+--- /dev/null
++++ b/tests/phase3/test_barge_admin_events.py
+@@ -0,0 +1,68 @@
++from app.ws.barge import BargeState
++from app.ws import ws_asgi
++from app.ws.bus import bus
++from app.db import db
++
++
++def _capture_admin_events(monkeypatch):
++    events = []
++
++    def _emit(name, **payload):
++        events.append((name, payload))
++
++    monkeypatch.setattr(ws_asgi, "_admin_emit", _emit)
++    return events
++
++
++def test_barge_admin_pause_resume_cancel(monkeypatch):
++    sid = "test-barge-admin"
++    events = _capture_admin_events(monkeypatch)
++
++    tts_tbl = db.memory.setdefault("tts_status", {})
++    tts_tbl[sid] = {
++        "turn-1": {
++            "started": True,
++            "first_chunk": True,
++            "done": False,
++            "error": None,
++        }
++    }
++
++    bus.note_assistant_turn(sid, "turn-1")
++
++    last_phase = [None]
++
++    def capture(phase: str) -> None:
++        ws_asgi._emit_barge_admin_events(sid, phase, last_phase[0])
++        last_phase[0] = phase
++
++    barge = BargeState()
++
++    try:
++        assert barge.start(confirm_ms=50, on_commit=lambda: None, send_state=capture)
++        barge.cancel(capture)
++
++        assert barge.start(confirm_ms=50, on_commit=lambda: None, send_state=capture)
++        barge.commit(capture)
++    finally:
++        bus.note_assistant_turn(sid, None)
++        tts_tbl.pop(sid, None)
++
++    event_names = [name for name, _ in events]
++
++    assert event_names == [
++        "barge_in",
++        "tts_pause",
++        "barge_resume",
++        "tts_resume",
++        "barge_in",
++        "tts_pause",
++        "barge_commit",
++        "tts_cancel",
 +    ]
 +
-+    assert ack_events, f"expected CloseStream ack admin event, saw {admin_events}"
-+    ack_payload = ack_events[0]
-+    assert ack_payload.get("status") == "ok"
-+    assert ack_payload.get("session_id") == "default"
++    for name, payload in events:
++        assert payload.get("session_id") == sid
++        assert payload.get("phase") in {"paused", "assistant_speaking", "ready"}
++        if name.startswith("tts_"):
++            assert payload.get("tts_state")

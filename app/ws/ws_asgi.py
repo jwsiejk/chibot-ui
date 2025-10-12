@@ -40,6 +40,96 @@ except Exception:
     _admin_emit = None
 
 
+def _current_assistant_turn_id(sid: str) -> Optional[str]:
+    try:
+        turn = bus.current_assistant_turn(sid)
+    except Exception:
+        return None
+    if turn is None:
+        return None
+    try:
+        return str(turn)
+    except Exception:
+        return None
+
+
+def _lookup_tts_state(sid: str, turn_id: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    try:
+        tts_tbl = db.memory.get("tts_status") or {}
+        session_tbl = tts_tbl.get(sid) or {}
+    except Exception:
+        return None, None
+
+    keys_to_try = []
+    if turn_id:
+        keys_to_try.append(str(turn_id))
+    else:
+        keys_to_try.append("greet")
+
+    # Fallback: consider any active (not done) entry
+    for key, value in session_tbl.items():
+        if key not in keys_to_try and isinstance(value, dict):
+            if not value.get("done") and (value.get("started") or value.get("first_chunk")):
+                keys_to_try.append(key)
+
+    for key in keys_to_try:
+        state = session_tbl.get(key)
+        if isinstance(state, dict):
+            return dict(state), key
+
+    return None, None
+
+
+def _is_tts_active(state: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(state, dict):
+        return False
+    if state.get("error"):
+        return False
+    if state.get("done"):
+        return False
+    return bool(state.get("started") or state.get("first_chunk"))
+
+
+def _emit_barge_admin_events(sid: str,
+                              phase: Optional[str],
+                              previous_phase: Optional[str]) -> None:
+    if not phase:
+        return
+    admin_cb = globals().get("_admin_emit")
+    if not callable(admin_cb):
+        return
+
+    turn_id = _current_assistant_turn_id(sid)
+    tts_state, tts_key = _lookup_tts_state(sid, turn_id)
+
+    payload: Dict[str, Any] = {
+        "session_id": sid,
+        "sid": sid,
+        "phase": phase,
+    }
+    if turn_id is not None:
+        payload["turn_id"] = turn_id
+    if previous_phase:
+        payload["previous_phase"] = previous_phase
+    if tts_key:
+        payload["tts_turn_key"] = tts_key
+    if tts_state is not None:
+        payload["tts_state"] = tts_state
+
+    if phase == "paused" and previous_phase != "paused":
+        admin_cb("barge_in", **payload)
+        if _is_tts_active(tts_state):
+            admin_cb("tts_pause", **payload)
+    elif phase == "assistant_speaking" and previous_phase == "paused":
+        admin_cb("barge_resume", **payload)
+        if _is_tts_active(tts_state):
+            admin_cb("tts_resume", **payload)
+    elif phase == "ready" and previous_phase == "paused":
+        admin_cb("barge_commit", **payload)
+        if _is_tts_active(tts_state):
+            admin_cb("tts_cancel", **payload)
+
+
 ACTIVE_WS: dict[str, dict[str, Any]] = {}
 ACTIVE_WS_LOCK = asyncio.Lock()
 
@@ -1057,6 +1147,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
     loop = asyncio.get_running_loop()
     barge = BargeState()
+    last_barge_phase = [None]
 
     def _send_barge_state(phase: str) -> None:
         if not phase:
@@ -1064,6 +1155,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         frame = {"type": "state", "phase": phase}
         try:
             bus.broadcast(sid, frame)
+        except Exception:
+            pass
+
+        try:
+            prev = last_barge_phase[0]
+            _emit_barge_admin_events(sid, phase, prev)
+            last_barge_phase[0] = phase
         except Exception:
             pass
         try:
