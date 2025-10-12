@@ -1119,7 +1119,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             min_tokens=confirm_min_tokens,
             min_confidence=confirm_min_conf,
             snr_threshold_db=confirm_snr_db,
-            snr_enabled=true bool(transport.get("containerized_opus")),
+            snr_enabled=True,
         )
         window.start(now_ts)
         confirm_window_ref[0] = window
