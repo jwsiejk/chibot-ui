@@ -8,9 +8,22 @@
 
 import { ChunkedAudioPlayer } from './audio_player.js';
 
+const DEFAULT_SIGNATURE = Object.freeze({ rms: 0, rmsDb: -Infinity, mfcc: [], timestamp: 0 });
+
 let _player = null;
 let _el = null;
 let _lastTtsState = 'ended';
+
+const _analysis = {
+  ctx: null,
+  source: null,
+  analyser: null,
+  raf: null,
+  timeBuf: null,
+  freqBuf: null,
+  signature: { ...DEFAULT_SIGNATURE },
+  mfccConfig: null,
+};
 
 const TTS_IDLE_VOLUME = 1.0;
 const TTS_ATTENUATED_VOLUME = 0.5; // ~6 dB reduction to limit mic bleed
@@ -54,10 +67,12 @@ function ensureEl() {
     const onEnd = () => {
       _el.volume = TTS_IDLE_VOLUME;
       _emitTtsState('ended');
+      _analysis.signature = { ...DEFAULT_SIGNATURE };
     };
     _el.addEventListener('pause', onEnd);
     _el.addEventListener('ended', onEnd);
   } catch {}
+  try { _ensureSignatureTracker(); } catch {}
   return _el;
 }
 
@@ -69,9 +84,223 @@ function ensurePlayer(mime) {
   return _player;
 }
 
+function _ensureSignatureTracker() {
+  if (!_el) return;
+  if (_analysis.ctx && _analysis.analyser) return;
+
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+
+  try {
+    const ctx = new AC();
+    if (ctx.state === 'suspended') {
+      try { ctx.resume(); } catch {}
+    }
+
+    let source = null;
+    try {
+      if (typeof _el.captureStream === 'function') {
+        const stream = _el.captureStream();
+        if (stream) {
+          source = ctx.createMediaStreamSource(stream);
+        }
+      }
+    } catch {}
+
+    if (!source) {
+      try {
+        source = ctx.createMediaElementSource(_el);
+        const passthrough = ctx.createGain();
+        passthrough.gain.value = 1;
+        source.connect(passthrough).connect(ctx.destination);
+      } catch (err) {
+        console.warn('[audio] failed to create analysis source', err);
+        try { ctx.close(); } catch {}
+        return;
+      }
+    }
+
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0;
+    source.connect(analyser);
+
+    _analysis.ctx = ctx;
+    _analysis.source = source;
+    _analysis.analyser = analyser;
+    _analysis.timeBuf = new Float32Array(analyser.fftSize);
+    _analysis.freqBuf = new Float32Array(analyser.frequencyBinCount);
+    _analysis.signature = { ...DEFAULT_SIGNATURE };
+
+    _scheduleSignatureUpdate();
+  } catch (e) {
+    console.warn('[audio] unable to initialize playback analysis', e);
+  }
+}
+
+function _teardownSignatureTracker() {
+  if (_analysis.raf) {
+    const cancel = window.cancelAnimationFrame
+      || window.webkitCancelAnimationFrame
+      || window.mozCancelAnimationFrame
+      || ((id) => clearTimeout(id));
+    try { cancel(_analysis.raf); } catch {}
+    _analysis.raf = null;
+  }
+
+  try { _analysis.source && _analysis.source.disconnect(); } catch {}
+  try { _analysis.analyser && _analysis.analyser.disconnect(); } catch {}
+  try { _analysis.ctx && _analysis.ctx.close && _analysis.ctx.close(); } catch {}
+
+  _analysis.ctx = null;
+  _analysis.source = null;
+  _analysis.analyser = null;
+  _analysis.timeBuf = null;
+  _analysis.freqBuf = null;
+  _analysis.mfccConfig = null;
+  _analysis.signature = { ...DEFAULT_SIGNATURE };
+}
+
+function _scheduleSignatureUpdate() {
+  const raf = window.requestAnimationFrame
+    || window.webkitRequestAnimationFrame
+    || window.mozRequestAnimationFrame
+    || ((cb) => setTimeout(() => cb(Date.now()), 33));
+  if (typeof raf !== 'function') return;
+
+  const tick = () => {
+    try { _updateSignature(); } catch {}
+    _analysis.raf = raf(tick);
+  };
+
+  if (_analysis.raf) {
+    return;
+  }
+  _analysis.raf = raf(tick);
+}
+
+function _hzToMel(hz) {
+  return 2595 * Math.log10(1 + hz / 700);
+}
+
+function _melToHz(mel) {
+  return 700 * (Math.pow(10, mel / 2595) - 1);
+}
+
+function _ensureMfccConfig(sampleRate, fftSize) {
+  if (_analysis.mfccConfig && _analysis.mfccConfig.sampleRate === sampleRate && _analysis.mfccConfig.fftSize === fftSize) {
+    return _analysis.mfccConfig;
+  }
+
+  const filterCount = 20;
+  const mfccCount = 13;
+  const minMel = _hzToMel(20);
+  const maxMel = _hzToMel(sampleRate / 2);
+  const melStep = (maxMel - minMel) / (filterCount + 1);
+  const filters = [];
+  for (let i = 0; i < filterCount; i++) {
+    const melStart = minMel + melStep * i;
+    const melCenter = minMel + melStep * (i + 1);
+    const melEnd = minMel + melStep * (i + 2);
+    const start = Math.floor((_melToHz(melStart) / sampleRate) * fftSize);
+    const center = Math.floor((_melToHz(melCenter) / sampleRate) * fftSize);
+    const end = Math.floor((_melToHz(melEnd) / sampleRate) * fftSize);
+    filters.push({ start: Math.max(1, start), center: Math.max(1, center), end: Math.max(1, end) });
+  }
+
+  _analysis.mfccConfig = { sampleRate, fftSize, filterCount, mfccCount, filters };
+  return _analysis.mfccConfig;
+}
+
+function _computeMfcc(freqBuf, sampleRate, fftSize) {
+  if (!freqBuf) return [];
+  const cfg = _ensureMfccConfig(sampleRate, fftSize);
+  const energies = new Array(cfg.filterCount).fill(0);
+
+  for (let i = 0; i < cfg.filterCount; i++) {
+    const { start, center, end } = cfg.filters[i];
+    let energy = 0;
+    for (let bin = start; bin < end && bin < freqBuf.length; bin++) {
+      const leftWidth = Math.max(center - start, 1);
+      const rightWidth = Math.max(end - center, 1);
+      let weight;
+      if (bin <= center) {
+        weight = (bin - start) / leftWidth;
+      } else {
+        weight = (end - bin) / rightWidth;
+      }
+      weight = Math.max(0, Math.min(1, weight));
+      const magnitude = Math.pow(10, freqBuf[bin] / 20);
+      const power = magnitude * magnitude;
+      energy += power * weight;
+    }
+    energies[i] = Math.log(Math.max(1e-12, energy));
+  }
+
+  const coeffs = [];
+  for (let k = 0; k < cfg.mfccCount; k++) {
+    let sum = 0;
+    for (let n = 0; n < energies.length; n++) {
+      sum += energies[n] * Math.cos(Math.PI * k * (n + 0.5) / energies.length);
+    }
+    const scale = k === 0 ? Math.sqrt(1 / energies.length) : Math.sqrt(2 / energies.length);
+    coeffs.push(sum * scale);
+  }
+  return coeffs;
+}
+
+function _updateSignature() {
+  if (!_analysis.analyser || !_analysis.timeBuf) {
+    _analysis.signature = { ...DEFAULT_SIGNATURE };
+    return;
+  }
+
+  try {
+    const analyser = _analysis.analyser;
+    const timeBuf = _analysis.timeBuf;
+    const freqBuf = _analysis.freqBuf;
+    analyser.getFloatTimeDomainData(timeBuf);
+
+    let sum = 0;
+    for (let i = 0; i < timeBuf.length; i++) {
+      const v = timeBuf[i];
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / timeBuf.length);
+    const rmsDb = 20 * Math.log10(Math.max(1e-8, rms));
+
+    if (freqBuf) {
+      analyser.getFloatFrequencyData(freqBuf);
+    }
+
+    const sampleRate = _analysis.ctx?.sampleRate || 48000;
+    const mfcc = freqBuf ? _computeMfcc(freqBuf, sampleRate, analyser.fftSize) : [];
+
+    _analysis.signature = {
+      rms,
+      rmsDb,
+      mfcc,
+      timestamp: (typeof performance !== 'undefined' && performance?.now) ? performance.now() : Date.now(),
+    };
+  } catch {
+    _analysis.signature = { ...DEFAULT_SIGNATURE };
+  }
+}
+
+export function getPlaybackSignature() {
+  const sig = _analysis.signature || DEFAULT_SIGNATURE;
+  return {
+    rms: sig.rms ?? 0,
+    rmsDb: Number.isFinite(sig.rmsDb) ? sig.rmsDb : DEFAULT_SIGNATURE.rmsDb,
+    mfcc: Array.isArray(sig.mfcc) ? sig.mfcc.slice() : [],
+    timestamp: sig.timestamp ?? 0,
+  };
+}
+
 // Accepts WS frame ({mime, audio_chunks, is_last}) OR legacy (chunks, mime?)
 export function playStream(frameOrChunks, maybeMime) {
   try {
+    _ensureSignatureTracker();
     // --- New frame shape ----------------------------------------------------
     if (frameOrChunks && typeof frameOrChunks === 'object' && !Array.isArray(frameOrChunks)) {
       const frame = frameOrChunks;
@@ -110,6 +339,7 @@ export function audioEnd() {
 
 export function audioTeardown() {
   try { _player?.teardown(); } catch {}
+  try { _teardownSignatureTracker(); } catch {}
 }
 
 export function stopPlayback() {

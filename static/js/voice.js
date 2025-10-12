@@ -19,7 +19,7 @@ Citations for context (non-functional):
 
 import { VAD } from './voice/vad.js';
 import { sendAudioChunk, sendCloseStream } from './ws_module.js';
-import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
+import { stopPlayback, isPlaying as ttsIsPlaying, getPlaybackSignature } from './audio.js';
 import { logIfEnabled } from './util/logging.js';
 
 // Public API (matches prior usage)
@@ -59,6 +59,8 @@ const state = {
   recStartedAt: 0,
   pendingEndTimer: null,
 };
+
+let _overrideEchoSignatureFn = null;
 
 // ---- Helpers ----------------------------------------------------------------
 
@@ -268,6 +270,11 @@ async function _arm(stream = null, opts = {}) {
     stopFallback
   );
 
+  const echoSuppressDb = _resolveNumber(
+    cfg.ECHO_SUPPRESS_DB ?? cfg.echoSuppressDb,
+    15
+  );
+
   const vadOpts = {
     // Tunables (admin-configurable via opts or window.__askchip_config.vad)
     minSpeechMs: _resolveNumber(cfg.minSpeechMs, 360),
@@ -277,6 +284,13 @@ async function _arm(stream = null, opts = {}) {
     stopDbOffset: exitThresholdDb !== null ? exitThresholdDb : 6,
     echoBoostStartDb,
     echoBoostStopDb,
+    echoSuppressDb,
+    echoSignatureFn: () => {
+      if (typeof _overrideEchoSignatureFn === 'function') {
+        try { return _overrideEchoSignatureFn(); } catch { return null; }
+      }
+      try { return getPlaybackSignature?.(); } catch { return null; }
+    },
     echoStateFn: () => {
       // treat "TTS is playing" as echo present
       try { return !!ttsIsPlaying(); } catch { return false; }
@@ -313,6 +327,10 @@ async function _arm(stream = null, opts = {}) {
     {
       onSpeechStart: _onSpeechStartCommitted,
       onSpeechEnd: _onSpeechEndCommitted,
+      onSuppressed: (detail) => {
+        const payload = Object.assign({ reason: 'echo' }, detail || {});
+        _logLifecycle('vad_echo_suppressed', payload);
+      },
     }
   );
 
@@ -510,4 +528,7 @@ export const __TEST_ONLY__ = {
   startRecorder: _startRecorder,
   stopRecorder: _stopRecorder,
   logLifecycle: _logLifecycle,
+  setEchoSignatureOverride(fn) {
+    _overrideEchoSignatureFn = typeof fn === 'function' ? fn : null;
+  },
 };

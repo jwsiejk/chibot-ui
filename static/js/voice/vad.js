@@ -13,6 +13,8 @@ const CLAMP_MAX_DB = -10;
 const rmsToDb = (rms) => 20 * Math.log10(Math.max(EPSILON, rms));
 const dbToRms = (db) => Math.pow(10, db / 20);
 const clampDb = (db) => Math.min(CLAMP_MAX_DB, Math.max(CLAMP_MIN_DB, db));
+const DEFAULT_SUPPRESS_DB = 15;
+const DEFAULT_SIGNATURE_MAX_AGE_MS = 350;
 
 /** @typedef {{
  *   minSpeechMs?: number,
@@ -98,6 +100,7 @@ export class VAD {
     this._lastNoiseUpdate = 0;
     this._legacyStartDb = Number.isFinite(this.opts.startRms) ? rmsToDb(this.opts.startRms) : null;
     this._legacyStopDb = Number.isFinite(this.opts.stopRms) ? rmsToDb(this.opts.stopRms) : null;
+    this._suppressingEcho = false;
   }
 
   _rms() {
@@ -189,96 +192,11 @@ export class VAD {
     this._speechStartedAt = 0;
     this._activeDetail = null;
     this._activeNoiseFloorDb = null;
+    this._suppressingEcho = false;
 
     const pollMs = Number.isFinite(this.opts.pollMs) ? this.opts.pollMs : 33;
 
-    this._timer = setInterval(() => {
-      const rms = this._rms();
-      const rmsDb = rmsToDb(rms);
-      const now = (typeof performance !== 'undefined' && performance?.now)
-        ? performance.now()
-        : Date.now();
-      const inCooldown = now < this._cooldownUntil;
-      const echo = this.opts.echoStateFn ? !!this.opts.echoStateFn() : false;
-
-      const noiseFloorDb = Number.isFinite(this._noiseFloorDb) ? this._noiseFloorDb : rmsDb;
-      const { startDb, stopDb, baseStartDb } = this._computeThresholds(noiseFloorDb, echo);
-      const startR = dbToRms(startDb);
-      const stopR = dbToRms(stopDb);
-
-      if (!this._recording) {
-        this._updateNoiseFloor(rmsDb, now, baseStartDb);
-      }
-
-      if (!this._recording) {
-        if (inCooldown) {
-          this._aboveSince = 0;
-          return;
-        }
-        if (rms >= startR) {
-          if (!this._aboveSince) this._aboveSince = now;
-          if (now - this._aboveSince >= (this.opts.minSpeechMs ?? 0)) {
-            this._recording = true;
-            this._belowSince = 0;
-            this._speechStartedAt = now;
-            this._activeDetail = this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
-            this._activeNoiseFloorDb = noiseFloorDb;
-            try {
-              this.cbs.onSpeechStart && this.cbs.onSpeechStart({
-                ...this._activeDetail,
-                peakDb: this._activeDetail?.rmsDb,
-                speechDurationMs: 0,
-              });
-            } catch {}
-          }
-        } else {
-          this._aboveSince = 0;
-        }
-      } else {
-        if (Number.isFinite(rmsDb) && (!this._activeDetail || rmsDb > (this._activeDetail.rmsDb ?? -Infinity))) {
-          this._activeDetail = this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
-        }
-        if (Number.isFinite(noiseFloorDb)) {
-          if (!Number.isFinite(this._activeNoiseFloorDb)) {
-            this._activeNoiseFloorDb = noiseFloorDb;
-          } else {
-            this._activeNoiseFloorDb = Math.min(this._activeNoiseFloorDb, noiseFloorDb);
-          }
-        }
-
-        if (rms < stopR) {
-          if (!this._belowSince) this._belowSince = now;
-          if (now - this._belowSince >= (this.opts.minSilenceMs ?? 0)) {
-            this._recording = false;
-            this._aboveSince = 0;
-            this._cooldownUntil = now + Math.max(0, this.opts.cooldownMs || 0);
-
-            const duration = Math.max(0, now - (this._speechStartedAt || now));
-            const active = this._activeDetail || this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
-            const noiseRef = Number.isFinite(this._activeNoiseFloorDb) ? this._activeNoiseFloorDb : noiseFloorDb;
-            const peakDb = Number.isFinite(active?.rmsDb) ? active.rmsDb : rmsDb;
-            const snrDb = (Number.isFinite(peakDb) && Number.isFinite(noiseRef)) ? peakDb - noiseRef : active?.snrDb;
-            const detail = {
-              ...active,
-              noiseFloorDb: noiseRef,
-              snrDb,
-              peakDb,
-              speechDurationMs: duration,
-            };
-
-            try {
-              this.cbs.onSpeechEnd && this.cbs.onSpeechEnd(detail);
-            } catch {}
-
-            this._activeDetail = null;
-            this._activeNoiseFloorDb = null;
-            this._speechStartedAt = 0;
-          }
-        } else {
-          this._belowSince = 0;
-        }
-      }
-    }, pollMs);
+    this._timer = setInterval(() => this._pollFrame(), pollMs);
   }
 
   stop() {
@@ -290,8 +208,151 @@ export class VAD {
     this._speechStartedAt = 0;
     this._activeDetail = null;
     this._activeNoiseFloorDb = null;
+    this._suppressingEcho = false;
   }
 
   isRecording() { return this._recording; }
+
+  _shouldSuppressEcho(rmsDb, now) {
+    if (!Number.isFinite(rmsDb)) return false;
+    const fn = this.opts.echoSignatureFn;
+    if (typeof fn !== 'function') return false;
+    let signature;
+    try {
+      signature = fn();
+    } catch {
+      return false;
+    }
+    if (!signature || !Number.isFinite(signature.rmsDb)) return false;
+    const requiredGap = Number.isFinite(this.opts.echoSuppressDb)
+      ? this.opts.echoSuppressDb
+      : DEFAULT_SUPPRESS_DB;
+    const maxAge = Number.isFinite(this.opts.echoSignatureMaxAgeMs)
+      ? this.opts.echoSignatureMaxAgeMs
+      : DEFAULT_SIGNATURE_MAX_AGE_MS;
+    const signatureTs = Number.isFinite(signature.timestamp) ? signature.timestamp : null;
+    if (signatureTs !== null) {
+      const age = now - signatureTs;
+      if (Number.isFinite(age) && age > maxAge) {
+        this._suppressingEcho = false;
+        return false;
+      }
+    }
+    const gap = rmsDb - signature.rmsDb;
+    if (!Number.isFinite(gap) || gap < requiredGap) {
+      if (!this._suppressingEcho) {
+        this._suppressingEcho = true;
+        try {
+          this.cbs.onSuppressed && this.cbs.onSuppressed({
+            micRmsDb: rmsDb,
+            echoRmsDb: signature.rmsDb,
+            gapDb: gap,
+            requiredGapDb: requiredGap,
+            signatureTimestamp: signature.timestamp ?? null,
+            mfcc: Array.isArray(signature.mfcc) ? signature.mfcc.slice() : undefined,
+          });
+        } catch {}
+      }
+      return true;
+    }
+    this._suppressingEcho = false;
+    return false;
+  }
+
+  _pollFrame() {
+    const rms = this._rms();
+    const rmsDb = rmsToDb(rms);
+    const now = (typeof performance !== 'undefined' && performance?.now)
+      ? performance.now()
+      : Date.now();
+    const inCooldown = now < this._cooldownUntil;
+    const echo = this.opts.echoStateFn ? !!this.opts.echoStateFn() : false;
+
+    const noiseFloorDb = Number.isFinite(this._noiseFloorDb) ? this._noiseFloorDb : rmsDb;
+    const { startDb, stopDb, baseStartDb } = this._computeThresholds(noiseFloorDb, echo);
+    const startR = dbToRms(startDb);
+    const stopR = dbToRms(stopDb);
+
+    if (!this._recording) {
+      this._updateNoiseFloor(rmsDb, now, baseStartDb);
+    }
+
+    if (!this._recording) {
+      if (inCooldown) {
+        this._aboveSince = 0;
+        this._suppressingEcho = false;
+        return;
+      }
+      if (rms >= startR) {
+        if (this._shouldSuppressEcho(rmsDb, now)) {
+          this._aboveSince = 0;
+          return;
+        }
+        this._suppressingEcho = false;
+        if (!this._aboveSince) this._aboveSince = now;
+        if (now - this._aboveSince >= (this.opts.minSpeechMs ?? 0)) {
+          this._recording = true;
+          this._belowSince = 0;
+          this._speechStartedAt = now;
+          this._activeDetail = this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
+          this._activeNoiseFloorDb = noiseFloorDb;
+          try {
+            this.cbs.onSpeechStart && this.cbs.onSpeechStart({
+              ...this._activeDetail,
+              peakDb: this._activeDetail?.rmsDb,
+              speechDurationMs: 0,
+            });
+          } catch {}
+        }
+      } else {
+        this._aboveSince = 0;
+        this._suppressingEcho = false;
+      }
+    } else {
+      this._suppressingEcho = false;
+      if (Number.isFinite(rmsDb) && (!this._activeDetail || rmsDb > (this._activeDetail.rmsDb ?? -Infinity))) {
+        this._activeDetail = this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
+      }
+      if (Number.isFinite(noiseFloorDb)) {
+        if (!Number.isFinite(this._activeNoiseFloorDb)) {
+          this._activeNoiseFloorDb = noiseFloorDb;
+        } else {
+          this._activeNoiseFloorDb = Math.min(this._activeNoiseFloorDb, noiseFloorDb);
+        }
+      }
+
+      if (rms < stopR) {
+        if (!this._belowSince) this._belowSince = now;
+        if (now - this._belowSince >= (this.opts.minSilenceMs ?? 0)) {
+          this._recording = false;
+          this._aboveSince = 0;
+          this._cooldownUntil = now + Math.max(0, this.opts.cooldownMs || 0);
+
+          const duration = Math.max(0, now - (this._speechStartedAt || now));
+          const active = this._activeDetail || this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
+          const noiseRef = Number.isFinite(this._activeNoiseFloorDb) ? this._activeNoiseFloorDb : noiseFloorDb;
+          const peakDb = Number.isFinite(active?.rmsDb) ? active.rmsDb : rmsDb;
+          const snrDb = (Number.isFinite(peakDb) && Number.isFinite(noiseRef)) ? peakDb - noiseRef : active?.snrDb;
+          const detail = {
+            ...active,
+            noiseFloorDb: noiseRef,
+            snrDb,
+            peakDb,
+            speechDurationMs: duration,
+          };
+
+          try {
+            this.cbs.onSpeechEnd && this.cbs.onSpeechEnd(detail);
+          } catch {}
+
+          this._activeDetail = null;
+          this._activeNoiseFloorDb = null;
+          this._speechStartedAt = 0;
+        }
+      } else {
+        this._belowSince = 0;
+      }
+    }
+  }
 }
 

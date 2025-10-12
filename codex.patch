@@ -1,1491 +1,1485 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 3de8421f400d27edc12843a9dc749735f4567950..bee59db40ed61d8595ad31d789446c2914eb16c4 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -138,50 +138,59 @@ class _FakeWSForTests:
-     async def close(self):
-         self.open = False
+diff --git a/static/js/audio.js b/static/js/audio.js
+index 85f3bdc7f288789d96e3d4b8dd28a9cb02fb9b0e..02676297272c91dc5192070391251bd711f89101 100644
+--- a/static/js/audio.js
++++ b/static/js/audio.js
+@@ -1,137 +1,367 @@
+ // static/js/audio.js — unified playback (MSE chunked by MIME) + unlockAudio
+ // Backwards compatible:
+ //   • playStream(chunks, mime?)            // legacy
+ //   • playStream(frameObject)              // { mime, audio_chunks:[], is_last }
+ // New helpers:
+ //   • audioEnd() — mark natural end-of-utterance (drain then endOfStream)
+ //   • audioTeardown() — hard reset pipeline (optional)
  
-     def __aiter__(self):
-         # No incoming provider frames in test mode
-         async def _gen():
-             if False:
-                 yield None
+ import { ChunkedAudioPlayer } from './audio_player.js';
  
-         return _gen()
- 
- 
- # ------------------------- URL & Config Helpers -------------------------------
- 
- 
- def _clip_text(txt: str, limit: int = 120) -> str:
-     try:
-         txt = txt or ""
-         if len(txt) <= limit:
-             return txt
-         return txt[:limit] + "…"
-     except Exception:
-         return ""
- 
- 
-+def _safe_float(val):
-+    try:
-+        if val is None:
-+            return None
-+        return float(val)
-+    except (TypeError, ValueError):
-+        return None
++const DEFAULT_SIGNATURE = Object.freeze({ rms: 0, rmsDb: -Infinity, mfcc: [], timestamp: 0 });
 +
+ let _player = null;
+ let _el = null;
+ let _lastTtsState = 'ended';
+ 
++const _analysis = {
++  ctx: null,
++  source: null,
++  analyser: null,
++  raf: null,
++  timeBuf: null,
++  freqBuf: null,
++  signature: { ...DEFAULT_SIGNATURE },
++  mfccConfig: null,
++};
 +
- def _dg_url(overrides: Optional[dict] = None) -> str:
-     """Return the Deepgram listen URL with safe defaults.
+ const TTS_IDLE_VOLUME = 1.0;
+ const TTS_ATTENUATED_VOLUME = 0.5; // ~6 dB reduction to limit mic bleed
  
-     Audio transport parameters must be in the URL query for Deepgram's v1/listen.
-     For **containerized Opus** (OGG/WebM), we must NOT send encoding, sample_rate, or channels.
-     """
-     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
+ const DEFAULT_MIME = 'audio/webm; codecs="opus"';
  
-     # Detect containerized Opus from overrides (nested under _transport)
-     containerized = False
-     try:
-         if overrides and isinstance(overrides.get("_transport"), dict):
-             containerized = bool(overrides["_transport"].get("containerized_opus"))
-     except Exception:
-         containerized = False
+ function _emitTtsState(state) {
+   if (!state || state === _lastTtsState) return;
+   _lastTtsState = state;
+   try {
+     window.dispatchEvent(new CustomEvent('chip-tts', { detail: { state } }));
+   } catch {}
+ }
  
-     # Append conservative defaults ONLY when not containerized
-     if (not containerized) and ("encoding=" not in base):
-         sep = "&" if "?" in base else "?"
-         base = (
-             base
-             + sep
-             # RAW defaults; safe for legacy raw paths. If truly containerized, these will be stripped below.
-             + "encoding=opus&sample_rate=48000&channels=1"
-             + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true"
-@@ -1569,98 +1578,137 @@ class DeepgramClient:
-                         json.loads(raw)
-                         if isinstance(raw, (str, bytes, bytearray))
-                         else raw
-                     )
-                 except Exception:
-                     continue
+ export async function unlockAudio() {
+   try {
+     const AC = window.AudioContext || window.webkitAudioContext;
+     if (!AC) return;
+     const ctx = new AC();
+     if (ctx.state === 'suspended') await ctx.resume();
+     const o = ctx.createOscillator();
+     const g = ctx.createGain();
+     g.gain.value = 0.00001;
+     o.connect(g).connect(ctx.destination);
+     o.start();
+     o.stop(ctx.currentTime + 0.01);
+   } catch (_) {}
+ }
  
-                 evt_type = (msg.get("type") or "").lower()
+ function ensureEl() {
+   if (_el) return _el;
+   _el = new Audio();
+   _el.autoplay = true;
+   // _el.playsInline = true; // optional (mobile)
+   try {
+     _el.volume = TTS_IDLE_VOLUME;
+     _el.addEventListener('playing', () => {
+       _el.volume = TTS_ATTENUATED_VOLUME;
+       _emitTtsState('playing');
+     });
+     const onEnd = () => {
+       _el.volume = TTS_IDLE_VOLUME;
+       _emitTtsState('ended');
++      _analysis.signature = { ...DEFAULT_SIGNATURE };
+     };
+     _el.addEventListener('pause', onEnd);
+     _el.addEventListener('ended', onEnd);
+   } catch {}
++  try { _ensureSignatureTracker(); } catch {}
+   return _el;
+ }
  
-                 if evt_type in ("metadata", "listening", "connected", "ready"):
-                     await self._signal_ready()
-                     continue
+ function ensurePlayer(mime) {
+   ensureEl();
+   const m = mime || DEFAULT_MIME;
+   if (!_player) _player = new ChunkedAudioPlayer(_el, m);
+   _player.setMime(m);
+   return _player;
+ }
  
-                 if evt_type in (
-                     "results",
-                     "transcript",
-                     "partialtranscript",
-                     "speech.update",
-                 ):
-                     text = ""
-                     is_final = False
- 
-                     # Prefer channel.* first (typical DG shape)
-                     channel = msg.get("channel") or {}
-                     alts = channel.get("alternatives")
-+                    confidence = None
-+                    token_count = 0
-                     if isinstance(alts, list) and alts:
--                        text = (alts[0].get("transcript") or "").strip()
-+                        first_alt = alts[0]
-+                        text = (first_alt.get("transcript") or "").strip()
-+                        confidence = _safe_float(first_alt.get("confidence"))
-+                        words = first_alt.get("words")
-+                        if isinstance(words, list):
-+                            token_count = len(
-+                                [
-+                                    w
-+                                    for w in words
-+                                    if isinstance(w, dict)
-+                                    and (w.get("word") or "").strip()
-+                                ]
-+                            )
- 
-                     # Fallback: top-level alternatives (some messages)
-                     if not text:
-                         top_alts = msg.get("alternatives")
-                         if isinstance(top_alts, list) and top_alts:
--                            text = (top_alts[0].get("transcript") or "").strip()
-+                            first_alt = top_alts[0]
-+                            text = (first_alt.get("transcript") or "").strip()
-+                            if confidence is None:
-+                                confidence = _safe_float(first_alt.get("confidence"))
-+                            if not token_count:
-+                                words = first_alt.get("words")
-+                                if isinstance(words, list):
-+                                    token_count = len(
-+                                        [
-+                                            w
-+                                            for w in words
-+                                            if isinstance(w, dict)
-+                                            and (w.get("word") or "").strip()
-+                                        ]
-+                                    )
- 
-                     # Fallback: top-level transcript (some messages)
-                     if not text and isinstance(msg.get("transcript"), str):
-                         text = (msg.get("transcript") or "").strip()
- 
-+                    if confidence is None:
-+                        confidence = _safe_float(
-+                            channel.get("confidence") or msg.get("confidence")
-+                        )
++function _ensureSignatureTracker() {
++  if (!_el) return;
++  if (_analysis.ctx && _analysis.analyser) return;
 +
-+                    if not token_count and text:
-+                        token_count = len([tok for tok in text.split() if tok])
++  const AC = window.AudioContext || window.webkitAudioContext;
++  if (!AC) return;
 +
-                     # Finalness can be on channel or top-level, or implied by event type
-                     is_final = (
-                         bool(channel.get("is_final"))
-                         or bool(msg.get("is_final"))
-                         or bool(msg.get("speech_final"))
-                         or (evt_type in ("utteranceend", "UtteranceEnd"))
-                     )
- 
-                     # No usable text in this message; keep listening
-                     if not text:
-                         continue
- 
-                     # Seeing a result also implies the upstream is functioning
-                     await self._signal_ready()
- 
-                     self._logger.debug(
-                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
-                         sid,
-                         is_final,
-                         len(text),
-                         _clip_text(text),
-                     )
-                     self._emit_diag(
-                         "asr_final" if is_final else "asr_partial",
-                         text=text,
-                         chars=len(text),
-                         active=True,
-                     )
-                     try:
--                        await self._ev_queue.put(
--                            {
--                                "type": "user_final" if is_final else "user_partial",
--                                "text": text,
--                            }
--                        )
-+                        payload = {
-+                            "type": "user_final" if is_final else "user_partial",
-+                            "text": text,
-+                        }
-+                        if confidence is not None:
-+                            payload["confidence"] = confidence
-+                        if token_count:
-+                            payload["token_count"] = token_count
-+                        await self._ev_queue.put(payload)
-                     except Exception:
-                         pass
- 
-                     if is_final:
-                         self._any_result = True
-                         self._final_event.set()
-                         continue
- 
-                 elif evt_type in ("error", "close"):
-                     self._logger.warning(
-                         "Deepgram error event sid=%s evt_type=%s detail=%s",
-                         sid,
-                         evt_type,
-                         _clip_text(str(msg), 200),
-                     )
-                     self._emit_diag(
-                         "asr_error",
-                         error=msg.get("error") or evt_type,
-                         provider_error=True,
-                         detail=_clip_text(str(msg), 200),
-                     )
-                     try:
-                         await self._ev_queue.put(
-                             {"type": "asr_error", "error": msg.get("error") or evt_type}
-                         )
-diff --git a/app/ws/barge.py b/app/ws/barge.py
-index 45d63dbdab39211d1df41ebd777668868423345f..dec7b4c99acf3e45dd5907318d90823d02f08941 100644
---- a/app/ws/barge.py
-+++ b/app/ws/barge.py
-@@ -1,97 +1,113 @@
- import threading
-+import time
- 
- class BargeState:
-     def __init__(self):
-         self._lock = threading.Lock()
-         self._paused = False
-         self._timer = None
-         self._on_commit = None
-+        self._deadline = None
- 
-     def is_paused(self) -> bool:
-         with self._lock:
-             return self._paused
- 
--    def start(self, confirm_ms: int, on_commit, send_state) -> bool:
-+    def start(self, confirm_ms: int, on_commit, send_state, *, auto_commit: bool = True) -> bool:
-         """Enter paused state, schedule confirm; if still paused after confirm_ms, commit."""
-         with self._lock:
-             if self._paused:
-                 return False
-             self._paused = True
-             self._on_commit = on_commit
-+            if confirm_ms:
-+                self._deadline = time.monotonic() + max(0, confirm_ms) / 1000.0
-+            else:
-+                self._deadline = None
-         try:
-             send_state("paused")
-         except Exception:
-             pass
--        # schedule timer
--        t = threading.Timer(max(0, confirm_ms or 0)/1000.0, self._confirm_and_commit, [send_state])
--        t.daemon = True
--        with self._lock:
--            self._timer = t
--        t.start()
-+        if auto_commit:
-+            delay = max(0, confirm_ms or 0) / 1000.0
-+            t = threading.Timer(delay, self._confirm_and_commit, [send_state])
-+            t.daemon = True
-+            with self._lock:
-+                self._timer = t
-+            t.start()
-+        else:
-+            with self._lock:
-+                self._timer = None
-         return True
- 
-     def _confirm_and_commit(self, send_state):
-         with self._lock:
-             if not self._paused:
-                 return
-         self.commit(send_state)
- 
-     def cancel(self, send_state):
-         """Cancel barge-in; resume speaking."""
-         with self._lock:
-             self._paused = False
-             t = self._timer
-             self._timer = None
-+            self._deadline = None
-         try:
-             if t: t.cancel()
-         except Exception:
-             pass
-         try:
-             send_state("assistant_speaking")
-         except Exception:
-             pass
- 
-     def commit(self, send_state):
-         """Commit interrupt immediately; call on_commit, set ready."""
-         with self._lock:
-             on_commit = self._on_commit
--            self._on_commit = None            
-+            self._on_commit = None
-             self._paused = False
-             t = self._timer
-             self._timer = None
-+            self._deadline = None
-         try:
-             if t: t.cancel()
-         except Exception:
-             pass
-         wait_token = None            
-         if on_commit:
-             try:
-                 wait_token = on_commit()
-             except Exception:
-                 wait_token = None
- 
-         def _await_ready(token):
-             if token is None:
-                 return
-             if isinstance(token, (list, tuple, set)):
-                 for part in token:
-                     _await_ready(part)
-                 return
-             wait_fn = getattr(token, "wait", None)
-             if callable(wait_fn):
-                 try:
-                     wait_fn()
-                 except Exception:
-                     pass
-                 return
-             if callable(token):
-                 try:
-                     token()
-                 except Exception:
-                     pass
- 
-         _await_ready(wait_token)
-         try:
-             send_state("ready")
-         except Exception:
-             pass
++  try {
++    const ctx = new AC();
++    if (ctx.state === 'suspended') {
++      try { ctx.resume(); } catch {}
++    }
 +
-+    def confirm_deadline(self):
-+        with self._lock:
-+            return self._deadline
-diff --git a/app/ws/confirm_window.py b/app/ws/confirm_window.py
++    let source = null;
++    try {
++      if (typeof _el.captureStream === 'function') {
++        const stream = _el.captureStream();
++        if (stream) {
++          source = ctx.createMediaStreamSource(stream);
++        }
++      }
++    } catch {}
++
++    if (!source) {
++      try {
++        source = ctx.createMediaElementSource(_el);
++        const passthrough = ctx.createGain();
++        passthrough.gain.value = 1;
++        source.connect(passthrough).connect(ctx.destination);
++      } catch (err) {
++        console.warn('[audio] failed to create analysis source', err);
++        try { ctx.close(); } catch {}
++        return;
++      }
++    }
++
++    const analyser = ctx.createAnalyser();
++    analyser.fftSize = 2048;
++    analyser.smoothingTimeConstant = 0;
++    source.connect(analyser);
++
++    _analysis.ctx = ctx;
++    _analysis.source = source;
++    _analysis.analyser = analyser;
++    _analysis.timeBuf = new Float32Array(analyser.fftSize);
++    _analysis.freqBuf = new Float32Array(analyser.frequencyBinCount);
++    _analysis.signature = { ...DEFAULT_SIGNATURE };
++
++    _scheduleSignatureUpdate();
++  } catch (e) {
++    console.warn('[audio] unable to initialize playback analysis', e);
++  }
++}
++
++function _teardownSignatureTracker() {
++  if (_analysis.raf) {
++    const cancel = window.cancelAnimationFrame
++      || window.webkitCancelAnimationFrame
++      || window.mozCancelAnimationFrame
++      || ((id) => clearTimeout(id));
++    try { cancel(_analysis.raf); } catch {}
++    _analysis.raf = null;
++  }
++
++  try { _analysis.source && _analysis.source.disconnect(); } catch {}
++  try { _analysis.analyser && _analysis.analyser.disconnect(); } catch {}
++  try { _analysis.ctx && _analysis.ctx.close && _analysis.ctx.close(); } catch {}
++
++  _analysis.ctx = null;
++  _analysis.source = null;
++  _analysis.analyser = null;
++  _analysis.timeBuf = null;
++  _analysis.freqBuf = null;
++  _analysis.mfccConfig = null;
++  _analysis.signature = { ...DEFAULT_SIGNATURE };
++}
++
++function _scheduleSignatureUpdate() {
++  const raf = window.requestAnimationFrame
++    || window.webkitRequestAnimationFrame
++    || window.mozRequestAnimationFrame
++    || ((cb) => setTimeout(() => cb(Date.now()), 33));
++  if (typeof raf !== 'function') return;
++
++  const tick = () => {
++    try { _updateSignature(); } catch {}
++    _analysis.raf = raf(tick);
++  };
++
++  if (_analysis.raf) {
++    return;
++  }
++  _analysis.raf = raf(tick);
++}
++
++function _hzToMel(hz) {
++  return 2595 * Math.log10(1 + hz / 700);
++}
++
++function _melToHz(mel) {
++  return 700 * (Math.pow(10, mel / 2595) - 1);
++}
++
++function _ensureMfccConfig(sampleRate, fftSize) {
++  if (_analysis.mfccConfig && _analysis.mfccConfig.sampleRate === sampleRate && _analysis.mfccConfig.fftSize === fftSize) {
++    return _analysis.mfccConfig;
++  }
++
++  const filterCount = 20;
++  const mfccCount = 13;
++  const minMel = _hzToMel(20);
++  const maxMel = _hzToMel(sampleRate / 2);
++  const melStep = (maxMel - minMel) / (filterCount + 1);
++  const filters = [];
++  for (let i = 0; i < filterCount; i++) {
++    const melStart = minMel + melStep * i;
++    const melCenter = minMel + melStep * (i + 1);
++    const melEnd = minMel + melStep * (i + 2);
++    const start = Math.floor((_melToHz(melStart) / sampleRate) * fftSize);
++    const center = Math.floor((_melToHz(melCenter) / sampleRate) * fftSize);
++    const end = Math.floor((_melToHz(melEnd) / sampleRate) * fftSize);
++    filters.push({ start: Math.max(1, start), center: Math.max(1, center), end: Math.max(1, end) });
++  }
++
++  _analysis.mfccConfig = { sampleRate, fftSize, filterCount, mfccCount, filters };
++  return _analysis.mfccConfig;
++}
++
++function _computeMfcc(freqBuf, sampleRate, fftSize) {
++  if (!freqBuf) return [];
++  const cfg = _ensureMfccConfig(sampleRate, fftSize);
++  const energies = new Array(cfg.filterCount).fill(0);
++
++  for (let i = 0; i < cfg.filterCount; i++) {
++    const { start, center, end } = cfg.filters[i];
++    let energy = 0;
++    for (let bin = start; bin < end && bin < freqBuf.length; bin++) {
++      const leftWidth = Math.max(center - start, 1);
++      const rightWidth = Math.max(end - center, 1);
++      let weight;
++      if (bin <= center) {
++        weight = (bin - start) / leftWidth;
++      } else {
++        weight = (end - bin) / rightWidth;
++      }
++      weight = Math.max(0, Math.min(1, weight));
++      const magnitude = Math.pow(10, freqBuf[bin] / 20);
++      const power = magnitude * magnitude;
++      energy += power * weight;
++    }
++    energies[i] = Math.log(Math.max(1e-12, energy));
++  }
++
++  const coeffs = [];
++  for (let k = 0; k < cfg.mfccCount; k++) {
++    let sum = 0;
++    for (let n = 0; n < energies.length; n++) {
++      sum += energies[n] * Math.cos(Math.PI * k * (n + 0.5) / energies.length);
++    }
++    const scale = k === 0 ? Math.sqrt(1 / energies.length) : Math.sqrt(2 / energies.length);
++    coeffs.push(sum * scale);
++  }
++  return coeffs;
++}
++
++function _updateSignature() {
++  if (!_analysis.analyser || !_analysis.timeBuf) {
++    _analysis.signature = { ...DEFAULT_SIGNATURE };
++    return;
++  }
++
++  try {
++    const analyser = _analysis.analyser;
++    const timeBuf = _analysis.timeBuf;
++    const freqBuf = _analysis.freqBuf;
++    analyser.getFloatTimeDomainData(timeBuf);
++
++    let sum = 0;
++    for (let i = 0; i < timeBuf.length; i++) {
++      const v = timeBuf[i];
++      sum += v * v;
++    }
++    const rms = Math.sqrt(sum / timeBuf.length);
++    const rmsDb = 20 * Math.log10(Math.max(1e-8, rms));
++
++    if (freqBuf) {
++      analyser.getFloatFrequencyData(freqBuf);
++    }
++
++    const sampleRate = _analysis.ctx?.sampleRate || 48000;
++    const mfcc = freqBuf ? _computeMfcc(freqBuf, sampleRate, analyser.fftSize) : [];
++
++    _analysis.signature = {
++      rms,
++      rmsDb,
++      mfcc,
++      timestamp: (typeof performance !== 'undefined' && performance?.now) ? performance.now() : Date.now(),
++    };
++  } catch {
++    _analysis.signature = { ...DEFAULT_SIGNATURE };
++  }
++}
++
++export function getPlaybackSignature() {
++  const sig = _analysis.signature || DEFAULT_SIGNATURE;
++  return {
++    rms: sig.rms ?? 0,
++    rmsDb: Number.isFinite(sig.rmsDb) ? sig.rmsDb : DEFAULT_SIGNATURE.rmsDb,
++    mfcc: Array.isArray(sig.mfcc) ? sig.mfcc.slice() : [],
++    timestamp: sig.timestamp ?? 0,
++  };
++}
++
+ // Accepts WS frame ({mime, audio_chunks, is_last}) OR legacy (chunks, mime?)
+ export function playStream(frameOrChunks, maybeMime) {
+   try {
++    _ensureSignatureTracker();
+     // --- New frame shape ----------------------------------------------------
+     if (frameOrChunks && typeof frameOrChunks === 'object' && !Array.isArray(frameOrChunks)) {
+       const frame = frameOrChunks;
+       const mime = frame.mime || maybeMime || DEFAULT_MIME;
+       const p = ensurePlayer(mime);
+       const list = Array.isArray(frame.audio_chunks) ? frame.audio_chunks : [];
+       for (const c of list) {
+         if (!c) continue;
+         if (typeof c === 'string') p.appendBase64(c);
+         else if (c instanceof Uint8Array) p.appendBytes(c);
+         else if (Array.isArray(c)) p.appendBytes(new Uint8Array(c));
+       }
+       if (frame.is_last) p.end();
+       return;
+     }
+ 
+     // --- Legacy call signature ----------------------------------------------
+     const list = Array.isArray(frameOrChunks) ? frameOrChunks : [frameOrChunks];
+     if (!list.length) return;
+     const mime = maybeMime || DEFAULT_MIME;
+     const p = ensurePlayer(mime);
+     for (const c of list) {
+       if (!c) continue;
+       if (typeof c === 'string') p.appendBase64(c);
+       else if (c instanceof Uint8Array) p.appendBytes(c);
+       else if (Array.isArray(c)) p.appendBytes(new Uint8Array(c));
+     }
+   } catch (e) {
+     console.warn('[audio] playStream error', e);
+   }
+ }
+ 
+ export function audioEnd() {
+   try { _player?.end(); } catch {}
+ }
+ 
+ export function audioTeardown() {
+   try { _player?.teardown(); } catch {}
++  try { _teardownSignatureTracker(); } catch {}
+ }
+ 
+ export function stopPlayback() {
+   try { _player?.stop(); } catch {}
+   try { ensureEl().pause(); } catch {}
+   try { ensureEl().volume = TTS_IDLE_VOLUME; } catch {}
+   _emitTtsState('ended');
+ }
+ 
+ export function isPlaying() {
+   try { return !!(_el && !_el.paused); } catch { return false; }
+ }
+ 
+ export function pausePlayback() {
+   try {
+     const el = ensureEl();
+     if (!el.paused) {
+       el.pause();
+       el.volume = TTS_IDLE_VOLUME;
+       _emitTtsState('ended');
+     }
+   } catch {}
+ }
+ 
+ export function resumePlayback() {
+diff --git a/static/js/voice.js b/static/js/voice.js
+index f3ae1bf57ce6eed430f69c2039dada88960a823c..a0e3799d49f44212f6b0b78552e0a20d4708c765 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -1,87 +1,89 @@
+ /*
+ Citations for context (non-functional):
+ :contentReference[oaicite:0]{index=0}
+ :contentReference[oaicite:1]{index=1}
+ */
+ 
+ /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
+    Goals satisfied:
+     • Echo-aware VAD (threshold boost while TTS is playing)
+     • Streaming Opus blobs per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
+     • Soft barge-in: pause Chip TTS on committed speech start
+     • Turn timeout (safety), robust errors, clean session end
+     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
+ 
+    Notes:
+     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
+     • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
+ */
+ 
+ import { VAD } from './voice/vad.js';
+ import { sendAudioChunk, sendCloseStream } from './ws_module.js';
+-import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
++import { stopPlayback, isPlaying as ttsIsPlaying, getPlaybackSignature } from './audio.js';
+ import { logIfEnabled } from './util/logging.js';
+ 
+ // Public API (matches prior usage)
+ export async function initMic(stream = null) { return await _ensureMic(stream); }
+ export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
+ export function disarmVAD() { _disarm(); }
+ export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
+ export function bargeIn() { _bargeIn(); }         // keeps API parity
+ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+ 
+ // ---- Internal state ---------------------------------------------------------
+ 
+ // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   && typeof MediaRecorder.isTypeSupported === 'function'
+   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
+   ? 'audio/ogg; codecs=opus'
+   : 'audio/webm; codecs=opus';
+ 
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+ 
+ const state = {
+   stream: null,
+   ctx: null,
+   source: null,
+   analyser: null,
+   vad: null,
+   rec: null,
+   chunkSendPromise: Promise.resolve(),
+   chunkBytesSent: 0,
+   chunkSendError: null,
+   turnTimer: null,
+   turnOpen: false,   // track whether a turn is currently open server-side
+   deviceLogged: false,
+   // NEW: min-turn gating
+   recStartedAt: 0,
+   pendingEndTimer: null,
+ };
+ 
++let _overrideEchoSignatureFn = null;
++
+ // ---- Helpers ----------------------------------------------------------------
+ 
+ function _emitVoiceState(state, detail = {}) {
+   try {
+     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
+   } catch {}
+ }
+ 
+ function _console(level, ...args) {
+   logIfEnabled(() => {
+     try {
+       const method = (typeof console?.[level] === 'function') ? console[level] : console.log;
+       method?.apply(console, args);
+     } catch {}
+   });
+ }
+ 
+ function _logLifecycle(event, detail = {}, level = 'debug') {
+   const payload = { event, ...(detail && typeof detail === 'object' ? detail : { detail }) };
+   _console(level, '[voice]', event, payload);
+   try {
+     window.dispatchEvent(new CustomEvent('askchip-voice-lifecycle', { detail: payload }));
+   } catch {}
+ }
+ 
+@@ -246,95 +248,111 @@ async function _arm(stream = null, opts = {}) {
+   _teardownVADOnly();
+ 
+   // Merge runtime globals so admins can tune without rebuilds:
+   let globalVad = {};
+   try { globalVad = (window.__askchip_config && window.__askchip_config.vad) || {}; } catch {}
+   const cfg = { ...globalVad, ...opts };
+ 
+   const pollMs = _resolveNumber(cfg.pollMs, 33);
+   const baseThresholdDb = _toFiniteNumber(cfg.baseThresholdDb ?? cfg.startDbOffset);
+   const exitThresholdDb = _toFiniteNumber(cfg.exitThresholdDb ?? cfg.stopDbOffset);
+   const ttsBoostDb = _toFiniteNumber(cfg.ttsBoostDb);
+   const echoBoostStartDb = _resolveNumber(
+     cfg.echoBoostStartDb ?? cfg.echoBoostStart ?? ttsBoostDb,
+     8
+   );
+   const hasExplicitStartBoost = cfg.echoBoostStartDb !== undefined || cfg.echoBoostStart !== undefined;
+   let stopFallback = 6;
+   if (ttsBoostDb !== null || hasExplicitStartBoost) {
+     stopFallback = echoBoostStartDb;
+   }
+   const echoBoostStopDb = _resolveNumber(
+     cfg.echoBoostStopDb ?? cfg.echoBoostStop ?? (ttsBoostDb !== null ? ttsBoostDb : null),
+     stopFallback
+   );
+ 
++  const echoSuppressDb = _resolveNumber(
++    cfg.ECHO_SUPPRESS_DB ?? cfg.echoSuppressDb,
++    15
++  );
++
+   const vadOpts = {
+     // Tunables (admin-configurable via opts or window.__askchip_config.vad)
+     minSpeechMs: _resolveNumber(cfg.minSpeechMs, 360),
+     minSilenceMs: _resolveNumber(cfg.minSilenceMs, 900),
+     pollMs,
+     startDbOffset: baseThresholdDb !== null ? baseThresholdDb : 10,
+     stopDbOffset: exitThresholdDb !== null ? exitThresholdDb : 6,
+     echoBoostStartDb,
+     echoBoostStopDb,
++    echoSuppressDb,
++    echoSignatureFn: () => {
++      if (typeof _overrideEchoSignatureFn === 'function') {
++        try { return _overrideEchoSignatureFn(); } catch { return null; }
++      }
++      try { return getPlaybackSignature?.(); } catch { return null; }
++    },
+     echoStateFn: () => {
+       // treat "TTS is playing" as echo present
+       try { return !!ttsIsPlaying(); } catch { return false; }
+     }
+   };
+ 
+   const startRms = _toFiniteNumber(cfg.startRms);
+   if (startRms !== null) vadOpts.startRms = startRms;
+   const stopRms = _toFiniteNumber(cfg.stopRms);
+   if (stopRms !== null) vadOpts.stopRms = stopRms;
+ 
+   const passthroughKeys = [
+     'cooldownMs',
+     'minStartDb',
+     'minStopDb',
+     'noiseFloorAlpha',
+     'noiseFloorRiseAlpha',
+     'noiseFloorGuardDb',
+     'noiseFloorHangMs',
+     'initialNoiseFloorDb',
+   ];
+   for (const key of passthroughKeys) {
+     if (key in cfg) {
+       const value = _toFiniteNumber(cfg[key]);
+       if (value !== null) {
+         vadOpts[key] = value;
+       }
+     }
+   }
+ 
+   const vad = new VAD(
+     state.analyser,
+     vadOpts,
+     {
+       onSpeechStart: _onSpeechStartCommitted,
+       onSpeechEnd: _onSpeechEndCommitted,
++      onSuppressed: (detail) => {
++        const payload = Object.assign({ reason: 'echo' }, detail || {});
++        _logLifecycle('vad_echo_suppressed', payload);
++      },
+     }
+   );
+ 
+   state.vad = vad;
+   state.vad.start();
+   _logLifecycle('mic_start', {
+     sampleRate: state.ctx?.sampleRate,
+     pollMs,
+   });
+   _emitVoiceState('armed');
+ 
+   return mic;
+ }
+ 
+ // ---- Recorder lifecycle -----------------------------------------------------
+ 
+ function _startRecorder() {
+   if (!state.stream) return false;
+   if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
+ 
+   if (typeof MediaRecorder === 'undefined') {
+     _console('warn', '[voice] MediaRecorder not supported in this browser');
+     state.rec = null;
+     return false;
+   }
+@@ -488,26 +506,29 @@ function _onSpeechEndCommitted(detail = null) {
+   }
+ 
+   _logLifecycle('vad_speech_end', { reason });
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   _stopRecorder({ reason });
+   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
+ }
+ 
+ // ---- Utilities --------------------------------------------------------------
+ 
+ function optsFromGlobal(key, fallback) {
+   // Allow admin-configurable values to seep in (if app exposes them)
+   try {
+     const cfg = window.__askchip_config || {};
+     if (key in cfg) return cfg[key];
+   } catch {}
+   return fallback;
+ }
+ 
+ export const __TEST_ONLY__ = {
+   state,
+   startRecorder: _startRecorder,
+   stopRecorder: _stopRecorder,
+   logLifecycle: _logLifecycle,
++  setEchoSignatureOverride(fn) {
++    _overrideEchoSignatureFn = typeof fn === 'function' ? fn : null;
++  },
+ };
+diff --git a/static/js/voice/vad.js b/static/js/voice/vad.js
+index 6e252f9c2305c318d92d24aff01d94cf9f8af8de..da93374c9c2a0b144520ff75f49a71716b2c2374 100644
+--- a/static/js/voice/vad.js
++++ b/static/js/voice/vad.js
+@@ -1,40 +1,42 @@
+ // static/js/voice/vad.js
+ // Lightweight RMS-based VAD tuned for conversational UX.
+ // Features:
+ //  • Rolling noise-floor tracking with adaptive thresholds (dB offsets)
+ //  • Echo-aware gating (raise thresholds while TTS is active)
+ //  • Emits onSpeechStart / onSpeechEnd callbacks with metrics
+ //  • Safe timers; idempotent start/stop
+ 
+ const EPSILON = 1e-8;
+ const CLAMP_MIN_DB = -120;
+ const CLAMP_MAX_DB = -10;
+ 
+ const rmsToDb = (rms) => 20 * Math.log10(Math.max(EPSILON, rms));
+ const dbToRms = (db) => Math.pow(10, db / 20);
+ const clampDb = (db) => Math.min(CLAMP_MAX_DB, Math.max(CLAMP_MIN_DB, db));
++const DEFAULT_SUPPRESS_DB = 15;
++const DEFAULT_SIGNATURE_MAX_AGE_MS = 350;
+ 
+ /** @typedef {{
+  *   minSpeechMs?: number,
+  *   minSilenceMs?: number,
+  *   pollMs?: number,
+  *   cooldownMs?: number,
+  *   startDbOffset?: number,
+  *   stopDbOffset?: number,
+  *   minStartDb?: number,
+  *   minStopDb?: number,
+  *   echoBoostStartDb?: number,
+  *   echoBoostStopDb?: number,
+  *   noiseFloorAlpha?: number,
+  *   noiseFloorRiseAlpha?: number,
+  *   noiseFloorGuardDb?: number,
+  *   noiseFloorHangMs?: number,
+  *   initialNoiseFloorDb?: number,
+  *   startRms?: number,          // legacy absolute fallback
+  *   stopRms?: number,           // legacy absolute fallback
+  *   echoStateFn?: ()=>boolean,
+  * }} VADOptions
+  */
+ 
+ /** @typedef {{
+  *   rms?: number,
+@@ -76,50 +78,51 @@ export class VAD {
+       noiseFloorAlpha: 0.05,
+       noiseFloorRiseAlpha: 0.01,
+       noiseFloorGuardDb: 3,
+       noiseFloorHangMs: 600,
+       initialNoiseFloorDb: -72,
+       echoStateFn: null,
+     }, opts || {});
+     this.cbs = cbs || {};
+     this._buf = new Float32Array(this.analyser.fftSize || 2048);
+     this._timer = null;
+     this._recording = false;
+     this._aboveSince = 0;
+     this._belowSince = 0;
+     this._cooldownUntil = 0;
+     this._speechStartedAt = 0;
+     this._activeDetail = null;
+     this._activeNoiseFloorDb = null;
+     this._noiseFloorDb = clampDb(
+       Number.isFinite(this.opts.initialNoiseFloorDb)
+         ? this.opts.initialNoiseFloorDb
+         : -72
+     );
+     this._lastNoiseUpdate = 0;
+     this._legacyStartDb = Number.isFinite(this.opts.startRms) ? rmsToDb(this.opts.startRms) : null;
+     this._legacyStopDb = Number.isFinite(this.opts.stopRms) ? rmsToDb(this.opts.stopRms) : null;
++    this._suppressingEcho = false;
+   }
+ 
+   _rms() {
+     this.analyser.getFloatTimeDomainData(this._buf);
+     let sum = 0;
+     for (let i = 0; i < this._buf.length; i++) {
+       const v = this._buf[i];
+       sum += v * v;
+     }
+     return Math.sqrt(sum / this._buf.length);
+   }
+ 
+   _makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb) {
+     const snrDb = (Number.isFinite(rmsDb) && Number.isFinite(noiseFloorDb))
+       ? rmsDb - noiseFloorDb
+       : null;
+     return {
+       rms,
+       rmsDb,
+       noiseFloorDb,
+       snrDb,
+       thresholds: { startDb, stopDb },
+     };
+   }
+ 
+@@ -167,131 +170,189 @@ export class VAD {
+     }
+     if (Number.isFinite(this._legacyStopDb)) {
+       stopDb = Math.max(stopDb, this._legacyStopDb);
+     }
+ 
+     if (echoActive) {
+       startDb += this.opts.echoBoostStartDb ?? 0;
+       stopDb += this.opts.echoBoostStopDb ?? 0;
+     }
+ 
+     return {
+       startDb: clampDb(startDb),
+       stopDb: clampDb(stopDb),
+       baseStartDb: baseStart,
+     };
+   }
+ 
+   start() {
+     this.stop(); // idempotent
+     this._aboveSince = 0;
+     this._belowSince = 0;
+     this._cooldownUntil = 0;
+     this._speechStartedAt = 0;
+     this._activeDetail = null;
+     this._activeNoiseFloorDb = null;
++    this._suppressingEcho = false;
+ 
+     const pollMs = Number.isFinite(this.opts.pollMs) ? this.opts.pollMs : 33;
+ 
+-    this._timer = setInterval(() => {
+-      const rms = this._rms();
+-      const rmsDb = rmsToDb(rms);
+-      const now = (typeof performance !== 'undefined' && performance?.now)
+-        ? performance.now()
+-        : Date.now();
+-      const inCooldown = now < this._cooldownUntil;
+-      const echo = this.opts.echoStateFn ? !!this.opts.echoStateFn() : false;
++    this._timer = setInterval(() => this._pollFrame(), pollMs);
++  }
+ 
+-      const noiseFloorDb = Number.isFinite(this._noiseFloorDb) ? this._noiseFloorDb : rmsDb;
+-      const { startDb, stopDb, baseStartDb } = this._computeThresholds(noiseFloorDb, echo);
+-      const startR = dbToRms(startDb);
+-      const stopR = dbToRms(stopDb);
++  stop() {
++    if (this._timer) { clearInterval(this._timer); this._timer = null; }
++    this._recording = false;
++    this._aboveSince = 0;
++    this._belowSince = 0;
++    this._cooldownUntil = 0;
++    this._speechStartedAt = 0;
++    this._activeDetail = null;
++    this._activeNoiseFloorDb = null;
++    this._suppressingEcho = false;
++  }
++
++  isRecording() { return this._recording; }
+ 
+-      if (!this._recording) {
+-        this._updateNoiseFloor(rmsDb, now, baseStartDb);
++  _shouldSuppressEcho(rmsDb, now) {
++    if (!Number.isFinite(rmsDb)) return false;
++    const fn = this.opts.echoSignatureFn;
++    if (typeof fn !== 'function') return false;
++    let signature;
++    try {
++      signature = fn();
++    } catch {
++      return false;
++    }
++    if (!signature || !Number.isFinite(signature.rmsDb)) return false;
++    const requiredGap = Number.isFinite(this.opts.echoSuppressDb)
++      ? this.opts.echoSuppressDb
++      : DEFAULT_SUPPRESS_DB;
++    const maxAge = Number.isFinite(this.opts.echoSignatureMaxAgeMs)
++      ? this.opts.echoSignatureMaxAgeMs
++      : DEFAULT_SIGNATURE_MAX_AGE_MS;
++    const signatureTs = Number.isFinite(signature.timestamp) ? signature.timestamp : null;
++    if (signatureTs !== null) {
++      const age = now - signatureTs;
++      if (Number.isFinite(age) && age > maxAge) {
++        this._suppressingEcho = false;
++        return false;
++      }
++    }
++    const gap = rmsDb - signature.rmsDb;
++    if (!Number.isFinite(gap) || gap < requiredGap) {
++      if (!this._suppressingEcho) {
++        this._suppressingEcho = true;
++        try {
++          this.cbs.onSuppressed && this.cbs.onSuppressed({
++            micRmsDb: rmsDb,
++            echoRmsDb: signature.rmsDb,
++            gapDb: gap,
++            requiredGapDb: requiredGap,
++            signatureTimestamp: signature.timestamp ?? null,
++            mfcc: Array.isArray(signature.mfcc) ? signature.mfcc.slice() : undefined,
++          });
++        } catch {}
+       }
++      return true;
++    }
++    this._suppressingEcho = false;
++    return false;
++  }
++
++  _pollFrame() {
++    const rms = this._rms();
++    const rmsDb = rmsToDb(rms);
++    const now = (typeof performance !== 'undefined' && performance?.now)
++      ? performance.now()
++      : Date.now();
++    const inCooldown = now < this._cooldownUntil;
++    const echo = this.opts.echoStateFn ? !!this.opts.echoStateFn() : false;
++
++    const noiseFloorDb = Number.isFinite(this._noiseFloorDb) ? this._noiseFloorDb : rmsDb;
++    const { startDb, stopDb, baseStartDb } = this._computeThresholds(noiseFloorDb, echo);
++    const startR = dbToRms(startDb);
++    const stopR = dbToRms(stopDb);
+ 
+-      if (!this._recording) {
+-        if (inCooldown) {
++    if (!this._recording) {
++      this._updateNoiseFloor(rmsDb, now, baseStartDb);
++    }
++
++    if (!this._recording) {
++      if (inCooldown) {
++        this._aboveSince = 0;
++        this._suppressingEcho = false;
++        return;
++      }
++      if (rms >= startR) {
++        if (this._shouldSuppressEcho(rmsDb, now)) {
+           this._aboveSince = 0;
+           return;
+         }
+-        if (rms >= startR) {
+-          if (!this._aboveSince) this._aboveSince = now;
+-          if (now - this._aboveSince >= (this.opts.minSpeechMs ?? 0)) {
+-            this._recording = true;
+-            this._belowSince = 0;
+-            this._speechStartedAt = now;
+-            this._activeDetail = this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
+-            this._activeNoiseFloorDb = noiseFloorDb;
+-            try {
+-              this.cbs.onSpeechStart && this.cbs.onSpeechStart({
+-                ...this._activeDetail,
+-                peakDb: this._activeDetail?.rmsDb,
+-                speechDurationMs: 0,
+-              });
+-            } catch {}
+-          }
+-        } else {
+-          this._aboveSince = 0;
+-        }
+-      } else {
+-        if (Number.isFinite(rmsDb) && (!this._activeDetail || rmsDb > (this._activeDetail.rmsDb ?? -Infinity))) {
++        this._suppressingEcho = false;
++        if (!this._aboveSince) this._aboveSince = now;
++        if (now - this._aboveSince >= (this.opts.minSpeechMs ?? 0)) {
++          this._recording = true;
++          this._belowSince = 0;
++          this._speechStartedAt = now;
+           this._activeDetail = this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
++          this._activeNoiseFloorDb = noiseFloorDb;
++          try {
++            this.cbs.onSpeechStart && this.cbs.onSpeechStart({
++              ...this._activeDetail,
++              peakDb: this._activeDetail?.rmsDb,
++              speechDurationMs: 0,
++            });
++          } catch {}
+         }
+-        if (Number.isFinite(noiseFloorDb)) {
+-          if (!Number.isFinite(this._activeNoiseFloorDb)) {
+-            this._activeNoiseFloorDb = noiseFloorDb;
+-          } else {
+-            this._activeNoiseFloorDb = Math.min(this._activeNoiseFloorDb, noiseFloorDb);
+-          }
++      } else {
++        this._aboveSince = 0;
++        this._suppressingEcho = false;
++      }
++    } else {
++      this._suppressingEcho = false;
++      if (Number.isFinite(rmsDb) && (!this._activeDetail || rmsDb > (this._activeDetail.rmsDb ?? -Infinity))) {
++        this._activeDetail = this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
++      }
++      if (Number.isFinite(noiseFloorDb)) {
++        if (!Number.isFinite(this._activeNoiseFloorDb)) {
++          this._activeNoiseFloorDb = noiseFloorDb;
++        } else {
++          this._activeNoiseFloorDb = Math.min(this._activeNoiseFloorDb, noiseFloorDb);
+         }
++      }
+ 
+-        if (rms < stopR) {
+-          if (!this._belowSince) this._belowSince = now;
+-          if (now - this._belowSince >= (this.opts.minSilenceMs ?? 0)) {
+-            this._recording = false;
+-            this._aboveSince = 0;
+-            this._cooldownUntil = now + Math.max(0, this.opts.cooldownMs || 0);
++      if (rms < stopR) {
++        if (!this._belowSince) this._belowSince = now;
++        if (now - this._belowSince >= (this.opts.minSilenceMs ?? 0)) {
++          this._recording = false;
++          this._aboveSince = 0;
++          this._cooldownUntil = now + Math.max(0, this.opts.cooldownMs || 0);
+ 
+-            const duration = Math.max(0, now - (this._speechStartedAt || now));
+-            const active = this._activeDetail || this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
+-            const noiseRef = Number.isFinite(this._activeNoiseFloorDb) ? this._activeNoiseFloorDb : noiseFloorDb;
+-            const peakDb = Number.isFinite(active?.rmsDb) ? active.rmsDb : rmsDb;
+-            const snrDb = (Number.isFinite(peakDb) && Number.isFinite(noiseRef)) ? peakDb - noiseRef : active?.snrDb;
+-            const detail = {
+-              ...active,
+-              noiseFloorDb: noiseRef,
+-              snrDb,
+-              peakDb,
+-              speechDurationMs: duration,
+-            };
++          const duration = Math.max(0, now - (this._speechStartedAt || now));
++          const active = this._activeDetail || this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
++          const noiseRef = Number.isFinite(this._activeNoiseFloorDb) ? this._activeNoiseFloorDb : noiseFloorDb;
++          const peakDb = Number.isFinite(active?.rmsDb) ? active.rmsDb : rmsDb;
++          const snrDb = (Number.isFinite(peakDb) && Number.isFinite(noiseRef)) ? peakDb - noiseRef : active?.snrDb;
++          const detail = {
++            ...active,
++            noiseFloorDb: noiseRef,
++            snrDb,
++            peakDb,
++            speechDurationMs: duration,
++          };
+ 
+-            try {
+-              this.cbs.onSpeechEnd && this.cbs.onSpeechEnd(detail);
+-            } catch {}
++          try {
++            this.cbs.onSpeechEnd && this.cbs.onSpeechEnd(detail);
++          } catch {}
+ 
+-            this._activeDetail = null;
+-            this._activeNoiseFloorDb = null;
+-            this._speechStartedAt = 0;
+-          }
+-        } else {
+-          this._belowSince = 0;
++          this._activeDetail = null;
++          this._activeNoiseFloorDb = null;
++          this._speechStartedAt = 0;
+         }
++      } else {
++        this._belowSince = 0;
+       }
+-    }, pollMs);
+-  }
+-
+-  stop() {
+-    if (this._timer) { clearInterval(this._timer); this._timer = null; }
+-    this._recording = false;
+-    this._aboveSince = 0;
+-    this._belowSince = 0;
+-    this._cooldownUntil = 0;
+-    this._speechStartedAt = 0;
+-    this._activeDetail = null;
+-    this._activeNoiseFloorDb = null;
++    }
+   }
+-
+-  isRecording() { return this._recording; }
+ }
+ 
+diff --git a/tests/js/helpers/voice-test-setup.mjs b/tests/js/helpers/voice-test-setup.mjs
 new file mode 100644
-index 0000000000000000000000000000000000000000..ae73962f2a5055babc7fb157348a52f0b49f0703
+index 0000000000000000000000000000000000000000..696c0f1392e7a2416ddfe3e997f101ad17a2e421
 --- /dev/null
-+++ b/app/ws/confirm_window.py
-@@ -0,0 +1,229 @@
-+"""Utility for gating local barge-in confirmation."""
-+from __future__ import annotations
++++ b/tests/js/helpers/voice-test-setup.mjs
+@@ -0,0 +1,224 @@
++const listenerMap = new Map();
 +
-+import math
-+import struct
-+from dataclasses import dataclass
-+from typing import Dict, Optional
++export class TestCustomEvent {
++  constructor(type, init = {}) {
++    this.type = type;
++    this.detail = init.detail;
++  }
++}
 +
++export const windowStub = {
++  __askchip_config: {},
++  addEventListener(type, handler) {
++    if (!listenerMap.has(type)) listenerMap.set(type, new Set());
++    listenerMap.get(type).add(handler);
++  },
++  removeEventListener(type, handler) {
++    const set = listenerMap.get(type);
++    if (!set) return;
++    set.delete(handler);
++    if (set.size === 0) listenerMap.delete(type);
++  },
++  dispatchEvent(event) {
++    const set = listenerMap.get(event.type);
++    if (!set) return true;
++    for (const handler of Array.from(set)) {
++      handler(event);
++    }
++    return true;
++  },
++};
 +
-+@dataclass
-+class ConfirmDecision:
-+    action: Optional[str]
-+    metrics: Optional[Dict[str, object]]
++windowStub.CustomEvent = TestCustomEvent;
++windowStub.dispatchEvent = windowStub.dispatchEvent.bind(windowStub);
 +
++export class FakeAnalyser {
++  constructor() {
++    this.fftSize = 2048;
++    this.smoothingTimeConstant = 0.06;
++    this._rms = 0;
++  }
 +
-+class ConfirmWindow:
-+    """Stateful helper that validates mic activity before committing barge-in."""
++  connect() {}
++  disconnect() {}
 +
-+    def __init__(
-+        self,
-+        *,
-+        min_duration_ms: int = 420,
-+        max_duration_ms: int = 900,
-+        max_gap_ms: float = 180.0,
-+        min_tokens: int = 2,
-+        min_confidence: float = 0.5,
-+        snr_threshold_db: float = 8.0,
-+        snr_enabled: bool = True,
-+    ) -> None:
-+        self.min_duration_ms = max(0, int(min_duration_ms))
-+        max_dur = int(max_duration_ms)
-+        if max_dur <= 0:
-+            max_dur = self.min_duration_ms + 600
-+        if max_dur < self.min_duration_ms:
-+            max_dur = self.min_duration_ms
-+        self.max_duration_ms = max_dur
-+        self.max_gap_ms = max(0.0, float(max_gap_ms))
-+        self.min_tokens = max(1, int(min_tokens))
-+        self.min_confidence = float(min_confidence)
-+        self.snr_threshold_db = float(snr_threshold_db)
-+        self.snr_enabled = bool(snr_enabled)
++  setRmsDb(db) {
++    if (!Number.isFinite(db)) {
++      this._rms = 0;
++      return;
++    }
++    this._rms = Math.pow(10, db / 20);
++  }
 +
-+        self.active = False
-+        self.start_ts = 0.0
-+        self.last_chunk_ts = 0.0
-+        self.noise_rms: Optional[float] = None
-+        self.peak_rms = 0.0
-+        self.snr_db: Optional[float] = None
-+        self.partial_tokens = 0
-+        self.partial_confidence: Optional[float] = None
-+        self.partial_ts = 0.0
-+        self.total_bytes = 0
++  getFloatTimeDomainData(arr) {
++    if (!arr) return;
++    arr.fill(this._rms);
++  }
 +
-+    def set_snr_enabled(self, enabled: bool) -> None:
-+        self.snr_enabled = bool(enabled)
++  getFloatFrequencyData(arr) {
++    if (!arr) return;
++    arr.fill(-120);
++  }
++}
 +
-+    def start(self, now_ts: float) -> None:
-+        self.active = True
-+        self.start_ts = now_ts
-+        self.last_chunk_ts = now_ts
-+        self.noise_rms = None
-+        self.peak_rms = 0.0
-+        self.snr_db = None
-+        self.partial_tokens = 0
-+        self.partial_confidence = None
-+        self.partial_ts = 0.0
-+        self.total_bytes = 0
++class FakeSource {
++  connect() {}
++  disconnect() {}
++}
 +
-+    # ------------------------------- Public API -------------------------------
++export const createdAnalysers = [];
 +
-+    def observe_chunk(self, chunk: bytes, now_ts: float) -> ConfirmDecision:
-+        if not self.active:
-+            return ConfirmDecision(None, None)
++let analyserFactory = () => {
++  const analyser = new FakeAnalyser();
++  createdAnalysers.push(analyser);
++  return analyser;
++};
 +
-+        elapsed_ms = self._elapsed_ms(now_ts)
-+        gap_decision = self._check_gap(now_ts)
-+        if gap_decision.action:
-+            return gap_decision
++export function setAnalyserFactory(factory) {
++  analyserFactory = typeof factory === 'function'
++    ? () => {
++        const analyser = factory();
++        createdAnalysers.push(analyser);
++        return analyser;
++      }
++    : () => {
++        const analyser = new FakeAnalyser();
++        createdAnalysers.push(analyser);
++        return analyser;
++      };
++}
 +
-+        self.last_chunk_ts = now_ts
-+        self.total_bytes += len(chunk or b"")
++export class FakeAudioContext {
++  constructor() {
++    this.state = 'running';
++    this.sampleRate = 48000;
++    this.destination = { channelCount: 1 };
++  }
 +
-+        if self.snr_enabled:
-+            self._update_snr(chunk)
++  async resume() {}
++  createMediaStreamSource() { return new FakeSource(); }
++  createAnalyser() { return analyserFactory(); }
++  createGain() { return { gain: { value: 1 }, connect() {} }; }
++  close() {}
++}
 +
-+        commit_decision = self._maybe_commit("chunk", elapsed_ms)
-+        if commit_decision.action:
-+            return commit_decision
++export const fakeStream = {
++  active: true,
++  getAudioTracks() {
++    return [{
++      label: 'Fake Mic',
++      getSettings: () => ({ sampleRate: 48000, channelCount: 1 }),
++    }];
++  },
++};
 +
-+        if elapsed_ms >= self.max_duration_ms:
-+            if self._can_commit():
-+                return self._finish("timeout_commit", elapsed_ms)
-+            return self._finish("timeout", elapsed_ms)
++class FakeMediaRecorder {
++  constructor() {
++    this.state = 'inactive';
++    this.mimeType = 'audio/ogg; codecs=opus';
++  }
 +
-+        return ConfirmDecision(None, None)
++  start() {
++    this.state = 'recording';
++    if (typeof this.onstart === 'function') {
++      setTimeout(() => this.onstart(), 0);
++    }
++  }
 +
-+    def observe_partial(
-+        self, token_count: Optional[int], confidence: Optional[float], now_ts: float
-+    ) -> ConfirmDecision:
-+        if not self.active or token_count is None:
-+            return ConfirmDecision(None, None)
++  stop() {
++    this.state = 'inactive';
++    if (typeof this.onstop === 'function') {
++      setTimeout(() => this.onstop(), 0);
++    }
++  }
++}
 +
-+        tokens = int(token_count)
-+        conf = self._coerce_confidence(confidence)
-+        elapsed_ms = self._elapsed_ms(now_ts)
++class FakeAudioElement {
++  constructor() {
++    this.volume = 1;
++    this.paused = true;
++    this._listeners = new Map();
++  }
 +
-+        if tokens < self.min_tokens:
-+            return ConfirmDecision(None, None)
++  get autoplay() { return this._autoplay; }
++  set autoplay(v) { this._autoplay = !!v; }
 +
-+        self.partial_tokens = tokens
-+        self.partial_confidence = conf
-+        self.partial_ts = now_ts
++  addEventListener(type, handler) {
++    if (!this._listeners.has(type)) this._listeners.set(type, new Set());
++    this._listeners.get(type).add(handler);
++  }
 +
-+        if conf is not None and conf < self.min_confidence:
-+            return self._finish("partial_low_confidence", elapsed_ms)
++  removeEventListener(type, handler) {
++    const set = this._listeners.get(type);
++    if (!set) return;
++    set.delete(handler);
++    if (set.size === 0) this._listeners.delete(type);
++  }
 +
-+        commit_decision = self._maybe_commit("partial", elapsed_ms)
-+        if commit_decision.action:
-+            return commit_decision
++  _emit(type) {
++    const set = this._listeners.get(type);
++    if (!set) return;
++    for (const handler of Array.from(set)) {
++      handler();
++    }
++  }
 +
-+        return ConfirmDecision(None, None)
++  play() {
++    this.paused = false;
++    this._emit('playing');
++    return Promise.resolve();
++  }
 +
-+    def timeout(self, now_ts: float) -> ConfirmDecision:
-+        if not self.active:
-+            return ConfirmDecision(None, None)
++  pause() {
++    if (!this.paused) {
++      this.paused = true;
++      this._emit('pause');
++    }
++  }
 +
-+        elapsed_ms = self._elapsed_ms(now_ts)
-+        if elapsed_ms < self.max_duration_ms:
-+            return ConfirmDecision(None, None)
++  captureStream() {
++    return {
++      getAudioTracks() { return []; },
++    };
++  }
++}
 +
-+        if self._can_commit():
-+            return self._finish("timeout_commit", elapsed_ms)
-+        return self._finish("timeout", elapsed_ms)
++export function resetListeners() {
++  listenerMap.clear();
++}
 +
-+    def cancel(self, reason: str, now_ts: float) -> ConfirmDecision:
-+        if not self.active:
-+            return ConfirmDecision(None, None)
-+        return self._finish(reason or "cancel", self._elapsed_ms(now_ts))
++export async function setupVoiceTestEnv() {
++  resetListeners();
++  windowStub.__askchip_config = {};
++  windowStub.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 16);
++  windowStub.cancelAnimationFrame = (id) => clearTimeout(id);
 +
-+    # ------------------------------- Internals --------------------------------
++  Object.defineProperty(globalThis, 'CustomEvent', { value: TestCustomEvent, configurable: true });
++  Object.defineProperty(globalThis, 'window', { value: windowStub, configurable: true });
++  Object.defineProperty(globalThis, 'performance', {
++    value: { now: () => Date.now() },
++    configurable: true,
++  });
++  Object.defineProperty(globalThis, 'navigator', {
++    value: {
++      mediaDevices: {
++        async getUserMedia() { return fakeStream; },
++      },
++    },
++    configurable: true,
++  });
++  Object.defineProperty(globalThis, '__TEST_WS_HOOKS', { value: {}, configurable: true });
++  Object.defineProperty(globalThis, '__TEST_WS_MODULE', {
++    value: await import('../ws_stub.mjs'),
++    configurable: true,
++  });
++  Object.defineProperty(globalThis, 'AudioContext', { value: FakeAudioContext, configurable: true });
++  Object.defineProperty(globalThis, 'webkitAudioContext', { value: FakeAudioContext, configurable: true });
++  Object.defineProperty(globalThis, 'MediaRecorder', { value: FakeMediaRecorder, configurable: true });
++  Object.defineProperty(globalThis, 'Audio', { value: FakeAudioElement, configurable: true });
 +
-+    def _elapsed_ms(self, now_ts: float) -> float:
-+        return max(0.0, (now_ts - self.start_ts) * 1000.0)
++  windowStub.AudioContext = FakeAudioContext;
++  windowStub.webkitAudioContext = FakeAudioContext;
++  windowStub.MediaRecorder = FakeMediaRecorder;
++  windowStub.Audio = FakeAudioElement;
++}
+diff --git a/tests/js/voice-echo-suppression.test.mjs b/tests/js/voice-echo-suppression.test.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..1ff688d88675ec54e0ee9b853be30c37eb4d7fd1
+--- /dev/null
++++ b/tests/js/voice-echo-suppression.test.mjs
+@@ -0,0 +1,94 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
 +
-+    def _coerce_confidence(self, value: Optional[float]) -> Optional[float]:
-+        if value is None:
-+            return None
-+        try:
-+            return float(value)
-+        except (TypeError, ValueError):
-+            return None
++import {
++  setupVoiceTestEnv,
++  windowStub,
++  fakeStream,
++} from './helpers/voice-test-setup.mjs';
 +
-+    def _check_gap(self, now_ts: float) -> ConfirmDecision:
-+        if not self.active:
-+            return ConfirmDecision(None, None)
-+        if not self.last_chunk_ts:
-+            return ConfirmDecision(None, None)
-+        gap_ms = (now_ts - self.last_chunk_ts) * 1000.0
-+        if self.max_gap_ms > 0.0 and gap_ms > self.max_gap_ms:
-+            return self._finish("gap", self._elapsed_ms(now_ts), {"gap_ms": gap_ms})
-+        return ConfirmDecision(None, None)
++await setupVoiceTestEnv();
 +
-+    def _can_commit(self) -> bool:
-+        if self.partial_tokens < self.min_tokens:
-+            return False
-+        if not self.snr_enabled:
-+            return True
-+        if self.snr_db is None:
-+            return False
-+        return self.snr_db >= self.snr_threshold_db
++const voice = await import(new URL('../../static/js/voice.js', import.meta.url));
++const hooks = voice.__TEST_ONLY__;
++const audio = await import(new URL('../../static/js/audio.js', import.meta.url));
 +
-+    def _maybe_commit(self, trigger: str, elapsed_ms: float) -> ConfirmDecision:
-+        if elapsed_ms >= self.min_duration_ms and self._can_commit():
-+            return self._finish(trigger, elapsed_ms)
-+        return ConfirmDecision(None, None)
++test('correlated echo frames are suppressed before VAD start', async (t) => {
++  windowStub.__askchip_config.vad = {
++    pollMs: 10,
++    minSpeechMs: 0,
++    minSilenceMs: 0,
++    ECHO_SUPPRESS_DB: 15,
++  };
 +
-+    def _update_snr(self, chunk: bytes) -> None:
-+        if not chunk:
-+            return
-+        sample_count = len(chunk) // 2
-+        if sample_count <= 0:
-+            return
-+        fmt = f"<{sample_count}h"
-+        try:
-+            samples = struct.unpack(fmt, chunk[: sample_count * 2])
-+        except struct.error:
-+            return
++  let echoDb = -18;
++  voice.__TEST_ONLY__.setEchoSignatureOverride(() => ({
++    rmsDb: echoDb,
++    timestamp: performance.now(),
++    mfcc: [1, 2, 3],
++  }));
 +
-+        total = 0.0
-+        for s in samples:
-+            total += float(s) * float(s)
-+        if sample_count == 0:
-+            return
-+        rms = math.sqrt(total / sample_count)
-+        if rms <= 0.0:
-+            return
++  const events = [];
++  const handler = (event) => events.push(event.detail);
++  windowStub.addEventListener('askchip-voice-lifecycle', handler);
 +
-+        if self.noise_rms is None:
-+            self.noise_rms = max(1.0, rms * 0.4)
-+        else:
-+            if rms < self.noise_rms:
-+                alpha = 0.10
-+                self.noise_rms = (1 - alpha) * self.noise_rms + alpha * rms
-+            else:
-+                alpha = 0.02
-+                self.noise_rms = (1 - alpha) * self.noise_rms + alpha * rms
++  await voice.armVAD();
++  t.after(() => {
++    voice.disarmVAD();
++    hooks.state.stream = fakeStream;
++    voice.__TEST_ONLY__.setEchoSignatureOverride(null);
++    windowStub.removeEventListener('askchip-voice-lifecycle', handler);
++    audio.audioTeardown();
++  });
 +
-+        self.peak_rms = max(self.peak_rms, rms)
-+        noise = max(self.noise_rms or 1.0, 1e-3)
-+        snr = 20.0 * math.log10(max(rms, 1e-3) / noise)
-+        self.snr_db = snr
++  const analyser = hooks.state.analyser;
++  analyser.setRmsDb(-20);
 +
-+    def _finish(
-+        self, reason: str, elapsed_ms: float, extra: Optional[Dict[str, object]] = None
-+    ) -> ConfirmDecision:
-+        self.active = False
-+        metrics: Dict[str, object] = {
-+            "reason": reason,
-+            "elapsed_ms": int(elapsed_ms),
-+            "snr_db": round(self.snr_db, 2) if self.snr_db is not None else None,
-+            "noise_rms": round(self.noise_rms, 2) if self.noise_rms is not None else None,
-+            "peak_rms": round(self.peak_rms, 2) if self.peak_rms else None,
-+            "partial_tokens": self.partial_tokens or None,
-+            "partial_confidence": self.partial_confidence,
-+            "total_bytes": self.total_bytes,
-+        }
-+        if extra:
-+            metrics.update(extra)
-+        return ConfirmDecision("commit" if reason in ("chunk", "partial", "timeout_commit") else "abort", metrics)
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index cdde303daa0e1c414b88a79c735cfa01b13952d3..bf05dec284a22b55b31776c26e16b87080b20716 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -8,50 +8,51 @@ from app.services.audio.container_sniffer import (
-     coerce_detection_from_meta,
- )
++  await new Promise((resolve) => setTimeout(resolve, 60));
++
++  const suppressed = events.filter((e) => e?.event === 'vad_echo_suppressed');
++  const starts = events.filter((e) => e?.event === 'vad_speech_start');
++
++  assert.ok(suppressed.length > 0, 'suppressed frames should be logged');
++  assert.equal(starts.length, 0, 'speech should not start when echo dominates');
++});
++
++test('uncorrelated mic frames surpass echo gap and trigger speech', async (t) => {
++  windowStub.__askchip_config.vad = {
++    pollMs: 10,
++    minSpeechMs: 0,
++    minSilenceMs: 0,
++    ECHO_SUPPRESS_DB: 12,
++  };
++
++  let echoDb = -60;
++  voice.__TEST_ONLY__.setEchoSignatureOverride(() => ({
++    rmsDb: echoDb,
++    timestamp: performance.now(),
++    mfcc: [0.1],
++  }));
++
++  const events = [];
++  const handler = (event) => events.push(event.detail);
++  windowStub.addEventListener('askchip-voice-lifecycle', handler);
++
++  await voice.armVAD();
++  t.after(() => {
++    voice.disarmVAD();
++    hooks.state.stream = fakeStream;
++    voice.__TEST_ONLY__.setEchoSignatureOverride(null);
++    windowStub.removeEventListener('askchip-voice-lifecycle', handler);
++    audio.audioTeardown();
++  });
++
++  const analyser = hooks.state.analyser;
++  analyser.setRmsDb(-20);
++
++  await new Promise((resolve) => setTimeout(resolve, 80));
++
++  const starts = events.filter((e) => e?.event === 'vad_speech_start');
++  assert.ok(starts.length > 0, 'speech start should be logged when mic dominates echo');
++
++  const suppressed = events.filter((e) => e?.event === 'vad_echo_suppressed');
++  assert.equal(suppressed.length, 0, 'no suppression should be logged when gap exceeds threshold');
++});
+diff --git a/tests/js/voice-vad-config.test.mjs b/tests/js/voice-vad-config.test.mjs
+index e7bc79fb9637bdaa02e8f9ac5bc74d9ccc764d70..ee4a84297e5d2bd752fbf0d612662782800963c1 100644
+--- a/tests/js/voice-vad-config.test.mjs
++++ b/tests/js/voice-vad-config.test.mjs
+@@ -1,159 +1,70 @@
+ import test from 'node:test';
+ import assert from 'node:assert/strict';
++import {
++  setupVoiceTestEnv,
++  windowStub,
++  fakeStream,
++} from './helpers/voice-test-setup.mjs';
  
- from .schema_v1 import (
-     parse_client_json,
-     make_keepalive_ack,
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.config import load_settings
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
+-class TestCustomEvent {
+-  constructor(type, init = {}) {
+-    this.type = type;
+-    this.detail = init.detail;
+-  }
+-}
+-
+-const listenerMap = new Map();
+-
+-const windowStub = {
+-  __askchip_config: {},
+-  addEventListener(type, handler) {
+-    if (!listenerMap.has(type)) listenerMap.set(type, new Set());
+-    listenerMap.get(type).add(handler);
+-  },
+-  removeEventListener(type, handler) {
+-    const set = listenerMap.get(type);
+-    if (!set) return;
+-    set.delete(handler);
+-    if (set.size === 0) listenerMap.delete(type);
+-  },
+-  dispatchEvent(event) {
+-    const set = listenerMap.get(event.type);
+-    if (!set) return true;
+-    for (const handler of Array.from(set)) {
+-      handler(event);
+-    }
+-    return true;
+-  },
+-};
+-
+-windowStub.CustomEvent = TestCustomEvent;
+-windowStub.dispatchEvent = windowStub.dispatchEvent.bind(windowStub);
+-
+-class FakeAnalyser {
+-  constructor() {
+-    this.fftSize = 2048;
+-    this.smoothingTimeConstant = 0.06;
+-  }
+-
+-  connect() {}
+-  disconnect() {}
+-
+-  getFloatTimeDomainData(arr) {
+-    if (Array.isArray(arr) || ArrayBuffer.isView(arr)) {
+-      arr.fill(0);
+-    }
+-  }
+-}
+-
+-class FakeSource {
+-  connect() {}
+-  disconnect() {}
+-}
+-
+-class FakeAudioContext {
+-  constructor() {
+-    this.state = 'running';
+-    this.sampleRate = 48000;
+-    this.destination = { channelCount: 1 };
+-  }
+-
+-  async resume() {}
+-  createMediaStreamSource() { return new FakeSource(); }
+-  createAnalyser() { return new FakeAnalyser(); }
+-  close() {}
+-}
+-
+-const fakeStream = {
+-  active: true,
+-  getAudioTracks() {
+-    return [{
+-      label: 'Fake Mic',
+-      getSettings: () => ({ sampleRate: 48000, channelCount: 1 }),
+-    }];
+-  },
+-};
+-
+-Object.defineProperty(globalThis, 'CustomEvent', { value: TestCustomEvent, configurable: true });
+-Object.defineProperty(globalThis, 'window', { value: windowStub, configurable: true });
+-Object.defineProperty(globalThis, 'performance', { value: { now: () => Date.now() }, configurable: true });
+-Object.defineProperty(globalThis, 'navigator', {
+-  value: {
+-    mediaDevices: {
+-      async getUserMedia() { return fakeStream; },
+-    },
+-  },
+-  configurable: true,
+-});
+-Object.defineProperty(globalThis, '__TEST_WS_HOOKS', { value: {}, configurable: true });
+-Object.defineProperty(globalThis, '__TEST_WS_MODULE', {
+-  value: await import('./ws_stub.mjs'),
+-  configurable: true,
+-});
+-Object.defineProperty(globalThis, 'AudioContext', { value: FakeAudioContext, configurable: true });
+-Object.defineProperty(globalThis, 'webkitAudioContext', { value: FakeAudioContext, configurable: true });
+-windowStub.AudioContext = FakeAudioContext;
+-windowStub.webkitAudioContext = FakeAudioContext;
++await setupVoiceTestEnv();
  
- # NEW: invoke LLM on final transcript
- from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
- from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
- from app.ws.barge import BargeState
-+from app.ws.confirm_window import ConfirmWindow
- from app.ws.bus import bus
+ const voice = await import(new URL('../../static/js/voice.js', import.meta.url));
+ const hooks = voice.__TEST_ONLY__;
  
- # Optional admin emitter
- try:
-     from app.api_v1.admin import _emit as _admin_emit
- except Exception:
-     _admin_emit = None
+ test('VAD applies injected config thresholds and boosts', async (t) => {
+   windowStub.__askchip_config.vad = {
+     baseThresholdDb: 11,
+     exitThresholdDb: 7,
+     ttsBoostDb: 5,
+     minSpeechMs: 420,
++    ECHO_SUPPRESS_DB: 18,
+   };
  
+   await voice.armVAD();
+   t.after(() => {
+     voice.disarmVAD();
+     hooks.state.stream = fakeStream;
+   });
  
- ACTIVE_WS: dict[str, dict[str, Any]] = {}
- ACTIVE_WS_LOCK = asyncio.Lock()
+   const vad = hooks.state.vad;
+   assert.ok(vad, 'VAD instance should be created');
+   assert.equal(vad.opts.minSpeechMs, 420, 'minSpeechMs should honor injected config');
+   assert.equal(vad.opts.startDbOffset, 11, 'base threshold should map to startDbOffset');
+   assert.equal(vad.opts.stopDbOffset, 7, 'exit threshold should map to stopDbOffset');
+   assert.equal(vad.opts.echoBoostStartDb, 5, 'TTS boost should map to echoBoostStartDb');
+   assert.equal(vad.opts.echoBoostStopDb, 5, 'TTS boost should map to echoBoostStopDb');
++  assert.equal(vad.opts.echoSuppressDb, 18, 'echo suppression gap should respect config override');
  
- WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
+   const quiet = vad._computeThresholds(-72, false);
+   const echo = vad._computeThresholds(-72, true);
+   assert.equal(
+     Math.round((echo.startDb - quiet.startDb) * 10) / 10,
+     5,
+     'start threshold should increase by TTS boost when echo is present',
+   );
+   assert.equal(
+     Math.round((echo.stopDb - quiet.stopDb) * 10) / 10,
+     5,
+     'stop threshold should increase by TTS boost when echo is present',
+   );
+   voice.disarmVAD();
+ });
  
- _SETTINGS = load_settings()
- _ADVANCED_LOGGING_ENABLED = bool(
-     getattr(_SETTINGS, "advanced_logging_enabled", True)
- )
- try:
-     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
- except Exception:
-     pass
+ test('VAD defaults raise the minimum speech duration', async (t) => {
+   windowStub.__askchip_config.vad = {};
+   voice.disarmVAD();
  
- # ------------------------------ small helpers ------------------------------
+   await voice.armVAD();
+   t.after(() => {
+     voice.disarmVAD();
+     hooks.state.stream = fakeStream;
+   });
  
-@@ -311,50 +312,51 @@ async def _pump_bus_to_client(sid: str, send):
-             except Exception:
-                 await asyncio.sleep(0.01)
-     except asyncio.CancelledError:
-         pass
-     finally:
-         try:
-             if hasattr(bus, "unsubscribe"):
-                 bus.unsubscribe(sid, q)
-         except Exception:
-             pass
- 
- 
- async def _pump_dg_to_client(
-     dg: DeepgramClient,
-     send,
-     turn_id_ref,
-     final_seen,
-     pending_final_turns,
-     synthetic_final_turns,
-     completed_llm_turns,
-     sid: str,
-     asr_ready_evt: Optional[asyncio.Event] = None,
-     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
-     turn_timing: Optional[Dict[str, List[float]]] = None,
-     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
-+    on_asr_partial: Optional[Callable[[Dict[str, Any]], None]] = None,
- ):
-     """Relay Deepgram events to client and, on final, kick LLM turn."""
-     try:
-         async for ev in dg.events():
-             et = (ev.get("type") or "").lower()
-             if et == "asr_open":
-                 delta_ms = None
-                 now_ts = time.time()
-                 if turn_timing is not None:
-                     try:
-                         holder = turn_timing.setdefault("dg_open", [0.0])
-                         holder[0] = now_ts
-                         start_ts = turn_timing.get("start", [0.0])[0]
-                         if start_ts:
-                             delta_ms = int((now_ts - start_ts) * 1000)
-                     except Exception:
-                         pass
-                 _jlog(
-                     "dg_asr_open",
-                     sid=sid,
-                     turn_id=turn_id_ref[0],
-                     delta_from_turn_ms=delta_ms,
-                 )
-                 try:
-                     if asr_ready_evt and not asr_ready_evt.is_set():
-@@ -385,50 +387,56 @@ async def _pump_dg_to_client(
-                     except Exception:
-                         next_turn_id = None
-                     if next_turn_id is None:
-                         try:
-                             next_turn_id = min(synthetic_final_turns)
-                             synthetic_final_turns.discard(next_turn_id)
-                         except Exception:
-                             next_turn_id = turn_id_ref[0]
-                     else:
-                         synthetic_final_turns.discard(next_turn_id)
-                     turn_id_for_event = next_turn_id
-                 if not is_final:
-                     try:
-                         asr_seen_partial[0] = True
-                     except Exception:
-                         pass
-                     if turn_timing is not None:
-                         try:
-                             first_holder = turn_timing.setdefault(
-                                 "first_partial", [0.0]
-                             )
-                             if not first_holder[0]:
-                                 first_holder[0] = time.time()
-                         except Exception:
-                             pass
-+                if (not is_final) and on_asr_partial:
-+                    try:
-+                        on_asr_partial(ev)
-+                    except Exception:
-+                        pass
-+
-                 _jlog(
-                     "dg_transcript",
-                     sid=sid,
-                     turn_id=turn_id_for_event,
-                     is_final=is_final,
-                     chars=len(text),
-                     preview=_clip_text(text),
-                 )
-                 try:
-                     if et == "user_partial":
-                         _admin_emit and _admin_emit("asr:first_partial", session_id=sid)
-                 except Exception:
-                     pass
- 
-                 await _ws_send_json(
-                     send,
-                     make_results(
-                         turn_id_for_event,
-                         transcript=text,
-                         confidence=0.0,
-                         is_final=is_final,
-                     ),
-                 )
- 
-                 if is_final:
-@@ -804,50 +812,254 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     try:
-         no_audio_window_s = float(
-             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
-         )
-     except Exception:
-         no_audio_window_s = 10.0
-     if no_audio_window_s < 0:
-         no_audio_window_s = 0.0
-     no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
-     asr_ready_evt: asyncio.Event = asyncio.Event()
-     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
-     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
-     ws_frames_in = 0
-     ws_bytes_in = 0
-     backpressure_drop_count = 0
-     backpressure_last_emit = 0.0
-     backpressure_last_queue_len = 0
-     backpressure_emit_interval = 1.0
-     turn_connect_started = [False]
- 
-     # NEW: per-turn mic capture state
-     mic_chunks: List[bytes] = []
-     mic_first_ts = [0.0]
-     mic_last_ts = [0.0]
- 
-+    # Local confirmation gating
-+    try:
-+        confirm_min_ms = int(cfg.get("confirm_ms", 420) or 420)
-+    except Exception:
-+        confirm_min_ms = 420
-+    confirm_min_ms = max(0, confirm_min_ms)
-+    try:
-+        confirm_max_ms = int(cfg.get("confirm_max_ms", confirm_min_ms + 600) or (confirm_min_ms + 600))
-+    except Exception:
-+        confirm_max_ms = confirm_min_ms + 600
-+    if confirm_max_ms < confirm_min_ms:
-+        confirm_max_ms = confirm_min_ms
-+    try:
-+        confirm_gap_ms = float(cfg.get("confirm_max_gap_ms", 180.0) or 180.0)
-+    except Exception:
-+        confirm_gap_ms = 180.0
-+    try:
-+        confirm_min_tokens = max(1, int(cfg.get("confirm_min_tokens", 2) or 2))
-+    except Exception:
-+        confirm_min_tokens = 2
-+    try:
-+        confirm_min_conf = float(cfg.get("confirm_min_confidence", 0.5) or 0.5)
-+    except Exception:
-+        confirm_min_conf = 0.5
-+    try:
-+        confirm_snr_db = float(cfg.get("confirm_min_snr_db", 8.0) or 8.0)
-+    except Exception:
-+        confirm_snr_db = 8.0
-+
-+    confirm_window_ref: List[Optional[ConfirmWindow]] = [None]
-+    confirm_timeout_task: List[Optional[asyncio.Task]] = [None]
-+    confirm_timeout_cancelled: List[asyncio.Task] = []
-+    local_vad_meta_sent = [False]
-+
-+    def _cancel_confirm_timeout() -> None:
-+        task = confirm_timeout_task[0]
-+        if task:
-+            task.cancel()
-+            confirm_timeout_cancelled.append(task)
-+        confirm_timeout_task[0] = None
-+
-+    def _emit_local_vad_signal(now_ts: float) -> None:
-+        if local_vad_meta_sent[0]:
-+            return
-+        local_vad_meta_sent[0] = True
-+        payload = {
-+            "type": "meta",
-+            "turn_id": turn_id_ref[0],
-+            "meta": {"local_vad": "start", "ts": int(now_ts * 1000)},
-+        }
-+        with contextlib.suppress(Exception):
-+            _jlog(
-+                "local_vad_start",
-+                sid=sid,
-+                turn_id=turn_id_ref[0],
-+                ts_ms=int(now_ts * 1000),
-+            )
-+        with contextlib.suppress(Exception):
-+            bus.broadcast(sid, payload)
-+        try:
-+            if loop.is_closed():
-+                return
-+            try:
-+                running = asyncio.get_running_loop()
-+            except RuntimeError:
-+                running = None
-+            if running is loop:
-+                asyncio.create_task(_ws_send_json(send, payload))
-+            else:
-+                loop.call_soon_threadsafe(
-+                    asyncio.create_task, _ws_send_json(send, payload)
-+                )
-+        except Exception:
-+            pass
-+
-+    def _schedule_confirm_timeout(window: ConfirmWindow) -> None:
-+        _cancel_confirm_timeout()
-+
-+        wait_s = max(0.0, window.max_duration_ms / 1000.0)
-+
-+        async def _timeout() -> None:
-+            try:
-+                await asyncio.sleep(wait_s)
-+                if confirm_window_ref[0] is not window:
-+                    return
-+                decision = window.timeout(time.time())
-+                if decision.action == "commit":
-+                    metrics = decision.metrics or {}
-+                    reason = metrics.get("reason") or "timeout_commit"
-+                    _finalize_confirm_commit(reason, metrics, window)
-+                elif decision.action == "abort":
-+                    metrics = decision.metrics or {}
-+                    reason = metrics.get("reason") or "timeout"
-+                    _finalize_confirm_abort(reason, metrics, window)
-+            except asyncio.CancelledError:
-+                return
-+
-+        confirm_timeout_task[0] = asyncio.create_task(_timeout())
-+
-+    def _finalize_confirm_commit(
-+        trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
-+    ) -> None:
-+        if confirm_window_ref[0] is not window:
-+            return
-+        _cancel_confirm_timeout()
-+        confirm_window_ref[0] = None
-+        data = {k: v for k, v in (metrics or {}).items() if v is not None}
-+        data.setdefault("reason", trigger)
-+        data.setdefault("snr_enabled", window.snr_enabled)
-+        _jlog("confirm_commit", sid=sid, **data)
-+        if barge.is_paused():
-+            try:
-+                barge.commit(_send_barge_state)
-+            except Exception:
-+                pass
-+
-+    def _finalize_confirm_abort(
-+        trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
-+    ) -> None:
-+        if confirm_window_ref[0] is not window:
-+            return
-+        _cancel_confirm_timeout()
-+        confirm_window_ref[0] = None
-+        data = {k: v for k, v in (metrics or {}).items() if v is not None}
-+        data.setdefault("reason", trigger)
-+        data.setdefault("snr_enabled", window.snr_enabled)
-+        _jlog("confirm_abort", sid=sid, **data)
-+        if barge.is_paused():
-+            try:
-+                barge.cancel(_send_barge_state)
-+            except Exception:
-+                pass
-+
-+    def _start_confirm_window(now_ts: float) -> None:
-+        window = ConfirmWindow(
-+            min_duration_ms=confirm_min_ms,
-+            max_duration_ms=confirm_max_ms,
-+            max_gap_ms=confirm_gap_ms,
-+            min_tokens=confirm_min_tokens,
-+            min_confidence=confirm_min_conf,
-+            snr_threshold_db=confirm_snr_db,
-+            snr_enabled=not bool(transport.get("containerized_opus")),
-+        )
-+        window.start(now_ts)
-+        confirm_window_ref[0] = window
-+        local_vad_meta_sent[0] = False
-+        _emit_local_vad_signal(now_ts)
-+        _jlog(
-+            "confirm_start",
-+            sid=sid,
-+            turn_id=turn_id_ref[0],
-+            min_ms=confirm_min_ms,
-+            max_ms=confirm_max_ms,
-+            max_gap_ms=confirm_gap_ms,
-+            min_tokens=confirm_min_tokens,
-+            min_confidence=confirm_min_conf,
-+            snr_threshold_db=confirm_snr_db,
-+        )
-+        _schedule_confirm_timeout(window)
-+
-+    def _handle_confirm_chunk(chunk: bytes, now_ts: float) -> None:
-+        window = confirm_window_ref[0]
-+        if not window:
-+            return
-+        window.set_snr_enabled(not bool(transport.get("containerized_opus")))
-+        decision = window.observe_chunk(chunk, now_ts)
-+        if decision.action == "commit" and decision.metrics is not None:
-+            _finalize_confirm_commit(
-+                decision.metrics.get("reason") or "chunk", decision.metrics, window
-+            )
-+        elif decision.action == "abort" and decision.metrics is not None:
-+            _finalize_confirm_abort(
-+                decision.metrics.get("reason") or "chunk", decision.metrics, window
-+            )
-+
-+    def _handle_confirm_partial(ev: Dict[str, Any]) -> None:
-+        window = confirm_window_ref[0]
-+        if not window:
-+            return
-+        now_ts = time.time()
-+        decision = window.observe_partial(
-+            ev.get("token_count"), ev.get("confidence"), now_ts
-+        )
-+        if decision.action == "commit" and decision.metrics is not None:
-+            _finalize_confirm_commit(
-+                decision.metrics.get("reason") or "partial",
-+                decision.metrics,
-+                window,
-+            )
-+        elif decision.action == "abort" and decision.metrics is not None:
-+            _finalize_confirm_abort(
-+                decision.metrics.get("reason") or "partial",
-+                decision.metrics,
-+                window,
-+            )
-+
-+    def _ensure_confirm_closed(reason: str) -> None:
-+        window = confirm_window_ref[0]
-+        if not window:
-+            return
-+        decision = window.cancel(reason, time.time())
-+        if decision.action == "abort" and decision.metrics is not None:
-+            _finalize_confirm_abort(reason, decision.metrics, window)
-+
-     def _reset_turn_metrics(start_ts: float) -> None:
-         turn_timing["start"][0] = start_ts
-         turn_timing["dg_open"][0] = 0.0
-         turn_timing["first_partial"][0] = 0.0
-         turn_timing["final"][0] = 0.0
-         turn_finish_logged[0] = False
- 
-     def _emit_no_audio_alert(reason: str) -> None:
-         if no_audio_notified[0]:
-             return
-         if sent_any_audio[0]:
-             return
-         no_audio_notified[0] = True
-         turn_id = no_audio_turn_id[0] or turn_id_ref[0] or 0
-         since_first_ms = None
-         if mic_first_ts[0]:
-             since_first_ms = int(max(0.0, (time.time() - mic_first_ts[0]) * 1000))
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_no_audio_detected",
-                 sid=sid,
-                 turn_id=turn_id,
-                 reason=reason,
-                 window_s=no_audio_window_s,
-                 mic_chunks=len(mic_chunks),
-@@ -993,50 +1205,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 cfg["_transport"] = transport
-                 cfg["_jlog"] = _jlog
-                 cfg.setdefault("session_id", sid)
-                 cfg["_url_tag"] = f"{WS_ASGI_BUILD}:{sid}"
-                 _jlog("asr_connect_begin", sid=sid, transport=transport)
-                 client = DeepgramClient(cfg)
-                 dg = client
-                 await client.connect()
-                 dg_state = "open"
-                 connect_result["ok"] = True
-                 turn_id_ref[0] = buf.turn_seq + 1
-                 rx_task = asyncio.create_task(
-                     _pump_dg_to_client(
-                         client,
-                         send,
-                         turn_id_ref,
-                         final_seen,
-                         pending_final_turns,
-                         synthetic_final_turns,
-                         completed_llm_turns,
-                         sid,
-                         asr_ready_evt,
-                         _flush_buffered_chunks,
-                         turn_timing,
-                         _log_turn_finish,
-+                        _handle_confirm_partial,
-                     )
-                 )
-                 _jlog("asr_connect_ok", sid=sid)
-             except Exception as e:
-                 dg_state = "closed"
-                 dg = None
-                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
-                 with contextlib.suppress(Exception):
-                     await _ws_send_json(
-                         send, make_error("asr_connect_fail", type(e).__name__)
-                     )
-                 with contextlib.suppress(Exception):
-                     _admin_emit and _admin_emit(
-                         "asr:error", session_id=sid, error=f"connect:{type(e).__name__}"
-                     )
-             finally:
-                 dg_connect_task = None
- 
-         dg_connect_task = asyncio.create_task(_connect())
-         with contextlib.suppress(Exception):
-             await dg_connect_task
-         return connect_result["ok"]
- 
-     def _dg_client_ready(client: Optional[DeepgramClient]) -> bool:
-         """Return True if the Deepgram client reports an open websocket."""
-@@ -1244,57 +1457,66 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                             current_assistant_turn = None
-                         confirm_ms = 420
-                         try:
-                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
-                         except Exception:
-                             confirm_ms = 420
- 
-                         def _on_barge_commit() -> None:
-                             target_turn = current_assistant_turn
-                             try:
-                                 latest = bus.current_assistant_turn(sid)
-                             except Exception:
-                                 latest = None
-                             if latest:
-                                 target_turn = latest
-                             if target_turn:
-                                 try:
-                                     bus.cancel_turn(sid, target_turn)
-                                 except Exception:
-                                     pass
-                             try:
-                                 bus.broadcast(sid, {"type": "state", "phase": "ready"})
-                             except Exception:
-                                 pass
- 
--                        with contextlib.suppress(Exception):
--                            barge.start(
-+                        barge_started = False
-+                        try:
-+                            barge_started = barge.start(
-                                 confirm_ms=confirm_ms,
-                                 on_commit=_on_barge_commit,
-                                 send_state=_send_barge_state,
-+                                auto_commit=False,
-                             )
-+                        except Exception:
-+                            barge_started = False
-                         turn_id_ref[0] = buf.turn_seq + 1
-+                        if barge_started:
-+                            _start_confirm_window(now)
-+                        else:
-+                            confirm_window_ref[0] = None
-+                            local_vad_meta_sent[0] = False
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-                             completed_llm_turns.discard(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
-                         turn_connect_started[0] = False
-                         # reset mic capture
-                         mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
-                         _reset_turn_metrics(now)
-                         _schedule_no_audio_watch(turn_id_ref[0])
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "turn_start",
-                                 sid=sid,
-                                 turn_id=turn_id_ref[0],
-                                 first_bytes=len(raw_chunk),
-                             )
-                     # Detect container early using raw bytes
- 
-                     # Detect container early
-                     try:
-@@ -1338,50 +1560,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                         sid=sid,
-                                         container=transport.get("container"),
-                                         codec=transport.get("codec"),
-                                         containerized_opus=transport.get(
-                                             "containerized_opus"
-                                         ),
-                                     )
-                     except Exception:
-                         pass
- 
-                     chunk = raw_chunk
-                     buf.append(chunk)
- 
-                     # capture bytes for diagnostic playback
-                     if MIC_CAPTURE:
-                         mic_chunks.append(chunk)
-                         mic_last_ts[0] = now
-                     _jlog(
-                         "mic_capture_append",
-                         sid=sid,
-                         turn_id=turn_id_ref[0],
-                         chunks=len(mic_chunks),
-                         last_bytes=len(chunk),
-                     )
- 
-+                    _handle_confirm_chunk(raw_chunk, now)
-+
-                     if not _has_deepgram_key():
-                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
-                         continue
- 
-                     # Stage early frames
-                     if chunk:
-                         buffered_chunks.append(chunk)
-                         dropped_now = 0
-                         if len(buffered_chunks) > max_buffered_chunks:
-                             dropped_now = len(buffered_chunks) - max_buffered_chunks
-                             for _ in range(dropped_now):
-                                 if not buffered_chunks:
-                                     break
-                                 buffered_chunks.popleft()
-                             _jlog(
-                                 "ws_audio_drop", sid=sid, dropped=dropped_now, queued=len(buffered_chunks)
-                             )
-                         _maybe_emit_backpressure(len(buffered_chunks), dropped_now=dropped_now)
- 
-                     # Ensure provider connection
-                     if not turn_connect_started[0] and dg_state == "closed":
-                         turn_connect_started[0] = True
-                         if dg_connect_task is None:
-                             with contextlib.suppress(Exception):
-                                 _jlog(
-@@ -1573,50 +1797,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 try:
-                                     await asyncio.to_thread(
-                                         run_ws_user_turn,
-                                         sid,
-                                         text,
-                                         corr,
-                                         meta_overrides=meta_overrides,
-                                     )
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-                                         await _ws_send_json(
-                                             send,
-                                             make_error(
-                                                 "user_fail", e.__class__.__name__
-                                             ),
-                                         )
- 
-                             asyncio.create_task(_bg_user())
- 
-                         elif t == "CloseStream":
-                             _jlog("ws_close_stream", sid=sid)
- 
-                             # Always define this first so later 'if synthetic_emitted' is safe
-                             synthetic_emitted = False
- 
-+                            _ensure_confirm_closed("close_stream")
-+
-                             if buf.is_empty():
-                                 # Empty turn closure; synthesize ids + reset final tracking.
-                                 turn_id_ref[0] = buf.turn_seq + 1
-                                 final_seen[0] = False
-                                 _reset_turn_metrics(time.time())
-                                 with contextlib.suppress(Exception):
-                                     _jlog(
-                                         "turn_start",
-                                         sid=sid,
-                                         turn_id=turn_id_ref[0],
-                                         first_bytes=0,
-                                         empty_turn=True,
-                                     )
- 
-                             # --- Get a turn_id (with guard logs) ---
-                             _jlog(
-                                 "before_close_turn",
-                                 sid=sid,
-                                 next_turn_id=buf.turn_seq + 1,
-                             )
-                             try:
-                                 turn_id, _pcm = buf.close_turn()
-                             except Exception as e:
-                                 _jlog("close_turn_fail", sid=sid, err=type(e).__name__)
-                                 turn_id = turn_id_ref[0] or (buf.turn_seq + 1)
-@@ -1828,50 +2054,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 # No provider configured: still emit empty final + end to advance the dialog.
-                                 if not final_seen[0]:
-                                     if await _emit_synthetic_final(
-                                         turn_id, "no_provider"
-                                     ):
-                                         synthetic_emitted = True
-                                         with contextlib.suppress(ValueError):
-                                             pending_final_turns.remove(turn_id)
-                                         synthetic_final_turns.add(turn_id)
- 
-                             _cancel_no_audio_watch()
-                             if (not sent_any_audio[0]) and not no_audio_notified[0]:
-                                 elapsed = None
-                                 if mic_first_ts[0]:
-                                     elapsed = time.time() - mic_first_ts[0]
-                                 if no_audio_window_s <= 0 or (
-                                     elapsed is not None and elapsed >= no_audio_window_s
-                                 ):
-                                     _emit_no_audio_alert("close_stream")
- 
-                             if synthetic_emitted:
-                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
-                                 final_seen[0] = False
- 
-                             if barge.is_paused():
-+                                _ensure_confirm_closed("cleanup")
-                                 with contextlib.suppress(Exception):
-                                     barge.cancel(_send_barge_state)
-                                 await asyncio.sleep(0)
- 
-                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
- 
-                             _jlog(
-                                 "mic_capture_block_enter",
-                                 sid=sid,
-                                 turn_id=turn_id,
-                                 mic_chunks=len(mic_chunks),
-                             )
-                             if MIC_CAPTURE:
-                                 try:
-                                     raw = b"".join(mic_chunks)
-                                     _jlog(
-                                         "mic_capture_summary",
-                                         sid=sid,
-                                         turn_id=turn_id,
-                                         bytes=len(raw),
-                                         chunks=len(mic_chunks),
-                                         container=transport.get("container"),
-                                         codec=transport.get("codec"),
-                                         containerized_opus=transport.get(
-                                             "containerized_opus"
-@@ -1922,85 +2149,91 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                             # Send the audio back over WS so the client can play it
-                                             await _ws_send_diagnostic_audio(
-                                                 send, turn_id, mime, data_to_echo
-                                             )
-                                 except Exception as e:
-                                     _jlog(
-                                         "mic_capture_fail",
-                                         sid=sid,
-                                         err=type(e).__name__,
-                                     )
- 
-                         else:
-                             # Unknown type already filtered by schema; no-op to future-proof.
-                             pass
- 
-                     except ValueError as e:
-                         await _ws_send_json(send, make_error("bad_message", str(e)))
-                 else:
-                     # websocket.receive without text/bytes
-                     pass
-             else:
-                 # Other ASGI events are ignored
-                 pass
- 
-     finally:
-+        _ensure_confirm_closed("shutdown")
-+        _cancel_confirm_timeout()
-         with contextlib.suppress(Exception):
-             _cancel_no_audio_watch()
-         await _remove_active_ws_entry("cleanup")
-         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_conn_cleanup",
-                 conn_id=conn_id,
-                 sid=sid,
-                 duration=duration,
-                 had_disconnect=had_disconnect,
-             )
-         with contextlib.suppress(Exception):
-             if _admin_emit:
-                 _admin_emit(
-                     "ws_conn_cleanup",
-                     conn_id=conn_id,
-                     sid=sid,
-                     duration=duration,
-                     had_disconnect=had_disconnect,
-                 )
-         # Clean up safely; never raise in cleanup
-         with contextlib.suppress(Exception):
-             if rx_task:
-                 rx_task.cancel()
-                 await rx_task
-         with contextlib.suppress(Exception):
-             if dg is not None:
-                 await dg.close(wait_for_final=False)
-         with contextlib.suppress(Exception):
-             bus_task.cancel()
-             await bus_task
-         with contextlib.suppress(Exception):
-             ping_task.cancel()
-             await ping_task
-+        for task in list(confirm_timeout_cancelled):
-+            with contextlib.suppress(Exception):
-+                await task
-+        confirm_timeout_cancelled.clear()
-         with contextlib.suppress(Exception):
-             await send(
-                 {"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"}
-             )
- 
- 
- # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
- try:
-     from starlette.websockets import WebSocket as _StarletteWebSocket  # noqa
- except Exception:
-     _StarletteWebSocket = None
- 
- 
- async def ws_chat(websocket):
-     """Accept, validate, send ready, then pump frames to keep the connection alive."""
-     _jlog("ws_chat_compat_invoked")
-     await websocket.accept()
-     try:
-         sid = _get_session_id(websocket.scope)
-     except Exception:
-         sid = "default"
- 
-     try:
-         await websocket.send_text(_dumps({"type": "ready", "session_id": sid}))
-     except Exception:
-diff --git a/tests/test_phase3.py b/tests/test_phase3.py
-index 23792a58f2579112a4757bf95889c7bcdb86f4c7..99c400b13df016181abd644ea134f92c3471c8ad 100644
---- a/tests/test_phase3.py
-+++ b/tests/test_phase3.py
-@@ -59,25 +59,64 @@ def test_email_transcript_on_end():
- def test_nudges_arm_and_cancel_via_chat():
-     # Verify that a nudge can be armed and then canceled by user input
-     nudges = importlib.import_module("app.policy.nudges")
-     from app.db import db
-     sid = "s-nudge-3"
-     db.update_config({"nudges_enabled": True, "nudge_delay_ms": 100})  # speed up for test
-     nudges._cancel_all()
-     ok = nudges.arm_nudge(sid)
-     assert ok is True and sid in nudges._scheduled
-     # Now cancel via chat
-     app = import_app()
-     client = app.test_client()
-     rv = client.post("/api/v1/chat", json={"session_id": sid, "text": "hello"})
-     assert rv.status_code == 200
-     time.sleep(0.05)
-     assert sid not in nudges._scheduled, "nudge should be canceled by chat input"
- 
- def test_one_ws_per_tab_guard_still_present():
-     guard = importlib.import_module("app.ws.one_tab")
-     key = "s3:tabA"
-     assert guard.acquire(key) is True
-     assert guard.acquire(key) is False
-     guard.release(key)
-     assert guard.acquire(key) is True
- 
-+
-+def test_confirm_window_commits_after_valid_partial():
-+    from app.ws.confirm_window import ConfirmWindow
-+    import struct
-+
-+    win = ConfirmWindow(
-+        min_duration_ms=400,
-+        max_duration_ms=900,
-+        max_gap_ms=400,
-+        snr_threshold_db=4.0,
-+    )
-+    start = 0.0
-+    win.start(start)
-+    loud_chunk = struct.pack("<80h", *([1200] * 80))
-+
-+    assert win.observe_chunk(loud_chunk, start + 0.12).action is None
-+    assert win.observe_partial(3, 0.7, start + 0.28).action is None
-+    decision = win.observe_chunk(loud_chunk, start + 0.45)
-+    assert decision.action == "commit"
-+    metrics = decision.metrics or {}
-+    assert metrics.get("reason") == "chunk"
-+    assert metrics.get("partial_tokens") == 3
-+
-+
-+def test_confirm_window_aborts_on_low_confidence_partial():
-+    from app.ws.confirm_window import ConfirmWindow
-+    import struct
-+
-+    win = ConfirmWindow(min_duration_ms=350, max_duration_ms=900, snr_threshold_db=4.0)
-+    start = 0.0
-+    win.start(start)
-+    chunk = struct.pack("<80h", *([900] * 80))
-+
-+    win.observe_chunk(chunk, start + 0.1)
-+    decision = win.observe_partial(3, 0.3, start + 0.2)
-+    assert decision.action == "abort"
-+    metrics = decision.metrics or {}
-+    assert metrics.get("reason") == "partial_low_confidence"
-+
-diff --git a/tests/test_phase9_acceptance.py b/tests/test_phase9_acceptance.py
-index b97a7db847ffc87f88f8dd175044a4853c3e0370..af469716e3bf9e516d2f0002e6f481992519505c 100644
---- a/tests/test_phase9_acceptance.py
-+++ b/tests/test_phase9_acceptance.py
-@@ -40,25 +40,55 @@ def test_nudge_suggestions_email_and_admin_sse(monkeypatch):
-     # greet to get suggestions & nudge path
-     sid="p9nudge"; q=bus.subscribe(sid); c.get(f'/api/v1/greet?session_id={sid}')
-     frames=_drain(q,1000); sug=[f for f in frames if f.get('type')=='suggestions'][-1]
-     label=sug['items'][0]['label']
-     c.post('/api/v1/chat', json={'session_id':sid,'text':label})
-     # nudge backoff
-     r1=c.post('/api/v1/chat', json={'session_id':sid,'cmd':'nudge'}).get_json()
-     r2=c.post('/api/v1/chat', json={'session_id':sid,'cmd':'nudge'}).get_json()
-     r3=c.post('/api/v1/chat', json={'session_id':sid,'cmd':'nudge'}).get_json()
-     assert r1['nudged'] and r2['nudged'] and (not r3['nudged'])
-     # End emails transcript to user
-     tok=c.get('/api/v1/auth/csrf').get_json()['csrf']
-     c.post('/api/v1/auth/login', json={'email':'jwsiejk@purestorage.com'}, headers={'X-CSRF-Token': tok})
-     end=c.post('/api/v1/chat', json={'session_id':sid,'cmd':'end_session'}, headers={'X-CSRF-Token': tok}).get_json()
-     assert end['emailed'] is True and any(e['to']=='jwsiejk@purestorage.com' for e in db.list_emails())
-     # Admin SSE + actions
-     logs_stream=c.get('/api/v1/admin/logs')
-     c.post('/api/v1/admin/config', json={'suggestions_max_items':3}, headers={'X-CSRF-Token': tok})
-     c.post('/api/v1/admin/layouts', json={'breakpoint':'desktop','json':{'grid':'v1'}})
-     c.post('/api/v1/admin/layouts/rollback', json={'breakpoint':'desktop','version':1})
-     sse = logs_stream.data.decode('utf-8','ignore')
-     assert 'config_updated' in sse or 'layout_updated' in sse or 'audit' in sse
-     # Users & Memory
-     ls=c.get('/api/v1/admin/sessions').get_json()['sessions']
-     assert any(s['id']==sid for s in ls)
-+
-+
-+def test_confirm_window_gap_abort_path():
-+    from app.ws.confirm_window import ConfirmWindow
-+    import struct
-+
-+    win = ConfirmWindow(min_duration_ms=400, max_duration_ms=900, max_gap_ms=150, snr_threshold_db=4.0)
-+    start = 0.0
-+    win.start(start)
-+    chunk = struct.pack("<80h", *([1000] * 80))
-+    win.observe_chunk(chunk, start + 0.05)
-+    decision = win.observe_chunk(chunk, start + 0.26)
-+    assert decision.action == "abort"
-+    metrics = decision.metrics or {}
-+    assert metrics.get("reason") == "gap"
-+
-+
-+def test_confirm_window_timeout_abort_path():
-+    from app.ws.confirm_window import ConfirmWindow
-+    import struct
-+
-+    win = ConfirmWindow(min_duration_ms=300, max_duration_ms=320, snr_threshold_db=4.0)
-+    start = 0.0
-+    win.start(start)
-+    chunk = struct.pack("<80h", *([850] * 80))
-+    win.observe_chunk(chunk, start + 0.1)
-+    decision = win.timeout(start + 0.5)
-+    assert decision.action == "abort"
-+    metrics = decision.metrics or {}
-+    assert metrics.get("reason") == "timeout"
+   const vad = hooks.state.vad;
+   assert.ok(vad, 'VAD instance should be created with defaults');
+   assert.equal(vad.opts.minSpeechMs, 360, 'default minSpeechMs should be 360 ms');
+   assert.equal(vad.opts.startDbOffset, 10, 'default base threshold should be 10 dB');
+   assert.equal(vad.opts.stopDbOffset, 6, 'default exit threshold should be 6 dB');
++  assert.equal(vad.opts.echoSuppressDb, 15, 'default echo suppression gap should be 15 dB');
+   voice.disarmVAD();
+ });
