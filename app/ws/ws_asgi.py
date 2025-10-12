@@ -426,7 +426,6 @@ async def _emit_user_final_payload(
         if isinstance(turn_timing, dict):
             voiced_ms = int(turn_timing.get("voiced_ms", [0])[0] or 0)
 
-    # Thresholds (env-overridable)
     min_chars = int(os.getenv("NULL_TURN_MIN_CHARS", "5"))
     min_voiced = int(os.getenv("NULL_TURN_MIN_VOICED_MS", "600"))
 
@@ -439,7 +438,6 @@ async def _emit_user_final_payload(
             text_len=len(text_str),
             final_reason=final_reason,
         )
-        # Still close the turn cleanly so the client advances.
         with contextlib.suppress(Exception):
             await _ws_send_json(send, make_utterance_end(turn_id_for_event))
         return
@@ -455,15 +453,21 @@ async def _emit_user_final_payload(
         ),
     )
 
-        if on_turn_finish:
-            with contextlib.suppress(Exception):
-                on_turn_finish(turn_id_for_event, final_reason, False, len(text))
-        await _ws_send_json(send, make_utterance_end(turn_id_for_event))
+    if on_turn_finish:
         with contextlib.suppress(Exception):
-            if _admin_emit:
-                _admin_emit("asr:final", session_id=sid)
-        if not text:
-            return
+            on_turn_finish(turn_id_for_event, final_reason, False, len(text_str))
+
+    await _ws_send_json(send, make_utterance_end(turn_id_for_event))
+
+    with contextlib.suppress(Exception):
+        if _admin_emit:
+            _admin_emit("asr:final", session_id=sid)
+
+    if not text_str:
+        return
+
+    # ... rest of your existing logic after the final (metadata/NLU/etc.) ...
+
         dialog_nlu_pre: Dict[str, Any] = {}
         universal_pre: Dict[str, Any] = {}
         meta_stub = {"source": "user_ws", "channel": "ws"}
