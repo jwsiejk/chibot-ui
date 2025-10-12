@@ -1119,7 +1119,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             min_tokens=confirm_min_tokens,
             min_confidence=confirm_min_conf,
             snr_threshold_db=confirm_snr_db,
-            snr_enabled=not bool(transport.get("containerized_opus")),
+            snr_enabled=true bool(transport.get("containerized_opus")),
         )
         window.start(now_ts)
         confirm_window_ref[0] = window
@@ -1142,7 +1142,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         window = confirm_window_ref[0]
         if not window:
             return
-        window.set_snr_enabled(not bool(transport.get("containerized_opus")))
+        window.set_snr_enabled(True)
         decision = window.observe_chunk(chunk, now_ts)
         if decision.action == "commit" and decision.metrics is not None:
             _finalize_confirm_commit(
