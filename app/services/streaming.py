@@ -201,7 +201,7 @@ from ..dialog.policy import pick as pick_dialog_policy
 from ..config import load_settings
 
 try:
-    from ..api_v1.admin import _emit as _admin_emit  # SSE to Admin
+    from ..admin_log import emit as _admin_emit  # SSE/Admin relay
 except Exception:
     def _admin_emit(*a, **k):  # no-op if admin channel absent
         pass
@@ -479,8 +479,25 @@ def _log_policy_decision(*,
             payload["persona_move"] = seed_move_name
         if used_docs:
             payload["used_docs"] = used_docs
-
         _jlog("policy.decision", **payload)
+
+        if callable(_admin_emit):
+            label_move = (
+                resolved_move_name
+                or policy_move_name
+                or normalized_action_name
+                or seed_move_name
+                or "unknown"
+            )
+            try:
+                _admin_emit(
+                    "policy_decision",
+                    event="policy_decision",
+                    label=f"policy_decision: {label_move}",
+                    **payload,
+                )
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -1144,7 +1161,21 @@ def _log_suggestions_made(turn_id: Optional[str],
             items=items,
             max_items=max_items,
             max_words_per_item=max_words,
+            count=len(items),
         )
+        if callable(_admin_emit):
+            try:
+                _admin_emit(
+                    "suggestions_made",
+                    event="suggestions_made",
+                    turn_id=str(turn_id) if turn_id is not None else None,
+                    items=items,
+                    max_items=max_items,
+                    max_words_per_item=max_words,
+                    count=len(items),
+                )
+            except Exception:
+                pass
     except Exception:
         pass
 

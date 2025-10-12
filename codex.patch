@@ -1,299 +1,370 @@
 diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 6ad76dcbcdb1db4f2f75867c4f73e7d4f506596c..85236557414ede6277188ad7e680643719a9d179 100644
+index 85236557414ede6277188ad7e680643719a9d179..1d6f85e329a69779a591c132513b77f86a350fc9 100644
 --- a/app/services/streaming.py
 +++ b/app/services/streaming.py
-@@ -1892,60 +1892,64 @@ def _make_foundation_frames(seed_text: str,
-                             action: Optional[str] = None,
-                             broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
-     if turn_id is None:
-         turn_id = _allocate_turn_id(force_turn_id)
-     turn_id = str(turn_id)
+@@ -179,51 +179,51 @@ from .llm_provider import get_provider
+ from .awareness import annotate
+ from .engagement import score as score_engagement
+ from .retrieval import search as kb_search
+ from .persona_prompt import build_persona_preamble, format_kb_context
+ from .suggestions import hygienic_suggestions
+ from .vendor_clients import make_openai_client
+ from .nlg.humanize import humanize_text, sounds_botty
+ from .greet_idempotency import get_or_create_greet_turn, DEFAULT_TTL_SEC
+ from ..db import db
+ from ..ws.bus import bus
+ from ..policy import nudges
+ from ..obs import jlog as _jlog
+ from ..obs.nlu_logging import NluLoggingContext, create_context as _create_nlu_context
+ from ..personas.store import PersonaManager, PersonaStore
+ from ..personas.prompt_builder import build_messages
+ from .. import nlu as _nlu
+ from ..nlu.classifier import classify as classify_turn
+ from ..nlu.universal_interpreter import (
+     ensure_all_fields as _ensure_universal_fields,
+     interpret as _interpret_universal,
+ )
+ from ..dialog.policy import pick as pick_dialog_policy
+ from ..config import load_settings
  
-     if telemetry is None:
-         telemetry = _create_nlu_context(
-             turn_id=turn_id,
-             session_id=session_id,
-             correlation_user_msg_id=correlation_user_msg_id,
-             meta=meta,
-             settings=SETTINGS,
-             cfg=cfg,
-         )
-         telemetry.turn_id = turn_id
-         telemetry.log_start(seed_text, meta=meta)
+ try:
+-    from ..api_v1.admin import _emit as _admin_emit  # SSE to Admin
++    from ..admin_log import emit as _admin_emit  # SSE/Admin relay
+ except Exception:
+     def _admin_emit(*a, **k):  # no-op if admin channel absent
+         pass
+ 
+ 
+ def _emit_turn_action_metadata(turn_id: Optional[str],
+                                meta: Optional[Dict[str, Any]],
+                                *,
+                                is_greet: bool) -> None:
+     """Emit structured NLU/policy metadata for admin observers."""
+     if not turn_id or not isinstance(meta, dict):
+         return
+ 
+     if isinstance(meta.get(_DIALOG_NLU_KEY), dict):
+         nlu_meta = meta.get(_DIALOG_NLU_KEY) or {}
+     elif isinstance(meta.get("nlu"), dict):
+         nlu_meta = meta.get("nlu") or {}
      else:
-         telemetry.turn_id = turn_id
-     store = PersonaStore()
-     persona = PersonaManager(store).get_active()
-     dialog_meta = dict(meta or {})
- 
-     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
-     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store) or {}
-+    policy_summary = summarize_policy_metadata(policy)
-     if isinstance(policy, dict):
-         for key in ("confidence_band", "clarify_variant"):
-             value = policy.get(key)
-             existing = meta.get(key) if isinstance(meta, dict) else None
-             chosen = existing or value
-             if value is not None and existing in (None, ""):
-                 meta[key] = value
-                 chosen = value
-             if chosen is not None and key not in dialog_meta:
-                 dialog_meta[key] = chosen
-+    if policy_summary and isinstance(meta, dict):
-+        for key, value in policy_summary.items():
-+            meta.setdefault(key, value)
- 
-     telemetry.log_entities(nlu_result.get("entities"))
- 
-     try:
-         nlu_meta = dict(nlu_result)
-     except Exception:
          nlu_meta = {}
-     else:
-         meta["nlu"] = nlu_meta
-         meta[_DIALOG_NLU_KEY] = dict(nlu_meta)
- 
-     provided_action: Optional[str] = None
-     if action is not None:
-         try:
-             provided_action = str(action or "").strip().lower()
-         except Exception:
-             provided_action = None
-     normalized_action = provided_action or _normalize_action(meta)
-     policy_move = _policy_action(policy)
-     clarifier_style: Optional[str] = None
-     band_flag = str(dialog_meta.get('confidence_band') or meta.get('confidence_band') or "").strip().lower()
-     variant_flag = str(dialog_meta.get('clarify_variant') or meta.get('clarify_variant') or "").strip().lower()
-     existing_style = str(meta.get('clarifier_style') or dialog_meta.get('clarifier_style') or "").strip().lower()
-     if policy_move == "clarify" and (band_flag == "low" or variant_flag == "high_level"):
-         clarifier_style = "clarifier_high_level"
-@@ -2135,50 +2139,67 @@ def _make_foundation_frames(seed_text: str,
-     active_teacher_move = policy_action or teacher_move
-     if _should_force_welcome_move(meta, is_greet=is_greet, intent=nlu_result.get('intent')):
-         active_teacher_move = _WELCOME_MOVE
-     kb_source = kb_candidates if 'kb_candidates' in locals() else None
-     _log_policy_decision(
-         session_id=session_id,
-         turn_id=turn_id,
-         resolved_move=active_teacher_move,
-         normalized_action=normalized_action,
-         policy_move=policy_action,
-         teacher_move_seed=teacher_move,
-         fallback_fired=fallback_fired,
-         fallback_reason=fallback_reason,
-         meta=meta,
-         nlu_meta=nlu_result,
-         used_docs_source=kb_source,
-     )
-     chunk: Dict[str, Any] = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': safe_reply,
-         'kb_hits': 0,
-         'intent': nlu_result.get('intent'),
-         'teacher_move': active_teacher_move,
+     policy_payload = {
+         "action": meta.get(_DIALOG_ACTION_KEY) or meta.get("action"),
+         "verbosity": meta.get(_DIALOG_VERBOSITY_KEY) or meta.get("verbosity"),
+         "show_suggestions": meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY) or meta.get("show_suggestions"),
      }
-+    if policy_summary:
-+        band = policy_summary.get('planner_confidence_band') or policy_summary.get('policy_confidence_band')
-+        if band:
-+            chunk['planner_confidence_band'] = band
-+        policy_band = policy_summary.get('policy_confidence_band')
-+        if policy_band and policy_band != band:
-+            chunk['policy_confidence_band'] = policy_band
-+        chips = policy_summary.get('policy_chips')
-+        if chips:
-+            chunk['policy_chips'] = chips
-+    if isinstance(meta, dict):
-+        clarify_variant = meta.get('clarify_variant')
-+        clarifier_style = meta.get('clarifier_style')
-+        if clarifier_style:
-+            chunk['clarifier_style'] = clarifier_style
-+        if clarify_variant:
-+            chunk['clarify_variant'] = clarify_variant
-     if correlation_user_msg_id:
-         chunk['correlation_user_msg_id'] = correlation_user_msg_id
-     frames.append(chunk)
+     payload = {
+@@ -457,52 +457,69 @@ def _log_policy_decision(*,
+                         nlu_confidence = float(str(confidence_raw))
+                     except Exception:
+                         nlu_confidence = None
  
-     legacy_suggestions = []
-     try:
-         if cfg.get('suggestions_enabled', True):
-             legacy_suggestions = hygienic_suggestions(safe_reply)
+         used_docs = _summarize_used_docs(used_docs_source)
+ 
+         payload: Dict[str, Any] = {
+             "sid": session_id,
+             "turn_id": turn_id,
+             "teacher_move": resolved_move_name or None,
+             "teacher_move_family": _teacher_move_family(resolved_move_name),
+             "reason": reason,
+             "fallback_fired": bool(fallback_fired),
+             "fallback_reason": fallback_reason,
+             "nlu_intent": nlu_intent,
+             "nlu_confidence": nlu_confidence,
+         }
+         if normalized_action_name:
+             payload["meta_action"] = normalized_action_name
+         if policy_move_name:
+             payload["policy_move"] = policy_move_name
+         if seed_move_name and seed_move_name != resolved_move_name:
+             payload["persona_move"] = seed_move_name
+         if used_docs:
+             payload["used_docs"] = used_docs
+-
+         _jlog("policy.decision", **payload)
++
++        if callable(_admin_emit):
++            label_move = (
++                resolved_move_name
++                or policy_move_name
++                or normalized_action_name
++                or seed_move_name
++                or "unknown"
++            )
++            try:
++                _admin_emit(
++                    "policy_decision",
++                    event="policy_decision",
++                    label=f"policy_decision: {label_move}",
++                    **payload,
++                )
++            except Exception:
++                pass
      except Exception:
-         legacy_suggestions = []
-     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
-     _log_suggestions_made(
-         turn_id=turn_id,
-         policy_chips=policy_chips,
-         legacy_suggestions=legacy_suggestions,
-         merged_suggestions=merged_suggestions,
-         cfg=cfg,
-     )
+         pass
+ 
+ 
+ def _should_use_foundation(seed_text: str) -> bool:
+     if not ENABLE_CHIP_FOUNDATION:
+         return False
      try:
+         normalized = str(seed_text or "").strip().lower()
+     except Exception:
+         return False
+     if not normalized:
+         return False
+     return True
+ 
+ 
+ _POLICY_SUGGESTION_ACTIONS = frozenset({"clarify", "ask_clarify", "offer_steps"})
+ _WELCOME_MOVE = "offer_steps"
+ _WELCOME_INTENTS = {"greet", "idle"}
+ 
+ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+ 
+ 
+ def _get_dialog_action(meta: Optional[Dict[str, Any]]) -> Optional[str]:
+     if not isinstance(meta, dict):
+@@ -1122,51 +1139,65 @@ def _log_suggestions_made(turn_id: Optional[str],
+         retrieval_set = {
+             text
+             for text in (_display_text(item) for item in (legacy_suggestions or []))
+             if text
+         }
+ 
+         items: List[Dict[str, str]] = []
+         for raw in merged_suggestions or []:
+             text = _display_text(raw)
+             if not text:
+                 continue
+             if text in policy_set:
+                 source = "policy"
+             elif text in retrieval_set:
+                 source = "retrieval"
+             else:
+                 source = "retrieval"
+             items.append({"text": text, "source": source})
+ 
          _jlog(
-             "chips_emit",
-             sid=session_id,
-             intent=nlu_result.get('intent'),
-             count=len(merged_suggestions),
-             items=merged_suggestions,
-diff --git a/tests/test_streaming_policy_logging.py b/tests/test_streaming_policy_logging.py
-index 4c1e0f1ba200135ad188d46c8be13dfef2f4982f..1c7be2c8d06bea1115aa3c4e3856b2f503ff409c 100644
---- a/tests/test_streaming_policy_logging.py
-+++ b/tests/test_streaming_policy_logging.py
-@@ -17,62 +17,65 @@ class DummyTelemetry:
-         return None
- 
-     def mark_fallback(self, *args, **kwargs):
-         return None
- 
-     def log_llm_response(self, *args, **kwargs):
-         return None
- 
-     def log_error(self, *args, **kwargs):
-         return None
- 
- 
- class DummyStore:
-     def match_examples(self, persona_id, user_text, limit=4):
-         return []
+             "suggestions_made",
+             turn_id=str(turn_id) if turn_id is not None else None,
+             items=items,
+             max_items=max_items,
+             max_words_per_item=max_words,
++            count=len(items),
+         )
++        if callable(_admin_emit):
++            try:
++                _admin_emit(
++                    "suggestions_made",
++                    event="suggestions_made",
++                    turn_id=str(turn_id) if turn_id is not None else None,
++                    items=items,
++                    max_items=max_items,
++                    max_words_per_item=max_words,
++                    count=len(items),
++                )
++            except Exception:
++                pass
+     except Exception:
+         pass
  
  
- class DummyPersonaManager:
-     def __init__(self, store):
-         self.store = store
+ def classify(seed_text: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+     """Run lightweight classifiers and awareness annotators for a user turn."""
+     base_meta = meta or {}
+     labels: Dict[str, Any] = {}
  
-     def get_active(self):
-         return {"id": "chip", "name": "Chip", "config": {}}
+     try:
+         primary_labels = classify_turn(seed_text, base_meta)
+         if isinstance(primary_labels, dict):
+             labels.update(primary_labels)
+     except Exception:
+         pass
  
+     try:
+         awareness = annotate(seed_text, base_meta)
+         if isinstance(awareness, dict):
+             labels.update({k: v for k, v in awareness.items() if k not in labels})
+             # Allow awareness annotators to augment existing labels without
+             # clobbering core classifier outputs like intent/topic.
+             for key, value in awareness.items():
+                 if key not in {"intent", "topic", "expected_depth", "needs_scoping"}:
+                     labels[key] = value
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 945907bc6c9533b2423ab17e1308e63d522d2b42..de813f88d2cc5e24874a76b2dd74a6b8938fce97 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -52,60 +52,86 @@ _ADVANCED_LOGGING_ENABLED = bool(
+ try:
+     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
+ except Exception:
+     pass
  
--def _patch_foundation_dependencies(monkeypatch, *, teacher_move="deep_dive"):
-+def _patch_foundation_dependencies(monkeypatch, *, teacher_move="deep_dive", policy_extra=None):
-     monkeypatch.setattr(streaming, "PersonaStore", lambda: DummyStore())
-     monkeypatch.setattr(streaming, "PersonaManager", DummyPersonaManager)
-     monkeypatch.setattr(
-         streaming._nlu,
-         "infer",
-         lambda *a, **k: {"intent": "install", "confidence": 0.91, "tags": {}, "entities": []},
-     )
-     monkeypatch.setattr(
-         streaming._nlu.policy,
-         "decide",
--        lambda *a, **k: {"teacher_move": teacher_move},
-+        lambda *a, **k: {
-+            **({} if policy_extra is None else dict(policy_extra)),
-+            "teacher_move": teacher_move,
-+        },
-     )
-     persona_trace = {
-         "intensity": 0.25,
-         "quote": {
-             "text": "Giddy up",
-             "quote_id": "q-demo",
-             "enabled": True,
-             "picked": True,
-             "candidate_count": 1,
-             "bank": "nebraska",
-         },
-         "toggles": {"humor": 0.2},
-         "guardrail": {"muted": []},
-     }
-     monkeypatch.setattr(
-         streaming,
-         "build_messages",
-         lambda **kwargs: (
-             [{"role": "user", "content": kwargs["user_text"]}],
-             teacher_move,
-             "hash1234",
-             persona_trace,
-         ),
-     )
- 
-@@ -128,50 +131,89 @@ def test_foundation_policy_decision_logs_kb_snippets(monkeypatch):
-     assert policy_events
-     fields = policy_events[0]
-     assert fields["teacher_move"] == "deep_dive"
-     assert fields["teacher_move_family"] == "deep_dive"
-     assert fields["reason"] == "policy"
-     assert fields["nlu_intent"] == "install"
-     assert pytest.approx(fields["nlu_confidence"], rel=1e-6) == 0.91
-     assert "used_docs" in fields and len(fields["used_docs"]) == 2
-     hashes = {entry["hash"] for entry in fields["used_docs"]}
-     assert all(len(h) == 8 for h in hashes)
- 
-     persona_events = [fields for event, fields in captured if event == "persona_applied"]
-     assert persona_events
-     persona_fields = persona_events[0]
-     assert persona_fields["persona_level"] == pytest.approx(0.25)
-     assert persona_fields["persona_elements"] == ["humor:0.20", "quote:q-demo"]
-     assert persona_fields["guardrails_suppressed"] == []
- 
-     suggestions_events = [fields for event, fields in captured if event == "suggestions_made"]
-     assert suggestions_events
-     suggestion_fields = suggestions_events[0]
-     assert suggestion_fields["turn_id"] == "10"
-     assert suggestion_fields["items"] == []
+ # ------------------------------ small helpers ------------------------------
  
  
-+def test_foundation_clarify_chunk_includes_confidence_and_clarify(monkeypatch):
-+    _patch_foundation_dependencies(
-+        monkeypatch,
-+        teacher_move="clarify",
-+        policy_extra={"confidence_band": "low", "clarify_variant": "high_level"},
-+    )
-+    monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: ["Clarify next steps"])
-+
-+    telemetry = DummyTelemetry()
-+    meta = {"kb_snippets": []}
-+    cfg = {"suggestions_enabled": False, "nebraska_quotes_enabled": True}
-+
-+    turn_id, frames = streaming._make_foundation_frames(
-+        "Need clarification",
-+        "session-clarify",
-+        meta,
-+        cfg,
-+        correlation_user_msg_id=None,
-+        turn_id="11",
-+        telemetry=telemetry,
-+        is_greet=False,
-+        fallback_line="Fallback",
-+        fallback_on_empty=True,
-+        fallback_on_error=True,
-+        fallback_emit_event=False,
-+        broadcast_immediately=False,
-+    )
-+
-+    assert turn_id == "11"
-+    assert frames and frames[0]["type"] == "assistant_chunk"
-+    chunk = frames[0]
-+    assert chunk["teacher_move"] == "clarify"
-+    assert chunk.get("planner_confidence_band") == "low"
-+    assert chunk.get("policy_confidence_band", "low") == "low"
-+    assert chunk.get("policy_chips") == ["Clarify next steps"]
-+    assert chunk.get("clarify_variant") == "high_level"
-+    assert chunk.get("clarifier_style") == "clarifier_high_level"
+ def _client_ip_from_scope(scope) -> str:
+     try:
+         c = scope.get("client") or ()
+         if isinstance(c, (list, tuple)) and c:
+             return str(c[0])
+     except Exception:
+         pass
+     try:
+         hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
+         xff = hdrs.get("x-forwarded-for", "").split(",")[0].strip()
+         if xff:
+             return xff
+     except Exception:
+         pass
+     return "unknown"
+ 
+ 
+-def _jlog(event: str, **fields):
++def _normalize_admin_event_name(name: str) -> str:
++    try:
++        text = str(name or "").strip().lower()
++    except Exception:
++        text = ""
++    if not text:
++        return "log"
++    for ch in (" ", "\t", "\r", "\n"):
++        text = text.replace(ch, "_")
++    text = text.replace("/", ":").replace("..", ".")
++    text = text.replace(".", "_")
++    while "__" in text:
++        text = text.replace("__", "_")
++    return text or "log"
 +
 +
- def _patch_legacy_dependencies(monkeypatch, reply_text: str):
-     monkeypatch.setattr(streaming, "_get_persona_for_session", lambda session_id: {"id": "chip", "name": "Chip"})
++def _jlog(event: str, *, admin_event: Optional[str] = None, admin_label: Optional[str] = None, **fields):
+     """Lightweight JSON log (stdout). Keep dependency-free inside WS path."""
+     if not _ADVANCED_LOGGING_ENABLED:
+         return
+     try:
+         import time as _t, json as _json
  
-     class Provider:
-         def generate_reply(self, prompt, persona=None, teacher_move=None, context=None):
-             return reply_text
+         fields.setdefault("event", event)
+         fields.setdefault("ts", _t.time())
+         print(_json.dumps(fields, separators=(",", ":"), ensure_ascii=False))
++
++        admin_cb = globals().get("_admin_emit")
++        if callable(admin_cb):
++            admin_payload = dict(fields)
++            normalized = _normalize_admin_event_name(admin_event or admin_payload.get("event", event))
++            admin_payload["event"] = normalized
++            if admin_label is not None:
++                admin_cb(normalized, label=admin_label, **admin_payload)
++            else:
++                admin_cb(normalized, **admin_payload)
+     except Exception:
+         pass
  
-     monkeypatch.setattr(streaming, "get_provider", lambda cfg: Provider())
-     monkeypatch.setattr(streaming, "hygienic_suggestions", lambda text: [])
-     monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: [])
+ 
+ def _clip_text(txt: str, limit: int = 120) -> str:
+     try:
+         txt = txt or ""
+         if len(txt) <= limit:
+             return txt
+         return txt[:limit] + "…"
+     except Exception:
+         return ""
  
  
- def test_legacy_policy_decision_logs_fallback(monkeypatch):
-     _patch_legacy_dependencies(monkeypatch, reply_text="")
+ def _dumps(obj) -> str:
+     import json as _json
  
-     telemetry = DummyTelemetry()
-     meta = {"action": "offer_steps"}
-     cfg = {"suggestions_enabled": False, "nebraska_persona_level": 0.13, "nebraska_quotes_enabled": False}
-     labels = {"intent": "install", "confidence": 0.5}
-     policy = {"teacher_move": "offer_steps"}
+     return _json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
  
-     captured = []
-     monkeypatch.setattr(streaming, "_jlog", lambda event, **fields: captured.append((event, fields)))
  
-     turn_id, frames = streaming._make_legacy_frames(
+ def _emit_admin_nlu_event(text: str,
+                           sid: str,
+                           *,
+                           dialog_nlu: Optional[Dict[str, Any]] = None,
+                           universal: Optional[Dict[str, Any]] = None) -> None:
+@@ -1314,62 +1340,83 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                     return
+                 _emit_no_audio_alert("timeout")
+             except asyncio.CancelledError:
+                 pass
+             finally:
+                 no_audio_watch_task[0] = None
+ 
+         no_audio_watch_task[0] = asyncio.create_task(_watch())
+ 
+     def _log_turn_finish(
+         turn_id: int, reason: str, synthetic: bool, transcript_chars: int
+     ) -> None:
+         if turn_finish_logged[0]:
+             return
+         turn_finish_logged[0] = True
+         now_ts = time.time()
+         turn_timing["final"][0] = now_ts
+         start_ts = turn_timing.get("start", [0.0])[0]
+         dg_open_ts = turn_timing.get("dg_open", [0.0])[0]
+         first_partial_ts = turn_timing.get("first_partial", [0.0])[0]
+         delta_start = int((now_ts - start_ts) * 1000) if start_ts else None
+         delta_open = int((now_ts - dg_open_ts) * 1000) if dg_open_ts else None
+         delta_partial = (
+             int((now_ts - first_partial_ts) * 1000) if first_partial_ts else None
+         )
++        latency_ms: Dict[str, Optional[int]] = {
++            "final_from_mic_start": delta_start,
++            "final_from_dg_open": delta_open,
++            "final_from_first_partial": delta_partial,
++        }
++        if start_ts and dg_open_ts:
++            latency_ms["dg_connect"] = int(max(0.0, (dg_open_ts - start_ts) * 1000))
++        if start_ts and first_partial_ts:
++            latency_ms["first_partial_from_mic_start"] = int(
++                max(0.0, (first_partial_ts - start_ts) * 1000)
++            )
++        if dg_open_ts and first_partial_ts:
++            latency_ms["first_partial_from_dg_open"] = int(
++                max(0.0, (first_partial_ts - dg_open_ts) * 1000)
++            )
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "turn_finish",
+                 sid=sid,
+                 turn_id=turn_id,
+                 reason=reason,
+                 synthetic=bool(synthetic),
+                 delta_start_ms=delta_start,
+                 delta_asr_open_ms=delta_open,
+                 delta_first_partial_ms=delta_partial,
+                 transcript_chars=int(transcript_chars),
+             )
++            _jlog(
++                "latency_breakdown",
++                sid=sid,
++                turn_id=turn_id,
++                ms={k: v for k, v in latency_ms.items() if v is not None},
++            )
+ 
+     async def _emit_synthetic_final(
+         turn_id: int, reason: str, transcript: str = ""
+     ) -> bool:
+         if final_seen[0]:
+             with contextlib.suppress(Exception):
+                 _jlog(
+                     "ws_synthetic_final_skip_duplicate",
+                     sid=sid,
+                     turn_id=turn_id,
+                     reason=reason,
+                 )
+             return False
+         final_seen[0] = True
+         payload = make_results(turn_id, transcript=transcript, is_final=True)
+         payload["type"] = "Results"
+         await _ws_send_json(send, payload)
+         utterance_payload = make_utterance_end(turn_id)
+         utterance_payload["type"] = "UtteranceEnd"
+         await _ws_send_json(send, utterance_payload)
+         with contextlib.suppress(Exception):
+             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
+         _log_turn_finish(
+             turn_id,
+             reason=reason,

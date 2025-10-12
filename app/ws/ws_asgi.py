@@ -74,7 +74,23 @@ def _client_ip_from_scope(scope) -> str:
     return "unknown"
 
 
-def _jlog(event: str, **fields):
+def _normalize_admin_event_name(name: str) -> str:
+    try:
+        text = str(name or "").strip().lower()
+    except Exception:
+        text = ""
+    if not text:
+        return "log"
+    for ch in (" ", "\t", "\r", "\n"):
+        text = text.replace(ch, "_")
+    text = text.replace("/", ":").replace("..", ".")
+    text = text.replace(".", "_")
+    while "__" in text:
+        text = text.replace("__", "_")
+    return text or "log"
+
+
+def _jlog(event: str, *, admin_event: Optional[str] = None, admin_label: Optional[str] = None, **fields):
     """Lightweight JSON log (stdout). Keep dependency-free inside WS path."""
     if not _ADVANCED_LOGGING_ENABLED:
         return
@@ -84,6 +100,16 @@ def _jlog(event: str, **fields):
         fields.setdefault("event", event)
         fields.setdefault("ts", _t.time())
         print(_json.dumps(fields, separators=(",", ":"), ensure_ascii=False))
+
+        admin_cb = globals().get("_admin_emit")
+        if callable(admin_cb):
+            admin_payload = dict(fields)
+            normalized = _normalize_admin_event_name(admin_event or admin_payload.get("event", event))
+            admin_payload["event"] = normalized
+            if admin_label is not None:
+                admin_cb(normalized, label=admin_label, **admin_payload)
+            else:
+                admin_cb(normalized, **admin_payload)
     except Exception:
         pass
 
@@ -1336,6 +1362,21 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         delta_partial = (
             int((now_ts - first_partial_ts) * 1000) if first_partial_ts else None
         )
+        latency_ms: Dict[str, Optional[int]] = {
+            "final_from_mic_start": delta_start,
+            "final_from_dg_open": delta_open,
+            "final_from_first_partial": delta_partial,
+        }
+        if start_ts and dg_open_ts:
+            latency_ms["dg_connect"] = int(max(0.0, (dg_open_ts - start_ts) * 1000))
+        if start_ts and first_partial_ts:
+            latency_ms["first_partial_from_mic_start"] = int(
+                max(0.0, (first_partial_ts - start_ts) * 1000)
+            )
+        if dg_open_ts and first_partial_ts:
+            latency_ms["first_partial_from_dg_open"] = int(
+                max(0.0, (first_partial_ts - dg_open_ts) * 1000)
+            )
         with contextlib.suppress(Exception):
             _jlog(
                 "turn_finish",
@@ -1347,6 +1388,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 delta_asr_open_ms=delta_open,
                 delta_first_partial_ms=delta_partial,
                 transcript_chars=int(transcript_chars),
+            )
+            _jlog(
+                "latency_breakdown",
+                sid=sid,
+                turn_id=turn_id,
+                ms={k: v for k, v in latency_ms.items() if v is not None},
             )
 
     async def _emit_synthetic_final(
