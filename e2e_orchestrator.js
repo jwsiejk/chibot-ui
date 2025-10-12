@@ -370,6 +370,11 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
 
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
 
+  // Start admin collector early
+  const adminUrlEarly = baseUrl.replace(/\/$/, '') + '/api/v1/admin/logs';
+  await startAdminCollector(page, adminUrlEarly);
+
+
   const dir = path.join(artifactsDir, probe.id); ensureDir(dir);
   await page.screenshot({ path: path.join(dir, 'after_goto.png') });
   fs.writeFileSync(path.join(dir, 'page_url.txt'), page.url());
@@ -400,9 +405,8 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
   try { await page.waitForLoadState('networkidle', { timeout: 4000 }); } catch {}
 
   // Start SSE AFTER Start
-  let adminLogs = [];
-  try { adminLogs = await collectAdminSSEInPage(page, { url: adminUrl, ms: 12000 }); }
-  catch { try { adminLogs = await collectAdminSSEInPage(page, { url: adminUrl, ms: 8000 }); } catch {} }
+  let adminLogs = await harvestAdminLogs(page);
+  await stopAdminCollector(page);
 
   // Let the probe’s audio play/flow
   const ua = (probe.user_action || '').toLowerCase();
@@ -426,6 +430,10 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
   fs.writeFileSync(path.join(dir,'network_ws.json'), JSON.stringify(wsUrls,null,2));
 
   const { passed, findings, metrics } = evalProbe(probe, adminLogs, consoleLines, wsUrls);
+
+  // DOM expectations
+  const domFindings = await checkDomExpectations(page, probe.expect_dom, artifactsDir, probe.id);
+  if (domFindings.length){ findings.push(...domFindings); }
 
   await context.close(); await browser.close();
   return { id: probe.id, pass: passed, findings, metrics };
