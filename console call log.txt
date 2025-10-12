@@ -1,24 +1,426 @@
-[AskChip] bootstrap loaded
-debug.js?v=1760245690:4 [DBG] debug:on Object
-bootstrap.js?v=1760245690:184 [Violation] 'click' handler took 170ms
-ws.js?v=1760245690:50 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760245690', version: '1760245690', flags: undefined, reconnectEnabled: true, sessionStarted: false}
-ws.js?v=1760245690:50 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760245690:22 [bootstrap] startOnce sending greet configure
-debug.js?v=1760245690:4 [DBG] UI→WS {type: 'Configure', session_id: '5cf1df95-36ff-4a12-8ba4-8f19a9cea10c', greet: true, reset: 1}
-bootstrap.js?v=1760245690:22 [bootstrap] startOnce greet configure sent — recorder setup will follow
-bootstrap.js?v=1760245690:22 [WS→UI] {"type":"ready","session_id":"5cf1df95-36ff-4a12-8ba4-8f19a9cea10c"}
+bootstrap.js?v=1760246717:22 [AskChip] bootstrap loaded
+debug.js?v=1760246717:4 [DBG] debug:on Object
+ws.js?v=1760246717:50 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760246717', version: '1760246717', flags: undefined, reconnectEnabled: true, sessionStarted: false}
+ws.js?v=1760246717:50 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760246717:22 [bootstrap] startOnce sending greet configure
+debug.js?v=1760246717:4 [DBG] UI→WS {type: 'Configure', session_id: 'cdca864b-9f64-4ba6-87dd-dfc0d33358cf', greet: true, reset: 1}
+bootstrap.js?v=1760246717:22 [bootstrap] startOnce greet configure sent — recorder setup will follow
+bootstrap.js?v=1760246717:22 [WS→UI] {"type":"ready","session_id":"cdca864b-9f64-4ba6-87dd-dfc0d33358cf"}
 voice.js:82 [voice] mic_device_selected {event: 'mic_device_selected', label: 'Microphone Array (Intel® Smart Sound Technology for Digital Microphones)', sampleRate: 48000, channels: 1}
-bootstrap.js?v=1760245690:22 [bootstrap] startOnce mic initialized — about to arm VAD for voice turns
+bootstrap.js?v=1760246717:22 [bootstrap] startOnce mic initialized — about to arm VAD for voice turns
 voice.js:82 [voice] mic_start {event: 'mic_start', sampleRate: 48000, pollMs: 33}
-bootstrap.js?v=1760245690:22 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
-bootstrap.js?v=1760245690:22 [WS→UI] {"type":"assistant_chunk","turn_id":"1845d0c2a558404bb8014d2eeab0e94f","text":"Hey James, what would you like to accomplish today?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps"}
-bootstrap.js?v=1760245690:22 [WS→UI] {"type":"suggestions","turn_id":"1845d0c2a558404bb8014d2eeab0e94f","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"},{"text":"Explain the business value"}]}
-bootstrap.js?v=1760245690:22 [WS→UI] {"type":"assistant_end","turn_id":"1845d0c2a558404bb8014d2eeab0e94f"}
-bootstrap.js?v=1760245690:22 [WS→UI] {"type":"assistant_audio","turn_id":"1845d0c2a558404bb8014d2eeab0e94f","mime":"audio/mpeg","audio_chunks":["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
-voice.js:82 [voice] vad_speech_end {event: 'vad_speech_end', reason: 'vad_silence'}
-voice.js:82 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'vad_silence'}
+bootstrap.js?v=1760246717:22 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
+voice.js:82 [voice] vad_speech_start {event: 'vad_speech_start'}
+voice.js:82 [voice] recorder started {mime: 'audio/webm; codecs=opus', timeslice: 150}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2094, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2094)
+voice.js:82 [voice] streamed audio chunk {bytes: 2094}
+bootstrap.js?v=1760246717:22 [WS→UI] {"type":"state","phase":"paused"}
+bootstrap.js?v=1760246717:22 [WS→UI] {"type":"meta","turn_id":1,"meta":{"local_vad":"start","ts":1760246894935}}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+bootstrap.js?v=1760246717:22 [WS→UI] {"type":"state","phase":"paused"}
+bootstrap.js?v=1760246717:22 [WS→UI] {"type":"meta","turn_id":1,"meta":{"local_vad":"start","ts":1760246894935}}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:82 [voice] streamed audio chunk {bytes: 2898}
+voice.js:82 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'manual_disarm'}
+ws.js?v=1760246717:50 [ws] sending audio chunk {bytes: 965, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760246717:4 [DBG] UI→WS ArrayBuffer(965)
+voice.js:82 [voice] streamed audio chunk {bytes: 965}
+voice.js:82 [voice] recorder stopped {bytesSent: 385595, mime: 'audio/webm; codecs=opus'}
+ws.js?v=1760246717:50 [DBG] UI→WS {type: 'CloseStream'}
+debug.js?v=1760246717:4 [DBG] UI→WS {type: 'CloseStream'}
 voice.js:82 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
-ws.js?v=1760245690:50 [DBG] UI→WS {type: 'CloseStream'}
-debug.js?v=1760245690:4 [DBG] UI→WS {type: 'CloseStream'}
-voice.js:82 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
-bootstrap.js?v=1760245690:22 [WS close] {code: 1000, reason: 'normal closure'}
+bootstrap.js?v=1760246717:22 [WS close] {code: 1000, reason: 'normal closure'}
