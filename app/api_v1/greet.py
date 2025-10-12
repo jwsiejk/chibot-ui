@@ -54,7 +54,6 @@ def greet():
         try:
             auto_arm_ms = max(0, int(auto_arm_env))
         except Exception:
-            # If it's set but not a number, default to 250ms
             auto_arm_ms = 250
 
     audio_scheduled = False
@@ -166,7 +165,6 @@ def greet():
     # ---- Optional: control frame to auto-arm mic on the client --------------
     try:
         if audio_scheduled and auto_arm_ms is not None:
-            # Nudge the UI to arm the microphone after a short delay so TTS can begin.
             bus.broadcast(sid, {"type": "control", "op": "arm_mic", "delay_ms": int(auto_arm_ms)})
             _admin_emit('mic:auto_arm_suggested', session_id=sid, turn_id=tid, delay_ms=int(auto_arm_ms))
     except Exception:
