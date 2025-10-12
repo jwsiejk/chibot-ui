@@ -12,9 +12,16 @@
 (function(){
   const cfg = {{ askchip_config|tojson }};
   try {
-    const target = (window.__askchip_config = Object.assign({}, window.__askchip_config || {}));
-    const logging = Object.assign({}, target.logging || {}, cfg && cfg.logging ? cfg.logging : {});
-    target.logging = logging;
+    if (cfg && typeof cfg === 'object') {
+      const target = (window.__askchip_config = Object.assign({}, window.__askchip_config || {}));
+      for (const [key, value] of Object.entries(cfg)) {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          target[key] = Object.assign({}, target[key] || {}, value);
+        } else {
+          target[key] = value;
+        }
+      }
+    }
   } catch {}
 })();
 </script>

@@ -92,6 +92,24 @@ function _clearPendingEndTimer() {
   }
 }
 
+function _toFiniteNumber(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed === '') return null;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function _resolveNumber(value, fallback) {
+  const num = _toFiniteNumber(value);
+  return num === null ? fallback : num;
+}
+
 async function _ensureMic(externalStream = null) {
   if (state.stream && state.stream.active) return state.stream;
 
@@ -232,23 +250,66 @@ async function _arm(stream = null, opts = {}) {
   try { globalVad = (window.__askchip_config && window.__askchip_config.vad) || {}; } catch {}
   const cfg = { ...globalVad, ...opts };
 
-  const pollMs = cfg.pollMs ?? 33;
+  const pollMs = _resolveNumber(cfg.pollMs, 33);
+  const baseThresholdDb = _toFiniteNumber(cfg.baseThresholdDb ?? cfg.startDbOffset);
+  const exitThresholdDb = _toFiniteNumber(cfg.exitThresholdDb ?? cfg.stopDbOffset);
+  const ttsBoostDb = _toFiniteNumber(cfg.ttsBoostDb);
+  const echoBoostStartDb = _resolveNumber(
+    cfg.echoBoostStartDb ?? cfg.echoBoostStart ?? ttsBoostDb,
+    8
+  );
+  const hasExplicitStartBoost = cfg.echoBoostStartDb !== undefined || cfg.echoBoostStart !== undefined;
+  let stopFallback = 6;
+  if (ttsBoostDb !== null || hasExplicitStartBoost) {
+    stopFallback = echoBoostStartDb;
+  }
+  const echoBoostStopDb = _resolveNumber(
+    cfg.echoBoostStopDb ?? cfg.echoBoostStop ?? (ttsBoostDb !== null ? ttsBoostDb : null),
+    stopFallback
+  );
+
+  const vadOpts = {
+    // Tunables (admin-configurable via opts or window.__askchip_config.vad)
+    minSpeechMs: _resolveNumber(cfg.minSpeechMs, 360),
+    minSilenceMs: _resolveNumber(cfg.minSilenceMs, 900),
+    pollMs,
+    startDbOffset: baseThresholdDb !== null ? baseThresholdDb : 10,
+    stopDbOffset: exitThresholdDb !== null ? exitThresholdDb : 6,
+    echoBoostStartDb,
+    echoBoostStopDb,
+    echoStateFn: () => {
+      // treat "TTS is playing" as echo present
+      try { return !!ttsIsPlaying(); } catch { return false; }
+    }
+  };
+
+  const startRms = _toFiniteNumber(cfg.startRms);
+  if (startRms !== null) vadOpts.startRms = startRms;
+  const stopRms = _toFiniteNumber(cfg.stopRms);
+  if (stopRms !== null) vadOpts.stopRms = stopRms;
+
+  const passthroughKeys = [
+    'cooldownMs',
+    'minStartDb',
+    'minStopDb',
+    'noiseFloorAlpha',
+    'noiseFloorRiseAlpha',
+    'noiseFloorGuardDb',
+    'noiseFloorHangMs',
+    'initialNoiseFloorDb',
+  ];
+  for (const key of passthroughKeys) {
+    if (key in cfg) {
+      const value = _toFiniteNumber(cfg[key]);
+      if (value !== null) {
+        vadOpts[key] = value;
+      }
+    }
+  }
+
   const vad = new VAD(
     state.analyser,
-    {
-      // Tunables (admin-configurable via opts or window.__askchip_config.vad)
-      startRms: cfg.startRms ?? 0.012,
-      stopRms:  cfg.stopRms  ?? 0.006,   // LOWER = less twitchy end
-      minSpeechMs: cfg.minSpeechMs ?? 220,
-      minSilenceMs: cfg.minSilenceMs ?? 900, // HIGHER = needs longer quiet
-      pollMs,
-      echoBoostStart: cfg.echoBoostStart ?? 1.5,
-      echoBoostStop:  cfg.echoBoostStop  ?? 1.3,
-      echoStateFn: () => {
-        // treat "TTS is playing" as echo present
-        try { return !!ttsIsPlaying(); } catch { return false; }
-      }
-    },
+    vadOpts,
     {
       onSpeechStart: _onSpeechStartCommitted,
       onSpeechEnd: _onSpeechEndCommitted,

@@ -90,9 +90,20 @@ def create_app():
             enabled = bool(getattr(_SETTINGS, "advanced_logging_enabled", True))
         except Exception:
             enabled = True
+        vad_config = {}
+        try:
+            vad_config = {
+                "baseThresholdDb": float(getattr(_SETTINGS, "vad_base_threshold_db", 10.0)),
+                "exitThresholdDb": float(getattr(_SETTINGS, "vad_exit_threshold_db", 6.0)),
+                "ttsBoostDb": float(getattr(_SETTINGS, "vad_tts_boost_db", 6.0)),
+                "minSpeechMs": int(getattr(_SETTINGS, "vad_min_speech_ms", 360)),
+            }
+        except Exception:
+            vad_config = {}
         return {
             "askchip_config": {
                 "logging": {"enabled": enabled},
+                "vad": vad_config,
             }
         }
 

@@ -14,6 +14,16 @@ def _optional_bool_from_env(name: str) -> Optional[bool]:
         return False
     return None
 
+
+def _float_from_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
 @dataclass
 class Settings:
     admin_emails: str = os.getenv("ADMIN_EMAILS", "")
@@ -43,6 +53,10 @@ class Settings:
     secret_key: str = os.getenv("SECRET_KEY", "dev-secret")
     session_type: str = os.getenv("SESSION_TYPE", "filesystem")
     ws_ping_interval_ms: int = int(os.getenv("WS_PING_INTERVAL_MS", "25000"))
+    vad_base_threshold_db: float = _float_from_env("VAD_BASE_THRESHOLD", 10.0)
+    vad_exit_threshold_db: float = _float_from_env("VAD_EXIT_THRESHOLD", 6.0)
+    vad_tts_boost_db: float = _float_from_env("VAD_TTS_BOOST", 6.0)
+    vad_min_speech_ms: int = int(os.getenv("VAD_MIN_SPEECH_MS", "360"))
 
 def load_settings() -> Settings:
     return Settings()
