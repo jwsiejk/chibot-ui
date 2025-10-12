@@ -39,7 +39,7 @@ class DummyPersonaManager:
         return {"id": "chip", "name": "Chip", "config": {}}
 
 
-def _patch_foundation_dependencies(monkeypatch, *, teacher_move="deep_dive"):
+def _patch_foundation_dependencies(monkeypatch, *, teacher_move="deep_dive", policy_extra=None):
     monkeypatch.setattr(streaming, "PersonaStore", lambda: DummyStore())
     monkeypatch.setattr(streaming, "PersonaManager", DummyPersonaManager)
     monkeypatch.setattr(
@@ -50,7 +50,10 @@ def _patch_foundation_dependencies(monkeypatch, *, teacher_move="deep_dive"):
     monkeypatch.setattr(
         streaming._nlu.policy,
         "decide",
-        lambda *a, **k: {"teacher_move": teacher_move},
+        lambda *a, **k: {
+            **({} if policy_extra is None else dict(policy_extra)),
+            "teacher_move": teacher_move,
+        },
     )
     persona_trace = {
         "intensity": 0.25,
@@ -148,6 +151,45 @@ def test_foundation_policy_decision_logs_kb_snippets(monkeypatch):
     suggestion_fields = suggestions_events[0]
     assert suggestion_fields["turn_id"] == "10"
     assert suggestion_fields["items"] == []
+
+
+def test_foundation_clarify_chunk_includes_confidence_and_clarify(monkeypatch):
+    _patch_foundation_dependencies(
+        monkeypatch,
+        teacher_move="clarify",
+        policy_extra={"confidence_band": "low", "clarify_variant": "high_level"},
+    )
+    monkeypatch.setattr(streaming, "_collect_policy_chips", lambda policy: ["Clarify next steps"])
+
+    telemetry = DummyTelemetry()
+    meta = {"kb_snippets": []}
+    cfg = {"suggestions_enabled": False, "nebraska_quotes_enabled": True}
+
+    turn_id, frames = streaming._make_foundation_frames(
+        "Need clarification",
+        "session-clarify",
+        meta,
+        cfg,
+        correlation_user_msg_id=None,
+        turn_id="11",
+        telemetry=telemetry,
+        is_greet=False,
+        fallback_line="Fallback",
+        fallback_on_empty=True,
+        fallback_on_error=True,
+        fallback_emit_event=False,
+        broadcast_immediately=False,
+    )
+
+    assert turn_id == "11"
+    assert frames and frames[0]["type"] == "assistant_chunk"
+    chunk = frames[0]
+    assert chunk["teacher_move"] == "clarify"
+    assert chunk.get("planner_confidence_band") == "low"
+    assert chunk.get("policy_confidence_band", "low") == "low"
+    assert chunk.get("policy_chips") == ["Clarify next steps"]
+    assert chunk.get("clarify_variant") == "high_level"
+    assert chunk.get("clarifier_style") == "clarifier_high_level"
 
 
 def _patch_legacy_dependencies(monkeypatch, reply_text: str):

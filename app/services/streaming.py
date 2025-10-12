@@ -1914,6 +1914,7 @@ def _make_foundation_frames(seed_text: str,
 
     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store) or {}
+    policy_summary = summarize_policy_metadata(policy)
     if isinstance(policy, dict):
         for key in ("confidence_band", "clarify_variant"):
             value = policy.get(key)
@@ -1924,6 +1925,9 @@ def _make_foundation_frames(seed_text: str,
                 chosen = value
             if chosen is not None and key not in dialog_meta:
                 dialog_meta[key] = chosen
+    if policy_summary and isinstance(meta, dict):
+        for key, value in policy_summary.items():
+            meta.setdefault(key, value)
 
     telemetry.log_entities(nlu_result.get("entities"))
 
@@ -2157,6 +2161,23 @@ def _make_foundation_frames(seed_text: str,
         'intent': nlu_result.get('intent'),
         'teacher_move': active_teacher_move,
     }
+    if policy_summary:
+        band = policy_summary.get('planner_confidence_band') or policy_summary.get('policy_confidence_band')
+        if band:
+            chunk['planner_confidence_band'] = band
+        policy_band = policy_summary.get('policy_confidence_band')
+        if policy_band and policy_band != band:
+            chunk['policy_confidence_band'] = policy_band
+        chips = policy_summary.get('policy_chips')
+        if chips:
+            chunk['policy_chips'] = chips
+    if isinstance(meta, dict):
+        clarify_variant = meta.get('clarify_variant')
+        clarifier_style = meta.get('clarifier_style')
+        if clarifier_style:
+            chunk['clarifier_style'] = clarifier_style
+        if clarify_variant:
+            chunk['clarify_variant'] = clarify_variant
     if correlation_user_msg_id:
         chunk['correlation_user_msg_id'] = correlation_user_msg_id
     frames.append(chunk)
