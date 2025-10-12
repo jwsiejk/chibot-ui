@@ -46,9 +46,19 @@ def greet():
     have_openai = bool(os.environ.get("OPENAI_API_KEY"))
     have_eleven = bool(os.environ.get("ELEVENLABS_API_KEY"))
 
+    # Optional: auto-arm mic after TTS greet begins.
+    # Set ASKCHIP_AUTO_ARM_MS to a number (e.g., "250") to enable the hint and a control frame.
+    auto_arm_env = (os.environ.get("ASKCHIP_AUTO_ARM_MS") or "").strip()
+    auto_arm_ms: int | None = None
+    if auto_arm_env:
+        try:
+            auto_arm_ms = max(0, int(auto_arm_env))
+        except Exception:
+            # If it's set but not a number, default to 250ms
+            auto_arm_ms = 250
+
     audio_scheduled = False
     note = None
-
     scheduled_frames = []
 
     if have_openai:
@@ -96,11 +106,16 @@ def greet():
     else:
         note = "missing_openai_key"
 
-    payload = {"ok": True, "turn_id": tid, "idempotent": bool(idempotent)}
-    if not audio_scheduled:
-        payload["audio_scheduled"] = False
-        if note:
-            payload["note"] = note
+    # ---- Response payload ----------------------------------------------------
+    payload: dict = {"ok": True, "turn_id": tid, "idempotent": bool(idempotent)}
+    payload["audio_scheduled"] = bool(audio_scheduled)
+    if note:
+        payload["note"] = note
+
+    # If audio is scheduled and auto-arm is enabled, include a client hint.
+    if audio_scheduled and auto_arm_ms is not None:
+        payload["arm_mic_after_ms"] = int(auto_arm_ms)
+        payload["autostart_hint"] = "arm_mic"
 
     try:
         payload["diag"] = {
@@ -126,6 +141,7 @@ def greet():
     except Exception:
         pass
 
+    # ---- Wake the UI: state + suggestions (avoid double-sending) ------------
     state_already_scheduled = any(
         isinstance(fr, dict) and fr.get("type") == "state" for fr in scheduled_frames
     )
@@ -133,7 +149,6 @@ def greet():
         isinstance(fr, dict) and fr.get("type") == "suggestions" for fr in scheduled_frames
     )
 
-    # Always nudge UI awake (but avoid double-sending frames already scheduled)
     try:
         if not state_already_scheduled:
             if should_emit_phase(sid, "ready"):
@@ -148,11 +163,27 @@ def greet():
     except Exception:
         pass
 
+    # ---- Optional: control frame to auto-arm mic on the client --------------
     try:
-        _admin_emit('greet:resp', label=('greet:resp (repeat)' if idempotent else 'greet:resp'),
-                    session_id=sid, turn_id=tid,
-                    tts_status=db.memory.get('tts_status', {}).get(sid, {}).get(str(tid) if tid else 'greet', {}),
-                    idempotent=bool(idempotent))
+        if audio_scheduled and auto_arm_ms is not None:
+            # Nudge the UI to arm the microphone after a short delay so TTS can begin.
+            bus.broadcast(sid, {"type": "control", "op": "arm_mic", "delay_ms": int(auto_arm_ms)})
+            _admin_emit('mic:auto_arm_suggested', session_id=sid, turn_id=tid, delay_ms=int(auto_arm_ms))
+    except Exception:
+        pass
+
+    # ---- Admin breadcrumbs ---------------------------------------------------
+    try:
+        _admin_emit(
+            'greet:resp',
+            label=('greet:resp (repeat)' if idempotent else 'greet:resp'),
+            session_id=sid,
+            turn_id=tid,
+            tts_status=db.memory.get('tts_status', {}).get(sid, {}).get(str(tid) if tid else 'greet', {}),
+            idempotent=bool(idempotent),
+            audio_scheduled=bool(audio_scheduled),
+            arm_mic_after_ms=(int(auto_arm_ms) if (audio_scheduled and auto_arm_ms is not None) else None),
+        )
     except Exception:
         pass
 
