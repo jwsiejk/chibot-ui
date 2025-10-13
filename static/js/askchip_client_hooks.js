@@ -2,13 +2,50 @@
 (function () {
   const ADMIN_POST = "/api/v1/admin/log";
 
+    function currentSessionId() {
+    try {
+      const key = "chip.sid";
+      let sid = localStorage.getItem(key);
+      if (!sid) {
+        if (typeof crypto?.randomUUID === "function") {
+          sid = crypto.randomUUID();
+        } else {
+          sid = `${Date.now()}-${Math.random()}`;
+        }
+        localStorage.setItem(key, sid);
+      }
+      return sid || undefined;
+    } catch (err) {
+      try { console.warn("[askchip] sid lookup failed", err); } catch {}
+      return undefined;
+    }
+  }
+
+  function normalizePayload(evt) {
+    const payload = Object.assign({}, evt || {});
+    const event = typeof payload.event === "string" ? payload.event : null;
+    if (!payload.kind && event) payload.kind = event;
+    if (!payload.event && payload.kind) payload.event = payload.kind;
+    if (!payload.label && (event || payload.kind)) {
+      payload.label = event || payload.kind;
+    }
+    const sid = payload.session_id || payload.sid || currentSessionId();
+    if (sid) {
+      payload.session_id = String(sid);
+      payload.sid = String(sid);
+    }
+    if (!payload.sent_at) payload.sent_at = Date.now();
+    return payload;
+  }
+  
   async function postAdmin(evt) {
     try {
+      const payload = normalizePayload(evt);
       await fetch(ADMIN_POST, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify(evt),
+        body: JSON.stringify(payload),
       });
     } catch {}
   }
