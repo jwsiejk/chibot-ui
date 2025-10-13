@@ -60,9 +60,9 @@
       ],
       "expect_dom": {
         "any_of": [
-          "[data-testid='transcript-line']",
-          ".chip-suggestion",
-          "[data-testid='persona-banner']"
+          ".chat-window .msg.assistant",
+          ".chat-window .msg.user",
+          "#suggestions .chip"
         ],
         "timeout_ms": 6000
       }
@@ -102,9 +102,9 @@
       ],
       "expect_dom": {
         "any_of": [
-          "[data-testid='transcript-line']",
-          ".chip-suggestion",
-          "[data-testid='persona-banner']"
+          ".chat-window .msg.assistant",
+          ".chat-window .msg.user",
+          "#suggestions .chip"
         ],
         "timeout_ms": 6000
       }
@@ -140,9 +140,9 @@
       ],
       "expect_dom": {
         "any_of": [
-          "[data-testid='transcript-line']",
-          ".chip-suggestion",
-          "[data-testid='persona-banner']"
+          ".chat-window .msg.assistant",
+          ".chat-window .msg.user",
+          "#suggestions .chip"
         ],
         "timeout_ms": 6000
       }
@@ -189,9 +189,9 @@
       ],
       "expect_dom": {
         "any_of": [
-          "[data-testid='transcript-line']",
-          ".chip-suggestion",
-          "[data-testid='persona-banner']"
+          ".chat-window .msg.assistant",
+          ".chat-window .msg.user",
+          "#suggestions .chip"
         ],
         "timeout_ms": 6000
       }
@@ -226,9 +226,9 @@
       ],
       "expect_dom": {
         "any_of": [
-          "[data-testid='transcript-line']",
-          ".chip-suggestion",
-          "[data-testid='persona-banner']"
+          ".chat-window .msg.assistant",
+          ".chat-window .msg.user",
+          "#suggestions .chip"
         ],
         "timeout_ms": 6000
       }
@@ -264,9 +264,9 @@
       ],
       "expect_dom": {
         "any_of": [
-          "[data-testid='transcript-line']",
-          ".chip-suggestion",
-          "[data-testid='persona-banner']"
+          ".chat-window .msg.assistant",
+          ".chat-window .msg.user",
+          "#suggestions .chip"
         ],
         "timeout_ms": 6000
       }
@@ -300,9 +300,9 @@
       ],
       "expect_dom": {
         "any_of": [
-          "[data-testid='transcript-line']",
-          ".chip-suggestion",
-          "[data-testid='persona-banner']"
+          ".chat-window .msg.assistant",
+          ".chat-window .msg.user",
+          "#suggestions .chip"
         ],
         "timeout_ms": 6000
       }
@@ -334,9 +334,9 @@
       ],
       "expect_dom": {
         "any_of": [
-          "[data-testid='transcript-line']",
-          ".chip-suggestion",
-          "[data-testid='persona-banner']"
+          ".chat-window .msg.assistant",
+          ".chat-window .msg.user",
+          "#suggestions .chip"
         ],
         "timeout_ms": 6000
       }
@@ -385,9 +385,9 @@
       ],
       "expect_dom": {
         "any_of": [
-          "[data-testid='transcript-line']",
-          ".chip-suggestion",
-          "[data-testid='persona-banner']"
+          ".chat-window .msg.assistant",
+          ".chat-window .msg.user",
+          "#suggestions .chip"
         ],
         "timeout_ms": 6000
       }
@@ -421,9 +421,9 @@
       ],
       "expect_dom": {
         "any_of": [
-          "[data-testid='transcript-line']",
-          ".chip-suggestion",
-          "[data-testid='persona-banner']"
+          ".chat-window .msg.assistant",
+          ".chat-window .msg.user",
+          "#suggestions .chip"
         ],
         "timeout_ms": 6000
       }
@@ -467,9 +467,9 @@
       ],
       "expect_dom": {
         "any_of": [
-          "[data-testid='transcript-line']",
-          ".chip-suggestion",
-          "[data-testid='persona-banner']"
+          ".chat-window .msg.assistant",
+          ".chat-window .msg.user",
+          "#suggestions .chip"
         ],
         "timeout_ms": 6000
       }
@@ -512,9 +512,9 @@
       ],
       "expect_dom": {
         "any_of": [
-          "[data-testid='transcript-line']",
-          ".chip-suggestion",
-          "[data-testid='persona-banner']"
+          ".chat-window .msg.assistant",
+          ".chat-window .msg.user",
+          "#suggestions .chip"
         ],
         "timeout_ms": 6000
       }
@@ -539,9 +539,9 @@
       ],
       "expect_dom": {
         "any_of": [
-          "[data-testid='transcript-line']",
-          ".chip-suggestion",
-          "[data-testid='persona-banner']"
+          ".chat-window .msg.assistant",
+          ".chat-window .msg.user",
+          "#suggestions .chip"
         ],
         "timeout_ms": 10000
       },
