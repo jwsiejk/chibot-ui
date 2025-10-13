@@ -47,6 +47,27 @@ def test_admin_log_post_appends_event(monkeypatch):
     assert "\"session_id\": \"sid-123\"" in text
 
 
+def test_admin_logs_sse_default_heartbeat(monkeypatch):
+    monkeypatch.delenv("ENABLE_ADMIN_SSE", raising=False)
+    monkeypatch.delenv("ADMIN_SSE_E2E_KEY", raising=False)
+
+    admin_mod._LOG_Q.clear()
+    admin_mod._STEP = 0
+
+    def _iter(live: bool = False):
+        while admin_mod._LOG_Q:
+            yield admin_mod._LOG_Q.popleft()
+
+    monkeypatch.setattr(admin_mod, "admin_log_iter", _iter, raising=False)
+
+    client = flask_app.test_client()
+    resp = client.get("/api/v1/admin/logs", buffered=True)
+
+    assert resp.status_code == 200
+    text = _decode(resp)
+    assert "\"event\": \"heartbeat\"" in text
+
+
 def test_admin_log_post_accepts_sse_token(monkeypatch):
     monkeypatch.setenv("ENABLE_ADMIN_SSE", "1")
     monkeypatch.setenv("ADMIN_SSE_E2E_KEY", "secret-token")
