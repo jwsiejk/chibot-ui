@@ -13,6 +13,13 @@ from collections import deque
 import websockets  # provided by uvicorn[standard]
 
 try:
+    from app.admin_log import emit as _admin_emit
+except Exception:  # pragma: no cover - extremely defensive
+
+    def _admin_emit(*a, **k):  # type: ignore[empty-body]
+        pass
+
+try:
     from websockets import exceptions as _ws_exceptions  # type: ignore[attr-defined]
 except Exception:  # pragma: no cover - extremely defensive
     _ws_exceptions = None  # type: ignore[assignment]
@@ -1013,6 +1020,7 @@ class DeepgramClient:
 
         containerized = False
         safe_url = url
+        url_meta: dict[str, Any] = {}
 
         try:
             # Diagnostic: parse params and emit compact JSON log that shows
@@ -1137,6 +1145,7 @@ class DeepgramClient:
                 pass
 
         start_ts = time.time()
+        elapsed_ms = 0
         if callable(self._jlog):
             try:
                 self._jlog(
@@ -1181,6 +1190,20 @@ class DeepgramClient:
                         )
                     except Exception:
                         pass
+                try:
+                    _admin_emit(
+                        "dg_connect",
+                        session_id=sid,
+                        dg_id=self._dg_id,
+                        safe_url=safe_url,
+                        containerized=containerized,
+                        tag=self._url_tag,
+                        normalized_pcm=bool(url_meta.get("normalized_pcm")),
+                        elapsed_ms=elapsed_ms,
+                        test_mode=True,
+                    )
+                except Exception:
+                    pass
                 return
 
             try:
@@ -1253,6 +1276,20 @@ class DeepgramClient:
                     )
                 except Exception:
                     pass
+            try:
+                _admin_emit(
+                    "dg_connect",
+                    session_id=sid,
+                    dg_id=self._dg_id,
+                    safe_url=safe_url,
+                    containerized=containerized,
+                    tag=self._url_tag,
+                    normalized_pcm=bool(url_meta.get("normalized_pcm")),
+                    elapsed_ms=elapsed_ms,
+                    test_mode=False,
+                )
+            except Exception:
+                pass
         except asyncio.CancelledError:
             raise
         except Exception as exc:

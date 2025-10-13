@@ -1,302 +1,395 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index ab8ef573b1dcfb7bb1c01424222efa52aa1b3da3..2a9398a06f03c5630972536f0912ded56637d2e3 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1559,68 +1559,83 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         now_ts = time.time()
-         turn_timing["final"][0] = now_ts
-         start_ts = turn_timing.get("start", [0.0])[0]
-         dg_open_ts = turn_timing.get("dg_open", [0.0])[0]
-         first_partial_ts = turn_timing.get("first_partial", [0.0])[0]
-         delta_start = int((now_ts - start_ts) * 1000) if start_ts else None
-         delta_open = int((now_ts - dg_open_ts) * 1000) if dg_open_ts else None
-         delta_partial = (
-             int((now_ts - first_partial_ts) * 1000) if first_partial_ts else None
-         )
-         latency_ms: Dict[str, Optional[int]] = {
-             "final_from_mic_start": delta_start,
-             "final_from_dg_open": delta_open,
-             "final_from_first_partial": delta_partial,
-         }
-         if start_ts and dg_open_ts:
-             latency_ms["dg_connect"] = int(max(0.0, (dg_open_ts - start_ts) * 1000))
-         if start_ts and first_partial_ts:
-             latency_ms["first_partial_from_mic_start"] = int(
-                 max(0.0, (first_partial_ts - start_ts) * 1000)
-             )
-         if dg_open_ts and first_partial_ts:
-             latency_ms["first_partial_from_dg_open"] = int(
-                 max(0.0, (first_partial_ts - dg_open_ts) * 1000)
-             )
-+        latency_ms_clean = {k: v for k, v in latency_ms.items() if v is not None}
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "turn_finish",
-                 sid=sid,
-                 turn_id=turn_id,
-                 reason=reason,
-                 synthetic=bool(synthetic),
-                 delta_start_ms=delta_start,
-                 delta_asr_open_ms=delta_open,
-                 delta_first_partial_ms=delta_partial,
-                 transcript_chars=int(transcript_chars),
-             )
-             _jlog(
-                 "latency_breakdown",
-                 sid=sid,
-                 turn_id=turn_id,
--                ms={k: v for k, v in latency_ms.items() if v is not None},
-+                ms=latency_ms_clean,
-             )
-+        admin_cb = _admin_emit if callable(_admin_emit) else None
-+        latency_payload = {
-+            "session_id": sid,
-+            "turn_id": turn_id,
-+            "ms": latency_ms_clean,
-+            "reason": reason,
-+            "synthetic": bool(synthetic),
-+        }
-+        if admin_cb:
-+            with contextlib.suppress(Exception):
-+                admin_cb("latency_breakdown", **latency_payload)
-+        frame = {"type": "latency_breakdown", **latency_payload}
-+        with contextlib.suppress(Exception):
-+            asyncio.create_task(_ws_send_json(send, frame))
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index 69e8faf27af5b090de4b65a3e803e361c6c0bcf5..2b20e8a126624974d6ade23211d5e7665a86652a 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -1,39 +1,46 @@
+ from __future__ import annotations
  
-     async def _emit_synthetic_final(
-         turn_id: int, reason: str, transcript: str = ""
-     ) -> bool:
-         if final_seen[0]:
-             with contextlib.suppress(Exception):
-                 _jlog(
-                     "ws_synthetic_final_skip_duplicate",
-                     sid=sid,
-                     turn_id=turn_id,
-                     reason=reason,
-                 )
-             return False
-         final_seen[0] = True
-         payload = make_results(turn_id, transcript=transcript, is_final=True)
-         payload["type"] = "Results"
-         await _ws_send_json(send, payload)
-         utterance_payload = make_utterance_end(turn_id)
-         utterance_payload["type"] = "UtteranceEnd"
-         await _ws_send_json(send, utterance_payload)
-         with contextlib.suppress(Exception):
-             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
-         _log_turn_finish(
-             turn_id,
-             reason=reason,
-diff --git a/tests/test_ws_close_stream_timeout.py b/tests/test_ws_close_stream_timeout.py
-index e8481c4b0865cf152c52cef613b8fb158dad9df3..57a84a4965de64b56cfedbf05a4392d0cbbc1899 100644
---- a/tests/test_ws_close_stream_timeout.py
-+++ b/tests/test_ws_close_stream_timeout.py
-@@ -71,169 +71,197 @@ class _ImmediateFinalDeepgram:
-         asyncio.create_task(_emit_final())
+ import asyncio
+ import json
+ import logging
+ import os
+ import re
+ import time
+ import warnings
+ from typing import AsyncGenerator, Optional, Any, Deque, Tuple, Callable
+ from collections import deque
  
-     def is_open(self):
-         return True
+ import websockets  # provided by uvicorn[standard]
  
-     async def events(self):
-         while True:
-             ev = await self._queue.get()
-             if ev is None:
-                 break
-             yield ev
- 
-     async def send(self, chunk: bytes):
-         return
- 
-     async def close(self, wait_for_final: bool = True, **_):
-         self.close_called = True
-         await self._queue.put(None)
- 
- 
- def test_close_stream_waits_for_delayed_open(monkeypatch):
-     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
-     monkeypatch.setenv("DG_LINGER_MS", "0")
-     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
-+    monkeypatch.setenv("WS_NO_AUDIO_DETECT_WINDOW_S", "0")
-+    monkeypatch.setenv("NULL_TURN_MIN_CHARS", "0")
-+    monkeypatch.setenv("NULL_TURN_MIN_VOICED_MS", "0")
-+    monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
++try:
++    from app.admin_log import emit as _admin_emit
++except Exception:  # pragma: no cover - extremely defensive
 +
-+    admin_events = []
++    def _admin_emit(*a, **k):  # type: ignore[empty-body]
++        pass
 +
-+    def _capture_admin(event, **payload):
-+        admin_events.append((event, payload))
-+
-+    monkeypatch.setattr(ws_asgi, "_admin_emit", _capture_admin)
+ try:
+     from websockets import exceptions as _ws_exceptions  # type: ignore[attr-defined]
+ except Exception:  # pragma: no cover - extremely defensive
+     _ws_exceptions = None  # type: ignore[assignment]
+ else:
+     _invalid_types = []
+     with warnings.catch_warnings():
+         warnings.simplefilter("ignore", DeprecationWarning)
+         for _name in ("InvalidStatus", "InvalidStatusCode"):
+             _cls = getattr(_ws_exceptions, _name, None)
+             if isinstance(_cls, type):
+                 _invalid_types.append(_cls)
+     _INVALID_STATUS_TYPES = tuple(_invalid_types)
+ if "_INVALID_STATUS_TYPES" not in globals():
+     _INVALID_STATUS_TYPES = ()
  
-     _DelayedOpenDeepgram.instances = []
-     monkeypatch.setattr(ws_asgi, "DeepgramClient", _DelayedOpenDeepgram)
- 
-     events = deque(
-         [
-             {"type": "websocket.receive", "bytes": b"\x00\x01"},
-             {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
-             {"type": "websocket.disconnect"},
-         ]
-     )
- 
-     sent = []
- 
-     async def _receive():
-         return events.popleft() if events else {"type": "websocket.disconnect"}
- 
-     async def _send(msg):
-         sent.append(msg)
- 
-     scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
- 
-     loop = asyncio.new_event_loop()
-     asyncio.set_event_loop(loop)
+ try:  # pragma: no cover - exercised indirectly
+     _WEBSOCKETS_PROTOCOL = websockets.protocol  # type: ignore[attr-defined]
+ except AttributeError:  # pragma: no cover - older packaging style
      try:
-         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
--        loop.run_until_complete(asyncio.sleep(0.05))
-+        loop.run_until_complete(asyncio.sleep(0.1))
-     finally:
-         asyncio.set_event_loop(None)
-         loop.close()
- 
-     instance = _DelayedOpenDeepgram.instances[0]
- 
-     # Either we waited for open before closing or we avoided closing altogether.
-     assert not instance.closed_before_open, "Deepgram close should not run before the socket opens"
- 
-     payloads = [
-         json.loads(m["text"])
-         for m in sent
-         if m.get("type") == "websocket.send" and m.get("text")
-     ]
- 
-+    latency_frames = [p for p in payloads if p.get("type") == "latency_breakdown"]
-+    assert latency_frames, "latency breakdown frame should be sent to the client"
-+    latency_payload = latency_frames[0]
-+    assert latency_payload.get("synthetic") is True
-+    assert latency_payload.get("ms") is not None
-+    assert latency_payload.get("reason")
-+
-+    latency_admin = [
-+        payload for event, payload in admin_events if event == "latency_breakdown"
-+    ]
-+    assert latency_admin, f"expected latency breakdown admin event, saw {admin_events}"
-+    admin_payload = latency_admin[0]
-+    assert admin_payload.get("synthetic") is True
-+    assert admin_payload.get("ms") == latency_payload.get("ms")
-+    assert admin_payload.get("reason") == latency_payload.get("reason")
-+
-     finals = [p for p in payloads if p.get("type") == "Results" and p.get("channel", {}).get("is_final")]
- 
-     assert finals, "CloseStream should emit a final result even if provider open is delayed"
+         from websockets import protocol as _WEBSOCKETS_PROTOCOL  # type: ignore
+     except Exception:  # pragma: no cover - highly defensive
+         _WEBSOCKETS_PROTOCOL = None  # type: ignore
  
  
- def test_close_stream_with_existing_final_does_not_emit_synthetic(monkeypatch):
-     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
-     monkeypatch.setenv("DG_LINGER_MS", "0")
-     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
-+    monkeypatch.setenv("WS_NO_AUDIO_DETECT_WINDOW_S", "0")
-+    monkeypatch.setenv("NULL_TURN_MIN_CHARS", "0")
-+    monkeypatch.setenv("NULL_TURN_MIN_VOICED_MS", "0")
-+    monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
-+
-+    monkeypatch.setattr(ws_asgi, "_admin_emit", lambda *_, **__: None)
- 
-     _ImmediateFinalDeepgram.instances = []
-     monkeypatch.setattr(ws_asgi, "DeepgramClient", _ImmediateFinalDeepgram)
- 
-     events = deque(
-         [
-             {"type": "websocket.receive", "bytes": b"\x00\x01"},
-             {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
-             {"type": "websocket.disconnect"},
-         ]
-     )
- 
-     sent = []
--    final_sent_evt: asyncio.Event = asyncio.Event()
- 
-     async def _receive():
-         if not events:
-             return {"type": "websocket.disconnect"}
-         next_event = events[0]
-         text = next_event.get("text")
-         if text:
+@@ -991,50 +998,51 @@ class DeepgramClient:
+     async def connect(self) -> None:
+         global DG_LAST_URL, DG_LAST_CONFIG
+         sid = self._sid_for_log()
+         if callable(self._jlog):
              try:
-                 payload = json.loads(text)
+                 self._jlog(
+                     "dg_connect_begin",
+                     sid=sid,
+                     dg_id=self._dg_id,
+                     tag=self._url_tag,
+                     already_open=bool(self._ws),
+                     closing=self._closing,
+                     closed=self._closed,
+                 )
              except Exception:
-                 payload = {}
-             if payload.get("type") == "CloseStream":
--                await final_sent_evt.wait()
-+                await asyncio.sleep(0.05)
-         return events.popleft()
- 
-     async def _send(msg):
-         sent.append(msg)
--        if msg.get("type") == "websocket.send" and msg.get("text"):
--            try:
--                payload = json.loads(msg["text"])
--            except Exception:
--                return
--            channel = payload.get("channel") or {}
--            if payload.get("type") == "Results" and channel.get("is_final"):
--                final_sent_evt.set()
- 
-     scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
- 
-     loop = asyncio.new_event_loop()
-     asyncio.set_event_loop(loop)
-     try:
-         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-         loop.run_until_complete(asyncio.sleep(0.05))
-     finally:
-         asyncio.set_event_loop(None)
-         loop.close()
- 
-     payloads = [
-         json.loads(m["text"])
-         for m in sent
-         if m.get("type") == "websocket.send" and m.get("text")
-     ]
- 
-     finals = [p for p in payloads if p.get("type") == "Results" and p.get("channel", {}).get("is_final")]
- 
-     assert len(finals) == 1, "Only provider final should be emitted when already observed"
- 
- 
- def test_close_stream_ack_reaches_admin_log(monkeypatch):
-     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
-     monkeypatch.setenv("DG_LINGER_MS", "0")
-     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
-+    monkeypatch.setenv("WS_NO_AUDIO_DETECT_WINDOW_S", "0")
-+    monkeypatch.setenv("NULL_TURN_MIN_CHARS", "0")
-+    monkeypatch.setenv("NULL_TURN_MIN_VOICED_MS", "0")
-+    monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
- 
-     admin_events = []
- 
-     def _capture_admin(event, **payload):
-         admin_events.append((event, payload))
- 
-     monkeypatch.setattr(ws_asgi, "_admin_emit", _capture_admin)
- 
-     class _AdminDiagDeepgram:
-         instances = []
- 
-         def __init__(self, cfg=None):
-             self.__class__.instances.append(self)
-             self._cfg = cfg or {}
-             self._open_sent = False
- 
-         async def connect(self):
+                 pass
+         if self._ws:
+             self._logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
              return
  
-         def is_open(self):
-             return True
+         url = _dg_url(self._cfg)
+         self._emit_diag("provider_open", active=True, url=url)
  
-         async def events(self):
-             if not self._open_sent:
-                 self._open_sent = True
+         containerized = False
+         safe_url = url
++        url_meta: dict[str, Any] = {}
+ 
+         try:
+             # Diagnostic: parse params and emit compact JSON log that shows
+             # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
+             import urllib.parse as _p
+ 
+             parts = _p.urlsplit(url)
+             q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
+             self._url_tag = q.get("tag") or None
+             transport = (self._cfg or {}).get("_transport", {}) or {}
+             containerized = bool(transport.get("containerized_opus"))
+             url_meta = {
+                 "container": transport.get("container"),
+                 "codec": transport.get("codec"),
+                 "containerized_opus": containerized,
+                 "normalized_pcm": bool(transport.get("normalized_pcm")),
+                 "omitted_params": None,
+                 "raw_params": None,
+             }
+             if containerized:
+                 # These should be absent in containerized mode
+                 omitted = []
+                 for k in ("encoding", "sample_rate", "channels"):
+                     if k not in q:
+                         omitted.append(k)
+@@ -1115,94 +1123,109 @@ class DeepgramClient:
+         )
+         ws_headers = [("Authorization", f"Token {key_value}")]
+         del key_value
+         subprotocols = None
+         self._logger.info(
+             "Deepgram connect attempt sid=%s safe_url=%s key_len=%s subprotocols=%s",
+             sid,
+             safe_url,
+             key_len,
+             subprotocols,
+         )
+         if callable(self._jlog):
+             try:
+                 self._jlog(
+                     "dg_connect_attempt",
+                     sid=sid,
+                     dg_id=self._dg_id,
+                     safe_url=safe_url,
+                     key_len=key_len,
+                     subprotocols=subprotocols,
+                 )
+             except Exception:
+                 pass
+ 
+         start_ts = time.time()
++        elapsed_ms = 0
+         if callable(self._jlog):
+             try:
+                 self._jlog(
+                     "asr_connect_start",
+                     sid=sid,
+                     dg_id=self._dg_id,
+                 )
+             except Exception:
+                 pass
+ 
+         try:
+             if DG_TEST_MODE:
+                 self._ws = _FakeWSForTests()
+                 DG_LAST_URL = url
+                 cfg_payload = _initial_config(self._cfg)
+                 DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
+                 self._open_evt.set()
+                 await self._signal_ready()
+                 self._logger.info("Deepgram test-mode connect sid=%s", sid)
+                 if callable(self._jlog):
+                     try:
+                         self._jlog(
+                             "dg_open",
+                             sid=sid,
+                             dg_id=self._dg_id,
+                             url=url,
+                             tag=self._url_tag,
+                             test_mode=True,
+                         )
+                     except Exception:
+                         pass
+                     try:
+                         elapsed_ms = int((time.time() - start_ts) * 1000)
+                     except Exception:
+                         elapsed_ms = 0
+                     try:
+                         self._jlog(
+                             "asr_connect_ok",
+                             sid=sid,
+                             dg_id=self._dg_id,
+                             elapsed_ms=elapsed_ms,
+                         )
+                     except Exception:
+                         pass
++                try:
++                    _admin_emit(
++                        "dg_connect",
++                        session_id=sid,
++                        dg_id=self._dg_id,
++                        safe_url=safe_url,
++                        containerized=containerized,
++                        tag=self._url_tag,
++                        normalized_pcm=bool(url_meta.get("normalized_pcm")),
++                        elapsed_ms=elapsed_ms,
++                        test_mode=True,
++                    )
++                except Exception:
++                    pass
+                 return
+ 
+             try:
+                 self._ws = await websockets.connect(
+                     url,
+                     additional_headers=ws_headers,
+                     max_size=None,
+                 )
+             except TypeError:
+                 self._ws = await websockets.connect(
+                     url,
+                     extra_headers=ws_headers,
+                     max_size=None,
+                 )
+ 
+             # Micro-wait to ensure the underlying socket is actually open
+             await self.wait_socket_open(
+                 timeout=float(os.getenv("DG_OPEN_MICRO_WAIT_S", "0.75"))
+             )
+ 
+             cfg_payload = _initial_config(self._cfg)
+             DG_LAST_URL = url
+             DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
+             async with self._send_lock:
+                 await self._ws.send(json.dumps(cfg_payload))
+@@ -1231,50 +1254,64 @@ class DeepgramClient:
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_open",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         url=url,
+                         tag=self._url_tag,
+                         containerized=containerized,
+                     )
+                 except Exception:
+                     pass
+                 try:
+                     elapsed_ms = int((time.time() - start_ts) * 1000)
+                 except Exception:
+                     elapsed_ms = 0
+                 try:
+                     self._jlog(
+                         "asr_connect_ok",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         elapsed_ms=elapsed_ms,
+                     )
+                 except Exception:
+                     pass
++            try:
++                _admin_emit(
++                    "dg_connect",
++                    session_id=sid,
++                    dg_id=self._dg_id,
++                    safe_url=safe_url,
++                    containerized=containerized,
++                    tag=self._url_tag,
++                    normalized_pcm=bool(url_meta.get("normalized_pcm")),
++                    elapsed_ms=elapsed_ms,
++                    test_mode=False,
++                )
++            except Exception:
++                pass
+         except asyncio.CancelledError:
+             raise
+         except Exception as exc:
+             diag_extra: dict[str, Any] = {}
+             header_items: list[tuple[str, str]] | None = None
+             status_code: Any = None
+             status_reason: Any = None
+ 
+             if _INVALID_STATUS_TYPES and isinstance(exc, _INVALID_STATUS_TYPES):
+                 response = getattr(exc, "response", None)
+                 headers_obj = None
+                 if response is not None:
+                     status_code = getattr(response, "status_code", None)
+                     status_reason = getattr(response, "reason_phrase", None)
+                     headers_obj = getattr(response, "headers", None)
+                 else:
+                     status_code = getattr(exc, "status_code", None)
+                     status_reason = getattr(exc, "reason_phrase", None)
+                     headers_obj = getattr(exc, "headers", None)
+ 
+                 if headers_obj is not None:
+                     header_iter = None
+                     try:
+                         header_iter = list(headers_obj.items())
+                     except Exception:
+diff --git a/tests/test_deepgram_client_connect.py b/tests/test_deepgram_client_connect.py
+index d5b75cb3ca5e89d3b8a49d53d9d3131f405ddbf2..8a1adc0a8e821261606f991b7d944be49c70160f 100644
+--- a/tests/test_deepgram_client_connect.py
++++ b/tests/test_deepgram_client_connect.py
+@@ -104,50 +104,112 @@ def test_connect_prefers_additional_headers(monkeypatch):
+         record["kwargs"] = kwargs
+         return DummyWS()
+ 
+     monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
+ 
+     async def run():
+         client = dg_mod.DeepgramClient()
+ 
+         await client.connect()
+ 
+         assert "additional_headers" in record["kwargs"]
+         assert record["kwargs"]["additional_headers"] == [("Authorization", "Token abc123")]
+         assert "extra_headers" not in record["kwargs"]
+         assert record["kwargs"]["max_size"] is None
+ 
+         assert json.loads(client._ws.sent[0])["type"] == "Configure"
+ 
+         event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.1)
+         assert event["type"] == "asr_open"
+ 
+         await client.close(wait_for_final=False)
+ 
+     asyncio.run(run())
+ 
+ 
++def test_connect_emits_admin_event_once(monkeypatch):
++    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
++    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
++
++    events = []
++
++    def capture(event, **payload):
++        events.append((event, payload))
++
++    async def fake_connect(url, **kwargs):
++        return DummyWS()
++
++    monkeypatch.setattr(dg_mod, "_admin_emit", capture)
++    monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
++
++    async def run():
++        client = dg_mod.DeepgramClient()
++
++        await client.connect()
++
++        assert len(events) == 1
++        event, payload = events[0]
++        assert event == "dg_connect"
++        assert payload["session_id"]
++        assert payload["safe_url"].startswith("wss://")
++        assert isinstance(payload["containerized"], bool)
++        assert payload["test_mode"] is False
++        assert isinstance(payload["elapsed_ms"], int)
++
++        await client.close(wait_for_final=False)
++
++    asyncio.run(run())
++
++
++def test_connect_emits_admin_event_once_in_test_mode(monkeypatch):
++    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
++    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", True)
++
++    events = []
++
++    def capture(event, **payload):
++        events.append((event, payload))
++
++    monkeypatch.setattr(dg_mod, "_admin_emit", capture)
++
++    async def run():
++        client = dg_mod.DeepgramClient({"session_id": "sid-admin"})
++
++        await client.connect()
++
++        assert len(events) == 1
++        event, payload = events[0]
++        assert event == "dg_connect"
++        assert payload["session_id"] == "sid-admin"
++        assert payload["test_mode"] is True
++        assert isinstance(payload["containerized"], bool)
++
++        await client.close(wait_for_final=False)
++
++    asyncio.run(run())
++
++
+ def test_flush_keeps_small_chunk_for_containerized_transport(monkeypatch):
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+ 
+     async def run():
+         client = dg_mod.DeepgramClient({"_transport": {"containerized_opus": True}})
+         dummy_ws = DummyWS()
+         client._ws = dummy_ws
+         client._open_evt.set()
+         client._tx_queue.append(b"x" * 32)
+ 
+         await client._flush_tx()
+ 
+         assert dummy_ws.sent == [b"x" * 32]
+         assert client._tx_queue == deque()
+ 
+     asyncio.run(run())
+ 
+ 
+ def test_close_retries_flush_until_socket_open(monkeypatch):
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+ 
+     class DelayedOpenWS(DummyWS):
+         def __init__(self):

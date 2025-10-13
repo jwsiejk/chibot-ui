@@ -126,6 +126,68 @@ def test_connect_prefers_additional_headers(monkeypatch):
     asyncio.run(run())
 
 
+def test_connect_emits_admin_event_once(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+
+    events = []
+
+    def capture(event, **payload):
+        events.append((event, payload))
+
+    async def fake_connect(url, **kwargs):
+        return DummyWS()
+
+    monkeypatch.setattr(dg_mod, "_admin_emit", capture)
+    monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
+
+    async def run():
+        client = dg_mod.DeepgramClient()
+
+        await client.connect()
+
+        assert len(events) == 1
+        event, payload = events[0]
+        assert event == "dg_connect"
+        assert payload["session_id"]
+        assert payload["safe_url"].startswith("wss://")
+        assert isinstance(payload["containerized"], bool)
+        assert payload["test_mode"] is False
+        assert isinstance(payload["elapsed_ms"], int)
+
+        await client.close(wait_for_final=False)
+
+    asyncio.run(run())
+
+
+def test_connect_emits_admin_event_once_in_test_mode(monkeypatch):
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", True)
+
+    events = []
+
+    def capture(event, **payload):
+        events.append((event, payload))
+
+    monkeypatch.setattr(dg_mod, "_admin_emit", capture)
+
+    async def run():
+        client = dg_mod.DeepgramClient({"session_id": "sid-admin"})
+
+        await client.connect()
+
+        assert len(events) == 1
+        event, payload = events[0]
+        assert event == "dg_connect"
+        assert payload["session_id"] == "sid-admin"
+        assert payload["test_mode"] is True
+        assert isinstance(payload["containerized"], bool)
+
+        await client.close(wait_for_final=False)
+
+    asyncio.run(run())
+
+
 def test_flush_keeps_small_chunk_for_containerized_transport(monkeypatch):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
