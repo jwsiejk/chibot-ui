@@ -106,6 +106,25 @@
   </div>
 
   <!-- Scripts -->
+  <script>
+    (function () {
+      const cfg = {{ askchip_config|tojson }};
+      try {
+        if (cfg && typeof cfg === 'object') {
+          const target = (window.__askchip_config = Object.assign({}, window.__askchip_config || {}));
+          for (const [key, value] of Object.entries(cfg)) {
+            if (value && typeof value === 'object' && !Array.isArray(value)) {
+              target[key] = Object.assign({}, target[key] || {}, value);
+            } else {
+              target[key] = value;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[index] failed to merge askchip_config', err);
+      }
+    })();
+  </script>
   {% set asset_ver = asset_version('js/bootstrap.js') %}
   <script>
     window.__askchipAssetVersion = {{ asset_ver|tojson }};

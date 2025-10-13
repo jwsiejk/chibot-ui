@@ -1,943 +1,264 @@
-diff --git a/app/api_v1/__init__.py b/app/api_v1/__init__.py
-index 8ba35f2c125d29958a5aa6c93d0d273245058fc9..d24038cb997f7cc79d46766d174965934953c57d 100644
---- a/app/api_v1/__init__.py
-+++ b/app/api_v1/__init__.py
-@@ -1,21 +1,23 @@
- from flask import Blueprint
- from .admin import bp as admin_bp
- from .auth import bp as auth_bp
- from .profile import bp as profile_bp
- from .greet import bp as greet_bp
- from .chat import bp as chat_bp
- from .voice import bp as voice_bp
-+from .asr import bp as asr_bp
- from .diag import bp as diag_bp
- from .metrics import bp as metrics_bp
+diff --git a/app/__init__.py b/app/__init__.py
+index fd23c8cf9a0bfa44f3ee80c98c727be49c0bd221..df8a4ba208c545ff562e0b4ba2f18039159c937d 100644
+--- a/app/__init__.py
++++ b/app/__init__.py
+@@ -68,63 +68,68 @@ def create_app():
  
- def create_v1_blueprint():
-     bp = Blueprint("api_v1", __name__)
-     bp.register_blueprint(admin_bp, url_prefix="/admin")
-     bp.register_blueprint(auth_bp, url_prefix="/auth")
-     bp.register_blueprint(profile_bp, url_prefix="/profile")
-     bp.register_blueprint(greet_bp, url_prefix="/greet")
-     bp.register_blueprint(chat_bp, url_prefix="/chat")
-     bp.register_blueprint(voice_bp, url_prefix="/voice")
-+    bp.register_blueprint(asr_bp, url_prefix="")
-     bp.register_blueprint(diag_bp, url_prefix="")
-     bp.register_blueprint(metrics_bp, url_prefix="")
-     return bp
-diff --git a/app/api_v1/asr.py b/app/api_v1/asr.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..a4e7f89786205ab7945a06c69709d7d18ef5ed22
---- /dev/null
-+++ b/app/api_v1/asr.py
-@@ -0,0 +1,46 @@
-+from __future__ import annotations
-+
-+from flask import Blueprint, jsonify, request, session
-+
-+from ..security_state import get_user
-+from ..services.streaming_asr.deepgram_client import (
-+    build_client_session_descriptor,
-+)
-+
-+
-+bp = Blueprint("asr_v1", __name__, url_prefix="/api/v1/asr")
-+
-+
-+def _require_user() -> str | None:
-+    email = (session.get("user") or {}).get("email") or (get_user() or "")
-+    return email or None
-+
-+
-+@bp.get("/client-session")
-+def client_session():
-+    if not _require_user():
-+        return jsonify({"ok": False, "error": "auth_required"}), 401
-+
-+    sid = (request.args.get("session_id") or request.args.get("sid") or "").strip()
-+
-+    overrides: dict[str, object] = {
-+        "session_id": sid or None,
-+        "_transport": {
-+            "containerized_opus": True,
-+            "container": "webm",
-+            "codec": "opus",
-+        },
-+    }
-+
-+    descriptor = build_client_session_descriptor(overrides)
-+
-+    return (
-+        jsonify(
-+            {
-+                "ok": True,
-+                "session": descriptor,
-+            }
-+        ),
-+        200,
-+    )
-+
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index cb55455c08fd1e74d0b6f7cbb597ccbde90aefb1..69e8faf27af5b090de4b65a3e803e361c6c0bcf5 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -77,50 +77,52 @@ class _NullLogger:
-     def exception(self, *args, **kwargs):
-         return None
+     # Middleware
+     app.before_request(csrf_before_request)
+     rate_limit_register(app)
  
- _DG_KEY_PROBED = False
+     make_csrf_route(app)
  
- 
- def _mask_key_fragment(raw: str) -> str:
-     try:
-         txt = str(raw)
-     except Exception:
-         return "?"
-     txt = txt.strip()
-     if not txt:
-         return "?"
-     if len(txt) <= 4:
-         return "*" * len(txt)
-     return f"{txt[:2]}…{txt[-2:]}"
- 
- 
- def _api_key_info(*, log: bool = True, logger_obj: logging.Logger = logger) -> tuple[str, int]:
-     key = os.getenv("DEEPGRAM_API_KEY", "")
-     if key is None:
-         key = ""
-     key = str(key).strip()
-     if not key:
-+        if DG_TEST_MODE:
-+            return "test", 4
-         raise RuntimeError("DEEPGRAM_API_KEY is not set")
-     length = len(key)
-     global _DG_KEY_PROBED
-     if log and not _DG_KEY_PROBED:
-         _DG_KEY_PROBED = True
+     def asset_version(rel_path: str) -> str:
          try:
-             masked = _mask_key_fragment(key)
-             logger_obj.info("Deepgram API key detected len=%s mask=%s", length, masked)
-         except Exception:
-             logger_obj.info("Deepgram API key detected len=%s", length)
-     return key, length
+             full_path = os.path.join(current_app.static_folder, rel_path)
+             return str(int(os.path.getmtime(full_path)))
+         except (OSError, TypeError, ValueError):
+             return "0"
  
+     @app.context_processor
+     def _inject_asset_version():
+         return {"asset_version": asset_version}
  
- class DeepgramDrainTimeoutError(RuntimeError):
-     """Raised when the transmit queue fails to drain during close."""
- 
-     def __init__(
-         self, sid: str, *, queued_chunks: int, queued_bytes: int, wait_timeout: bool
-     ) -> None:
-         self.sid = sid
-         self.queued_chunks = queued_chunks
-         self.queued_bytes = queued_bytes
-         self.wait_timeout = wait_timeout
-         super().__init__(
-             f"drain_timeout sid={sid} queued_chunks={queued_chunks} queued_bytes={queued_bytes}"
-@@ -163,50 +165,67 @@ def _clip_text(txt: str, limit: int = 120) -> str:
- def _safe_float(val):
-     try:
-         if val is None:
-             return None
-         return float(val)
-     except (TypeError, ValueError):
-         return None
- 
- 
- def _dg_url(overrides: Optional[dict] = None) -> str:
-     """Return the Deepgram listen URL with safe defaults.
- 
-     Audio transport parameters must be in the URL query for Deepgram's v1/listen.
-     For **containerized Opus** (OGG/WebM), we must NOT send encoding, sample_rate, or channels.
-     """
-     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
- 
-     # Detect containerized Opus from overrides (nested under _transport)
-     containerized = False
-     try:
-         if overrides and isinstance(overrides.get("_transport"), dict):
-             containerized = bool(overrides["_transport"].get("containerized_opus"))
-     except Exception:
-         containerized = False
- 
-+    if isinstance(overrides, dict):
-+        try:
-+            transport_cfg = overrides.setdefault("_transport", {})
-+            if not isinstance(transport_cfg, dict):
-+                transport_cfg = {}
-+                overrides["_transport"] = transport_cfg
-+        except Exception:
-+            transport_cfg = {}
-+
-+        if not containerized:
-+            transport_cfg["containerized_opus"] = True
-+            transport_cfg["_containerized_forced"] = True
-+            containerized = True
-+
-+        transport_cfg.setdefault("container", "webm")
-+        transport_cfg.setdefault("codec", "opus")
-+
-     # Append conservative defaults ONLY when not containerized
-     if (not containerized) and ("encoding=" not in base):
-         sep = "&" if "?" in base else "?"
-         base = (
-             base
-             + sep
-             # RAW defaults; safe for legacy raw paths. If truly containerized, these will be stripped below.
-             + "encoding=opus&sample_rate=48000&channels=1"
-             + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true"
-         )
- 
-     # Apply overrides into query string and clean up for containerized
-     effective_utterance_end_ms = 0
- 
-     try:
-         import urllib.parse as _p
- 
-         parts = _p.urlsplit(base)
-         q = _p.parse_qsl(parts.query, keep_blank_values=True)
-         qd = {k: v for k, v in q}
- 
-         def _fmt(v):
-             if isinstance(v, bool):
-                 return "true" if v else "false"
-             if isinstance(v, int):
-@@ -320,50 +339,158 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
-                 effective_utterance_end_ms = 0
- 
-         query = _p.urlencode(qd)
-         base = _p.urlunsplit(
-             (parts.scheme, parts.netloc, parts.path, query, parts.fragment)
-         )
-     except Exception:
-         pass
- 
-     if isinstance(overrides, dict):
+     @app.context_processor
+     def _inject_askchip_config():
+         enabled = True
          try:
-             overrides["_effective_utterance_end_ms"] = int(
-                 effective_utterance_end_ms or 0
-             )
+             enabled = bool(getattr(_SETTINGS, "advanced_logging_enabled", True))
          except Exception:
-             overrides["_effective_utterance_end_ms"] = 0
- 
-     return base
- 
- 
- def _auth_header(*, log: bool = True, logger_obj: logging.Logger = logger) -> str:
-     key, _ = _api_key_info(log=log, logger_obj=logger_obj)
-     return f"Token {key}"
- 
- 
-+def _client_url_metadata(url: str, overrides: Optional[dict]) -> tuple[str, str, dict[str, Any]]:
-+    """Return (safe_url, sanitized_query, meta) for diagnostics/clients."""
-+
-+    transport = {}
-+    try:
-+        if overrides and isinstance(overrides.get("_transport"), dict):
-+            transport = dict(overrides.get("_transport") or {})
-+    except Exception:
-+        transport = {}
-+
-+    containerized = bool(transport.get("containerized_opus"))
-+    container = transport.get("container")
-+    codec = transport.get("codec")
-+    normalized_pcm = bool(transport.get("normalized_pcm"))
-+
-+    safe_url = url
-+    sanitized_qs = "?"
-+    meta: dict[str, Any] = {
-+        "container": container,
-+        "codec": codec,
-+        "containerized_opus": containerized,
-+        "normalized_pcm": normalized_pcm,
-+        "omitted_params": None,
-+        "raw_params": None,
-+    }
-+
-+    try:
-+        import urllib.parse as _p
-+
-+        parts = _p.urlsplit(url)
-+        q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
-+
-+        raw_param_keys = {"encoding", "sample_rate", "channels"}
-+        if containerized:
-+            omitted = []
-+            for key in raw_param_keys:
-+                if key not in q:
-+                    omitted.append(key)
-+            meta["omitted_params"] = omitted
-+        else:
-+            meta["raw_params"] = {
-+                "encoding": q.get("encoding"),
-+                "sample_rate": q.get("sample_rate"),
-+                "channels": q.get("channels"),
-+            }
-+
-+        sanitized_pairs = []
-+        for key in sorted(q.keys()):
-+            if key is None:
-+                continue
-+            key_str = str(key)
-+            lower = key_str.lower()
-+            if "key" in lower or "token" in lower or "secret" in lower:
-+                continue
-+            if containerized and key_str in raw_param_keys:
-+                continue
-+            sanitized_pairs.append((key_str, q[key]))
-+
-+        sanitized_query = _p.urlencode(sanitized_pairs, doseq=True)
-+        sanitized_qs = f"?{sanitized_query}" if sanitized_query else "?"
-+        safe_url = f"{parts.scheme}://{parts.netloc}{parts.path}"
-+        if sanitized_query:
-+            safe_url = f"{safe_url}?{sanitized_query}"
-+        if parts.fragment:
-+            safe_url = f"{safe_url}#{parts.fragment}"
-+    except Exception:
-+        pass
-+
-+    return safe_url, sanitized_qs, meta
-+
-+
-+def build_client_session_descriptor(overrides: Optional[dict] = None) -> dict[str, Any]:
-+    """Expose Deepgram session info for browser-initiated clients."""
-+
-+    cfg = dict(overrides or {})
-+    url = _dg_url(cfg)
-+    safe_url, sanitized_qs, meta = _client_url_metadata(url, cfg)
-+    configure_payload = _initial_config(cfg)
-+
-+    try:
-+        key, _ = _api_key_info(log=False, logger_obj=logger)
-+        auth_masked = _mask_key_fragment(key)
-+    except Exception:
-+        auth_masked = None
-+
-+    descriptor: dict[str, Any] = {
-+        "url": url,
-+        "sanitized_url": safe_url,
-+        "sanitized_query": sanitized_qs,
-+        "configure": configure_payload,
-+        "transport": {
-+            "container": meta.get("container"),
-+            "codec": meta.get("codec"),
-+            "containerized": bool(meta.get("containerized_opus")),
-+            "normalized_pcm": bool(meta.get("normalized_pcm")),
-+        },
-+        "meta": meta,
-+        "auth": {
-+            "header": "Authorization",
-+            "scheme": "Token",
-+            "masked": auth_masked,
-+            "requires_proxy": True,
-+        },
-+    }
-+
-+    return descriptor
-+
-+
- def _initial_config(overrides: Optional[dict] = None) -> dict:
-     """Build Configure payload with FEATURES ONLY (no audio/transport keys)."""
-     interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
-     features = {
-         "interim_results": interim,
-         "smart_format": True,
-         "punctuate": True,
-         "vad_events": True,
-         # Keep URL-only keys (like utterance_end_ms) out of Configure
-     }
- 
-     # Allow simple boolean overrides at top-level OR nested under "features"
-     try:
-         if overrides:
-             # Merge nested features if provided
-             if isinstance(overrides.get("features"), dict):
-                 for k, v in overrides["features"].items():
-                     features[k] = v
- 
-             # Support legacy boolean overrides at top level
-             for k in ("interim_results", "smart_format", "punctuate", "vad_events"):
-                 if k in overrides and overrides[k] is not None:
-                     features[k] = bool(overrides[k])
-     except Exception:
-         pass
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 86d29551b481918677951d94811f7849d632bc65..67aab66d219c9575f71706ec73034f757f7b1634 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -1,90 +1,104 @@
- /*
- Citations for context (non-functional):
- :contentReference[oaicite:0]{index=0}
- :contentReference[oaicite:1]{index=1}
- */
- 
- /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
-    Goals satisfied:
-     • Echo-aware VAD (threshold boost while TTS is playing)
-     • Streaming Opus blobs per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
-     • Soft barge-in: pause Chip TTS on committed speech start
-     • Turn timeout (safety), robust errors, clean session end
-     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
- 
-    Notes:
-     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
-     • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
- */
- 
- import { VAD } from './voice/vad.js';
--import { sendAudioChunk, sendCloseStream } from './ws_module.js';
-+import { sendAudioChunk, sendCloseStream, sendJSON } from './ws_module.js';
- import { stopPlayback, isPlaying as ttsIsPlaying, getPlaybackSignature } from './audio.js';
- import { logIfEnabled } from './util/logging.js';
-+import { getSID } from './util/sid.js';
- 
- // Public API (matches prior usage)
- export async function initMic(stream = null) { return await _ensureMic(stream); }
- export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
- export function disarmVAD() { _disarm(); }
- export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
- export function bargeIn() { _bargeIn(); }         // keeps API parity
- export function setVadBoost(_v) { /* kept for API parity; no-op */ }
- 
- // ---- Internal state ---------------------------------------------------------
- 
- // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
- const REC_MIME = (typeof MediaRecorder !== 'undefined'
-   && typeof MediaRecorder.isTypeSupported === 'function'
-   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
-   ? 'audio/ogg; codecs=opus'
-   : 'audio/webm; codecs=opus';
- 
- const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
- const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
- const POST_TTS_HOLDOFF_MS = 600;    // grace window after Chip begins speaking
- 
- const state = {
-   stream: null,
-   ctx: null,
-   source: null,
-   analyser: null,
-   vad: null,
-   rec: null,
-   chunkSendPromise: Promise.resolve(),
-   chunkBytesSent: 0,
-   chunkSendError: null,
-   turnTimer: null,
-   turnOpen: false,   // track whether a turn is currently open server-side
-   deviceLogged: false,
-   // NEW: min-turn gating
-   recStartedAt: 0,
-   pendingEndTimer: null,
-   postTtsHoldUntil: 0,
-   postTtsHoldTimer: null,
-   eligibility: 'blocked_pregreet', // 'blocked_pregreet' | 'holdoff' | 'eligible'
--  refractoryUntil: 0, 
-+  refractoryUntil: 0,
-+  direct: {
-+    descriptor: null,
-+    fetchPromise: null,
-+    connectPromise: null,
-+    ws: null,
-+    ready: false,
-+    sendPromise: Promise.resolve(),
-+    lastError: null,
-+    container: 'webm',
-+    codec: 'opus',
-+    containerized: true,
-+    sanitizedUrl: null,
-+  },
- };
- 
- let _overrideEchoSignatureFn = null;
- 
- // ---- Helpers ----------------------------------------------------------------
- 
- function _emitVoiceState(state, detail = {}) {
-   try {
-     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
-   } catch {}
- }
- 
- function _console(level, ...args) {
-   logIfEnabled(() => {
-     try {
-       const method = (typeof console?.[level] === 'function') ? console[level] : console.log;
-       method?.apply(console, args);
-     } catch {}
-   });
- }
- 
- function _logLifecycle(event, detail = {}, level = 'debug') {
-   const payload = { event, ...(detail && typeof detail === 'object' ? detail : { detail }) };
-   _console(level, '[voice]', event, payload);
-   try {
-@@ -95,97 +109,279 @@ function _logLifecycle(event, detail = {}, level = 'debug') {
- function _now() {
-   try {
-     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-       return performance.now();
-     }
-   } catch {}
-   return Date.now();
- }
- 
- function _clearPendingEndTimer() {
-   if (state.pendingEndTimer) {
-     try { clearTimeout(state.pendingEndTimer); } catch {}
-     state.pendingEndTimer = null;
-   }
- }
- 
- function _clearPostTtsHoldTimer() {
-   const hadTimer = !!state.postTtsHoldTimer;
-   if (hadTimer) {
-     try { clearTimeout(state.postTtsHoldTimer); } catch {}
-   }
-   state.postTtsHoldTimer = null;
-   return hadTimer;
- }
- 
-+async function _fetchAsrClientSession(force = false) {
-+  const direct = state.direct;
-+  if (!direct) return null;
-+  if (!force && direct.descriptor) return direct.descriptor;
-+  if (direct.fetchPromise) return direct.fetchPromise;
-+
-+  const sid = (() => {
-+    try { return getSID(); } catch { return null; }
-+  })();
-+  const qs = sid ? `?session_id=${encodeURIComponent(sid)}` : '';
-+
-+  const url = `/api/v1/asr/client-session${qs}`;
-+  direct.fetchPromise = fetch(url, { credentials: 'include' })
-+    .then(async (res) => {
-+      if (!res.ok) {
-+        const err = new Error(`fetch_failed_${res.status}`);
-+        err.status = res.status;
-+        throw err;
-+      }
-+      return res.json();
-+    })
-+    .then((body) => {
-+      const session = body?.session || body?.descriptor || null;
-+      if (!session || typeof session !== 'object') {
-+        throw new Error('bad_descriptor');
-+      }
-+      direct.descriptor = session;
-+      direct.container = (session?.transport?.container || 'webm');
-+      direct.codec = (session?.transport?.codec || 'opus');
-+      direct.containerized = session?.transport?.containerized !== false;
-+      direct.sanitizedUrl = session?.sanitized_url || session?.url || null;
-+
-+      const diagContainer = `${direct.container || 'webm'}/${direct.codec || 'opus'}`;
-+      _console('info', '[voice] direct ASR descriptor', {
-+        sanitizedUrl: direct.sanitizedUrl,
-+        container: diagContainer,
-+        containerized: direct.containerized,
-+      });
-+
-+      const diagFrame = {
-+        type: 'ClientAsrSession',
-+        sanitized_url: direct.sanitizedUrl || null,
-+        container: diagContainer,
-+        containerized: direct.containerized !== false,
-+      };
-+      try { sendJSON(diagFrame); } catch {}
-+      return session;
-+    })
-+    .catch((err) => {
-+      direct.lastError = err;
-+      throw err;
-+    })
-+    .finally(() => {
-+      direct.fetchPromise = null;
-+    });
-+
-+  return direct.fetchPromise;
-+}
-+
-+function _handleDirectWsMessage(evt) {
-+  if (!evt) return;
-+  const data = evt.data;
-+  if (typeof data !== 'string') {
-+    return;
-+  }
-+  try {
-+    const parsed = JSON.parse(data);
-+    _console('debug', '[voice] direct ASR frame', parsed);
-+  } catch (err) {
-+    _console('debug', '[voice] direct ASR frame (raw)', { error: err?.message || err });
-+  }
-+}
-+
-+async function _ensureDirectWs() {
-+  const direct = state.direct;
-+  if (!direct || !direct.descriptor) return null;
-+  if (direct.ws && direct.ws.readyState === WebSocket.OPEN) return direct.ws;
-+  if (direct.connectPromise) return direct.connectPromise;
-+
-+  if (typeof WebSocket === 'undefined') {
-+    return null;
-+  }
-+
-+  const descriptor = direct.descriptor;
-+  const wsUrl = descriptor?.url;
-+  if (!wsUrl || typeof wsUrl !== 'string') {
-+    return null;
-+  }
-+
-+  const protocols = (() => {
-+    const raw = descriptor?.protocols;
-+    if (Array.isArray(raw)) {
-+      return raw.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim());
-+    }
-+    if (typeof raw === 'string' && raw.trim()) {
-+      return [raw.trim()];
-+    }
-+    return [];
-+  })();
-+
-+  direct.connectPromise = new Promise((resolve, reject) => {
-+    let ws;
-+    try {
-+      ws = protocols.length ? new WebSocket(wsUrl, protocols) : new WebSocket(wsUrl);
-+    } catch (err) {
-+      direct.lastError = err;
-+      direct.connectPromise = null;
-+      return reject(err);
-+    }
-+
-+    direct.ws = ws;
-+    ws.binaryType = 'arraybuffer';
-+
-+    ws.onopen = () => {
-+      direct.ready = true;
-+      try {
-+        if (descriptor?.configure) {
-+          ws.send(JSON.stringify(descriptor.configure));
-+        }
-+      } catch (err) {
-+        _console('warn', '[voice] failed to send direct ASR configure', err);
-+      }
-+      resolve(ws);
-+    };
-+
-+    ws.onmessage = (evt) => {
-+      try { _handleDirectWsMessage(evt); } catch {}
-+    };
-+
-+    ws.onerror = (evt) => {
-+      direct.lastError = evt;
-+    };
-+
-+    ws.onclose = () => {
-+      direct.ready = false;
-+      direct.ws = null;
-+    };
-+  }).finally(() => {
-+    direct.connectPromise = null;
-+  });
-+
-+  return direct.connectPromise.catch(() => null);
-+}
-+
-+async function _directSendChunk(blob) {
-+  const direct = state.direct;
-+  if (!direct) return;
-+  const ws = direct.ws;
-+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-+  try {
-+    const buf = await blob.arrayBuffer();
-+    ws.send(buf);
-+  } catch (err) {
-+    direct.lastError = err;
-+    _console('warn', '[voice] direct ASR send failed', err);
-+  }
-+}
-+
-+function _closeDirectWs() {
-+  const direct = state.direct;
-+  if (!direct) return;
-+  const ws = direct.ws;
-+  direct.ws = null;
-+  direct.ready = false;
-+  if (ws) {
-+    try { ws.close(); } catch {}
-+  }
-+}
-+
- try {
-   window.addEventListener('chip-tts', (ev) => {
-     const detail = ev?.detail || {};
-     const rawState = detail.state;
-     const ttsState = typeof rawState === 'string' ? rawState.toLowerCase() : '';
-     if (ttsState === 'playing') {
-       state.postTtsHoldUntil = _now() + POST_TTS_HOLDOFF_MS;
- 
-       const isPrime = detail && detail.prime === true;
-       const playbackConfirmed = (() => {
-         if (detail && (detail.confirmed === true || detail.playbackConfirmed === true)) {
-           return true;
+             enabled = True
++        auth_config = {}
++        auto_login_email = (os.environ.get("ASKCHIP_AUTO_LOGIN_EMAIL") or "").strip()
++        if auto_login_email:
++            auth_config["autoLoginEmail"] = auto_login_email
+         vad_config = {}
+         try:
+             vad_config = {
+                 "baseThresholdDb": float(getattr(_SETTINGS, "vad_base_threshold_db", 10.0)),
+                 "exitThresholdDb": float(getattr(_SETTINGS, "vad_exit_threshold_db", 6.0)),
+                 "ttsBoostDb": float(getattr(_SETTINGS, "vad_tts_boost_db", 6.0)),
+                 "minSpeechMs": int(getattr(_SETTINGS, "vad_min_speech_ms", 360)),
+             }
+         except Exception:
+             vad_config = {}
+         return {
+             "askchip_config": {
+                 "logging": {"enabled": enabled},
++                "auth": auth_config,
+                 "vad": vad_config,
+             }
          }
-         try { return !!ttsIsPlaying(); } catch { return false; }
-       })();
  
-       if (!isPrime && playbackConfirmed && state.eligibility === 'blocked_pregreet') {
-         state.eligibility = 'holdoff';
-       }
-       return;
-     }
-     if (!ttsState || ttsState === 'ended' || ttsState === 'stopped' || ttsState === 'idle' || ttsState === 'paused') {
-       state.postTtsHoldUntil = 0;
-       _clearPostTtsHoldTimer();
-       if (state.eligibility === 'holdoff') state.eligibility = 'eligible'; 
-     }
+     @app.after_request
+     def maybe_allow_cors(resp):
+         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
+         if allow:
+             origins = [o.strip() for o in allow.split(",") if o.strip()]
+             ori = request.headers.get("Origin", "")
+             if ori in origins:
+                 resp.headers["Access-Control-Allow-Origin"] = ori
+                 resp.headers["Vary"] = "Origin"
+                 resp.headers["Access-Control-Allow-Credentials"] = "true"
+                 resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token"
+                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+         return resp
+ 
+     @app.route("/<path:_>", methods=["OPTIONS"])
+     def _cors_preflight(_):
+         return ("", 204)
+ 
+     @app.before_request
+     def _auth_gate():
+         p = request.path or "/"
+diff --git a/static/js/auth_gate.js b/static/js/auth_gate.js
+index 45c5776565dd22dbfd704b1b680196b5b79a350c..97f9eec2372cd38f0113ae9c23aef369be73eee4 100644
+--- a/static/js/auth_gate.js
++++ b/static/js/auth_gate.js
+@@ -51,79 +51,114 @@ function valueById(id) {
+ }
+ function valueFromLabel(labelsLower) {
+   const lbl = $$('label').find(L => {
+     const t = (L.textContent || '').trim().toLowerCase();
+     return labelsLower.some(w => t === w || t.startsWith(`${w} `));
    });
- } catch {}
- 
- function _toFiniteNumber(value) {
-   if (typeof value === 'number') {
-     return Number.isFinite(value) ? value : null;
+   if (!lbl) return '';
+   const forId = lbl.getAttribute('for');
+   if (forId) {
+     const el = document.getElementById(forId);
+     return el && 'value' in el ? (el.value || '').trim() : '';
    }
-   if (typeof value === 'string') {
-     const trimmed = value.trim();
-     if (trimmed === '') return null;
-     const parsed = Number(trimmed);
-     return Number.isFinite(parsed) ? parsed : null;
-   }
-   return null;
+   const sib = lbl.nextElementSibling;
+   return (sib && sib.tagName === 'INPUT') ? (sib.value || '').trim() : '';
+ }
+ function readProfileFields() {
+   // Supported ids: #prof_name, #prof_role (or #profileTitle), #prof_region
+   const name   = valueById('prof_name')   || valueFromLabel(['name']);
+   const title  = valueById('prof_role')   || valueById('profileTitle') || valueFromLabel(['role','title']);
+   const region = valueById('prof_region') || valueFromLabel(['region']);
+   return { name, title, region };
  }
  
- function _resolveNumber(value, fallback) {
-   const num = _toFiniteNumber(value);
-   return num === null ? fallback : num;
- }
+ // ---------- Gate evaluation ----------
+ let evalLock = false;
++let autoLoginAttempted = false;
++let autoLoginFailed = false;
  
-+function _selectRecorderMime() {
-+  try {
-+    const preferWebm = !!(state.direct && state.direct.descriptor && state.direct.containerized);
-+    const webmMime = 'audio/webm; codecs=opus';
-+    if (preferWebm && typeof MediaRecorder !== 'undefined' && typeof MediaRecorder.isTypeSupported === 'function') {
-+      if (MediaRecorder.isTypeSupported(webmMime)) {
-+        return webmMime;
-+      }
-+    }
-+  } catch {}
-+  return REC_MIME;
-+}
-+
- async function _ensureMic(externalStream = null) {
-   if (state.stream && state.stream.active) return state.stream;
- 
-   if (state.stream && !state.stream.active) {
-     _teardownAudioGraph();
-     state.stream = null;
-   }
- 
-   let stream = externalStream;
- 
-   if (!stream || !stream.active) {
-     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
-       _logLifecycle('mic_perm_denied', { reason: 'mediaDevices_unavailable' }, 'warn');
-       throw new Error('Media devices API unavailable');
-     }
- 
-     const constraints = {
-       audio: {
-         channelCount: 1,
-         sampleRate: 48000,
-         echoCancellation: true,
-         noiseSuppression: true,
-         autoGainControl: false
-       }
-     };
-@@ -257,87 +453,94 @@ function _stopRecorder(detail = null) {
- 
- function _teardownVADOnly() {
-   try { state.vad && state.vad.stop(); } catch {}
-   state.vad = null;
- }
- 
- function _teardownAudioGraph() {
-   try { state.source && state.source.disconnect(); } catch {}
-   try { state.analyser && state.analyser.disconnect(); } catch {}
-   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
-   state.source = null;
-   state.analyser = null;
-   state.ctx = null;
-   state.deviceLogged = false;
- }
- 
- function _disarm() {
-   // 1) Hard stop + clear all timers
-   _safeClearTurnTimer();
-   _clearPendingEndTimer();
-   _clearPostTtsHoldTimer();
- 
-   // 2) Stop capture/VAD cleanly
-   _stopRecorder({ reason: 'manual_disarm' });
-   _teardownVADOnly();
-+  _closeDirectWs();
- 
-   // 3) Reset local state
-   state.turnOpen = false;
-   state.recStartedAt = 0;
- 
-   // 4) Block any pre-greet starts, and enforce a refractory lockout
-   //    Use your configured cooldown (default 900ms) so we can't instantly re-arm.
-   const cooldown = _resolveNumber(cfg.cooldownMs, 900);
-   state.refractoryUntil = Date.now() + cooldown;  // prevent immediate re-starts
-   state.postTtsHoldUntil = 0;                     // no pending hold
-   state.eligibility = 'blocked_pregreet';         // require greet/tts to begin before starts are allowed
- 
-   // 5) Final UI state
-   _emitVoiceState('idle');
- }
- 
- function _bargeIn() {
-   _clearPostTtsHoldTimer();
-   state.postTtsHoldUntil = 0;
-   // Soft barge-in: pause audio locally
-   try { stopPlayback(); } catch {}
-   // If a prior ASR turn is somehow still open, politely close it.
-   // (Harmless if no turn is open; guarded to avoid duplicate closes.)
-   if (state.turnOpen) {
-     try { sendCloseStream(); } catch {}
-     state.turnOpen = false;
-   }
- }
- 
- // ---- VAD wiring -------------------------------------------------------------
- 
- async function _arm(stream = null, opts = {}) {
-   const mic = stream || await _ensureMic();
- 
-   // Build / rebuild VAD
-   _teardownVADOnly();
- 
-+  try {
-+    _fetchAsrClientSession().then(() => {
-+      _ensureDirectWs().catch(() => {});
-+    }).catch(() => {});
-+  } catch {}
-+
-   // Merge runtime globals so admins can tune without rebuilds:
-   let globalVad = {};
-   try { globalVad = (window.__askchip_config && window.__askchip_config.vad) || {}; } catch {}
-   const cfg = { ...globalVad, ...opts };
- 
-   const pollMs = _resolveNumber(cfg.pollMs, 33);
-   const baseThresholdDb = _toFiniteNumber(cfg.baseThresholdDb ?? cfg.startDbOffset);
-   const exitThresholdDb = _toFiniteNumber(cfg.exitThresholdDb ?? cfg.stopDbOffset);
-   const ttsBoostDb = _toFiniteNumber(cfg.ttsBoostDb);
-   const echoBoostStartDb = _resolveNumber(
-     cfg.echoBoostStartDb ?? cfg.echoBoostStart ?? ttsBoostDb,
-     8
-   );
-   const hasExplicitStartBoost = cfg.echoBoostStartDb !== undefined || cfg.echoBoostStart !== undefined;
-   let stopFallback = 6;
-   if (ttsBoostDb !== null || hasExplicitStartBoost) {
-     stopFallback = echoBoostStartDb;
-   }
-   const echoBoostStopDb = _resolveNumber(
-     cfg.echoBoostStopDb ?? cfg.echoBoostStop ?? (ttsBoostDb !== null ? ttsBoostDb : null),
-     stopFallback
-   );
- 
-   const echoSuppressDb = _resolveNumber(
-     cfg.ECHO_SUPPRESS_DB ?? cfg.echoSuppressDb,
-@@ -412,74 +615,91 @@ async function _arm(stream = null, opts = {}) {
-   });
-   _emitVoiceState('armed');
- 
-   return mic;
- }
- 
- // ---- Recorder lifecycle -----------------------------------------------------
- 
- function _startRecorder() {
-   if (!state.stream) return false;
-   if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
- 
-   if (typeof MediaRecorder === 'undefined') {
-     _console('warn', '[voice] MediaRecorder not supported in this browser');
-     state.rec = null;
-     return false;
-   }
- 
-   state.chunkSendPromise = Promise.resolve();
-   state.chunkBytesSent = 0;
-   state.chunkSendError = null;
-   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
-   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
- 
-   let recorder;
-+  const mimeType = _selectRecorderMime();
-+
+ export async function evaluateAuth() {
+   if (evalLock) return;
+   evalLock = true;
    try {
--    recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
-+    recorder = new MediaRecorder(state.stream, { mimeType, audioBitsPerSecond: 128000 });
-   } catch (primaryErr) {
-     try {
-       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
-     } catch (fallbackErr) {
-       _console('warn', '[voice] MediaRecorder init failed', fallbackErr || primaryErr);
-       state.rec = null;
-       return false;
-     }
-   }
+     // ✅ Fail-open immediately so first paint has Start enabled.
+     // We'll only disable if we KNOW the user must be gated.
+     setStartEnabled(true);
  
-   state.rec = recorder;
+     const me = await getJSON('/api/v1/auth/me');
+     // Fire a state event for observability/tools
+     window.dispatchEvent(new CustomEvent('askchip-auth-state', { detail: me }));
  
-   state.rec.ondataavailable = (e) => {
-     const blob = e.data;
-     if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
+     const loginModal   = $('#loginModal');
+     const profileModal = $('#profileModal');
+ 
+     // Always mirror email into the profile form so it never appears blank
+     const emailField = document.getElementById('prof_email');
+     const emailVal = me?.profile?.email || me?.email || '';
+     if (emailField && emailVal) { try { emailField.value = emailVal; } catch(e){} }
+ 
+     if (!me.authenticated) {
++      const autoLoginEmail = window.__askchip_config?.auth?.autoLoginEmail;
++      if (autoLoginEmail && !autoLoginAttempted) {
++        autoLoginAttempted = true;
++        autoLoginFailed = false;
++        const rerun = () => {
++          try {
++            setTimeout(() => {
++              try {
++                const maybe = evaluateAuth();
++                if (maybe && typeof maybe.catch === 'function') {
++                  maybe.catch((err) => console.warn('[auth_gate] auto-login re-eval failed:', err));
++                }
++              } catch (err) {
++                console.warn('[auth_gate] auto-login re-eval threw:', err);
++              }
++            }, 0);
++          } catch (err) {
++            console.warn('[auth_gate] auto-login schedule failed:', err);
++          }
++        };
++        try {
++          await postJSON('/api/v1/auth/login', { email: autoLoginEmail });
++        } catch (err) {
++          autoLoginFailed = true;
++          console.warn('[auth_gate] auto-login failed (continuing without auth):', err);
++        } finally {
++          rerun();
++        }
++        return;
++      }
+       show(loginModal, true);
+       show(profileModal, false);
+-      setStartEnabled(false);
++      if (autoLoginFailed) setStartEnabled(true);
++      else setStartEnabled(false);
+       showBanner('Please log in to continue.');
        return;
      }
  
-     // Chain chunk sends to preserve ordering across the WS.
-     state.chunkSendPromise = state.chunkSendPromise
-       .catch(() => {}) // allow queue to continue even if a prior chunk failed
-       .then(async () => {
-+        const direct = state.direct;
-+        if (direct && direct.descriptor) {
-+          try {
-+            if (!direct.ws || direct.ws.readyState !== WebSocket.OPEN) {
-+              await _ensureDirectWs();
++    autoLoginFailed = false;
++
+     // Prefer top-level profile_complete, fall back to nested
+     const complete = !!(me.profile_complete || me.profile?.profile_complete);
+ 
+     if (!complete) {
+       show(loginModal, false);
+       show(profileModal, true);
+       setStartEnabled(false);
+       showBanner('Please fill out your profile to continue.');
+       return;
+     }
+ 
+     // Ready
+     show(loginModal, false);
+     show(profileModal, false);
+     setStartEnabled(true);
+     // Back-compat + explicit event
+     document.dispatchEvent(new CustomEvent('auth_ready', { detail: me }));
+     window.dispatchEvent(new CustomEvent('askchip-auth-ready', { detail: me }));
+   } catch (e) {
+     // Fail-open so the user isn't stranded if /auth/me is temporarily failing
+     console.warn('[auth_gate] evaluateAuth failed (fail-open):', e);
+     setStartEnabled(true);
+   } finally {
+     evalLock = false;
+   }
+diff --git a/templates/index.html b/templates/index.html
+index aec98a8a8871e86990dd422e237f927c3d19f852..7154f6123016c844c8f528e22be855ed62a12e0a 100644
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -84,47 +84,66 @@
+         </div>
+         <div id="inlineLoginMsg" class="msgline"></div>
+       </form>
+     </div>
+   </div>
+ 
+   <div id="profileModal" class="modal hidden">
+     <div class="sheet">
+       <h3>Profile</h3>
+       <div class="grid">
+         <label>Name<input id="prof_name"/></label>
+         <label>Email<input id="prof_email" disabled/></label>
+         <label>Role<input id="prof_role"/></label>
+         <label>Region<input id="prof_region"/></label>
+         <label>Company<input id="prof_company"/></label>
+       </div>
+       <div class="actions">
+         <button id="profileSave" class="primary">Save</button>
+         <button id="profileCancel" type="button">Cancel</button>
+       </div>
+       <div id="profileMsg" class="msgline"></div>
+     </div>
+   </div>
+ 
+   <!-- Scripts -->
++  <script>
++    (function () {
++      const cfg = {{ askchip_config|tojson }};
++      try {
++        if (cfg && typeof cfg === 'object') {
++          const target = (window.__askchip_config = Object.assign({}, window.__askchip_config || {}));
++          for (const [key, value] of Object.entries(cfg)) {
++            if (value && typeof value === 'object' && !Array.isArray(value)) {
++              target[key] = Object.assign({}, target[key] || {}, value);
++            } else {
++              target[key] = value;
 +            }
-+            if (direct.ws && direct.ws.readyState === WebSocket.OPEN) {
-+              await _directSendChunk(blob);
-+            }
-+          } catch (err) {
-+            direct.lastError = err;
-+            _console('debug', '[voice] direct ASR chunk failed', err);
 +          }
 +        }
-+
-         try {
-           await sendAudioChunk(blob);
-           state.chunkBytesSent += blob.size;
-           try {
-             _console('debug', '[voice] streamed audio chunk', { bytes: blob.size });
-           } catch {}
-         } catch (err) {
-           state.chunkSendError = err;
-           try {
-             _console('warn', '[voice] failed to stream audio chunk', err);
-           } catch {}
-         }
-       });
-   };
- 
-   state.rec.onstop = async () => {
-     let finalDetail;
-     try {
-       await state.chunkSendPromise.catch((err) => {
-         state.chunkSendError = state.chunkSendError || err;
-       });
-       if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
-         _console('warn', '[voice] recorded chunks too small', state.chunkBytesSent);
-         finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
-       }
++      } catch (err) {
++        console.warn('[index] failed to merge askchip_config', err);
++      }
++    })();
++  </script>
+   {% set asset_ver = asset_version('js/bootstrap.js') %}
+   <script>
+     window.__askchipAssetVersion = {{ asset_ver|tojson }};
+   </script>
+   <script
+     type="module"
+     src="{{ url_for('static', filename='js/askchip_client_hooks.js') }}?v={{ asset_ver }}"
+   ></script>
+   <script
+     type="module"
+     src="{{ url_for('static', filename='js/bootstrap.js') }}?v={{ asset_ver }}"
+   ></script>
+   <script
+     type="module"
+     src="{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}"
+   ></script>
+   <script
+     type="module"
+     src="{{ url_for('static', filename='js/ui_menu.js') }}?v={{ asset_ver }}"
+   ></script>
+ </body>
+ </html>

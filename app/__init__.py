@@ -90,6 +90,10 @@ def create_app():
             enabled = bool(getattr(_SETTINGS, "advanced_logging_enabled", True))
         except Exception:
             enabled = True
+        auth_config = {}
+        auto_login_email = (os.environ.get("ASKCHIP_AUTO_LOGIN_EMAIL") or "").strip()
+        if auto_login_email:
+            auth_config["autoLoginEmail"] = auto_login_email
         vad_config = {}
         try:
             vad_config = {
@@ -103,6 +107,7 @@ def create_app():
         return {
             "askchip_config": {
                 "logging": {"enabled": enabled},
+                "auth": auth_config,
                 "vad": vad_config,
             }
         }

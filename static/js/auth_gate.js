@@ -73,6 +73,8 @@ function readProfileFields() {
 
 // ---------- Gate evaluation ----------
 let evalLock = false;
+let autoLoginAttempted = false;
+let autoLoginFailed = false;
 
 export async function evaluateAuth() {
   if (evalLock) return;
@@ -95,12 +97,45 @@ export async function evaluateAuth() {
     if (emailField && emailVal) { try { emailField.value = emailVal; } catch(e){} }
 
     if (!me.authenticated) {
+      const autoLoginEmail = window.__askchip_config?.auth?.autoLoginEmail;
+      if (autoLoginEmail && !autoLoginAttempted) {
+        autoLoginAttempted = true;
+        autoLoginFailed = false;
+        const rerun = () => {
+          try {
+            setTimeout(() => {
+              try {
+                const maybe = evaluateAuth();
+                if (maybe && typeof maybe.catch === 'function') {
+                  maybe.catch((err) => console.warn('[auth_gate] auto-login re-eval failed:', err));
+                }
+              } catch (err) {
+                console.warn('[auth_gate] auto-login re-eval threw:', err);
+              }
+            }, 0);
+          } catch (err) {
+            console.warn('[auth_gate] auto-login schedule failed:', err);
+          }
+        };
+        try {
+          await postJSON('/api/v1/auth/login', { email: autoLoginEmail });
+        } catch (err) {
+          autoLoginFailed = true;
+          console.warn('[auth_gate] auto-login failed (continuing without auth):', err);
+        } finally {
+          rerun();
+        }
+        return;
+      }
       show(loginModal, true);
       show(profileModal, false);
-      setStartEnabled(false);
+      if (autoLoginFailed) setStartEnabled(true);
+      else setStartEnabled(false);
       showBanner('Please log in to continue.');
       return;
     }
+
+    autoLoginFailed = false;
 
     // Prefer top-level profile_complete, fall back to nested
     const complete = !!(me.profile_complete || me.profile?.profile_complete);
