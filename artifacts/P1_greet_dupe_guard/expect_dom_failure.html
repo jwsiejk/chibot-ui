@@ -1,7 +1,7 @@
 <!DOCTYPE html><html lang="en"><head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="csrf" content="67761dc0f96460bd10670a20b4c9c18b">
+  <meta name="csrf" content="85711eb7a76da8c8b3ab2da748b8ae6d">
   <title>Ask Chip</title>
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
@@ -32,18 +32,18 @@
         <div id="chatMessages" class="chat-window"></div>
         <div class="composer">
           <input id="composer" placeholder="Type a message…" style="">
-          <button id="composerSend" disabled="">Send</button>
+          <button id="composerSend">Send</button>
         </div>
       </aside>
 
       <section class="visualizer-pane">
         <div class="status-row">
           <span class="status-label">Status:</span>
-          <span id="statusText">Ready</span>
+          <span id="statusText">Listening…</span>
         </div>
         <div class="visualizer-shell" role="img" aria-label="Audio visualizer">
           <div class="visualizer-backdrop">
-            <canvas class="visualizer-waveform" role="presentation"></canvas>
+            <canvas class="visualizer-waveform" role="presentation" width="354" height="239"></canvas>
           </div>
         </div>
       </section>
@@ -57,7 +57,7 @@
     <div class="meeting-toolbar">
       <div class="toolbar-buttons">
         <button id="startButton" class="primary" title="Please complete your profile to continue" disabled="">Start</button>
-        <button id="endButton" disabled="">End</button>
+        <button id="endButton">End</button>
         <span id="stateDot" class="dot dot-ready" title="Ready"></span>
       </div>
     </div>
@@ -74,7 +74,7 @@
           <button id="inlineLoginSubmit" type="submit" class="primary">Sign in</button>
           <button id="inlineLoginCancel" type="button">Cancel</button>
         </div>
-        <div id="inlineLoginMsg" class="msgline warn">Please log in to continue.</div>
+        <div id="inlineLoginMsg" class="msgline warn">No assistant frames after greet — check WS handler/payload.</div>
       </form>
     </div>
   </div>
@@ -98,13 +98,32 @@
   </div>
 
   <!-- Scripts -->
+  <script>
+    (function () {
+      const cfg = {"auth": {}, "logging": {"enabled": true}, "vad": {"baseThresholdDb": 10.0, "exitThresholdDb": 6.0, "minSpeechMs": 360, "ttsBoostDb": 6.0}};
+      try {
+        if (cfg && typeof cfg === 'object') {
+          const target = (window.__askchip_config = Object.assign({}, window.__askchip_config || {}));
+          for (const [key, value] of Object.entries(cfg)) {
+            if (value && typeof value === 'object' && !Array.isArray(value)) {
+              target[key] = Object.assign({}, target[key] || {}, value);
+            } else {
+              target[key] = value;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[index] failed to merge askchip_config', err);
+      }
+    })();
+  </script>
   
   <script>
-    window.__askchipAssetVersion = "1760325989";
+    window.__askchipAssetVersion = "1760388075";
   </script>
-  <script type="module" src="/static/js/askchip_client_hooks.js?v=1760325989"></script>
-  <script type="module" src="/static/js/bootstrap.js?v=1760325989"></script>
-  <script type="module" src="/static/js/auth_gate.js?v=1760325989"></script>
-  <script type="module" src="/static/js/ui_menu.js?v=1760325989"></script>
+  <script type="module" src="/static/js/askchip_client_hooks.js?v=1760388075"></script>
+  <script type="module" src="/static/js/bootstrap.js?v=1760388075"></script>
+  <script type="module" src="/static/js/auth_gate.js?v=1760388075"></script>
+  <script type="module" src="/static/js/ui_menu.js?v=1760388075"></script>
 
 </body></html>
