@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-10-13T03:33:40.650Z",
+  "generated_at": "2025-10-13T03:52:35.347Z",
   "summary": {
     "total": 13,
     "passed": 1,
@@ -24,8 +24,7 @@
       "id": "P1_greet_dupe_guard",
       "pass": false,
       "findings": [
-        "WS console missing 'assistant_end'",
-        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
+        "WS console missing 'assistant_end'"
       ],
       "metrics": {
         "browser_console_ws": {}
@@ -47,11 +46,57 @@
         "WS console missing 'asr:start'",
         "WS latency 'first_partial_from_mic_start' unavailable",
         "Fail: WS console missing 'asr:start'",
-        "Fail: WS latency 'first_partial_from_mic_start' unavailable",
-        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
+        "Fail: WS latency 'first_partial_from_mic_start' unavailable"
       ],
       "metrics": {
-        "browser_console_ws": {}
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "f175ed6690c74231b00990011861a6d6",
+              "text": "Hey User, what should we tackle first?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "f175ed6690c74231b00990011861a6d6",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ]
+        }
       },
       "admin_stream_disabled": false,
       "admin_capture_meta": {
@@ -70,11 +115,57 @@
         "WS console missing 'latency_breakdown'",
         "WS latency 'dg_connect' unavailable",
         "WS latency 'first_partial_from_mic_start' unavailable",
-        "Fail: WS latency 'first_partial_from_mic_start' unavailable",
-        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
+        "Fail: WS latency 'first_partial_from_mic_start' unavailable"
       ],
       "metrics": {
-        "browser_console_ws": {}
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "becb90ed2bf24800bd06a218aaf1c1aa",
+              "text": "Hey User, what outcome are you aiming for today?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "becb90ed2bf24800bd06a218aaf1c1aa",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ]
+        }
       },
       "admin_stream_disabled": false,
       "admin_capture_meta": {
@@ -92,11 +183,57 @@
         "Deepgram WS URL not observed",
         "WS console missing 'container=webm/opus'",
         "WS console missing 'containerized=true'",
-        "Fail: WS console missing 'containerized=true'",
-        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
+        "Fail: WS console missing 'containerized=true'"
       ],
       "metrics": {
-        "browser_console_ws": {}
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "3a3f409e104843bda7dc6da92302d367",
+              "text": "Hey User, what do you want to get done today?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "3a3f409e104843bda7dc6da92302d367",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ]
+        }
       },
       "admin_stream_disabled": false,
       "admin_capture_meta": {
@@ -112,11 +249,57 @@
       "pass": false,
       "findings": [
         "WS console missing 'asr:final'",
-        "WS console missing 'CloseStream ack'",
-        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
+        "WS console missing 'CloseStream ack'"
       ],
       "metrics": {
-        "browser_console_ws": {}
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "2c5b61fec5904d21bb999cff64c74121",
+              "text": "Hey User, what's the goal for this session?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "2c5b61fec5904d21bb999cff64c74121",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ]
+        }
       },
       "admin_stream_disabled": false,
       "admin_capture_meta": {
@@ -134,11 +317,57 @@
         "WS console missing 'barge_in'",
         "WS console missing 'tts_pause'",
         "WS latency 'tts_pause_after_vad' unavailable",
-        "Fail: WS latency 'tts_pause_after_vad' unavailable",
-        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
+        "Fail: WS latency 'tts_pause_after_vad' unavailable"
       ],
       "metrics": {
-        "browser_console_ws": {}
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "d6b3fea0f1cc46619b5efa5e7d52d5f6",
+              "text": "Hey User, what do you want to get done today?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "d6b3fea0f1cc46619b5efa5e7d52d5f6",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ]
+        }
       },
       "admin_stream_disabled": false,
       "admin_capture_meta": {
@@ -154,11 +383,57 @@
       "id": "P7_state_debounce",
       "pass": false,
       "findings": [
-        "WS state events missing for spam check",
-        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
+        "WS state events missing for spam check"
       ],
       "metrics": {
-        "browser_console_ws": {}
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "54033c7442c04f53a3ae922284e21807",
+              "text": "Hey User, what would you like to accomplish today?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "54033c7442c04f53a3ae922284e21807",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ]
+        }
       },
       "admin_stream_disabled": false,
       "admin_capture_meta": {
@@ -172,11 +447,56 @@
     {
       "id": "P8_no_assistant_dup_messages",
       "pass": true,
-      "findings": [
-        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
-      ],
+      "findings": [],
       "metrics": {
-        "browser_console_ws": {}
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "8e3eaea338ca4e99a637f3f5cdc086be",
+              "text": "Hey User, what do you want to get done today?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "8e3eaea338ca4e99a637f3f5cdc086be",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ]
+        }
       },
       "admin_stream_disabled": false,
       "admin_capture_meta": {
@@ -192,13 +512,59 @@
         "WS console missing 'nlu'",
         "No WS NLU event observed",
         "WS console missing 'suggestions_made'",
-        "WS suggestions payload missing for chips check",
-        "Fail: WS suggestions payload missing for chips check",
-        "Fail: No WS NLU event observed",
-        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
+        "WS chips count 4 > 3",
+        "Fail: WS chips 4 > 3",
+        "Fail: No WS NLU event observed"
       ],
       "metrics": {
-        "browser_console_ws": {}
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "e069c1bf247d4286a8446cf53cc5a5ce",
+              "text": "Hey User, what's the goal for this session?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "e069c1bf247d4286a8446cf53cc5a5ce",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ]
+        }
       },
       "admin_stream_disabled": false,
       "admin_capture_meta": {
@@ -214,11 +580,57 @@
       "id": "P10_persona_governor_on_diagnose",
       "pass": false,
       "findings": [
-        "WS console missing 'policy_decision: diagnose'",
-        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
+        "WS console missing 'policy_decision: diagnose'"
       ],
       "metrics": {
-        "browser_console_ws": {}
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "429fdce66b074fe1a0eb9f062fe8a461",
+              "text": "Hey User, what do you want to get done today?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "429fdce66b074fe1a0eb9f062fe8a461",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ]
+        }
       },
       "admin_stream_disabled": false,
       "admin_capture_meta": {
@@ -235,11 +647,57 @@
       "findings": [
         "WS console missing 'session_goal'",
         "WS session_goal hints missing",
-        "Fail: WS session_goal hints missing",
-        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
+        "Fail: WS session_goal hints missing"
       ],
       "metrics": {
-        "browser_console_ws": {}
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "f5790dd006aa4c008cb61b37ab691425",
+              "text": "Hey User, what would you like to accomplish today?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "f5790dd006aa4c008cb61b37ab691425",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ]
+        }
       },
       "admin_stream_disabled": false,
       "admin_capture_meta": {
@@ -258,11 +716,57 @@
         "No WS NLU event observed",
         "Fail: WS nlu missing 'delivery_pref'",
         "Fail: WS nlu missing 'entities.product'",
-        "Fail: WS nlu missing 'entities.env'",
-        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
+        "Fail: WS nlu missing 'entities.env'"
       ],
       "metrics": {
-        "browser_console_ws": {}
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "c0e8b7be615045b4bf1a7be7d6a23fbc",
+              "text": "Hey User, what would you like to accomplish today?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "c0e8b7be615045b4bf1a7be7d6a23fbc",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ]
+        }
       },
       "admin_stream_disabled": false,
       "admin_capture_meta": {
@@ -277,11 +781,57 @@
       "id": "P15_long_help_session",
       "pass": false,
       "findings": [
-        "WS console missing 'latency_breakdown'",
-        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 10000ms"
+        "WS console missing 'latency_breakdown'"
       ],
       "metrics": {
-        "browser_console_ws": {}
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "85b060ef66bd427bbff03175360b03b8",
+              "text": "Hey User, what do you want to get done today?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "85b060ef66bd427bbff03175360b03b8",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ]
+        }
       },
       "admin_stream_disabled": false,
       "admin_capture_meta": {

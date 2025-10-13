@@ -2,5 +2,13 @@
   "[AskChip] bootstrap loaded",
   "Failed to load resource: the server responded with a status of 403 ()",
   "Failed to load resource: the server responded with a status of 403 ()",
-  "[askchip] startCall() placeholder"
+  "[ws] openWS build {module: https://chibot-ui.onrender.com/static/js/ws.js?v=1760327237, version: 1760327237, flags: undefined, reconnectEnabled: true, sessionStarted: false}",
+  "[ws] openWS options= {} reconnect= true",
+  "[bootstrap] startOnce sending greet configure",
+  "[bootstrap] startOnce greet configure sent — recorder setup will follow",
+  "[WS→UI] {\"type\":\"ready\",\"session_id\":\"b4345449-34f0-4b89-accf-6943cc9bf216\"}",
+  "[voice] mic_device_selected {event: mic_device_selected, label: Fake Default Audio Input, sampleRate: 48000, channels: 1}",
+  "[bootstrap] startOnce mic initialized — about to arm VAD for voice turns",
+  "[voice] mic_start {event: mic_start, sampleRate: 48000, pollMs: 33}",
+  "[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state"
 ]

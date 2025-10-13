@@ -1,19 +1,19 @@
 [
   {
     "event": "heartbeat",
-    "at": 1760326343182
+    "at": 1760327505554
   },
   {
     "event": "heartbeat",
-    "at": 1760326346244
+    "at": 1760327508641
   },
   {
     "event": "heartbeat",
-    "at": 1760326349298
+    "at": 1760327511718
   },
   {
     "event": "heartbeat",
-    "at": 1760326352361
+    "at": 1760327514796
   },
   {
     "event": "collector_error",
