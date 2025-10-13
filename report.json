@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-10-13T03:52:35.347Z",
+  "generated_at": "2025-10-13T04:44:44.928Z",
   "summary": {
     "total": 13,
     "passed": 1,
@@ -27,7 +27,30 @@
         "WS console missing 'assistant_end'"
       ],
       "metrics": {
-        "browser_console_ws": {}
+        "browser_console_ws": {
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "b40c4929-3eb4-4c09-a5db-7c7d0fc71325",
+              "sid": "b40c4929-3eb4-4c09-a5db-7c7d0fc71325"
+            }
+          ]
+        }
       },
       "admin_stream_disabled": false,
       "admin_capture_meta": {
@@ -52,8 +75,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "f175ed6690c74231b00990011861a6d6",
-              "text": "Hey User, what should we tackle first?",
+              "turn_id": "75d58fced58b42a989d33c8aaf5c612d",
+              "text": "Hey User, what would you like to accomplish today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -79,7 +102,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "f175ed6690c74231b00990011861a6d6",
+              "turn_id": "75d58fced58b42a989d33c8aaf5c612d",
               "items": [
                 {
                   "text": "Send me the email"
@@ -94,6 +117,28 @@
                   "text": "Explain the business value"
                 }
               ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "5aee0c45-b250-4ae2-8143-c74d14197ab1",
+              "sid": "5aee0c45-b250-4ae2-8143-c74d14197ab1"
             }
           ]
         }
@@ -121,8 +166,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "becb90ed2bf24800bd06a218aaf1c1aa",
-              "text": "Hey User, what outcome are you aiming for today?",
+              "turn_id": "7f5d3b2aa36848b7a813f3a231eafa7d",
+              "text": "Hey User, what do you want to get done today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -148,7 +193,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "becb90ed2bf24800bd06a218aaf1c1aa",
+              "turn_id": "7f5d3b2aa36848b7a813f3a231eafa7d",
               "items": [
                 {
                   "text": "Send me the email"
@@ -163,6 +208,28 @@
                   "text": "Explain the business value"
                 }
               ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "5019d528-c70e-4be3-87fd-97422f106f27",
+              "sid": "5019d528-c70e-4be3-87fd-97422f106f27"
             }
           ]
         }
@@ -189,7 +256,7 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "3a3f409e104843bda7dc6da92302d367",
+              "turn_id": "88cf7e006d6540f49b9a5001dff1459b",
               "text": "Hey User, what do you want to get done today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -216,7 +283,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "3a3f409e104843bda7dc6da92302d367",
+              "turn_id": "88cf7e006d6540f49b9a5001dff1459b",
               "items": [
                 {
                   "text": "Send me the email"
@@ -231,6 +298,28 @@
                   "text": "Explain the business value"
                 }
               ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "f93bd046-17ae-4c66-afd6-8af7bcf2cac5",
+              "sid": "f93bd046-17ae-4c66-afd6-8af7bcf2cac5"
             }
           ]
         }
@@ -255,8 +344,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "2c5b61fec5904d21bb999cff64c74121",
-              "text": "Hey User, what's the goal for this session?",
+              "turn_id": "58fbe22911fe471180536298f4cf5d33",
+              "text": "Hey User, what would you like to accomplish today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -282,7 +371,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "2c5b61fec5904d21bb999cff64c74121",
+              "turn_id": "58fbe22911fe471180536298f4cf5d33",
               "items": [
                 {
                   "text": "Send me the email"
@@ -297,6 +386,28 @@
                   "text": "Explain the business value"
                 }
               ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "a5490c17-bbff-413c-9893-013a6e889b1e",
+              "sid": "a5490c17-bbff-413c-9893-013a6e889b1e"
             }
           ]
         }
@@ -323,204 +434,7 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "d6b3fea0f1cc46619b5efa5e7d52d5f6",
-              "text": "Hey User, what do you want to get done today?",
-              "chunk_count": 1,
-              "assistant_end_count": 1,
-              "policy_chips": [
-                "Send me the email",
-                "Walk me through it live"
-              ],
-              "suggestions": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ],
-          "suggestions": [
-            {
-              "type": "suggestions",
-              "turn_id": "d6b3fea0f1cc46619b5efa5e7d52d5f6",
-              "items": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ]
-        }
-      },
-      "admin_stream_disabled": false,
-      "admin_capture_meta": {
-        "error": "eventsource_error",
-        "captureState": "active"
-      },
-      "recommendations": [
-        "Pause TTS on first VAD hit; confirm ~420ms; resume/commit accordingly.",
-        "Increase echo-aware VAD threshold during TTS to avoid false triggers."
-      ]
-    },
-    {
-      "id": "P7_state_debounce",
-      "pass": false,
-      "findings": [
-        "WS state events missing for spam check"
-      ],
-      "metrics": {
-        "browser_console_ws": {
-          "assistant_frames": [
-            {
-              "turn_id": "54033c7442c04f53a3ae922284e21807",
-              "text": "Hey User, what would you like to accomplish today?",
-              "chunk_count": 1,
-              "assistant_end_count": 1,
-              "policy_chips": [
-                "Send me the email",
-                "Walk me through it live"
-              ],
-              "suggestions": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ],
-          "suggestions": [
-            {
-              "type": "suggestions",
-              "turn_id": "54033c7442c04f53a3ae922284e21807",
-              "items": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ]
-        }
-      },
-      "admin_stream_disabled": false,
-      "admin_capture_meta": {
-        "error": "eventsource_error",
-        "captureState": "active"
-      },
-      "recommendations": [
-        "Debounce identical state emissions for 500ms to prevent spam."
-      ]
-    },
-    {
-      "id": "P8_no_assistant_dup_messages",
-      "pass": true,
-      "findings": [],
-      "metrics": {
-        "browser_console_ws": {
-          "assistant_frames": [
-            {
-              "turn_id": "8e3eaea338ca4e99a637f3f5cdc086be",
-              "text": "Hey User, what do you want to get done today?",
-              "chunk_count": 1,
-              "assistant_end_count": 1,
-              "policy_chips": [
-                "Send me the email",
-                "Walk me through it live"
-              ],
-              "suggestions": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ],
-          "suggestions": [
-            {
-              "type": "suggestions",
-              "turn_id": "8e3eaea338ca4e99a637f3f5cdc086be",
-              "items": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ]
-        }
-      },
-      "admin_stream_disabled": false,
-      "admin_capture_meta": {
-        "error": "eventsource_error",
-        "captureState": "active"
-      },
-      "recommendations": []
-    },
-    {
-      "id": "P9_chips_only_when_needed",
-      "pass": false,
-      "findings": [
-        "WS console missing 'nlu'",
-        "No WS NLU event observed",
-        "WS console missing 'suggestions_made'",
-        "WS chips count 4 > 3",
-        "Fail: WS chips 4 > 3",
-        "Fail: No WS NLU event observed"
-      ],
-      "metrics": {
-        "browser_console_ws": {
-          "assistant_frames": [
-            {
-              "turn_id": "e069c1bf247d4286a8446cf53cc5a5ce",
+              "turn_id": "96477ed717534aadbb7ff6a798811d83",
               "text": "Hey User, what's the goal for this session?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -547,7 +461,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "e069c1bf247d4286a8446cf53cc5a5ce",
+              "turn_id": "96477ed717534aadbb7ff6a798811d83",
               "items": [
                 {
                   "text": "Send me the email"
@@ -562,6 +476,289 @@
                   "text": "Explain the business value"
                 }
               ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "a2e57492-a2d9-439f-a2c6-9bd43724be6e",
+              "sid": "a2e57492-a2d9-439f-a2c6-9bd43724be6e"
+            }
+          ]
+        }
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
+      "recommendations": [
+        "Pause TTS on first VAD hit; confirm ~420ms; resume/commit accordingly.",
+        "Increase echo-aware VAD threshold during TTS to avoid false triggers."
+      ]
+    },
+    {
+      "id": "P7_state_debounce",
+      "pass": false,
+      "findings": [
+        "WS state events missing for spam check"
+      ],
+      "metrics": {
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "cb77b71791ae422989c157f55f9e896e",
+              "text": "Hey User, what should we tackle first?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "cb77b71791ae422989c157f55f9e896e",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "42b45f41-256c-4193-a25d-a8a4e0727ffd",
+              "sid": "42b45f41-256c-4193-a25d-a8a4e0727ffd"
+            }
+          ]
+        }
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
+      "recommendations": [
+        "Debounce identical state emissions for 500ms to prevent spam."
+      ]
+    },
+    {
+      "id": "P8_no_assistant_dup_messages",
+      "pass": true,
+      "findings": [],
+      "metrics": {
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "9c57444d81234a2982ba4a3cb0498fc8",
+              "text": "Hey User, what outcome are you aiming for today?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "9c57444d81234a2982ba4a3cb0498fc8",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "1b63ba02-fd80-46f3-a4ba-0a0e869a58ff",
+              "sid": "1b63ba02-fd80-46f3-a4ba-0a0e869a58ff"
+            }
+          ]
+        }
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
+      "recommendations": []
+    },
+    {
+      "id": "P9_chips_only_when_needed",
+      "pass": false,
+      "findings": [
+        "WS nlu.needs_clarification expected true, got undefined",
+        "WS nlu.missing should include one of [depth, delivery_pref], got []",
+        "WS chips count 4 > 3",
+        "Fail: WS chips 4 > 3"
+      ],
+      "metrics": {
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "4c2c18fd93234fb997911d9e246a5b71",
+              "text": "Hey User, what's the goal for this session?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "4c2c18fd93234fb997911d9e246a5b71",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "83236bfb-9444-42c7-86c3-88c39655c1bb",
+              "sid": "83236bfb-9444-42c7-86c3-88c39655c1bb"
             }
           ]
         }
@@ -586,8 +783,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "429fdce66b074fe1a0eb9f062fe8a461",
-              "text": "Hey User, what do you want to get done today?",
+              "turn_id": "20bc2d89f8e84c2d850111822886311a",
+              "text": "Hey User, what would you like to accomplish today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -613,7 +810,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "429fdce66b074fe1a0eb9f062fe8a461",
+              "turn_id": "20bc2d89f8e84c2d850111822886311a",
               "items": [
                 {
                   "text": "Send me the email"
@@ -628,6 +825,28 @@
                   "text": "Explain the business value"
                 }
               ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "a0d28921-a03e-469a-8b98-c6cbfe8c13d6",
+              "sid": "a0d28921-a03e-469a-8b98-c6cbfe8c13d6"
             }
           ]
         }
@@ -645,16 +864,14 @@
       "id": "P11_session_goal_persists",
       "pass": false,
       "findings": [
-        "WS console missing 'session_goal'",
-        "WS session_goal hints missing",
-        "Fail: WS session_goal hints missing"
+        "session_goal.depth expected 'deep_dive', got 'normal'"
       ],
       "metrics": {
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "f5790dd006aa4c008cb61b37ab691425",
-              "text": "Hey User, what would you like to accomplish today?",
+              "turn_id": "8f8233baaba8470faa1e7e9b78c1cf12",
+              "text": "Hey User, what's the goal for this session?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -680,7 +897,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "f5790dd006aa4c008cb61b37ab691425",
+              "turn_id": "8f8233baaba8470faa1e7e9b78c1cf12",
               "items": [
                 {
                   "text": "Send me the email"
@@ -695,6 +912,28 @@
                   "text": "Explain the business value"
                 }
               ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "3e486bb2-c34e-4c0b-bea0-7a0339db7fe0",
+              "sid": "3e486bb2-c34e-4c0b-bea0-7a0339db7fe0"
             }
           ]
         }
@@ -712,8 +951,13 @@
       "id": "P12_nlu_completeness",
       "pass": false,
       "findings": [
-        "WS console missing 'nlu'",
-        "No WS NLU event observed",
+        "WS nlu missing key 'user_goal'",
+        "WS nlu missing key 'phase'",
+        "WS nlu missing key 'depth'",
+        "WS nlu missing key 'delivery_pref'",
+        "WS nlu missing key 'intent_hint'",
+        "WS nlu missing key 'entities'",
+        "WS nlu missing key 'needs_clarification'",
         "Fail: WS nlu missing 'delivery_pref'",
         "Fail: WS nlu missing 'entities.product'",
         "Fail: WS nlu missing 'entities.env'"
@@ -722,8 +966,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "c0e8b7be615045b4bf1a7be7d6a23fbc",
-              "text": "Hey User, what would you like to accomplish today?",
+              "turn_id": "a5d171281e36453cadde65e45cb6035e",
+              "text": "Hey User, what outcome are you aiming for today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -749,7 +993,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "c0e8b7be615045b4bf1a7be7d6a23fbc",
+              "turn_id": "a5d171281e36453cadde65e45cb6035e",
               "items": [
                 {
                   "text": "Send me the email"
@@ -764,6 +1008,28 @@
                   "text": "Explain the business value"
                 }
               ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "91be4149-9bd3-4c99-b978-276b4cd171ab",
+              "sid": "91be4149-9bd3-4c99-b978-276b4cd171ab"
             }
           ]
         }
@@ -787,8 +1053,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "85b060ef66bd427bbff03175360b03b8",
-              "text": "Hey User, what do you want to get done today?",
+              "turn_id": "cabb87a81ca349bd9c65f6a58e5c8533",
+              "text": "Hey User, what would you like to accomplish today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -814,7 +1080,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "85b060ef66bd427bbff03175360b03b8",
+              "turn_id": "cabb87a81ca349bd9c65f6a58e5c8533",
               "items": [
                 {
                   "text": "Send me the email"
@@ -829,6 +1095,28 @@
                   "text": "Explain the business value"
                 }
               ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "408a8661-a1f1-49f7-b4a3-6d72dfc6d375",
+              "sid": "408a8661-a1f1-49f7-b4a3-6d72dfc6d375"
             }
           ]
         }
