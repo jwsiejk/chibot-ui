@@ -1,420 +1,213 @@
 diff --git a/e2e_orchestrator.js b/e2e_orchestrator.js
-index 41344496709efc9208979d60031ed447a0e55cbd..aab6acce3d5d4d736224a7e39d7795e88c0b93ec 100644
+index aab6acce3d5d4d736224a7e39d7795e88c0b93ec..4fb2b29ab5025434de999ce5f7724d81b94e5451 100644
 --- a/e2e_orchestrator.js
 +++ b/e2e_orchestrator.js
-@@ -1,36 +1,277 @@
- // e2e_orchestrator.js
- // Run:
- //   npm i -D playwright
- //   npx playwright install chromium
- //   # optional: npx playwright install chrome
- //   node e2e_orchestrator.js askchip_e2e_tests.json --base https://chibot-ui.onrender.com/ [--chrome] [--dump-ui] [--start "<selector|text|xpath>"] [--start-eval "window.startCall()"]
+@@ -545,93 +545,204 @@ async function clickStartAnywhere(page, attempts){
+ }
  
- const fs = require('fs');
- const path = require('path');
- const { chromium } = require('playwright');
+ // last-resort gesture clicks
+ async function bruteStart(page, attempts){
+   try{
+     const v = page.viewportSize() || { width: 1200, height: 800 };
+     await page.mouse.click(Math.floor(v.width/2), Math.floor(v.height/2));
+     attempts.push({ ok:true, selector:'mouse:center' });
+     await page.waitForTimeout(400);
+   } catch(e){ attempts.push({ ok:false, selector:'mouse:center', error:e.message?.slice(0,120) }); }
  
-+function readUInt32LE(buf, offset) { return buf.readUInt32LE(offset); }
-+function readUInt16LE(buf, offset) { return buf.readUInt16LE(offset); }
+   const btns = page.locator('button');
+   const n = await btns.count().catch(()=>0);
+   for (let i=0;i<Math.min(n, 6);i++){
+     const b = btns.nth(i);
+     try { if (await b.isVisible()) { await b.click({ timeout: 700 }); attempts.push({ ok:true, selector:`button#${i}` }); } }
+     catch(e){ attempts.push({ ok:false, selector:`button#${i}`, error:e.message?.slice(0,120) }); }
+   }
+ }
+ 
+ function getLatencies(adminLogs){
+   const e = adminLogs.find(x => x.event === 'latency_breakdown');
+   return e?.ms || null;
+ }
+ 
++function normalizeTimestampMs(entry) {
++  if (!entry || typeof entry !== 'object') return null;
++  const candidates = [
++    ['ts_ms', true],
++    ['timestamp_ms', true],
++    ['time_ms', true],
++    ['ms', true],
++    ['millis', true],
++    ['ts', false],
++    ['timestamp', false],
++    ['time', false],
++    ['at', false]
++  ];
++  for (const [key, isMs] of candidates) {
++    if (!(key in entry)) continue;
++    const raw = entry[key];
++    const num = typeof raw === 'string' ? Number(raw) : raw;
++    if (!Number.isFinite(num)) continue;
++    if (isMs || num > 1e12) return num;
++    return Math.round(num * 1000);
++  }
++  return null;
++}
 +
-+function decodeWav(buffer) {
-+  if (buffer.toString('ascii', 0, 4) !== 'RIFF') throw new Error('Invalid WAV: missing RIFF header');
-+  if (buffer.toString('ascii', 8, 12) !== 'WAVE') throw new Error('Invalid WAV: missing WAVE header');
++function extractStateEvent(entry) {
++  if (!entry || typeof entry !== 'object') return null;
++  const tsMs = normalizeTimestampMs(entry);
++  if (!Number.isFinite(tsMs)) return null;
 +
-+  let offset = 12;
-+  let audioFormat = null;
-+  let numChannels = null;
-+  let sampleRate = null;
-+  let bitsPerSample = null;
-+  let dataStart = null;
-+  let dataLength = null;
-+
-+  while (offset + 8 <= buffer.length) {
-+    const chunkId = buffer.toString('ascii', offset, offset + 4);
-+    const chunkSize = readUInt32LE(buffer, offset + 4);
-+    const chunkDataStart = offset + 8;
-+    if (chunkId === 'fmt ') {
-+      audioFormat = readUInt16LE(buffer, chunkDataStart);
-+      numChannels = readUInt16LE(buffer, chunkDataStart + 2);
-+      sampleRate = readUInt32LE(buffer, chunkDataStart + 4);
-+      bitsPerSample = readUInt16LE(buffer, chunkDataStart + 14);
-+    } else if (chunkId === 'data') {
-+      dataStart = chunkDataStart;
-+      dataLength = chunkSize;
++  const nestedPhaseSources = [entry, entry.payload, entry.data, entry.detail, entry.frame];
++  let phase = null;
++  for (const src of nestedPhaseSources) {
++    if (phase) break;
++    if (!src || typeof src !== 'object') continue;
++    const candidate = src.phase ?? src.state ?? src.status;
++    if (typeof candidate === 'string' && candidate.trim()) {
++      phase = candidate.trim();
 +      break;
 +    }
-+    offset = chunkDataStart + chunkSize + (chunkSize % 2);
 +  }
 +
-+  if (audioFormat !== 1) throw new Error('Only PCM WAV files are supported');
-+  if (!numChannels || !sampleRate || !bitsPerSample) throw new Error('Malformed WAV header');
-+  if (dataStart == null || dataLength == null) throw new Error('WAV missing data chunk');
-+
-+  const bytesPerSample = bitsPerSample / 8;
-+  if (![1, 2, 3, 4].includes(bytesPerSample)) throw new Error(`Unsupported sample size: ${bitsPerSample}`);
-+  if (bitsPerSample !== 16 && bitsPerSample !== 32) throw new Error('Only 16-bit or 32-bit PCM supported');
-+
-+  const sampleCount = Math.floor(dataLength / bytesPerSample);
-+  const samples = new Float32Array(sampleCount);
-+  for (let i = 0; i < sampleCount; i++) {
-+    const byteOffset = dataStart + i * bytesPerSample;
-+    let value;
-+    if (bitsPerSample === 16) {
-+      value = buffer.readInt16LE(byteOffset) / 32768;
-+    } else {
-+      value = buffer.readInt32LE(byteOffset) / 2147483648;
++  const labelCandidates = [entry.label, entry.event, entry.kind, entry.message, entry.raw];
++  let display = null;
++  for (const val of labelCandidates) {
++    if (typeof val !== 'string') continue;
++    const text = val.trim();
++    if (!text) continue;
++    if (!/state/i.test(text)) continue;
++    const match = text.match(/state[^a-z0-9]*([a-z0-9_ -]+)/i);
++    if (match && match[1]) {
++      const parsed = match[1].trim();
++      if (parsed && !phase) phase = parsed;
 +    }
-+    samples[i] = Math.max(-1, Math.min(1, value));
++    if (!display) display = text;
 +  }
 +
-+  return { samples, sampleRate, channels: numChannels };
++  if (!phase) return null;
++  const canonical = phase.trim();
++  if (!canonical) return null;
++  const key = canonical.toLowerCase();
++  const label = display || `state ${canonical}`;
++  return { key, label, ts: tsMs, canonical };
 +}
 +
-+function parseSilenceDuration(entry) {
-+  if (entry == null) return null;
-+  if (typeof entry === 'number') return entry;
-+  if (typeof entry === 'object') {
-+    if (typeof entry.silence_ms === 'number') return entry.silence_ms;
-+    if (typeof entry.wait_ms === 'number') return entry.wait_ms;
-+    if (typeof entry.duration_ms === 'number') return entry.duration_ms;
++function detectStateSpam(adminLogs, windowMs) {
++  const span = Math.max(0, Number(windowMs) || 0);
++  if (span <= 0) return [];
++  const events = [];
++  for (const entry of adminLogs || []) {
++    const evt = extractStateEvent(entry);
++    if (evt) events.push(evt);
 +  }
-+  if (typeof entry !== 'string') return null;
-+  const str = entry.trim().toLowerCase();
-+  const match = str.match(/^(silence|wait|pause)[:_]?([0-9]+(?:\.[0-9]+)?)(ms|s|sec|seconds)?$/);
-+  if (!match) return null;
-+  const value = parseFloat(match[2]);
-+  const unit = match[3] || 'ms';
-+  if (Number.isNaN(value)) return null;
-+  if (unit.startsWith('s') && !unit.startsWith('ms')) return value * 1000;
-+  return value;
-+}
++  if (events.length < 2) return [];
++  events.sort((a, b) => a.ts - b.ts);
 +
-+function normalizeInputs(inputs, audioDir) {
-+  const items = Array.isArray(inputs) && inputs.length ? inputs.slice() : ['sample_sentence.wav'];
-+  const timeline = [];
-+  const audioFiles = [];
-+  let defaultSampleRate = null;
-+  let defaultChannels = null;
-+  let audioClipCount = 0;
-+  let totalDurationMs = 0;
++  const buffers = new Map();
++  const worst = new Map();
 +
-+  const pushSilence = (durationMs, sampleRateHint, channelHint) => {
-+    const duration = Math.max(0, Number(durationMs || 0));
-+    if (!duration) return;
-+    const sr = sampleRateHint || defaultSampleRate || 16000;
-+    const ch = channelHint || defaultChannels || 1;
-+    timeline.push({ kind: 'silence', durationMs: duration, sampleRate: sr, channels: ch });
-+    totalDurationMs += duration;
-+  };
++  for (const evt of events) {
++    const buf = buffers.get(evt.key) || [];
++    buf.push(evt);
++    while (buf.length && evt.ts - buf[0].ts > span) buf.shift();
++    buffers.set(evt.key, buf);
 +
-+  for (const entry of items) {
-+    if (typeof entry === 'object' && entry && entry.file && typeof entry.file === 'string' && entry.file.endsWith('.wav')) {
-+      const filePath = path.resolve(path.join(audioDir, entry.file));
-+      if (!fs.existsSync(filePath)) throw new Error(`Audio fixture missing: ${entry.file}`);
-+      const clip = decodeWav(fs.readFileSync(filePath));
-+      timeline.push({ kind: 'audio', sampleRate: clip.sampleRate, channels: clip.channels, samples: Array.from(clip.samples) });
-+      audioFiles.push(filePath);
-+      defaultSampleRate = defaultSampleRate || clip.sampleRate;
-+      defaultChannels = defaultChannels || clip.channels;
-+      audioClipCount += 1;
-+      const frames = clip.samples.length / clip.channels;
-+      totalDurationMs += (frames / clip.sampleRate) * 1000;
-+      const extraSilence = entry.silence_after_ms ?? entry.silenceAfterMs ?? entry.pause_after_ms ?? entry.pauseAfterMs;
-+      if (extraSilence) pushSilence(extraSilence, clip.sampleRate, clip.channels);
-+      continue;
++    if (buf.length > 1) {
++      const info = worst.get(evt.key);
++      const firstTs = buf[0].ts;
++      const lastTs = buf[buf.length - 1].ts;
++      const count = buf.length;
++      if (!info || count > info.count || (count === info.count && firstTs < info.start)) {
++        worst.set(evt.key, { label: evt.label, count, start: firstTs, end: lastTs });
++      }
 +    }
-+    if (typeof entry === 'string' && entry.endsWith('.wav')) {
-+      const filePath = path.resolve(path.join(audioDir, entry));
-+      if (!fs.existsSync(filePath)) throw new Error(`Audio fixture missing: ${entry}`);
-+      const clip = decodeWav(fs.readFileSync(filePath));
-+      timeline.push({ kind: 'audio', sampleRate: clip.sampleRate, channels: clip.channels, samples: Array.from(clip.samples) });
-+      audioFiles.push(filePath);
-+      defaultSampleRate = defaultSampleRate || clip.sampleRate;
-+      defaultChannels = defaultChannels || clip.channels;
-+      audioClipCount += 1;
-+      const frames = clip.samples.length / clip.channels;
-+      totalDurationMs += (frames / clip.sampleRate) * 1000;
-+      continue;
-+    }
-+    const silence = parseSilenceDuration(entry);
-+    if (silence != null) {
-+      pushSilence(silence);
-+      continue;
-+    }
-+    throw new Error(`Unsupported probe input: ${JSON.stringify(entry)}`);
 +  }
 +
-+  if (!audioClipCount) throw new Error('At least one audio input is required');
-+
-+  return {
-+    inputs: items,
-+    timeline,
-+    audioFiles,
-+    defaultSampleRate: defaultSampleRate || 16000,
-+    defaultChannels: defaultChannels || 1,
-+    audioClipCount,
-+    totalDurationMs
-+  };
++  const findings = [];
++  for (const { label, count, start, end } of worst.values()) {
++    const delta = Math.max(0, Math.round(end - start));
++    const base = label.toLowerCase().includes('state') ? label : `state ${label}`;
++    const parts = [`${base} emitted ${count}× within ${span} ms`];
++    if (delta > 0) parts.push(`(Δ${delta} ms)`);
++    findings.push(parts.join(' '));
++  }
++  return findings;
 +}
 +
-+async function installCustomMicrophone(context, spec) {
-+  if (!spec || !spec.timeline?.length) return;
-+  await context.addInitScript(({ timeline, defaultSampleRate, defaultChannels }) => {
-+    if (typeof window === 'undefined') return;
-+    const TrackGenerator = window.MediaStreamTrackGenerator;
-+    const AudioDataCtor = window.AudioData;
-+    if (typeof TrackGenerator !== 'function' || typeof AudioDataCtor !== 'function') {
-+      console.warn('Custom microphone unavailable: MediaStreamTrackGenerator/AudioData missing');
-+      return;
-+    }
-+
-+    const baseTimeline = Array.isArray(timeline) ? timeline : [];
-+    const fallbackSampleRate = defaultSampleRate || 16000;
-+    const fallbackChannels = defaultChannels || 1;
-+
-+    const originalGetUserMedia = window.navigator?.mediaDevices?.getUserMedia?.bind(window.navigator.mediaDevices);
-+    if (!window.navigator.mediaDevices) window.navigator.mediaDevices = {};
-+
-+    const runTimeline = async (writer) => {
-+      let timestampUs = 0;
-+      try {
-+        for (const event of baseTimeline) {
-+          const sr = event.sampleRate || fallbackSampleRate;
-+          const ch = event.channels || fallbackChannels;
-+          if (event.kind === 'audio') {
-+            const data = new Float32Array(event.samples);
-+            const frames = data.length / ch;
-+            if (frames) {
-+              const audioData = new AudioDataCtor({
-+                format: 'f32',
-+                sampleRate: sr,
-+                numberOfChannels: ch,
-+                numberOfFrames: frames,
-+                timestamp: timestampUs,
-+                data: data.buffer
-+              });
-+              await writer.write(audioData);
-+              audioData.close();
-+              timestampUs += Math.round((frames / sr) * 1e6);
-+            }
-+          } else if (event.kind === 'silence') {
-+            const frames = Math.max(0, Math.round((Math.max(0, event.durationMs || 0) / 1000) * sr));
-+            if (frames) {
-+              const silent = new Float32Array(frames * ch);
-+              const audioData = new AudioDataCtor({
-+                format: 'f32',
-+                sampleRate: sr,
-+                numberOfChannels: ch,
-+                numberOfFrames: frames,
-+                timestamp: timestampUs,
-+                data: silent.buffer
-+              });
-+              await writer.write(audioData);
-+              audioData.close();
-+              timestampUs += Math.round((frames / sr) * 1e6);
-+            }
-+          }
-+        }
-+      } finally {
-+        try { await writer.close(); } catch {}
-+      }
-+    };
-+
-+    const createAudioStream = () => {
-+      const generator = new TrackGenerator({ kind: 'audio' });
-+      const writer = generator.writable.getWriter();
-+      runTimeline(writer).catch(err => console.error('Custom microphone timeline failed', err));
-+      return generator;
-+    };
-+
-+    window.navigator.mediaDevices.getUserMedia = async (constraints = {}) => {
-+      const wantsAudio = !!constraints.audio;
-+      const wantsVideo = !!constraints.video;
-+      if (!wantsAudio) {
-+        if (originalGetUserMedia) return originalGetUserMedia(constraints);
-+        return new MediaStream();
-+      }
-+
-+      let videoStream = null;
-+      if (wantsVideo && originalGetUserMedia) {
-+        try {
-+          const clone = { ...constraints, audio: false };
-+          videoStream = await originalGetUserMedia(clone);
-+        } catch (err) {
-+          console.warn('Video capture via original getUserMedia failed', err);
-+        }
-+      }
-+
-+      const generator = createAudioStream();
-+      const stream = new MediaStream([generator]);
-+      if (videoStream) {
-+        for (const track of videoStream.getVideoTracks()) stream.addTrack(track);
-+      }
-+      return stream;
-+    };
-+  }, { timeline: spec.timeline, defaultSampleRate: spec.defaultSampleRate, defaultChannels: spec.defaultChannels });
-+}
-+
- function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
- function ensureDir(p){ fs.mkdirSync(p,{recursive:true}); }
- function readJSON(p){ return JSON.parse(fs.readFileSync(p,'utf-8')); }
- function hasStr(objs,s){ return objs.some(x=>JSON.stringify(x).includes(s)); }
- function countStr(objs,s){ return objs.filter(x=>JSON.stringify(x).includes(s)).length; }
+ function evalProbe(probe, adminLogs, consoleLines, wsUrls){
+   const findings = [];
+   const metrics = {};
+   const lat = getLatencies(adminLogs);
+   if (lat) metrics.latency_breakdown = lat;
  
- function parseCLI(){
-   const specPath = process.argv[2] || 'askchip_e2e_tests.json';
-   let base = process.env.ASKCHIP_BASE_URL || '';
-   const i = process.argv.indexOf('--base');
-   if (i !== -1 && process.argv[i+1]) base = process.argv[i+1];
-   if (!base) { console.error('Provide base URL, e.g. --base https://chibot-ui.onrender.com/'); process.exit(1); }
-   const useChrome = process.argv.includes('--chrome') || process.env.BROWSER === 'chrome';
-   const dumpUI = process.argv.includes('--dump-ui');
-   const startIdx = process.argv.indexOf('--start');
-   const startOverride = startIdx !== -1 ? process.argv[startIdx+1] : (process.env.START_SELECTOR || '');
-   const evalIdx = process.argv.indexOf('--start-eval');
-   const startEval = evalIdx !== -1 ? process.argv[evalIdx+1] : (process.env.START_EVAL || '');
-   return { specPath, base, useChrome, dumpUI, startOverride, startEval };
- }
- 
- // ---- IN-PAGE SSE collector (uses cookies/session) ----
- async function collectAdminSSEInPage(page, { url, ms }) {
-   return await page.evaluate(({ url, ms }) => {
-     return new Promise(resolve => {
-@@ -407,128 +648,140 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls){
-       const nlu = adminLogs.find(x=>x.event==='nlu') || {};
-       const f = cond.nlu_flags;
-       if (typeof f.needs_clarification === 'boolean') {
-         if (!!nlu.needs_clarification !== f.needs_clarification) findings.push(`Fail: nlu.needs_clarification expected ${f.needs_clarification}, got ${nlu.needs_clarification}`);
+   for (const rule of (probe.expect_signals || [])) {
+     if (rule.stream === 'admin') {
+       if (rule.must_include) for (const k of rule.must_include) if (!hasStr(adminLogs,k)) findings.push(`Admin missing '${k}'`);
+       if (rule.must_not_include) for (const k of rule.must_not_include) if (hasStr(adminLogs,k)) findings.push(`Admin should NOT include '${k}'`);
+       if (rule.max_count_per_turn) for (const [k,max] of Object.entries(rule.max_count_per_turn)){
+         const c = countStr(adminLogs,k); if (c>max) findings.push(`'${k}' count ${c} > ${max}`);
+       }
+       if (rule.latency_lt_ms && lat) for (const [k,limit] of Object.entries(rule.latency_lt_ms)){
+         const got = lat[k]; if (got==null || got>=limit) findings.push(`Latency '${k}' ${got ?? 'N/A'}ms not < ${limit}ms`);
+       }
+       if (rule.nlu_flags) {
+         const nlu = adminLogs.find(x=>x.event==='nlu') || {};
+         const f = rule.nlu_flags;
+         if (typeof f.needs_clarification === 'boolean') {
+           if (!!nlu.needs_clarification !== f.needs_clarification) findings.push(`nlu.needs_clarification expected ${f.needs_clarification}, got ${nlu.needs_clarification}`);
+         }
+         if (f.missing_any_of) {
+           const missing = nlu.missing || [];
+           if (!f.missing_any_of.some(m => missing.includes(m))) findings.push(`nlu.missing should include one of [${f.missing_any_of.join(', ')}], got [${missing.join(', ')}]`);
+         }
+       }
+       if (rule.chips_lte != null) {
+         const sm = adminLogs.find(x => String(x.event).includes('suggestions_made')) || {};
+         const cnt = (sm.items?.length) ?? sm.count ?? 0;
+         if (cnt > rule.chips_lte) findings.push(`chips count ${cnt} > ${rule.chips_lte}`);
+       }
+       if (rule.goal_fields) {
+         const sg = adminLogs.find(x => String(x.event).includes('session_goal')) || {};
+         for (const [k,expected] of Object.entries(rule.goal_fields)) {
+           if (k === 'confirmed_contains') {
+             const arr = sg.confirmed || [];
+             for (const item of expected) if (!arr.includes(item)) findings.push(`session_goal.confirmed missing '${item}'`);
+           } else if ((sg[k] ?? null) !== expected) {
+             findings.push(`session_goal.${k} expected '${expected}', got '${sg[k]}'`);
+           }
+         }
+       }
++      if (rule.must_not_spam_state) {
++        const windowMs = rule.must_not_spam_state.window_ms ?? rule.must_not_spam_state.windowMs ?? 0;
++        const spamFindings = detectStateSpam(adminLogs, windowMs);
++        if (spamFindings.length) findings.push(...spamFindings);
++      }
+       if (rule.nlu_must_have_keys) {
+         const nlu = adminLogs.find(x=>x.event==='nlu');
+         if (!nlu) findings.push('No nlu event observed');
+         else for (const k of rule.nlu_must_have_keys) if (!(k in nlu)) findings.push(`nlu missing key '${k}'`);
        }
      }
-     if (cond.goal_missing) {
-       const sg = adminLogs.find(x => String(x.event).includes('session_goal')) || {};
-       for (const k of cond.goal_missing) if (!(k in sg)) findings.push(`Fail: session_goal missing '${k}'`);
+     if (rule.stream === 'browser_console') {
+       if (rule.must_include) for (const s of rule.must_include) if (!consoleLines.some(l=>l.includes(s))) findings.push(`Console missing '${s}'`);
+       if (rule.must_not_include) for (const s of rule.must_not_include) if (consoleLines.some(l=>l.includes(s))) findings.push(`Console should NOT include '${s}'`);
      }
-     if (cond.nlu_missing_any) {
-       const nlu = adminLogs.find(x=>x.event==='nlu') || {};
-       for (const k of cond.nlu_missing_any) {
-         const parts = k.split('.');
-         let cur = nlu, ok = true;
-         for (const p of parts) { if (cur && p in cur) cur = cur[p]; else { ok = false; break; } }
-         if (!ok) findings.push(`Fail: nlu missing '${k}'`);
+     if (rule.stream === 'network') {
+       if (rule.must_not_include_query_params || rule.network_has_any_params) {
+         const dg = wsUrls.find(u => /deepgram\.com\/v1\/listen/.test(u));
+         if (!dg) findings.push('Deepgram WS URL not observed');
+         else {
+           const url = new URL(dg);
+           const bad = (rule.must_not_include_query_params || rule.network_has_any_params).filter(k => url.searchParams.has(k));
+           if (bad.length) findings.push(`Deepgram URL contains forbidden params: ${bad.join(', ')}`);
+         }
        }
      }
    }
  
-   return { passed: findings.length === 0, findings, metrics };
- }
- 
- async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval){
--  const audioName = (probe.inputs && probe.inputs.find(x => x.endsWith('.wav'))) || 'sample_sentence.wav';
--  const fakeAudio = path.resolve(path.join(audioDir, audioName));
--  if (!fs.existsSync(fakeAudio)) {
--    return { id: probe.id, pass: false, findings: [`Audio fixture missing: ${audioName}`], metrics: {} };
-+  let normalized;
-+  try {
-+    normalized = normalizeInputs(probe.inputs, audioDir);
-+  } catch (err) {
-+    return { id: probe.id, pass: false, findings: [err?.message || String(err)], metrics: {} };
-+  }
-+
-+  const useCustomMic = normalized.inputs.length > 1;
-+  const firstAudioPath = normalized.audioFiles[0];
-+  if (!firstAudioPath) {
-+    return { id: probe.id, pass: false, findings: ['No audio fixtures found for probe'], metrics: {} };
-+  }
-+
-+  const launchArgs = [
-+    '--use-fake-device-for-media-stream',
-+    '--autoplay-policy=no-user-gesture-required'
-+  ];
-+  if (!useCustomMic) {
-+    launchArgs.push(`--use-file-for-fake-audio-capture=${firstAudioPath}`);
-   }
- 
-   const browser = await chromium.launch({
-     headless: false,
-     channel: useChrome ? 'chrome' : undefined,
--    args: [
--      '--use-fake-device-for-media-stream',
--      `--use-file-for-fake-audio-capture=${fakeAudio}`,
--      '--autoplay-policy=no-user-gesture-required'
--    ]
-+    args: launchArgs
-   });
- 
-   const context = await browser.newContext();
-+  if (useCustomMic) {
-+    await installCustomMicrophone(context, normalized);
-+  }
-   await context.grantPermissions(['microphone'], { origin: baseUrl });
-   const page = await context.newPage();
- 
-   const consoleLines = [];
-   page.on('console', m => consoleLines.push(m.text()));
-   const wsUrls = [];
-   page.on('websocket', ws => { try { wsUrls.push(ws.url()); } catch {} });
- 
-   let adminUrl = spec.endpoints?.admin_sse_url;
-   if (!adminUrl || /your_domain/i.test(adminUrl)) adminUrl = baseUrl.replace(/\/$/,'') + '/api/v1/admin/logs';
- 
-   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
- 
-   // Start admin collector before kicking off the call so we capture the whole exchange.
-   await startAdminCollector(page, adminUrl);
- 
- 
-   const dir = path.join(artifactsDir, probe.id); ensureDir(dir);
-   await page.screenshot({ path: path.join(dir, 'after_goto.png') });
-   fs.writeFileSync(path.join(dir, 'page_url.txt'), page.url());
- 
-   const attempts = [];
- 
-   // user overrides first
-   if (!(await clickStartWithOverrides(page, startOverride, startEval, attempts))) {
-     // heuristics across frames/shadow
-     let clicked = await clickStartAnywhere(page, attempts);
-     if (!clicked) {
-       // brute gestures and retry heuristics
-       await bruteStart(page, attempts);
-       clicked = await clickStartAnywhere(page, attempts);
-     }
-     if (!clicked) {
-       if (!dumpUI) await dumpUI(page, dir);
-       await page.screenshot({ path: path.join(dir, 'start_not_found.png'), fullPage: true });
-       fs.writeFileSync(path.join(dir, 'start_click_attempts.json'), JSON.stringify(attempts,null,2));
-       try { await stopAdminCollector(page); } catch {}
-       await context.close(); await browser.close();
-       return { id: probe.id, pass: false, findings: ['Start control not found/clickable'], metrics: {} };
-     }
-   }
- 
-   fs.writeFileSync(path.join(dir, 'start_click_attempts.json'), JSON.stringify(attempts,null,2));
- 
-   // Let any navigation settle
-   try { await page.waitForLoadState('networkidle', { timeout: 4000 }); } catch {}
-   
-   // Let the probe’s audio play/flow
-   const ua = (probe.user_action || '').toLowerCase();
-+  const playbackDurationMs = Math.max(0, normalized.totalDurationMs || 0);
-   if (ua.includes('do not speak')) {
--    await sleep(3000);
-+    await sleep(Math.max(3000, playbackDurationMs));
-   } else if (ua.includes('two short back-to-back turns')) {
--    await sleep(2200);
--    await page.reload({ waitUntil: 'domcontentloaded' });
--    await clickStartWithOverrides(page, startOverride, startEval, attempts);
--    await clickStartAnywhere(page, attempts);
--    await sleep(2200);
-+    const waitMs = Math.max(playbackDurationMs + 1200, 2600);
-+    await sleep(waitMs);
-   } else if (ua.includes('start talking while chip is speaking')) {
--    await sleep(1500);
-+    await sleep(Math.max(1500, Math.min(playbackDurationMs + 500, 2500)));
-   } else {
--    await sleep(4200);
-+    await sleep(Math.max(4200, playbackDurationMs + 800));
-   }
- 
+   for (const cond of (probe.fail_if || [])) {
+     if (cond.admin_any) for (const s of cond.admin_any) if (hasStr(adminLogs,s)) findings.push(`Fail: admin contains '${s}'`);
+@@ -765,74 +876,83 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
    // Pull the admin logs after we've allowed the scripted audio to play out.
    let adminLogs = [];
    try {
@@ -438,3 +231,103 @@ index 41344496709efc9208979d60031ed447a0e55cbd..aab6acce3d5d4d736224a7e39d7795e8
  
    await context.close(); await browser.close();
    return { id: probe.id, pass: passed, findings, metrics };
+ }
+ 
+-(async () => {
++async function main() {
+   const { specPath, base, useChrome, dumpUI, startOverride, startEval } = parseCLI();
+   const spec = readJSON(specPath);
+   const baseUrl = (spec.endpoints?.ui_base_url && !/your_domain/i.test(spec.endpoints.ui_base_url))
+     ? spec.endpoints.ui_base_url
+     : base;
+ 
+   const artifactsDir = path.resolve('artifacts');
+   const audioDir = path.resolve('audio');
+   ensureDir(artifactsDir);
+ 
+   const results = [];
+   for (const probe of spec.probes) {
+     console.log(`\n=== Running ${probe.id} ===`);
+     try {
+       const r = await runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval);
+       results.push(r);
+       console.log(`${probe.id}: ${r.pass ? 'PASS' : 'FAIL'}${r.findings.length ? ' – ' + r.findings.join('; ') : ''}`);
+     } catch (e) {
+       results.push({ id: probe.id, pass: false, findings: [`Runner error: ${e.message}`], metrics: {} });
+       console.error(`${probe.id}: Runner error`, e);
+     }
+   }
+ 
+   const catalog = spec.recommendations_catalog || {};
+   const enriched = results.map(r => {
+     const probe = spec.probes.find(p => p.id === r.id) || {};
+     const ids = r.pass ? [] : (probe.recommendations_on_fail || []);
+     return { ...r, recommendations: ids.map(id => catalog[id]).filter(Boolean) };
+   });
+ 
+   const report = {
+     generated_at: new Date().toISOString(),
+     summary: {
+       total: enriched.length,
+       passed: enriched.filter(x => x.pass).length,
+       failed: enriched.filter(x => !x.pass).map(x => x.id)
+     },
+     probes: enriched
+   };
+   fs.writeFileSync('report.json', JSON.stringify(report, null, 2));
+ 
+   const lines = [];
+   lines.push(`# AskChip E2E Findings\n`);
+   lines.push(`**Passed:** ${report.summary.passed}/${report.summary.total}\n`);
+   for (const p of report.probes) lines.push(`- **${p.id}**: ${p.pass ? 'PASS' : 'FAIL'}${p.findings.length ? ' — ' + p.findings.join('; ') : ''}`);
+   fs.writeFileSync('FINDINGS.md', lines.join('\n'));
+   console.log('\nReport written to report.json and FINDINGS.md');
+-})();
++}
++
++if (require.main === module) {
++  main().catch(err => {
++    console.error(err);
++    process.exitCode = 1;
++  });
++}
++
++module.exports = { evalProbe };
+diff --git a/tests/evalProbe_state_spam.test.js b/tests/evalProbe_state_spam.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..d9576d038feb119a9cb4ed2e244167a9b371fb99
+--- /dev/null
++++ b/tests/evalProbe_state_spam.test.js
+@@ -0,0 +1,32 @@
++const assert = require('assert');
++
++const { evalProbe } = require('../e2e_orchestrator');
++
++const baseTs = 1_700_000_000; // seconds since epoch
++const adminLogs = [
++  { ts: baseTs, label: 'state: ready', phase: 'ready' },
++  { ts: baseTs + 0.18, label: 'state: ready', phase: 'ready' },
++  { ts: baseTs + 0.42, label: 'state: ready', phase: 'ready' },
++  { ts: baseTs + 2, label: 'state: ready', phase: 'ready' }
++];
++
++const probe = {
++  expect_signals: [
++    {
++      stream: 'admin',
++      must_not_spam_state: {
++        window_ms: 500
++      }
++    }
++  ]
++};
++
++const result = evalProbe(probe, adminLogs, [], []);
++
++assert.strictEqual(result.passed, false, 'Expected probe to fail when state spam is detected');
++assert(
++  result.findings.some(f => /state[:\s]+ready\s+emitted\s+3×\s+within\s+500\s+ms/i.test(f)),
++  `Expected findings to mention state spam, got: ${result.findings.join('; ')}`
++);
++
++console.log('State spam detection check passed.');

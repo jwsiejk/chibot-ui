@@ -567,6 +567,112 @@ function getLatencies(adminLogs){
   return e?.ms || null;
 }
 
+function normalizeTimestampMs(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const candidates = [
+    ['ts_ms', true],
+    ['timestamp_ms', true],
+    ['time_ms', true],
+    ['ms', true],
+    ['millis', true],
+    ['ts', false],
+    ['timestamp', false],
+    ['time', false],
+    ['at', false]
+  ];
+  for (const [key, isMs] of candidates) {
+    if (!(key in entry)) continue;
+    const raw = entry[key];
+    const num = typeof raw === 'string' ? Number(raw) : raw;
+    if (!Number.isFinite(num)) continue;
+    if (isMs || num > 1e12) return num;
+    return Math.round(num * 1000);
+  }
+  return null;
+}
+
+function extractStateEvent(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const tsMs = normalizeTimestampMs(entry);
+  if (!Number.isFinite(tsMs)) return null;
+
+  const nestedPhaseSources = [entry, entry.payload, entry.data, entry.detail, entry.frame];
+  let phase = null;
+  for (const src of nestedPhaseSources) {
+    if (phase) break;
+    if (!src || typeof src !== 'object') continue;
+    const candidate = src.phase ?? src.state ?? src.status;
+    if (typeof candidate === 'string' && candidate.trim()) {
+      phase = candidate.trim();
+      break;
+    }
+  }
+
+  const labelCandidates = [entry.label, entry.event, entry.kind, entry.message, entry.raw];
+  let display = null;
+  for (const val of labelCandidates) {
+    if (typeof val !== 'string') continue;
+    const text = val.trim();
+    if (!text) continue;
+    if (!/state/i.test(text)) continue;
+    const match = text.match(/state[^a-z0-9]*([a-z0-9_ -]+)/i);
+    if (match && match[1]) {
+      const parsed = match[1].trim();
+      if (parsed && !phase) phase = parsed;
+    }
+    if (!display) display = text;
+  }
+
+  if (!phase) return null;
+  const canonical = phase.trim();
+  if (!canonical) return null;
+  const key = canonical.toLowerCase();
+  const label = display || `state ${canonical}`;
+  return { key, label, ts: tsMs, canonical };
+}
+
+function detectStateSpam(adminLogs, windowMs) {
+  const span = Math.max(0, Number(windowMs) || 0);
+  if (span <= 0) return [];
+  const events = [];
+  for (const entry of adminLogs || []) {
+    const evt = extractStateEvent(entry);
+    if (evt) events.push(evt);
+  }
+  if (events.length < 2) return [];
+  events.sort((a, b) => a.ts - b.ts);
+
+  const buffers = new Map();
+  const worst = new Map();
+
+  for (const evt of events) {
+    const buf = buffers.get(evt.key) || [];
+    buf.push(evt);
+    while (buf.length && evt.ts - buf[0].ts > span) buf.shift();
+    buffers.set(evt.key, buf);
+
+    if (buf.length > 1) {
+      const info = worst.get(evt.key);
+      const firstTs = buf[0].ts;
+      const lastTs = buf[buf.length - 1].ts;
+      const count = buf.length;
+      if (!info || count > info.count || (count === info.count && firstTs < info.start)) {
+        worst.set(evt.key, { label: evt.label, count, start: firstTs, end: lastTs });
+      }
+    }
+  }
+
+  const findings = [];
+  for (const { label, count, start, end } of worst.values()) {
+    const delta = Math.max(0, Math.round(end - start));
+    const base = label.toLowerCase().includes('state') ? label : `state ${label}`;
+    const parts = [`${base} emitted ${count}× within ${span} ms`];
+    if (delta > 0) parts.push(`(Δ${delta} ms)`);
+    findings.push(parts.join(' '));
+  }
+  return findings;
+}
+
 function evalProbe(probe, adminLogs, consoleLines, wsUrls){
   const findings = [];
   const metrics = {};
@@ -609,6 +715,11 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls){
             findings.push(`session_goal.${k} expected '${expected}', got '${sg[k]}'`);
           }
         }
+      }
+      if (rule.must_not_spam_state) {
+        const windowMs = rule.must_not_spam_state.window_ms ?? rule.must_not_spam_state.windowMs ?? 0;
+        const spamFindings = detectStateSpam(adminLogs, windowMs);
+        if (spamFindings.length) findings.push(...spamFindings);
       }
       if (rule.nlu_must_have_keys) {
         const nlu = adminLogs.find(x=>x.event==='nlu');
@@ -787,7 +898,7 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
   return { id: probe.id, pass: passed, findings, metrics };
 }
 
-(async () => {
+async function main() {
   const { specPath, base, useChrome, dumpUI, startOverride, startEval } = parseCLI();
   const spec = readJSON(specPath);
   const baseUrl = (spec.endpoints?.ui_base_url && !/your_domain/i.test(spec.endpoints.ui_base_url))
@@ -835,4 +946,13 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
   for (const p of report.probes) lines.push(`- **${p.id}**: ${p.pass ? 'PASS' : 'FAIL'}${p.findings.length ? ' — ' + p.findings.join('; ') : ''}`);
   fs.writeFileSync('FINDINGS.md', lines.join('\n'));
   console.log('\nReport written to report.json and FINDINGS.md');
-})();
+}
+
+if (require.main === module) {
+  main().catch(err => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { evalProbe };
