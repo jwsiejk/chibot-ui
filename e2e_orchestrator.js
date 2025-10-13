@@ -3,7 +3,8 @@
 //   npm i -D playwright
 //   npx playwright install chromium
 //   # optional: npx playwright install chrome
-//   node e2e_orchestrator.js askchip_e2e_tests.json --base https://chibot-ui.onrender.com/ [--chrome] [--dump-ui] [--start "<selector|text|xpath>"] [--start-eval "window.startCall()"]
+//   node e2e_orchestrator.js askchip_e2e_tests.json --base https://chibot-ui.onrender.com/ [--chrome] [--dump-ui] [--start "<selector|text|xpath>"] [--start-eval "window.startCall()"] [--login-email you@example.com]
+//     (auto-login defaults to AskChip admin; override via --login-email or ASKCHIP_E2E_LOGIN_EMAIL, disable with "none")
 
 const fs = require('fs');
 const path = require('path');
@@ -1291,7 +1292,6 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
   // Start admin collector before kicking off the call so we capture the whole exchange.
   await startAdminCollector(page, adminUrl);
 
-
   await page.screenshot({ path: path.join(dir, 'after_goto.png') });
   fs.writeFileSync(path.join(dir, 'page_url.txt'), page.url());
 
@@ -1375,7 +1375,15 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
 }
 
 async function main() {
-  const { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail } = parseCLI();
+  const { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail, disableAutoLogin } = parseCLI();
+
+  if (autoLoginEmail) {
+    console.log(`[auto-login] Using admin email ${autoLoginEmail} (set --login-email or ASKCHIP_E2E_LOGIN_EMAIL to change, use "none" to disable).`);
+  } else if (disableAutoLogin) {
+    console.log('[auto-login] Disabled; provide --login-email <address> or ASKCHIP_E2E_LOGIN_EMAIL to re-enable.');
+  } else {
+    console.log('[auto-login] No email configured; set --login-email <address> or ASKCHIP_E2E_LOGIN_EMAIL.');
+  }
   const spec = readJSON(specPath);
   const baseUrl = (spec.endpoints?.ui_base_url && !/your_domain/i.test(spec.endpoints.ui_base_url))
     ? spec.endpoints.ui_base_url
