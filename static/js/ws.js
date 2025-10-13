@@ -1,5 +1,41 @@
 // static/js/ws.js — Phase 4/5 hardened: single socket + reconnection + helpers
 
+// === E2E/Prod Observability: WS lifecycle hooks (safe) ===
+(function __installWsLifecycleHooks(){
+  try {
+    const _add = WebSocket.prototype.addEventListener;
+    if (_add.__askchip_lifecycle_patched) return;
+    WebSocket.prototype.addEventListener = function(ev, fn){
+      if (ev === 'close') {
+        const wrap = (e) => {
+          try { console.info(`[ws] close code=${e.code} clean=${!!e.wasClean} reason=${e.reason||''}`); } catch {}
+          try { return fn(e); } catch {}
+        };
+        return _add.call(this, ev, wrap);
+      }
+      if (ev === 'error') {
+        const wrap = (e) => { try { console.info('[ws] error'); } catch {} try { return fn(e); } catch {} };
+        return _add.call(this, ev, wrap);
+      }
+      return _add.call(this, ev, fn);
+    };
+    WebSocket.prototype.addEventListener.__askchip_lifecycle_patched = true;
+  } catch {}
+})();
+
+// Page-exit breadcrumbs (to distinguish user navigation vs. programmatic close)
+(function __installPageExitBreadcrumbs(){
+  try {
+    if (window.__askchip_exit_hooks_installed) return;
+    window.addEventListener('beforeunload', () => { try { console.info('[ui] beforeunload'); } catch {} });
+    document.addEventListener('visibilitychange', () => {
+      try { console.info(`[ui] visibility=${document.visibilityState}`); } catch {}
+    });
+    window.__askchip_exit_hooks_installed = true;
+  } catch {}
+})();
+
+
 // === E2E minimal WS message hook (always-on, safe) ===
 (function __installE2EHook(){
   try {
@@ -633,3 +669,25 @@ export const __TEST_ONLY__ = {
   wsLog: _wsLog,
   console: _console,
 };
+
+
+// Diagnostic: hold UI from ending too quickly unless explicitly allowed.
+// Opt-in: localStorage.DIAG_MIN_SESSION_MS = '3500'
+(function __installDiagMinSessionHold(){
+  try {
+    const minMs = parseInt((localStorage && localStorage.DIAG_MIN_SESSION_MS) || '0', 10);
+    if (!minMs || isNaN(minMs) || minMs <= 0) return;
+    const t0 = Date.now();
+    const _oldClose = WebSocket.prototype.close;
+    WebSocket.prototype.close = function(...args){
+      const elapsed = Date.now() - t0;
+      if (elapsed < minMs) {
+        try { console.info(`[diag] deferring WS close ${elapsed}ms < ${minMs}`); } catch {}
+        setTimeout(() => { try { _oldClose.apply(this, args); } catch {} }, (minMs - elapsed));
+        return;
+      }
+      return _oldClose.apply(this, args);
+    };
+  } catch {}
+})();
+

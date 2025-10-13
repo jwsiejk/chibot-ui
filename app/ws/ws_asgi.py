@@ -2747,3 +2747,12 @@ async def ws_chat(websocket):
         with contextlib.suppress(Exception):
             await websocket.close(code=1000, reason="normal_shutdown")
             await asyncio.sleep(0.05)
+
+
+def _admin_ws_close_breadcrumb(session_id: str, code: int = 1000, reason: str = ''):
+    try:
+        from app.api_v1.admin import _emit as _admin_emit
+        _admin_emit('ws_close', session_id=session_id, code=str(code), reason=reason)
+    except Exception:
+        pass
+
