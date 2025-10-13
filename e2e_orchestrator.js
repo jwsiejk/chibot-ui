@@ -299,7 +299,8 @@ async function startAdminCollector(page, url) {
       startedAt: Date.now(),
       source: null,
       logs,
-      lastError: null
+      lastError: null,
+      captureState: 'active'
     };
 
     window.__adminLogs = logs;
@@ -316,10 +317,21 @@ async function startAdminCollector(page, url) {
           logs.push({ raw: event.data });
         }
       };
-      es.onerror = () => { collector.lastError = 'eventsource_error'; };
+      es.onerror = (event) => {
+        collector.lastError = 'eventsource_error';
+        const status = event?.status ?? event?.target?.status ?? event?.currentTarget?.status ?? null;
+        const message = event?.message || '';
+        if (status === 403 || /403/.test(String(message))) {
+          collector.lastError = 'forbidden';
+          collector.captureState = 'disabled';
+        }
+      };
       window.addEventListener('beforeunload', () => { try { es.close(); } catch {}; });
     } catch (err) {
       collector.lastError = err?.message || String(err);
+      if (/403/.test(String(collector.lastError))) {
+        collector.captureState = 'disabled';
+      }
     }
   }, url);
 }
@@ -327,12 +339,39 @@ async function startAdminCollector(page, url) {
 async function harvestAdminLogs(page) {
   const logs = await page.evaluate(() => {
     const data = Array.isArray(window.__adminLogs) ? window.__adminLogs.slice() : [];
-    return { data, error: window.__adminCollector?.lastError || null };
+    const collector = window.__adminCollector || {};
+    return {
+      data,
+      error: collector.lastError || null,
+      captureState: collector.captureState || null
+    };
   });
-  if (logs.error) {
-    return logs.data.concat([{ event: 'collector_error', message: logs.error }]);
+
+  const events = Array.isArray(logs.data) ? logs.data.slice() : [];
+  const meta = {
+    error: logs.error || null,
+    captureState: logs.captureState || null
+  };
+
+  if (meta.error) {
+    events.push({ event: 'collector_error', message: meta.error });
   }
-  return logs.data;
+
+  if (!meta.captureState) {
+    const hadCollectorError = events.some(entry => {
+      if (!entry || typeof entry !== 'object') return false;
+      if (entry.event !== 'collector_error') return false;
+      if (entry.status === 403) return true;
+      const text = [entry.message, entry.raw, entry.error]
+        .filter(Boolean)
+        .map(v => String(v))
+        .join(' ');
+      return /403/.test(text);
+    });
+    if (hadCollectorError) meta.captureState = 'disabled';
+  }
+
+  return { events, meta };
 }
 
 async function stopAdminCollector(page) {
@@ -673,14 +712,29 @@ function detectStateSpam(adminLogs, windowMs) {
   return findings;
 }
 
-function evalProbe(probe, adminLogs, consoleLines, wsUrls){
+function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}){
   const findings = [];
   const metrics = {};
-  const lat = getLatencies(adminLogs);
+  const adminDisabled = String(adminCaptureMeta.captureState || '').toLowerCase() === 'disabled'
+    || adminCaptureMeta.disabled === true;
+  const lat = adminDisabled ? null : getLatencies(adminLogs);
   if (lat) metrics.latency_breakdown = lat;
+  if (adminDisabled) metrics.admin_stream = 'disabled';
+
+  let adminWarningLogged = false;
+  const ensureAdminWarning = () => {
+    if (adminWarningLogged || !adminDisabled) return;
+    const probeId = probe?.id || '<unknown>';
+    console.warn(`Skipping admin stream checks for probe ${probeId}: admin stream is gated (403).`);
+    adminWarningLogged = true;
+  };
 
   for (const rule of (probe.expect_signals || [])) {
     if (rule.stream === 'admin') {
+      if (adminDisabled) {
+        ensureAdminWarning();
+        continue;
+      }
       if (rule.must_include) for (const k of rule.must_include) if (!hasStr(adminLogs,k)) findings.push(`Admin missing '${k}'`);
       if (rule.must_not_include) for (const k of rule.must_not_include) if (hasStr(adminLogs,k)) findings.push(`Admin should NOT include '${k}'`);
       if (rule.max_count_per_turn) for (const [k,max] of Object.entries(rule.max_count_per_turn)){
@@ -745,10 +799,17 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls){
   }
 
   for (const cond of (probe.fail_if || [])) {
+    const touchesAdmin = cond.admin_any || cond.admin_missing || cond.admin_count_gt
+      || cond.latency_gte_ms || cond.chips_gt != null || cond.nlu_flags
+      || cond.goal_missing || cond.nlu_missing_any;
+    if (adminDisabled && touchesAdmin) {
+      ensureAdminWarning();
+      continue;
+    }
     if (cond.admin_any) for (const s of cond.admin_any) if (hasStr(adminLogs,s)) findings.push(`Fail: admin contains '${s}'`);
     if (cond.admin_missing) for (const s of cond.admin_missing) if (!hasStr(adminLogs,s)) findings.push(`Fail: admin missing '${s}'`);
     if (cond.admin_count_gt) for (const [k,m] of Object.entries(cond.admin_count_gt)){ const c = countStr(adminLogs,k); if (c>m) findings.push(`Fail: '${k}' count ${c} > ${m}`); }
-    const lat2 = getLatencies(adminLogs);
+    const lat2 = adminDisabled ? null : getLatencies(adminLogs);
     if (cond.latency_gte_ms && lat2) for (const [k,v] of Object.entries(cond.latency_gte_ms)){ const got = lat2[k]; if (got!=null && got>=v) findings.push(`Fail: latency '${k}' ${got}ms >= ${v}ms`); }
     if (cond.chips_gt != null) {
       const sm = adminLogs.find(x => String(x.event).includes('suggestions_made')) || {};
@@ -875,27 +936,41 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
 
   // Pull the admin logs after we've allowed the scripted audio to play out.
   let adminLogs = [];
+  let adminMeta = { error: null, captureState: null };
   try {
-    adminLogs = await harvestAdminLogs(page);
+    const capture = await harvestAdminLogs(page);
+    adminLogs = Array.isArray(capture.events) ? capture.events : [];
+    adminMeta = capture.meta || adminMeta;
   } catch (err) {
-    adminLogs = [{ event: 'collector_error', message: err?.message || String(err) }];
+    const message = err?.message || String(err);
+    adminLogs = [{ event: 'collector_error', message }];
+    const disabled = /403/.test(String(message)) ? 'disabled' : adminMeta.captureState;
+    adminMeta = { error: message, captureState: disabled };
   } finally {
     try { await stopAdminCollector(page); } catch {}
   }
 
   // Artifacts
   fs.writeFileSync(path.join(dir,'admin_logs.json'), JSON.stringify(adminLogs,null,2));
+  fs.writeFileSync(path.join(dir,'admin_capture_meta.json'), JSON.stringify(adminMeta,null,2));
   fs.writeFileSync(path.join(dir,'browser_console.json'), JSON.stringify(consoleLines,null,2));
   fs.writeFileSync(path.join(dir,'network_ws.json'), JSON.stringify(wsUrls,null,2));
 
-  const { passed, findings, metrics } = evalProbe(probe, adminLogs, consoleLines, wsUrls);
+  const { passed, findings, metrics } = evalProbe(probe, adminLogs, consoleLines, wsUrls, adminMeta);
 
   // DOM expectations
   const domFindings = await checkDomExpectations(page, probe.expect_dom, artifactsDir, probe.id);
   if (domFindings.length){ findings.push(...domFindings); }
 
   await context.close(); await browser.close();
-  return { id: probe.id, pass: passed, findings, metrics };
+  return {
+    id: probe.id,
+    pass: passed,
+    findings,
+    metrics,
+    admin_stream_disabled: String(adminMeta.captureState || '').toLowerCase() === 'disabled',
+    admin_capture_meta: adminMeta
+  };
 }
 
 async function main() {
@@ -929,12 +1004,14 @@ async function main() {
     return { ...r, recommendations: ids.map(id => catalog[id]).filter(Boolean) };
   });
 
+  const adminSkipped = enriched.filter(x => x.admin_stream_disabled).map(x => x.id);
   const report = {
     generated_at: new Date().toISOString(),
     summary: {
       total: enriched.length,
       passed: enriched.filter(x => x.pass).length,
-      failed: enriched.filter(x => !x.pass).map(x => x.id)
+      failed: enriched.filter(x => !x.pass).map(x => x.id),
+      admin_stream_skipped: adminSkipped
     },
     probes: enriched
   };
@@ -943,6 +1020,9 @@ async function main() {
   const lines = [];
   lines.push(`# AskChip E2E Findings\n`);
   lines.push(`**Passed:** ${report.summary.passed}/${report.summary.total}\n`);
+  if (adminSkipped.length) {
+    lines.push(`**Admin signals skipped for:** ${adminSkipped.join(', ')} (admin stream is gated)\n`);
+  }
   for (const p of report.probes) lines.push(`- **${p.id}**: ${p.pass ? 'PASS' : 'FAIL'}${p.findings.length ? ' — ' + p.findings.join('; ') : ''}`);
   fs.writeFileSync('FINDINGS.md', lines.join('\n'));
   console.log('\nReport written to report.json and FINDINGS.md');

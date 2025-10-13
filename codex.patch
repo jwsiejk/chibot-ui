@@ -1,108 +1,404 @@
-diff --git a/templates/index.html b/templates/index.html
-index 3c54d56ccd6767534bc2a94ad2b81c8589102551..aec98a8a8871e86990dd422e237f927c3d19f852 100644
---- a/templates/index.html
-+++ b/templates/index.html
-@@ -88,39 +88,43 @@
-   </div>
- 
-   <div id="profileModal" class="modal hidden">
-     <div class="sheet">
-       <h3>Profile</h3>
-       <div class="grid">
-         <label>Name<input id="prof_name"/></label>
-         <label>Email<input id="prof_email" disabled/></label>
-         <label>Role<input id="prof_role"/></label>
-         <label>Region<input id="prof_region"/></label>
-         <label>Company<input id="prof_company"/></label>
-       </div>
-       <div class="actions">
-         <button id="profileSave" class="primary">Save</button>
-         <button id="profileCancel" type="button">Cancel</button>
-       </div>
-       <div id="profileMsg" class="msgline"></div>
-     </div>
-   </div>
- 
-   <!-- Scripts -->
-   {% set asset_ver = asset_version('js/bootstrap.js') %}
-   <script>
-     window.__askchipAssetVersion = {{ asset_ver|tojson }};
-   </script>
-+  <script
-+    type="module"
-+    src="{{ url_for('static', filename='js/askchip_client_hooks.js') }}?v={{ asset_ver }}"
-+  ></script>
-   <script
-     type="module"
-     src="{{ url_for('static', filename='js/bootstrap.js') }}?v={{ asset_ver }}"
-   ></script>
-   <script
-     type="module"
-     src="{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}"
-   ></script>
-   <script
-     type="module"
-     src="{{ url_for('static', filename='js/ui_menu.js') }}?v={{ asset_ver }}"
-   ></script>
- </body>
- </html>
-diff --git a/templates/profile.html b/templates/profile.html
-index 6d259666ad773d74d5e1cd9fa5a9eb9f30d662ff..e608a1c504625315e266d5de69d647d307eb17da 100644
---- a/templates/profile.html
-+++ b/templates/profile.html
-@@ -4,37 +4,51 @@
-   <meta charset="utf-8" />
-   <meta name="viewport" content="width=device-width, initial-scale=1" />
-   <title>AskChip — Profile</title>
-   <link rel="stylesheet" href="/static/css/app.css" />
- </head>
- <body class="page">
-   <header class="toolbar">
-     <a href="/" class="brand">⟵ Back</a>
-     <h1>Profile</h1>
-   </header>
-   <section class="card">
-     <div class="grid">
-       <label>Name<input id="prof_name"/></label>
-       <label>Email<input id="prof_email" disabled/></label>
-       <label>Role<input id="prof_role"/></label>
-       <label>Region<input id="prof_region"/></label>
-       <label>Company<input id="prof_company"/></label>
-     </div>
-     <div class="actions">
-       <button id="profileSave" class="primary">Save</button>
-       <a class="ghost" href="/">Cancel</a>
-     </div>
-     <div id="profileMsg" class="msgline"></div>
-   </section>
- 
--  <script type="module" src="/static/js/auth_gate.js"></script>
-+  {% set asset_ver = asset_version('js/bootstrap.js') %}
-+  <script
-+    type="module"
-+    src="{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}"
-+  ></script>
-   <script type="module">
--    import { prefillProfile, saveProfile } from '/static/js/auth_gate.js';
-+    import { prefillProfile, saveProfile } from '{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}';
-     document.addEventListener('DOMContentLoaded', async ()=>{
-       await prefillProfile();
-       document.getElementById('profileSave').addEventListener('click', saveProfile);
+diff --git a/e2e_orchestrator.js b/e2e_orchestrator.js
+index 4fb2b29ab5025434de999ce5f7724d81b94e5451..e043b92889bbac3c73049efbb213b1789ed30bb8 100644
+--- a/e2e_orchestrator.js
++++ b/e2e_orchestrator.js
+@@ -277,84 +277,123 @@ async function collectAdminSSEInPage(page, { url, ms }) {
+     return new Promise(resolve => {
+       const logs = [];
+       let es;
+       try {
+         es = new EventSource(url, { withCredentials: true });
+         es.onmessage = (e) => { try { logs.push(JSON.parse(e.data)); } catch {} };
+         es.onerror = () => { /* ignore; resolve on timeout */ };
+       } catch { resolve(logs); return; }
+       setTimeout(() => { try { es && es.close(); } catch {} resolve(logs); }, ms);
+       window.addEventListener('beforeunload', () => { try { es && es.close(); } catch {} });
      });
-   </script>
--  <script type="module" src="/static/js/bootstrap.js"></script>
--  <script type="module" src="/static/js/auth_gate.js"></script>
-+  <script
-+    type="module"
-+    src="{{ url_for('static', filename='js/askchip_client_hooks.js') }}?v={{ asset_ver }}"
-+  ></script>
-+  <script
-+    type="module"
-+    src="{{ url_for('static', filename='js/bootstrap.js') }}?v={{ asset_ver }}"
-+  ></script>
-+  <script
-+    type="module"
-+    src="{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}"
-+  ></script>
- </body>
- </html>
+   }, { url, ms });
+ }
+ 
+ async function startAdminCollector(page, url) {
+   await page.evaluate((adminUrl) => {
+     if (window.__adminCollector?.source) {
+       try { window.__adminCollector.source.close(); } catch {}
+     }
+ 
+     const logs = [];
+     const collector = {
+       startedAt: Date.now(),
+       source: null,
+       logs,
+-      lastError: null
++      lastError: null,
++      captureState: 'active'
+     };
+ 
+     window.__adminLogs = logs;
+     window.__adminCollector = collector;
+ 
+     try {
+       const es = new EventSource(adminUrl, { withCredentials: true });
+       collector.source = es;
+       es.onmessage = (event) => {
+         if (!window.__adminLogs) window.__adminLogs = logs;
+         try {
+           logs.push(JSON.parse(event.data));
+         } catch {
+           logs.push({ raw: event.data });
+         }
+       };
+-      es.onerror = () => { collector.lastError = 'eventsource_error'; };
++      es.onerror = (event) => {
++        collector.lastError = 'eventsource_error';
++        const status = event?.status ?? event?.target?.status ?? event?.currentTarget?.status ?? null;
++        const message = event?.message || '';
++        if (status === 403 || /403/.test(String(message))) {
++          collector.lastError = 'forbidden';
++          collector.captureState = 'disabled';
++        }
++      };
+       window.addEventListener('beforeunload', () => { try { es.close(); } catch {}; });
+     } catch (err) {
+       collector.lastError = err?.message || String(err);
++      if (/403/.test(String(collector.lastError))) {
++        collector.captureState = 'disabled';
++      }
+     }
+   }, url);
+ }
+ 
+ async function harvestAdminLogs(page) {
+   const logs = await page.evaluate(() => {
+     const data = Array.isArray(window.__adminLogs) ? window.__adminLogs.slice() : [];
+-    return { data, error: window.__adminCollector?.lastError || null };
++    const collector = window.__adminCollector || {};
++    return {
++      data,
++      error: collector.lastError || null,
++      captureState: collector.captureState || null
++    };
+   });
+-  if (logs.error) {
+-    return logs.data.concat([{ event: 'collector_error', message: logs.error }]);
++
++  const events = Array.isArray(logs.data) ? logs.data.slice() : [];
++  const meta = {
++    error: logs.error || null,
++    captureState: logs.captureState || null
++  };
++
++  if (meta.error) {
++    events.push({ event: 'collector_error', message: meta.error });
++  }
++
++  if (!meta.captureState) {
++    const hadCollectorError = events.some(entry => {
++      if (!entry || typeof entry !== 'object') return false;
++      if (entry.event !== 'collector_error') return false;
++      if (entry.status === 403) return true;
++      const text = [entry.message, entry.raw, entry.error]
++        .filter(Boolean)
++        .map(v => String(v))
++        .join(' ');
++      return /403/.test(text);
++    });
++    if (hadCollectorError) meta.captureState = 'disabled';
+   }
+-  return logs.data;
++
++  return { events, meta };
+ }
+ 
+ async function stopAdminCollector(page) {
+   await page.evaluate(() => {
+     const collector = window.__adminCollector;
+     if (!collector) return;
+     if (collector.source) {
+       try { collector.source.close(); } catch {}
+     }
+     collector.stoppedAt = Date.now();
+     collector.source = null;
+   });
+ }
+ 
+ // ---- UI dump (buttons + clickables + DOM) ----
+ async function dumpUI(page, dumpDir){
+   const out = [];
+   const frames = page.frames();
+   for (const f of frames){
+     try {
+       const buttons = await f.locator('button').all();
+       for (const loc of buttons) {
+         try {
+           const text = (await loc.textContent())?.trim() || '';
+           const id = await loc.getAttribute('id');
+@@ -651,58 +690,73 @@ function detectStateSpam(adminLogs, windowMs) {
+     while (buf.length && evt.ts - buf[0].ts > span) buf.shift();
+     buffers.set(evt.key, buf);
+ 
+     if (buf.length > 1) {
+       const info = worst.get(evt.key);
+       const firstTs = buf[0].ts;
+       const lastTs = buf[buf.length - 1].ts;
+       const count = buf.length;
+       if (!info || count > info.count || (count === info.count && firstTs < info.start)) {
+         worst.set(evt.key, { label: evt.label, count, start: firstTs, end: lastTs });
+       }
+     }
+   }
+ 
+   const findings = [];
+   for (const { label, count, start, end } of worst.values()) {
+     const delta = Math.max(0, Math.round(end - start));
+     const base = label.toLowerCase().includes('state') ? label : `state ${label}`;
+     const parts = [`${base} emitted ${count}× within ${span} ms`];
+     if (delta > 0) parts.push(`(Δ${delta} ms)`);
+     findings.push(parts.join(' '));
+   }
+   return findings;
+ }
+ 
+-function evalProbe(probe, adminLogs, consoleLines, wsUrls){
++function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}){
+   const findings = [];
+   const metrics = {};
+-  const lat = getLatencies(adminLogs);
++  const adminDisabled = String(adminCaptureMeta.captureState || '').toLowerCase() === 'disabled'
++    || adminCaptureMeta.disabled === true;
++  const lat = adminDisabled ? null : getLatencies(adminLogs);
+   if (lat) metrics.latency_breakdown = lat;
++  if (adminDisabled) metrics.admin_stream = 'disabled';
++
++  let adminWarningLogged = false;
++  const ensureAdminWarning = () => {
++    if (adminWarningLogged || !adminDisabled) return;
++    const probeId = probe?.id || '<unknown>';
++    console.warn(`Skipping admin stream checks for probe ${probeId}: admin stream is gated (403).`);
++    adminWarningLogged = true;
++  };
+ 
+   for (const rule of (probe.expect_signals || [])) {
+     if (rule.stream === 'admin') {
++      if (adminDisabled) {
++        ensureAdminWarning();
++        continue;
++      }
+       if (rule.must_include) for (const k of rule.must_include) if (!hasStr(adminLogs,k)) findings.push(`Admin missing '${k}'`);
+       if (rule.must_not_include) for (const k of rule.must_not_include) if (hasStr(adminLogs,k)) findings.push(`Admin should NOT include '${k}'`);
+       if (rule.max_count_per_turn) for (const [k,max] of Object.entries(rule.max_count_per_turn)){
+         const c = countStr(adminLogs,k); if (c>max) findings.push(`'${k}' count ${c} > ${max}`);
+       }
+       if (rule.latency_lt_ms && lat) for (const [k,limit] of Object.entries(rule.latency_lt_ms)){
+         const got = lat[k]; if (got==null || got>=limit) findings.push(`Latency '${k}' ${got ?? 'N/A'}ms not < ${limit}ms`);
+       }
+       if (rule.nlu_flags) {
+         const nlu = adminLogs.find(x=>x.event==='nlu') || {};
+         const f = rule.nlu_flags;
+         if (typeof f.needs_clarification === 'boolean') {
+           if (!!nlu.needs_clarification !== f.needs_clarification) findings.push(`nlu.needs_clarification expected ${f.needs_clarification}, got ${nlu.needs_clarification}`);
+         }
+         if (f.missing_any_of) {
+           const missing = nlu.missing || [];
+           if (!f.missing_any_of.some(m => missing.includes(m))) findings.push(`nlu.missing should include one of [${f.missing_any_of.join(', ')}], got [${missing.join(', ')}]`);
+         }
+       }
+       if (rule.chips_lte != null) {
+         const sm = adminLogs.find(x => String(x.event).includes('suggestions_made')) || {};
+         const cnt = (sm.items?.length) ?? sm.count ?? 0;
+         if (cnt > rule.chips_lte) findings.push(`chips count ${cnt} > ${rule.chips_lte}`);
+       }
+       if (rule.goal_fields) {
+@@ -723,54 +777,61 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls){
+       }
+       if (rule.nlu_must_have_keys) {
+         const nlu = adminLogs.find(x=>x.event==='nlu');
+         if (!nlu) findings.push('No nlu event observed');
+         else for (const k of rule.nlu_must_have_keys) if (!(k in nlu)) findings.push(`nlu missing key '${k}'`);
+       }
+     }
+     if (rule.stream === 'browser_console') {
+       if (rule.must_include) for (const s of rule.must_include) if (!consoleLines.some(l=>l.includes(s))) findings.push(`Console missing '${s}'`);
+       if (rule.must_not_include) for (const s of rule.must_not_include) if (consoleLines.some(l=>l.includes(s))) findings.push(`Console should NOT include '${s}'`);
+     }
+     if (rule.stream === 'network') {
+       if (rule.must_not_include_query_params || rule.network_has_any_params) {
+         const dg = wsUrls.find(u => /deepgram\.com\/v1\/listen/.test(u));
+         if (!dg) findings.push('Deepgram WS URL not observed');
+         else {
+           const url = new URL(dg);
+           const bad = (rule.must_not_include_query_params || rule.network_has_any_params).filter(k => url.searchParams.has(k));
+           if (bad.length) findings.push(`Deepgram URL contains forbidden params: ${bad.join(', ')}`);
+         }
+       }
+     }
+   }
+ 
+   for (const cond of (probe.fail_if || [])) {
++    const touchesAdmin = cond.admin_any || cond.admin_missing || cond.admin_count_gt
++      || cond.latency_gte_ms || cond.chips_gt != null || cond.nlu_flags
++      || cond.goal_missing || cond.nlu_missing_any;
++    if (adminDisabled && touchesAdmin) {
++      ensureAdminWarning();
++      continue;
++    }
+     if (cond.admin_any) for (const s of cond.admin_any) if (hasStr(adminLogs,s)) findings.push(`Fail: admin contains '${s}'`);
+     if (cond.admin_missing) for (const s of cond.admin_missing) if (!hasStr(adminLogs,s)) findings.push(`Fail: admin missing '${s}'`);
+     if (cond.admin_count_gt) for (const [k,m] of Object.entries(cond.admin_count_gt)){ const c = countStr(adminLogs,k); if (c>m) findings.push(`Fail: '${k}' count ${c} > ${m}`); }
+-    const lat2 = getLatencies(adminLogs);
++    const lat2 = adminDisabled ? null : getLatencies(adminLogs);
+     if (cond.latency_gte_ms && lat2) for (const [k,v] of Object.entries(cond.latency_gte_ms)){ const got = lat2[k]; if (got!=null && got>=v) findings.push(`Fail: latency '${k}' ${got}ms >= ${v}ms`); }
+     if (cond.chips_gt != null) {
+       const sm = adminLogs.find(x => String(x.event).includes('suggestions_made')) || {};
+       const cnt = (sm.items?.length) ?? sm.count ?? 0;
+       if (cnt > cond.chips_gt) findings.push(`Fail: chips ${cnt} > ${cond.chips_gt}`);
+     }
+     if (cond.nlu_flags) {
+       const nlu = adminLogs.find(x=>x.event==='nlu') || {};
+       const f = cond.nlu_flags;
+       if (typeof f.needs_clarification === 'boolean') {
+         if (!!nlu.needs_clarification !== f.needs_clarification) findings.push(`Fail: nlu.needs_clarification expected ${f.needs_clarification}, got ${nlu.needs_clarification}`);
+       }
+     }
+     if (cond.goal_missing) {
+       const sg = adminLogs.find(x => String(x.event).includes('session_goal')) || {};
+       for (const k of cond.goal_missing) if (!(k in sg)) findings.push(`Fail: session_goal missing '${k}'`);
+     }
+     if (cond.nlu_missing_any) {
+       const nlu = adminLogs.find(x=>x.event==='nlu') || {};
+       for (const k of cond.nlu_missing_any) {
+         const parts = k.split('.');
+         let cur = nlu, ok = true;
+         for (const p of parts) { if (cur && p in cur) cur = cur[p]; else { ok = false; break; } }
+         if (!ok) findings.push(`Fail: nlu missing '${k}'`);
+       }
+@@ -853,106 +914,125 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
+       return { id: probe.id, pass: false, findings: ['Start control not found/clickable'], metrics: {} };
+     }
+   }
+ 
+   fs.writeFileSync(path.join(dir, 'start_click_attempts.json'), JSON.stringify(attempts,null,2));
+ 
+   // Let any navigation settle
+   try { await page.waitForLoadState('networkidle', { timeout: 4000 }); } catch {}
+   
+   // Let the probe’s audio play/flow
+   const ua = (probe.user_action || '').toLowerCase();
+   const playbackDurationMs = Math.max(0, normalized.totalDurationMs || 0);
+   if (ua.includes('do not speak')) {
+     await sleep(Math.max(3000, playbackDurationMs));
+   } else if (ua.includes('two short back-to-back turns')) {
+     const waitMs = Math.max(playbackDurationMs + 1200, 2600);
+     await sleep(waitMs);
+   } else if (ua.includes('start talking while chip is speaking')) {
+     await sleep(Math.max(1500, Math.min(playbackDurationMs + 500, 2500)));
+   } else {
+     await sleep(Math.max(4200, playbackDurationMs + 800));
+   }
+ 
+   // Pull the admin logs after we've allowed the scripted audio to play out.
+   let adminLogs = [];
++  let adminMeta = { error: null, captureState: null };
+   try {
+-    adminLogs = await harvestAdminLogs(page);
++    const capture = await harvestAdminLogs(page);
++    adminLogs = Array.isArray(capture.events) ? capture.events : [];
++    adminMeta = capture.meta || adminMeta;
+   } catch (err) {
+-    adminLogs = [{ event: 'collector_error', message: err?.message || String(err) }];
++    const message = err?.message || String(err);
++    adminLogs = [{ event: 'collector_error', message }];
++    const disabled = /403/.test(String(message)) ? 'disabled' : adminMeta.captureState;
++    adminMeta = { error: message, captureState: disabled };
+   } finally {
+     try { await stopAdminCollector(page); } catch {}
+   }
+ 
+   // Artifacts
+   fs.writeFileSync(path.join(dir,'admin_logs.json'), JSON.stringify(adminLogs,null,2));
++  fs.writeFileSync(path.join(dir,'admin_capture_meta.json'), JSON.stringify(adminMeta,null,2));
+   fs.writeFileSync(path.join(dir,'browser_console.json'), JSON.stringify(consoleLines,null,2));
+   fs.writeFileSync(path.join(dir,'network_ws.json'), JSON.stringify(wsUrls,null,2));
+ 
+-  const { passed, findings, metrics } = evalProbe(probe, adminLogs, consoleLines, wsUrls);
++  const { passed, findings, metrics } = evalProbe(probe, adminLogs, consoleLines, wsUrls, adminMeta);
+ 
+   // DOM expectations
+   const domFindings = await checkDomExpectations(page, probe.expect_dom, artifactsDir, probe.id);
+   if (domFindings.length){ findings.push(...domFindings); }
+ 
+   await context.close(); await browser.close();
+-  return { id: probe.id, pass: passed, findings, metrics };
++  return {
++    id: probe.id,
++    pass: passed,
++    findings,
++    metrics,
++    admin_stream_disabled: String(adminMeta.captureState || '').toLowerCase() === 'disabled',
++    admin_capture_meta: adminMeta
++  };
+ }
+ 
+ async function main() {
+   const { specPath, base, useChrome, dumpUI, startOverride, startEval } = parseCLI();
+   const spec = readJSON(specPath);
+   const baseUrl = (spec.endpoints?.ui_base_url && !/your_domain/i.test(spec.endpoints.ui_base_url))
+     ? spec.endpoints.ui_base_url
+     : base;
+ 
+   const artifactsDir = path.resolve('artifacts');
+   const audioDir = path.resolve('audio');
+   ensureDir(artifactsDir);
+ 
+   const results = [];
+   for (const probe of spec.probes) {
+     console.log(`\n=== Running ${probe.id} ===`);
+     try {
+       const r = await runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval);
+       results.push(r);
+       console.log(`${probe.id}: ${r.pass ? 'PASS' : 'FAIL'}${r.findings.length ? ' – ' + r.findings.join('; ') : ''}`);
+     } catch (e) {
+       results.push({ id: probe.id, pass: false, findings: [`Runner error: ${e.message}`], metrics: {} });
+       console.error(`${probe.id}: Runner error`, e);
+     }
+   }
+ 
+   const catalog = spec.recommendations_catalog || {};
+   const enriched = results.map(r => {
+     const probe = spec.probes.find(p => p.id === r.id) || {};
+     const ids = r.pass ? [] : (probe.recommendations_on_fail || []);
+     return { ...r, recommendations: ids.map(id => catalog[id]).filter(Boolean) };
+   });
+ 
++  const adminSkipped = enriched.filter(x => x.admin_stream_disabled).map(x => x.id);
+   const report = {
+     generated_at: new Date().toISOString(),
+     summary: {
+       total: enriched.length,
+       passed: enriched.filter(x => x.pass).length,
+-      failed: enriched.filter(x => !x.pass).map(x => x.id)
++      failed: enriched.filter(x => !x.pass).map(x => x.id),
++      admin_stream_skipped: adminSkipped
+     },
+     probes: enriched
+   };
+   fs.writeFileSync('report.json', JSON.stringify(report, null, 2));
+ 
+   const lines = [];
+   lines.push(`# AskChip E2E Findings\n`);
+   lines.push(`**Passed:** ${report.summary.passed}/${report.summary.total}\n`);
++  if (adminSkipped.length) {
++    lines.push(`**Admin signals skipped for:** ${adminSkipped.join(', ')} (admin stream is gated)\n`);
++  }
+   for (const p of report.probes) lines.push(`- **${p.id}**: ${p.pass ? 'PASS' : 'FAIL'}${p.findings.length ? ' — ' + p.findings.join('; ') : ''}`);
+   fs.writeFileSync('FINDINGS.md', lines.join('\n'));
+   console.log('\nReport written to report.json and FINDINGS.md');
+ }
+ 
+ if (require.main === module) {
+   main().catch(err => {
+     console.error(err);
+     process.exitCode = 1;
+   });
+ }
+ 
+ module.exports = { evalProbe };
