@@ -598,6 +598,7 @@ def _log_policy_decision(*,
                     "policy_decision",
                     event="policy_decision",
                     label=f"policy_decision: {label_move}",
+                    decision=label_move,
                     **payload,
                 )
             except Exception:
