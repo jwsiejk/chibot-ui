@@ -268,7 +268,24 @@ function parseCLI(){
   const startOverride = startIdx !== -1 ? process.argv[startIdx+1] : (process.env.START_SELECTOR || '');
   const evalIdx = process.argv.indexOf('--start-eval');
   const startEval = evalIdx !== -1 ? process.argv[evalIdx+1] : (process.env.START_EVAL || '');
-  return { specPath, base, useChrome, dumpUI, startOverride, startEval };
+  const loginIdx = process.argv.indexOf('--login-email');
+  let autoLoginEmail = process.env.ASKCHIP_E2E_LOGIN_EMAIL || process.env.ASKCHIP_AUTO_LOGIN_EMAIL || '';
+  if (loginIdx !== -1 && process.argv[loginIdx+1]) autoLoginEmail = process.argv[loginIdx+1];
+  let disableAutoLogin = false;
+  if (typeof autoLoginEmail === 'string') {
+    const trimmed = autoLoginEmail.trim();
+    const lower = trimmed.toLowerCase();
+    if (!trimmed) {
+      autoLoginEmail = '';
+    } else if (['none', 'off', 'false', 'no'].includes(lower)) {
+      disableAutoLogin = true;
+      autoLoginEmail = '';
+    } else {
+      autoLoginEmail = trimmed;
+    }
+  }
+  if (!autoLoginEmail && !disableAutoLogin) autoLoginEmail = 'jwsiejk@purestorage.com';
+  return { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail };
 }
 
 // ---- IN-PAGE SSE collector (uses cookies/session) ----
@@ -471,6 +488,91 @@ async function tryClick(locator, meta, attempts){
   }catch(e){
     attempts.push({ ok:false, error: e.message?.slice(0,120), ...meta });
     return false;
+  }
+}
+
+async function performAutoLogin(page, email) {
+  if (!email) return { ok: false, error: 'missing_email' };
+  try {
+    const result = await page.evaluate(async (emailAddr) => {
+      const output = { ok: false, email: emailAddr };
+      try {
+        if (!emailAddr) { output.error = 'missing_email'; return output; }
+
+        try {
+          const cfg = window.__askchip_config = window.__askchip_config || {};
+          const authCfg = cfg.auth = cfg.auth || {};
+          authCfg.autoLoginEmail = emailAddr;
+        } catch {}
+
+        const fetchJson = async (url, init) => {
+          const res = await fetch(url, { credentials: 'include', ...(init || {}) });
+          let data = null;
+          try {
+            data = await res.clone().json();
+          } catch {
+            try { data = await res.text(); } catch {}
+          }
+          return { status: res.status, ok: res.ok, data };
+        };
+
+        let token = null;
+        const csrfEndpoints = ['/api/v1/csrf', '/api/v1/auth/csrf'];
+        for (const endpoint of csrfEndpoints) {
+          try {
+            const resp = await fetchJson(endpoint);
+            if (resp.ok && resp.data && typeof resp.data === 'object') {
+              token = resp.data.csrf || resp.data.token || resp.data.csrf_token || null;
+            }
+            if (token) break;
+          } catch {}
+        }
+
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['X-CSRF-Token'] = token;
+
+        const loginResp = await fetchJson('/api/v1/auth/login', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ email: emailAddr })
+        });
+
+        output.login = loginResp;
+        if (!loginResp.ok) {
+          output.error = (loginResp.data && loginResp.data.error) || `login_failed_${loginResp.status}`;
+          return output;
+        }
+
+        const meResp = await fetchJson('/api/v1/auth/me');
+        output.me = meResp;
+
+        output.profile_complete = !!(
+          (meResp.data && meResp.data.profile_complete) ||
+          (loginResp.data && loginResp.data.profile_complete) ||
+          (loginResp.data && loginResp.data.profile && loginResp.data.profile.profile_complete)
+        );
+
+        try {
+          if (typeof window.evaluateAuth === 'function') {
+            await window.evaluateAuth();
+          } else if (typeof window.evaluateAuthGate === 'function') {
+            await window.evaluateAuthGate();
+          }
+        } catch (err) {
+          output.evaluate_error = err?.message || String(err);
+        }
+
+        output.ok = true;
+        return output;
+      } catch (err) {
+        output.error = err?.message || String(err);
+        return output;
+      }
+    }, email);
+
+    return result || { ok: false, error: 'unknown_auto_login_result' };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
   }
 }
 
@@ -1130,7 +1232,7 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}
   return { passed: findings.length === 0, findings, metrics };
 }
 
-async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval){
+async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval, autoLoginEmail){
   let normalized;
   try {
     normalized = normalizeInputs(probe.inputs, audioDir);
@@ -1173,13 +1275,23 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
   let adminUrl = spec.endpoints?.admin_sse_url;
   if (!adminUrl || /your_domain/i.test(adminUrl)) adminUrl = baseUrl.replace(/\/$/,'') + '/api/v1/admin/logs';
 
+  const dir = path.join(artifactsDir, probe.id); ensureDir(dir);
+
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+
+  let autoLoginResult = null;
+  if (autoLoginEmail) {
+    autoLoginResult = await performAutoLogin(page, autoLoginEmail);
+    try { fs.writeFileSync(path.join(dir, 'auto_login_result.json'), JSON.stringify(autoLoginResult, null, 2)); } catch {}
+    if (autoLoginResult?.ok) {
+      try { await page.waitForTimeout(300); } catch {}
+    }
+  }
 
   // Start admin collector before kicking off the call so we capture the whole exchange.
   await startAdminCollector(page, adminUrl);
 
 
-  const dir = path.join(artifactsDir, probe.id); ensureDir(dir);
   await page.screenshot({ path: path.join(dir, 'after_goto.png') });
   fs.writeFileSync(path.join(dir, 'page_url.txt'), page.url());
 
@@ -1263,7 +1375,7 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
 }
 
 async function main() {
-  const { specPath, base, useChrome, dumpUI, startOverride, startEval } = parseCLI();
+  const { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail } = parseCLI();
   const spec = readJSON(specPath);
   const baseUrl = (spec.endpoints?.ui_base_url && !/your_domain/i.test(spec.endpoints.ui_base_url))
     ? spec.endpoints.ui_base_url
@@ -1277,7 +1389,7 @@ async function main() {
   for (const probe of spec.probes) {
     console.log(`\n=== Running ${probe.id} ===`);
     try {
-      const r = await runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval);
+      const r = await runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval, autoLoginEmail);
       results.push(r);
       console.log(`${probe.id}: ${r.pass ? 'PASS' : 'FAIL'}${r.findings.length ? ' – ' + r.findings.join('; ') : ''}`);
     } catch (e) {

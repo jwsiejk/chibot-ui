@@ -1,395 +1,391 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 69e8faf27af5b090de4b65a3e803e361c6c0bcf5..2b20e8a126624974d6ade23211d5e7665a86652a 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -1,39 +1,46 @@
- from __future__ import annotations
+diff --git a/e2e_orchestrator.js b/e2e_orchestrator.js
+index bf110e8aa227ed2021156c839e36337e8a58bc9c..4a0defe568d83f38dddd915d979f9bc3d965c105 100644
+--- a/e2e_orchestrator.js
++++ b/e2e_orchestrator.js
+@@ -246,51 +246,68 @@ async function installCustomMicrophone(context, spec) {
+         for (const track of videoStream.getVideoTracks()) stream.addTrack(track);
+       }
+       return stream;
+     };
+   }, { timeline: spec.timeline, defaultSampleRate: spec.defaultSampleRate, defaultChannels: spec.defaultChannels });
+ }
  
- import asyncio
- import json
- import logging
- import os
- import re
- import time
- import warnings
- from typing import AsyncGenerator, Optional, Any, Deque, Tuple, Callable
- from collections import deque
+ function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+ function ensureDir(p){ fs.mkdirSync(p,{recursive:true}); }
+ function readJSON(p){ return JSON.parse(fs.readFileSync(p,'utf-8')); }
+ function hasStr(objs,s){ return objs.some(x=>JSON.stringify(x).includes(s)); }
+ function countStr(objs,s){ return objs.filter(x=>JSON.stringify(x).includes(s)).length; }
  
- import websockets  # provided by uvicorn[standard]
+ function parseCLI(){
+   const specPath = process.argv[2] || 'askchip_e2e_tests.json';
+   let base = process.env.ASKCHIP_BASE_URL || '';
+   const i = process.argv.indexOf('--base');
+   if (i !== -1 && process.argv[i+1]) base = process.argv[i+1];
+   if (!base) { console.error('Provide base URL, e.g. --base https://chibot-ui.onrender.com/'); process.exit(1); }
+   const useChrome = process.argv.includes('--chrome') || process.env.BROWSER === 'chrome';
+   const dumpUI = process.argv.includes('--dump-ui');
+   const startIdx = process.argv.indexOf('--start');
+   const startOverride = startIdx !== -1 ? process.argv[startIdx+1] : (process.env.START_SELECTOR || '');
+   const evalIdx = process.argv.indexOf('--start-eval');
+   const startEval = evalIdx !== -1 ? process.argv[evalIdx+1] : (process.env.START_EVAL || '');
+-  return { specPath, base, useChrome, dumpUI, startOverride, startEval };
++  const loginIdx = process.argv.indexOf('--login-email');
++  let autoLoginEmail = process.env.ASKCHIP_E2E_LOGIN_EMAIL || process.env.ASKCHIP_AUTO_LOGIN_EMAIL || '';
++  if (loginIdx !== -1 && process.argv[loginIdx+1]) autoLoginEmail = process.argv[loginIdx+1];
++  let disableAutoLogin = false;
++  if (typeof autoLoginEmail === 'string') {
++    const trimmed = autoLoginEmail.trim();
++    const lower = trimmed.toLowerCase();
++    if (!trimmed) {
++      autoLoginEmail = '';
++    } else if (['none', 'off', 'false', 'no'].includes(lower)) {
++      disableAutoLogin = true;
++      autoLoginEmail = '';
++    } else {
++      autoLoginEmail = trimmed;
++    }
++  }
++  if (!autoLoginEmail && !disableAutoLogin) autoLoginEmail = 'jwsiejk@purestorage.com';
++  return { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail };
+ }
  
-+try:
-+    from app.admin_log import emit as _admin_emit
-+except Exception:  # pragma: no cover - extremely defensive
+ // ---- IN-PAGE SSE collector (uses cookies/session) ----
+ async function collectAdminSSEInPage(page, { url, ms }) {
+   return await page.evaluate(({ url, ms }) => {
+     return new Promise(resolve => {
+       const logs = [];
+       let es;
+       try {
+         es = new EventSource(url, { withCredentials: true });
+         es.onmessage = (e) => { try { logs.push(JSON.parse(e.data)); } catch {} };
+         es.onerror = () => { /* ignore; resolve on timeout */ };
+       } catch { resolve(logs); return; }
+       setTimeout(() => { try { es && es.close(); } catch {} resolve(logs); }, ms);
+       window.addEventListener('beforeunload', () => { try { es && es.close(); } catch {} });
+     });
+   }, { url, ms });
+ }
+ 
+ async function startAdminCollector(page, url) {
+   await page.evaluate((adminUrl) => {
+     if (window.__adminCollector?.source) {
+       try { window.__adminCollector.source.close(); } catch {}
+     }
+ 
+@@ -452,50 +469,135 @@ async function checkDomExpectations(page, expectDom, artifactsDir, probeId){
+ 
+ // ---- Start clickers ----
+ const TEXT_VARIANTS = [
+   /^start$/i, /start session/i, /start call/i, /start chat/i, /begin/i, /join/i, /connect/i,
+   /let's go/i, /enable mic/i, /enable microphone/i, /talk/i, /call/i
+ ];
+ const ATTR_VARIANTS = [
+   '#startButton', '[data-role="start-btn"]', '[data-testid="start"]', '[data-test="start"]',
+   '[data-qa="start"]', '[id*="start"]', '[class*="start"]', '[aria-label*="start" i]',
+   '[aria-label*="join" i]', '.start', 'button.start'
+ ];
+ 
+ async function tryClick(locator, meta, attempts){
+   try{
+     const loc = locator.first();
+     await loc.waitFor({ state: 'visible', timeout: 900 });
+     await loc.click({ timeout: 1500 });
+     attempts.push({ ok:true, ...meta });
+     return true;
+   }catch(e){
+     attempts.push({ ok:false, error: e.message?.slice(0,120), ...meta });
+     return false;
+   }
+ }
+ 
++async function performAutoLogin(page, email) {
++  if (!email) return { ok: false, error: 'missing_email' };
++  try {
++    const result = await page.evaluate(async (emailAddr) => {
++      const output = { ok: false, email: emailAddr };
++      try {
++        if (!emailAddr) { output.error = 'missing_email'; return output; }
 +
-+    def _admin_emit(*a, **k):  # type: ignore[empty-body]
-+        pass
++        try {
++          const cfg = window.__askchip_config = window.__askchip_config || {};
++          const authCfg = cfg.auth = cfg.auth || {};
++          authCfg.autoLoginEmail = emailAddr;
++        } catch {}
 +
- try:
-     from websockets import exceptions as _ws_exceptions  # type: ignore[attr-defined]
- except Exception:  # pragma: no cover - extremely defensive
-     _ws_exceptions = None  # type: ignore[assignment]
- else:
-     _invalid_types = []
-     with warnings.catch_warnings():
-         warnings.simplefilter("ignore", DeprecationWarning)
-         for _name in ("InvalidStatus", "InvalidStatusCode"):
-             _cls = getattr(_ws_exceptions, _name, None)
-             if isinstance(_cls, type):
-                 _invalid_types.append(_cls)
-     _INVALID_STATUS_TYPES = tuple(_invalid_types)
- if "_INVALID_STATUS_TYPES" not in globals():
-     _INVALID_STATUS_TYPES = ()
- 
- try:  # pragma: no cover - exercised indirectly
-     _WEBSOCKETS_PROTOCOL = websockets.protocol  # type: ignore[attr-defined]
- except AttributeError:  # pragma: no cover - older packaging style
-     try:
-         from websockets import protocol as _WEBSOCKETS_PROTOCOL  # type: ignore
-     except Exception:  # pragma: no cover - highly defensive
-         _WEBSOCKETS_PROTOCOL = None  # type: ignore
- 
- 
-@@ -991,50 +998,51 @@ class DeepgramClient:
-     async def connect(self) -> None:
-         global DG_LAST_URL, DG_LAST_CONFIG
-         sid = self._sid_for_log()
-         if callable(self._jlog):
-             try:
-                 self._jlog(
-                     "dg_connect_begin",
-                     sid=sid,
-                     dg_id=self._dg_id,
-                     tag=self._url_tag,
-                     already_open=bool(self._ws),
-                     closing=self._closing,
-                     closed=self._closed,
-                 )
-             except Exception:
-                 pass
-         if self._ws:
-             self._logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
-             return
- 
-         url = _dg_url(self._cfg)
-         self._emit_diag("provider_open", active=True, url=url)
- 
-         containerized = False
-         safe_url = url
-+        url_meta: dict[str, Any] = {}
- 
-         try:
-             # Diagnostic: parse params and emit compact JSON log that shows
-             # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
-             import urllib.parse as _p
- 
-             parts = _p.urlsplit(url)
-             q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
-             self._url_tag = q.get("tag") or None
-             transport = (self._cfg or {}).get("_transport", {}) or {}
-             containerized = bool(transport.get("containerized_opus"))
-             url_meta = {
-                 "container": transport.get("container"),
-                 "codec": transport.get("codec"),
-                 "containerized_opus": containerized,
-                 "normalized_pcm": bool(transport.get("normalized_pcm")),
-                 "omitted_params": None,
-                 "raw_params": None,
-             }
-             if containerized:
-                 # These should be absent in containerized mode
-                 omitted = []
-                 for k in ("encoding", "sample_rate", "channels"):
-                     if k not in q:
-                         omitted.append(k)
-@@ -1115,94 +1123,109 @@ class DeepgramClient:
-         )
-         ws_headers = [("Authorization", f"Token {key_value}")]
-         del key_value
-         subprotocols = None
-         self._logger.info(
-             "Deepgram connect attempt sid=%s safe_url=%s key_len=%s subprotocols=%s",
-             sid,
-             safe_url,
-             key_len,
-             subprotocols,
-         )
-         if callable(self._jlog):
-             try:
-                 self._jlog(
-                     "dg_connect_attempt",
-                     sid=sid,
-                     dg_id=self._dg_id,
-                     safe_url=safe_url,
-                     key_len=key_len,
-                     subprotocols=subprotocols,
-                 )
-             except Exception:
-                 pass
- 
-         start_ts = time.time()
-+        elapsed_ms = 0
-         if callable(self._jlog):
-             try:
-                 self._jlog(
-                     "asr_connect_start",
-                     sid=sid,
-                     dg_id=self._dg_id,
-                 )
-             except Exception:
-                 pass
- 
-         try:
-             if DG_TEST_MODE:
-                 self._ws = _FakeWSForTests()
-                 DG_LAST_URL = url
-                 cfg_payload = _initial_config(self._cfg)
-                 DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
-                 self._open_evt.set()
-                 await self._signal_ready()
-                 self._logger.info("Deepgram test-mode connect sid=%s", sid)
-                 if callable(self._jlog):
-                     try:
-                         self._jlog(
-                             "dg_open",
-                             sid=sid,
-                             dg_id=self._dg_id,
-                             url=url,
-                             tag=self._url_tag,
-                             test_mode=True,
-                         )
-                     except Exception:
-                         pass
-                     try:
-                         elapsed_ms = int((time.time() - start_ts) * 1000)
-                     except Exception:
-                         elapsed_ms = 0
-                     try:
-                         self._jlog(
-                             "asr_connect_ok",
-                             sid=sid,
-                             dg_id=self._dg_id,
-                             elapsed_ms=elapsed_ms,
-                         )
-                     except Exception:
-                         pass
-+                try:
-+                    _admin_emit(
-+                        "dg_connect",
-+                        session_id=sid,
-+                        dg_id=self._dg_id,
-+                        safe_url=safe_url,
-+                        containerized=containerized,
-+                        tag=self._url_tag,
-+                        normalized_pcm=bool(url_meta.get("normalized_pcm")),
-+                        elapsed_ms=elapsed_ms,
-+                        test_mode=True,
-+                    )
-+                except Exception:
-+                    pass
-                 return
- 
-             try:
-                 self._ws = await websockets.connect(
-                     url,
-                     additional_headers=ws_headers,
-                     max_size=None,
-                 )
-             except TypeError:
-                 self._ws = await websockets.connect(
-                     url,
-                     extra_headers=ws_headers,
-                     max_size=None,
-                 )
- 
-             # Micro-wait to ensure the underlying socket is actually open
-             await self.wait_socket_open(
-                 timeout=float(os.getenv("DG_OPEN_MICRO_WAIT_S", "0.75"))
-             )
- 
-             cfg_payload = _initial_config(self._cfg)
-             DG_LAST_URL = url
-             DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
-             async with self._send_lock:
-                 await self._ws.send(json.dumps(cfg_payload))
-@@ -1231,50 +1254,64 @@ class DeepgramClient:
-             if callable(self._jlog):
-                 try:
-                     self._jlog(
-                         "dg_open",
-                         sid=sid,
-                         dg_id=self._dg_id,
-                         url=url,
-                         tag=self._url_tag,
-                         containerized=containerized,
-                     )
-                 except Exception:
-                     pass
-                 try:
-                     elapsed_ms = int((time.time() - start_ts) * 1000)
-                 except Exception:
-                     elapsed_ms = 0
-                 try:
-                     self._jlog(
-                         "asr_connect_ok",
-                         sid=sid,
-                         dg_id=self._dg_id,
-                         elapsed_ms=elapsed_ms,
-                     )
-                 except Exception:
-                     pass
-+            try:
-+                _admin_emit(
-+                    "dg_connect",
-+                    session_id=sid,
-+                    dg_id=self._dg_id,
-+                    safe_url=safe_url,
-+                    containerized=containerized,
-+                    tag=self._url_tag,
-+                    normalized_pcm=bool(url_meta.get("normalized_pcm")),
-+                    elapsed_ms=elapsed_ms,
-+                    test_mode=False,
-+                )
-+            except Exception:
-+                pass
-         except asyncio.CancelledError:
-             raise
-         except Exception as exc:
-             diag_extra: dict[str, Any] = {}
-             header_items: list[tuple[str, str]] | None = None
-             status_code: Any = None
-             status_reason: Any = None
- 
-             if _INVALID_STATUS_TYPES and isinstance(exc, _INVALID_STATUS_TYPES):
-                 response = getattr(exc, "response", None)
-                 headers_obj = None
-                 if response is not None:
-                     status_code = getattr(response, "status_code", None)
-                     status_reason = getattr(response, "reason_phrase", None)
-                     headers_obj = getattr(response, "headers", None)
-                 else:
-                     status_code = getattr(exc, "status_code", None)
-                     status_reason = getattr(exc, "reason_phrase", None)
-                     headers_obj = getattr(exc, "headers", None)
- 
-                 if headers_obj is not None:
-                     header_iter = None
-                     try:
-                         header_iter = list(headers_obj.items())
-                     except Exception:
-diff --git a/tests/test_deepgram_client_connect.py b/tests/test_deepgram_client_connect.py
-index d5b75cb3ca5e89d3b8a49d53d9d3131f405ddbf2..8a1adc0a8e821261606f991b7d944be49c70160f 100644
---- a/tests/test_deepgram_client_connect.py
-+++ b/tests/test_deepgram_client_connect.py
-@@ -104,50 +104,112 @@ def test_connect_prefers_additional_headers(monkeypatch):
-         record["kwargs"] = kwargs
-         return DummyWS()
- 
-     monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
- 
-     async def run():
-         client = dg_mod.DeepgramClient()
- 
-         await client.connect()
- 
-         assert "additional_headers" in record["kwargs"]
-         assert record["kwargs"]["additional_headers"] == [("Authorization", "Token abc123")]
-         assert "extra_headers" not in record["kwargs"]
-         assert record["kwargs"]["max_size"] is None
- 
-         assert json.loads(client._ws.sent[0])["type"] == "Configure"
- 
-         event = await asyncio.wait_for(client._ev_queue.get(), timeout=0.1)
-         assert event["type"] == "asr_open"
- 
-         await client.close(wait_for_final=False)
- 
-     asyncio.run(run())
- 
- 
-+def test_connect_emits_admin_event_once(monkeypatch):
-+    monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
-+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
++        const fetchJson = async (url, init) => {
++          const res = await fetch(url, { credentials: 'include', ...(init || {}) });
++          let data = null;
++          try {
++            data = await res.clone().json();
++          } catch {
++            try { data = await res.text(); } catch {}
++          }
++          return { status: res.status, ok: res.ok, data };
++        };
 +
-+    events = []
++        let token = null;
++        const csrfEndpoints = ['/api/v1/csrf', '/api/v1/auth/csrf'];
++        for (const endpoint of csrfEndpoints) {
++          try {
++            const resp = await fetchJson(endpoint);
++            if (resp.ok && resp.data && typeof resp.data === 'object') {
++              token = resp.data.csrf || resp.data.token || resp.data.csrf_token || null;
++            }
++            if (token) break;
++          } catch {}
++        }
 +
-+    def capture(event, **payload):
-+        events.append((event, payload))
++        const headers = { 'Content-Type': 'application/json' };
++        if (token) headers['X-CSRF-Token'] = token;
 +
-+    async def fake_connect(url, **kwargs):
-+        return DummyWS()
++        const loginResp = await fetchJson('/api/v1/auth/login', {
++          method: 'POST',
++          headers,
++          body: JSON.stringify({ email: emailAddr })
++        });
 +
-+    monkeypatch.setattr(dg_mod, "_admin_emit", capture)
-+    monkeypatch.setattr(dg_mod.websockets, "connect", fake_connect)
++        output.login = loginResp;
++        if (!loginResp.ok) {
++          output.error = (loginResp.data && loginResp.data.error) || `login_failed_${loginResp.status}`;
++          return output;
++        }
 +
-+    async def run():
-+        client = dg_mod.DeepgramClient()
++        const meResp = await fetchJson('/api/v1/auth/me');
++        output.me = meResp;
 +
-+        await client.connect()
++        output.profile_complete = !!(
++          (meResp.data && meResp.data.profile_complete) ||
++          (loginResp.data && loginResp.data.profile_complete) ||
++          (loginResp.data && loginResp.data.profile && loginResp.data.profile.profile_complete)
++        );
 +
-+        assert len(events) == 1
-+        event, payload = events[0]
-+        assert event == "dg_connect"
-+        assert payload["session_id"]
-+        assert payload["safe_url"].startswith("wss://")
-+        assert isinstance(payload["containerized"], bool)
-+        assert payload["test_mode"] is False
-+        assert isinstance(payload["elapsed_ms"], int)
++        try {
++          if (typeof window.evaluateAuth === 'function') {
++            await window.evaluateAuth();
++          } else if (typeof window.evaluateAuthGate === 'function') {
++            await window.evaluateAuthGate();
++          }
++        } catch (err) {
++          output.evaluate_error = err?.message || String(err);
++        }
 +
-+        await client.close(wait_for_final=False)
++        output.ok = true;
++        return output;
++      } catch (err) {
++        output.error = err?.message || String(err);
++        return output;
++      }
++    }, email);
 +
-+    asyncio.run(run())
++    return result || { ok: false, error: 'unknown_auto_login_result' };
++  } catch (err) {
++    return { ok: false, error: err?.message || String(err) };
++  }
++}
 +
-+
-+def test_connect_emits_admin_event_once_in_test_mode(monkeypatch):
-+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
-+    monkeypatch.setattr(dg_mod, "DG_TEST_MODE", True)
-+
-+    events = []
-+
-+    def capture(event, **payload):
-+        events.append((event, payload))
-+
-+    monkeypatch.setattr(dg_mod, "_admin_emit", capture)
-+
-+    async def run():
-+        client = dg_mod.DeepgramClient({"session_id": "sid-admin"})
-+
-+        await client.connect()
-+
-+        assert len(events) == 1
-+        event, payload = events[0]
-+        assert event == "dg_connect"
-+        assert payload["session_id"] == "sid-admin"
-+        assert payload["test_mode"] is True
-+        assert isinstance(payload["containerized"], bool)
-+
-+        await client.close(wait_for_final=False)
-+
-+    asyncio.run(run())
-+
-+
- def test_flush_keeps_small_chunk_for_containerized_transport(monkeypatch):
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
-     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+ // JS-level scan (pierces shadow roots, clicks even if overlayed)
+ async function clickViaEvaluate(target, rxSource, attempts){
+   try{
+     const ok = await target.evaluate((rxSrc) => {
+       const rx = new RegExp(rxSrc, 'i');
+       function* allNodes(root){
+         const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
+         while (walker.nextNode()) yield walker.currentNode;
+         // open shadow roots
+         for (const el of root.querySelectorAll('*')) {
+           const sr = el.shadowRoot;
+           if (sr) yield* allNodes(sr);
+         }
+       }
+       for (const el of allNodes(document)){
+         const txt = (el.innerText || el.textContent || '').trim();
+         const aria = el.getAttribute?.('aria-label') || '';
+         if (rx.test(txt) || rx.test(aria)) {
+           if (typeof el.click === 'function') { el.click(); return true; }
+         }
+       }
+       return false;
+     }, rxSource);
+     attempts.push({ ok: ok, selector: 'evaluate:text', text: rxSource });
+     return ok;
+@@ -1108,100 +1210,110 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}
+         }
+       }
+       if (cond.ws_console_goal_missing) {
+         const latest = wsConsole.sessionGoalHints[wsConsole.sessionGoalHints.length - 1];
+         if (!latest) findings.push('Fail: WS session_goal hints missing');
+         else for (const key of cond.ws_console_goal_missing) if (!(key in latest)) findings.push(`Fail: session_goal missing '${key}'`);
+       }
+       if (cond.ws_console_nlu_missing_any) {
+         const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
+         for (const key of cond.ws_console_nlu_missing_any) {
+           let cur = nlu;
+           let ok = true;
+           for (const part of key.split('.')) {
+             if (cur && typeof cur === 'object' && part in cur) cur = cur[part];
+             else { ok = false; break; }
+           }
+           if (!ok) findings.push(`Fail: WS nlu missing '${key}'`);
+         }
+       }
+     }
+   }
  
-     async def run():
-         client = dg_mod.DeepgramClient({"_transport": {"containerized_opus": True}})
-         dummy_ws = DummyWS()
-         client._ws = dummy_ws
-         client._open_evt.set()
-         client._tx_queue.append(b"x" * 32)
+   return { passed: findings.length === 0, findings, metrics };
+ }
  
-         await client._flush_tx()
+-async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval){
++async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval, autoLoginEmail){
+   let normalized;
+   try {
+     normalized = normalizeInputs(probe.inputs, audioDir);
+   } catch (err) {
+     return { id: probe.id, pass: false, findings: [err?.message || String(err)], metrics: {} };
+   }
  
-         assert dummy_ws.sent == [b"x" * 32]
-         assert client._tx_queue == deque()
+   const useCustomMic = normalized.inputs.length > 1;
+   const firstAudioPath = normalized.audioFiles[0];
+   if (!firstAudioPath) {
+     return { id: probe.id, pass: false, findings: ['No audio fixtures found for probe'], metrics: {} };
+   }
  
-     asyncio.run(run())
+   const launchArgs = [
+     '--use-fake-device-for-media-stream',
+     '--autoplay-policy=no-user-gesture-required'
+   ];
+   if (!useCustomMic) {
+     launchArgs.push(`--use-file-for-fake-audio-capture=${firstAudioPath}`);
+   }
+ 
+   const browser = await chromium.launch({
+     headless: false,
+     channel: useChrome ? 'chrome' : undefined,
+     args: launchArgs
+   });
+ 
+   const context = await browser.newContext();
+   if (useCustomMic) {
+     await installCustomMicrophone(context, normalized);
+   }
+   await context.grantPermissions(['microphone'], { origin: baseUrl });
+   const page = await context.newPage();
+ 
+   const consoleLines = [];
+   page.on('console', m => consoleLines.push(m.text()));
+   const wsUrls = [];
+   page.on('websocket', ws => { try { wsUrls.push(ws.url()); } catch {} });
+ 
+   let adminUrl = spec.endpoints?.admin_sse_url;
+   if (!adminUrl || /your_domain/i.test(adminUrl)) adminUrl = baseUrl.replace(/\/$/,'') + '/api/v1/admin/logs';
+ 
++  const dir = path.join(artifactsDir, probe.id); ensureDir(dir);
++
+   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+ 
++  let autoLoginResult = null;
++  if (autoLoginEmail) {
++    autoLoginResult = await performAutoLogin(page, autoLoginEmail);
++    try { fs.writeFileSync(path.join(dir, 'auto_login_result.json'), JSON.stringify(autoLoginResult, null, 2)); } catch {}
++    if (autoLoginResult?.ok) {
++      try { await page.waitForTimeout(300); } catch {}
++    }
++  }
++
+   // Start admin collector before kicking off the call so we capture the whole exchange.
+   await startAdminCollector(page, adminUrl);
  
  
- def test_close_retries_flush_until_socket_open(monkeypatch):
-     monkeypatch.setenv("DEEPGRAM_API_KEY", "abc123")
-     monkeypatch.setattr(dg_mod, "DG_TEST_MODE", False)
+-  const dir = path.join(artifactsDir, probe.id); ensureDir(dir);
+   await page.screenshot({ path: path.join(dir, 'after_goto.png') });
+   fs.writeFileSync(path.join(dir, 'page_url.txt'), page.url());
  
-     class DelayedOpenWS(DummyWS):
-         def __init__(self):
+   const attempts = [];
+ 
+   // user overrides first
+   if (!(await clickStartWithOverrides(page, startOverride, startEval, attempts))) {
+     // heuristics across frames/shadow
+     let clicked = await clickStartAnywhere(page, attempts);
+     if (!clicked) {
+       // brute gestures and retry heuristics
+       await bruteStart(page, attempts);
+       clicked = await clickStartAnywhere(page, attempts);
+     }
+     if (!clicked) {
+       if (!dumpUI) await dumpUI(page, dir);
+       await page.screenshot({ path: path.join(dir, 'start_not_found.png'), fullPage: true });
+       fs.writeFileSync(path.join(dir, 'start_click_attempts.json'), JSON.stringify(attempts,null,2));
+       try { await stopAdminCollector(page); } catch {}
+       await context.close(); await browser.close();
+       return { id: probe.id, pass: false, findings: ['Start control not found/clickable'], metrics: {} };
+     }
+   }
+ 
+   fs.writeFileSync(path.join(dir, 'start_click_attempts.json'), JSON.stringify(attempts,null,2));
+@@ -1241,65 +1353,65 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
+ 
+   // Artifacts
+   fs.writeFileSync(path.join(dir,'admin_logs.json'), JSON.stringify(adminLogs,null,2));
+   fs.writeFileSync(path.join(dir,'admin_capture_meta.json'), JSON.stringify(adminMeta,null,2));
+   fs.writeFileSync(path.join(dir,'browser_console.json'), JSON.stringify(consoleLines,null,2));
+   fs.writeFileSync(path.join(dir,'network_ws.json'), JSON.stringify(wsUrls,null,2));
+ 
+   const { passed, findings, metrics } = evalProbe(probe, adminLogs, consoleLines, wsUrls, adminMeta);
+ 
+   // DOM expectations
+   const domFindings = await checkDomExpectations(page, probe.expect_dom, artifactsDir, probe.id);
+   if (domFindings.length){ findings.push(...domFindings); }
+ 
+   await context.close(); await browser.close();
+   return {
+     id: probe.id,
+     pass: passed,
+     findings,
+     metrics,
+     admin_stream_disabled: String(adminMeta.captureState || '').toLowerCase() === 'disabled',
+     admin_capture_meta: adminMeta
+   };
+ }
+ 
+ async function main() {
+-  const { specPath, base, useChrome, dumpUI, startOverride, startEval } = parseCLI();
++  const { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail } = parseCLI();
+   const spec = readJSON(specPath);
+   const baseUrl = (spec.endpoints?.ui_base_url && !/your_domain/i.test(spec.endpoints.ui_base_url))
+     ? spec.endpoints.ui_base_url
+     : base;
+ 
+   const artifactsDir = path.resolve('artifacts');
+   const audioDir = path.resolve('audio');
+   ensureDir(artifactsDir);
+ 
+   const results = [];
+   for (const probe of spec.probes) {
+     console.log(`\n=== Running ${probe.id} ===`);
+     try {
+-      const r = await runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval);
++      const r = await runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval, autoLoginEmail);
+       results.push(r);
+       console.log(`${probe.id}: ${r.pass ? 'PASS' : 'FAIL'}${r.findings.length ? ' – ' + r.findings.join('; ') : ''}`);
+     } catch (e) {
+       results.push({ id: probe.id, pass: false, findings: [`Runner error: ${e.message}`], metrics: {} });
+       console.error(`${probe.id}: Runner error`, e);
+     }
+   }
+ 
+   const catalog = spec.recommendations_catalog || {};
+   const enriched = results.map(r => {
+     const probe = spec.probes.find(p => p.id === r.id) || {};
+     const ids = r.pass ? [] : (probe.recommendations_on_fail || []);
+     return { ...r, recommendations: ids.map(id => catalog[id]).filter(Boolean) };
+   });
+ 
+   const adminSkipped = enriched.filter(x => x.admin_stream_disabled).map(x => x.id);
+   const report = {
+     generated_at: new Date().toISOString(),
+     summary: {
+       total: enriched.length,
+       passed: enriched.filter(x => x.pass).length,
+       failed: enriched.filter(x => !x.pass).map(x => x.id),
+       admin_stream_skipped: adminSkipped
+     },
+     probes: enriched
