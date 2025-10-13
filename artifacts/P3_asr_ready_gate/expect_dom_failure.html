@@ -1,7 +1,7 @@
 <!DOCTYPE html><html lang="en"><head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="csrf" content="f84073d3d81f9746446e174e78795e9d">
+  <meta name="csrf" content="66f4be74fb74d24dedf645edc858805b">
   <title>Ask Chip</title>
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
@@ -29,35 +29,35 @@
         <div class="pane-header">
           <h2>Chat</h2>
         </div>
-        <div id="chatMessages" class="chat-window"></div>
+        <div id="chatMessages" class="chat-window"><div data-role="assistant" data-turn-id="91bdf310be0b493f9d2ddae4a4d47e5f" class="msg assistant">Hey User, what outcome are you aiming for today?</div><div data-role="assistant" data-turn-id="9" class="msg assistant">I appreciate the check-in!</div></div>
         <div class="composer">
           <input id="composer" placeholder="Type a message…" style="">
-          <button id="composerSend" disabled="">Send</button>
+          <button id="composerSend">Send</button>
         </div>
       </aside>
 
       <section class="visualizer-pane">
         <div class="status-row">
           <span class="status-label">Status:</span>
-          <span id="statusText">Ready</span>
-        </div>
+          <span id="statusText">Listening…</span>
+        <span id="userTranscriptPreview" class="asr-preview" aria-live="polite" style="display: none;"></span></div>
         <div class="visualizer-shell" role="img" aria-label="Audio visualizer">
           <div class="visualizer-backdrop">
-            <canvas class="visualizer-waveform" role="presentation"></canvas>
+            <canvas class="visualizer-waveform" role="presentation" width="354" height="239"></canvas>
           </div>
         </div>
       </section>
 
       <aside class="suggestions-pane">
         <h4>Suggestions</h4>
-        <ul id="suggestions"></ul>
+        <ul id="suggestions"><button class="chip" type="button">Show install steps</button><button class="chip" type="button">Explain the business value</button></ul>
       </aside>
     </div>
 
     <div class="meeting-toolbar">
       <div class="toolbar-buttons">
         <button id="startButton" class="primary" title="Please complete your profile to continue" disabled="">Start</button>
-        <button id="endButton" disabled="">End</button>
+        <button id="endButton">End</button>
         <span id="stateDot" class="dot dot-ready" title="Ready"></span>
       </div>
     </div>
@@ -100,10 +100,10 @@
   <!-- Scripts -->
   
   <script>
-    window.__askchipAssetVersion = "1760315580";
+    window.__askchipAssetVersion = "1760317169";
   </script>
-  <script type="module" src="/static/js/bootstrap.js?v=1760315580"></script>
-  <script type="module" src="/static/js/auth_gate.js?v=1760315580"></script>
-  <script type="module" src="/static/js/ui_menu.js?v=1760315580"></script>
+  <script type="module" src="/static/js/bootstrap.js?v=1760317169"></script>
+  <script type="module" src="/static/js/auth_gate.js?v=1760317169"></script>
+  <script type="module" src="/static/js/ui_menu.js?v=1760317169"></script>
 
 </body></html>
