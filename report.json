@@ -1,7 +1,7 @@
 {
-  "generated_at": "2025-10-12T21:42:10.077Z",
+  "generated_at": "2025-10-13T00:46:39.084Z",
   "summary": {
-    "total": 12,
+    "total": 13,
     "passed": 2,
     "failed": [
       "P1_greet_dupe_guard",
@@ -13,7 +13,8 @@
       "P9_chips_only_when_needed",
       "P10_persona_governor_on_diagnose",
       "P11_session_goal_persists",
-      "P12_nlu_completeness"
+      "P12_nlu_completeness",
+      "P15_long_help_session"
     ]
   },
   "probes": [
@@ -22,7 +23,8 @@
       "pass": false,
       "findings": [
         "Admin missing 'assistant_end'",
-        "Admin missing 'UtteranceEnd'"
+        "Admin missing 'UtteranceEnd'",
+        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
       ],
       "metrics": {},
       "recommendations": [
@@ -35,7 +37,8 @@
       "pass": false,
       "findings": [
         "Admin missing 'asr:start'",
-        "Fail: admin missing 'asr:start'"
+        "Fail: admin missing 'asr:start'",
+        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
       ],
       "metrics": {},
       "recommendations": [
@@ -47,7 +50,8 @@
       "id": "P3_asr_ready_gate",
       "pass": false,
       "findings": [
-        "Admin missing 'latency_breakdown'"
+        "Admin missing 'latency_breakdown'",
+        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
       ],
       "metrics": {},
       "recommendations": [
@@ -61,7 +65,8 @@
         "Deepgram WS URL not observed",
         "Admin missing 'container=webm/opus'",
         "Admin missing 'containerized=true'",
-        "Fail: admin missing 'containerized=true'"
+        "Fail: admin missing 'containerized=true'",
+        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
       ],
       "metrics": {},
       "recommendations": [
@@ -73,7 +78,8 @@
       "pass": false,
       "findings": [
         "Admin missing 'asr:final'",
-        "Admin missing 'CloseStream ack'"
+        "Admin missing 'CloseStream ack'",
+        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
       ],
       "metrics": {},
       "recommendations": [
@@ -85,7 +91,8 @@
       "pass": false,
       "findings": [
         "Admin missing 'barge_in'",
-        "Admin missing 'tts_pause'"
+        "Admin missing 'tts_pause'",
+        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
       ],
       "metrics": {},
       "recommendations": [
@@ -96,14 +103,18 @@
     {
       "id": "P7_state_debounce",
       "pass": true,
-      "findings": [],
+      "findings": [
+        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+      ],
       "metrics": {},
       "recommendations": []
     },
     {
       "id": "P8_no_assistant_dup_messages",
       "pass": true,
-      "findings": [],
+      "findings": [
+        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+      ],
       "metrics": {},
       "recommendations": []
     },
@@ -114,7 +125,8 @@
         "Admin missing 'nlu'",
         "nlu.needs_clarification expected true, got undefined",
         "nlu.missing should include one of [depth, delivery_pref], got []",
-        "Admin missing 'suggestions_made'"
+        "Admin missing 'suggestions_made'",
+        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
       ],
       "metrics": {},
       "recommendations": [
@@ -126,7 +138,8 @@
       "id": "P10_persona_governor_on_diagnose",
       "pass": false,
       "findings": [
-        "Admin missing 'policy_decision: diagnose'"
+        "Admin missing 'policy_decision: diagnose'",
+        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
       ],
       "metrics": {},
       "recommendations": [
@@ -140,7 +153,8 @@
         "Admin missing 'session_goal'",
         "session_goal.depth expected 'deep_dive', got 'undefined'",
         "session_goal.confirmed missing 'depth'",
-        "Fail: session_goal missing 'depth'"
+        "Fail: session_goal missing 'depth'",
+        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
       ],
       "metrics": {},
       "recommendations": [
@@ -155,11 +169,26 @@
         "No nlu event observed",
         "Fail: nlu missing 'delivery_pref'",
         "Fail: nlu missing 'entities.product'",
-        "Fail: nlu missing 'entities.env'"
+        "Fail: nlu missing 'entities.env'",
+        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
       ],
       "metrics": {},
       "recommendations": [
         "Interpreter must always populate phase, delivery_pref, user_goal, entities; set needs_clarification when unknown."
+      ]
+    },
+    {
+      "id": "P15_long_help_session",
+      "pass": false,
+      "findings": [
+        "Admin missing 'latency_breakdown'",
+        "Admin should NOT include 'error'",
+        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 10000ms"
+      ],
+      "metrics": {},
+      "recommendations": [
+        "Ensure session state persists across multi-minute interactions; verify buffers/reset logic after each user final.",
+        "Emit admin breadcrumbs: latency_breakdown, CloseStream ack, policy_decision, and barge_in events before evaluating regressions."
       ]
     }
   ]

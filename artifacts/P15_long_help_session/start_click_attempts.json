@@ -1,0 +1,264 @@
+[
+  {
+    "ok": false,
+    "selector": "--start-eval",
+    "text": "window.startCall && window.startCall()"
+  },
+  {
+    "ok": false,
+    "error": "locator.click: Timeout 1500ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /^start$/i }).first()\u001b",
+    "selector": "getByRole(button /^start$/i)",
+    "text": "/^start$/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.click: Timeout 1500ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText(/^start$/i).first()\u001b[22m\n\u001b[2m    - locat",
+    "selector": "getByText(/^start$/i)",
+    "text": "/^start$/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /start session/i }).f",
+    "selector": "getByRole(button /start session/i)",
+    "text": "/start session/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText(/start session/i).first() to be visible",
+    "selector": "getByText(/start session/i)",
+    "text": "/start session/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /start call/i }).firs",
+    "selector": "getByRole(button /start call/i)",
+    "text": "/start call/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText(/start call/i).first() to be visible\u001b[2",
+    "selector": "getByText(/start call/i)",
+    "text": "/start call/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /start chat/i }).firs",
+    "selector": "getByRole(button /start chat/i)",
+    "text": "/start chat/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText(/start chat/i).first() to be visible\u001b[2",
+    "selector": "getByText(/start chat/i)",
+    "text": "/start chat/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /begin/i }).first() t",
+    "selector": "getByRole(button /begin/i)",
+    "text": "/begin/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText(/begin/i).first() to be visible\u001b[22m\n",
+    "selector": "getByText(/begin/i)",
+    "text": "/begin/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /join/i }).first() to",
+    "selector": "getByRole(button /join/i)",
+    "text": "/join/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText(/join/i).first() to be visible\u001b[22m\n",
+    "selector": "getByText(/join/i)",
+    "text": "/join/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /connect/i }).first()",
+    "selector": "getByRole(button /connect/i)",
+    "text": "/connect/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText(/connect/i).first() to be visible\u001b[22m\n",
+    "selector": "getByText(/connect/i)",
+    "text": "/connect/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /let's go/i }).first(",
+    "selector": "getByRole(button /let's go/i)",
+    "text": "/let's go/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText(/let's go/i).first() to be visible\u001b[22m",
+    "selector": "getByText(/let's go/i)",
+    "text": "/let's go/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /enable mic/i }).firs",
+    "selector": "getByRole(button /enable mic/i)",
+    "text": "/enable mic/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText(/enable mic/i).first() to be visible\u001b[2",
+    "selector": "getByText(/enable mic/i)",
+    "text": "/enable mic/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /enable microphone/i ",
+    "selector": "getByRole(button /enable microphone/i)",
+    "text": "/enable microphone/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText(/enable microphone/i).first() to be vis",
+    "selector": "getByText(/enable microphone/i)",
+    "text": "/enable microphone/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /talk/i }).first() to",
+    "selector": "getByRole(button /talk/i)",
+    "text": "/talk/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText(/talk/i).first() to be visible\u001b[22m\n",
+    "selector": "getByText(/talk/i)",
+    "text": "/talk/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /call/i }).first() to",
+    "selector": "getByRole(button /call/i)",
+    "text": "/call/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText(/call/i).first() to be visible\u001b[22m\n",
+    "selector": "getByText(/call/i)",
+    "text": "/call/i",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.click: Timeout 1500ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('#startButton').first()\u001b[22m\n\u001b[2m    - loc",
+    "selector": "#startButton",
+    "text": "attr",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-role=\"start-btn\"]').first() to be ",
+    "selector": "[data-role=\"start-btn\"]",
+    "text": "attr",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-testid=\"start\"]').first() to be vi",
+    "selector": "[data-testid=\"start\"]",
+    "text": "attr",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-test=\"start\"]').first() to be visi",
+    "selector": "[data-test=\"start\"]",
+    "text": "attr",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-qa=\"start\"]').first() to be visibl",
+    "selector": "[data-qa=\"start\"]",
+    "text": "attr",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.click: Timeout 1500ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[id*=\"start\"]').first()\u001b[22m\n\u001b[2m    - lo",
+    "selector": "[id*=\"start\"]",
+    "text": "attr",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[class*=\"start\"]').first() to be visible",
+    "selector": "[class*=\"start\"]",
+    "text": "attr",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[aria-label*=\"start\" i]').first() to be ",
+    "selector": "[aria-label*=\"start\" i]",
+    "text": "attr",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[aria-label*=\"join\" i]').first() to be v",
+    "selector": "[aria-label*=\"join\" i]",
+    "text": "attr",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.start').first() to be visible\u001b[22m\n",
+    "selector": ".start",
+    "text": "attr",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.waitFor: Timeout 900ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('button.start').first() to be visible\u001b[22",
+    "selector": "button.start",
+    "text": "attr",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": false,
+    "error": "locator.click: Timeout 1500ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('button').nth(2).first()\u001b[22m\n\u001b[2m    - lo",
+    "selector": "button#2",
+    "text": "Start",
+    "frameUrl": "https://chibot-ui.onrender.com/"
+  },
+  {
+    "ok": true,
+    "selector": "evaluate:text",
+    "text": "^start$"
+  }
+]
