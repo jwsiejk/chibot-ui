@@ -9,6 +9,247 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
 
+function readUInt32LE(buf, offset) { return buf.readUInt32LE(offset); }
+function readUInt16LE(buf, offset) { return buf.readUInt16LE(offset); }
+
+function decodeWav(buffer) {
+  if (buffer.toString('ascii', 0, 4) !== 'RIFF') throw new Error('Invalid WAV: missing RIFF header');
+  if (buffer.toString('ascii', 8, 12) !== 'WAVE') throw new Error('Invalid WAV: missing WAVE header');
+
+  let offset = 12;
+  let audioFormat = null;
+  let numChannels = null;
+  let sampleRate = null;
+  let bitsPerSample = null;
+  let dataStart = null;
+  let dataLength = null;
+
+  while (offset + 8 <= buffer.length) {
+    const chunkId = buffer.toString('ascii', offset, offset + 4);
+    const chunkSize = readUInt32LE(buffer, offset + 4);
+    const chunkDataStart = offset + 8;
+    if (chunkId === 'fmt ') {
+      audioFormat = readUInt16LE(buffer, chunkDataStart);
+      numChannels = readUInt16LE(buffer, chunkDataStart + 2);
+      sampleRate = readUInt32LE(buffer, chunkDataStart + 4);
+      bitsPerSample = readUInt16LE(buffer, chunkDataStart + 14);
+    } else if (chunkId === 'data') {
+      dataStart = chunkDataStart;
+      dataLength = chunkSize;
+      break;
+    }
+    offset = chunkDataStart + chunkSize + (chunkSize % 2);
+  }
+
+  if (audioFormat !== 1) throw new Error('Only PCM WAV files are supported');
+  if (!numChannels || !sampleRate || !bitsPerSample) throw new Error('Malformed WAV header');
+  if (dataStart == null || dataLength == null) throw new Error('WAV missing data chunk');
+
+  const bytesPerSample = bitsPerSample / 8;
+  if (![1, 2, 3, 4].includes(bytesPerSample)) throw new Error(`Unsupported sample size: ${bitsPerSample}`);
+  if (bitsPerSample !== 16 && bitsPerSample !== 32) throw new Error('Only 16-bit or 32-bit PCM supported');
+
+  const sampleCount = Math.floor(dataLength / bytesPerSample);
+  const samples = new Float32Array(sampleCount);
+  for (let i = 0; i < sampleCount; i++) {
+    const byteOffset = dataStart + i * bytesPerSample;
+    let value;
+    if (bitsPerSample === 16) {
+      value = buffer.readInt16LE(byteOffset) / 32768;
+    } else {
+      value = buffer.readInt32LE(byteOffset) / 2147483648;
+    }
+    samples[i] = Math.max(-1, Math.min(1, value));
+  }
+
+  return { samples, sampleRate, channels: numChannels };
+}
+
+function parseSilenceDuration(entry) {
+  if (entry == null) return null;
+  if (typeof entry === 'number') return entry;
+  if (typeof entry === 'object') {
+    if (typeof entry.silence_ms === 'number') return entry.silence_ms;
+    if (typeof entry.wait_ms === 'number') return entry.wait_ms;
+    if (typeof entry.duration_ms === 'number') return entry.duration_ms;
+  }
+  if (typeof entry !== 'string') return null;
+  const str = entry.trim().toLowerCase();
+  const match = str.match(/^(silence|wait|pause)[:_]?([0-9]+(?:\.[0-9]+)?)(ms|s|sec|seconds)?$/);
+  if (!match) return null;
+  const value = parseFloat(match[2]);
+  const unit = match[3] || 'ms';
+  if (Number.isNaN(value)) return null;
+  if (unit.startsWith('s') && !unit.startsWith('ms')) return value * 1000;
+  return value;
+}
+
+function normalizeInputs(inputs, audioDir) {
+  const items = Array.isArray(inputs) && inputs.length ? inputs.slice() : ['sample_sentence.wav'];
+  const timeline = [];
+  const audioFiles = [];
+  let defaultSampleRate = null;
+  let defaultChannels = null;
+  let audioClipCount = 0;
+  let totalDurationMs = 0;
+
+  const pushSilence = (durationMs, sampleRateHint, channelHint) => {
+    const duration = Math.max(0, Number(durationMs || 0));
+    if (!duration) return;
+    const sr = sampleRateHint || defaultSampleRate || 16000;
+    const ch = channelHint || defaultChannels || 1;
+    timeline.push({ kind: 'silence', durationMs: duration, sampleRate: sr, channels: ch });
+    totalDurationMs += duration;
+  };
+
+  for (const entry of items) {
+    if (typeof entry === 'object' && entry && entry.file && typeof entry.file === 'string' && entry.file.endsWith('.wav')) {
+      const filePath = path.resolve(path.join(audioDir, entry.file));
+      if (!fs.existsSync(filePath)) throw new Error(`Audio fixture missing: ${entry.file}`);
+      const clip = decodeWav(fs.readFileSync(filePath));
+      timeline.push({ kind: 'audio', sampleRate: clip.sampleRate, channels: clip.channels, samples: Array.from(clip.samples) });
+      audioFiles.push(filePath);
+      defaultSampleRate = defaultSampleRate || clip.sampleRate;
+      defaultChannels = defaultChannels || clip.channels;
+      audioClipCount += 1;
+      const frames = clip.samples.length / clip.channels;
+      totalDurationMs += (frames / clip.sampleRate) * 1000;
+      const extraSilence = entry.silence_after_ms ?? entry.silenceAfterMs ?? entry.pause_after_ms ?? entry.pauseAfterMs;
+      if (extraSilence) pushSilence(extraSilence, clip.sampleRate, clip.channels);
+      continue;
+    }
+    if (typeof entry === 'string' && entry.endsWith('.wav')) {
+      const filePath = path.resolve(path.join(audioDir, entry));
+      if (!fs.existsSync(filePath)) throw new Error(`Audio fixture missing: ${entry}`);
+      const clip = decodeWav(fs.readFileSync(filePath));
+      timeline.push({ kind: 'audio', sampleRate: clip.sampleRate, channels: clip.channels, samples: Array.from(clip.samples) });
+      audioFiles.push(filePath);
+      defaultSampleRate = defaultSampleRate || clip.sampleRate;
+      defaultChannels = defaultChannels || clip.channels;
+      audioClipCount += 1;
+      const frames = clip.samples.length / clip.channels;
+      totalDurationMs += (frames / clip.sampleRate) * 1000;
+      continue;
+    }
+    const silence = parseSilenceDuration(entry);
+    if (silence != null) {
+      pushSilence(silence);
+      continue;
+    }
+    throw new Error(`Unsupported probe input: ${JSON.stringify(entry)}`);
+  }
+
+  if (!audioClipCount) throw new Error('At least one audio input is required');
+
+  return {
+    inputs: items,
+    timeline,
+    audioFiles,
+    defaultSampleRate: defaultSampleRate || 16000,
+    defaultChannels: defaultChannels || 1,
+    audioClipCount,
+    totalDurationMs
+  };
+}
+
+async function installCustomMicrophone(context, spec) {
+  if (!spec || !spec.timeline?.length) return;
+  await context.addInitScript(({ timeline, defaultSampleRate, defaultChannels }) => {
+    if (typeof window === 'undefined') return;
+    const TrackGenerator = window.MediaStreamTrackGenerator;
+    const AudioDataCtor = window.AudioData;
+    if (typeof TrackGenerator !== 'function' || typeof AudioDataCtor !== 'function') {
+      console.warn('Custom microphone unavailable: MediaStreamTrackGenerator/AudioData missing');
+      return;
+    }
+
+    const baseTimeline = Array.isArray(timeline) ? timeline : [];
+    const fallbackSampleRate = defaultSampleRate || 16000;
+    const fallbackChannels = defaultChannels || 1;
+
+    const originalGetUserMedia = window.navigator?.mediaDevices?.getUserMedia?.bind(window.navigator.mediaDevices);
+    if (!window.navigator.mediaDevices) window.navigator.mediaDevices = {};
+
+    const runTimeline = async (writer) => {
+      let timestampUs = 0;
+      try {
+        for (const event of baseTimeline) {
+          const sr = event.sampleRate || fallbackSampleRate;
+          const ch = event.channels || fallbackChannels;
+          if (event.kind === 'audio') {
+            const data = new Float32Array(event.samples);
+            const frames = data.length / ch;
+            if (frames) {
+              const audioData = new AudioDataCtor({
+                format: 'f32',
+                sampleRate: sr,
+                numberOfChannels: ch,
+                numberOfFrames: frames,
+                timestamp: timestampUs,
+                data: data.buffer
+              });
+              await writer.write(audioData);
+              audioData.close();
+              timestampUs += Math.round((frames / sr) * 1e6);
+            }
+          } else if (event.kind === 'silence') {
+            const frames = Math.max(0, Math.round((Math.max(0, event.durationMs || 0) / 1000) * sr));
+            if (frames) {
+              const silent = new Float32Array(frames * ch);
+              const audioData = new AudioDataCtor({
+                format: 'f32',
+                sampleRate: sr,
+                numberOfChannels: ch,
+                numberOfFrames: frames,
+                timestamp: timestampUs,
+                data: silent.buffer
+              });
+              await writer.write(audioData);
+              audioData.close();
+              timestampUs += Math.round((frames / sr) * 1e6);
+            }
+          }
+        }
+      } finally {
+        try { await writer.close(); } catch {}
+      }
+    };
+
+    const createAudioStream = () => {
+      const generator = new TrackGenerator({ kind: 'audio' });
+      const writer = generator.writable.getWriter();
+      runTimeline(writer).catch(err => console.error('Custom microphone timeline failed', err));
+      return generator;
+    };
+
+    window.navigator.mediaDevices.getUserMedia = async (constraints = {}) => {
+      const wantsAudio = !!constraints.audio;
+      const wantsVideo = !!constraints.video;
+      if (!wantsAudio) {
+        if (originalGetUserMedia) return originalGetUserMedia(constraints);
+        return new MediaStream();
+      }
+
+      let videoStream = null;
+      if (wantsVideo && originalGetUserMedia) {
+        try {
+          const clone = { ...constraints, audio: false };
+          videoStream = await originalGetUserMedia(clone);
+        } catch (err) {
+          console.warn('Video capture via original getUserMedia failed', err);
+        }
+      }
+
+      const generator = createAudioStream();
+      const stream = new MediaStream([generator]);
+      if (videoStream) {
+        for (const track of videoStream.getVideoTracks()) stream.addTrack(track);
+      }
+      return stream;
+    };
+  }, { timeline: spec.timeline, defaultSampleRate: spec.defaultSampleRate, defaultChannels: spec.defaultChannels });
+}
+
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 function ensureDir(p){ fs.mkdirSync(p,{recursive:true}); }
 function readJSON(p){ return JSON.parse(fs.readFileSync(p,'utf-8')); }
@@ -429,23 +670,37 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls){
 }
 
 async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval){
-  const audioName = (probe.inputs && probe.inputs.find(x => x.endsWith('.wav'))) || 'sample_sentence.wav';
-  const fakeAudio = path.resolve(path.join(audioDir, audioName));
-  if (!fs.existsSync(fakeAudio)) {
-    return { id: probe.id, pass: false, findings: [`Audio fixture missing: ${audioName}`], metrics: {} };
+  let normalized;
+  try {
+    normalized = normalizeInputs(probe.inputs, audioDir);
+  } catch (err) {
+    return { id: probe.id, pass: false, findings: [err?.message || String(err)], metrics: {} };
+  }
+
+  const useCustomMic = normalized.inputs.length > 1;
+  const firstAudioPath = normalized.audioFiles[0];
+  if (!firstAudioPath) {
+    return { id: probe.id, pass: false, findings: ['No audio fixtures found for probe'], metrics: {} };
+  }
+
+  const launchArgs = [
+    '--use-fake-device-for-media-stream',
+    '--autoplay-policy=no-user-gesture-required'
+  ];
+  if (!useCustomMic) {
+    launchArgs.push(`--use-file-for-fake-audio-capture=${firstAudioPath}`);
   }
 
   const browser = await chromium.launch({
     headless: false,
     channel: useChrome ? 'chrome' : undefined,
-    args: [
-      '--use-fake-device-for-media-stream',
-      `--use-file-for-fake-audio-capture=${fakeAudio}`,
-      '--autoplay-policy=no-user-gesture-required'
-    ]
+    args: launchArgs
   });
 
   const context = await browser.newContext();
+  if (useCustomMic) {
+    await installCustomMicrophone(context, normalized);
+  }
   await context.grantPermissions(['microphone'], { origin: baseUrl });
   const page = await context.newPage();
 
@@ -495,18 +750,16 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
   
   // Let the probe’s audio play/flow
   const ua = (probe.user_action || '').toLowerCase();
+  const playbackDurationMs = Math.max(0, normalized.totalDurationMs || 0);
   if (ua.includes('do not speak')) {
-    await sleep(3000);
+    await sleep(Math.max(3000, playbackDurationMs));
   } else if (ua.includes('two short back-to-back turns')) {
-    await sleep(2200);
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await clickStartWithOverrides(page, startOverride, startEval, attempts);
-    await clickStartAnywhere(page, attempts);
-    await sleep(2200);
+    const waitMs = Math.max(playbackDurationMs + 1200, 2600);
+    await sleep(waitMs);
   } else if (ua.includes('start talking while chip is speaking')) {
-    await sleep(1500);
+    await sleep(Math.max(1500, Math.min(playbackDurationMs + 500, 2500)));
   } else {
-    await sleep(4200);
+    await sleep(Math.max(4200, playbackDurationMs + 800));
   }
 
   // Pull the admin logs after we've allowed the scripted audio to play out.
