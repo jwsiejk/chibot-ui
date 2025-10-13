@@ -327,6 +327,9 @@ function wireUI(){
   const composer = document.getElementById('composer');
 
   if (startBtn) startBtn.addEventListener('click', startOnce);
+  if (typeof window.startCall !== 'function') {
+    window.startCall = () => startOnce();
+  }
   if (endBtn)   endBtn.addEventListener('click', () => {
     try { disarmVAD(); } catch {}
     try { Visualizer.stop({ reset: true }); } catch {}
