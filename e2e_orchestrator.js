@@ -459,9 +459,8 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
 
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
 
-  // Start admin collector early
-  const adminUrlEarly = baseUrl.replace(/\/$/, '') + '/api/v1/admin/logs';
-  await startAdminCollector(page, adminUrlEarly);
+  // Start admin collector before kicking off the call so we capture the whole exchange.
+  await startAdminCollector(page, adminUrl);
 
 
   const dir = path.join(artifactsDir, probe.id); ensureDir(dir);
@@ -483,6 +482,7 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
       if (!dumpUI) await dumpUI(page, dir);
       await page.screenshot({ path: path.join(dir, 'start_not_found.png'), fullPage: true });
       fs.writeFileSync(path.join(dir, 'start_click_attempts.json'), JSON.stringify(attempts,null,2));
+      try { await stopAdminCollector(page); } catch {}
       await context.close(); await browser.close();
       return { id: probe.id, pass: false, findings: ['Start control not found/clickable'], metrics: {} };
     }
@@ -492,11 +492,7 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
 
   // Let any navigation settle
   try { await page.waitForLoadState('networkidle', { timeout: 4000 }); } catch {}
-
-  // Start SSE AFTER Start
-  let adminLogs = await harvestAdminLogs(page);
-  await stopAdminCollector(page);
-
+  
   // Let the probe’s audio play/flow
   const ua = (probe.user_action || '').toLowerCase();
   if (ua.includes('do not speak')) {
@@ -511,6 +507,16 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
     await sleep(1500);
   } else {
     await sleep(4200);
+  }
+
+  // Pull the admin logs after we've allowed the scripted audio to play out.
+  let adminLogs = [];
+  try {
+    adminLogs = await harvestAdminLogs(page);
+  } catch (err) {
+    adminLogs = [{ event: 'collector_error', message: err?.message || String(err) }];
+  } finally {
+    try { await stopAdminCollector(page); } catch {}
   }
 
   // Artifacts
