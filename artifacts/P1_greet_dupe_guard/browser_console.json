@@ -1,19 +1,19 @@
 [
   "[AskChip] bootstrap loaded",
   "Failed to load resource: the server responded with a status of 403 ()",
-  "Failed to load resource: the server responded with a status of 403 ()",
-  "[ws] openWS build {module: https://chibot-ui.onrender.com/static/js/ws.js?v=1760330418, version: 1760330418, flags: undefined, reconnectEnabled: true, sessionStarted: false}",
+  "[ws] openWS build {module: https://chibot-ui.onrender.com/static/js/ws.js?v=1760332138, version: 1760332138, flags: undefined, reconnectEnabled: true, sessionStarted: false}",
   "[ws] openWS options= {} reconnect= true",
+  "Failed to load resource: the server responded with a status of 403 ()",
   "[bootstrap] startOnce sending greet configure",
   "[bootstrap] startOnce greet configure sent — recorder setup will follow",
-  "[WS→UI] {\"type\":\"ws_conn_open\",\"sid\":\"b40c4929-3eb4-4c09-a5db-7c7d0fc71325\",\"conn_id\":\"3a12fc5c3ef14dd6b5dff16ceba20083\",\"client_ip\":\"170.85.73.7\",\"path\":\"/ws/v1/chat\",\"query_string\":\"session_id=b40c4929-3eb4-4c09-a5db-7c7d0fc71325\",\"session_id\":\"b40c4929-3eb4-4c09-a5db-7c7d0fc71325\"}",
-  "[WS→UI] {\"type\":\"ready\",\"session_id\":\"b40c4929-3eb4-4c09-a5db-7c7d0fc71325\"}",
+  "[WS→UI] {\"type\":\"ws_conn_open\",\"sid\":\"7b73abac-4ce5-4178-a4ce-ab3d929629ae\",\"conn_id\":\"22024df315784ac8992b2d469b44841a\",\"client_ip\":\"170.85.73.7\",\"path\":\"/ws/v1/chat\",\"query_string\":\"session_id=7b73abac-4ce5-4178-a4ce-ab3d929629ae\",\"session_id\":\"7b73abac-4ce5-4178-a4ce-ab3d929629ae\"}",
+  "[WS→UI] {\"type\":\"ready\",\"session_id\":\"7b73abac-4ce5-4178-a4ce-ab3d929629ae\"}",
   "[voice] mic_device_selected {event: mic_device_selected, label: Fake Default Audio Input, sampleRate: 48000, channels: 1}",
   "[bootstrap] startOnce mic initialized — about to arm VAD for voice turns",
   "[voice] mic_start {event: mic_start, sampleRate: 48000, pollMs: 33}",
   "[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state",
-  "[WS→UI] {\"type\":\"Configure\",\"sid\":\"b40c4929-3eb4-4c09-a5db-7c7d0fc71325\",\"session_id\":\"b40c4929-3eb4-4c09-a5db-7c7d0fc71325\"}",
-  "[WS→UI] {\"type\":\"greet:reset\",\"route\":\"/ws/v1/chat\",\"label\":\"greet:reset\",\"session_id\":\"b40c4929-3eb4-4c09-a5db-7c7d0fc71325\",\"sid\":\"b40c4929-3eb4-4c09-a5db-7c7d0fc71325\"}",
-  "[WS→UI] {\"type\":\"session_goal\",\"phase\":\"clarify\",\"depth\":\"normal\",\"delivery_pref\":\"explain\",\"working_intent\":\"greet\",\"entities\":{\"products\":[],\"keywords\":[]},\"confirmed\":[\"phase\",\"depth\",\"delivery_pref\",\"working_intent\"],\"event\":\"session_goal\",\"session_id\":\"b40c4929-3eb4-4c09-a5db-7c7d0fc71325\",\"sid\":\"b40c4929-3eb4-4c09-a5db-7c7d0fc71325\"}",
-  "Failed to load resource: the server responded with a status of 405 ()"
+  "[WS→UI] {\"type\":\"Configure\",\"sid\":\"7b73abac-4ce5-4178-a4ce-ab3d929629ae\",\"session_id\":\"7b73abac-4ce5-4178-a4ce-ab3d929629ae\"}",
+  "Failed to load resource: the server responded with a status of 405 ()",
+  "[WS→UI] {\"type\":\"greet:reset\",\"route\":\"/ws/v1/chat\",\"label\":\"greet:reset\",\"session_id\":\"7b73abac-4ce5-4178-a4ce-ab3d929629ae\",\"sid\":\"7b73abac-4ce5-4178-a4ce-ab3d929629ae\"}",
+  "[WS→UI] {\"type\":\"session_goal\",\"phase\":\"clarify\",\"depth\":\"normal\",\"delivery_pref\":\"explain\",\"working_intent\":\"greet\",\"entities\":{\"products\":[],\"keywords\":[]},\"confirmed\":[\"phase\",\"depth\",\"delivery_pref\",\"working_intent\"],\"event\":\"session_goal\",\"session_id\":\"7b73abac-4ce5-4178-a4ce-ab3d929629ae\",\"sid\":\"7b73abac-4ce5-4178-a4ce-ab3d929629ae\"}"
 ]

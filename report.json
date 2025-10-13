@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-10-13T04:44:44.928Z",
+  "generated_at": "2025-10-13T05:14:28.293Z",
   "summary": {
     "total": 13,
     "passed": 1,
@@ -46,8 +46,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "b40c4929-3eb4-4c09-a5db-7c7d0fc71325",
-              "sid": "b40c4929-3eb4-4c09-a5db-7c7d0fc71325"
+              "session_id": "7b73abac-4ce5-4178-a4ce-ab3d929629ae",
+              "sid": "7b73abac-4ce5-4178-a4ce-ab3d929629ae"
             }
           ]
         }
@@ -75,8 +75,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "75d58fced58b42a989d33c8aaf5c612d",
-              "text": "Hey User, what would you like to accomplish today?",
+              "turn_id": "2d5c702aed5f45b5b1996cf9735b00cc",
+              "text": "Hey User, what's the goal for this session?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -102,7 +102,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "75d58fced58b42a989d33c8aaf5c612d",
+              "turn_id": "2d5c702aed5f45b5b1996cf9735b00cc",
               "items": [
                 {
                   "text": "Send me the email"
@@ -137,8 +137,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "5aee0c45-b250-4ae2-8143-c74d14197ab1",
-              "sid": "5aee0c45-b250-4ae2-8143-c74d14197ab1"
+              "session_id": "32808e6b-30fc-4a0b-bbfb-0e3837f64582",
+              "sid": "32808e6b-30fc-4a0b-bbfb-0e3837f64582"
             }
           ]
         }
@@ -166,7 +166,7 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "7f5d3b2aa36848b7a813f3a231eafa7d",
+              "turn_id": "00c9ddcbf58540579ad569b26035ed0b",
               "text": "Hey User, what do you want to get done today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -193,7 +193,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "7f5d3b2aa36848b7a813f3a231eafa7d",
+              "turn_id": "00c9ddcbf58540579ad569b26035ed0b",
               "items": [
                 {
                   "text": "Send me the email"
@@ -228,8 +228,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "5019d528-c70e-4be3-87fd-97422f106f27",
-              "sid": "5019d528-c70e-4be3-87fd-97422f106f27"
+              "session_id": "268d8efd-1aef-43f7-a7fd-0578006a6cd1",
+              "sid": "268d8efd-1aef-43f7-a7fd-0578006a6cd1"
             }
           ]
         }
@@ -256,358 +256,7 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "88cf7e006d6540f49b9a5001dff1459b",
-              "text": "Hey User, what do you want to get done today?",
-              "chunk_count": 1,
-              "assistant_end_count": 1,
-              "policy_chips": [
-                "Send me the email",
-                "Walk me through it live"
-              ],
-              "suggestions": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ],
-          "suggestions": [
-            {
-              "type": "suggestions",
-              "turn_id": "88cf7e006d6540f49b9a5001dff1459b",
-              "items": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ],
-          "session_goal_hints": [
-            {
-              "type": "session_goal",
-              "phase": "clarify",
-              "depth": "normal",
-              "delivery_pref": "explain",
-              "working_intent": "greet",
-              "entities": {
-                "products": [],
-                "keywords": []
-              },
-              "confirmed": [
-                "phase",
-                "depth",
-                "delivery_pref",
-                "working_intent"
-              ],
-              "event": "session_goal",
-              "session_id": "f93bd046-17ae-4c66-afd6-8af7bcf2cac5",
-              "sid": "f93bd046-17ae-4c66-afd6-8af7bcf2cac5"
-            }
-          ]
-        }
-      },
-      "admin_stream_disabled": false,
-      "admin_capture_meta": {
-        "error": "eventsource_error",
-        "captureState": "active"
-      },
-      "recommendations": [
-        "For WebM/Opus, omit encoding/sample_rate/channels in Deepgram URL."
-      ]
-    },
-    {
-      "id": "P5_close_timeout_race",
-      "pass": false,
-      "findings": [
-        "WS console missing 'asr:final'",
-        "WS console missing 'CloseStream ack'"
-      ],
-      "metrics": {
-        "browser_console_ws": {
-          "assistant_frames": [
-            {
-              "turn_id": "58fbe22911fe471180536298f4cf5d33",
-              "text": "Hey User, what would you like to accomplish today?",
-              "chunk_count": 1,
-              "assistant_end_count": 1,
-              "policy_chips": [
-                "Send me the email",
-                "Walk me through it live"
-              ],
-              "suggestions": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ],
-          "suggestions": [
-            {
-              "type": "suggestions",
-              "turn_id": "58fbe22911fe471180536298f4cf5d33",
-              "items": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ],
-          "session_goal_hints": [
-            {
-              "type": "session_goal",
-              "phase": "clarify",
-              "depth": "normal",
-              "delivery_pref": "explain",
-              "working_intent": "greet",
-              "entities": {
-                "products": [],
-                "keywords": []
-              },
-              "confirmed": [
-                "phase",
-                "depth",
-                "delivery_pref",
-                "working_intent"
-              ],
-              "event": "session_goal",
-              "session_id": "a5490c17-bbff-413c-9893-013a6e889b1e",
-              "sid": "a5490c17-bbff-413c-9893-013a6e889b1e"
-            }
-          ]
-        }
-      },
-      "admin_stream_disabled": false,
-      "admin_capture_meta": {
-        "error": "eventsource_error",
-        "captureState": "active"
-      },
-      "recommendations": [
-        "Cancel 'wait for final' watchdog on either asr:final or CloseStream ack."
-      ]
-    },
-    {
-      "id": "P6_barge_in_pauses_tts",
-      "pass": false,
-      "findings": [
-        "WS console missing 'barge_in'",
-        "WS console missing 'tts_pause'",
-        "WS latency 'tts_pause_after_vad' unavailable",
-        "Fail: WS latency 'tts_pause_after_vad' unavailable"
-      ],
-      "metrics": {
-        "browser_console_ws": {
-          "assistant_frames": [
-            {
-              "turn_id": "96477ed717534aadbb7ff6a798811d83",
-              "text": "Hey User, what's the goal for this session?",
-              "chunk_count": 1,
-              "assistant_end_count": 1,
-              "policy_chips": [
-                "Send me the email",
-                "Walk me through it live"
-              ],
-              "suggestions": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ],
-          "suggestions": [
-            {
-              "type": "suggestions",
-              "turn_id": "96477ed717534aadbb7ff6a798811d83",
-              "items": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ],
-          "session_goal_hints": [
-            {
-              "type": "session_goal",
-              "phase": "clarify",
-              "depth": "normal",
-              "delivery_pref": "explain",
-              "working_intent": "greet",
-              "entities": {
-                "products": [],
-                "keywords": []
-              },
-              "confirmed": [
-                "phase",
-                "depth",
-                "delivery_pref",
-                "working_intent"
-              ],
-              "event": "session_goal",
-              "session_id": "a2e57492-a2d9-439f-a2c6-9bd43724be6e",
-              "sid": "a2e57492-a2d9-439f-a2c6-9bd43724be6e"
-            }
-          ]
-        }
-      },
-      "admin_stream_disabled": false,
-      "admin_capture_meta": {
-        "error": "eventsource_error",
-        "captureState": "active"
-      },
-      "recommendations": [
-        "Pause TTS on first VAD hit; confirm ~420ms; resume/commit accordingly.",
-        "Increase echo-aware VAD threshold during TTS to avoid false triggers."
-      ]
-    },
-    {
-      "id": "P7_state_debounce",
-      "pass": false,
-      "findings": [
-        "WS state events missing for spam check"
-      ],
-      "metrics": {
-        "browser_console_ws": {
-          "assistant_frames": [
-            {
-              "turn_id": "cb77b71791ae422989c157f55f9e896e",
-              "text": "Hey User, what should we tackle first?",
-              "chunk_count": 1,
-              "assistant_end_count": 1,
-              "policy_chips": [
-                "Send me the email",
-                "Walk me through it live"
-              ],
-              "suggestions": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ],
-          "suggestions": [
-            {
-              "type": "suggestions",
-              "turn_id": "cb77b71791ae422989c157f55f9e896e",
-              "items": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ],
-          "session_goal_hints": [
-            {
-              "type": "session_goal",
-              "phase": "clarify",
-              "depth": "normal",
-              "delivery_pref": "explain",
-              "working_intent": "greet",
-              "entities": {
-                "products": [],
-                "keywords": []
-              },
-              "confirmed": [
-                "phase",
-                "depth",
-                "delivery_pref",
-                "working_intent"
-              ],
-              "event": "session_goal",
-              "session_id": "42b45f41-256c-4193-a25d-a8a4e0727ffd",
-              "sid": "42b45f41-256c-4193-a25d-a8a4e0727ffd"
-            }
-          ]
-        }
-      },
-      "admin_stream_disabled": false,
-      "admin_capture_meta": {
-        "error": "eventsource_error",
-        "captureState": "active"
-      },
-      "recommendations": [
-        "Debounce identical state emissions for 500ms to prevent spam."
-      ]
-    },
-    {
-      "id": "P8_no_assistant_dup_messages",
-      "pass": true,
-      "findings": [],
-      "metrics": {
-        "browser_console_ws": {
-          "assistant_frames": [
-            {
-              "turn_id": "9c57444d81234a2982ba4a3cb0498fc8",
+              "turn_id": "4157ec32b35945e1aecd65cdc1b47aec",
               "text": "Hey User, what outcome are you aiming for today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -634,7 +283,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "9c57444d81234a2982ba4a3cb0498fc8",
+              "turn_id": "4157ec32b35945e1aecd65cdc1b47aec",
               "items": [
                 {
                   "text": "Send me the email"
@@ -669,8 +318,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "1b63ba02-fd80-46f3-a4ba-0a0e869a58ff",
-              "sid": "1b63ba02-fd80-46f3-a4ba-0a0e869a58ff"
+              "session_id": "ac030f35-0b9f-408d-844a-7a989e7b7b07",
+              "sid": "ac030f35-0b9f-408d-844a-7a989e7b7b07"
             }
           ]
         }
@@ -680,22 +329,22 @@
         "error": "eventsource_error",
         "captureState": "active"
       },
-      "recommendations": []
+      "recommendations": [
+        "For WebM/Opus, omit encoding/sample_rate/channels in Deepgram URL."
+      ]
     },
     {
-      "id": "P9_chips_only_when_needed",
+      "id": "P5_close_timeout_race",
       "pass": false,
       "findings": [
-        "WS nlu.needs_clarification expected true, got undefined",
-        "WS nlu.missing should include one of [depth, delivery_pref], got []",
-        "WS chips count 4 > 3",
-        "Fail: WS chips 4 > 3"
+        "WS console missing 'asr:final'",
+        "WS console missing 'CloseStream ack'"
       ],
       "metrics": {
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "4c2c18fd93234fb997911d9e246a5b71",
+              "turn_id": "dd97897f25e34ead957f1a18a815c403",
               "text": "Hey User, what's the goal for this session?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -722,7 +371,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "4c2c18fd93234fb997911d9e246a5b71",
+              "turn_id": "dd97897f25e34ead957f1a18a815c403",
               "items": [
                 {
                   "text": "Send me the email"
@@ -757,8 +406,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "83236bfb-9444-42c7-86c3-88c39655c1bb",
-              "sid": "83236bfb-9444-42c7-86c3-88c39655c1bb"
+              "session_id": "7eca6bc9-f9ba-4e58-8568-3c7fcb009ac0",
+              "sid": "7eca6bc9-f9ba-4e58-8568-3c7fcb009ac0"
             }
           ]
         }
@@ -769,21 +418,111 @@
         "captureState": "active"
       },
       "recommendations": [
-        "Generate chips strictly from nlu.missing (depth/delivery/phase).",
-        "Respect chips_max and chips_word_max from DB config."
+        "Cancel 'wait for final' watchdog on either asr:final or CloseStream ack."
       ]
     },
     {
-      "id": "P10_persona_governor_on_diagnose",
+      "id": "P6_barge_in_pauses_tts",
       "pass": false,
       "findings": [
-        "WS console missing 'policy_decision: diagnose'"
+        "WS console missing 'barge_in'",
+        "WS console missing 'tts_pause'",
+        "WS latency 'tts_pause_after_vad' unavailable",
+        "Fail: WS latency 'tts_pause_after_vad' unavailable"
       ],
       "metrics": {
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "20bc2d89f8e84c2d850111822886311a",
+              "turn_id": "3c3fbc0e6f7c49f9b40e22ee45d24117",
+              "text": "Hey User, what should we tackle first?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "3c3fbc0e6f7c49f9b40e22ee45d24117",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "43742d6d-92f5-455d-ab43-9258ce3326a0",
+              "sid": "43742d6d-92f5-455d-ab43-9258ce3326a0"
+            }
+          ]
+        }
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
+      "recommendations": [
+        "Pause TTS on first VAD hit; confirm ~420ms; resume/commit accordingly.",
+        "Increase echo-aware VAD threshold during TTS to avoid false triggers."
+      ]
+    },
+    {
+      "id": "P7_state_debounce",
+      "pass": false,
+      "findings": [
+        "WS state events missing for spam check"
+      ],
+      "metrics": {
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "c8cd6dc689f44708a4a808ade26c762d",
               "text": "Hey User, what would you like to accomplish today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -810,7 +549,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "20bc2d89f8e84c2d850111822886311a",
+              "turn_id": "c8cd6dc689f44708a4a808ade26c762d",
               "items": [
                 {
                   "text": "Send me the email"
@@ -845,8 +584,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "a0d28921-a03e-469a-8b98-c6cbfe8c13d6",
-              "sid": "a0d28921-a03e-469a-8b98-c6cbfe8c13d6"
+              "session_id": "ecc8f0d2-9cfe-450d-b8c3-bfb06aa9047c",
+              "sid": "ecc8f0d2-9cfe-450d-b8c3-bfb06aa9047c"
             }
           ]
         }
@@ -857,20 +596,106 @@
         "captureState": "active"
       },
       "recommendations": [
-        "Persona composer should skip on strategy=diagnose or urgency=high."
+        "Debounce identical state emissions for 500ms to prevent spam."
       ]
     },
     {
-      "id": "P11_session_goal_persists",
+      "id": "P8_no_assistant_dup_messages",
+      "pass": true,
+      "findings": [],
+      "metrics": {
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "09a833a15bed45a0b55dacb7bd23f764",
+              "text": "Hey User, what do you want to get done today?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "09a833a15bed45a0b55dacb7bd23f764",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "7b04f8f3-067c-41ce-96d5-0306bd131b33",
+              "sid": "7b04f8f3-067c-41ce-96d5-0306bd131b33"
+            }
+          ]
+        }
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
+      "recommendations": []
+    },
+    {
+      "id": "P9_chips_only_when_needed",
       "pass": false,
       "findings": [
-        "session_goal.depth expected 'deep_dive', got 'normal'"
+        "WS nlu.needs_clarification expected true, got undefined",
+        "WS nlu.missing should include one of [depth, delivery_pref], got []",
+        "WS chips count 4 > 3",
+        "Fail: WS chips 4 > 3"
       ],
       "metrics": {
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "8f8233baaba8470faa1e7e9b78c1cf12",
+              "turn_id": "4f9c351ebabf448d90688a5be0875268",
               "text": "Hey User, what's the goal for this session?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -897,7 +722,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "8f8233baaba8470faa1e7e9b78c1cf12",
+              "turn_id": "4f9c351ebabf448d90688a5be0875268",
               "items": [
                 {
                   "text": "Send me the email"
@@ -932,8 +757,183 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "3e486bb2-c34e-4c0b-bea0-7a0339db7fe0",
-              "sid": "3e486bb2-c34e-4c0b-bea0-7a0339db7fe0"
+              "session_id": "9655d299-251e-4658-9e3b-d26fe29265f4",
+              "sid": "9655d299-251e-4658-9e3b-d26fe29265f4"
+            }
+          ]
+        }
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
+      "recommendations": [
+        "Generate chips strictly from nlu.missing (depth/delivery/phase).",
+        "Respect chips_max and chips_word_max from DB config."
+      ]
+    },
+    {
+      "id": "P10_persona_governor_on_diagnose",
+      "pass": false,
+      "findings": [
+        "WS console missing 'policy_decision: diagnose'"
+      ],
+      "metrics": {
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "718470cd70d84a508f02317a9c3ba4b4",
+              "text": "Hey User, what do you want to get done today?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "718470cd70d84a508f02317a9c3ba4b4",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "cdc0b03c-eb57-4e68-9271-76e887894699",
+              "sid": "cdc0b03c-eb57-4e68-9271-76e887894699"
+            }
+          ]
+        }
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
+      "recommendations": [
+        "Persona composer should skip on strategy=diagnose or urgency=high."
+      ]
+    },
+    {
+      "id": "P11_session_goal_persists",
+      "pass": false,
+      "findings": [
+        "session_goal.depth expected 'deep_dive', got 'normal'"
+      ],
+      "metrics": {
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "6c5946b48f664eecabc11e572d7113db",
+              "text": "Hey User, what outcome are you aiming for today?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "6c5946b48f664eecabc11e572d7113db",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "e8d02811-fe8d-4a8b-9104-01ddfdfb9699",
+              "sid": "e8d02811-fe8d-4a8b-9104-01ddfdfb9699"
             }
           ]
         }
@@ -966,94 +966,7 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "a5d171281e36453cadde65e45cb6035e",
-              "text": "Hey User, what outcome are you aiming for today?",
-              "chunk_count": 1,
-              "assistant_end_count": 1,
-              "policy_chips": [
-                "Send me the email",
-                "Walk me through it live"
-              ],
-              "suggestions": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ],
-          "suggestions": [
-            {
-              "type": "suggestions",
-              "turn_id": "a5d171281e36453cadde65e45cb6035e",
-              "items": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
-                }
-              ]
-            }
-          ],
-          "session_goal_hints": [
-            {
-              "type": "session_goal",
-              "phase": "clarify",
-              "depth": "normal",
-              "delivery_pref": "explain",
-              "working_intent": "greet",
-              "entities": {
-                "products": [],
-                "keywords": []
-              },
-              "confirmed": [
-                "phase",
-                "depth",
-                "delivery_pref",
-                "working_intent"
-              ],
-              "event": "session_goal",
-              "session_id": "91be4149-9bd3-4c99-b978-276b4cd171ab",
-              "sid": "91be4149-9bd3-4c99-b978-276b4cd171ab"
-            }
-          ]
-        }
-      },
-      "admin_stream_disabled": false,
-      "admin_capture_meta": {
-        "error": "eventsource_error",
-        "captureState": "active"
-      },
-      "recommendations": [
-        "Interpreter must always populate phase, delivery_pref, user_goal, entities; set needs_clarification when unknown."
-      ]
-    },
-    {
-      "id": "P15_long_help_session",
-      "pass": false,
-      "findings": [
-        "WS console missing 'latency_breakdown'"
-      ],
-      "metrics": {
-        "browser_console_ws": {
-          "assistant_frames": [
-            {
-              "turn_id": "cabb87a81ca349bd9c65f6a58e5c8533",
+              "turn_id": "12b7686da1544c7eb04963b65aacaf70",
               "text": "Hey User, what would you like to accomplish today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -1080,7 +993,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "cabb87a81ca349bd9c65f6a58e5c8533",
+              "turn_id": "12b7686da1544c7eb04963b65aacaf70",
               "items": [
                 {
                   "text": "Send me the email"
@@ -1115,8 +1028,95 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "408a8661-a1f1-49f7-b4a3-6d72dfc6d375",
-              "sid": "408a8661-a1f1-49f7-b4a3-6d72dfc6d375"
+              "session_id": "0e910587-6085-4b2a-a64b-802d9dec0c93",
+              "sid": "0e910587-6085-4b2a-a64b-802d9dec0c93"
+            }
+          ]
+        }
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
+      "recommendations": [
+        "Interpreter must always populate phase, delivery_pref, user_goal, entities; set needs_clarification when unknown."
+      ]
+    },
+    {
+      "id": "P15_long_help_session",
+      "pass": false,
+      "findings": [
+        "WS console missing 'latency_breakdown'"
+      ],
+      "metrics": {
+        "browser_console_ws": {
+          "assistant_frames": [
+            {
+              "turn_id": "d933165bdf8044fcb65caf64637aea7e",
+              "text": "Hey User, what's the goal for this session?",
+              "chunk_count": 1,
+              "assistant_end_count": 1,
+              "policy_chips": [
+                "Send me the email",
+                "Walk me through it live"
+              ],
+              "suggestions": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "suggestions": [
+            {
+              "type": "suggestions",
+              "turn_id": "d933165bdf8044fcb65caf64637aea7e",
+              "items": [
+                {
+                  "text": "Send me the email"
+                },
+                {
+                  "text": "Walk me through it live"
+                },
+                {
+                  "text": "Show install steps"
+                },
+                {
+                  "text": "Explain the business value"
+                }
+              ]
+            }
+          ],
+          "session_goal_hints": [
+            {
+              "type": "session_goal",
+              "phase": "clarify",
+              "depth": "normal",
+              "delivery_pref": "explain",
+              "working_intent": "greet",
+              "entities": {
+                "products": [],
+                "keywords": []
+              },
+              "confirmed": [
+                "phase",
+                "depth",
+                "delivery_pref",
+                "working_intent"
+              ],
+              "event": "session_goal",
+              "session_id": "e63eca0f-00a9-4982-925d-cdada1703376",
+              "sid": "e63eca0f-00a9-4982-925d-cdada1703376"
             }
           ]
         }
