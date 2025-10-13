@@ -82,6 +82,36 @@ def _has_valid_admin_token(payload: dict | None = None) -> bool:
     provided = _extract_admin_token(payload)
     return bool(provided) and provided == expected
 
+def _mirror_ws_event(kind: str, *, event: dict) -> None:
+    """Mirror admin diagnostics to the WS session stream when possible."""
+    sid = event.get("session_id") or event.get("sid")
+    if not sid:
+        return
+
+    try:
+        sid_str = str(sid)
+    except Exception:
+        sid_str = sid  # type: ignore[assignment]
+
+    frame = {"type": kind}
+    frame.update(event)
+    frame.setdefault("session_id", sid_str)
+    frame.setdefault("sid", sid_str)
+
+    try:
+        from app.ws.bus import bus as _bus  # local import to avoid circular deps
+    except Exception:
+        _bus = None
+
+    if _bus is None:
+        return
+
+    try:
+        _bus.broadcast(str(sid_str), frame)
+    except Exception:
+        pass
+
+
 def _emit(kind: str, *, label: str | None = None, route: str | None = None, **fields) -> bool:
     """Append an admin log event (and bump step)."""
     try:
@@ -98,6 +128,11 @@ def _emit(kind: str, *, label: str | None = None, route: str | None = None, **fi
             "label": base,
             **(fields or {})
         }
+        evt.setdefault("event", kind)
+        try:
+            _mirror_ws_event(kind, event=evt)
+        except Exception:
+            pass
         _LOG_Q.append(evt)
         return True
     except Exception:

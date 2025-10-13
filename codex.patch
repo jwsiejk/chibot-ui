@@ -1,433 +1,79 @@
-diff --git a/e2e_orchestrator.js b/e2e_orchestrator.js
-index bf110e8aa227ed2021156c839e36337e8a58bc9c..06177e1ac2ceda7daa54de9861bb3676da8b8d71 100644
---- a/e2e_orchestrator.js
-+++ b/e2e_orchestrator.js
-@@ -1,31 +1,32 @@
- // e2e_orchestrator.js
- // Run:
- //   npm i -D playwright
- //   npx playwright install chromium
- //   # optional: npx playwright install chrome
--//   node e2e_orchestrator.js askchip_e2e_tests.json --base https://chibot-ui.onrender.com/ [--chrome] [--dump-ui] [--start "<selector|text|xpath>"] [--start-eval "window.startCall()"]
-+//   node e2e_orchestrator.js askchip_e2e_tests.json --base https://chibot-ui.onrender.com/ [--chrome] [--dump-ui] [--start "<selector|text|xpath>"] [--start-eval "window.startCall()"] [--login-email you@example.com]
-+//     (auto-login defaults to AskChip admin; override via --login-email or ASKCHIP_E2E_LOGIN_EMAIL, disable with "none")
+diff --git a/static/js/askchip_client_hooks.js b/static/js/askchip_client_hooks.js
+index cc8aa3af860b1740a41670549d2c8fc43abeb6ae..cd88132da0ca19a4281b8f934b0a0e5929ef936c 100644
+--- a/static/js/askchip_client_hooks.js
++++ b/static/js/askchip_client_hooks.js
+@@ -1,36 +1,73 @@
+ // static/js/askchip_client_hooks.js — control frame handler + minimal mic arming
+ (function () {
+   const ADMIN_POST = "/api/v1/admin/log";
  
- const fs = require('fs');
- const path = require('path');
- const { chromium } = require('playwright');
- 
- function readUInt32LE(buf, offset) { return buf.readUInt32LE(offset); }
- function readUInt16LE(buf, offset) { return buf.readUInt16LE(offset); }
- 
- function decodeWav(buffer) {
-   if (buffer.toString('ascii', 0, 4) !== 'RIFF') throw new Error('Invalid WAV: missing RIFF header');
-   if (buffer.toString('ascii', 8, 12) !== 'WAVE') throw new Error('Invalid WAV: missing WAVE header');
- 
-   let offset = 12;
-   let audioFormat = null;
-   let numChannels = null;
-   let sampleRate = null;
-   let bitsPerSample = null;
-   let dataStart = null;
-   let dataLength = null;
- 
-   while (offset + 8 <= buffer.length) {
-     const chunkId = buffer.toString('ascii', offset, offset + 4);
-     const chunkSize = readUInt32LE(buffer, offset + 4);
-     const chunkDataStart = offset + 8;
-     if (chunkId === 'fmt ') {
-@@ -246,51 +247,68 @@ async function installCustomMicrophone(context, spec) {
-         for (const track of videoStream.getVideoTracks()) stream.addTrack(track);
-       }
-       return stream;
-     };
-   }, { timeline: spec.timeline, defaultSampleRate: spec.defaultSampleRate, defaultChannels: spec.defaultChannels });
- }
- 
- function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
- function ensureDir(p){ fs.mkdirSync(p,{recursive:true}); }
- function readJSON(p){ return JSON.parse(fs.readFileSync(p,'utf-8')); }
- function hasStr(objs,s){ return objs.some(x=>JSON.stringify(x).includes(s)); }
- function countStr(objs,s){ return objs.filter(x=>JSON.stringify(x).includes(s)).length; }
- 
- function parseCLI(){
-   const specPath = process.argv[2] || 'askchip_e2e_tests.json';
-   let base = process.env.ASKCHIP_BASE_URL || '';
-   const i = process.argv.indexOf('--base');
-   if (i !== -1 && process.argv[i+1]) base = process.argv[i+1];
-   if (!base) { console.error('Provide base URL, e.g. --base https://chibot-ui.onrender.com/'); process.exit(1); }
-   const useChrome = process.argv.includes('--chrome') || process.env.BROWSER === 'chrome';
-   const dumpUI = process.argv.includes('--dump-ui');
-   const startIdx = process.argv.indexOf('--start');
-   const startOverride = startIdx !== -1 ? process.argv[startIdx+1] : (process.env.START_SELECTOR || '');
-   const evalIdx = process.argv.indexOf('--start-eval');
-   const startEval = evalIdx !== -1 ? process.argv[evalIdx+1] : (process.env.START_EVAL || '');
--  return { specPath, base, useChrome, dumpUI, startOverride, startEval };
-+  const loginIdx = process.argv.indexOf('--login-email');
-+  let autoLoginEmail = process.env.ASKCHIP_E2E_LOGIN_EMAIL || process.env.ASKCHIP_AUTO_LOGIN_EMAIL || '';
-+  if (loginIdx !== -1 && process.argv[loginIdx+1]) autoLoginEmail = process.argv[loginIdx+1];
-+  let disableAutoLogin = false;
-+  if (typeof autoLoginEmail === 'string') {
-+    const trimmed = autoLoginEmail.trim();
-+    const lower = trimmed.toLowerCase();
-+    if (!trimmed) {
-+      autoLoginEmail = '';
-+    } else if (['none', 'off', 'false', 'no'].includes(lower)) {
-+      disableAutoLogin = true;
-+      autoLoginEmail = '';
-+    } else {
-+      autoLoginEmail = trimmed;
-+    }
-+  }
-+  if (!autoLoginEmail && !disableAutoLogin) autoLoginEmail = 'jwsiejk@purestorage.com';
-+  return { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail, disableAutoLogin };
- }
- 
- // ---- IN-PAGE SSE collector (uses cookies/session) ----
- async function collectAdminSSEInPage(page, { url, ms }) {
-   return await page.evaluate(({ url, ms }) => {
-     return new Promise(resolve => {
-       const logs = [];
-       let es;
-       try {
-         es = new EventSource(url, { withCredentials: true });
-         es.onmessage = (e) => { try { logs.push(JSON.parse(e.data)); } catch {} };
-         es.onerror = () => { /* ignore; resolve on timeout */ };
-       } catch { resolve(logs); return; }
-       setTimeout(() => { try { es && es.close(); } catch {} resolve(logs); }, ms);
-       window.addEventListener('beforeunload', () => { try { es && es.close(); } catch {} });
-     });
-   }, { url, ms });
- }
- 
- async function startAdminCollector(page, url) {
-   await page.evaluate((adminUrl) => {
-     if (window.__adminCollector?.source) {
-       try { window.__adminCollector.source.close(); } catch {}
-     }
- 
-@@ -452,50 +470,135 @@ async function checkDomExpectations(page, expectDom, artifactsDir, probeId){
- 
- // ---- Start clickers ----
- const TEXT_VARIANTS = [
-   /^start$/i, /start session/i, /start call/i, /start chat/i, /begin/i, /join/i, /connect/i,
-   /let's go/i, /enable mic/i, /enable microphone/i, /talk/i, /call/i
- ];
- const ATTR_VARIANTS = [
-   '#startButton', '[data-role="start-btn"]', '[data-testid="start"]', '[data-test="start"]',
-   '[data-qa="start"]', '[id*="start"]', '[class*="start"]', '[aria-label*="start" i]',
-   '[aria-label*="join" i]', '.start', 'button.start'
- ];
- 
- async function tryClick(locator, meta, attempts){
-   try{
-     const loc = locator.first();
-     await loc.waitFor({ state: 'visible', timeout: 900 });
-     await loc.click({ timeout: 1500 });
-     attempts.push({ ok:true, ...meta });
-     return true;
-   }catch(e){
-     attempts.push({ ok:false, error: e.message?.slice(0,120), ...meta });
-     return false;
-   }
- }
- 
-+async function performAutoLogin(page, email) {
-+  if (!email) return { ok: false, error: 'missing_email' };
-+  try {
-+    const result = await page.evaluate(async (emailAddr) => {
-+      const output = { ok: false, email: emailAddr };
-+      try {
-+        if (!emailAddr) { output.error = 'missing_email'; return output; }
-+
-+        try {
-+          const cfg = window.__askchip_config = window.__askchip_config || {};
-+          const authCfg = cfg.auth = cfg.auth || {};
-+          authCfg.autoLoginEmail = emailAddr;
-+        } catch {}
-+
-+        const fetchJson = async (url, init) => {
-+          const res = await fetch(url, { credentials: 'include', ...(init || {}) });
-+          let data = null;
-+          try {
-+            data = await res.clone().json();
-+          } catch {
-+            try { data = await res.text(); } catch {}
-+          }
-+          return { status: res.status, ok: res.ok, data };
-+        };
-+
-+        let token = null;
-+        const csrfEndpoints = ['/api/v1/csrf', '/api/v1/auth/csrf'];
-+        for (const endpoint of csrfEndpoints) {
-+          try {
-+            const resp = await fetchJson(endpoint);
-+            if (resp.ok && resp.data && typeof resp.data === 'object') {
-+              token = resp.data.csrf || resp.data.token || resp.data.csrf_token || null;
-+            }
-+            if (token) break;
-+          } catch {}
++  function currentSessionId() {
++    try {
++      const key = "chip.sid";
++      let sid = localStorage.getItem(key);
++      if (!sid) {
++        if (typeof crypto?.randomUUID === "function") {
++          sid = crypto.randomUUID();
++        } else {
++          sid = `${Date.now()}-${Math.random()}`;
 +        }
-+
-+        const headers = { 'Content-Type': 'application/json' };
-+        if (token) headers['X-CSRF-Token'] = token;
-+
-+        const loginResp = await fetchJson('/api/v1/auth/login', {
-+          method: 'POST',
-+          headers,
-+          body: JSON.stringify({ email: emailAddr })
-+        });
-+
-+        output.login = loginResp;
-+        if (!loginResp.ok) {
-+          output.error = (loginResp.data && loginResp.data.error) || `login_failed_${loginResp.status}`;
-+          return output;
-+        }
-+
-+        const meResp = await fetchJson('/api/v1/auth/me');
-+        output.me = meResp;
-+
-+        output.profile_complete = !!(
-+          (meResp.data && meResp.data.profile_complete) ||
-+          (loginResp.data && loginResp.data.profile_complete) ||
-+          (loginResp.data && loginResp.data.profile && loginResp.data.profile.profile_complete)
-+        );
-+
-+        try {
-+          if (typeof window.evaluateAuth === 'function') {
-+            await window.evaluateAuth();
-+          } else if (typeof window.evaluateAuthGate === 'function') {
-+            await window.evaluateAuthGate();
-+          }
-+        } catch (err) {
-+          output.evaluate_error = err?.message || String(err);
-+        }
-+
-+        output.ok = true;
-+        return output;
-+      } catch (err) {
-+        output.error = err?.message || String(err);
-+        return output;
++        localStorage.setItem(key, sid);
 +      }
-+    }, email);
-+
-+    return result || { ok: false, error: 'unknown_auto_login_result' };
-+  } catch (err) {
-+    return { ok: false, error: err?.message || String(err) };
-+  }
-+}
-+
- // JS-level scan (pierces shadow roots, clicks even if overlayed)
- async function clickViaEvaluate(target, rxSource, attempts){
-   try{
-     const ok = await target.evaluate((rxSrc) => {
-       const rx = new RegExp(rxSrc, 'i');
-       function* allNodes(root){
-         const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
-         while (walker.nextNode()) yield walker.currentNode;
-         // open shadow roots
-         for (const el of root.querySelectorAll('*')) {
-           const sr = el.shadowRoot;
-           if (sr) yield* allNodes(sr);
-         }
-       }
-       for (const el of allNodes(document)){
-         const txt = (el.innerText || el.textContent || '').trim();
-         const aria = el.getAttribute?.('aria-label') || '';
-         if (rx.test(txt) || rx.test(aria)) {
-           if (typeof el.click === 'function') { el.click(); return true; }
-         }
-       }
-       return false;
-     }, rxSource);
-     attempts.push({ ok: ok, selector: 'evaluate:text', text: rxSource });
-     return ok;
-@@ -1108,100 +1211,110 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}
-         }
-       }
-       if (cond.ws_console_goal_missing) {
-         const latest = wsConsole.sessionGoalHints[wsConsole.sessionGoalHints.length - 1];
-         if (!latest) findings.push('Fail: WS session_goal hints missing');
-         else for (const key of cond.ws_console_goal_missing) if (!(key in latest)) findings.push(`Fail: session_goal missing '${key}'`);
-       }
-       if (cond.ws_console_nlu_missing_any) {
-         const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
-         for (const key of cond.ws_console_nlu_missing_any) {
-           let cur = nlu;
-           let ok = true;
-           for (const part of key.split('.')) {
-             if (cur && typeof cur === 'object' && part in cur) cur = cur[part];
-             else { ok = false; break; }
-           }
-           if (!ok) findings.push(`Fail: WS nlu missing '${key}'`);
-         }
-       }
-     }
-   }
- 
-   return { passed: findings.length === 0, findings, metrics };
- }
- 
--async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval){
-+async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval, autoLoginEmail){
-   let normalized;
-   try {
-     normalized = normalizeInputs(probe.inputs, audioDir);
-   } catch (err) {
-     return { id: probe.id, pass: false, findings: [err?.message || String(err)], metrics: {} };
-   }
- 
-   const useCustomMic = normalized.inputs.length > 1;
-   const firstAudioPath = normalized.audioFiles[0];
-   if (!firstAudioPath) {
-     return { id: probe.id, pass: false, findings: ['No audio fixtures found for probe'], metrics: {} };
-   }
- 
-   const launchArgs = [
-     '--use-fake-device-for-media-stream',
-     '--autoplay-policy=no-user-gesture-required'
-   ];
-   if (!useCustomMic) {
-     launchArgs.push(`--use-file-for-fake-audio-capture=${firstAudioPath}`);
-   }
- 
-   const browser = await chromium.launch({
-     headless: false,
-     channel: useChrome ? 'chrome' : undefined,
-     args: launchArgs
-   });
- 
-   const context = await browser.newContext();
-   if (useCustomMic) {
-     await installCustomMicrophone(context, normalized);
-   }
-   await context.grantPermissions(['microphone'], { origin: baseUrl });
-   const page = await context.newPage();
- 
-   const consoleLines = [];
-   page.on('console', m => consoleLines.push(m.text()));
-   const wsUrls = [];
-   page.on('websocket', ws => { try { wsUrls.push(ws.url()); } catch {} });
- 
-   let adminUrl = spec.endpoints?.admin_sse_url;
-   if (!adminUrl || /your_domain/i.test(adminUrl)) adminUrl = baseUrl.replace(/\/$/,'') + '/api/v1/admin/logs';
- 
-+  const dir = path.join(artifactsDir, probe.id); ensureDir(dir);
-+
-   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
- 
-+  let autoLoginResult = null;
-+  if (autoLoginEmail) {
-+    autoLoginResult = await performAutoLogin(page, autoLoginEmail);
-+    try { fs.writeFileSync(path.join(dir, 'auto_login_result.json'), JSON.stringify(autoLoginResult, null, 2)); } catch {}
-+    if (autoLoginResult?.ok) {
-+      try { await page.waitForTimeout(300); } catch {}
++      return sid || undefined;
++    } catch (err) {
++      try { console.warn("[askchip] sid lookup failed", err); } catch {}
++      return undefined;
 +    }
 +  }
 +
-   // Start admin collector before kicking off the call so we capture the whole exchange.
-   await startAdminCollector(page, adminUrl);
- 
- 
--  const dir = path.join(artifactsDir, probe.id); ensureDir(dir);
-   await page.screenshot({ path: path.join(dir, 'after_goto.png') });
-   fs.writeFileSync(path.join(dir, 'page_url.txt'), page.url());
- 
-   const attempts = [];
- 
-   // user overrides first
-   if (!(await clickStartWithOverrides(page, startOverride, startEval, attempts))) {
-     // heuristics across frames/shadow
-     let clicked = await clickStartAnywhere(page, attempts);
-     if (!clicked) {
-       // brute gestures and retry heuristics
-       await bruteStart(page, attempts);
-       clicked = await clickStartAnywhere(page, attempts);
-     }
-     if (!clicked) {
-       if (!dumpUI) await dumpUI(page, dir);
-       await page.screenshot({ path: path.join(dir, 'start_not_found.png'), fullPage: true });
-       fs.writeFileSync(path.join(dir, 'start_click_attempts.json'), JSON.stringify(attempts,null,2));
-       try { await stopAdminCollector(page); } catch {}
-       await context.close(); await browser.close();
-       return { id: probe.id, pass: false, findings: ['Start control not found/clickable'], metrics: {} };
-     }
-   }
- 
-   fs.writeFileSync(path.join(dir, 'start_click_attempts.json'), JSON.stringify(attempts,null,2));
-@@ -1241,65 +1354,73 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
- 
-   // Artifacts
-   fs.writeFileSync(path.join(dir,'admin_logs.json'), JSON.stringify(adminLogs,null,2));
-   fs.writeFileSync(path.join(dir,'admin_capture_meta.json'), JSON.stringify(adminMeta,null,2));
-   fs.writeFileSync(path.join(dir,'browser_console.json'), JSON.stringify(consoleLines,null,2));
-   fs.writeFileSync(path.join(dir,'network_ws.json'), JSON.stringify(wsUrls,null,2));
- 
-   const { passed, findings, metrics } = evalProbe(probe, adminLogs, consoleLines, wsUrls, adminMeta);
- 
-   // DOM expectations
-   const domFindings = await checkDomExpectations(page, probe.expect_dom, artifactsDir, probe.id);
-   if (domFindings.length){ findings.push(...domFindings); }
- 
-   await context.close(); await browser.close();
-   return {
-     id: probe.id,
-     pass: passed,
-     findings,
-     metrics,
-     admin_stream_disabled: String(adminMeta.captureState || '').toLowerCase() === 'disabled',
-     admin_capture_meta: adminMeta
-   };
- }
- 
- async function main() {
--  const { specPath, base, useChrome, dumpUI, startOverride, startEval } = parseCLI();
-+  const { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail, disableAutoLogin } = parseCLI();
-+
-+  if (autoLoginEmail) {
-+    console.log(`[auto-login] Using admin email ${autoLoginEmail} (set --login-email or ASKCHIP_E2E_LOGIN_EMAIL to change, use "none" to disable).`);
-+  } else if (disableAutoLogin) {
-+    console.log('[auto-login] Disabled; provide --login-email <address> or ASKCHIP_E2E_LOGIN_EMAIL to re-enable.');
-+  } else {
-+    console.log('[auto-login] No email configured; set --login-email <address> or ASKCHIP_E2E_LOGIN_EMAIL.');
++  function normalizePayload(evt) {
++    const payload = Object.assign({}, evt || {});
++    const event = typeof payload.event === "string" ? payload.event : null;
++    if (!payload.kind && event) payload.kind = event;
++    if (!payload.event && payload.kind) payload.event = payload.kind;
++    if (!payload.label && (event || payload.kind)) {
++      payload.label = event || payload.kind;
++    }
++    const sid = payload.session_id || payload.sid || currentSessionId();
++    if (sid) {
++      payload.session_id = String(sid);
++      payload.sid = String(sid);
++    }
++    if (!payload.sent_at) payload.sent_at = Date.now();
++    return payload;
 +  }
-   const spec = readJSON(specPath);
-   const baseUrl = (spec.endpoints?.ui_base_url && !/your_domain/i.test(spec.endpoints.ui_base_url))
-     ? spec.endpoints.ui_base_url
-     : base;
- 
-   const artifactsDir = path.resolve('artifacts');
-   const audioDir = path.resolve('audio');
-   ensureDir(artifactsDir);
- 
-   const results = [];
-   for (const probe of spec.probes) {
-     console.log(`\n=== Running ${probe.id} ===`);
++
+   async function postAdmin(evt) {
      try {
--      const r = await runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval);
-+      const r = await runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval, autoLoginEmail);
-       results.push(r);
-       console.log(`${probe.id}: ${r.pass ? 'PASS' : 'FAIL'}${r.findings.length ? ' – ' + r.findings.join('; ') : ''}`);
-     } catch (e) {
-       results.push({ id: probe.id, pass: false, findings: [`Runner error: ${e.message}`], metrics: {} });
-       console.error(`${probe.id}: Runner error`, e);
-     }
++      const payload = normalizePayload(evt);
+       await fetch(ADMIN_POST, {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         credentials: "include",
+-        body: JSON.stringify(evt),
++        body: JSON.stringify(payload),
+       });
+     } catch {}
    }
  
-   const catalog = spec.recommendations_catalog || {};
-   const enriched = results.map(r => {
-     const probe = spec.probes.find(p => p.id === r.id) || {};
-     const ids = r.pass ? [] : (probe.recommendations_on_fail || []);
-     return { ...r, recommendations: ids.map(id => catalog[id]).filter(Boolean) };
-   });
+   // Minimal upstream hook; wire this to your WS uplink if not present.
+   if (!window.askchip) window.askchip = {};
+   if (typeof window.askchip.audioUp !== "function") {
+     window.askchip.audioUp = function noop(_) {};
+   }
  
-   const adminSkipped = enriched.filter(x => x.admin_stream_disabled).map(x => x.id);
-   const report = {
-     generated_at: new Date().toISOString(),
-     summary: {
-       total: enriched.length,
-       passed: enriched.filter(x => x.pass).length,
-       failed: enriched.filter(x => !x.pass).map(x => x.id),
-       admin_stream_skipped: adminSkipped
-     },
-     probes: enriched
+   // Expose a start hook so tests can trigger the same flow your Start button uses.
+   if (typeof window.startCall !== "function") {
+     window.startCall = function () {
+       // no-op placeholder; your UI can replace this to match the real Start.
+       // The E2E runner can still click your Start button; this is a fallback.
+       console.log("[askchip] startCall() placeholder");
+       return true;
+     };
+     window.startCall.__askchipPlaceholder = true;
+   }
+ 
+   window.askchip.armMic = async function armMic() {
+     try {
+       const stream = await navigator.mediaDevices.getUserMedia({
+         audio: { echoCancellation: true, noiseSuppression: true },
