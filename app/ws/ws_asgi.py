@@ -35,9 +35,40 @@ from app.ws.bus import bus
 
 # Optional admin emitter
 try:
-    from app.api_v1.admin import _emit as _admin_emit
+    from app.api_v1.admin import _emit as _admin_emit_base
 except Exception:
-    _admin_emit = None
+    _admin_emit_base = None
+
+
+def _broadcast_admin_frame(event: str, payload: Dict[str, Any]) -> None:
+    """Mirror admin diagnostics to the session WS bus when possible."""
+    sid = payload.get("session_id") or payload.get("sid")
+    if not sid:
+        return
+    try:
+        sid_str = str(sid)
+    except Exception:
+        sid_str = sid  # type: ignore[assignment]
+
+    frame = {"type": event}
+    frame.update(dict(payload))
+    frame.setdefault("session_id", sid_str)
+    frame.setdefault("sid", sid_str)
+
+    try:
+        bus.broadcast(str(sid_str), frame)
+    except Exception:
+        pass
+
+
+def _admin_emit(event: str, **payload: Any) -> None:
+    if callable(_admin_emit_base):
+        try:
+            _admin_emit_base(event, **payload)
+        except Exception:
+            pass
+
+    _broadcast_admin_frame(event, payload)
 
 
 def _current_assistant_turn_id(sid: str) -> Optional[str]:

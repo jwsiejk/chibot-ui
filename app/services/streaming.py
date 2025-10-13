@@ -268,10 +268,35 @@ except Exception:
         pass
 
 
+def _broadcast_admin_ws_event(event: str, payload: Mapping[str, Any]) -> None:
+    """Best-effort mirror of admin diagnostics onto the session WS bus."""
+    try:
+        sid = payload.get("session_id") or payload.get("sid")
+    except Exception:
+        sid = None
+    if not sid:
+        return
+    try:
+        sid_str = str(sid)
+    except Exception:
+        sid_str = sid  # type: ignore[assignment]
+
+    frame = {"type": event}
+    frame.update(dict(payload))
+    frame.setdefault("session_id", sid_str)
+    frame.setdefault("sid", sid_str)
+
+    try:
+        bus.broadcast(str(sid_str), frame)
+    except Exception:
+        pass
+
+
 def _emit_turn_action_metadata(turn_id: Optional[str],
                                meta: Optional[Dict[str, Any]],
                                *,
-                               is_greet: bool) -> None:
+                               is_greet: bool,
+                               session_id: Optional[str] = None) -> None:
     """Emit structured NLU/policy metadata for admin observers."""
     if not turn_id or not isinstance(meta, dict):
         return
@@ -287,7 +312,7 @@ def _emit_turn_action_metadata(turn_id: Optional[str],
         "verbosity": meta.get(_DIALOG_VERBOSITY_KEY) or meta.get("verbosity"),
         "show_suggestions": meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY) or meta.get("show_suggestions"),
     }
-    payload = {
+    payload: Dict[str, Any] = {
         "turn_id": turn_id,
         "is_greet": bool(is_greet),
         "nlu": {
@@ -300,10 +325,23 @@ def _emit_turn_action_metadata(turn_id: Optional[str],
         },
         "policy": policy_payload,
     }
+    session_id_value: Optional[str] = None
+    if session_id:
+        session_id_value = str(session_id)
+    elif isinstance(meta, dict):
+        sid_candidate = meta.get("session_id") or meta.get("sid")
+        if sid_candidate:
+            try:
+                session_id_value = str(sid_candidate)
+            except Exception:
+                session_id_value = sid_candidate  # type: ignore[assignment]
+    if session_id_value:
+        payload["session_id"] = session_id_value
     try:
         _admin_emit("turn_action_metadata", **payload)
     except Exception:
         pass
+    _broadcast_admin_ws_event("turn_action_metadata", payload)
 
 
 def _get_persona_for_session(session_id: str) -> Dict:
@@ -532,6 +570,11 @@ def _log_policy_decision(*,
             "nlu_intent": nlu_intent,
             "nlu_confidence": nlu_confidence,
         }
+        if session_id:
+            try:
+                payload["session_id"] = str(session_id)
+            except Exception:
+                payload["session_id"] = session_id  # type: ignore[assignment]
         if normalized_action_name:
             payload["meta_action"] = normalized_action_name
         if policy_move_name:
@@ -559,6 +602,7 @@ def _log_policy_decision(*,
                 )
             except Exception:
                 pass
+        _broadcast_admin_ws_event("policy_decision", payload)
     except Exception:
         pass
 
@@ -1184,7 +1228,9 @@ def _log_suggestions_made(turn_id: Optional[str],
                           policy_chips: Optional[Iterable[Any]],
                           legacy_suggestions: Optional[Iterable[Any]],
                           merged_suggestions: Optional[Iterable[Any]],
-                          cfg: Optional[Dict[str, Any]]) -> None:
+                          cfg: Optional[Dict[str, Any]],
+                          *,
+                          session_id: Optional[str] = None) -> None:
     try:
         cfg_map: Dict[str, Any]
         if isinstance(cfg, dict):
@@ -1236,27 +1282,33 @@ def _log_suggestions_made(turn_id: Optional[str],
                 source = "retrieval"
             items.append({"text": text, "source": source})
 
-        _jlog(
-            "suggestions_made",
-            turn_id=str(turn_id) if turn_id is not None else None,
-            items=items,
-            max_items=max_items,
-            max_words_per_item=max_words,
-            count=len(items),
-        )
-        if callable(_admin_emit):
+        sid_value: Optional[str] = None
+        if session_id:
             try:
-                _admin_emit(
-                    "suggestions_made",
-                    event="suggestions_made",
-                    turn_id=str(turn_id) if turn_id is not None else None,
-                    items=items,
-                    max_items=max_items,
-                    max_words_per_item=max_words,
-                    count=len(items),
-                )
+                sid_value = str(session_id)
             except Exception:
-                pass
+                sid_value = session_id  # type: ignore[assignment]
+
+        log_payload: Dict[str, Any] = {
+            "turn_id": str(turn_id) if turn_id is not None else None,
+            "items": items,
+            "max_items": max_items,
+            "max_words_per_item": max_words,
+            "count": len(items),
+        }
+        if sid_value:
+            log_payload["sid"] = sid_value
+        _jlog("suggestions_made", **log_payload)
+
+        admin_payload = dict(log_payload)
+        admin_payload["event"] = "suggestions_made"
+        if sid_value:
+            admin_payload.setdefault("session_id", sid_value)
+        try:
+            _admin_emit("suggestions_made", **admin_payload)
+        except Exception:
+            pass
+        _broadcast_admin_ws_event("suggestions_made", admin_payload)
     except Exception:
         pass
 
@@ -1456,6 +1508,7 @@ def prepare_turn_metadata(seed_text: str,
                     admin_cb("session_goal", label=label_value, **payload)
                 except Exception:
                     pass
+                _broadcast_admin_ws_event("session_goal", payload)
 
     raw_policy = pick_dialog_policy(dialog_nlu, universal, session_goal=session_goal) or {}
     policy = dict(raw_policy)
@@ -2015,10 +2068,12 @@ def make_assistant_frames(seed_text: str,
                 skip_legacy = False
                 if isinstance(meta, dict):
                     meta.pop("skip_legacy_fallback", None)
+                error_payload = {"session_id": session_id, "error": e.__class__.__name__}
                 try:
-                    _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
+                    _admin_emit('foundation_pipeline_error', **error_payload)
                 except Exception:
                     pass
+                _broadcast_admin_ws_event('foundation_pipeline_error', error_payload)
 
         if skip_legacy:
             return None, []
@@ -2303,12 +2358,18 @@ def _make_foundation_frames(seed_text: str,
         pass
 
     if fallback_fired and fallback_emit_event:
+        fallback_payload: Dict[str, Any] = {
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "reason": fallback_reason or 'unknown',
+        }
         try:
-            _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
+            _admin_emit('fallback', **fallback_payload)
         except Exception:
             pass
+        _broadcast_admin_ws_event('fallback', fallback_payload)
 
-    _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
+    _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet, session_id=session_id)
 
     frames: List[Dict] = []
     active_teacher_move = policy_action or teacher_move
@@ -2370,6 +2431,7 @@ def _make_foundation_frames(seed_text: str,
         legacy_suggestions=legacy_suggestions,
         merged_suggestions=merged_suggestions,
         cfg=cfg,
+        session_id=session_id,
     )
     try:
         _jlog(
@@ -2565,7 +2627,15 @@ def _make_legacy_frames(seed_text: str,
         except Exception as e:
             provider = None
             error_note = "llm_not_available"
-            _admin_emit("llm_provider_error", error=e.__class__.__name__)
+            provider_error_payload = {
+                "session_id": session_id,
+                "error": e.__class__.__name__,
+            }
+            try:
+                _admin_emit("llm_provider_error", **provider_error_payload)
+            except Exception:
+                pass
+            _broadcast_admin_ws_event("llm_provider_error", provider_error_payload)
             telemetry.log_error("llm_not_available", str(e))
         if provider is not None:
             try:
@@ -2594,7 +2664,16 @@ def _make_legacy_frames(seed_text: str,
             except Exception as e:
                 error_note = f"llm_error:{e.__class__.__name__}"
                 reply = _LEGACY_WARMUP_LINE
-                _admin_emit("llm_generate_error", error=e.__class__.__name__)
+                generate_payload = {
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "error": e.__class__.__name__,
+                }
+                try:
+                    _admin_emit("llm_generate_error", **generate_payload)
+                except Exception:
+                    pass
+                _broadcast_admin_ws_event("llm_generate_error", generate_payload)
                 telemetry.log_error("llm_generate_error", str(e))
         else:
             reply = "Hi! I’m ready to help."
@@ -2668,12 +2747,18 @@ def _make_legacy_frames(seed_text: str,
         )
 
     if fallback_fired and fallback_emit_event:
+        fallback_payload = {
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "reason": fallback_reason or 'unknown',
+        }
         try:
-            _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
+            _admin_emit('fallback', **fallback_payload)
         except Exception:
             pass
+        _broadcast_admin_ws_event('fallback', fallback_payload)
 
-    _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
+    _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet, session_id=session_id)
 
     frames: List[Dict] = []
 
@@ -2740,6 +2825,7 @@ def _make_legacy_frames(seed_text: str,
         legacy_suggestions=legacy_suggestions,
         merged_suggestions=merged_suggestions,
         cfg=cfg,
+        session_id=session_id,
     )
     try:
         intent = labels.get('intent') if isinstance(labels, dict) else None
@@ -2895,10 +2981,16 @@ def schedule_tts_audio(session_id: str,
         except Exception as e:
             state['error'] = str(e)
             _log("tts.provider.error", error=str(e))
+            error_payload = {
+                "session_id": session_id,
+                "turn_id": safe_turn_id,
+                "error": str(e),
+            }
             try:
-                _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
+                _admin_emit('tts:error', **error_payload)
             except Exception:
                 pass
+            _broadcast_admin_ws_event('tts:error', error_payload)
             return False
 
         try:
@@ -2919,10 +3011,16 @@ def schedule_tts_audio(session_id: str,
         except Exception as e:
             state['error'] = str(e)
             _log("tts.synth.error", error=str(e), override=False)
+            synth_error_payload = {
+                "session_id": session_id,
+                "turn_id": safe_turn_id,
+                "error": str(e),
+            }
             try:
-                _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
+                _admin_emit('tts:error', **synth_error_payload)
             except Exception:
                 pass
+            _broadcast_admin_ws_event('tts:error', synth_error_payload)
             return False
     else:
         provider_label = "prebaked"
@@ -2963,15 +3061,16 @@ def schedule_tts_audio(session_id: str,
                 _log("tts.utterance_end.skip", reason=reason, already_sent=True)
                 return
             _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
+            end_payload = {
+                "session_id": session_id,
+                "turn_id": safe_turn_id,
+                "reason": reason,
+            }
             try:
-                _admin_emit(
-                    'UtteranceEnd',
-                    session_id=session_id,
-                    turn_id=safe_turn_id,
-                    reason=reason,
-                )
+                _admin_emit('UtteranceEnd', **end_payload)
             except Exception:
                 pass
+            _broadcast_admin_ws_event('UtteranceEnd', end_payload)
             try:
                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
             except Exception:
@@ -2986,10 +3085,12 @@ def schedule_tts_audio(session_id: str,
 
             total_audio_bytes = len(stream_payload or b"")
 
+            start_payload = {"session_id": session_id, "turn_id": safe_turn_id}
             try:
-                _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
+                _admin_emit('tts:start', **start_payload)
             except Exception:
                 pass
+            _broadcast_admin_ws_event('tts:start', start_payload)
 
             # Chunk and broadcast
             mv = memoryview(stream_payload)
@@ -3046,6 +3147,13 @@ def schedule_tts_audio(session_id: str,
                             _admin_emit('tts:first_chunk', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
                         except Exception:
                             pass
+                        _broadcast_admin_ws_event(
+                            'tts:first_chunk',
+                            {
+                                "session_id": session_id,
+                                "turn_id": str(turn_id) if turn_id else None,
+                            },
+                        )
 
                     chunk_count += 1
                     chunk_bytes_sent += chunk_len
@@ -3076,10 +3184,15 @@ def schedule_tts_audio(session_id: str,
             )
         finally:
             # Always mark tts done (admin), and always signal UtteranceEnd if we haven't already.
+            done_payload = {
+                "session_id": session_id,
+                "turn_id": str(turn_id) if turn_id else None,
+            }
             try:
-                _admin_emit('tts:done', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
+                _admin_emit('tts:done', **done_payload)
             except Exception:
                 pass
+            _broadcast_admin_ws_event('tts:done', done_payload)
 
             _emit_utterance_end("finalizer")
             try:
@@ -3187,10 +3300,12 @@ def schedule_frames(session_id: str,
                 except Exception:
                     pass
         finally:
+            frames_done_payload = {"session_id": session_id}
             try:
-                _admin_emit('schedule_frames_done', session_id=session_id)
+                _admin_emit('schedule_frames_done', **frames_done_payload)
             except Exception:
                 pass
+            _broadcast_admin_ws_event('schedule_frames_done', frames_done_payload)
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -3242,10 +3357,12 @@ def run_ws_greet(session_id: str) -> str:
     if _ws_generation_failed(tid, frames):
         tid = _allocate_turn_id(forced_tid)
         frames = _emit_ws_outage(session_id, tid)
+        outage_payload = {"session_id": session_id, "phase": 'greet'}
         try:
-            _admin_emit('ws_pipeline_outage', session_id=session_id, phase='greet')
+            _admin_emit('ws_pipeline_outage', **outage_payload)
         except Exception:
             pass
+        _broadcast_admin_ws_event('ws_pipeline_outage', outage_payload)
         try:
             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
         except Exception:
@@ -3334,6 +3451,7 @@ def run_ws_greet(session_id: str) -> str:
                 legacy_suggestions=greet_legacy,
                 merged_suggestions=base_suggestions,
                 cfg=cfg,
+                session_id=session_id,
             )
             if base_suggestions:
                 bus.broadcast(
@@ -3372,10 +3490,12 @@ def run_ws_user_turn(session_id: str,
             _apply_assistant_turn_state(session_id, frames)
         except Exception:
             pass
+        outage_payload = {"session_id": session_id, "phase": 'turn'}
         try:
-            _admin_emit('ws_pipeline_outage', session_id=session_id, phase='turn')
+            _admin_emit('ws_pipeline_outage', **outage_payload)
         except Exception:
             pass
+        _broadcast_admin_ws_event('ws_pipeline_outage', outage_payload)
         return tid
     try:
         _apply_assistant_turn_state(session_id, frames)

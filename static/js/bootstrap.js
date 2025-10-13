@@ -88,13 +88,15 @@ function wireWSEventsOnce(){
 
   // Log first few frames to verify payload shape
   let seen = 0;
+  const loggedTypes = new Set();
   window.addEventListener('askchip-ws', (ev) => {
     const d = ev.detail || {};
     const t = d.type || '';
 
-    if (seen < 5) {
+    if (seen < 5 || (!loggedTypes.has(t) && loggedTypes.size < 12)) {
       try { _console('log', '[WS→UI]', JSON.stringify(d)); } catch {}
       seen++;
+      if (t) loggedTypes.add(t);
     }
 
     // Lightweight state dot hints (no UI regressions)

@@ -3,12 +3,18 @@
 from __future__ import annotations
 import json, logging, os, time, traceback
 from contextlib import contextmanager
+from typing import Dict, Any
 
 try:
     from app.admin_log import emit as _admin_emit
 except Exception:
     def _admin_emit(*a, **k):
         pass
+
+try:
+    from .ws.bus import bus as _ws_bus
+except Exception:
+    _ws_bus = None
 
 _log = logging.getLogger("askchip")
 
@@ -31,6 +37,28 @@ def _redact(value: str | None):
         return v
     except Exception:
         return value
+
+def _broadcast_ws(kind: str, payload: Dict[str, Any]) -> None:
+    if _ws_bus is None:
+        return
+    sid = payload.get("session_id") or payload.get("sid")
+    if not sid:
+        return
+    try:
+        sid_str = str(sid)
+    except Exception:
+        sid_str = sid  # type: ignore[assignment]
+
+    frame = {"type": kind}
+    frame.update(dict(payload))
+    frame.setdefault("session_id", sid_str)
+    frame.setdefault("sid", sid_str)
+
+    try:
+        _ws_bus.broadcast(str(sid_str), frame)
+    except Exception:
+        pass
+
 
 def jlog(kind: str, **fields):
     """Emit one structured JSON log line and mirror to Admin SSE (best-effort)."""
@@ -56,6 +84,8 @@ def jlog(kind: str, **fields):
 
     # merge remainder
     base.update(fields)
+
+    _broadcast_ws(kind, base)
 
     try:
         _log.info(json.dumps(base, separators=(",", ":"), ensure_ascii=False))
