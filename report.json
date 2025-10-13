@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-10-13T06:26:29.925Z",
+  "generated_at": "2025-10-13T06:38:18.203Z",
   "summary": {
     "total": 13,
     "passed": 1,
@@ -46,8 +46,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "4cc90867-f24a-4c25-b723-89a40317beaf",
-              "sid": "4cc90867-f24a-4c25-b723-89a40317beaf"
+              "session_id": "ef288077-4099-4a55-838f-4b1575de7a38",
+              "sid": "ef288077-4099-4a55-838f-4b1575de7a38"
             }
           ]
         }
@@ -75,8 +75,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "8da3f347cd7d496ba8f205e403a94215",
-              "text": "Hey User, what's the goal for this session?",
+              "turn_id": "6fde2f0f592540d08878dbefb416c038",
+              "text": "Hey User, what would you like to accomplish today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -99,7 +99,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "8da3f347cd7d496ba8f205e403a94215",
+              "turn_id": "6fde2f0f592540d08878dbefb416c038",
               "items": [
                 {
                   "text": "Send me the email"
@@ -131,8 +131,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "22285bc3-6284-4925-aa58-a4c608d808b9",
-              "sid": "22285bc3-6284-4925-aa58-a4c608d808b9"
+              "session_id": "7aa82f05-c36a-4dd5-9420-95eb66be4922",
+              "sid": "7aa82f05-c36a-4dd5-9420-95eb66be4922"
             }
           ]
         }
@@ -160,8 +160,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "43b451262920471fb8a49f45b65d63b8",
-              "text": "Hey User, what do you want to get done today?",
+              "turn_id": "41a3d153a99a43abbeed54bc603e8400",
+              "text": "Hey User, what would you like to accomplish today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -184,7 +184,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "43b451262920471fb8a49f45b65d63b8",
+              "turn_id": "41a3d153a99a43abbeed54bc603e8400",
               "items": [
                 {
                   "text": "Send me the email"
@@ -216,8 +216,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "78ced1eb-0162-4321-911f-0a11b3e42a26",
-              "sid": "78ced1eb-0162-4321-911f-0a11b3e42a26"
+              "session_id": "a31b499e-4001-4441-9904-25ad892bb9bd",
+              "sid": "a31b499e-4001-4441-9904-25ad892bb9bd"
             }
           ]
         }
@@ -244,7 +244,7 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "e2b2c603b19a439cba71a6ff1eb21f94",
+              "turn_id": "37ee245cb5694a26b19763508daef8eb",
               "text": "Hey User, what outcome are you aiming for today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -268,7 +268,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "e2b2c603b19a439cba71a6ff1eb21f94",
+              "turn_id": "37ee245cb5694a26b19763508daef8eb",
               "items": [
                 {
                   "text": "Send me the email"
@@ -300,8 +300,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "6f4c753e-a0fa-42db-bf6c-98aec4a49be1",
-              "sid": "6f4c753e-a0fa-42db-bf6c-98aec4a49be1"
+              "session_id": "b0b2908f-1df7-44c7-aad4-2b183be5b69a",
+              "sid": "b0b2908f-1df7-44c7-aad4-2b183be5b69a"
             }
           ]
         }
@@ -326,8 +326,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "7a1b11764bac4803b922a97f201edcff",
-              "text": "Hey User, what do you want to get done today?",
+              "turn_id": "d161b2ed12264c67bea75c778f8db499",
+              "text": "Hey User, what should we tackle first?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -350,7 +350,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "7a1b11764bac4803b922a97f201edcff",
+              "turn_id": "d161b2ed12264c67bea75c778f8db499",
               "items": [
                 {
                   "text": "Send me the email"
@@ -382,8 +382,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "fcab6f14-f20c-48be-937d-40486e9116c1",
-              "sid": "fcab6f14-f20c-48be-937d-40486e9116c1"
+              "session_id": "f94d3948-8f5a-4913-8f55-974b7a0368e7",
+              "sid": "f94d3948-8f5a-4913-8f55-974b7a0368e7"
             }
           ]
         }
@@ -410,8 +410,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "adf19c34d7cf41778846fe8cd804779b",
-              "text": "Hey User, what would you like to accomplish today?",
+              "turn_id": "1d2f099f055d4fd0b767fbf873e736f8",
+              "text": "Hey User, what outcome are you aiming for today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -434,7 +434,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "adf19c34d7cf41778846fe8cd804779b",
+              "turn_id": "1d2f099f055d4fd0b767fbf873e736f8",
               "items": [
                 {
                   "text": "Send me the email"
@@ -466,8 +466,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "b05d91d1-b08a-40e8-9473-a7b8f505b083",
-              "sid": "b05d91d1-b08a-40e8-9473-a7b8f505b083"
+              "session_id": "93a0ef78-882a-439f-8325-e53645f728cd",
+              "sid": "93a0ef78-882a-439f-8325-e53645f728cd"
             }
           ]
         }
@@ -492,7 +492,7 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "72db6868fdf6484bad185c96ae09e7be",
+              "turn_id": "a8fdc6ab9a8d4c76bb5917b2bdbca5bd",
               "text": "Hey User, what should we tackle first?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -516,7 +516,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "72db6868fdf6484bad185c96ae09e7be",
+              "turn_id": "a8fdc6ab9a8d4c76bb5917b2bdbca5bd",
               "items": [
                 {
                   "text": "Send me the email"
@@ -548,8 +548,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "9a13b212-81de-4109-8483-8798cafb9d38",
-              "sid": "9a13b212-81de-4109-8483-8798cafb9d38"
+              "session_id": "24b70af8-d02f-4dab-a48f-90027eeeb999",
+              "sid": "24b70af8-d02f-4dab-a48f-90027eeeb999"
             }
           ]
         }
@@ -571,8 +571,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "267d1cccbda14c569ff2ecaa0e36ed8a",
-              "text": "Hey User, what's the goal for this session?",
+              "turn_id": "b464e346f5fb4138a81c12d14a96a8f5",
+              "text": "Hey User, what do you want to get done today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -595,7 +595,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "267d1cccbda14c569ff2ecaa0e36ed8a",
+              "turn_id": "b464e346f5fb4138a81c12d14a96a8f5",
               "items": [
                 {
                   "text": "Send me the email"
@@ -627,8 +627,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "c1f83648-4d45-4499-920b-d7239a6344f8",
-              "sid": "c1f83648-4d45-4499-920b-d7239a6344f8"
+              "session_id": "8631f31b-34b9-4010-a5d8-78a16a466a89",
+              "sid": "8631f31b-34b9-4010-a5d8-78a16a466a89"
             }
           ]
         }
@@ -651,8 +651,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "63ed9c629a784632b4b0d72630733d11",
-              "text": "Hey User, what's the goal for this session?",
+              "turn_id": "8cbb0b6f4dd644089d013c7ce2c8fcad",
+              "text": "Hey User, what outcome are you aiming for today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -675,7 +675,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "63ed9c629a784632b4b0d72630733d11",
+              "turn_id": "8cbb0b6f4dd644089d013c7ce2c8fcad",
               "items": [
                 {
                   "text": "Send me the email"
@@ -707,8 +707,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "20989b71-c0ca-4345-a2a8-6bf164e062cc",
-              "sid": "20989b71-c0ca-4345-a2a8-6bf164e062cc"
+              "session_id": "2763a22f-f6a4-4606-b0e1-93b36f556613",
+              "sid": "2763a22f-f6a4-4606-b0e1-93b36f556613"
             }
           ]
         }
@@ -733,8 +733,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "a5ee388098a245859154c143bc39c972",
-              "text": "Hey User, what should we tackle first?",
+              "turn_id": "d9b8d56284034df5b293dc79662e9215",
+              "text": "Hey User, what do you want to get done today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -757,7 +757,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "a5ee388098a245859154c143bc39c972",
+              "turn_id": "d9b8d56284034df5b293dc79662e9215",
               "items": [
                 {
                   "text": "Send me the email"
@@ -789,8 +789,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "71053ce7-d9cc-4b82-9a5a-09feecfb8d66",
-              "sid": "71053ce7-d9cc-4b82-9a5a-09feecfb8d66"
+              "session_id": "1daea494-5927-4b89-b45b-08de643e78fe",
+              "sid": "1daea494-5927-4b89-b45b-08de643e78fe"
             }
           ]
         }
@@ -814,8 +814,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "97c9325da9724cf6adbc1de03a725b49",
-              "text": "Hey User, what outcome are you aiming for today?",
+              "turn_id": "ca1908fa9a7340fa85eaaa276e636397",
+              "text": "Hey User, what do you want to get done today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -838,7 +838,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "97c9325da9724cf6adbc1de03a725b49",
+              "turn_id": "ca1908fa9a7340fa85eaaa276e636397",
               "items": [
                 {
                   "text": "Send me the email"
@@ -870,8 +870,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "d663b12c-e716-42ff-b467-7bb8b96f093e",
-              "sid": "d663b12c-e716-42ff-b467-7bb8b96f093e"
+              "session_id": "a0eac540-441a-45ac-898d-944f86e0745d",
+              "sid": "a0eac540-441a-45ac-898d-944f86e0745d"
             }
           ]
         }
@@ -904,8 +904,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "2e6e49b382474b05a15cf0cf3ca46cce",
-              "text": "Hey User, what should we tackle first?",
+              "turn_id": "77d21e69794047ed8d6407dcdc4c84b9",
+              "text": "Hey User, what would you like to accomplish today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -928,7 +928,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "2e6e49b382474b05a15cf0cf3ca46cce",
+              "turn_id": "77d21e69794047ed8d6407dcdc4c84b9",
               "items": [
                 {
                   "text": "Send me the email"
@@ -960,8 +960,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "38d43f8a-2acb-4674-b07d-7b0b09394cfc",
-              "sid": "38d43f8a-2acb-4674-b07d-7b0b09394cfc"
+              "session_id": "fa3c5d8d-2c3d-483f-b4ea-9ddbff4177f8",
+              "sid": "fa3c5d8d-2c3d-483f-b4ea-9ddbff4177f8"
             }
           ]
         }
@@ -985,8 +985,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "d90d6f879daa480bb4cbe313f7253133",
-              "text": "Hey User, what should we tackle first?",
+              "turn_id": "d5e2a5c334464afa92595759fe1a0dce",
+              "text": "Hey User, what do you want to get done today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -1009,7 +1009,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "d90d6f879daa480bb4cbe313f7253133",
+              "turn_id": "d5e2a5c334464afa92595759fe1a0dce",
               "items": [
                 {
                   "text": "Send me the email"
@@ -1041,8 +1041,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "e1a49be4-4645-4e61-b424-f7257a30eadb",
-              "sid": "e1a49be4-4645-4e61-b424-f7257a30eadb"
+              "session_id": "825f3e9c-7a52-4c86-81ec-18a2cfd358e1",
+              "sid": "825f3e9c-7a52-4c86-81ec-18a2cfd358e1"
             }
           ]
         }
