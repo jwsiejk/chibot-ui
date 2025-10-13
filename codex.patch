@@ -1,8 +1,42 @@
 diff --git a/e2e_orchestrator.js b/e2e_orchestrator.js
-index bf110e8aa227ed2021156c839e36337e8a58bc9c..4a0defe568d83f38dddd915d979f9bc3d965c105 100644
+index bf110e8aa227ed2021156c839e36337e8a58bc9c..06177e1ac2ceda7daa54de9861bb3676da8b8d71 100644
 --- a/e2e_orchestrator.js
 +++ b/e2e_orchestrator.js
-@@ -246,51 +246,68 @@ async function installCustomMicrophone(context, spec) {
+@@ -1,31 +1,32 @@
+ // e2e_orchestrator.js
+ // Run:
+ //   npm i -D playwright
+ //   npx playwright install chromium
+ //   # optional: npx playwright install chrome
+-//   node e2e_orchestrator.js askchip_e2e_tests.json --base https://chibot-ui.onrender.com/ [--chrome] [--dump-ui] [--start "<selector|text|xpath>"] [--start-eval "window.startCall()"]
++//   node e2e_orchestrator.js askchip_e2e_tests.json --base https://chibot-ui.onrender.com/ [--chrome] [--dump-ui] [--start "<selector|text|xpath>"] [--start-eval "window.startCall()"] [--login-email you@example.com]
++//     (auto-login defaults to AskChip admin; override via --login-email or ASKCHIP_E2E_LOGIN_EMAIL, disable with "none")
+ 
+ const fs = require('fs');
+ const path = require('path');
+ const { chromium } = require('playwright');
+ 
+ function readUInt32LE(buf, offset) { return buf.readUInt32LE(offset); }
+ function readUInt16LE(buf, offset) { return buf.readUInt16LE(offset); }
+ 
+ function decodeWav(buffer) {
+   if (buffer.toString('ascii', 0, 4) !== 'RIFF') throw new Error('Invalid WAV: missing RIFF header');
+   if (buffer.toString('ascii', 8, 12) !== 'WAVE') throw new Error('Invalid WAV: missing WAVE header');
+ 
+   let offset = 12;
+   let audioFormat = null;
+   let numChannels = null;
+   let sampleRate = null;
+   let bitsPerSample = null;
+   let dataStart = null;
+   let dataLength = null;
+ 
+   while (offset + 8 <= buffer.length) {
+     const chunkId = buffer.toString('ascii', offset, offset + 4);
+     const chunkSize = readUInt32LE(buffer, offset + 4);
+     const chunkDataStart = offset + 8;
+     if (chunkId === 'fmt ') {
+@@ -246,51 +247,68 @@ async function installCustomMicrophone(context, spec) {
          for (const track of videoStream.getVideoTracks()) stream.addTrack(track);
        }
        return stream;
@@ -46,7 +80,7 @@ index bf110e8aa227ed2021156c839e36337e8a58bc9c..4a0defe568d83f38dddd915d979f9bc3
 +    }
 +  }
 +  if (!autoLoginEmail && !disableAutoLogin) autoLoginEmail = 'jwsiejk@purestorage.com';
-+  return { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail };
++  return { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail, disableAutoLogin };
  }
  
  // ---- IN-PAGE SSE collector (uses cookies/session) ----
@@ -72,7 +106,7 @@ index bf110e8aa227ed2021156c839e36337e8a58bc9c..4a0defe568d83f38dddd915d979f9bc3
        try { window.__adminCollector.source.close(); } catch {}
      }
  
-@@ -452,50 +469,135 @@ async function checkDomExpectations(page, expectDom, artifactsDir, probeId){
+@@ -452,50 +470,135 @@ async function checkDomExpectations(page, expectDom, artifactsDir, probeId){
  
  // ---- Start clickers ----
  const TEXT_VARIANTS = [
@@ -208,7 +242,7 @@ index bf110e8aa227ed2021156c839e36337e8a58bc9c..4a0defe568d83f38dddd915d979f9bc3
      }, rxSource);
      attempts.push({ ok: ok, selector: 'evaluate:text', text: rxSource });
      return ok;
-@@ -1108,100 +1210,110 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}
+@@ -1108,100 +1211,110 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}
          }
        }
        if (cond.ws_console_goal_missing) {
@@ -321,7 +355,7 @@ index bf110e8aa227ed2021156c839e36337e8a58bc9c..4a0defe568d83f38dddd915d979f9bc3
    }
  
    fs.writeFileSync(path.join(dir, 'start_click_attempts.json'), JSON.stringify(attempts,null,2));
-@@ -1241,65 +1353,65 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
+@@ -1241,65 +1354,73 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
  
    // Artifacts
    fs.writeFileSync(path.join(dir,'admin_logs.json'), JSON.stringify(adminLogs,null,2));
@@ -348,7 +382,15 @@ index bf110e8aa227ed2021156c839e36337e8a58bc9c..4a0defe568d83f38dddd915d979f9bc3
  
  async function main() {
 -  const { specPath, base, useChrome, dumpUI, startOverride, startEval } = parseCLI();
-+  const { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail } = parseCLI();
++  const { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail, disableAutoLogin } = parseCLI();
++
++  if (autoLoginEmail) {
++    console.log(`[auto-login] Using admin email ${autoLoginEmail} (set --login-email or ASKCHIP_E2E_LOGIN_EMAIL to change, use "none" to disable).`);
++  } else if (disableAutoLogin) {
++    console.log('[auto-login] Disabled; provide --login-email <address> or ASKCHIP_E2E_LOGIN_EMAIL to re-enable.');
++  } else {
++    console.log('[auto-login] No email configured; set --login-email <address> or ASKCHIP_E2E_LOGIN_EMAIL.');
++  }
    const spec = readJSON(specPath);
    const baseUrl = (spec.endpoints?.ui_base_url && !/your_domain/i.test(spec.endpoints.ui_base_url))
      ? spec.endpoints.ui_base_url

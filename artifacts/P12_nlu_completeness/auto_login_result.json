@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "email": "jwsiejk@purestorage.com",
+  "login": {
+    "status": 200,
+    "ok": true,
+    "data": {
+      "email": "jwsiejk@purestorage.com",
+      "ok": true,
+      "profile": {
+        "email": "jwsiejk@purestorage.com",
+        "name": "James Siejk",
+        "profile_complete": true,
+        "region": "NorthEast",
+        "title": "Partner Techncial Manager"
+      },
+      "profile_complete": true
+    }
+  },
+  "me": {
+    "status": 200,
+    "ok": true,
+    "data": {
+      "authenticated": true,
+      "email": "jwsiejk@purestorage.com",
+      "ok": true,
+      "profile": {
+        "email": "jwsiejk@purestorage.com",
+        "name": "James Siejk",
+        "profile_complete": true,
+        "region": "NorthEast",
+        "title": "Partner Techncial Manager"
+      },
+      "profile_complete": true
+    }
+  },
+  "profile_complete": true
+}
