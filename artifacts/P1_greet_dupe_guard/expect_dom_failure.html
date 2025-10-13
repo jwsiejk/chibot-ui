@@ -1,7 +1,7 @@
 <!DOCTYPE html><html lang="en"><head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="csrf" content="85711eb7a76da8c8b3ab2da748b8ae6d">
+  <meta name="csrf" content="76a7980128d80f2be3bb197267de4ac6">
   <title>Ask Chip</title>
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
@@ -15,7 +15,7 @@
           <span class="askchip-caret" aria-hidden="true">▾</span>
         </button>
         <div id="menuDropdown" class="dropdown-content hidden" role="menu" aria-labelledby="menuAskChip">
-          <a id="menuAdmin" role="menuitem" href="/admin" style="display: none;">Admin</a>
+          <a id="menuAdmin" role="menuitem" href="/admin" style="">Admin</a>
           <a id="menuProfile" role="menuitem" href="#">Profile</a>
           <a id="menuLogout" role="menuitem" href="#">Logout</a>
         </div>
@@ -56,7 +56,7 @@
 
     <div class="meeting-toolbar">
       <div class="toolbar-buttons">
-        <button id="startButton" class="primary" title="Please complete your profile to continue" disabled="">Start</button>
+        <button id="startButton" class="primary" title="" disabled="">Start</button>
         <button id="endButton">End</button>
         <span id="stateDot" class="dot dot-ready" title="Ready"></span>
       </div>
@@ -64,7 +64,7 @@
   </main>
 
   <!-- Login / Profile Modals -->
-  <div id="loginModal" class="modal">
+  <div id="loginModal" class="modal hidden">
     <div class="sheet">
       <h3>Sign in</h3>
       <p>Login with your Trace3 or Pure email.</p>
@@ -119,11 +119,11 @@
   </script>
   
   <script>
-    window.__askchipAssetVersion = "1760388075";
+    window.__askchipAssetVersion = "1760395582";
   </script>
-  <script type="module" src="/static/js/askchip_client_hooks.js?v=1760388075"></script>
-  <script type="module" src="/static/js/bootstrap.js?v=1760388075"></script>
-  <script type="module" src="/static/js/auth_gate.js?v=1760388075"></script>
-  <script type="module" src="/static/js/ui_menu.js?v=1760388075"></script>
+  <script type="module" src="/static/js/askchip_client_hooks.js?v=1760395582"></script>
+  <script type="module" src="/static/js/bootstrap.js?v=1760395582"></script>
+  <script type="module" src="/static/js/auth_gate.js?v=1760395582"></script>
+  <script type="module" src="/static/js/ui_menu.js?v=1760395582"></script>
 
 </body></html>
