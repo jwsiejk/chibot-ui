@@ -1,6 +1,18 @@
 [
   {
+    "event": "heartbeat",
+    "at": 1760389279348
+  },
+  {
+    "event": "heartbeat",
+    "at": 1760389282550
+  },
+  {
+    "event": "heartbeat",
+    "at": 1760389285626
+  },
+  {
     "event": "collector_error",
-    "message": "page.evaluate: Target page, context or browser has been closed"
+    "message": "eventsource_error"
   }
 ]

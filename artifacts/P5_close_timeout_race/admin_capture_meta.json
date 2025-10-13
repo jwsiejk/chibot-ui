@@ -1,4 +1,4 @@
 {
-  "error": "page.evaluate: Target page, context or browser has been closed",
-  "captureState": null
+  "error": "eventsource_error",
+  "captureState": "active"
 }
