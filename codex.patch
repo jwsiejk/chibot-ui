@@ -1,582 +1,113 @@
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 28ad66bc9b9812fd10c137f97fc28464cd3ec428..7d74bf6f77c73b207e2560e07c8aab9244a66d73 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -37,50 +37,55 @@ def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
-     if not email:
-         try:
-             email = get_user() or None
-         except Exception:
-             email = None
-     if isinstance(email, str) and "@" in email:
-         first = email.split("@",1)[0].split(".")[0].replace("_"," ").replace("-", " ").strip()
-         if first:
-             return first.title()
-     return "there"
- 
- _GOAL_ASKS = [
-     "what would you like to accomplish today?",
-     "what's the goal for this session?",
-     "what do you want to get done today?",
-     "what should we tackle first?",
-     "what outcome are you aiming for today?",
- ]
- 
- _CHIP_INTRO_RE = re.compile(r"^hey[\s,\-–—]*i['’`]?m\s+chip[.!\s]*$", re.IGNORECASE)
- 
- _TTS_COMPLETION_LOCK = threading.Lock()
- _TTS_COMPLETION_EVENTS: Dict[str, Dict[str, threading.Event]] = {}
- _TTS_LATEST_TURN: Dict[str, str] = {}
- 
-+_FOUNDATION_FAILURE_LOCK = threading.Lock()
-+_FOUNDATION_DISABLED_UNTIL: float = 0.0
-+_FOUNDATION_LAST_ERROR: Optional[str] = None
-+_FOUNDATION_BACKOFF_SECONDS = 30.0
-+
- 
- def _tts_event_key(turn_id: Optional[str]) -> str:
-     return str(turn_id) if turn_id is not None else "greet"
- 
- 
- def _prepare_tts_completion_event(session_id: str, turn_key: str) -> threading.Event:
-     event = threading.Event()
-     with _TTS_COMPLETION_LOCK:
-         session_events = _TTS_COMPLETION_EVENTS.setdefault(session_id, {})
-         session_events[turn_key] = event
-         _TTS_LATEST_TURN[session_id] = turn_key
-     return event
- 
- 
- def _signal_tts_completion(session_id: str, turn_key: str) -> None:
-     with _TTS_COMPLETION_LOCK:
-         session_events = _TTS_COMPLETION_EVENTS.get(session_id)
-         if not session_events:
-             _TTS_LATEST_TURN.pop(session_id, None)
-             return
-         event = session_events.get(turn_key)
-         if event:
-             event.set()
-         session_events.pop(turn_key, None)
-         if not session_events:
-@@ -539,50 +544,52 @@ def _log_policy_decision(*,
- 
-         if callable(_admin_emit):
-             label_move = (
-                 resolved_move_name
-                 or policy_move_name
-                 or normalized_action_name
-                 or seed_move_name
-                 or "unknown"
-             )
-             try:
-                 _admin_emit(
-                     "policy_decision",
-                     event="policy_decision",
-                     label=f"policy_decision: {label_move}",
-                     **payload,
-                 )
-             except Exception:
-                 pass
-     except Exception:
-         pass
- 
- 
- def _should_use_foundation(seed_text: str) -> bool:
-     if not ENABLE_CHIP_FOUNDATION:
-         return False
-+    if _foundation_backoff_active():
-+        return False
-     try:
-         normalized = str(seed_text or "").strip().lower()
-     except Exception:
-         return False
-     if not normalized:
-         return False
-     return True
- 
- 
- _POLICY_SUGGESTION_ACTIONS = frozenset({"clarify", "ask_clarify", "offer_steps"})
- _WELCOME_MOVE = "offer_steps"
- _WELCOME_INTENTS = {"greet", "idle"}
- 
- _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
- 
- 
- def _get_dialog_action(meta: Optional[Dict[str, Any]]) -> Optional[str]:
-     if not isinstance(meta, dict):
-         return None
-     action = meta.get(_DIALOG_ACTION_KEY)
-     if action:
-         return action
-     return meta.get("action")
- 
- 
-@@ -971,51 +978,55 @@ def _format_next_actions(text: str, meta: Optional[Dict[str, Any]]) -> str:
-         cleaned = _truncate_chars(item, max_chars)
-         trimmed.append(f"• {cleaned}")
-     if verbosity == "brief":
-         return "\n".join(trimmed)
-     return "Next actions:\n" + "\n".join(trimmed)
- 
- 
- def _apply_action_shape(action: str,
-                         text: str,
-                         meta: Optional[Dict[str, Any]]) -> str:
-     if not text:
-         return text
-     normalized = (action or "").strip().lower()
-     if normalized in {"give_brief_answer", "high_level", "clarify"}:
-         return _format_brief_answer(text, meta)
-     if normalized == "offer_steps":
-         return _format_offer_steps(text, meta)
-     if normalized == "summarize_next_actions":
-         return _format_next_actions(text, meta)
-     return text
- 
- 
- def _call_foundation_llm(messages: List[Dict[str, str]],
-                          cfg: Dict[str, Any],
-                          telemetry: Optional[NluLoggingContext] = None) -> Tuple[str, Dict[str, Any]]:
--    client = make_openai_client()
-+    try:
-+        client = make_openai_client()
-+    except Exception as exc:
-+        _note_foundation_failure(exc)
-+        raise
-     model = (
-         cfg.get("openai_model")
-         or cfg.get("OPENAI_MODEL")
-         or os.getenv("OPENAI_MODEL")
-         or "gpt-4o-mini"
-     )
-     temperature = float(cfg.get("gen_temperature", 0.3))
-     top_p = float(cfg.get("gen_top_p", 1.0))
-     payload = [dict(m) for m in messages]
-     prompt_tokens_estimate = 0
-     for msg in payload:
-         content = msg.get("content")
-         if isinstance(content, str):
-             prompt_tokens_estimate += len(content.split())
-     cache_status = str(cfg.get("foundation_cache_status") or "unknown")
-     tool_allowlist = cfg.get("tool_allowlist")
-     allowlist_payload: Optional[Iterable[str]] = None
-     if isinstance(tool_allowlist, (list, tuple, set)):
-         allowlist_payload = tool_allowlist
-     elif tool_allowlist is not None:
-         allowlist_payload = [str(tool_allowlist)]
-     if telemetry:
-         telemetry.log_llm_request(
-             model=model,
-             temperature=temperature,
-@@ -1790,50 +1801,86 @@ def _summarize_persona_trace(trace: Optional[Dict[str, Any]],
- 
- def _log_persona_applied(turn_id: str,
-                          trace: Optional[Dict[str, Any]],
-                          cfg: Optional[Dict[str, Any]],
-                          *,
-                          persona: Optional[Dict[str, Any]] = None,
-                          meta: Optional[Dict[str, Any]] = None) -> None:
-     try:
-         persona_level, persona_elements, guardrails = _summarize_persona_trace(
-             trace,
-             cfg,
-             persona=persona,
-             meta=meta,
-         )
-         _jlog(
-             "persona_applied",
-             turn_id=str(turn_id),
-             persona_level=persona_level,
-             persona_elements=persona_elements,
-             guardrails_suppressed=guardrails,
-         )
-     except Exception:
-         pass
- 
- 
-+def _foundation_backoff_active(now: Optional[float] = None) -> bool:
-+    global _FOUNDATION_DISABLED_UNTIL, _FOUNDATION_LAST_ERROR
-+    if now is None:
-+        now = _t.time()
-+    with _FOUNDATION_FAILURE_LOCK:
-+        if _FOUNDATION_DISABLED_UNTIL <= 0:
-+            return False
-+        if now >= _FOUNDATION_DISABLED_UNTIL:
-+            _FOUNDATION_DISABLED_UNTIL = 0.0
-+            _FOUNDATION_LAST_ERROR = None
-+            return False
-+        return True
-+
-+
-+def _note_foundation_failure(exc: Optional[BaseException] = None,
-+                             *,
-+                             backoff_seconds: Optional[float] = None) -> None:
-+    global _FOUNDATION_DISABLED_UNTIL, _FOUNDATION_LAST_ERROR
-+    duration = _FOUNDATION_BACKOFF_SECONDS if backoff_seconds is None else float(backoff_seconds or 0.0)
-+    now = _t.time()
-+    with _FOUNDATION_FAILURE_LOCK:
-+        if duration <= 0:
-+            _FOUNDATION_DISABLED_UNTIL = now
-+        else:
-+            _FOUNDATION_DISABLED_UNTIL = now + duration
-+        if exc is not None:
-+            _FOUNDATION_LAST_ERROR = exc.__class__.__name__
-+
-+
-+def _clear_foundation_failure() -> None:
-+    global _FOUNDATION_DISABLED_UNTIL, _FOUNDATION_LAST_ERROR
-+    with _FOUNDATION_FAILURE_LOCK:
-+        _FOUNDATION_DISABLED_UNTIL = 0.0
-+        _FOUNDATION_LAST_ERROR = None
-+
-+
- def _should_skip_legacy(meta: Optional[Dict[str, Any]]) -> bool:
-     if not meta:
-         return False
-     if bool(meta.get("skip_legacy_fallback")):
-         return True
-     source = str(meta.get("source", "") or "").strip().lower()
-     if source in _WS_SOURCES:
-         return True
-     return False
- 
- 
- def _allocate_turn_id(force_turn_id: Optional[str]) -> str:
-     if force_turn_id is not None:
-         db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
-         return str(force_turn_id)
-     turn_seq = db.memory.setdefault('turn_seq', 0) + 1
-     db.memory['turn_seq'] = turn_seq
-     return str(turn_seq)
- 
- 
- def make_assistant_frames(seed_text: str,
-                           session_id: str,
-                           meta: Optional[Dict] = None,
-                           correlation_user_msg_id: Optional[str] = None,
-                           *,
-@@ -1942,50 +1989,54 @@ def make_assistant_frames(seed_text: str,
- 
-         fallback_on_empty = _cfg_flag("assistant_fallback_on_empty", True)
-         fallback_on_error = _cfg_flag("assistant_fallback_on_error", True)
-         fallback_emit_event = _cfg_flag("assistant_fallback_emit_event", True)
- 
-         if _should_use_foundation(seed_text):
-             try:
-                 return _make_foundation_frames(
-                     seed_text,
-                     session_id,
-                     meta,
-                     cfg,
-                     correlation_user_msg_id=correlation_user_msg_id,
-                     turn_id=turn_id,
-                     telemetry=context,
-                     is_greet=is_greet,
-                     fallback_line=fallback_line,
-                     fallback_on_empty=fallback_on_empty,
-                     fallback_on_error=fallback_on_error,
-                     fallback_emit_event=fallback_emit_event,
-                     action=action,
-                     broadcast_immediately=broadcast_immediately,
-                 )
-             except Exception as e:
-                 context.log_error("foundation_pipeline_error", str(e))
-+                _note_foundation_failure(e)
-+                skip_legacy = False
-+                if isinstance(meta, dict):
-+                    meta.pop("skip_legacy_fallback", None)
-                 try:
-                     _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
-                 except Exception:
-                     pass
- 
-         if skip_legacy:
-             return None, []
- 
-         return _make_legacy_frames(
-             seed_text,
-             session_id,
-             meta,
-             cfg,
-             correlation_user_msg_id=correlation_user_msg_id,
-             turn_id=turn_id,
-             telemetry=context,
-             is_greet=is_greet,
-             fallback_line=fallback_line,
-             fallback_on_empty=fallback_on_empty,
-             fallback_on_error=fallback_on_error,
-             fallback_emit_event=fallback_emit_event,
-             action=action,
-             labels=classified_labels,
-             policy=classified_policy,
-             broadcast_immediately=broadcast_immediately,
-@@ -2140,50 +2191,52 @@ def _make_foundation_frames(seed_text: str,
-     _log_persona_applied(
-         turn_id,
-         persona_trace,
-         cfg,
-         persona=persona,
-         meta=meta,
-     )
- 
-     kb_count = 0
-     try:
-         kb_candidates = meta.get('kb_snippets') if isinstance(meta, dict) else None
-         if isinstance(kb_candidates, (list, tuple)):
-             kb_count = len(kb_candidates)
-     except Exception:
-         kb_count = 0
-     telemetry.log_prompt_summary(messages=messages, prompt_hash=prompt_hash, kb_count=kb_count)
- 
-     use_llm = True
-     llm_info: Dict[str, Any] = {}
-     if use_llm:
-         try:
-             foundation_result = _call_foundation_with_retry(messages, cfg, telemetry=telemetry)
-         except Exception as exc:
-             telemetry.log_error("foundation_call_error", str(exc))
-             raise
-+        else:
-+            _clear_foundation_failure()
-         if isinstance(foundation_result, tuple) and len(foundation_result) == 2:
-             reply, llm_info = foundation_result
-         else:
-             reply = foundation_result
-             llm_info = {}
-     fallback_fired = False
-     fallback_reason: Optional[str] = None
- 
-     if use_llm:
-         if fallback_on_error and not reply and not fallback_fired:
-             # Foundation path has no explicit error flag; treat empty as error when allowed.
-             reply = fallback_line
-             fallback_fired = True
-             fallback_reason = "empty"
-         elif fallback_on_empty and not (reply or "").strip():
-             reply = fallback_line
-             fallback_fired = True
-             fallback_reason = "empty"
- 
-     safe_reply = _scrub_debug_stamps(reply)
- 
-     if use_llm and not fallback_fired:
-         shaped = _apply_action_shape(normalized_action, safe_reply, meta)
-         if shaped:
-             safe_reply = shaped
-diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
-index ef81bb5d6329b6fae8353fd19917e38a8d96fbcb..6b4eaedebffae936a077c4c45092fd955bce245d 100644
---- a/tests/test_streaming_ws_fallbacks.py
-+++ b/tests/test_streaming_ws_fallbacks.py
-@@ -72,50 +72,99 @@ def test_short_greeting_preserves_sentence():
- 
- def test_make_assistant_frames_ws_skips_legacy(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     legacy_called = False
- 
-     def fake_legacy(*args, **kwargs):  # pragma: no cover - should never be invoked
-         nonlocal legacy_called
-         legacy_called = True
-         return "legacy", [{"type": "assistant_end", "turn_id": "legacy"}]
- 
-     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
-     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
- 
-     tid, frames = streaming.make_assistant_frames(
-         "hello",
-         "session-ws",
-         meta={"source": "user_ws"},
-     )
- 
-     assert tid is None
-     assert frames == []
-     assert legacy_called is False
- 
- 
-+def test_make_assistant_frames_foundation_failure_uses_legacy(monkeypatch):
-+    _stub_config(monkeypatch)
-+
-+    monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
-+    monkeypatch.setattr(streaming, "_FOUNDATION_DISABLED_UNTIL", 0.0)
-+    monkeypatch.setattr(streaming, "_FOUNDATION_LAST_ERROR", None)
-+    monkeypatch.setattr(streaming.db, "memory", {})
-+
-+    def fake_prepare(seed_text, meta, cfg=None, telemetry=None):
-+        prepared = dict(meta or {})
-+        return prepared, {}, {}
-+
-+    monkeypatch.setattr(streaming, "prepare_turn_metadata", fake_prepare)
-+
-+    def raising_foundation(*args, **kwargs):
-+        raise RuntimeError("foundation boom")
-+
-+    monkeypatch.setattr(streaming, "_make_foundation_frames", raising_foundation)
-+
-+    legacy_called = {"count": 0}
-+
-+    def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
-+        legacy_called["count"] += 1
-+        turn_id = kwargs.get("turn_id") or kwargs.get("force_turn_id") or "legacy-turn"
-+        frames = [
-+            {"type": "assistant_chunk", "turn_id": turn_id, "text": "legacy reply", "kb_hits": 0},
-+            {"type": "assistant_end", "turn_id": turn_id},
-+        ]
-+        if kwargs.get("broadcast_immediately", True):
-+            streaming._broadcast_frames(session_id, frames, turn_id)
-+        return turn_id, frames
-+
-+    monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
-+
-+    tid, frames = streaming.make_assistant_frames(
-+        "hello",
-+        "session-fallback",
-+        meta={"source": "ws_greet", "skip_legacy_fallback": True},
-+        broadcast_immediately=False,
-+    )
-+
-+    assert tid
-+    assert frames and frames[0]["turn_id"] == tid and frames[0]["text"] == "legacy reply"
-+    assert legacy_called["count"] == 1
-+    assert not streaming._should_use_foundation("followup")
-+    streaming._clear_foundation_failure()
-+    assert streaming._should_use_foundation("followup")
-+
-+
- def test_run_ws_greet_uses_foundation_frames(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
- 
-     captured = {"called": 0}
- 
-     def fake_foundation(seed_text, session_id, meta, cfg, **kwargs):
-         captured["called"] += 1
-         captured["seed_text"] = seed_text
-         turn_id = kwargs.get("force_turn_id") or "tid-foundation"
-         frames = [
-             {"type": "assistant_chunk", "turn_id": turn_id, "text": "foundation hello", "kb_hits": 0},
-             {"type": "assistant_end", "turn_id": turn_id},
-         ]
-         captured["frames"] = frames
-         return turn_id, frames
- 
-     monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
- 
-     outage_calls = []
-     monkeypatch.setattr(streaming, "_emit_ws_outage", lambda *a, **k: outage_calls.append((a, k)))
- 
-     tts_texts = []
- 
-@@ -152,50 +201,112 @@ def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
-         turn_id = kwargs.get("force_turn_id") or "tid-greet"
-         if action == "clarify":
-             text = fallback_text
-         else:
-             text = "foundation hello"
-         frames = [
-             {"type": "assistant_chunk", "turn_id": turn_id, "text": text, "kb_hits": 0},
-             {"type": "assistant_end", "turn_id": turn_id},
-         ]
-         captured["frames"] = frames
-         captured["action"] = action
-         captured["fallback_text"] = fallback_text
-         return turn_id, frames
- 
-     monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
-     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
-     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
- 
-     tid = streaming.run_ws_greet("session-no-clarify")
- 
-     assert tid == captured["frames"][0]["turn_id"]
-     assert captured["action"] == "offer_steps"
-     assert captured["frames"][0]["text"] != captured["fallback_text"]
- 
- 
-+def test_run_ws_greet_falls_back_to_legacy_on_foundation_error(monkeypatch):
-+    _stub_config(monkeypatch)
-+
-+    monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
-+    monkeypatch.setattr(streaming, "_FOUNDATION_DISABLED_UNTIL", 0.0)
-+    monkeypatch.setattr(streaming, "_FOUNDATION_LAST_ERROR", None)
-+    monkeypatch.setattr(streaming.db, "memory", {})
-+
-+    monkeypatch.setattr(streaming.nudges, "cancel_idle_timers", lambda *a, **k: None)
-+    monkeypatch.setattr(streaming.nudges, "arm_idle_timers", lambda *a, **k: None)
-+    monkeypatch.setattr(streaming, "should_emit_phase", lambda *a, **k: True)
-+    monkeypatch.setattr(streaming, "set_phase", lambda *a, **k: None)
-+
-+    def fake_prepare(seed_text, meta, cfg=None, telemetry=None):
-+        prepared = dict(meta or {})
-+        return prepared, {}, {}
-+
-+    monkeypatch.setattr(streaming, "prepare_turn_metadata", fake_prepare)
-+
-+    def raise_foundation(*args, **kwargs):
-+        raise RuntimeError("foundation failed")
-+
-+    monkeypatch.setattr(streaming, "_make_foundation_frames", raise_foundation)
-+
-+    captured_frames = []
-+
-+    def capture_frames(session_id, frames, turn_id=None):
-+        for fr in frames:
-+            captured_frames.append(fr)
-+
-+    monkeypatch.setattr(streaming, "_broadcast_frames", capture_frames)
-+
-+    def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
-+        turn_id = kwargs.get("turn_id") or kwargs.get("force_turn_id") or "legacy-turn"
-+        frames = [
-+            {"type": "assistant_chunk", "turn_id": turn_id, "text": "legacy greet", "kb_hits": 0},
-+            {"type": "assistant_end", "turn_id": turn_id},
-+        ]
-+        if kwargs.get("broadcast_immediately", True):
-+            streaming._broadcast_frames(session_id, frames, turn_id)
-+        return turn_id, frames
-+
-+    monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
-+
-+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
-+
-+    bus_events = []
-+    monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: bus_events.append((a, k)))
-+
-+    monkeypatch.setattr(streaming, "get_or_create_greet_turn", lambda *a, **k: ("legacy-turn", False))
-+
-+    tid = streaming.run_ws_greet("session-failure")
-+
-+    assert tid
-+    assert any(fr.get("type") == "assistant_chunk" and fr.get("text") == "legacy greet" for fr in captured_frames)
-+    assert any(fr.get("type") == "assistant_end" for fr in captured_frames)
-+    assert not any(streaming._WS_PIPELINE_MESSAGE in (frame.get("text") or "") for frame in captured_frames if isinstance(frame, dict))
-+    assert not streaming._should_use_foundation("next")
-+    streaming._clear_foundation_failure()
-+    assert streaming._should_use_foundation("next")
-+
-+
- def test_run_ws_greet_surfaces_tts_failure(monkeypatch):
-     _stub_config(monkeypatch)
- 
-     from tests.tts_stub_provider import RaisingTTSProvider
- 
-     monkeypatch.setattr(streaming, "should_emit_phase", lambda *_: True)
-     monkeypatch.setattr(streaming, "set_phase", lambda *a, **k: None)
-     monkeypatch.setattr(streaming.nudges, "cancel_idle_timers", lambda *a, **k: None)
- 
-     idle_calls = []
- 
-     def _capture_idle(session_id, reason=""):
-         idle_calls.append((session_id, reason))
- 
-     monkeypatch.setattr(streaming.nudges, "arm_idle_timers", _capture_idle)
- 
-     broadcast_frames = []
- 
-     def _capture_broadcast(session_id, frame):
-         if isinstance(frame, dict):
-             broadcast_frames.append(frame)
- 
-     monkeypatch.setattr(streaming.bus, "broadcast", _capture_broadcast)
- 
-     monkeypatch.setattr(
+diff --git a/static/js/askchip_client_hooks.js b/static/js/askchip_client_hooks.js
+index 91df5051bab3d9f0b33450354226db104ef0bfa6..cc8aa3af860b1740a41670549d2c8fc43abeb6ae 100644
+--- a/static/js/askchip_client_hooks.js
++++ b/static/js/askchip_client_hooks.js
+@@ -5,50 +5,51 @@
+   async function postAdmin(evt) {
+     try {
+       await fetch(ADMIN_POST, {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         credentials: "include",
+         body: JSON.stringify(evt),
+       });
+     } catch {}
+   }
+ 
+   // Minimal upstream hook; wire this to your WS uplink if not present.
+   if (!window.askchip) window.askchip = {};
+   if (typeof window.askchip.audioUp !== "function") {
+     window.askchip.audioUp = function noop(_) {};
+   }
+ 
+   // Expose a start hook so tests can trigger the same flow your Start button uses.
+   if (typeof window.startCall !== "function") {
+     window.startCall = function () {
+       // no-op placeholder; your UI can replace this to match the real Start.
+       // The E2E runner can still click your Start button; this is a fallback.
+       console.log("[askchip] startCall() placeholder");
+       return true;
+     };
++    window.startCall.__askchipPlaceholder = true;
+   }
+ 
+   window.askchip.armMic = async function armMic() {
+     try {
+       const stream = await navigator.mediaDevices.getUserMedia({
+         audio: { echoCancellation: true, noiseSuppression: true },
+       });
+ 
+       const mr = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+ 
+       // Tell admin we are containerized (P4)
+       postAdmin({ event: "media", containerized: true, container: "webm/opus" });
+ 
+       let started = false;
+       mr.ondataavailable = (e) => {
+         if (!e.data || !e.data.size) return;
+         if (!started) {
+           started = true;
+           postAdmin({ event: "asr:start" }); // P2
+         }
+         try { window.askchip.audioUp(e.data); } catch {}
+       };
+ 
+       mr.start(150); // 150ms
+       console.log("[askchip] mic armed");
+diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
+index 371c6e7f64b945159b47598fcee4230f3576e537..86f36130570e8f7618069a09e2630b85c96f4ded 100644
+--- a/static/js/bootstrap.js
++++ b/static/js/bootstrap.js
+@@ -305,51 +305,51 @@ async function startOnce(){
+     setDot('ready');
+     try { Visualizer.stop({ reset: true }); } catch {}
+   } finally {
+     startInFlight = false;
+   }
+ }
+ 
+ function wireUI(){
+   // Safety guard: prevent duplicate UI wiring if module loaded twice
+   if (window.__bootstrapWired) {
+     _console('warn', '[bootstrap] duplicate wiring prevented');
+     return;
+   }
+   window.__bootstrapWired = true;
+ 
+   wireVoiceEventsOnce();
+ 
+   const startBtn = document.getElementById('startButton');
+   const endBtn   = document.getElementById('endButton');
+   const sendBtnA = document.getElementById('composerSend');
+   const sendBtnB = document.getElementById('sendBtn');
+   const form     = document.getElementById('composerForm');
+   const composer = document.getElementById('composer');
+ 
+   if (startBtn) startBtn.addEventListener('click', startOnce);
+-  if (typeof window.startCall !== 'function') {
++  if (typeof window.startCall !== 'function' || window.startCall.__askchipPlaceholder) {
+     window.startCall = () => startOnce();
+   }
+   if (endBtn)   endBtn.addEventListener('click', () => {
+     try { disarmVAD(); } catch {}
+     try { Visualizer.stop({ reset: true }); } catch {}
+     App.onEnd();
+   });
+ 
+   // Stop TTS as soon as user interacts to send or type (soft barge-in polish)
+   const stopAudio = () => { try { stopPlayback(); } catch {} };
+ 
+   const bindSend = (btn) => {
+     if (!btn) return;
+     btn.addEventListener('click', (e) => { stopAudio(); App.onSend(); });
+   };
+   bindSend(sendBtnA);
+   bindSend(sendBtnB);
+ 
+   if (form) form.addEventListener('submit', (e) => { e.preventDefault(); stopAudio(); App.onSend(); });
+ 
+   if (composer) {
+     composer.addEventListener('keydown', (ev) => {
+       stopAudio();
+       if (ev.key !== 'Enter') return;
+       if (ev.shiftKey || ev.ctrlKey || ev.altKey || ev.metaKey) return;

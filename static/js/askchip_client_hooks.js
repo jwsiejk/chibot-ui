@@ -27,6 +27,7 @@
       console.log("[askchip] startCall() placeholder");
       return true;
     };
+    window.startCall.__askchipPlaceholder = true;
   }
 
   window.askchip.armMic = async function armMic() {
