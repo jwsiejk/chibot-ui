@@ -99,6 +99,8 @@ def _api_key_info(*, log: bool = True, logger_obj: logging.Logger = logger) -> t
         key = ""
     key = str(key).strip()
     if not key:
+        if DG_TEST_MODE:
+            return "test", 4
         raise RuntimeError("DEEPGRAM_API_KEY is not set")
     length = len(key)
     global _DG_KEY_PROBED
@@ -184,6 +186,23 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             containerized = bool(overrides["_transport"].get("containerized_opus"))
     except Exception:
         containerized = False
+
+    if isinstance(overrides, dict):
+        try:
+            transport_cfg = overrides.setdefault("_transport", {})
+            if not isinstance(transport_cfg, dict):
+                transport_cfg = {}
+                overrides["_transport"] = transport_cfg
+        except Exception:
+            transport_cfg = {}
+
+        if not containerized:
+            transport_cfg["containerized_opus"] = True
+            transport_cfg["_containerized_forced"] = True
+            containerized = True
+
+        transport_cfg.setdefault("container", "webm")
+        transport_cfg.setdefault("codec", "opus")
 
     # Append conservative defaults ONLY when not containerized
     if (not containerized) and ("encoding=" not in base):
@@ -340,6 +359,114 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
 def _auth_header(*, log: bool = True, logger_obj: logging.Logger = logger) -> str:
     key, _ = _api_key_info(log=log, logger_obj=logger_obj)
     return f"Token {key}"
+
+
+def _client_url_metadata(url: str, overrides: Optional[dict]) -> tuple[str, str, dict[str, Any]]:
+    """Return (safe_url, sanitized_query, meta) for diagnostics/clients."""
+
+    transport = {}
+    try:
+        if overrides and isinstance(overrides.get("_transport"), dict):
+            transport = dict(overrides.get("_transport") or {})
+    except Exception:
+        transport = {}
+
+    containerized = bool(transport.get("containerized_opus"))
+    container = transport.get("container")
+    codec = transport.get("codec")
+    normalized_pcm = bool(transport.get("normalized_pcm"))
+
+    safe_url = url
+    sanitized_qs = "?"
+    meta: dict[str, Any] = {
+        "container": container,
+        "codec": codec,
+        "containerized_opus": containerized,
+        "normalized_pcm": normalized_pcm,
+        "omitted_params": None,
+        "raw_params": None,
+    }
+
+    try:
+        import urllib.parse as _p
+
+        parts = _p.urlsplit(url)
+        q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
+
+        raw_param_keys = {"encoding", "sample_rate", "channels"}
+        if containerized:
+            omitted = []
+            for key in raw_param_keys:
+                if key not in q:
+                    omitted.append(key)
+            meta["omitted_params"] = omitted
+        else:
+            meta["raw_params"] = {
+                "encoding": q.get("encoding"),
+                "sample_rate": q.get("sample_rate"),
+                "channels": q.get("channels"),
+            }
+
+        sanitized_pairs = []
+        for key in sorted(q.keys()):
+            if key is None:
+                continue
+            key_str = str(key)
+            lower = key_str.lower()
+            if "key" in lower or "token" in lower or "secret" in lower:
+                continue
+            if containerized and key_str in raw_param_keys:
+                continue
+            sanitized_pairs.append((key_str, q[key]))
+
+        sanitized_query = _p.urlencode(sanitized_pairs, doseq=True)
+        sanitized_qs = f"?{sanitized_query}" if sanitized_query else "?"
+        safe_url = f"{parts.scheme}://{parts.netloc}{parts.path}"
+        if sanitized_query:
+            safe_url = f"{safe_url}?{sanitized_query}"
+        if parts.fragment:
+            safe_url = f"{safe_url}#{parts.fragment}"
+    except Exception:
+        pass
+
+    return safe_url, sanitized_qs, meta
+
+
+def build_client_session_descriptor(overrides: Optional[dict] = None) -> dict[str, Any]:
+    """Expose Deepgram session info for browser-initiated clients."""
+
+    cfg = dict(overrides or {})
+    url = _dg_url(cfg)
+    safe_url, sanitized_qs, meta = _client_url_metadata(url, cfg)
+    configure_payload = _initial_config(cfg)
+
+    try:
+        key, _ = _api_key_info(log=False, logger_obj=logger)
+        auth_masked = _mask_key_fragment(key)
+    except Exception:
+        auth_masked = None
+
+    descriptor: dict[str, Any] = {
+        "url": url,
+        "sanitized_url": safe_url,
+        "sanitized_query": sanitized_qs,
+        "configure": configure_payload,
+        "transport": {
+            "container": meta.get("container"),
+            "codec": meta.get("codec"),
+            "containerized": bool(meta.get("containerized_opus")),
+            "normalized_pcm": bool(meta.get("normalized_pcm")),
+        },
+        "meta": meta,
+        "auth": {
+            "header": "Authorization",
+            "scheme": "Token",
+            "masked": auth_masked,
+            "requires_proxy": True,
+        },
+    }
+
+    return descriptor
 
 
 def _initial_config(overrides: Optional[dict] = None) -> dict:

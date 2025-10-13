@@ -1,1566 +1,943 @@
-diff --git a/app/obs.py b/app/obs.py
-index b58a1e2680f434f16e4628bb60f89fbf87d3d9f6..eb3979f2e2830e531e53ee481ea59758d10aca43 100644
---- a/app/obs.py
-+++ b/app/obs.py
-@@ -1,83 +1,113 @@
+diff --git a/app/api_v1/__init__.py b/app/api_v1/__init__.py
+index 8ba35f2c125d29958a5aa6c93d0d273245058fc9..d24038cb997f7cc79d46766d174965934953c57d 100644
+--- a/app/api_v1/__init__.py
++++ b/app/api_v1/__init__.py
+@@ -1,21 +1,23 @@
+ from flask import Blueprint
+ from .admin import bp as admin_bp
+ from .auth import bp as auth_bp
+ from .profile import bp as profile_bp
+ from .greet import bp as greet_bp
+ from .chat import bp as chat_bp
+ from .voice import bp as voice_bp
++from .asr import bp as asr_bp
+ from .diag import bp as diag_bp
+ from .metrics import bp as metrics_bp
  
- # app/obs.py — unified structured logging + Admin SSE mirror
- from __future__ import annotations
- import json, logging, os, time, traceback
- from contextlib import contextmanager
-+from typing import Dict, Any
- 
- try:
-     from app.admin_log import emit as _admin_emit
- except Exception:
-     def _admin_emit(*a, **k):
-         pass
- 
-+try:
-+    from .ws.bus import bus as _ws_bus
-+except Exception:
-+    _ws_bus = None
+ def create_v1_blueprint():
+     bp = Blueprint("api_v1", __name__)
+     bp.register_blueprint(admin_bp, url_prefix="/admin")
+     bp.register_blueprint(auth_bp, url_prefix="/auth")
+     bp.register_blueprint(profile_bp, url_prefix="/profile")
+     bp.register_blueprint(greet_bp, url_prefix="/greet")
+     bp.register_blueprint(chat_bp, url_prefix="/chat")
+     bp.register_blueprint(voice_bp, url_prefix="/voice")
++    bp.register_blueprint(asr_bp, url_prefix="")
+     bp.register_blueprint(diag_bp, url_prefix="")
+     bp.register_blueprint(metrics_bp, url_prefix="")
+     return bp
+diff --git a/app/api_v1/asr.py b/app/api_v1/asr.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a4e7f89786205ab7945a06c69709d7d18ef5ed22
+--- /dev/null
++++ b/app/api_v1/asr.py
+@@ -0,0 +1,46 @@
++from __future__ import annotations
 +
- _log = logging.getLogger("askchip")
++from flask import Blueprint, jsonify, request, session
++
++from ..security_state import get_user
++from ..services.streaming_asr.deepgram_client import (
++    build_client_session_descriptor,
++)
++
++
++bp = Blueprint("asr_v1", __name__, url_prefix="/api/v1/asr")
++
++
++def _require_user() -> str | None:
++    email = (session.get("user") or {}).get("email") or (get_user() or "")
++    return email or None
++
++
++@bp.get("/client-session")
++def client_session():
++    if not _require_user():
++        return jsonify({"ok": False, "error": "auth_required"}), 401
++
++    sid = (request.args.get("session_id") or request.args.get("sid") or "").strip()
++
++    overrides: dict[str, object] = {
++        "session_id": sid or None,
++        "_transport": {
++            "containerized_opus": True,
++            "container": "webm",
++            "codec": "opus",
++        },
++    }
++
++    descriptor = build_client_session_descriptor(overrides)
++
++    return (
++        jsonify(
++            {
++                "ok": True,
++                "session": descriptor,
++            }
++        ),
++        200,
++    )
++
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index cb55455c08fd1e74d0b6f7cbb597ccbde90aefb1..69e8faf27af5b090de4b65a3e803e361c6c0bcf5 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -77,50 +77,52 @@ class _NullLogger:
+     def exception(self, *args, **kwargs):
+         return None
  
- # Read once; env-driven
- REDACT_EMAIL = (os.environ.get("REDACT_EMAIL_IN_LOGS","true").lower() in ("1","true","yes","on"))
+ _DG_KEY_PROBED = False
  
- def _ts() -> float:        # seconds (float)
-     return time.time()
  
- def _now_ms() -> int:
-     return int(_ts() * 1000)
- 
- def _redact(value: str | None):
-     if not value or not REDACT_EMAIL:
-         return value
+ def _mask_key_fragment(raw: str) -> str:
      try:
-         v = str(value)
-         # very light redact (avoid heavy CPU in hot path)
-         v = v.replace("@", "ⓐ").replace(".", "·")
-         return v
+         txt = str(raw)
      except Exception:
-         return value
+         return "?"
+     txt = txt.strip()
+     if not txt:
+         return "?"
+     if len(txt) <= 4:
+         return "*" * len(txt)
+     return f"{txt[:2]}…{txt[-2:]}"
  
-+def _broadcast_ws(kind: str, payload: Dict[str, Any]) -> None:
-+    if _ws_bus is None:
-+        return
-+    sid = payload.get("session_id") or payload.get("sid")
-+    if not sid:
-+        return
-+    try:
-+        sid_str = str(sid)
-+    except Exception:
-+        sid_str = sid  # type: ignore[assignment]
-+
-+    frame = {"type": kind}
-+    frame.update(dict(payload))
-+    frame.setdefault("session_id", sid_str)
-+    frame.setdefault("sid", sid_str)
-+
-+    try:
-+        _ws_bus.broadcast(str(sid_str), frame)
-+    except Exception:
-+        pass
-+
-+
- def jlog(kind: str, **fields):
-     """Emit one structured JSON log line and mirror to Admin SSE (best-effort)."""
-     base = {
-         "ts": _ts(),
-         "kind": kind,
-         "level": fields.pop("level", "info"),
-     }
-     # common correlation keys
-     for k in ("session_id","turn_id","req_id","idem_key","component","phase"):
-         if k in fields:
-             base[k] = fields.pop(k)
  
-     # redact long texts to head+len
-     if "user_text" in fields:
-         t = str(fields.pop("user_text") or "")
-         base["user_text_head"] = _redact(t[:160])
-         base["user_text_len"] = len(t)
-     if "assistant_text" in fields:
-         t = str(fields.pop("assistant_text") or "")
-         base["assistant_text_head"] = t[:160]
-         base["assistant_text_len"] = len(t)
+ def _api_key_info(*, log: bool = True, logger_obj: logging.Logger = logger) -> tuple[str, int]:
+     key = os.getenv("DEEPGRAM_API_KEY", "")
+     if key is None:
+         key = ""
+     key = str(key).strip()
+     if not key:
++        if DG_TEST_MODE:
++            return "test", 4
+         raise RuntimeError("DEEPGRAM_API_KEY is not set")
+     length = len(key)
+     global _DG_KEY_PROBED
+     if log and not _DG_KEY_PROBED:
+         _DG_KEY_PROBED = True
+         try:
+             masked = _mask_key_fragment(key)
+             logger_obj.info("Deepgram API key detected len=%s mask=%s", length, masked)
+         except Exception:
+             logger_obj.info("Deepgram API key detected len=%s", length)
+     return key, length
  
-     # merge remainder
-     base.update(fields)
  
-+    _broadcast_ws(kind, base)
-+
+ class DeepgramDrainTimeoutError(RuntimeError):
+     """Raised when the transmit queue fails to drain during close."""
+ 
+     def __init__(
+         self, sid: str, *, queued_chunks: int, queued_bytes: int, wait_timeout: bool
+     ) -> None:
+         self.sid = sid
+         self.queued_chunks = queued_chunks
+         self.queued_bytes = queued_bytes
+         self.wait_timeout = wait_timeout
+         super().__init__(
+             f"drain_timeout sid={sid} queued_chunks={queued_chunks} queued_bytes={queued_bytes}"
+@@ -163,50 +165,67 @@ def _clip_text(txt: str, limit: int = 120) -> str:
+ def _safe_float(val):
      try:
-         _log.info(json.dumps(base, separators=(",", ":"), ensure_ascii=False))
+         if val is None:
+             return None
+         return float(val)
+     except (TypeError, ValueError):
+         return None
+ 
+ 
+ def _dg_url(overrides: Optional[dict] = None) -> str:
+     """Return the Deepgram listen URL with safe defaults.
+ 
+     Audio transport parameters must be in the URL query for Deepgram's v1/listen.
+     For **containerized Opus** (OGG/WebM), we must NOT send encoding, sample_rate, or channels.
+     """
+     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
+ 
+     # Detect containerized Opus from overrides (nested under _transport)
+     containerized = False
+     try:
+         if overrides and isinstance(overrides.get("_transport"), dict):
+             containerized = bool(overrides["_transport"].get("containerized_opus"))
      except Exception:
-         _log.info(f'{{"ts":{_ts()},"kind":"{kind}","error":"json_dump_failed"}}')
+         containerized = False
  
-     # SSE mirror
-     try:
-         _admin_emit(kind, **base)
-     except Exception:
-         pass
- 
- @contextmanager
- def span(kind: str, **fields):
-     t0 = _now_ms()
-     err = None
-     try:
-         jlog(f"{kind}:start", **fields)
-         yield
-     except Exception as e:
-         err = {"exc": e.__class__.__name__, "msg": str(e)}
-         jlog(f"{kind}:error", **fields, error=err, stack=traceback.format_exc())
-         raise
-     finally:
-         jlog(f"{kind}:done", **fields, dur_ms=_now_ms() - t0, error=err)
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 7d74bf6f77c73b207e2560e07c8aab9244a66d73..b73a64f79ee6744bd8f5f555753b0a3c9a9ded46 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -246,86 +246,124 @@ from .vendor_clients import make_openai_client
- from .nlg.humanize import humanize_text, sounds_botty
- from .greet_idempotency import get_or_create_greet_turn, DEFAULT_TTL_SEC
- from ..db import db
- from ..ws.bus import bus
- from ..policy import nudges
- from ..obs import jlog as _jlog
- from ..obs.nlu_logging import NluLoggingContext, create_context as _create_nlu_context
- from ..personas.store import PersonaManager, PersonaStore
- from ..personas.prompt_builder import build_messages
- from .. import nlu as _nlu
- from ..nlu.classifier import classify as classify_turn
- from ..nlu.universal_interpreter import (
-     ensure_all_fields as _ensure_universal_fields,
-     interpret as _interpret_universal,
- )
- from ..dialog.policy import pick as pick_dialog_policy
- from ..config import load_settings
- 
- try:
-     from ..admin_log import emit as _admin_emit  # SSE/Admin relay
- except Exception:
-     def _admin_emit(*a, **k):  # no-op if admin channel absent
-         pass
- 
- 
-+def _broadcast_admin_ws_event(event: str, payload: Mapping[str, Any]) -> None:
-+    """Best-effort mirror of admin diagnostics onto the session WS bus."""
-+    try:
-+        sid = payload.get("session_id") or payload.get("sid")
-+    except Exception:
-+        sid = None
-+    if not sid:
-+        return
-+    try:
-+        sid_str = str(sid)
-+    except Exception:
-+        sid_str = sid  # type: ignore[assignment]
-+
-+    frame = {"type": event}
-+    frame.update(dict(payload))
-+    frame.setdefault("session_id", sid_str)
-+    frame.setdefault("sid", sid_str)
-+
-+    try:
-+        bus.broadcast(str(sid_str), frame)
-+    except Exception:
-+        pass
-+
-+
- def _emit_turn_action_metadata(turn_id: Optional[str],
-                                meta: Optional[Dict[str, Any]],
-                                *,
--                               is_greet: bool) -> None:
-+                               is_greet: bool,
-+                               session_id: Optional[str] = None) -> None:
-     """Emit structured NLU/policy metadata for admin observers."""
-     if not turn_id or not isinstance(meta, dict):
-         return
- 
-     if isinstance(meta.get(_DIALOG_NLU_KEY), dict):
-         nlu_meta = meta.get(_DIALOG_NLU_KEY) or {}
-     elif isinstance(meta.get("nlu"), dict):
-         nlu_meta = meta.get("nlu") or {}
-     else:
-         nlu_meta = {}
-     policy_payload = {
-         "action": meta.get(_DIALOG_ACTION_KEY) or meta.get("action"),
-         "verbosity": meta.get(_DIALOG_VERBOSITY_KEY) or meta.get("verbosity"),
-         "show_suggestions": meta.get(_DIALOG_SHOW_SUGGESTIONS_KEY) or meta.get("show_suggestions"),
-     }
--    payload = {
-+    payload: Dict[str, Any] = {
-         "turn_id": turn_id,
-         "is_greet": bool(is_greet),
-         "nlu": {
-             "intent": nlu_meta.get("intent"),
-             "topic": nlu_meta.get("topic"),
-             "needs_scoping": nlu_meta.get("needs_scoping"),
-             "wants_list": nlu_meta.get("wants_list"),
-             "expected_depth": nlu_meta.get("expected_depth"),
-             "confidence": nlu_meta.get("confidence"),
-         },
-         "policy": policy_payload,
-     }
-+    session_id_value: Optional[str] = None
-+    if session_id:
-+        session_id_value = str(session_id)
-+    elif isinstance(meta, dict):
-+        sid_candidate = meta.get("session_id") or meta.get("sid")
-+        if sid_candidate:
-+            try:
-+                session_id_value = str(sid_candidate)
-+            except Exception:
-+                session_id_value = sid_candidate  # type: ignore[assignment]
-+    if session_id_value:
-+        payload["session_id"] = session_id_value
-     try:
-         _admin_emit("turn_action_metadata", **payload)
-     except Exception:
-         pass
-+    _broadcast_admin_ws_event("turn_action_metadata", payload)
- 
- 
- def _get_persona_for_session(session_id: str) -> Dict:
-     try:
-         sess = db.memory.get('sessions', {}).get(session_id) or {}
-         persona_id = (sess.get('persona_id') or 'chip')
-         return db.memory.get('personas', {}).get(persona_id) or {'id': 'chip'}
-     except Exception:
-         return {'id': 'chip'}
- 
- 
- def _build_prompt(seed_text: str, persona: Dict, kb_snippets: List[str], teacher_move: Optional[str]) -> str:
-     parts = [build_persona_preamble(persona)]
-     if kb_snippets:
-         parts.append(format_kb_context(kb_snippets))
-     if teacher_move:
-         parts.append(f"Teacher move: {teacher_move}.")
-     parts.append(f"User said: {seed_text.strip()}")
-     return "\n\n".join(parts)
- 
- 
- # --- text hygiene -------------------------------------------------------------
- # Remove ANY occurrence (not just trailing) of legacy "[KB:n]" stamps, case-insensitive.
- _KB_TAG_RE = re.compile(r"\s*\[(?:KB|kb)\s*:\s*\d+\]\s*")
- 
-@@ -510,77 +548,83 @@ def _log_policy_decision(*,
-         if isinstance(nlu_meta, dict):
-             nlu_intent = nlu_meta.get("intent")
-             confidence_raw = nlu_meta.get("confidence")
-             if confidence_raw is not None:
-                 if isinstance(confidence_raw, (int, float)):
-                     nlu_confidence = float(confidence_raw)
-                 else:
-                     try:
-                         nlu_confidence = float(str(confidence_raw))
-                     except Exception:
-                         nlu_confidence = None
- 
-         used_docs = _summarize_used_docs(used_docs_source)
- 
-         payload: Dict[str, Any] = {
-             "sid": session_id,
-             "turn_id": turn_id,
-             "teacher_move": resolved_move_name or None,
-             "teacher_move_family": _teacher_move_family(resolved_move_name),
-             "reason": reason,
-             "fallback_fired": bool(fallback_fired),
-             "fallback_reason": fallback_reason,
-             "nlu_intent": nlu_intent,
-             "nlu_confidence": nlu_confidence,
-         }
-+        if session_id:
-+            try:
-+                payload["session_id"] = str(session_id)
-+            except Exception:
-+                payload["session_id"] = session_id  # type: ignore[assignment]
-         if normalized_action_name:
-             payload["meta_action"] = normalized_action_name
-         if policy_move_name:
-             payload["policy_move"] = policy_move_name
-         if seed_move_name and seed_move_name != resolved_move_name:
-             payload["persona_move"] = seed_move_name
-         if used_docs:
-             payload["used_docs"] = used_docs
-         _jlog("policy.decision", **payload)
- 
-         if callable(_admin_emit):
-             label_move = (
-                 resolved_move_name
-                 or policy_move_name
-                 or normalized_action_name
-                 or seed_move_name
-                 or "unknown"
-             )
-             try:
-                 _admin_emit(
-                     "policy_decision",
-                     event="policy_decision",
-                     label=f"policy_decision: {label_move}",
-                     **payload,
-                 )
-             except Exception:
-                 pass
-+        _broadcast_admin_ws_event("policy_decision", payload)
-     except Exception:
-         pass
- 
- 
- def _should_use_foundation(seed_text: str) -> bool:
-     if not ENABLE_CHIP_FOUNDATION:
-         return False
-     if _foundation_backoff_active():
-         return False
-     try:
-         normalized = str(seed_text or "").strip().lower()
-     except Exception:
-         return False
-     if not normalized:
-         return False
-     return True
- 
- 
- _POLICY_SUGGESTION_ACTIONS = frozenset({"clarify", "ask_clarify", "offer_steps"})
- _WELCOME_MOVE = "offer_steps"
- _WELCOME_INTENTS = {"greet", "idle"}
- 
- _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
- 
- 
-@@ -1162,51 +1206,53 @@ def merge_suggestions(*lists: Iterable[Any], cap: int = 4) -> List[str]:
-         if not lst:
-             continue
-         for raw in lst:
-             text = _normalize_suggestion_item(raw)
-             if not text:
-                 continue
-             if len(text) > 50:
-                 text = text[:50].rstrip()
-             if not text or text in seen_set:
-                 continue
-             seen.append(text)
-             seen_set.add(text)
-             if len(seen) >= limit:
-                 return seen
-     return seen[:limit]
- 
- 
- def build_suggestion_items(items: List[str]) -> List[Dict[str, str]]:
-     return [{"text": it} for it in items]
- 
- 
- def _log_suggestions_made(turn_id: Optional[str],
-                           policy_chips: Optional[Iterable[Any]],
-                           legacy_suggestions: Optional[Iterable[Any]],
-                           merged_suggestions: Optional[Iterable[Any]],
--                          cfg: Optional[Dict[str, Any]]) -> None:
-+                          cfg: Optional[Dict[str, Any]],
-+                          *,
-+                          session_id: Optional[str] = None) -> None:
-     try:
-         cfg_map: Dict[str, Any]
-         if isinstance(cfg, dict):
-             cfg_map = cfg
-         else:
-             cfg_map = {}
- 
-         def _coerce_limit(value: Any, default: int) -> int:
-             try:
-                 if value is None:
-                     return default
-                 coerced = int(value)
-                 if coerced < 0:
-                     return default
-                 return coerced
-             except Exception:
-                 return default
- 
-         max_items = _coerce_limit(cfg_map.get("suggestions_max_items"), _suggestion_cap())
-         max_words = _coerce_limit(cfg_map.get("suggestions_max_words"), 7)
- 
-         def _display_text(raw: Any) -> str:
-             text = _normalize_suggestion_item(raw)
-             if len(text) > 50:
-                 text = text[:50].rstrip()
-@@ -1214,71 +1260,77 @@ def _log_suggestions_made(turn_id: Optional[str],
- 
-         policy_set = {
-             text
-             for text in (_display_text(item) for item in (policy_chips or []))
-             if text
-         }
-         retrieval_set = {
-             text
-             for text in (_display_text(item) for item in (legacy_suggestions or []))
-             if text
-         }
- 
-         items: List[Dict[str, str]] = []
-         for raw in merged_suggestions or []:
-             text = _display_text(raw)
-             if not text:
-                 continue
-             if text in policy_set:
-                 source = "policy"
-             elif text in retrieval_set:
-                 source = "retrieval"
-             else:
-                 source = "retrieval"
-             items.append({"text": text, "source": source})
- 
--        _jlog(
--            "suggestions_made",
--            turn_id=str(turn_id) if turn_id is not None else None,
--            items=items,
--            max_items=max_items,
--            max_words_per_item=max_words,
--            count=len(items),
--        )
--        if callable(_admin_emit):
-+        sid_value: Optional[str] = None
-+        if session_id:
-             try:
--                _admin_emit(
--                    "suggestions_made",
--                    event="suggestions_made",
--                    turn_id=str(turn_id) if turn_id is not None else None,
--                    items=items,
--                    max_items=max_items,
--                    max_words_per_item=max_words,
--                    count=len(items),
--                )
-+                sid_value = str(session_id)
-             except Exception:
--                pass
-+                sid_value = session_id  # type: ignore[assignment]
-+
-+        log_payload: Dict[str, Any] = {
-+            "turn_id": str(turn_id) if turn_id is not None else None,
-+            "items": items,
-+            "max_items": max_items,
-+            "max_words_per_item": max_words,
-+            "count": len(items),
-+        }
-+        if sid_value:
-+            log_payload["sid"] = sid_value
-+        _jlog("suggestions_made", **log_payload)
-+
-+        admin_payload = dict(log_payload)
-+        admin_payload["event"] = "suggestions_made"
-+        if sid_value:
-+            admin_payload.setdefault("session_id", sid_value)
++    if isinstance(overrides, dict):
 +        try:
-+            _admin_emit("suggestions_made", **admin_payload)
++            transport_cfg = overrides.setdefault("_transport", {})
++            if not isinstance(transport_cfg, dict):
++                transport_cfg = {}
++                overrides["_transport"] = transport_cfg
 +        except Exception:
-+            pass
-+        _broadcast_admin_ws_event("suggestions_made", admin_payload)
-     except Exception:
-         pass
- 
- 
- def classify(seed_text: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-     """Run lightweight classifiers and awareness annotators for a user turn."""
-     base_meta = meta or {}
-     labels: Dict[str, Any] = {}
- 
-     try:
-         primary_labels = classify_turn(seed_text, base_meta)
-         if isinstance(primary_labels, dict):
-             labels.update(primary_labels)
-     except Exception:
-         pass
- 
-     try:
-         awareness = annotate(seed_text, base_meta)
-         if isinstance(awareness, dict):
-             labels.update({k: v for k, v in awareness.items() if k not in labels})
-             # Allow awareness annotators to augment existing labels without
-             # clobbering core classifier outputs like intent/topic.
-             for key, value in awareness.items():
-                 if key not in {"intent", "topic", "expected_depth", "needs_scoping"}:
-                     labels[key] = value
-@@ -1434,50 +1486,51 @@ def prepare_turn_metadata(seed_text: str,
-         except Exception:
-             session_goal = db.get_session_goal(session_id)
-         if session_goal:
-             cleaned_goal = _clean_session_goal(session_goal)
-             target_meta["session_goal"] = copy.deepcopy(cleaned_goal)
-             admin_cb = _admin_emit if callable(_admin_emit) else None
-             if admin_cb:
-                 payload = copy.deepcopy(cleaned_goal)
-                 payload["event"] = "session_goal"
-                 payload["session_id"] = session_id or target_meta.get("session_id")
-                 turn_id_value = target_meta.get("turn_id")
-                 if not turn_id_value and isinstance(incoming_meta, dict):
-                     turn_id_value = incoming_meta.get("turn_id")
-                 if turn_id_value:
-                     payload["turn_id"] = turn_id_value
-                 depth_label = payload.get("depth")
-                 try:
-                     depth_label_str = str(depth_label).strip() if depth_label is not None else ""
-                 except Exception:
-                     depth_label_str = ""
-                 label_value = f"session_goal:{depth_label_str or 'unset'}"
-                 try:
-                     admin_cb("session_goal", label=label_value, **payload)
-                 except Exception:
-                     pass
-+                _broadcast_admin_ws_event("session_goal", payload)
- 
-     raw_policy = pick_dialog_policy(dialog_nlu, universal, session_goal=session_goal) or {}
-     policy = dict(raw_policy)
-     if policy.get("action") and "teacher_move" not in policy:
-         policy["teacher_move"] = policy["action"]
- 
-     if telemetry:
-         confidence_value: Optional[float]
-         try:
-             confidence_raw = universal.get("confidence") if isinstance(universal, Mapping) else None
-             confidence_value = float(confidence_raw) if isinstance(confidence_raw, (int, float)) else None
-         except Exception:
-             confidence_value = None
-         planner_features = _planner_feature_summary(dialog_nlu, universal)
-         telemetry.log_planner_decision(
-             confidence=confidence_value,
-             band=policy.get("confidence_band"),
-             teacher_move=policy.get("teacher_move") or policy.get("action"),
-             top_features=planner_features or None,
-         )
- 
-     action = target_meta.get(_DIALOG_ACTION_KEY) or target_meta.get("action")
-     if not action:
-         action = policy.get("action") or policy.get("teacher_move") or "respond"
-     canonical_action = _ACTION_ALIASES.get(str(action or "").strip().lower(), action)
-@@ -1993,54 +2046,56 @@ def make_assistant_frames(seed_text: str,
- 
-         if _should_use_foundation(seed_text):
-             try:
-                 return _make_foundation_frames(
-                     seed_text,
-                     session_id,
-                     meta,
-                     cfg,
-                     correlation_user_msg_id=correlation_user_msg_id,
-                     turn_id=turn_id,
-                     telemetry=context,
-                     is_greet=is_greet,
-                     fallback_line=fallback_line,
-                     fallback_on_empty=fallback_on_empty,
-                     fallback_on_error=fallback_on_error,
-                     fallback_emit_event=fallback_emit_event,
-                     action=action,
-                     broadcast_immediately=broadcast_immediately,
-                 )
-             except Exception as e:
-                 context.log_error("foundation_pipeline_error", str(e))
-                 _note_foundation_failure(e)
-                 skip_legacy = False
-                 if isinstance(meta, dict):
-                     meta.pop("skip_legacy_fallback", None)
-+                error_payload = {"session_id": session_id, "error": e.__class__.__name__}
-                 try:
--                    _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
-+                    _admin_emit('foundation_pipeline_error', **error_payload)
-                 except Exception:
-                     pass
-+                _broadcast_admin_ws_event('foundation_pipeline_error', error_payload)
- 
-         if skip_legacy:
-             return None, []
- 
-         return _make_legacy_frames(
-             seed_text,
-             session_id,
-             meta,
-             cfg,
-             correlation_user_msg_id=correlation_user_msg_id,
-             turn_id=turn_id,
-             telemetry=context,
-             is_greet=is_greet,
-             fallback_line=fallback_line,
-             fallback_on_empty=fallback_on_empty,
-             fallback_on_error=fallback_on_error,
-             fallback_emit_event=fallback_emit_event,
-             action=action,
-             labels=classified_labels,
-             policy=classified_policy,
-             broadcast_immediately=broadcast_immediately,
-         )
-     except Exception as exc:
-         context.log_error("streaming_pipeline_error", str(exc))
-         raise
-@@ -2281,56 +2336,62 @@ def _make_foundation_frames(seed_text: str,
-                 preview_text = None
-         telemetry.log_llm_response(
-             output_tokens=llm_info.get("output_tokens"),
-             finish_reason=llm_info.get("finish_reason"),
-             preview=preview_text,
-             fallback_fired=fallback_fired,
-             fallback_reason=fallback_reason,
-         )
- 
-     policy_chips = _collect_policy_chips(policy)
- 
-     try:
-         _jlog(
-             "turn_telemetry",
-             sid=session_id,
-             intent=nlu_result.get('intent'),
-             confidence=nlu_result.get('confidence'),
-             teacher_move=policy_action or teacher_move,
-             chips=len(policy_chips),
-             prompt_hash=prompt_hash,
-         )
-     except Exception:
-         pass
- 
-     if fallback_fired and fallback_emit_event:
-+        fallback_payload: Dict[str, Any] = {
-+            "session_id": session_id,
-+            "turn_id": turn_id,
-+            "reason": fallback_reason or 'unknown',
-+        }
-         try:
--            _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
-+            _admin_emit('fallback', **fallback_payload)
-         except Exception:
-             pass
-+        _broadcast_admin_ws_event('fallback', fallback_payload)
- 
--    _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
-+    _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet, session_id=session_id)
- 
-     frames: List[Dict] = []
-     active_teacher_move = policy_action or teacher_move
-     if _should_force_welcome_move(meta, is_greet=is_greet, intent=nlu_result.get('intent')):
-         active_teacher_move = _WELCOME_MOVE
-     kb_source = kb_candidates if 'kb_candidates' in locals() else None
-     _log_policy_decision(
-         session_id=session_id,
-         turn_id=turn_id,
-         resolved_move=active_teacher_move,
-         normalized_action=normalized_action,
-         policy_move=policy_action,
-         teacher_move_seed=teacher_move,
-         fallback_fired=fallback_fired,
-         fallback_reason=fallback_reason,
-         meta=meta,
-         nlu_meta=nlu_result,
-         used_docs_source=kb_source,
-     )
-     chunk: Dict[str, Any] = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': safe_reply,
-         'kb_hits': 0,
-         'intent': nlu_result.get('intent'),
-@@ -2348,50 +2409,51 @@ def _make_foundation_frames(seed_text: str,
-             chunk['policy_chips'] = chips
-     if isinstance(meta, dict):
-         clarify_variant = meta.get('clarify_variant')
-         clarifier_style = meta.get('clarifier_style')
-         if clarifier_style:
-             chunk['clarifier_style'] = clarifier_style
-         if clarify_variant:
-             chunk['clarify_variant'] = clarify_variant
-     if correlation_user_msg_id:
-         chunk['correlation_user_msg_id'] = correlation_user_msg_id
-     frames.append(chunk)
- 
-     legacy_suggestions = []
-     try:
-         if cfg.get('suggestions_enabled', True):
-             legacy_suggestions = hygienic_suggestions(safe_reply)
-     except Exception:
-         legacy_suggestions = []
-     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
-     _log_suggestions_made(
-         turn_id=turn_id,
-         policy_chips=policy_chips,
-         legacy_suggestions=legacy_suggestions,
-         merged_suggestions=merged_suggestions,
-         cfg=cfg,
-+        session_id=session_id,
-     )
-     try:
-         _jlog(
-             "chips_emit",
-             sid=session_id,
-             intent=nlu_result.get('intent'),
-             count=len(merged_suggestions),
-             items=merged_suggestions,
-         )
-     except Exception:
-         pass
-     allow_suggestions = bool(meta.get('show_suggestions')) if isinstance(meta, dict) else False
-     should_emit_suggestions = bool(merged_suggestions) and (is_greet or allow_suggestions)
-     if should_emit_suggestions:
-         frames.append(
-             {
-                 'type': 'suggestions',
-                 'turn_id': turn_id,
-                 'items': build_suggestion_items(merged_suggestions),
-             }
-         )
- 
-     end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
-     if correlation_user_msg_id:
-         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
-@@ -2543,80 +2605,97 @@ def _make_legacy_frames(seed_text: str,
- 
-     kb: List[str] = []
-     try:
-         if cfg.get('kb_enabled', False):
-             kb = kb_search(seed_text, top_k=int(cfg.get('kb_top_k', 3)))
-     except Exception:
-         kb = []
- 
-     prompt = _build_prompt(seed_text, persona, kb, teacher_move)
-     try:
-         prompt_hash = hashlib.sha256(prompt.encode('utf-8')).hexdigest()[:12]
-     except Exception:
-         prompt_hash = None
-     telemetry.log_prompt_summary(messages=None, prompt_hash=prompt_hash, kb_count=len(kb))
- 
-     reply: str
-     error_note: Optional[str] = None
-     use_llm = True
- 
-     if use_llm:
-         try:
-             provider = get_provider(cfg)
-         except Exception as e:
-             provider = None
-             error_note = "llm_not_available"
--            _admin_emit("llm_provider_error", error=e.__class__.__name__)
-+            provider_error_payload = {
-+                "session_id": session_id,
-+                "error": e.__class__.__name__,
-+            }
-+            try:
-+                _admin_emit("llm_provider_error", **provider_error_payload)
-+            except Exception:
-+                pass
-+            _broadcast_admin_ws_event("llm_provider_error", provider_error_payload)
-             telemetry.log_error("llm_not_available", str(e))
-         if provider is not None:
-             try:
-                 provider_context: Dict[str, Any] = {'kb': kb}
-                 for key in ('confidence_band', 'clarify_variant', 'clarifier_style'):
-                     if isinstance(meta, dict):
-                         value = meta.get(key)
-                     else:
-                         value = None
-                     if value:
-                         provider_context[key] = value
-                 if isinstance(meta, dict):
-                     dialog_subset = {
-                         key: meta.get(key)
-                         for key in ('confidence_band', 'clarify_variant', 'clarifier_style')
-                         if meta.get(key)
-                     }
-                     if dialog_subset:
-                         provider_context['dialog_meta'] = dialog_subset
-                 reply = provider.generate_reply(
-                     prompt,
-                     persona=persona,
-                     teacher_move=teacher_move,
-                     context=provider_context,
-                 )
-             except Exception as e:
-                 error_note = f"llm_error:{e.__class__.__name__}"
-                 reply = _LEGACY_WARMUP_LINE
--                _admin_emit("llm_generate_error", error=e.__class__.__name__)
-+                generate_payload = {
-+                    "session_id": session_id,
-+                    "turn_id": turn_id,
-+                    "error": e.__class__.__name__,
-+                }
-+                try:
-+                    _admin_emit("llm_generate_error", **generate_payload)
-+                except Exception:
-+                    pass
-+                _broadcast_admin_ws_event("llm_generate_error", generate_payload)
-                 telemetry.log_error("llm_generate_error", str(e))
-         else:
-             reply = "Hi! I’m ready to help."
-     else:
-         reply = _LEGACY_WARMUP_LINE
- 
-     fallback_fired = False
-     fallback_reason: Optional[str] = None
- 
-     if use_llm:
-         if fallback_on_error and error_note:
-             reply = fallback_line
-             fallback_fired = True
-             fallback_reason = error_note
-         elif fallback_on_empty and not (reply or "").strip():
-             reply = fallback_line
-             fallback_fired = True
-             fallback_reason = "empty"
- 
-     safe_reply = _scrub_debug_stamps(reply)
- 
-     if use_llm and not fallback_fired:
-         shaped = _apply_action_shape(normalized_action, safe_reply, meta)
-         if shaped:
-             safe_reply = shaped
-@@ -2646,56 +2725,62 @@ def _make_legacy_frames(seed_text: str,
-             safe_reply = _LEGACY_WARMUP_LINE
- 
-     telemetry.mark_fallback(fallback_fired, fallback_reason)
- 
-     # Personalize greet: name + dynamic goal ask
-     if is_greet:
-         meta.setdefault("session_id", session_id)
-         meta.setdefault("turn_id", turn_id)
-         safe_reply = _personalize_greet(safe_reply, meta)
- 
-     if use_llm:
-         preview = None
-         try:
-             preview = " ".join((safe_reply or "").split()[:8])
-         except Exception:
-             preview = None
-         telemetry.log_llm_response(
-             output_tokens=None,
-             finish_reason=error_note,
-             preview=preview,
-             fallback_fired=fallback_fired,
-             fallback_reason=fallback_reason,
-         )
- 
-     if fallback_fired and fallback_emit_event:
-+        fallback_payload = {
-+            "session_id": session_id,
-+            "turn_id": turn_id,
-+            "reason": fallback_reason or 'unknown',
-+        }
-         try:
--            _admin_emit('fallback', session_id=session_id, turn_id=turn_id, reason=fallback_reason or 'unknown')
-+            _admin_emit('fallback', **fallback_payload)
-         except Exception:
-             pass
-+        _broadcast_admin_ws_event('fallback', fallback_payload)
- 
--    _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet)
-+    _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet, session_id=session_id)
- 
-     frames: List[Dict] = []
- 
-     active_teacher_move = teacher_move
-     if _should_force_welcome_move(meta, is_greet=is_greet, intent=(labels or {}).get('intent') if isinstance(labels, dict) else None):
-         active_teacher_move = _WELCOME_MOVE
-     _log_policy_decision(
-         session_id=session_id,
-         turn_id=turn_id,
-         resolved_move=active_teacher_move,
-         normalized_action=normalized_action,
-         policy_move=policy_action,
-         teacher_move_seed=teacher_move,
-         fallback_fired=fallback_fired,
-         fallback_reason=fallback_reason,
-         meta=meta,
-         nlu_meta=labels,
-         used_docs_source=kb,
-     )
-     chunk = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': safe_reply,
-         'kb_hits': len(kb),
-     }
-@@ -2718,50 +2803,51 @@ def _make_legacy_frames(seed_text: str,
-         clarifier_style = meta.get('clarifier_style')
-         if clarifier_style:
-             chunk['clarifier_style'] = clarifier_style
-         if clarify_variant:
-             chunk['clarify_variant'] = clarify_variant
-     if correlation_user_msg_id:
-         chunk['correlation_user_msg_id'] = correlation_user_msg_id
-     if error_note:
-         chunk['note'] = error_note
-     frames.append(chunk)
- 
-     legacy_suggestions: List[Any] = []
-     try:
-         if cfg.get('suggestions_enabled', True):
-             legacy_suggestions = hygienic_suggestions(safe_reply)
-     except Exception:
-         legacy_suggestions = []
-     policy_chips = _collect_policy_chips(policy)
-     merged_suggestions = merge_suggestions(policy_chips, legacy_suggestions)
-     _log_suggestions_made(
-         turn_id=turn_id,
-         policy_chips=policy_chips,
-         legacy_suggestions=legacy_suggestions,
-         merged_suggestions=merged_suggestions,
-         cfg=cfg,
-+        session_id=session_id,
-     )
-     try:
-         intent = labels.get('intent') if isinstance(labels, dict) else None
-         _jlog(
-             "chips_emit",
-             sid=session_id,
-             intent=intent,
-             count=len(merged_suggestions),
-             items=merged_suggestions,
-         )
-     except Exception:
-         pass
-     allow_suggestions = bool(meta.get('show_suggestions')) if isinstance(meta, dict) else False
-     should_emit_suggestions = bool(merged_suggestions) and (is_greet or allow_suggestions)
-     if should_emit_suggestions:
-         frames.append(
-             {
-                 'type': 'suggestions',
-                 'turn_id': turn_id,
-                 'items': build_suggestion_items(merged_suggestions),
-             }
-         )
- 
-     end_fr = {'type': 'assistant_end', 'turn_id': turn_id}
-     if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
-@@ -2873,145 +2959,160 @@ def schedule_tts_audio(session_id: str,
-         except Exception:
-             pass
- 
-     state_snapshot = dict(state)
-     level = "warning" if state_snapshot.get('started') or state_snapshot.get('done') else "info"
-     _log("tts.schedule", level=level, state=state_snapshot, feature_audio=feature_audio)
- 
-     if not feature_audio:
-         return False
- 
-     desired_mime = _guess_tts_mime(cfg.get('tts_output_format'))
- 
-     audio_payload = audio_bytes
-     provider_label: Optional[str] = None
- 
-     if audio_payload is None:
-         try:
-             from app.services.tts_provider import get_tts_provider
- 
-             provider = get_tts_provider(cfg or {})
-             provider_label = getattr(provider, "name", None) or getattr(type(provider), "__name__", "unknown")
-             _log("tts.provider_selected", provider=provider_label, override=False)
-         except Exception as e:
-             state['error'] = str(e)
-             _log("tts.provider.error", error=str(e))
-+            error_payload = {
-+                "session_id": session_id,
-+                "turn_id": safe_turn_id,
-+                "error": str(e),
-+            }
-             try:
--                _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
-+                _admin_emit('tts:error', **error_payload)
-             except Exception:
-                 pass
-+            _broadcast_admin_ws_event('tts:error', error_payload)
-             return False
- 
-         try:
-             synth_started_at = _t.time()
-             _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=False)
-             audio_payload, _vis = provider.synth(_scrub_debug_stamps(text))
-             state['started'] = True
-             synth_duration_ms = int((_t.time() - synth_started_at) * 1000)
-             total_audio_bytes = len(audio_payload or b"")
-             _log(
-                 "tts.synth.done",
-                 desired_mime=desired_mime,
-                 chunk_bytes=chunk_bytes,
-                 dur_ms=synth_duration_ms,
-                 audio_bytes=total_audio_bytes,
-                 override=False,
-             )
-         except Exception as e:
-             state['error'] = str(e)
-             _log("tts.synth.error", error=str(e), override=False)
-+            synth_error_payload = {
-+                "session_id": session_id,
-+                "turn_id": safe_turn_id,
-+                "error": str(e),
-+            }
-             try:
--                _admin_emit('tts:error', session_id=session_id, turn_id=safe_turn_id, error=str(e))
-+                _admin_emit('tts:error', **synth_error_payload)
-             except Exception:
-                 pass
-+            _broadcast_admin_ws_event('tts:error', synth_error_payload)
-             return False
-     else:
-         provider_label = "prebaked"
-         _log("tts.provider_selected", provider=provider_label, override=True)
-         _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=True)
-         total_audio_bytes = len(audio_payload or b"")
-         state['started'] = True
-         _log(
-             "tts.synth.done",
-             desired_mime=desired_mime,
-             chunk_bytes=chunk_bytes,
-             dur_ms=0,
-             audio_bytes=total_audio_bytes,
-             override=True,
-         )
- 
-     if not audio_payload:
-         state['error'] = 'empty_audio'
-         _log("tts.synth.error", error='empty_audio', override=audio_override)
-         return False
- 
-     completion_event = _prepare_tts_completion_event(session_id, turn_key)
- 
-     payload_for_stream = audio_payload
- 
-     def _run():
-         total_audio_bytes = 0
-         chunk_count = 0
-         chunk_bytes_sent = 0
-         canceled = False
-         truncated = False
-         utterance_end_sent = False
-         max_frames = 256  # guardrail
- 
-         def _emit_utterance_end(reason: str) -> None:
-             nonlocal utterance_end_sent
-             if utterance_end_sent:
-                 _log("tts.utterance_end.skip", reason=reason, already_sent=True)
-                 return
-             _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
-+            end_payload = {
-+                "session_id": session_id,
-+                "turn_id": safe_turn_id,
-+                "reason": reason,
-+            }
-             try:
--                _admin_emit(
--                    'UtteranceEnd',
--                    session_id=session_id,
--                    turn_id=safe_turn_id,
--                    reason=reason,
--                )
-+                _admin_emit('UtteranceEnd', **end_payload)
-             except Exception:
-                 pass
-+            _broadcast_admin_ws_event('UtteranceEnd', end_payload)
-             try:
-                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
-             except Exception:
-                 pass
-             utterance_end_sent = True
- 
-         stream_payload = audio_bytes if audio_override else payload_for_stream
-         try:
-             # Small pacing delay if requested
-             if delay_ms and delay_ms > 0:
-                 _t.sleep(max(0, delay_ms) / 1000.0)
- 
-             total_audio_bytes = len(stream_payload or b"")
- 
-+            start_payload = {"session_id": session_id, "turn_id": safe_turn_id}
-             try:
--                _admin_emit('tts:start', session_id=session_id, turn_id=safe_turn_id)
-+                _admin_emit('tts:start', **start_payload)
-             except Exception:
-                 pass
-+            _broadcast_admin_ws_event('tts:start', start_payload)
- 
-             # Chunk and broadcast
-             mv = memoryview(stream_payload)
-             idx = 0
-             first_sent = False
- 
-             while idx < len(mv):
-                 # stop early if canceled
-                 try:
-                     from ..ws.bus import bus as _bus_ref
-                     if _bus_ref.is_canceled(session_id, safe_turn_id):
-                         canceled = True
-                         _log(
-                             "tts.chunks.cancelled",
-                             chunk_count=chunk_count,
-                             bytes_sent=chunk_bytes_sent,
-                             total_bytes=total_audio_bytes,
-                         )
-                         break
-                 except Exception:
-                     pass
- 
-                 next_idx = idx + int(chunk_bytes)
-                 part = bytes(mv[idx: next_idx])
-                 idx = next_idx
-@@ -3024,84 +3125,96 @@ def schedule_tts_audio(session_id: str,
-                         "turn_id": safe_turn_id,
-                         "mime": desired_mime,
-                         "audio_chunks": [b64],
-                         "is_last": (idx >= len(mv)),
-                     }
-                     if correlation_user_msg_id:
-                         fr["correlation_user_msg_id"] = correlation_user_msg_id
- 
-                     bus.broadcast(session_id, fr)
- 
-                     if not first_sent:
-                         first_sent = True
-                         state['first_chunk'] = True
-                         try:
-                             nudges.cancel_idle_timers(
-                                 session_id,
-                                 source="assistant_audio_start",
-                                 mark=False,
-                             )
-                         except Exception:
-                             pass
-                         try:
-                             _admin_emit('tts:first_chunk', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
-                         except Exception:
-                             pass
-+                        _broadcast_admin_ws_event(
-+                            'tts:first_chunk',
-+                            {
-+                                "session_id": session_id,
-+                                "turn_id": str(turn_id) if turn_id else None,
-+                            },
-+                        )
- 
-                     chunk_count += 1
-                     chunk_bytes_sent += chunk_len
-                     if chunk_count >= max_frames:
-                         # Safety cut: end stream explicitly if we truncated
-                         truncated = True
-                         _log(
-                             "tts.chunks.truncated",
-                             chunk_count=chunk_count,
-                             bytes_sent=chunk_bytes_sent,
-                             total_bytes=total_audio_bytes,
-                             max_frames=max_frames,
-                         )
-                         _emit_utterance_end("truncated_guard")
-                         break
-                 except Exception:
-                     # If a single chunk fails, try to continue; we'll still emit UtteranceEnd.
-                     pass
- 
-             status = "canceled" if canceled else ("truncated" if truncated else "complete")
-             _log(
-                 "tts.chunks.summary",
-                 chunk_count=chunk_count,
-                 bytes_sent=chunk_bytes_sent,
-                 total_bytes=total_audio_bytes,
-                 status=status,
-                 max_frames=max_frames,
-             )
-         finally:
-             # Always mark tts done (admin), and always signal UtteranceEnd if we haven't already.
-+            done_payload = {
-+                "session_id": session_id,
-+                "turn_id": str(turn_id) if turn_id else None,
-+            }
-             try:
--                _admin_emit('tts:done', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
-+                _admin_emit('tts:done', **done_payload)
-             except Exception:
-                 pass
-+            _broadcast_admin_ws_event('tts:done', done_payload)
- 
-             _emit_utterance_end("finalizer")
-             try:
-                 note_utterance_end(session_id)
-             except Exception:
-                 pass
- 
-             state['done'] = True
- 
-             if on_complete is not None:
-                 try:
-                     on_complete()
-                 except Exception:
-                     pass
- 
-             if on_post_silence is not None:
-                 try:
-                     nudges.run_after_silence(
-                         session_id,
-                         on_post_silence,
-                         reason=post_silence_origin or "assistant_audio",
-                     )
-                 except Exception:
-                     try:
-                         on_post_silence()
-@@ -3165,54 +3278,56 @@ def schedule_frames(session_id: str,
-                     if isinstance(fr, dict) and fr.get('type') == 'assistant_chunk' and 'text' in fr:
-                         fr['text'] = _scrub_debug_stamps(fr['text'])
-                     if correlation_user_msg_id and isinstance(fr, dict) and 'correlation_user_msg_id' not in fr:
-                         fr['correlation_user_msg_id'] = correlation_user_msg_id
-                     turn_id_for_admin: Optional[str] = None
-                     if isinstance(fr, dict):
-                         turn_id_for_admin = fr.get('turn_id') or current_turn_id
-                     current_turn_id = _update_assistant_turn_state(session_id, fr, current_turn_id)
-                     _broadcast_frames(session_id, [fr], turn_id_for_admin)
-                 except Exception:
-                     pass
-             # Ensure an assistant_end terminator exists
-             if not any(fr.get('type') in ('assistant_end', 'end') for fr in frames):
-                 end_fr = {'type': 'assistant_end', 'turn_id': frames[-1].get('turn_id') if frames else None}
-                 if current_turn_id and not end_fr.get('turn_id'):
-                     end_fr['turn_id'] = current_turn_id
-                 if correlation_user_msg_id and 'correlation_user_msg_id' not in end_fr:
-                     end_fr['correlation_user_msg_id'] = correlation_user_msg_id
-                 try:
-                     turn_id_for_admin = end_fr.get('turn_id') or current_turn_id
-                     _apply_assistant_turn_state(session_id, [end_fr])
-                     _broadcast_frames(session_id, [end_fr], turn_id_for_admin)
-                 except Exception:
-                     pass
-         finally:
-+            frames_done_payload = {"session_id": session_id}
-             try:
--                _admin_emit('schedule_frames_done', session_id=session_id)
-+                _admin_emit('schedule_frames_done', **frames_done_payload)
-             except Exception:
-                 pass
-+            _broadcast_admin_ws_event('schedule_frames_done', frames_done_payload)
- 
-     threading.Thread(target=_run, daemon=True).start()
- 
- 
- # ---- WS orchestration helpers (centralize greet/user pipelines) ----
- 
- def _emit_ws_outage(session_id: str,
-                     turn_id: str,
-                     *,
-                     correlation_user_msg_id: Optional[str] = None) -> List[Dict[str, Any]]:
-     frames: List[Dict[str, Any]] = []
-     chunk: Dict[str, Any] = {
-         'type': 'assistant_chunk',
-         'turn_id': turn_id,
-         'text': _WS_PIPELINE_MESSAGE,
-         'kb_hits': 0,
-         'note': _WS_PIPELINE_UNAVAILABLE_NOTE,
-     }
-     if correlation_user_msg_id:
-         chunk['correlation_user_msg_id'] = correlation_user_msg_id
-     frames.append(chunk)
-     end_fr: Dict[str, Any] = {'type': 'assistant_end', 'turn_id': turn_id}
-     if correlation_user_msg_id:
-         end_fr['correlation_user_msg_id'] = correlation_user_msg_id
-     frames.append(end_fr)
-@@ -3220,54 +3335,56 @@ def _emit_ws_outage(session_id: str,
-     return frames
- 
- 
- def _ws_generation_failed(turn_id: Optional[str], frames: List[Dict[str, Any]]) -> bool:
-     return turn_id is None and not frames
- 
- 
- def run_ws_greet(session_id: str) -> str:
-     """
-     Produce assistant text for greet, broadcast frames, schedule TTS audio,
-     and nudge UI with state+suggestions. Returns turn_id.
-     """
-     nudges.cancel_idle_timers(session_id, mark=False)
-     forced_tid, _idempotent = get_or_create_greet_turn(session_id, force=False, ttl_sec=DEFAULT_TTL_SEC)
-     cfg = db.get_config()
-     tid, frames = make_assistant_frames(
-         "greet",
-         session_id,
-         meta={"source": "ws_greet", "channel": "ws"},
-         force_turn_id=forced_tid,
-         cfg=cfg,
-     )
-     if _ws_generation_failed(tid, frames):
-         tid = _allocate_turn_id(forced_tid)
-         frames = _emit_ws_outage(session_id, tid)
-+        outage_payload = {"session_id": session_id, "phase": 'greet'}
-         try:
--            _admin_emit('ws_pipeline_outage', session_id=session_id, phase='greet')
-+            _admin_emit('ws_pipeline_outage', **outage_payload)
-         except Exception:
-             pass
-+        _broadcast_admin_ws_event('ws_pipeline_outage', outage_payload)
-         try:
-             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-         except Exception:
-             pass
-         return tid
-     existing_frame_types = [
-         fr.get("type")
-         for fr in frames
-         if isinstance(fr, dict) and fr.get("type") is not None
-     ]
-     state_already_sent = any(ft == "state" for ft in existing_frame_types)
-     suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
- 
-     ready_sent = state_already_sent
-     idle_armed = False
- 
-     def _emit_ready_once() -> None:
-         nonlocal ready_sent
-         if ready_sent:
-             return
-         try:
-             if should_emit_phase(session_id, "ready"):
-                 set_phase(session_id, "ready", emitted=True)
-                 bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-             else:
-@@ -3312,92 +3429,95 @@ def run_ws_greet(session_id: str) -> str:
-                         sid=session_id,
-                         turn_id=tid,
-                         flow="greet",
-                         reason="schedule_failed",
-                         **_tts_text_markers(safe_text),
-                     )
-                 except Exception:
-                     pass
-                 _arm_idle_once()
-     except Exception:
-         pass
- 
-     # UI nudges (only emit if the assistant frames didn't already do so)
-     try:
-         if not audio_scheduled:
-             _arm_idle_once()
-         if not suggestions_already_sent:
-             greet_legacy = hygienic_suggestions("")
-             base_suggestions = merge_suggestions(greet_legacy)
-             _log_suggestions_made(
-                 turn_id=tid,
-                 policy_chips=[],
-                 legacy_suggestions=greet_legacy,
-                 merged_suggestions=base_suggestions,
-                 cfg=cfg,
-+                session_id=session_id,
-             )
-             if base_suggestions:
-                 bus.broadcast(
-                     session_id,
-                     {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
-                 )
-     except Exception:
-         pass
-     return tid
- 
- 
- def run_ws_user_turn(session_id: str,
-                      text: str,
-                      correlation_user_msg_id: Optional[str] = None,
-                      *,
-                      meta_overrides: Optional[Dict[str, Any]] = None) -> str:
-     """
-     Produce assistant text for a user turn and schedule both text pacing and TTS.
-     Mirrors HTTP /api_v1/chat behavior for consistency.
-     """
-     nudges.cancel_idle_timers(session_id, mark=False)
-     meta = {"source": "user_ws", "channel": "ws"}
-     if isinstance(meta_overrides, dict):
-         for key, value in meta_overrides.items():
-             try:
-                 meta[key] = copy.deepcopy(value)
-             except Exception:
-                 meta[key] = value
- 
-     tid, frames = make_assistant_frames(text, session_id, meta=meta,
-                                         correlation_user_msg_id=correlation_user_msg_id)
-     if _ws_generation_failed(tid, frames):
-         tid = _allocate_turn_id(force_turn_id=None)
-         frames = _emit_ws_outage(session_id, tid, correlation_user_msg_id=correlation_user_msg_id)
-         try:
-             _apply_assistant_turn_state(session_id, frames)
-         except Exception:
-             pass
-+        outage_payload = {"session_id": session_id, "phase": 'turn'}
-         try:
--            _admin_emit('ws_pipeline_outage', session_id=session_id, phase='turn')
-+            _admin_emit('ws_pipeline_outage', **outage_payload)
-         except Exception:
-             pass
-+        _broadcast_admin_ws_event('ws_pipeline_outage', outage_payload)
-         return tid
-     try:
-         _apply_assistant_turn_state(session_id, frames)
-     except Exception:
-         pass
-     existing_frame_types = [
-         fr.get("type")
-         for fr in frames
-         if isinstance(fr, dict) and fr.get("type") is not None
-     ]
-     ready_sent = any(ft == "state" for ft in existing_frame_types)
- 
-     def _emit_ready_once() -> None:
-         nonlocal ready_sent
-         if ready_sent:
-             return
-         try:
-             if should_emit_phase(session_id, "ready"):
-                 set_phase(session_id, "ready", emitted=True)
-                 bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-             else:
-                 set_phase(session_id, "ready")
-             ready_sent = True
-         except Exception:
-             pass
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 7840cb67a9c270493ec2ad3d9129a81645abdae4..ab8ef573b1dcfb7bb1c01424222efa52aa1b3da3 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -13,53 +13,84 @@ from .schema_v1 import (
-     make_keepalive_ack,
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.config import load_settings
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
- 
- # NEW: invoke LLM on final transcript
- from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
- from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
- from app.ws.barge import BargeState
- from app.ws.confirm_window import ConfirmWindow
- from app.ws.bus import bus
- 
- # Optional admin emitter
- try:
--    from app.api_v1.admin import _emit as _admin_emit
-+    from app.api_v1.admin import _emit as _admin_emit_base
- except Exception:
--    _admin_emit = None
-+    _admin_emit_base = None
++            transport_cfg = {}
 +
++        if not containerized:
++            transport_cfg["containerized_opus"] = True
++            transport_cfg["_containerized_forced"] = True
++            containerized = True
 +
-+def _broadcast_admin_frame(event: str, payload: Dict[str, Any]) -> None:
-+    """Mirror admin diagnostics to the session WS bus when possible."""
-+    sid = payload.get("session_id") or payload.get("sid")
-+    if not sid:
-+        return
++        transport_cfg.setdefault("container", "webm")
++        transport_cfg.setdefault("codec", "opus")
++
+     # Append conservative defaults ONLY when not containerized
+     if (not containerized) and ("encoding=" not in base):
+         sep = "&" if "?" in base else "?"
+         base = (
+             base
+             + sep
+             # RAW defaults; safe for legacy raw paths. If truly containerized, these will be stripped below.
+             + "encoding=opus&sample_rate=48000&channels=1"
+             + "&interim_results=true&vad_events=true&smart_format=true&punctuate=true"
+         )
+ 
+     # Apply overrides into query string and clean up for containerized
+     effective_utterance_end_ms = 0
+ 
+     try:
+         import urllib.parse as _p
+ 
+         parts = _p.urlsplit(base)
+         q = _p.parse_qsl(parts.query, keep_blank_values=True)
+         qd = {k: v for k, v in q}
+ 
+         def _fmt(v):
+             if isinstance(v, bool):
+                 return "true" if v else "false"
+             if isinstance(v, int):
+@@ -320,50 +339,158 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
+                 effective_utterance_end_ms = 0
+ 
+         query = _p.urlencode(qd)
+         base = _p.urlunsplit(
+             (parts.scheme, parts.netloc, parts.path, query, parts.fragment)
+         )
+     except Exception:
+         pass
+ 
+     if isinstance(overrides, dict):
+         try:
+             overrides["_effective_utterance_end_ms"] = int(
+                 effective_utterance_end_ms or 0
+             )
+         except Exception:
+             overrides["_effective_utterance_end_ms"] = 0
+ 
+     return base
+ 
+ 
+ def _auth_header(*, log: bool = True, logger_obj: logging.Logger = logger) -> str:
+     key, _ = _api_key_info(log=log, logger_obj=logger_obj)
+     return f"Token {key}"
+ 
+ 
++def _client_url_metadata(url: str, overrides: Optional[dict]) -> tuple[str, str, dict[str, Any]]:
++    """Return (safe_url, sanitized_query, meta) for diagnostics/clients."""
++
++    transport = {}
 +    try:
-+        sid_str = str(sid)
++        if overrides and isinstance(overrides.get("_transport"), dict):
++            transport = dict(overrides.get("_transport") or {})
 +    except Exception:
-+        sid_str = sid  # type: ignore[assignment]
++        transport = {}
 +
-+    frame = {"type": event}
-+    frame.update(dict(payload))
-+    frame.setdefault("session_id", sid_str)
-+    frame.setdefault("sid", sid_str)
++    containerized = bool(transport.get("containerized_opus"))
++    container = transport.get("container")
++    codec = transport.get("codec")
++    normalized_pcm = bool(transport.get("normalized_pcm"))
++
++    safe_url = url
++    sanitized_qs = "?"
++    meta: dict[str, Any] = {
++        "container": container,
++        "codec": codec,
++        "containerized_opus": containerized,
++        "normalized_pcm": normalized_pcm,
++        "omitted_params": None,
++        "raw_params": None,
++    }
 +
 +    try:
-+        bus.broadcast(str(sid_str), frame)
++        import urllib.parse as _p
++
++        parts = _p.urlsplit(url)
++        q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
++
++        raw_param_keys = {"encoding", "sample_rate", "channels"}
++        if containerized:
++            omitted = []
++            for key in raw_param_keys:
++                if key not in q:
++                    omitted.append(key)
++            meta["omitted_params"] = omitted
++        else:
++            meta["raw_params"] = {
++                "encoding": q.get("encoding"),
++                "sample_rate": q.get("sample_rate"),
++                "channels": q.get("channels"),
++            }
++
++        sanitized_pairs = []
++        for key in sorted(q.keys()):
++            if key is None:
++                continue
++            key_str = str(key)
++            lower = key_str.lower()
++            if "key" in lower or "token" in lower or "secret" in lower:
++                continue
++            if containerized and key_str in raw_param_keys:
++                continue
++            sanitized_pairs.append((key_str, q[key]))
++
++        sanitized_query = _p.urlencode(sanitized_pairs, doseq=True)
++        sanitized_qs = f"?{sanitized_query}" if sanitized_query else "?"
++        safe_url = f"{parts.scheme}://{parts.netloc}{parts.path}"
++        if sanitized_query:
++            safe_url = f"{safe_url}?{sanitized_query}"
++        if parts.fragment:
++            safe_url = f"{safe_url}#{parts.fragment}"
 +    except Exception:
 +        pass
 +
++    return safe_url, sanitized_qs, meta
 +
-+def _admin_emit(event: str, **payload: Any) -> None:
-+    if callable(_admin_emit_base):
-+        try:
-+            _admin_emit_base(event, **payload)
-+        except Exception:
-+            pass
 +
-+    _broadcast_admin_frame(event, payload)
++def build_client_session_descriptor(overrides: Optional[dict] = None) -> dict[str, Any]:
++    """Expose Deepgram session info for browser-initiated clients."""
++
++    cfg = dict(overrides or {})
++    url = _dg_url(cfg)
++    safe_url, sanitized_qs, meta = _client_url_metadata(url, cfg)
++    configure_payload = _initial_config(cfg)
++
++    try:
++        key, _ = _api_key_info(log=False, logger_obj=logger)
++        auth_masked = _mask_key_fragment(key)
++    except Exception:
++        auth_masked = None
++
++    descriptor: dict[str, Any] = {
++        "url": url,
++        "sanitized_url": safe_url,
++        "sanitized_query": sanitized_qs,
++        "configure": configure_payload,
++        "transport": {
++            "container": meta.get("container"),
++            "codec": meta.get("codec"),
++            "containerized": bool(meta.get("containerized_opus")),
++            "normalized_pcm": bool(meta.get("normalized_pcm")),
++        },
++        "meta": meta,
++        "auth": {
++            "header": "Authorization",
++            "scheme": "Token",
++            "masked": auth_masked,
++            "requires_proxy": True,
++        },
++    }
++
++    return descriptor
++
++
+ def _initial_config(overrides: Optional[dict] = None) -> dict:
+     """Build Configure payload with FEATURES ONLY (no audio/transport keys)."""
+     interim = os.getenv("DG_ENABLE_PARTIALS", "true").lower() != "false"
+     features = {
+         "interim_results": interim,
+         "smart_format": True,
+         "punctuate": True,
+         "vad_events": True,
+         # Keep URL-only keys (like utterance_end_ms) out of Configure
+     }
  
- 
- def _current_assistant_turn_id(sid: str) -> Optional[str]:
+     # Allow simple boolean overrides at top-level OR nested under "features"
      try:
-         turn = bus.current_assistant_turn(sid)
+         if overrides:
+             # Merge nested features if provided
+             if isinstance(overrides.get("features"), dict):
+                 for k, v in overrides["features"].items():
+                     features[k] = v
+ 
+             # Support legacy boolean overrides at top level
+             for k in ("interim_results", "smart_format", "punctuate", "vad_events"):
+                 if k in overrides and overrides[k] is not None:
+                     features[k] = bool(overrides[k])
      except Exception:
-         return None
-     if turn is None:
-         return None
-     try:
-         return str(turn)
-     except Exception:
-         return None
+         pass
+diff --git a/static/js/voice.js b/static/js/voice.js
+index 86d29551b481918677951d94811f7849d632bc65..67aab66d219c9575f71706ec73034f757f7b1634 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -1,90 +1,104 @@
+ /*
+ Citations for context (non-functional):
+ :contentReference[oaicite:0]{index=0}
+ :contentReference[oaicite:1]{index=1}
+ */
  
+ /* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
+    Goals satisfied:
+     • Echo-aware VAD (threshold boost while TTS is playing)
+     • Streaming Opus blobs per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
+     • Soft barge-in: pause Chip TTS on committed speech start
+     • Turn timeout (safety), robust errors, clean session end
+     • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
  
- def _lookup_tts_state(sid: str, turn_id: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-     try:
-         tts_tbl = db.memory.get("tts_status") or {}
-         session_tbl = tts_tbl.get(sid) or {}
-     except Exception:
-         return None, None
+    Notes:
+     • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
+     • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
+ */
  
-     keys_to_try = []
-     if turn_id:
-         keys_to_try.append(str(turn_id))
-diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
-index 86f36130570e8f7618069a09e2630b85c96f4ded..a0599e199b8ccc56180660155faceab0fd2af0d7 100644
---- a/static/js/bootstrap.js
-+++ b/static/js/bootstrap.js
-@@ -66,57 +66,59 @@ function showBanner(msg){
+ import { VAD } from './voice/vad.js';
+-import { sendAudioChunk, sendCloseStream } from './ws_module.js';
++import { sendAudioChunk, sendCloseStream, sendJSON } from './ws_module.js';
+ import { stopPlayback, isPlaying as ttsIsPlaying, getPlaybackSignature } from './audio.js';
+ import { logIfEnabled } from './util/logging.js';
++import { getSID } from './util/sid.js';
  
- function _disableButtons() {
-   const endBtn   = $('#endButton');
-   const sendBtnA = $('#composerSend');
-   const sendBtnB = $('#sendBtn');
-   if (sendBtnA) sendBtnA.disabled = true;
-   if (sendBtnB) sendBtnB.disabled = true;
-   if (endBtn)   endBtn.disabled   = true;
+ // Public API (matches prior usage)
+ export async function initMic(stream = null) { return await _ensureMic(stream); }
+ export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
+ export function disarmVAD() { _disarm(); }
+ export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
+ export function bargeIn() { _bargeIn(); }         // keeps API parity
+ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+ 
+ // ---- Internal state ---------------------------------------------------------
+ 
+ // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   && typeof MediaRecorder.isTypeSupported === 'function'
+   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
+   ? 'audio/ogg; codecs=opus'
+   : 'audio/webm; codecs=opus';
+ 
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+ const POST_TTS_HOLDOFF_MS = 600;    // grace window after Chip begins speaking
+ 
+ const state = {
+   stream: null,
+   ctx: null,
+   source: null,
+   analyser: null,
+   vad: null,
+   rec: null,
+   chunkSendPromise: Promise.resolve(),
+   chunkBytesSent: 0,
+   chunkSendError: null,
+   turnTimer: null,
+   turnOpen: false,   // track whether a turn is currently open server-side
+   deviceLogged: false,
+   // NEW: min-turn gating
+   recStartedAt: 0,
+   pendingEndTimer: null,
+   postTtsHoldUntil: 0,
+   postTtsHoldTimer: null,
+   eligibility: 'blocked_pregreet', // 'blocked_pregreet' | 'holdoff' | 'eligible'
+-  refractoryUntil: 0, 
++  refractoryUntil: 0,
++  direct: {
++    descriptor: null,
++    fetchPromise: null,
++    connectPromise: null,
++    ws: null,
++    ready: false,
++    sendPromise: Promise.resolve(),
++    lastError: null,
++    container: 'webm',
++    codec: 'opus',
++    containerized: true,
++    sanitizedUrl: null,
++  },
+ };
+ 
+ let _overrideEchoSignatureFn = null;
+ 
+ // ---- Helpers ----------------------------------------------------------------
+ 
+ function _emitVoiceState(state, detail = {}) {
+   try {
+     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
+   } catch {}
  }
  
- function _enableButtons() {
-   const endBtn   = $('#endButton');
-   const sendBtnA = $('#composerSend');
-   const sendBtnB = $('#sendBtn');
-   if (sendBtnA) sendBtnA.disabled = false;
-   if (sendBtnB) sendBtnB.disabled = false;
-   if (endBtn)   endBtn.disabled   = false;
- }
- 
- function wireWSEventsOnce(){
-   if (window.__askchip_ws_wired) return;
-   window.__askchip_ws_wired = true;
- 
-   // Log first few frames to verify payload shape
-   let seen = 0;
-+  const loggedTypes = new Set();
-   window.addEventListener('askchip-ws', (ev) => {
-     const d = ev.detail || {};
-     const t = d.type || '';
- 
--    if (seen < 5) {
-+    if (seen < 5 || (!loggedTypes.has(t) && loggedTypes.size < 12)) {
-       try { _console('log', '[WS→UI]', JSON.stringify(d)); } catch {}
-       seen++;
-+      if (t) loggedTypes.add(t);
-     }
- 
-     // Lightweight state dot hints (no UI regressions)
-     if (t === 'assistant_audio') setDot('speaking');
-     if (t === 'UtteranceEnd')    setDot('ready');
-     if (t === 'state' && d.phase) {
-       if (d.phase === 'ready')    setDot('ready');
-       if (d.phase === 'thinking') setDot('thinking');
-       if (d.phase === 'speaking') setDot('speaking');
-       if (d.phase === 'listening')setDot('listening');
-     }
- 
-     // De-dupe assistant text frames so greet can't double-render
-     if (_isAssistantTextFrame(d)) {
-       if (!_dedupeAssistant(d)) return; // swallow duplicate
-     }
- 
-     try { App.handleAssistantFrame(d); } catch (e) { _console('warn', 'App.handleAssistantFrame error', e); }
+ function _console(level, ...args) {
+   logIfEnabled(() => {
+     try {
+       const method = (typeof console?.[level] === 'function') ? console[level] : console.log;
+       method?.apply(console, args);
+     } catch {}
    });
+ }
  
-   window.addEventListener('askchip-ws-close', (ev) => {
-     const detail = ev.detail || {};
-     const normal = detail.code === 1000 || detail.code === 1001;
-     const reason = detail.reason || (normal ? 'normal closure' : '');
-     const payload = { ...detail, reason };
+ function _logLifecycle(event, detail = {}, level = 'debug') {
+   const payload = { event, ...(detail && typeof detail === 'object' ? detail : { detail }) };
+   _console(level, '[voice]', event, payload);
+   try {
+@@ -95,97 +109,279 @@ function _logLifecycle(event, detail = {}, level = 'debug') {
+ function _now() {
+   try {
+     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+       return performance.now();
+     }
+   } catch {}
+   return Date.now();
+ }
+ 
+ function _clearPendingEndTimer() {
+   if (state.pendingEndTimer) {
+     try { clearTimeout(state.pendingEndTimer); } catch {}
+     state.pendingEndTimer = null;
+   }
+ }
+ 
+ function _clearPostTtsHoldTimer() {
+   const hadTimer = !!state.postTtsHoldTimer;
+   if (hadTimer) {
+     try { clearTimeout(state.postTtsHoldTimer); } catch {}
+   }
+   state.postTtsHoldTimer = null;
+   return hadTimer;
+ }
+ 
++async function _fetchAsrClientSession(force = false) {
++  const direct = state.direct;
++  if (!direct) return null;
++  if (!force && direct.descriptor) return direct.descriptor;
++  if (direct.fetchPromise) return direct.fetchPromise;
++
++  const sid = (() => {
++    try { return getSID(); } catch { return null; }
++  })();
++  const qs = sid ? `?session_id=${encodeURIComponent(sid)}` : '';
++
++  const url = `/api/v1/asr/client-session${qs}`;
++  direct.fetchPromise = fetch(url, { credentials: 'include' })
++    .then(async (res) => {
++      if (!res.ok) {
++        const err = new Error(`fetch_failed_${res.status}`);
++        err.status = res.status;
++        throw err;
++      }
++      return res.json();
++    })
++    .then((body) => {
++      const session = body?.session || body?.descriptor || null;
++      if (!session || typeof session !== 'object') {
++        throw new Error('bad_descriptor');
++      }
++      direct.descriptor = session;
++      direct.container = (session?.transport?.container || 'webm');
++      direct.codec = (session?.transport?.codec || 'opus');
++      direct.containerized = session?.transport?.containerized !== false;
++      direct.sanitizedUrl = session?.sanitized_url || session?.url || null;
++
++      const diagContainer = `${direct.container || 'webm'}/${direct.codec || 'opus'}`;
++      _console('info', '[voice] direct ASR descriptor', {
++        sanitizedUrl: direct.sanitizedUrl,
++        container: diagContainer,
++        containerized: direct.containerized,
++      });
++
++      const diagFrame = {
++        type: 'ClientAsrSession',
++        sanitized_url: direct.sanitizedUrl || null,
++        container: diagContainer,
++        containerized: direct.containerized !== false,
++      };
++      try { sendJSON(diagFrame); } catch {}
++      return session;
++    })
++    .catch((err) => {
++      direct.lastError = err;
++      throw err;
++    })
++    .finally(() => {
++      direct.fetchPromise = null;
++    });
++
++  return direct.fetchPromise;
++}
++
++function _handleDirectWsMessage(evt) {
++  if (!evt) return;
++  const data = evt.data;
++  if (typeof data !== 'string') {
++    return;
++  }
++  try {
++    const parsed = JSON.parse(data);
++    _console('debug', '[voice] direct ASR frame', parsed);
++  } catch (err) {
++    _console('debug', '[voice] direct ASR frame (raw)', { error: err?.message || err });
++  }
++}
++
++async function _ensureDirectWs() {
++  const direct = state.direct;
++  if (!direct || !direct.descriptor) return null;
++  if (direct.ws && direct.ws.readyState === WebSocket.OPEN) return direct.ws;
++  if (direct.connectPromise) return direct.connectPromise;
++
++  if (typeof WebSocket === 'undefined') {
++    return null;
++  }
++
++  const descriptor = direct.descriptor;
++  const wsUrl = descriptor?.url;
++  if (!wsUrl || typeof wsUrl !== 'string') {
++    return null;
++  }
++
++  const protocols = (() => {
++    const raw = descriptor?.protocols;
++    if (Array.isArray(raw)) {
++      return raw.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim());
++    }
++    if (typeof raw === 'string' && raw.trim()) {
++      return [raw.trim()];
++    }
++    return [];
++  })();
++
++  direct.connectPromise = new Promise((resolve, reject) => {
++    let ws;
++    try {
++      ws = protocols.length ? new WebSocket(wsUrl, protocols) : new WebSocket(wsUrl);
++    } catch (err) {
++      direct.lastError = err;
++      direct.connectPromise = null;
++      return reject(err);
++    }
++
++    direct.ws = ws;
++    ws.binaryType = 'arraybuffer';
++
++    ws.onopen = () => {
++      direct.ready = true;
++      try {
++        if (descriptor?.configure) {
++          ws.send(JSON.stringify(descriptor.configure));
++        }
++      } catch (err) {
++        _console('warn', '[voice] failed to send direct ASR configure', err);
++      }
++      resolve(ws);
++    };
++
++    ws.onmessage = (evt) => {
++      try { _handleDirectWsMessage(evt); } catch {}
++    };
++
++    ws.onerror = (evt) => {
++      direct.lastError = evt;
++    };
++
++    ws.onclose = () => {
++      direct.ready = false;
++      direct.ws = null;
++    };
++  }).finally(() => {
++    direct.connectPromise = null;
++  });
++
++  return direct.connectPromise.catch(() => null);
++}
++
++async function _directSendChunk(blob) {
++  const direct = state.direct;
++  if (!direct) return;
++  const ws = direct.ws;
++  if (!ws || ws.readyState !== WebSocket.OPEN) return;
++  try {
++    const buf = await blob.arrayBuffer();
++    ws.send(buf);
++  } catch (err) {
++    direct.lastError = err;
++    _console('warn', '[voice] direct ASR send failed', err);
++  }
++}
++
++function _closeDirectWs() {
++  const direct = state.direct;
++  if (!direct) return;
++  const ws = direct.ws;
++  direct.ws = null;
++  direct.ready = false;
++  if (ws) {
++    try { ws.close(); } catch {}
++  }
++}
++
+ try {
+   window.addEventListener('chip-tts', (ev) => {
+     const detail = ev?.detail || {};
+     const rawState = detail.state;
+     const ttsState = typeof rawState === 'string' ? rawState.toLowerCase() : '';
+     if (ttsState === 'playing') {
+       state.postTtsHoldUntil = _now() + POST_TTS_HOLDOFF_MS;
+ 
+       const isPrime = detail && detail.prime === true;
+       const playbackConfirmed = (() => {
+         if (detail && (detail.confirmed === true || detail.playbackConfirmed === true)) {
+           return true;
+         }
+         try { return !!ttsIsPlaying(); } catch { return false; }
+       })();
+ 
+       if (!isPrime && playbackConfirmed && state.eligibility === 'blocked_pregreet') {
+         state.eligibility = 'holdoff';
+       }
+       return;
+     }
+     if (!ttsState || ttsState === 'ended' || ttsState === 'stopped' || ttsState === 'idle' || ttsState === 'paused') {
+       state.postTtsHoldUntil = 0;
+       _clearPostTtsHoldTimer();
+       if (state.eligibility === 'holdoff') state.eligibility = 'eligible'; 
+     }
+   });
+ } catch {}
+ 
+ function _toFiniteNumber(value) {
+   if (typeof value === 'number') {
+     return Number.isFinite(value) ? value : null;
+   }
+   if (typeof value === 'string') {
+     const trimmed = value.trim();
+     if (trimmed === '') return null;
+     const parsed = Number(trimmed);
+     return Number.isFinite(parsed) ? parsed : null;
+   }
+   return null;
+ }
+ 
+ function _resolveNumber(value, fallback) {
+   const num = _toFiniteNumber(value);
+   return num === null ? fallback : num;
+ }
+ 
++function _selectRecorderMime() {
++  try {
++    const preferWebm = !!(state.direct && state.direct.descriptor && state.direct.containerized);
++    const webmMime = 'audio/webm; codecs=opus';
++    if (preferWebm && typeof MediaRecorder !== 'undefined' && typeof MediaRecorder.isTypeSupported === 'function') {
++      if (MediaRecorder.isTypeSupported(webmMime)) {
++        return webmMime;
++      }
++    }
++  } catch {}
++  return REC_MIME;
++}
++
+ async function _ensureMic(externalStream = null) {
+   if (state.stream && state.stream.active) return state.stream;
+ 
+   if (state.stream && !state.stream.active) {
+     _teardownAudioGraph();
+     state.stream = null;
+   }
+ 
+   let stream = externalStream;
+ 
+   if (!stream || !stream.active) {
+     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+       _logLifecycle('mic_perm_denied', { reason: 'mediaDevices_unavailable' }, 'warn');
+       throw new Error('Media devices API unavailable');
+     }
+ 
+     const constraints = {
+       audio: {
+         channelCount: 1,
+         sampleRate: 48000,
+         echoCancellation: true,
+         noiseSuppression: true,
+         autoGainControl: false
+       }
+     };
+@@ -257,87 +453,94 @@ function _stopRecorder(detail = null) {
+ 
+ function _teardownVADOnly() {
+   try { state.vad && state.vad.stop(); } catch {}
+   state.vad = null;
+ }
+ 
+ function _teardownAudioGraph() {
+   try { state.source && state.source.disconnect(); } catch {}
+   try { state.analyser && state.analyser.disconnect(); } catch {}
+   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
+   state.source = null;
+   state.analyser = null;
+   state.ctx = null;
+   state.deviceLogged = false;
+ }
+ 
+ function _disarm() {
+   // 1) Hard stop + clear all timers
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   _clearPostTtsHoldTimer();
+ 
+   // 2) Stop capture/VAD cleanly
+   _stopRecorder({ reason: 'manual_disarm' });
+   _teardownVADOnly();
++  _closeDirectWs();
+ 
+   // 3) Reset local state
+   state.turnOpen = false;
+   state.recStartedAt = 0;
+ 
+   // 4) Block any pre-greet starts, and enforce a refractory lockout
+   //    Use your configured cooldown (default 900ms) so we can't instantly re-arm.
+   const cooldown = _resolveNumber(cfg.cooldownMs, 900);
+   state.refractoryUntil = Date.now() + cooldown;  // prevent immediate re-starts
+   state.postTtsHoldUntil = 0;                     // no pending hold
+   state.eligibility = 'blocked_pregreet';         // require greet/tts to begin before starts are allowed
+ 
+   // 5) Final UI state
+   _emitVoiceState('idle');
+ }
+ 
+ function _bargeIn() {
+   _clearPostTtsHoldTimer();
+   state.postTtsHoldUntil = 0;
+   // Soft barge-in: pause audio locally
+   try { stopPlayback(); } catch {}
+   // If a prior ASR turn is somehow still open, politely close it.
+   // (Harmless if no turn is open; guarded to avoid duplicate closes.)
+   if (state.turnOpen) {
+     try { sendCloseStream(); } catch {}
+     state.turnOpen = false;
+   }
+ }
+ 
+ // ---- VAD wiring -------------------------------------------------------------
+ 
+ async function _arm(stream = null, opts = {}) {
+   const mic = stream || await _ensureMic();
+ 
+   // Build / rebuild VAD
+   _teardownVADOnly();
+ 
++  try {
++    _fetchAsrClientSession().then(() => {
++      _ensureDirectWs().catch(() => {});
++    }).catch(() => {});
++  } catch {}
++
+   // Merge runtime globals so admins can tune without rebuilds:
+   let globalVad = {};
+   try { globalVad = (window.__askchip_config && window.__askchip_config.vad) || {}; } catch {}
+   const cfg = { ...globalVad, ...opts };
+ 
+   const pollMs = _resolveNumber(cfg.pollMs, 33);
+   const baseThresholdDb = _toFiniteNumber(cfg.baseThresholdDb ?? cfg.startDbOffset);
+   const exitThresholdDb = _toFiniteNumber(cfg.exitThresholdDb ?? cfg.stopDbOffset);
+   const ttsBoostDb = _toFiniteNumber(cfg.ttsBoostDb);
+   const echoBoostStartDb = _resolveNumber(
+     cfg.echoBoostStartDb ?? cfg.echoBoostStart ?? ttsBoostDb,
+     8
+   );
+   const hasExplicitStartBoost = cfg.echoBoostStartDb !== undefined || cfg.echoBoostStart !== undefined;
+   let stopFallback = 6;
+   if (ttsBoostDb !== null || hasExplicitStartBoost) {
+     stopFallback = echoBoostStartDb;
+   }
+   const echoBoostStopDb = _resolveNumber(
+     cfg.echoBoostStopDb ?? cfg.echoBoostStop ?? (ttsBoostDb !== null ? ttsBoostDb : null),
+     stopFallback
+   );
+ 
+   const echoSuppressDb = _resolveNumber(
+     cfg.ECHO_SUPPRESS_DB ?? cfg.echoSuppressDb,
+@@ -412,74 +615,91 @@ async function _arm(stream = null, opts = {}) {
+   });
+   _emitVoiceState('armed');
+ 
+   return mic;
+ }
+ 
+ // ---- Recorder lifecycle -----------------------------------------------------
+ 
+ function _startRecorder() {
+   if (!state.stream) return false;
+   if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
+ 
+   if (typeof MediaRecorder === 'undefined') {
+     _console('warn', '[voice] MediaRecorder not supported in this browser');
+     state.rec = null;
+     return false;
+   }
+ 
+   state.chunkSendPromise = Promise.resolve();
+   state.chunkBytesSent = 0;
+   state.chunkSendError = null;
+   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
+   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
+ 
+   let recorder;
++  const mimeType = _selectRecorderMime();
++
+   try {
+-    recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
++    recorder = new MediaRecorder(state.stream, { mimeType, audioBitsPerSecond: 128000 });
+   } catch (primaryErr) {
+     try {
+       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
+     } catch (fallbackErr) {
+       _console('warn', '[voice] MediaRecorder init failed', fallbackErr || primaryErr);
+       state.rec = null;
+       return false;
+     }
+   }
+ 
+   state.rec = recorder;
+ 
+   state.rec.ondataavailable = (e) => {
+     const blob = e.data;
+     if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
+       return;
+     }
+ 
+     // Chain chunk sends to preserve ordering across the WS.
+     state.chunkSendPromise = state.chunkSendPromise
+       .catch(() => {}) // allow queue to continue even if a prior chunk failed
+       .then(async () => {
++        const direct = state.direct;
++        if (direct && direct.descriptor) {
++          try {
++            if (!direct.ws || direct.ws.readyState !== WebSocket.OPEN) {
++              await _ensureDirectWs();
++            }
++            if (direct.ws && direct.ws.readyState === WebSocket.OPEN) {
++              await _directSendChunk(blob);
++            }
++          } catch (err) {
++            direct.lastError = err;
++            _console('debug', '[voice] direct ASR chunk failed', err);
++          }
++        }
++
+         try {
+           await sendAudioChunk(blob);
+           state.chunkBytesSent += blob.size;
+           try {
+             _console('debug', '[voice] streamed audio chunk', { bytes: blob.size });
+           } catch {}
+         } catch (err) {
+           state.chunkSendError = err;
+           try {
+             _console('warn', '[voice] failed to stream audio chunk', err);
+           } catch {}
+         }
+       });
+   };
+ 
+   state.rec.onstop = async () => {
+     let finalDetail;
+     try {
+       await state.chunkSendPromise.catch((err) => {
+         state.chunkSendError = state.chunkSendError || err;
+       });
+       if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
+         _console('warn', '[voice] recorded chunks too small', state.chunkBytesSent);
+         finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
+       }

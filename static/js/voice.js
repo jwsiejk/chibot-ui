@@ -18,9 +18,10 @@ Citations for context (non-functional):
 */
 
 import { VAD } from './voice/vad.js';
-import { sendAudioChunk, sendCloseStream } from './ws_module.js';
+import { sendAudioChunk, sendCloseStream, sendJSON } from './ws_module.js';
 import { stopPlayback, isPlaying as ttsIsPlaying, getPlaybackSignature } from './audio.js';
 import { logIfEnabled } from './util/logging.js';
+import { getSID } from './util/sid.js';
 
 // Public API (matches prior usage)
 export async function initMic(stream = null) { return await _ensureMic(stream); }
@@ -62,7 +63,20 @@ const state = {
   postTtsHoldUntil: 0,
   postTtsHoldTimer: null,
   eligibility: 'blocked_pregreet', // 'blocked_pregreet' | 'holdoff' | 'eligible'
-  refractoryUntil: 0, 
+  refractoryUntil: 0,
+  direct: {
+    descriptor: null,
+    fetchPromise: null,
+    connectPromise: null,
+    ws: null,
+    ready: false,
+    sendPromise: Promise.resolve(),
+    lastError: null,
+    container: 'webm',
+    codec: 'opus',
+    containerized: true,
+    sanitizedUrl: null,
+  },
 };
 
 let _overrideEchoSignatureFn = null;
@@ -117,6 +131,175 @@ function _clearPostTtsHoldTimer() {
   return hadTimer;
 }
 
+async function _fetchAsrClientSession(force = false) {
+  const direct = state.direct;
+  if (!direct) return null;
+  if (!force && direct.descriptor) return direct.descriptor;
+  if (direct.fetchPromise) return direct.fetchPromise;
+
+  const sid = (() => {
+    try { return getSID(); } catch { return null; }
+  })();
+  const qs = sid ? `?session_id=${encodeURIComponent(sid)}` : '';
+
+  const url = `/api/v1/asr/client-session${qs}`;
+  direct.fetchPromise = fetch(url, { credentials: 'include' })
+    .then(async (res) => {
+      if (!res.ok) {
+        const err = new Error(`fetch_failed_${res.status}`);
+        err.status = res.status;
+        throw err;
+      }
+      return res.json();
+    })
+    .then((body) => {
+      const session = body?.session || body?.descriptor || null;
+      if (!session || typeof session !== 'object') {
+        throw new Error('bad_descriptor');
+      }
+      direct.descriptor = session;
+      direct.container = (session?.transport?.container || 'webm');
+      direct.codec = (session?.transport?.codec || 'opus');
+      direct.containerized = session?.transport?.containerized !== false;
+      direct.sanitizedUrl = session?.sanitized_url || session?.url || null;
+
+      const diagContainer = `${direct.container || 'webm'}/${direct.codec || 'opus'}`;
+      _console('info', '[voice] direct ASR descriptor', {
+        sanitizedUrl: direct.sanitizedUrl,
+        container: diagContainer,
+        containerized: direct.containerized,
+      });
+
+      const diagFrame = {
+        type: 'ClientAsrSession',
+        sanitized_url: direct.sanitizedUrl || null,
+        container: diagContainer,
+        containerized: direct.containerized !== false,
+      };
+      try { sendJSON(diagFrame); } catch {}
+      return session;
+    })
+    .catch((err) => {
+      direct.lastError = err;
+      throw err;
+    })
+    .finally(() => {
+      direct.fetchPromise = null;
+    });
+
+  return direct.fetchPromise;
+}
+
+function _handleDirectWsMessage(evt) {
+  if (!evt) return;
+  const data = evt.data;
+  if (typeof data !== 'string') {
+    return;
+  }
+  try {
+    const parsed = JSON.parse(data);
+    _console('debug', '[voice] direct ASR frame', parsed);
+  } catch (err) {
+    _console('debug', '[voice] direct ASR frame (raw)', { error: err?.message || err });
+  }
+}
+
+async function _ensureDirectWs() {
+  const direct = state.direct;
+  if (!direct || !direct.descriptor) return null;
+  if (direct.ws && direct.ws.readyState === WebSocket.OPEN) return direct.ws;
+  if (direct.connectPromise) return direct.connectPromise;
+
+  if (typeof WebSocket === 'undefined') {
+    return null;
+  }
+
+  const descriptor = direct.descriptor;
+  const wsUrl = descriptor?.url;
+  if (!wsUrl || typeof wsUrl !== 'string') {
+    return null;
+  }
+
+  const protocols = (() => {
+    const raw = descriptor?.protocols;
+    if (Array.isArray(raw)) {
+      return raw.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim());
+    }
+    if (typeof raw === 'string' && raw.trim()) {
+      return [raw.trim()];
+    }
+    return [];
+  })();
+
+  direct.connectPromise = new Promise((resolve, reject) => {
+    let ws;
+    try {
+      ws = protocols.length ? new WebSocket(wsUrl, protocols) : new WebSocket(wsUrl);
+    } catch (err) {
+      direct.lastError = err;
+      direct.connectPromise = null;
+      return reject(err);
+    }
+
+    direct.ws = ws;
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+      direct.ready = true;
+      try {
+        if (descriptor?.configure) {
+          ws.send(JSON.stringify(descriptor.configure));
+        }
+      } catch (err) {
+        _console('warn', '[voice] failed to send direct ASR configure', err);
+      }
+      resolve(ws);
+    };
+
+    ws.onmessage = (evt) => {
+      try { _handleDirectWsMessage(evt); } catch {}
+    };
+
+    ws.onerror = (evt) => {
+      direct.lastError = evt;
+    };
+
+    ws.onclose = () => {
+      direct.ready = false;
+      direct.ws = null;
+    };
+  }).finally(() => {
+    direct.connectPromise = null;
+  });
+
+  return direct.connectPromise.catch(() => null);
+}
+
+async function _directSendChunk(blob) {
+  const direct = state.direct;
+  if (!direct) return;
+  const ws = direct.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  try {
+    const buf = await blob.arrayBuffer();
+    ws.send(buf);
+  } catch (err) {
+    direct.lastError = err;
+    _console('warn', '[voice] direct ASR send failed', err);
+  }
+}
+
+function _closeDirectWs() {
+  const direct = state.direct;
+  if (!direct) return;
+  const ws = direct.ws;
+  direct.ws = null;
+  direct.ready = false;
+  if (ws) {
+    try { ws.close(); } catch {}
+  }
+}
+
 try {
   window.addEventListener('chip-tts', (ev) => {
     const detail = ev?.detail || {};
@@ -162,6 +345,19 @@ function _toFiniteNumber(value) {
 function _resolveNumber(value, fallback) {
   const num = _toFiniteNumber(value);
   return num === null ? fallback : num;
+}
+
+function _selectRecorderMime() {
+  try {
+    const preferWebm = !!(state.direct && state.direct.descriptor && state.direct.containerized);
+    const webmMime = 'audio/webm; codecs=opus';
+    if (preferWebm && typeof MediaRecorder !== 'undefined' && typeof MediaRecorder.isTypeSupported === 'function') {
+      if (MediaRecorder.isTypeSupported(webmMime)) {
+        return webmMime;
+      }
+    }
+  } catch {}
+  return REC_MIME;
 }
 
 async function _ensureMic(externalStream = null) {
@@ -279,6 +475,7 @@ function _disarm() {
   // 2) Stop capture/VAD cleanly
   _stopRecorder({ reason: 'manual_disarm' });
   _teardownVADOnly();
+  _closeDirectWs();
 
   // 3) Reset local state
   state.turnOpen = false;
@@ -315,6 +512,12 @@ async function _arm(stream = null, opts = {}) {
 
   // Build / rebuild VAD
   _teardownVADOnly();
+
+  try {
+    _fetchAsrClientSession().then(() => {
+      _ensureDirectWs().catch(() => {});
+    }).catch(() => {});
+  } catch {}
 
   // Merge runtime globals so admins can tune without rebuilds:
   let globalVad = {};
@@ -434,8 +637,10 @@ function _startRecorder() {
   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
 
   let recorder;
+  const mimeType = _selectRecorderMime();
+
   try {
-    recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 128000 });
+    recorder = new MediaRecorder(state.stream, { mimeType, audioBitsPerSecond: 128000 });
   } catch (primaryErr) {
     try {
       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
@@ -458,6 +663,21 @@ function _startRecorder() {
     state.chunkSendPromise = state.chunkSendPromise
       .catch(() => {}) // allow queue to continue even if a prior chunk failed
       .then(async () => {
+        const direct = state.direct;
+        if (direct && direct.descriptor) {
+          try {
+            if (!direct.ws || direct.ws.readyState !== WebSocket.OPEN) {
+              await _ensureDirectWs();
+            }
+            if (direct.ws && direct.ws.readyState === WebSocket.OPEN) {
+              await _directSendChunk(blob);
+            }
+          } catch (err) {
+            direct.lastError = err;
+            _console('debug', '[voice] direct ASR chunk failed', err);
+          }
+        }
+
         try {
           await sendAudioChunk(blob);
           state.chunkBytesSent += blob.size;
