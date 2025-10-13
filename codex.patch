@@ -1,264 +1,302 @@
-diff --git a/app/__init__.py b/app/__init__.py
-index fd23c8cf9a0bfa44f3ee80c98c727be49c0bd221..df8a4ba208c545ff562e0b4ba2f18039159c937d 100644
---- a/app/__init__.py
-+++ b/app/__init__.py
-@@ -68,63 +68,68 @@ def create_app():
- 
-     # Middleware
-     app.before_request(csrf_before_request)
-     rate_limit_register(app)
- 
-     make_csrf_route(app)
- 
-     def asset_version(rel_path: str) -> str:
-         try:
-             full_path = os.path.join(current_app.static_folder, rel_path)
-             return str(int(os.path.getmtime(full_path)))
-         except (OSError, TypeError, ValueError):
-             return "0"
- 
-     @app.context_processor
-     def _inject_asset_version():
-         return {"asset_version": asset_version}
- 
-     @app.context_processor
-     def _inject_askchip_config():
-         enabled = True
-         try:
-             enabled = bool(getattr(_SETTINGS, "advanced_logging_enabled", True))
-         except Exception:
-             enabled = True
-+        auth_config = {}
-+        auto_login_email = (os.environ.get("ASKCHIP_AUTO_LOGIN_EMAIL") or "").strip()
-+        if auto_login_email:
-+            auth_config["autoLoginEmail"] = auto_login_email
-         vad_config = {}
-         try:
-             vad_config = {
-                 "baseThresholdDb": float(getattr(_SETTINGS, "vad_base_threshold_db", 10.0)),
-                 "exitThresholdDb": float(getattr(_SETTINGS, "vad_exit_threshold_db", 6.0)),
-                 "ttsBoostDb": float(getattr(_SETTINGS, "vad_tts_boost_db", 6.0)),
-                 "minSpeechMs": int(getattr(_SETTINGS, "vad_min_speech_ms", 360)),
-             }
-         except Exception:
-             vad_config = {}
-         return {
-             "askchip_config": {
-                 "logging": {"enabled": enabled},
-+                "auth": auth_config,
-                 "vad": vad_config,
-             }
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index ab8ef573b1dcfb7bb1c01424222efa52aa1b3da3..2a9398a06f03c5630972536f0912ded56637d2e3 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -1559,68 +1559,83 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         now_ts = time.time()
+         turn_timing["final"][0] = now_ts
+         start_ts = turn_timing.get("start", [0.0])[0]
+         dg_open_ts = turn_timing.get("dg_open", [0.0])[0]
+         first_partial_ts = turn_timing.get("first_partial", [0.0])[0]
+         delta_start = int((now_ts - start_ts) * 1000) if start_ts else None
+         delta_open = int((now_ts - dg_open_ts) * 1000) if dg_open_ts else None
+         delta_partial = (
+             int((now_ts - first_partial_ts) * 1000) if first_partial_ts else None
+         )
+         latency_ms: Dict[str, Optional[int]] = {
+             "final_from_mic_start": delta_start,
+             "final_from_dg_open": delta_open,
+             "final_from_first_partial": delta_partial,
          }
- 
-     @app.after_request
-     def maybe_allow_cors(resp):
-         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
-         if allow:
-             origins = [o.strip() for o in allow.split(",") if o.strip()]
-             ori = request.headers.get("Origin", "")
-             if ori in origins:
-                 resp.headers["Access-Control-Allow-Origin"] = ori
-                 resp.headers["Vary"] = "Origin"
-                 resp.headers["Access-Control-Allow-Credentials"] = "true"
-                 resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token"
-                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-         return resp
- 
-     @app.route("/<path:_>", methods=["OPTIONS"])
-     def _cors_preflight(_):
-         return ("", 204)
- 
-     @app.before_request
-     def _auth_gate():
-         p = request.path or "/"
-diff --git a/static/js/auth_gate.js b/static/js/auth_gate.js
-index 45c5776565dd22dbfd704b1b680196b5b79a350c..97f9eec2372cd38f0113ae9c23aef369be73eee4 100644
---- a/static/js/auth_gate.js
-+++ b/static/js/auth_gate.js
-@@ -51,79 +51,114 @@ function valueById(id) {
- }
- function valueFromLabel(labelsLower) {
-   const lbl = $$('label').find(L => {
-     const t = (L.textContent || '').trim().toLowerCase();
-     return labelsLower.some(w => t === w || t.startsWith(`${w} `));
-   });
-   if (!lbl) return '';
-   const forId = lbl.getAttribute('for');
-   if (forId) {
-     const el = document.getElementById(forId);
-     return el && 'value' in el ? (el.value || '').trim() : '';
-   }
-   const sib = lbl.nextElementSibling;
-   return (sib && sib.tagName === 'INPUT') ? (sib.value || '').trim() : '';
- }
- function readProfileFields() {
-   // Supported ids: #prof_name, #prof_role (or #profileTitle), #prof_region
-   const name   = valueById('prof_name')   || valueFromLabel(['name']);
-   const title  = valueById('prof_role')   || valueById('profileTitle') || valueFromLabel(['role','title']);
-   const region = valueById('prof_region') || valueFromLabel(['region']);
-   return { name, title, region };
- }
- 
- // ---------- Gate evaluation ----------
- let evalLock = false;
-+let autoLoginAttempted = false;
-+let autoLoginFailed = false;
- 
- export async function evaluateAuth() {
-   if (evalLock) return;
-   evalLock = true;
-   try {
-     // ✅ Fail-open immediately so first paint has Start enabled.
-     // We'll only disable if we KNOW the user must be gated.
-     setStartEnabled(true);
- 
-     const me = await getJSON('/api/v1/auth/me');
-     // Fire a state event for observability/tools
-     window.dispatchEvent(new CustomEvent('askchip-auth-state', { detail: me }));
- 
-     const loginModal   = $('#loginModal');
-     const profileModal = $('#profileModal');
- 
-     // Always mirror email into the profile form so it never appears blank
-     const emailField = document.getElementById('prof_email');
-     const emailVal = me?.profile?.email || me?.email || '';
-     if (emailField && emailVal) { try { emailField.value = emailVal; } catch(e){} }
- 
-     if (!me.authenticated) {
-+      const autoLoginEmail = window.__askchip_config?.auth?.autoLoginEmail;
-+      if (autoLoginEmail && !autoLoginAttempted) {
-+        autoLoginAttempted = true;
-+        autoLoginFailed = false;
-+        const rerun = () => {
-+          try {
-+            setTimeout(() => {
-+              try {
-+                const maybe = evaluateAuth();
-+                if (maybe && typeof maybe.catch === 'function') {
-+                  maybe.catch((err) => console.warn('[auth_gate] auto-login re-eval failed:', err));
-+                }
-+              } catch (err) {
-+                console.warn('[auth_gate] auto-login re-eval threw:', err);
-+              }
-+            }, 0);
-+          } catch (err) {
-+            console.warn('[auth_gate] auto-login schedule failed:', err);
-+          }
-+        };
-+        try {
-+          await postJSON('/api/v1/auth/login', { email: autoLoginEmail });
-+        } catch (err) {
-+          autoLoginFailed = true;
-+          console.warn('[auth_gate] auto-login failed (continuing without auth):', err);
-+        } finally {
-+          rerun();
+         if start_ts and dg_open_ts:
+             latency_ms["dg_connect"] = int(max(0.0, (dg_open_ts - start_ts) * 1000))
+         if start_ts and first_partial_ts:
+             latency_ms["first_partial_from_mic_start"] = int(
+                 max(0.0, (first_partial_ts - start_ts) * 1000)
+             )
+         if dg_open_ts and first_partial_ts:
+             latency_ms["first_partial_from_dg_open"] = int(
+                 max(0.0, (first_partial_ts - dg_open_ts) * 1000)
+             )
++        latency_ms_clean = {k: v for k, v in latency_ms.items() if v is not None}
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "turn_finish",
+                 sid=sid,
+                 turn_id=turn_id,
+                 reason=reason,
+                 synthetic=bool(synthetic),
+                 delta_start_ms=delta_start,
+                 delta_asr_open_ms=delta_open,
+                 delta_first_partial_ms=delta_partial,
+                 transcript_chars=int(transcript_chars),
+             )
+             _jlog(
+                 "latency_breakdown",
+                 sid=sid,
+                 turn_id=turn_id,
+-                ms={k: v for k, v in latency_ms.items() if v is not None},
++                ms=latency_ms_clean,
+             )
++        admin_cb = _admin_emit if callable(_admin_emit) else None
++        latency_payload = {
++            "session_id": sid,
++            "turn_id": turn_id,
++            "ms": latency_ms_clean,
++            "reason": reason,
++            "synthetic": bool(synthetic),
 +        }
-+        return;
-+      }
-       show(loginModal, true);
-       show(profileModal, false);
--      setStartEnabled(false);
-+      if (autoLoginFailed) setStartEnabled(true);
-+      else setStartEnabled(false);
-       showBanner('Please log in to continue.');
-       return;
-     }
++        if admin_cb:
++            with contextlib.suppress(Exception):
++                admin_cb("latency_breakdown", **latency_payload)
++        frame = {"type": "latency_breakdown", **latency_payload}
++        with contextlib.suppress(Exception):
++            asyncio.create_task(_ws_send_json(send, frame))
  
-+    autoLoginFailed = false;
+     async def _emit_synthetic_final(
+         turn_id: int, reason: str, transcript: str = ""
+     ) -> bool:
+         if final_seen[0]:
+             with contextlib.suppress(Exception):
+                 _jlog(
+                     "ws_synthetic_final_skip_duplicate",
+                     sid=sid,
+                     turn_id=turn_id,
+                     reason=reason,
+                 )
+             return False
+         final_seen[0] = True
+         payload = make_results(turn_id, transcript=transcript, is_final=True)
+         payload["type"] = "Results"
+         await _ws_send_json(send, payload)
+         utterance_payload = make_utterance_end(turn_id)
+         utterance_payload["type"] = "UtteranceEnd"
+         await _ws_send_json(send, utterance_payload)
+         with contextlib.suppress(Exception):
+             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
+         _log_turn_finish(
+             turn_id,
+             reason=reason,
+diff --git a/tests/test_ws_close_stream_timeout.py b/tests/test_ws_close_stream_timeout.py
+index e8481c4b0865cf152c52cef613b8fb158dad9df3..57a84a4965de64b56cfedbf05a4392d0cbbc1899 100644
+--- a/tests/test_ws_close_stream_timeout.py
++++ b/tests/test_ws_close_stream_timeout.py
+@@ -71,169 +71,197 @@ class _ImmediateFinalDeepgram:
+         asyncio.create_task(_emit_final())
+ 
+     def is_open(self):
+         return True
+ 
+     async def events(self):
+         while True:
+             ev = await self._queue.get()
+             if ev is None:
+                 break
+             yield ev
+ 
+     async def send(self, chunk: bytes):
+         return
+ 
+     async def close(self, wait_for_final: bool = True, **_):
+         self.close_called = True
+         await self._queue.put(None)
+ 
+ 
+ def test_close_stream_waits_for_delayed_open(monkeypatch):
+     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
+     monkeypatch.setenv("DG_LINGER_MS", "0")
+     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
++    monkeypatch.setenv("WS_NO_AUDIO_DETECT_WINDOW_S", "0")
++    monkeypatch.setenv("NULL_TURN_MIN_CHARS", "0")
++    monkeypatch.setenv("NULL_TURN_MIN_VOICED_MS", "0")
++    monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
 +
-     // Prefer top-level profile_complete, fall back to nested
-     const complete = !!(me.profile_complete || me.profile?.profile_complete);
++    admin_events = []
++
++    def _capture_admin(event, **payload):
++        admin_events.append((event, payload))
++
++    monkeypatch.setattr(ws_asgi, "_admin_emit", _capture_admin)
  
-     if (!complete) {
-       show(loginModal, false);
-       show(profileModal, true);
-       setStartEnabled(false);
-       showBanner('Please fill out your profile to continue.');
-       return;
-     }
+     _DelayedOpenDeepgram.instances = []
+     monkeypatch.setattr(ws_asgi, "DeepgramClient", _DelayedOpenDeepgram)
  
-     // Ready
-     show(loginModal, false);
-     show(profileModal, false);
-     setStartEnabled(true);
-     // Back-compat + explicit event
-     document.dispatchEvent(new CustomEvent('auth_ready', { detail: me }));
-     window.dispatchEvent(new CustomEvent('askchip-auth-ready', { detail: me }));
-   } catch (e) {
-     // Fail-open so the user isn't stranded if /auth/me is temporarily failing
-     console.warn('[auth_gate] evaluateAuth failed (fail-open):', e);
-     setStartEnabled(true);
-   } finally {
-     evalLock = false;
-   }
-diff --git a/templates/index.html b/templates/index.html
-index aec98a8a8871e86990dd422e237f927c3d19f852..7154f6123016c844c8f528e22be855ed62a12e0a 100644
---- a/templates/index.html
-+++ b/templates/index.html
-@@ -84,47 +84,66 @@
-         </div>
-         <div id="inlineLoginMsg" class="msgline"></div>
-       </form>
-     </div>
-   </div>
+     events = deque(
+         [
+             {"type": "websocket.receive", "bytes": b"\x00\x01"},
+             {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
+             {"type": "websocket.disconnect"},
+         ]
+     )
  
-   <div id="profileModal" class="modal hidden">
-     <div class="sheet">
-       <h3>Profile</h3>
-       <div class="grid">
-         <label>Name<input id="prof_name"/></label>
-         <label>Email<input id="prof_email" disabled/></label>
-         <label>Role<input id="prof_role"/></label>
-         <label>Region<input id="prof_region"/></label>
-         <label>Company<input id="prof_company"/></label>
-       </div>
-       <div class="actions">
-         <button id="profileSave" class="primary">Save</button>
-         <button id="profileCancel" type="button">Cancel</button>
-       </div>
-       <div id="profileMsg" class="msgline"></div>
-     </div>
-   </div>
+     sent = []
  
-   <!-- Scripts -->
-+  <script>
-+    (function () {
-+      const cfg = {{ askchip_config|tojson }};
-+      try {
-+        if (cfg && typeof cfg === 'object') {
-+          const target = (window.__askchip_config = Object.assign({}, window.__askchip_config || {}));
-+          for (const [key, value] of Object.entries(cfg)) {
-+            if (value && typeof value === 'object' && !Array.isArray(value)) {
-+              target[key] = Object.assign({}, target[key] || {}, value);
-+            } else {
-+              target[key] = value;
-+            }
-+          }
-+        }
-+      } catch (err) {
-+        console.warn('[index] failed to merge askchip_config', err);
-+      }
-+    })();
-+  </script>
-   {% set asset_ver = asset_version('js/bootstrap.js') %}
-   <script>
-     window.__askchipAssetVersion = {{ asset_ver|tojson }};
-   </script>
-   <script
-     type="module"
-     src="{{ url_for('static', filename='js/askchip_client_hooks.js') }}?v={{ asset_ver }}"
-   ></script>
-   <script
-     type="module"
-     src="{{ url_for('static', filename='js/bootstrap.js') }}?v={{ asset_ver }}"
-   ></script>
-   <script
-     type="module"
-     src="{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}"
-   ></script>
-   <script
-     type="module"
-     src="{{ url_for('static', filename='js/ui_menu.js') }}?v={{ asset_ver }}"
-   ></script>
- </body>
- </html>
+     async def _receive():
+         return events.popleft() if events else {"type": "websocket.disconnect"}
+ 
+     async def _send(msg):
+         sent.append(msg)
+ 
+     scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
+ 
+     loop = asyncio.new_event_loop()
+     asyncio.set_event_loop(loop)
+     try:
+         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
+-        loop.run_until_complete(asyncio.sleep(0.05))
++        loop.run_until_complete(asyncio.sleep(0.1))
+     finally:
+         asyncio.set_event_loop(None)
+         loop.close()
+ 
+     instance = _DelayedOpenDeepgram.instances[0]
+ 
+     # Either we waited for open before closing or we avoided closing altogether.
+     assert not instance.closed_before_open, "Deepgram close should not run before the socket opens"
+ 
+     payloads = [
+         json.loads(m["text"])
+         for m in sent
+         if m.get("type") == "websocket.send" and m.get("text")
+     ]
+ 
++    latency_frames = [p for p in payloads if p.get("type") == "latency_breakdown"]
++    assert latency_frames, "latency breakdown frame should be sent to the client"
++    latency_payload = latency_frames[0]
++    assert latency_payload.get("synthetic") is True
++    assert latency_payload.get("ms") is not None
++    assert latency_payload.get("reason")
++
++    latency_admin = [
++        payload for event, payload in admin_events if event == "latency_breakdown"
++    ]
++    assert latency_admin, f"expected latency breakdown admin event, saw {admin_events}"
++    admin_payload = latency_admin[0]
++    assert admin_payload.get("synthetic") is True
++    assert admin_payload.get("ms") == latency_payload.get("ms")
++    assert admin_payload.get("reason") == latency_payload.get("reason")
++
+     finals = [p for p in payloads if p.get("type") == "Results" and p.get("channel", {}).get("is_final")]
+ 
+     assert finals, "CloseStream should emit a final result even if provider open is delayed"
+ 
+ 
+ def test_close_stream_with_existing_final_does_not_emit_synthetic(monkeypatch):
+     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
+     monkeypatch.setenv("DG_LINGER_MS", "0")
+     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
++    monkeypatch.setenv("WS_NO_AUDIO_DETECT_WINDOW_S", "0")
++    monkeypatch.setenv("NULL_TURN_MIN_CHARS", "0")
++    monkeypatch.setenv("NULL_TURN_MIN_VOICED_MS", "0")
++    monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
++
++    monkeypatch.setattr(ws_asgi, "_admin_emit", lambda *_, **__: None)
+ 
+     _ImmediateFinalDeepgram.instances = []
+     monkeypatch.setattr(ws_asgi, "DeepgramClient", _ImmediateFinalDeepgram)
+ 
+     events = deque(
+         [
+             {"type": "websocket.receive", "bytes": b"\x00\x01"},
+             {"type": "websocket.receive", "text": json.dumps({"type": "CloseStream"})},
+             {"type": "websocket.disconnect"},
+         ]
+     )
+ 
+     sent = []
+-    final_sent_evt: asyncio.Event = asyncio.Event()
+ 
+     async def _receive():
+         if not events:
+             return {"type": "websocket.disconnect"}
+         next_event = events[0]
+         text = next_event.get("text")
+         if text:
+             try:
+                 payload = json.loads(text)
+             except Exception:
+                 payload = {}
+             if payload.get("type") == "CloseStream":
+-                await final_sent_evt.wait()
++                await asyncio.sleep(0.05)
+         return events.popleft()
+ 
+     async def _send(msg):
+         sent.append(msg)
+-        if msg.get("type") == "websocket.send" and msg.get("text"):
+-            try:
+-                payload = json.loads(msg["text"])
+-            except Exception:
+-                return
+-            channel = payload.get("channel") or {}
+-            if payload.get("type") == "Results" and channel.get("is_final"):
+-                final_sent_evt.set()
+ 
+     scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
+ 
+     loop = asyncio.new_event_loop()
+     asyncio.set_event_loop(loop)
+     try:
+         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
+         loop.run_until_complete(asyncio.sleep(0.05))
+     finally:
+         asyncio.set_event_loop(None)
+         loop.close()
+ 
+     payloads = [
+         json.loads(m["text"])
+         for m in sent
+         if m.get("type") == "websocket.send" and m.get("text")
+     ]
+ 
+     finals = [p for p in payloads if p.get("type") == "Results" and p.get("channel", {}).get("is_final")]
+ 
+     assert len(finals) == 1, "Only provider final should be emitted when already observed"
+ 
+ 
+ def test_close_stream_ack_reaches_admin_log(monkeypatch):
+     monkeypatch.setenv("WS_TOKEN_REQUIRED", "0")
+     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
+     monkeypatch.setenv("DG_LINGER_MS", "0")
+     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
++    monkeypatch.setenv("WS_NO_AUDIO_DETECT_WINDOW_S", "0")
++    monkeypatch.setenv("NULL_TURN_MIN_CHARS", "0")
++    monkeypatch.setenv("NULL_TURN_MIN_VOICED_MS", "0")
++    monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
+ 
+     admin_events = []
+ 
+     def _capture_admin(event, **payload):
+         admin_events.append((event, payload))
+ 
+     monkeypatch.setattr(ws_asgi, "_admin_emit", _capture_admin)
+ 
+     class _AdminDiagDeepgram:
+         instances = []
+ 
+         def __init__(self, cfg=None):
+             self.__class__.instances.append(self)
+             self._cfg = cfg or {}
+             self._open_sent = False
+ 
+         async def connect(self):
+             return
+ 
+         def is_open(self):
+             return True
+ 
+         async def events(self):
+             if not self._open_sent:
+                 self._open_sent = True

@@ -93,6 +93,17 @@ def test_close_stream_waits_for_delayed_open(monkeypatch):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
     monkeypatch.setenv("DG_LINGER_MS", "0")
     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
+    monkeypatch.setenv("WS_NO_AUDIO_DETECT_WINDOW_S", "0")
+    monkeypatch.setenv("NULL_TURN_MIN_CHARS", "0")
+    monkeypatch.setenv("NULL_TURN_MIN_VOICED_MS", "0")
+    monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
+
+    admin_events = []
+
+    def _capture_admin(event, **payload):
+        admin_events.append((event, payload))
+
+    monkeypatch.setattr(ws_asgi, "_admin_emit", _capture_admin)
 
     _DelayedOpenDeepgram.instances = []
     monkeypatch.setattr(ws_asgi, "DeepgramClient", _DelayedOpenDeepgram)
@@ -119,7 +130,7 @@ def test_close_stream_waits_for_delayed_open(monkeypatch):
     asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(ws_asgi._ws_chat_asgi_impl(scope, _receive, _send))
-        loop.run_until_complete(asyncio.sleep(0.05))
+        loop.run_until_complete(asyncio.sleep(0.1))
     finally:
         asyncio.set_event_loop(None)
         loop.close()
@@ -135,6 +146,22 @@ def test_close_stream_waits_for_delayed_open(monkeypatch):
         if m.get("type") == "websocket.send" and m.get("text")
     ]
 
+    latency_frames = [p for p in payloads if p.get("type") == "latency_breakdown"]
+    assert latency_frames, "latency breakdown frame should be sent to the client"
+    latency_payload = latency_frames[0]
+    assert latency_payload.get("synthetic") is True
+    assert latency_payload.get("ms") is not None
+    assert latency_payload.get("reason")
+
+    latency_admin = [
+        payload for event, payload in admin_events if event == "latency_breakdown"
+    ]
+    assert latency_admin, f"expected latency breakdown admin event, saw {admin_events}"
+    admin_payload = latency_admin[0]
+    assert admin_payload.get("synthetic") is True
+    assert admin_payload.get("ms") == latency_payload.get("ms")
+    assert admin_payload.get("reason") == latency_payload.get("reason")
+
     finals = [p for p in payloads if p.get("type") == "Results" and p.get("channel", {}).get("is_final")]
 
     assert finals, "CloseStream should emit a final result even if provider open is delayed"
@@ -145,6 +172,12 @@ def test_close_stream_with_existing_final_does_not_emit_synthetic(monkeypatch):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
     monkeypatch.setenv("DG_LINGER_MS", "0")
     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
+    monkeypatch.setenv("WS_NO_AUDIO_DETECT_WINDOW_S", "0")
+    monkeypatch.setenv("NULL_TURN_MIN_CHARS", "0")
+    monkeypatch.setenv("NULL_TURN_MIN_VOICED_MS", "0")
+    monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
+
+    monkeypatch.setattr(ws_asgi, "_admin_emit", lambda *_, **__: None)
 
     _ImmediateFinalDeepgram.instances = []
     monkeypatch.setattr(ws_asgi, "DeepgramClient", _ImmediateFinalDeepgram)
@@ -158,7 +191,6 @@ def test_close_stream_with_existing_final_does_not_emit_synthetic(monkeypatch):
     )
 
     sent = []
-    final_sent_evt: asyncio.Event = asyncio.Event()
 
     async def _receive():
         if not events:
@@ -171,19 +203,11 @@ def test_close_stream_with_existing_final_does_not_emit_synthetic(monkeypatch):
             except Exception:
                 payload = {}
             if payload.get("type") == "CloseStream":
-                await final_sent_evt.wait()
+                await asyncio.sleep(0.05)
         return events.popleft()
 
     async def _send(msg):
         sent.append(msg)
-        if msg.get("type") == "websocket.send" and msg.get("text"):
-            try:
-                payload = json.loads(msg["text"])
-            except Exception:
-                return
-            channel = payload.get("channel") or {}
-            if payload.get("type") == "Results" and channel.get("is_final"):
-                final_sent_evt.set()
 
     scope = {"type": "websocket", "path": "/ws/v1/chat", "query_string": b""}
 
@@ -212,6 +236,10 @@ def test_close_stream_ack_reaches_admin_log(monkeypatch):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "test")
     monkeypatch.setenv("DG_LINGER_MS", "0")
     monkeypatch.setenv("ASR_FINAL_GRACE_S", "0")
+    monkeypatch.setenv("WS_NO_AUDIO_DETECT_WINDOW_S", "0")
+    monkeypatch.setenv("NULL_TURN_MIN_CHARS", "0")
+    monkeypatch.setenv("NULL_TURN_MIN_VOICED_MS", "0")
+    monkeypatch.setenv("WS_FINAL_GUARD_MS", "0")
 
     admin_events = []
 

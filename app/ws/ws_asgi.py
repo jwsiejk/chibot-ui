@@ -1581,6 +1581,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             latency_ms["first_partial_from_dg_open"] = int(
                 max(0.0, (first_partial_ts - dg_open_ts) * 1000)
             )
+        latency_ms_clean = {k: v for k, v in latency_ms.items() if v is not None}
         with contextlib.suppress(Exception):
             _jlog(
                 "turn_finish",
@@ -1597,8 +1598,22 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 "latency_breakdown",
                 sid=sid,
                 turn_id=turn_id,
-                ms={k: v for k, v in latency_ms.items() if v is not None},
+                ms=latency_ms_clean,
             )
+        admin_cb = _admin_emit if callable(_admin_emit) else None
+        latency_payload = {
+            "session_id": sid,
+            "turn_id": turn_id,
+            "ms": latency_ms_clean,
+            "reason": reason,
+            "synthetic": bool(synthetic),
+        }
+        if admin_cb:
+            with contextlib.suppress(Exception):
+                admin_cb("latency_breakdown", **latency_payload)
+        frame = {"type": "latency_breakdown", **latency_payload}
+        with contextlib.suppress(Exception):
+            asyncio.create_task(_ws_send_json(send, frame))
 
     async def _emit_synthetic_final(
         turn_id: int, reason: str, transcript: str = ""
