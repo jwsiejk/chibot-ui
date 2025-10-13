@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-10-13T02:23:47.251Z",
+  "generated_at": "2025-10-13T03:33:40.650Z",
   "summary": {
     "total": 13,
     "passed": 1,
@@ -131,9 +131,20 @@
       "id": "P6_barge_in_pauses_tts",
       "pass": false,
       "findings": [
-        "Runner error: page.goto: net::ERR_SOCKET_NOT_CONNECTED at https://chibot-ui.onrender.com/\nCall log:\n\u001b[2m  - navigating to \"https://chibot-ui.onrender.com/\", waiting until \"domcontentloaded\"\u001b[22m\n"
+        "WS console missing 'barge_in'",
+        "WS console missing 'tts_pause'",
+        "WS latency 'tts_pause_after_vad' unavailable",
+        "Fail: WS latency 'tts_pause_after_vad' unavailable",
+        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
       ],
-      "metrics": {},
+      "metrics": {
+        "browser_console_ws": {}
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
       "recommendations": [
         "Pause TTS on first VAD hit; confirm ~420ms; resume/commit accordingly.",
         "Increase echo-aware VAD threshold during TTS to avoid false triggers."

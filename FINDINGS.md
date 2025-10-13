@@ -7,10 +7,7 @@
 - **P3_asr_ready_gate**: FAIL — WS console missing 'latency_breakdown'; WS latency 'dg_connect' unavailable; WS latency 'first_partial_from_mic_start' unavailable; Fail: WS latency 'first_partial_from_mic_start' unavailable; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
 - **P4_containerized_opus_sanitized**: FAIL — Deepgram WS URL not observed; WS console missing 'container=webm/opus'; WS console missing 'containerized=true'; Fail: WS console missing 'containerized=true'; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
 - **P5_close_timeout_race**: FAIL — WS console missing 'asr:final'; WS console missing 'CloseStream ack'; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
-- **P6_barge_in_pauses_tts**: FAIL — Runner error: page.goto: net::ERR_SOCKET_NOT_CONNECTED at https://chibot-ui.onrender.com/
-Call log:
-[2m  - navigating to "https://chibot-ui.onrender.com/", waiting until "domcontentloaded"[22m
-
+- **P6_barge_in_pauses_tts**: FAIL — WS console missing 'barge_in'; WS console missing 'tts_pause'; WS latency 'tts_pause_after_vad' unavailable; Fail: WS latency 'tts_pause_after_vad' unavailable; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
 - **P7_state_debounce**: FAIL — WS state events missing for spam check; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
 - **P8_no_assistant_dup_messages**: PASS — DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
 - **P9_chips_only_when_needed**: FAIL — WS console missing 'nlu'; No WS NLU event observed; WS console missing 'suggestions_made'; WS suggestions payload missing for chips check; Fail: WS suggestions payload missing for chips check; Fail: No WS NLU event observed; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
