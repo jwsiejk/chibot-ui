@@ -26,15 +26,29 @@
     <div id="profileMsg" class="msgline"></div>
   </section>
 
-  <script type="module" src="/static/js/auth_gate.js"></script>
+  {% set asset_ver = asset_version('js/bootstrap.js') %}
+  <script
+    type="module"
+    src="{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}"
+  ></script>
   <script type="module">
-    import { prefillProfile, saveProfile } from '/static/js/auth_gate.js';
+    import { prefillProfile, saveProfile } from '{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}';
     document.addEventListener('DOMContentLoaded', async ()=>{
       await prefillProfile();
       document.getElementById('profileSave').addEventListener('click', saveProfile);
     });
   </script>
-  <script type="module" src="/static/js/bootstrap.js"></script>
-  <script type="module" src="/static/js/auth_gate.js"></script>
+  <script
+    type="module"
+    src="{{ url_for('static', filename='js/askchip_client_hooks.js') }}?v={{ asset_ver }}"
+  ></script>
+  <script
+    type="module"
+    src="{{ url_for('static', filename='js/bootstrap.js') }}?v={{ asset_ver }}"
+  ></script>
+  <script
+    type="module"
+    src="{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}"
+  ></script>
 </body>
 </html>
