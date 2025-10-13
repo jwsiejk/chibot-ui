@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-10-13T05:14:28.293Z",
+  "generated_at": "2025-10-13T06:08:34.440Z",
   "summary": {
     "total": 13,
     "passed": 1,
@@ -46,8 +46,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "7b73abac-4ce5-4178-a4ce-ab3d929629ae",
-              "sid": "7b73abac-4ce5-4178-a4ce-ab3d929629ae"
+              "session_id": "9fb3a250-6c1b-443e-8161-9aa88d1e7754",
+              "sid": "9fb3a250-6c1b-443e-8161-9aa88d1e7754"
             }
           ]
         }
@@ -75,8 +75,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "2d5c702aed5f45b5b1996cf9735b00cc",
-              "text": "Hey User, what's the goal for this session?",
+              "turn_id": "baa5dc1d595645d6a2106e0ec2bbdf20",
+              "text": "Hey User, what would you like to accomplish today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -92,9 +92,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -102,7 +99,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "2d5c702aed5f45b5b1996cf9735b00cc",
+              "turn_id": "baa5dc1d595645d6a2106e0ec2bbdf20",
               "items": [
                 {
                   "text": "Send me the email"
@@ -112,9 +109,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -137,8 +131,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "32808e6b-30fc-4a0b-bbfb-0e3837f64582",
-              "sid": "32808e6b-30fc-4a0b-bbfb-0e3837f64582"
+              "session_id": "2c52d79b-7e05-4b1a-924f-4e76d880032d",
+              "sid": "2c52d79b-7e05-4b1a-924f-4e76d880032d"
             }
           ]
         }
@@ -166,8 +160,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "00c9ddcbf58540579ad569b26035ed0b",
-              "text": "Hey User, what do you want to get done today?",
+              "turn_id": "cd04b5ab604b480aa1f27270358b38b4",
+              "text": "Hey User, what's the goal for this session?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -183,9 +177,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -193,7 +184,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "00c9ddcbf58540579ad569b26035ed0b",
+              "turn_id": "cd04b5ab604b480aa1f27270358b38b4",
               "items": [
                 {
                   "text": "Send me the email"
@@ -203,9 +194,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -228,8 +216,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "268d8efd-1aef-43f7-a7fd-0578006a6cd1",
-              "sid": "268d8efd-1aef-43f7-a7fd-0578006a6cd1"
+              "session_id": "a354b4a2-4659-49d6-9b07-dab275c9173b",
+              "sid": "a354b4a2-4659-49d6-9b07-dab275c9173b"
             }
           ]
         }
@@ -256,7 +244,7 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "4157ec32b35945e1aecd65cdc1b47aec",
+              "turn_id": "b04df99fcf624896a6b24b8d03537caa",
               "text": "Hey User, what outcome are you aiming for today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -273,9 +261,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -283,7 +268,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "4157ec32b35945e1aecd65cdc1b47aec",
+              "turn_id": "b04df99fcf624896a6b24b8d03537caa",
               "items": [
                 {
                   "text": "Send me the email"
@@ -293,9 +278,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -318,8 +300,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "ac030f35-0b9f-408d-844a-7a989e7b7b07",
-              "sid": "ac030f35-0b9f-408d-844a-7a989e7b7b07"
+              "session_id": "bd9bf4b1-9ffd-4887-8941-61cb6ab69916",
+              "sid": "bd9bf4b1-9ffd-4887-8941-61cb6ab69916"
             }
           ]
         }
@@ -344,8 +326,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "dd97897f25e34ead957f1a18a815c403",
-              "text": "Hey User, what's the goal for this session?",
+              "turn_id": "8eb3e5fa268445a8a26bac77ff21e163",
+              "text": "Hey User, what do you want to get done today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -361,9 +343,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -371,7 +350,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "dd97897f25e34ead957f1a18a815c403",
+              "turn_id": "8eb3e5fa268445a8a26bac77ff21e163",
               "items": [
                 {
                   "text": "Send me the email"
@@ -381,9 +360,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -406,8 +382,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "7eca6bc9-f9ba-4e58-8568-3c7fcb009ac0",
-              "sid": "7eca6bc9-f9ba-4e58-8568-3c7fcb009ac0"
+              "session_id": "d2f59db8-77ac-4fe4-a2f8-9a753bf6507c",
+              "sid": "d2f59db8-77ac-4fe4-a2f8-9a753bf6507c"
             }
           ]
         }
@@ -434,8 +410,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "3c3fbc0e6f7c49f9b40e22ee45d24117",
-              "text": "Hey User, what should we tackle first?",
+              "turn_id": "1decbc7e4f3b46799751c5fdb40986a3",
+              "text": "Hey User, what do you want to get done today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -451,9 +427,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -461,7 +434,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "3c3fbc0e6f7c49f9b40e22ee45d24117",
+              "turn_id": "1decbc7e4f3b46799751c5fdb40986a3",
               "items": [
                 {
                   "text": "Send me the email"
@@ -471,9 +444,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -496,8 +466,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "43742d6d-92f5-455d-ab43-9258ce3326a0",
-              "sid": "43742d6d-92f5-455d-ab43-9258ce3326a0"
+              "session_id": "78b72313-9dc0-4759-9877-aa48688dac71",
+              "sid": "78b72313-9dc0-4759-9877-aa48688dac71"
             }
           ]
         }
@@ -522,8 +492,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "c8cd6dc689f44708a4a808ade26c762d",
-              "text": "Hey User, what would you like to accomplish today?",
+              "turn_id": "a18fe7f1a54a4e3e83ccdcb4aad7f401",
+              "text": "Hey User, what outcome are you aiming for today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -539,9 +509,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -549,7 +516,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "c8cd6dc689f44708a4a808ade26c762d",
+              "turn_id": "a18fe7f1a54a4e3e83ccdcb4aad7f401",
               "items": [
                 {
                   "text": "Send me the email"
@@ -559,9 +526,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -584,8 +548,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "ecc8f0d2-9cfe-450d-b8c3-bfb06aa9047c",
-              "sid": "ecc8f0d2-9cfe-450d-b8c3-bfb06aa9047c"
+              "session_id": "0b949be3-6b4e-435c-9727-f644a34ac590",
+              "sid": "0b949be3-6b4e-435c-9727-f644a34ac590"
             }
           ]
         }
@@ -607,8 +571,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "09a833a15bed45a0b55dacb7bd23f764",
-              "text": "Hey User, what do you want to get done today?",
+              "turn_id": "53a649e36e5e4ad49b5dc3acd2788da9",
+              "text": "Hey User, what should we tackle first?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -624,9 +588,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -634,7 +595,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "09a833a15bed45a0b55dacb7bd23f764",
+              "turn_id": "53a649e36e5e4ad49b5dc3acd2788da9",
               "items": [
                 {
                   "text": "Send me the email"
@@ -644,9 +605,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -669,8 +627,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "7b04f8f3-067c-41ce-96d5-0306bd131b33",
-              "sid": "7b04f8f3-067c-41ce-96d5-0306bd131b33"
+              "session_id": "f9f9f34b-2ea3-4a1b-afec-368f1132c7e7",
+              "sid": "f9f9f34b-2ea3-4a1b-afec-368f1132c7e7"
             }
           ]
         }
@@ -687,16 +645,14 @@
       "pass": false,
       "findings": [
         "WS nlu.needs_clarification expected true, got undefined",
-        "WS nlu.missing should include one of [depth, delivery_pref], got []",
-        "WS chips count 4 > 3",
-        "Fail: WS chips 4 > 3"
+        "WS nlu.missing should include one of [depth, delivery_pref], got []"
       ],
       "metrics": {
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "4f9c351ebabf448d90688a5be0875268",
-              "text": "Hey User, what's the goal for this session?",
+              "turn_id": "d2424575b1854f6ea5967cd03b9cf84c",
+              "text": "Hey User, what should we tackle first?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -712,9 +668,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -722,7 +675,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "4f9c351ebabf448d90688a5be0875268",
+              "turn_id": "d2424575b1854f6ea5967cd03b9cf84c",
               "items": [
                 {
                   "text": "Send me the email"
@@ -732,9 +685,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -757,8 +707,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "9655d299-251e-4658-9e3b-d26fe29265f4",
-              "sid": "9655d299-251e-4658-9e3b-d26fe29265f4"
+              "session_id": "68785642-653a-4cd5-a9a1-cff065786ae0",
+              "sid": "68785642-653a-4cd5-a9a1-cff065786ae0"
             }
           ]
         }
@@ -783,7 +733,7 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "718470cd70d84a508f02317a9c3ba4b4",
+              "turn_id": "e0d86f503e674e42ae14825506ad3659",
               "text": "Hey User, what do you want to get done today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -800,9 +750,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -810,7 +757,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "718470cd70d84a508f02317a9c3ba4b4",
+              "turn_id": "e0d86f503e674e42ae14825506ad3659",
               "items": [
                 {
                   "text": "Send me the email"
@@ -820,9 +767,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -845,8 +789,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "cdc0b03c-eb57-4e68-9271-76e887894699",
-              "sid": "cdc0b03c-eb57-4e68-9271-76e887894699"
+              "session_id": "fd2c53da-13ce-4efc-ad40-02d2faa8ee24",
+              "sid": "fd2c53da-13ce-4efc-ad40-02d2faa8ee24"
             }
           ]
         }
@@ -870,8 +814,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "6c5946b48f664eecabc11e572d7113db",
-              "text": "Hey User, what outcome are you aiming for today?",
+              "turn_id": "f3447d64bd78475eafc6184ee012f963",
+              "text": "Hey User, what do you want to get done today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -887,9 +831,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -897,7 +838,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "6c5946b48f664eecabc11e572d7113db",
+              "turn_id": "f3447d64bd78475eafc6184ee012f963",
               "items": [
                 {
                   "text": "Send me the email"
@@ -907,9 +848,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -932,8 +870,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "e8d02811-fe8d-4a8b-9104-01ddfdfb9699",
-              "sid": "e8d02811-fe8d-4a8b-9104-01ddfdfb9699"
+              "session_id": "c6cb9c72-41b6-42ea-8a6a-73f346576850",
+              "sid": "c6cb9c72-41b6-42ea-8a6a-73f346576850"
             }
           ]
         }
@@ -966,8 +904,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "12b7686da1544c7eb04963b65aacaf70",
-              "text": "Hey User, what would you like to accomplish today?",
+              "turn_id": "6701a21da06b461a9d3b0aa9f8a778ec",
+              "text": "Hey User, what should we tackle first?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -983,9 +921,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -993,7 +928,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "12b7686da1544c7eb04963b65aacaf70",
+              "turn_id": "6701a21da06b461a9d3b0aa9f8a778ec",
               "items": [
                 {
                   "text": "Send me the email"
@@ -1003,9 +938,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -1028,8 +960,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "0e910587-6085-4b2a-a64b-802d9dec0c93",
-              "sid": "0e910587-6085-4b2a-a64b-802d9dec0c93"
+              "session_id": "ee864adb-6180-404a-afb8-ffaf12410060",
+              "sid": "ee864adb-6180-404a-afb8-ffaf12410060"
             }
           ]
         }
@@ -1053,7 +985,7 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "d933165bdf8044fcb65caf64637aea7e",
+              "turn_id": "405715f310144ec792cc9c68d1052b5b",
               "text": "Hey User, what's the goal for this session?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -1070,9 +1002,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -1080,7 +1009,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "d933165bdf8044fcb65caf64637aea7e",
+              "turn_id": "405715f310144ec792cc9c68d1052b5b",
               "items": [
                 {
                   "text": "Send me the email"
@@ -1090,9 +1019,6 @@
                 },
                 {
                   "text": "Show install steps"
-                },
-                {
-                  "text": "Explain the business value"
                 }
               ]
             }
@@ -1115,8 +1041,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "e63eca0f-00a9-4982-925d-cdada1703376",
-              "sid": "e63eca0f-00a9-4982-925d-cdada1703376"
+              "session_id": "b2cac3b8-126a-48db-b734-492c4fcaaa3a",
+              "sid": "b2cac3b8-126a-48db-b734-492c4fcaaa3a"
             }
           ]
         }

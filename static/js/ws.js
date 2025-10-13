@@ -1,4 +1,40 @@
 // static/js/ws.js — Phase 4/5 hardened: single socket + reconnection + helpers
+
+// === E2E minimal WS message hook (always-on, safe) ===
+(function __installE2EHook(){
+  try {
+    const _add = WebSocket.prototype.addEventListener;
+    if (!_add.__askchip_e2e_patched) {
+      WebSocket.prototype.addEventListener = function(ev, fn){
+        if (ev === 'message') {
+          const wrapper = (e) => {
+            try {
+              if (typeof e.data === 'string' && e.data.length < 4096) {
+                try {
+                  const d = JSON.parse(e.data);
+                  if (d && typeof d === 'object') {
+                    if (d.type === 'assistant_end') { try { console.info('assistant_end'); } catch {} }
+                    if (d.type === 'UtteranceEnd')  { try { console.info('UtteranceEnd'); } catch {} }
+                    if (d.type === 'latency_breakdown' || d.event === 'latency_breakdown') { try { console.info('latency_breakdown'); } catch {} }
+                    if (d.type === 'policy_decision' || (d.event && String(d.event).includes('policy_decision'))) {
+                      const val = d.detail || d.decision || (d.payload && d.payload.decision) || 'unknown';
+                      try { console.info('policy_decision: ' + String(val)); } catch {}
+                    }
+                  }
+                } catch {}
+              }
+            } catch {}
+            try { return fn(e); } catch {}
+          };
+          return _add.call(this, ev, wrapper);
+        }
+        return _add.call(this, ev, fn);
+      };
+      WebSocket.prototype.addEventListener.__askchip_e2e_patched = true;
+    }
+  } catch {}
+})();
+
 // Responsibilities:
 //   (Patched) Optional reconnect control for diagnostics
 let __WS_RECONNECT_ENABLED = true;

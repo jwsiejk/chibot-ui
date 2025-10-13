@@ -28,7 +28,7 @@ export async function initMic(stream = null) { return await _ensureMic(stream); 
 export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
 export function disarmVAD() { _disarm(); }
 export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
-export function bargeIn() { try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} _bargeIn(); }         // keeps API parity
+export function bargeIn() { try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} _bargeIn(); }         // keeps API parity
 export function setVadBoost(_v) { /* kept for API parity; no-op */ }
 
 // ---- Internal state ---------------------------------------------------------
@@ -791,7 +791,7 @@ function _onSpeechStartCommitted() {
   state.postTtsHoldUntil = 0;
   _logLifecycle('vad_speech_start');
   // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
-  try { console.info('barge_in'); console.info('tts_pause'); } catch {} _bargeIn();
+  try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} _bargeIn();
 
   const started = _startRecorder();
   if (started) {
