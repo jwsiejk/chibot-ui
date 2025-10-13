@@ -94,6 +94,55 @@ def test_make_assistant_frames_ws_skips_legacy(monkeypatch):
     assert legacy_called is False
 
 
+def test_make_assistant_frames_foundation_failure_uses_legacy(monkeypatch):
+    _stub_config(monkeypatch)
+
+    monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
+    monkeypatch.setattr(streaming, "_FOUNDATION_DISABLED_UNTIL", 0.0)
+    monkeypatch.setattr(streaming, "_FOUNDATION_LAST_ERROR", None)
+    monkeypatch.setattr(streaming.db, "memory", {})
+
+    def fake_prepare(seed_text, meta, cfg=None, telemetry=None):
+        prepared = dict(meta or {})
+        return prepared, {}, {}
+
+    monkeypatch.setattr(streaming, "prepare_turn_metadata", fake_prepare)
+
+    def raising_foundation(*args, **kwargs):
+        raise RuntimeError("foundation boom")
+
+    monkeypatch.setattr(streaming, "_make_foundation_frames", raising_foundation)
+
+    legacy_called = {"count": 0}
+
+    def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
+        legacy_called["count"] += 1
+        turn_id = kwargs.get("turn_id") or kwargs.get("force_turn_id") or "legacy-turn"
+        frames = [
+            {"type": "assistant_chunk", "turn_id": turn_id, "text": "legacy reply", "kb_hits": 0},
+            {"type": "assistant_end", "turn_id": turn_id},
+        ]
+        if kwargs.get("broadcast_immediately", True):
+            streaming._broadcast_frames(session_id, frames, turn_id)
+        return turn_id, frames
+
+    monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
+
+    tid, frames = streaming.make_assistant_frames(
+        "hello",
+        "session-fallback",
+        meta={"source": "ws_greet", "skip_legacy_fallback": True},
+        broadcast_immediately=False,
+    )
+
+    assert tid
+    assert frames and frames[0]["turn_id"] == tid and frames[0]["text"] == "legacy reply"
+    assert legacy_called["count"] == 1
+    assert not streaming._should_use_foundation("followup")
+    streaming._clear_foundation_failure()
+    assert streaming._should_use_foundation("followup")
+
+
 def test_run_ws_greet_uses_foundation_frames(monkeypatch):
     _stub_config(monkeypatch)
 
@@ -172,6 +221,68 @@ def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
     assert tid == captured["frames"][0]["turn_id"]
     assert captured["action"] == "offer_steps"
     assert captured["frames"][0]["text"] != captured["fallback_text"]
+
+
+def test_run_ws_greet_falls_back_to_legacy_on_foundation_error(monkeypatch):
+    _stub_config(monkeypatch)
+
+    monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
+    monkeypatch.setattr(streaming, "_FOUNDATION_DISABLED_UNTIL", 0.0)
+    monkeypatch.setattr(streaming, "_FOUNDATION_LAST_ERROR", None)
+    monkeypatch.setattr(streaming.db, "memory", {})
+
+    monkeypatch.setattr(streaming.nudges, "cancel_idle_timers", lambda *a, **k: None)
+    monkeypatch.setattr(streaming.nudges, "arm_idle_timers", lambda *a, **k: None)
+    monkeypatch.setattr(streaming, "should_emit_phase", lambda *a, **k: True)
+    monkeypatch.setattr(streaming, "set_phase", lambda *a, **k: None)
+
+    def fake_prepare(seed_text, meta, cfg=None, telemetry=None):
+        prepared = dict(meta or {})
+        return prepared, {}, {}
+
+    monkeypatch.setattr(streaming, "prepare_turn_metadata", fake_prepare)
+
+    def raise_foundation(*args, **kwargs):
+        raise RuntimeError("foundation failed")
+
+    monkeypatch.setattr(streaming, "_make_foundation_frames", raise_foundation)
+
+    captured_frames = []
+
+    def capture_frames(session_id, frames, turn_id=None):
+        for fr in frames:
+            captured_frames.append(fr)
+
+    monkeypatch.setattr(streaming, "_broadcast_frames", capture_frames)
+
+    def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
+        turn_id = kwargs.get("turn_id") or kwargs.get("force_turn_id") or "legacy-turn"
+        frames = [
+            {"type": "assistant_chunk", "turn_id": turn_id, "text": "legacy greet", "kb_hits": 0},
+            {"type": "assistant_end", "turn_id": turn_id},
+        ]
+        if kwargs.get("broadcast_immediately", True):
+            streaming._broadcast_frames(session_id, frames, turn_id)
+        return turn_id, frames
+
+    monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
+
+    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
+
+    bus_events = []
+    monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: bus_events.append((a, k)))
+
+    monkeypatch.setattr(streaming, "get_or_create_greet_turn", lambda *a, **k: ("legacy-turn", False))
+
+    tid = streaming.run_ws_greet("session-failure")
+
+    assert tid
+    assert any(fr.get("type") == "assistant_chunk" and fr.get("text") == "legacy greet" for fr in captured_frames)
+    assert any(fr.get("type") == "assistant_end" for fr in captured_frames)
+    assert not any(streaming._WS_PIPELINE_MESSAGE in (frame.get("text") or "") for frame in captured_frames if isinstance(frame, dict))
+    assert not streaming._should_use_foundation("next")
+    streaming._clear_foundation_failure()
+    assert streaming._should_use_foundation("next")
 
 
 def test_run_ws_greet_surfaces_tts_failure(monkeypatch):

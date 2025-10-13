@@ -1,1048 +1,582 @@
-diff --git a/askchip_e2e_tests.json b/askchip_e2e_tests.json
-index c28be7bc937af0be4aa78530e775282cce6e7fd1..a047df8dc26c8a2b9b47f24543bd1ce33910b598 100644
---- a/askchip_e2e_tests.json
-+++ b/askchip_e2e_tests.json
-@@ -3,553 +3,552 @@
-     "version": "1.1",
-     "notes": "Foundations-first probes aligned to current audio filenames."
-   },
-   "config": {
-     "clarify_threshold": 0.55,
-     "accept_threshold": 0.7,
-     "chips_max": 3,
-     "chips_word_max": 7,
-     "persona_intensity": 0.13,
-     "nlu_llm_enabled": true,
-     "nlu_pack_similarity_threshold": 0.55,
-     "nlu_llm_timeout_s": 6.0,
-     "asr_ready_wait_s": 0.3
-   },
-   "endpoints": {
-     "ui_base_url": "https://chibot-ui.onrender.com/",
-     "admin_sse_url": "https://chibot-ui.onrender.com/api/v1/admin/logs"
-   },
-   "probes": [
-     {
-       "id": "P1_greet_dupe_guard",
-       "user_action": "Press Start; do not speak for 3s.",
-       "inputs": [],
-       "expect_signals": [
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_include": [
--            "assistant_end",
--            "UtteranceEnd"
-+            "assistant_end"
-           ],
-           "max_count_per_turn": {
-             "assistant_end": 1
-           }
-         },
-         {
-           "stream": "browser_console",
-           "must_not_include": [
-             "Duplicate assistant final",
-             "double greet"
-           ]
-         }
-       ],
-       "fail_if": [
-         {
--          "admin_count_gt": {
-+          "ws_console_count_gt": {
-             "assistant_end": 1
-           }
-         },
-         {
--          "admin_any": [
-+          "ws_console_any": [
-             "Timed out waiting for ASR final"
-           ]
-         }
-       ],
-       "recommendations_on_fail": [
-         "R_DEDUP_FINALS",
-         "R_CANCEL_TIMEOUT_ON_FINAL"
-       ],
-       "expect_dom": {
-         "any_of": [
-           ".chat-window .msg.assistant",
-           ".chat-window .msg.user",
-           "#suggestions .chip"
-         ],
-         "timeout_ms": 6000
-       }
-     },
-     {
-       "id": "P2_mic_arms_after_greet",
-       "user_action": "Begin speaking within 1s of Chip\u2019s greet audio.",
-       "inputs": [
-         "sample_sentence.wav"
-       ],
-       "expect_signals": [
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_include": [
-             "asr:start"
-           ],
-           "latency_lt_ms": {
-             "first_partial_from_mic_start": 1200
-           }
-         }
-       ],
-       "fail_if": [
-         {
--          "admin_missing": [
-+          "ws_console_missing": [
-             "asr:start"
-           ]
-         },
-         {
--          "latency_gte_ms": {
-+          "ws_console_latency_gte_ms": {
-             "first_partial_from_mic_start": 2000
-           }
-         }
-       ],
-       "recommendations_on_fail": [
-         "R_ARM_MIC_IMMEDIATELY",
-         "R_LOWER_READY_WAIT_OR_TRICKLE"
-       ],
-       "expect_dom": {
-         "any_of": [
-           ".chat-window .msg.assistant",
-           ".chat-window .msg.user",
-           "#suggestions .chip"
-         ],
-         "timeout_ms": 6000
-       }
-     },
-     {
-       "id": "P3_asr_ready_gate",
-       "user_action": "Speak one normal sentence.",
-       "inputs": [
-         "sample_sentence.wav"
-       ],
-       "expect_signals": [
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_include": [
-             "latency_breakdown"
-           ],
-           "latency_lt_ms": {
-             "dg_connect": 600,
-             "first_partial_from_mic_start": 1200
-           }
-         }
-       ],
-       "fail_if": [
-         {
--          "latency_gte_ms": {
-+          "ws_console_latency_gte_ms": {
-             "first_partial_from_mic_start": 2000
-           }
-         }
-       ],
-       "recommendations_on_fail": [
-         "R_READY_OR_300MS",
-         "R_LOWER_READY_WAIT"
-       ],
-       "expect_dom": {
-         "any_of": [
-           ".chat-window .msg.assistant",
-           ".chat-window .msg.user",
-           "#suggestions .chip"
-         ],
-         "timeout_ms": 6000
-       }
-     },
-     {
-       "id": "P4_containerized_opus_sanitized",
-       "user_action": "Speak and capture Deepgram WS request.",
-       "inputs": [
-         "sample_sentence.wav"
-       ],
-       "expect_signals": [
-         {
-           "stream": "network",
-           "must_not_include_query_params": [
-             "encoding",
-             "sample_rate",
-             "channels"
-           ]
-         },
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_include": [
-             "container=webm/opus",
-             "containerized=true"
-           ]
-         }
-       ],
-       "fail_if": [
-         {
-           "network_has_any_params": [
-             "encoding",
-             "sample_rate",
-             "channels"
-           ]
-         },
-         {
--          "admin_missing": [
-+          "ws_console_missing": [
-             "containerized=true"
-           ]
-         }
-       ],
-       "recommendations_on_fail": [
-         "R_SANITIZE_DG_URL_FOR_CONTAINERIZED"
-       ],
-       "expect_dom": {
-         "any_of": [
-           ".chat-window .msg.assistant",
-           ".chat-window .msg.user",
-           "#suggestions .chip"
-         ],
-         "timeout_ms": 6000
-       }
-     },
-     {
-       "id": "P5_close_timeout_race",
-       "user_action": "Finish speaking; remain silent.",
-       "inputs": [
-         "sample_sentence.wav"
-       ],
-       "expect_signals": [
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_include": [
-             "asr:final",
-             "CloseStream ack"
-           ],
-           "must_not_include": [
-             "Timed out waiting for ASR final"
-           ]
-         }
-       ],
-       "fail_if": [
-         {
--          "admin_any": [
-+          "ws_console_any": [
-             "Timed out waiting for ASR final"
-           ]
-         }
-       ],
-       "recommendations_on_fail": [
-         "R_CANCEL_TIMEOUT_ON_FINAL"
-       ],
-       "expect_dom": {
-         "any_of": [
-           ".chat-window .msg.assistant",
-           ".chat-window .msg.user",
-           "#suggestions .chip"
-         ],
-         "timeout_ms": 6000
-       }
-     },
-     {
-       "id": "P6_barge_in_pauses_tts",
-       "user_action": "Start talking while Chip is speaking.",
-       "inputs": [
-         "interrupt.wav"
-       ],
-       "expect_signals": [
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_include": [
-             "barge_in",
-             "tts_pause"
-           ],
-           "latency_lt_ms": {
-             "tts_pause_after_vad": 250
-           }
-         }
-       ],
-       "fail_if": [
-         {
--          "latency_gte_ms": {
-+          "ws_console_latency_gte_ms": {
-             "tts_pause_after_vad": 300
-           }
-         }
-       ],
-       "recommendations_on_fail": [
-         "R_BARGEIN_PAUSE_ON_VAD",
-         "R_ECHO_THRESHOLD_BOOST"
-       ],
-       "expect_dom": {
-         "any_of": [
-           ".chat-window .msg.assistant",
-           ".chat-window .msg.user",
-           "#suggestions .chip"
-         ],
-         "timeout_ms": 6000
-       }
-     },
-     {
-       "id": "P7_state_debounce",
-       "user_action": "Two short back-to-back turns.",
-       "inputs": [
-         "short1.wav",
-         "short2.wav"
-       ],
-       "expect_signals": [
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_not_spam_state": {
-             "window_ms": 500
-           }
-         }
-       ],
-       "fail_if": [
-         {
--          "admin_any": [
-+          "ws_console_any": [
-             "state: ready",
-             "state: ready",
-             "state: ready"
-           ]
-         }
-       ],
-       "recommendations_on_fail": [
-         "R_DEBOUNCE_STATE_500MS"
-       ],
-       "expect_dom": {
-         "any_of": [
-           ".chat-window .msg.assistant",
-           ".chat-window .msg.user",
-           "#suggestions .chip"
-         ],
-         "timeout_ms": 6000
-       }
-     },
-     {
-       "id": "P8_no_assistant_dup_messages",
-       "user_action": "One short question expecting text reply.",
-       "inputs": [
-         "sample_sentence.wav"
-       ],
-       "expect_signals": [
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "max_count_per_turn": {
-             "assistant_end": 1
-           }
-         }
-       ],
-       "fail_if": [
-         {
--          "admin_count_gt": {
-+          "ws_console_count_gt": {
-             "assistant_end": 1
-           }
-         }
-       ],
-       "recommendations_on_fail": [
-         "R_DEDUP_FINALS",
-         "R_SINGLE_POLICY_COMMIT"
-       ],
-       "expect_dom": {
-         "any_of": [
-           ".chat-window .msg.assistant",
-           ".chat-window .msg.user",
-           "#suggestions .chip"
-         ],
-         "timeout_ms": 6000
-       }
-     },
-     {
-       "id": "P9_chips_only_when_needed",
-       "user_action": "Say: 'Help me set up Portworx.'",
-       "inputs": [
-         "underspecified.wav"
-       ],
-       "expect_signals": [
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_include": [
-             "nlu"
-           ],
-           "nlu_flags": {
-             "needs_clarification": true,
-             "missing_any_of": [
-               "depth",
-               "delivery_pref"
-             ]
-           }
-         },
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_include": [
-             "suggestions_made"
-           ],
-           "chips_lte": 3
-         }
-       ],
-       "fail_if": [
-         {
--          "chips_gt": 3
-+          "ws_console_chips_gt": 3
-         },
-         {
--          "nlu_flags": {
-+          "ws_console_nlu_flags": {
-             "needs_clarification": false
-           }
-         }
-       ],
-       "recommendations_on_fail": [
-         "R_SYNTHESIZE_CHIPS_FROM_MISSING",
-         "R_CAP_CHIPS"
-       ],
-       "expect_dom": {
-         "any_of": [
-           ".chat-window .msg.assistant",
-           ".chat-window .msg.user",
-           "#suggestions .chip"
-         ],
-         "timeout_ms": 6000
-       }
-     },
-     {
-       "id": "P10_persona_governor_on_diagnose",
-       "user_action": "Say: 'After 3.x upgrade, PX cluster degraded; volumes won\u2019t mount.'",
-       "inputs": [
-         "diagnose.wav"
-       ],
-       "expect_signals": [
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_include": [
-             "policy_decision: diagnose"
-           ],
-           "must_not_include": [
-             "persona_applied"
-           ]
-         }
-       ],
-       "fail_if": [
-         {
--          "admin_any": [
-+          "ws_console_any": [
-             "persona_applied"
-           ]
-         }
-       ],
-       "recommendations_on_fail": [
-         "R_SKIP_PERSONA_ON_DIAGNOSE"
-       ],
-       "expect_dom": {
-         "any_of": [
-           ".chat-window .msg.assistant",
-           ".chat-window .msg.user",
-           "#suggestions .chip"
-         ],
-         "timeout_ms": 6000
-       }
-     },
-     {
-       "id": "P11_session_goal_persists",
-       "user_action": "Choose [Deep dive] when asked, then ask again for steps.",
-       "inputs": [
-         "short1.wav",
-         "sample_sentence.wav"
-       ],
-       "expect_signals": [
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_include": [
-             "session_goal"
-           ],
-           "goal_fields": {
-             "depth": "deep_dive",
-             "confirmed_contains": [
-               "depth"
-             ]
-           }
-         },
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_not_include": [
-             "re-ask depth"
-           ]
-         }
-       ],
-       "fail_if": [
-         {
--          "goal_missing": [
-+          "ws_console_goal_missing": [
-             "depth"
-           ]
-         }
-       ],
-       "recommendations_on_fail": [
-         "R_SESSION_GOAL_MERGE_AND_CONFIRM"
-       ],
-       "expect_dom": {
-         "any_of": [
-           ".chat-window .msg.assistant",
-           ".chat-window .msg.user",
-           "#suggestions .chip"
-         ],
-         "timeout_ms": 6000
-       }
-     },
-     {
-       "id": "P12_nlu_completeness",
-       "user_action": "Say: 'Install FlashArray for VMware and email me the steps.'",
-       "inputs": [
-         "fa_vmware_email.wav"
-       ],
-       "expect_signals": [
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_include": [
-             "nlu"
-           ],
-           "nlu_must_have_keys": [
-             "user_goal",
-             "phase",
-             "depth",
-             "delivery_pref",
-             "intent_hint",
-             "entities",
-             "confidence",
-             "needs_clarification"
-           ]
-         }
-       ],
-       "fail_if": [
-         {
--          "nlu_missing_any": [
-+          "ws_console_nlu_missing_any": [
-             "delivery_pref",
-             "entities.product",
-             "entities.env"
-           ]
-         }
-       ],
-       "recommendations_on_fail": [
-         "R_EXTEND_INTERPRETER_FIELDS"
-       ],
-       "expect_dom": {
-         "any_of": [
-           ".chat-window .msg.assistant",
-           ".chat-window .msg.user",
-           "#suggestions .chip"
-         ],
-         "timeout_ms": 6000
-       }
-     },
-     {
-       "id": "P15_long_help_session",
-       "user_action": "Press Start; allow a longer clip to play to exercise persistence.",
-       "inputs": [
-         "diagnose.wav"
-       ],
-       "expect_signals": [
-         {
--          "stream": "admin",
-+          "stream": "browser_console_ws",
-           "must_include": [
-             "latency_breakdown"
-           ],
-           "must_not_include": [
-             "error",
-             "Timed out"
-           ]
-         }
-       ],
-       "expect_dom": {
-         "any_of": [
-           ".chat-window .msg.assistant",
-           ".chat-window .msg.user",
-           "#suggestions .chip"
-         ],
-         "timeout_ms": 10000
-       },
-       "recommendations_on_fail": [
-         "R_SESSION_PERSISTENCE",
-         "R_ADMIN_BREADCRUMBS"
-       ]
-     }
-   ],
-   "recommendations_catalog": {
-     "R_DEDUP_FINALS": "Add per-turn assistant_final guard by turn_id in WS bus; ignore duplicate policy commits.",
-diff --git a/e2e_orchestrator.js b/e2e_orchestrator.js
-index e043b92889bbac3c73049efbb213b1789ed30bb8..bf110e8aa227ed2021156c839e36337e8a58bc9c 100644
---- a/e2e_orchestrator.js
-+++ b/e2e_orchestrator.js
-@@ -690,59 +690,203 @@ function detectStateSpam(adminLogs, windowMs) {
-     while (buf.length && evt.ts - buf[0].ts > span) buf.shift();
-     buffers.set(evt.key, buf);
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index 28ad66bc9b9812fd10c137f97fc28464cd3ec428..7d74bf6f77c73b207e2560e07c8aab9244a66d73 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -37,50 +37,55 @@ def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
+     if not email:
+         try:
+             email = get_user() or None
+         except Exception:
+             email = None
+     if isinstance(email, str) and "@" in email:
+         first = email.split("@",1)[0].split(".")[0].replace("_"," ").replace("-", " ").strip()
+         if first:
+             return first.title()
+     return "there"
  
-     if (buf.length > 1) {
-       const info = worst.get(evt.key);
-       const firstTs = buf[0].ts;
-       const lastTs = buf[buf.length - 1].ts;
-       const count = buf.length;
-       if (!info || count > info.count || (count === info.count && firstTs < info.start)) {
-         worst.set(evt.key, { label: evt.label, count, start: firstTs, end: lastTs });
-       }
-     }
-   }
+ _GOAL_ASKS = [
+     "what would you like to accomplish today?",
+     "what's the goal for this session?",
+     "what do you want to get done today?",
+     "what should we tackle first?",
+     "what outcome are you aiming for today?",
+ ]
  
-   const findings = [];
-   for (const { label, count, start, end } of worst.values()) {
-     const delta = Math.max(0, Math.round(end - start));
-     const base = label.toLowerCase().includes('state') ? label : `state ${label}`;
-     const parts = [`${base} emitted ${count}× within ${span} ms`];
-     if (delta > 0) parts.push(`(Δ${delta} ms)`);
-     findings.push(parts.join(' '));
-   }
-   return findings;
- }
+ _CHIP_INTRO_RE = re.compile(r"^hey[\s,\-–—]*i['’`]?m\s+chip[.!\s]*$", re.IGNORECASE)
  
-+function parseBrowserConsoleWS(consoleLines) {
-+  const events = [];
-+  const latencies = {};
-+  const turnMap = new Map();
-+  const suggestions = [];
-+  const sessionGoalHints = [];
-+  const stateEvents = [];
-+  let nluEvent = null;
-+
-+  const mergeLatencyMap = (source) => {
-+    if (!source || typeof source !== 'object') return;
-+    for (const [key, value] of Object.entries(source)) {
-+      const num = typeof value === 'string' ? Number(value) : value;
-+      if (!Number.isFinite(num)) continue;
-+      latencies[key] = num;
-+    }
-+  };
-+
-+  const extractLatenciesFromEvent = (evt) => {
-+    if (!evt || typeof evt !== 'object') return;
-+    if (evt.latency_label && Number.isFinite(evt.latency_ms)) {
-+      latencies[evt.latency_label] = evt.latency_ms;
-+    }
-+    mergeLatencyMap(evt.latency_breakdown || evt.latencies);
-+    if (evt.metrics && typeof evt.metrics === 'object') {
-+      mergeLatencyMap(evt.metrics.latency_breakdown || evt.metrics.latencies);
-+      if (evt.metrics.latency_label && Number.isFinite(evt.metrics.latency_ms)) {
-+        latencies[evt.metrics.latency_label] = evt.metrics.latency_ms;
-+      }
-+    }
-+    if (evt.meta && typeof evt.meta === 'object') {
-+      mergeLatencyMap(evt.meta.latency_breakdown || evt.meta.latencies);
-+    }
-+  };
-+
-+  for (const raw of consoleLines || []) {
-+    if (typeof raw !== 'string') continue;
-+    const trimmed = raw.trim();
-+    if (!trimmed.startsWith('[WS→UI]')) continue;
-+    const idx = trimmed.indexOf(']');
-+    if (idx === -1) continue;
-+    const jsonText = trimmed.slice(idx + 1).trim();
-+    if (!jsonText) continue;
-+    let evt;
-+    try {
-+      evt = JSON.parse(jsonText);
-+    } catch {
-+      continue;
-+    }
-+
-+    events.push(evt);
-+    extractLatenciesFromEvent(evt);
-+
-+    const type = typeof evt.type === 'string' ? evt.type.toLowerCase() : '';
-+    if (!nluEvent && (type === 'nlu' || evt.event === 'nlu' || evt.nlu)) {
-+      nluEvent = evt.nlu && typeof evt.nlu === 'object' ? evt.nlu : evt;
-+    }
-+
-+    if (type === 'suggestions') {
-+      suggestions.push(evt);
-+    }
-+
-+    if (type.includes('session_goal') || evt.session_goal || evt.goal?.session_goal) {
-+      const payloads = [];
-+      if (evt.session_goal && typeof evt.session_goal === 'object') payloads.push(evt.session_goal);
-+      if (evt.goal && typeof evt.goal === 'object') payloads.push(evt.goal);
-+      if (!payloads.length && typeof evt === 'object') payloads.push(evt);
-+      for (const p of payloads) {
-+        if (p && typeof p === 'object') sessionGoalHints.push(p);
-+      }
-+    }
-+
-+    if (type === 'state' || type === 'phase') {
-+      stateEvents.push(evt);
-+    }
-+
-+    const turnId = evt.turn_id || evt.turnId || evt.turn;
-+    if (turnId) {
-+      const turn = turnMap.get(turnId) || {
-+        turn_id: turnId,
-+        chunks: [],
-+        assistant_end_count: 0,
-+        policy_chips: new Set(),
-+        suggestions: []
-+      };
-+      if (type === 'assistant_chunk') {
-+        if (typeof evt.text === 'string') turn.chunks.push(evt.text);
-+        if (Array.isArray(evt.policy_chips)) {
-+          for (const chip of evt.policy_chips) {
-+            if (typeof chip === 'string') turn.policy_chips.add(chip);
-+          }
-+        }
-+      }
-+      if (type === 'assistant_end') {
-+        turn.assistant_end_count += 1;
-+      }
-+      if (type === 'suggestions' && Array.isArray(evt.items)) {
-+        turn.suggestions = evt.items.slice();
-+      }
-+      turnMap.set(turnId, turn);
-+    }
-+  }
-+
-+  const assistantFrames = Array.from(turnMap.values()).map(turn => ({
-+    turn_id: turn.turn_id,
-+    text: turn.chunks.join(' ').trim(),
-+    chunk_count: turn.chunks.length,
-+    assistant_end_count: turn.assistant_end_count,
-+    policy_chips: Array.from(turn.policy_chips),
-+    suggestions: turn.suggestions
-+  }));
-+
-+  const chipsMax = suggestions.reduce((max, evt) => {
-+    const count = Array.isArray(evt.items) ? evt.items.length : 0;
-+    return count > max ? count : max;
-+  }, 0);
-+
-+  return {
-+    events,
-+    latencies,
-+    assistantFrames,
-+    suggestions,
-+    chipsMax,
-+    sessionGoalHints,
-+    stateEvents,
-+    nluEvent
-+  };
-+}
-+
- function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}){
-   const findings = [];
-   const metrics = {};
-   const adminDisabled = String(adminCaptureMeta.captureState || '').toLowerCase() === 'disabled'
-     || adminCaptureMeta.disabled === true;
-   const lat = adminDisabled ? null : getLatencies(adminLogs);
-   if (lat) metrics.latency_breakdown = lat;
-   if (adminDisabled) metrics.admin_stream = 'disabled';
+ _TTS_COMPLETION_LOCK = threading.Lock()
+ _TTS_COMPLETION_EVENTS: Dict[str, Dict[str, threading.Event]] = {}
+ _TTS_LATEST_TURN: Dict[str, str] = {}
  
-+  const wsConsole = parseBrowserConsoleWS(consoleLines);
-+  if (!metrics.browser_console_ws) metrics.browser_console_ws = {};
-+  if (Object.keys(wsConsole.latencies).length) {
-+    metrics.browser_console_ws.latencies = wsConsole.latencies;
-+  }
-+  if (wsConsole.assistantFrames.length) {
-+    metrics.browser_console_ws.assistant_frames = wsConsole.assistantFrames;
-+  }
-+  if (wsConsole.suggestions.length) {
-+    metrics.browser_console_ws.suggestions = wsConsole.suggestions;
-+  }
-+  if (wsConsole.sessionGoalHints.length) {
-+    metrics.browser_console_ws.session_goal_hints = wsConsole.sessionGoalHints;
-+  }
++_FOUNDATION_FAILURE_LOCK = threading.Lock()
++_FOUNDATION_DISABLED_UNTIL: float = 0.0
++_FOUNDATION_LAST_ERROR: Optional[str] = None
++_FOUNDATION_BACKOFF_SECONDS = 30.0
 +
-   let adminWarningLogged = false;
-   const ensureAdminWarning = () => {
-     if (adminWarningLogged || !adminDisabled) return;
-     const probeId = probe?.id || '<unknown>';
-     console.warn(`Skipping admin stream checks for probe ${probeId}: admin stream is gated (403).`);
-     adminWarningLogged = true;
-   };
  
-   for (const rule of (probe.expect_signals || [])) {
-     if (rule.stream === 'admin') {
-       if (adminDisabled) {
-         ensureAdminWarning();
-         continue;
-       }
-       if (rule.must_include) for (const k of rule.must_include) if (!hasStr(adminLogs,k)) findings.push(`Admin missing '${k}'`);
-       if (rule.must_not_include) for (const k of rule.must_not_include) if (hasStr(adminLogs,k)) findings.push(`Admin should NOT include '${k}'`);
-       if (rule.max_count_per_turn) for (const [k,max] of Object.entries(rule.max_count_per_turn)){
-         const c = countStr(adminLogs,k); if (c>max) findings.push(`'${k}' count ${c} > ${max}`);
-       }
-       if (rule.latency_lt_ms && lat) for (const [k,limit] of Object.entries(rule.latency_lt_ms)){
-         const got = lat[k]; if (got==null || got>=limit) findings.push(`Latency '${k}' ${got ?? 'N/A'}ms not < ${limit}ms`);
-       }
-       if (rule.nlu_flags) {
-         const nlu = adminLogs.find(x=>x.event==='nlu') || {};
-         const f = rule.nlu_flags;
-@@ -759,105 +903,250 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}
-         const cnt = (sm.items?.length) ?? sm.count ?? 0;
-         if (cnt > rule.chips_lte) findings.push(`chips count ${cnt} > ${rule.chips_lte}`);
-       }
-       if (rule.goal_fields) {
-         const sg = adminLogs.find(x => String(x.event).includes('session_goal')) || {};
-         for (const [k,expected] of Object.entries(rule.goal_fields)) {
-           if (k === 'confirmed_contains') {
-             const arr = sg.confirmed || [];
-             for (const item of expected) if (!arr.includes(item)) findings.push(`session_goal.confirmed missing '${item}'`);
-           } else if ((sg[k] ?? null) !== expected) {
-             findings.push(`session_goal.${k} expected '${expected}', got '${sg[k]}'`);
-           }
-         }
-       }
-       if (rule.must_not_spam_state) {
-         const windowMs = rule.must_not_spam_state.window_ms ?? rule.must_not_spam_state.windowMs ?? 0;
-         const spamFindings = detectStateSpam(adminLogs, windowMs);
-         if (spamFindings.length) findings.push(...spamFindings);
-       }
-       if (rule.nlu_must_have_keys) {
-         const nlu = adminLogs.find(x=>x.event==='nlu');
-         if (!nlu) findings.push('No nlu event observed');
-         else for (const k of rule.nlu_must_have_keys) if (!(k in nlu)) findings.push(`nlu missing key '${k}'`);
-       }
-     }
-+    if (rule.stream === 'browser_console_ws') {
-+      const wsEvents = wsConsole.events;
-+      if (rule.must_include) {
-+        for (const k of rule.must_include) {
-+          if (!hasStr(wsEvents, k)) findings.push(`WS console missing '${k}'`);
-+        }
-+      }
-+      if (rule.must_not_include) {
-+        for (const k of rule.must_not_include) {
-+          if (hasStr(wsEvents, k)) findings.push(`WS console should NOT include '${k}'`);
-+        }
-+      }
-+      if (rule.max_count_per_turn) {
-+        for (const [label, max] of Object.entries(rule.max_count_per_turn)) {
-+          const count = countStr(wsEvents, label);
-+          if (count > max) findings.push(`'${label}' count ${count} > ${max}`);
-+        }
-+      }
-+      if (rule.latency_lt_ms) {
-+        for (const [label, limit] of Object.entries(rule.latency_lt_ms)) {
-+          const got = wsConsole.latencies[label];
-+          if (got == null) findings.push(`WS latency '${label}' unavailable`);
-+          else if (got >= limit) findings.push(`WS latency '${label}' ${got}ms not < ${limit}ms`);
-+        }
-+      }
-+      if (rule.nlu_flags) {
-+        const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
-+        if (!nlu) {
-+          findings.push('No WS NLU event observed');
-+        } else {
-+          const flags = rule.nlu_flags;
-+          if (typeof flags.needs_clarification === 'boolean') {
-+            if (!!nlu.needs_clarification !== flags.needs_clarification) {
-+              findings.push(`WS nlu.needs_clarification expected ${flags.needs_clarification}, got ${nlu.needs_clarification}`);
-+            }
-+          }
-+          if (flags.missing_any_of) {
-+            const missing = Array.isArray(nlu.missing) ? nlu.missing : [];
-+            if (!flags.missing_any_of.some(m => missing.includes(m))) {
-+              findings.push(`WS nlu.missing should include one of [${flags.missing_any_of.join(', ')}], got [${missing.join(', ')}]`);
-+            }
-+          }
-+        }
-+      }
-+      if (rule.chips_lte != null) {
-+        if (!wsConsole.suggestions.length) {
-+          findings.push('WS suggestions payload missing for chips check');
-+        } else if (wsConsole.chipsMax > rule.chips_lte) {
-+          findings.push(`WS chips count ${wsConsole.chipsMax} > ${rule.chips_lte}`);
-+        }
-+      }
-+      if (rule.goal_fields) {
-+        if (!wsConsole.sessionGoalHints.length) {
-+          findings.push('WS session_goal hints missing');
-+        } else {
-+          const latest = wsConsole.sessionGoalHints[wsConsole.sessionGoalHints.length - 1];
-+          for (const [field, expected] of Object.entries(rule.goal_fields)) {
-+            if (field === 'confirmed_contains') {
-+              const confirmed = Array.isArray(latest.confirmed) ? latest.confirmed : [];
-+              for (const item of expected) {
-+                if (!confirmed.includes(item)) findings.push(`session_goal.confirmed missing '${item}'`);
-+              }
-+            } else if ((latest?.[field] ?? null) !== expected) {
-+              findings.push(`session_goal.${field} expected '${expected}', got '${latest?.[field]}'`);
-+            }
-+          }
-+        }
-+      }
-+      if (rule.must_not_spam_state) {
-+        const windowMs = rule.must_not_spam_state.window_ms ?? rule.must_not_spam_state.windowMs ?? 0;
-+        const spamFindings = detectStateSpam(wsConsole.events, windowMs);
-+        if (spamFindings.length) {
-+          findings.push(...spamFindings);
-+        } else if (!wsConsole.stateEvents.length) {
-+          findings.push('WS state events missing for spam check');
-+        } else if (!wsConsole.stateEvents.some(evt => normalizeTimestampMs(evt) != null)) {
-+          findings.push('WS state events missing timestamps for spam check');
-+        }
-+      }
-+      if (rule.nlu_must_have_keys) {
-+        const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
-+        if (!nlu) {
-+          findings.push('No WS NLU event observed');
-+        } else {
-+          for (const key of rule.nlu_must_have_keys) {
-+            if (!(key in nlu)) findings.push(`WS nlu missing key '${key}'`);
-+          }
-+        }
-+      }
-+    }
-     if (rule.stream === 'browser_console') {
-       if (rule.must_include) for (const s of rule.must_include) if (!consoleLines.some(l=>l.includes(s))) findings.push(`Console missing '${s}'`);
-       if (rule.must_not_include) for (const s of rule.must_not_include) if (consoleLines.some(l=>l.includes(s))) findings.push(`Console should NOT include '${s}'`);
-     }
-     if (rule.stream === 'network') {
-       if (rule.must_not_include_query_params || rule.network_has_any_params) {
-         const dg = wsUrls.find(u => /deepgram\.com\/v1\/listen/.test(u));
-         if (!dg) findings.push('Deepgram WS URL not observed');
-         else {
-           const url = new URL(dg);
-           const bad = (rule.must_not_include_query_params || rule.network_has_any_params).filter(k => url.searchParams.has(k));
-           if (bad.length) findings.push(`Deepgram URL contains forbidden params: ${bad.join(', ')}`);
-         }
-       }
-     }
-   }
+ def _tts_event_key(turn_id: Optional[str]) -> str:
+     return str(turn_id) if turn_id is not None else "greet"
  
-   for (const cond of (probe.fail_if || [])) {
-     const touchesAdmin = cond.admin_any || cond.admin_missing || cond.admin_count_gt
-       || cond.latency_gte_ms || cond.chips_gt != null || cond.nlu_flags
-       || cond.goal_missing || cond.nlu_missing_any;
-+    const touchesWs = cond.ws_console_any || cond.ws_console_missing || cond.ws_console_count_gt
-+      || cond.ws_console_latency_gte_ms || cond.ws_console_chips_gt != null || cond.ws_console_nlu_flags
-+      || cond.ws_console_goal_missing || cond.ws_console_nlu_missing_any;
-     if (adminDisabled && touchesAdmin) {
-       ensureAdminWarning();
-       continue;
-     }
-     if (cond.admin_any) for (const s of cond.admin_any) if (hasStr(adminLogs,s)) findings.push(`Fail: admin contains '${s}'`);
-     if (cond.admin_missing) for (const s of cond.admin_missing) if (!hasStr(adminLogs,s)) findings.push(`Fail: admin missing '${s}'`);
-     if (cond.admin_count_gt) for (const [k,m] of Object.entries(cond.admin_count_gt)){ const c = countStr(adminLogs,k); if (c>m) findings.push(`Fail: '${k}' count ${c} > ${m}`); }
-     const lat2 = adminDisabled ? null : getLatencies(adminLogs);
-     if (cond.latency_gte_ms && lat2) for (const [k,v] of Object.entries(cond.latency_gte_ms)){ const got = lat2[k]; if (got!=null && got>=v) findings.push(`Fail: latency '${k}' ${got}ms >= ${v}ms`); }
-     if (cond.chips_gt != null) {
-       const sm = adminLogs.find(x => String(x.event).includes('suggestions_made')) || {};
-       const cnt = (sm.items?.length) ?? sm.count ?? 0;
-       if (cnt > cond.chips_gt) findings.push(`Fail: chips ${cnt} > ${cond.chips_gt}`);
-     }
-     if (cond.nlu_flags) {
-       const nlu = adminLogs.find(x=>x.event==='nlu') || {};
-       const f = cond.nlu_flags;
-       if (typeof f.needs_clarification === 'boolean') {
-         if (!!nlu.needs_clarification !== f.needs_clarification) findings.push(`Fail: nlu.needs_clarification expected ${f.needs_clarification}, got ${nlu.needs_clarification}`);
-       }
-     }
-     if (cond.goal_missing) {
-       const sg = adminLogs.find(x => String(x.event).includes('session_goal')) || {};
-       for (const k of cond.goal_missing) if (!(k in sg)) findings.push(`Fail: session_goal missing '${k}'`);
-     }
-     if (cond.nlu_missing_any) {
-       const nlu = adminLogs.find(x=>x.event==='nlu') || {};
-       for (const k of cond.nlu_missing_any) {
-         const parts = k.split('.');
-         let cur = nlu, ok = true;
-         for (const p of parts) { if (cur && p in cur) cur = cur[p]; else { ok = false; break; } }
-         if (!ok) findings.push(`Fail: nlu missing '${k}'`);
-       }
-     }
-+    if (touchesWs) {
-+      if (cond.ws_console_any) {
-+        for (const s of cond.ws_console_any) if (hasStr(wsConsole.events, s)) findings.push(`Fail: WS console contains '${s}'`);
-+      }
-+      if (cond.ws_console_missing) {
-+        for (const s of cond.ws_console_missing) if (!hasStr(wsConsole.events, s)) findings.push(`Fail: WS console missing '${s}'`);
-+      }
-+      if (cond.ws_console_count_gt) {
-+        for (const [label, max] of Object.entries(cond.ws_console_count_gt)) {
-+          const count = countStr(wsConsole.events, label);
-+          if (count > max) findings.push(`Fail: '${label}' count ${count} > ${max}`);
-+        }
-+      }
-+      if (cond.ws_console_latency_gte_ms) {
-+        for (const [label, limit] of Object.entries(cond.ws_console_latency_gte_ms)) {
-+          const got = wsConsole.latencies[label];
-+          if (got == null) findings.push(`Fail: WS latency '${label}' unavailable`);
-+          else if (got >= limit) findings.push(`Fail: WS latency '${label}' ${got}ms >= ${limit}ms`);
-+        }
-+      }
-+      if (cond.ws_console_chips_gt != null) {
-+        if (!wsConsole.suggestions.length) findings.push('Fail: WS suggestions payload missing for chips check');
-+        else if (wsConsole.chipsMax > cond.ws_console_chips_gt) findings.push(`Fail: WS chips ${wsConsole.chipsMax} > ${cond.ws_console_chips_gt}`);
-+      }
-+      if (cond.ws_console_nlu_flags) {
-+        const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
-+        if (!nlu) {
-+          findings.push('Fail: No WS NLU event observed');
-+        } else if (typeof cond.ws_console_nlu_flags.needs_clarification === 'boolean') {
-+          if (!!nlu.needs_clarification !== cond.ws_console_nlu_flags.needs_clarification) {
-+            findings.push(`Fail: WS nlu.needs_clarification expected ${cond.ws_console_nlu_flags.needs_clarification}, got ${nlu.needs_clarification}`);
-+          }
-+        }
-+      }
-+      if (cond.ws_console_goal_missing) {
-+        const latest = wsConsole.sessionGoalHints[wsConsole.sessionGoalHints.length - 1];
-+        if (!latest) findings.push('Fail: WS session_goal hints missing');
-+        else for (const key of cond.ws_console_goal_missing) if (!(key in latest)) findings.push(`Fail: session_goal missing '${key}'`);
-+      }
-+      if (cond.ws_console_nlu_missing_any) {
-+        const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
-+        for (const key of cond.ws_console_nlu_missing_any) {
-+          let cur = nlu;
-+          let ok = true;
-+          for (const part of key.split('.')) {
-+            if (cur && typeof cur === 'object' && part in cur) cur = cur[part];
-+            else { ok = false; break; }
-+          }
-+          if (!ok) findings.push(`Fail: WS nlu missing '${key}'`);
-+        }
-+      }
-+    }
-   }
  
-   return { passed: findings.length === 0, findings, metrics };
- }
+ def _prepare_tts_completion_event(session_id: str, turn_key: str) -> threading.Event:
+     event = threading.Event()
+     with _TTS_COMPLETION_LOCK:
+         session_events = _TTS_COMPLETION_EVENTS.setdefault(session_id, {})
+         session_events[turn_key] = event
+         _TTS_LATEST_TURN[session_id] = turn_key
+     return event
  
- async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval){
-   let normalized;
-   try {
-     normalized = normalizeInputs(probe.inputs, audioDir);
-   } catch (err) {
-     return { id: probe.id, pass: false, findings: [err?.message || String(err)], metrics: {} };
-   }
  
-   const useCustomMic = normalized.inputs.length > 1;
-   const firstAudioPath = normalized.audioFiles[0];
-   if (!firstAudioPath) {
-     return { id: probe.id, pass: false, findings: ['No audio fixtures found for probe'], metrics: {} };
-   }
+ def _signal_tts_completion(session_id: str, turn_key: str) -> None:
+     with _TTS_COMPLETION_LOCK:
+         session_events = _TTS_COMPLETION_EVENTS.get(session_id)
+         if not session_events:
+             _TTS_LATEST_TURN.pop(session_id, None)
+             return
+         event = session_events.get(turn_key)
+         if event:
+             event.set()
+         session_events.pop(turn_key, None)
+         if not session_events:
+@@ -539,50 +544,52 @@ def _log_policy_decision(*,
  
-   const launchArgs = [
-     '--use-fake-device-for-media-stream',
-     '--autoplay-policy=no-user-gesture-required'
-   ];
-   if (!useCustomMic) {
-     launchArgs.push(`--use-file-for-fake-audio-capture=${firstAudioPath}`);
+         if callable(_admin_emit):
+             label_move = (
+                 resolved_move_name
+                 or policy_move_name
+                 or normalized_action_name
+                 or seed_move_name
+                 or "unknown"
+             )
+             try:
+                 _admin_emit(
+                     "policy_decision",
+                     event="policy_decision",
+                     label=f"policy_decision: {label_move}",
+                     **payload,
+                 )
+             except Exception:
+                 pass
+     except Exception:
+         pass
+ 
+ 
+ def _should_use_foundation(seed_text: str) -> bool:
+     if not ENABLE_CHIP_FOUNDATION:
+         return False
++    if _foundation_backoff_active():
++        return False
+     try:
+         normalized = str(seed_text or "").strip().lower()
+     except Exception:
+         return False
+     if not normalized:
+         return False
+     return True
+ 
+ 
+ _POLICY_SUGGESTION_ACTIONS = frozenset({"clarify", "ask_clarify", "offer_steps"})
+ _WELCOME_MOVE = "offer_steps"
+ _WELCOME_INTENTS = {"greet", "idle"}
+ 
+ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+ 
+ 
+ def _get_dialog_action(meta: Optional[Dict[str, Any]]) -> Optional[str]:
+     if not isinstance(meta, dict):
+         return None
+     action = meta.get(_DIALOG_ACTION_KEY)
+     if action:
+         return action
+     return meta.get("action")
+ 
+ 
+@@ -971,51 +978,55 @@ def _format_next_actions(text: str, meta: Optional[Dict[str, Any]]) -> str:
+         cleaned = _truncate_chars(item, max_chars)
+         trimmed.append(f"• {cleaned}")
+     if verbosity == "brief":
+         return "\n".join(trimmed)
+     return "Next actions:\n" + "\n".join(trimmed)
+ 
+ 
+ def _apply_action_shape(action: str,
+                         text: str,
+                         meta: Optional[Dict[str, Any]]) -> str:
+     if not text:
+         return text
+     normalized = (action or "").strip().lower()
+     if normalized in {"give_brief_answer", "high_level", "clarify"}:
+         return _format_brief_answer(text, meta)
+     if normalized == "offer_steps":
+         return _format_offer_steps(text, meta)
+     if normalized == "summarize_next_actions":
+         return _format_next_actions(text, meta)
+     return text
+ 
+ 
+ def _call_foundation_llm(messages: List[Dict[str, str]],
+                          cfg: Dict[str, Any],
+                          telemetry: Optional[NluLoggingContext] = None) -> Tuple[str, Dict[str, Any]]:
+-    client = make_openai_client()
++    try:
++        client = make_openai_client()
++    except Exception as exc:
++        _note_foundation_failure(exc)
++        raise
+     model = (
+         cfg.get("openai_model")
+         or cfg.get("OPENAI_MODEL")
+         or os.getenv("OPENAI_MODEL")
+         or "gpt-4o-mini"
+     )
+     temperature = float(cfg.get("gen_temperature", 0.3))
+     top_p = float(cfg.get("gen_top_p", 1.0))
+     payload = [dict(m) for m in messages]
+     prompt_tokens_estimate = 0
+     for msg in payload:
+         content = msg.get("content")
+         if isinstance(content, str):
+             prompt_tokens_estimate += len(content.split())
+     cache_status = str(cfg.get("foundation_cache_status") or "unknown")
+     tool_allowlist = cfg.get("tool_allowlist")
+     allowlist_payload: Optional[Iterable[str]] = None
+     if isinstance(tool_allowlist, (list, tuple, set)):
+         allowlist_payload = tool_allowlist
+     elif tool_allowlist is not None:
+         allowlist_payload = [str(tool_allowlist)]
+     if telemetry:
+         telemetry.log_llm_request(
+             model=model,
+             temperature=temperature,
+@@ -1790,50 +1801,86 @@ def _summarize_persona_trace(trace: Optional[Dict[str, Any]],
+ 
+ def _log_persona_applied(turn_id: str,
+                          trace: Optional[Dict[str, Any]],
+                          cfg: Optional[Dict[str, Any]],
+                          *,
+                          persona: Optional[Dict[str, Any]] = None,
+                          meta: Optional[Dict[str, Any]] = None) -> None:
+     try:
+         persona_level, persona_elements, guardrails = _summarize_persona_trace(
+             trace,
+             cfg,
+             persona=persona,
+             meta=meta,
+         )
+         _jlog(
+             "persona_applied",
+             turn_id=str(turn_id),
+             persona_level=persona_level,
+             persona_elements=persona_elements,
+             guardrails_suppressed=guardrails,
+         )
+     except Exception:
+         pass
+ 
+ 
++def _foundation_backoff_active(now: Optional[float] = None) -> bool:
++    global _FOUNDATION_DISABLED_UNTIL, _FOUNDATION_LAST_ERROR
++    if now is None:
++        now = _t.time()
++    with _FOUNDATION_FAILURE_LOCK:
++        if _FOUNDATION_DISABLED_UNTIL <= 0:
++            return False
++        if now >= _FOUNDATION_DISABLED_UNTIL:
++            _FOUNDATION_DISABLED_UNTIL = 0.0
++            _FOUNDATION_LAST_ERROR = None
++            return False
++        return True
++
++
++def _note_foundation_failure(exc: Optional[BaseException] = None,
++                             *,
++                             backoff_seconds: Optional[float] = None) -> None:
++    global _FOUNDATION_DISABLED_UNTIL, _FOUNDATION_LAST_ERROR
++    duration = _FOUNDATION_BACKOFF_SECONDS if backoff_seconds is None else float(backoff_seconds or 0.0)
++    now = _t.time()
++    with _FOUNDATION_FAILURE_LOCK:
++        if duration <= 0:
++            _FOUNDATION_DISABLED_UNTIL = now
++        else:
++            _FOUNDATION_DISABLED_UNTIL = now + duration
++        if exc is not None:
++            _FOUNDATION_LAST_ERROR = exc.__class__.__name__
++
++
++def _clear_foundation_failure() -> None:
++    global _FOUNDATION_DISABLED_UNTIL, _FOUNDATION_LAST_ERROR
++    with _FOUNDATION_FAILURE_LOCK:
++        _FOUNDATION_DISABLED_UNTIL = 0.0
++        _FOUNDATION_LAST_ERROR = None
++
++
+ def _should_skip_legacy(meta: Optional[Dict[str, Any]]) -> bool:
+     if not meta:
+         return False
+     if bool(meta.get("skip_legacy_fallback")):
+         return True
+     source = str(meta.get("source", "") or "").strip().lower()
+     if source in _WS_SOURCES:
+         return True
+     return False
+ 
+ 
+ def _allocate_turn_id(force_turn_id: Optional[str]) -> str:
+     if force_turn_id is not None:
+         db.memory['turn_seq'] = db.memory.setdefault('turn_seq', 0) + 1
+         return str(force_turn_id)
+     turn_seq = db.memory.setdefault('turn_seq', 0) + 1
+     db.memory['turn_seq'] = turn_seq
+     return str(turn_seq)
+ 
+ 
+ def make_assistant_frames(seed_text: str,
+                           session_id: str,
+                           meta: Optional[Dict] = None,
+                           correlation_user_msg_id: Optional[str] = None,
+                           *,
+@@ -1942,50 +1989,54 @@ def make_assistant_frames(seed_text: str,
+ 
+         fallback_on_empty = _cfg_flag("assistant_fallback_on_empty", True)
+         fallback_on_error = _cfg_flag("assistant_fallback_on_error", True)
+         fallback_emit_event = _cfg_flag("assistant_fallback_emit_event", True)
+ 
+         if _should_use_foundation(seed_text):
+             try:
+                 return _make_foundation_frames(
+                     seed_text,
+                     session_id,
+                     meta,
+                     cfg,
+                     correlation_user_msg_id=correlation_user_msg_id,
+                     turn_id=turn_id,
+                     telemetry=context,
+                     is_greet=is_greet,
+                     fallback_line=fallback_line,
+                     fallback_on_empty=fallback_on_empty,
+                     fallback_on_error=fallback_on_error,
+                     fallback_emit_event=fallback_emit_event,
+                     action=action,
+                     broadcast_immediately=broadcast_immediately,
+                 )
+             except Exception as e:
+                 context.log_error("foundation_pipeline_error", str(e))
++                _note_foundation_failure(e)
++                skip_legacy = False
++                if isinstance(meta, dict):
++                    meta.pop("skip_legacy_fallback", None)
+                 try:
+                     _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
+                 except Exception:
+                     pass
+ 
+         if skip_legacy:
+             return None, []
+ 
+         return _make_legacy_frames(
+             seed_text,
+             session_id,
+             meta,
+             cfg,
+             correlation_user_msg_id=correlation_user_msg_id,
+             turn_id=turn_id,
+             telemetry=context,
+             is_greet=is_greet,
+             fallback_line=fallback_line,
+             fallback_on_empty=fallback_on_empty,
+             fallback_on_error=fallback_on_error,
+             fallback_emit_event=fallback_emit_event,
+             action=action,
+             labels=classified_labels,
+             policy=classified_policy,
+             broadcast_immediately=broadcast_immediately,
+@@ -2140,50 +2191,52 @@ def _make_foundation_frames(seed_text: str,
+     _log_persona_applied(
+         turn_id,
+         persona_trace,
+         cfg,
+         persona=persona,
+         meta=meta,
+     )
+ 
+     kb_count = 0
+     try:
+         kb_candidates = meta.get('kb_snippets') if isinstance(meta, dict) else None
+         if isinstance(kb_candidates, (list, tuple)):
+             kb_count = len(kb_candidates)
+     except Exception:
+         kb_count = 0
+     telemetry.log_prompt_summary(messages=messages, prompt_hash=prompt_hash, kb_count=kb_count)
+ 
+     use_llm = True
+     llm_info: Dict[str, Any] = {}
+     if use_llm:
+         try:
+             foundation_result = _call_foundation_with_retry(messages, cfg, telemetry=telemetry)
+         except Exception as exc:
+             telemetry.log_error("foundation_call_error", str(exc))
+             raise
++        else:
++            _clear_foundation_failure()
+         if isinstance(foundation_result, tuple) and len(foundation_result) == 2:
+             reply, llm_info = foundation_result
+         else:
+             reply = foundation_result
+             llm_info = {}
+     fallback_fired = False
+     fallback_reason: Optional[str] = None
+ 
+     if use_llm:
+         if fallback_on_error and not reply and not fallback_fired:
+             # Foundation path has no explicit error flag; treat empty as error when allowed.
+             reply = fallback_line
+             fallback_fired = True
+             fallback_reason = "empty"
+         elif fallback_on_empty and not (reply or "").strip():
+             reply = fallback_line
+             fallback_fired = True
+             fallback_reason = "empty"
+ 
+     safe_reply = _scrub_debug_stamps(reply)
+ 
+     if use_llm and not fallback_fired:
+         shaped = _apply_action_shape(normalized_action, safe_reply, meta)
+         if shaped:
+             safe_reply = shaped
+diff --git a/tests/test_streaming_ws_fallbacks.py b/tests/test_streaming_ws_fallbacks.py
+index ef81bb5d6329b6fae8353fd19917e38a8d96fbcb..6b4eaedebffae936a077c4c45092fd955bce245d 100644
+--- a/tests/test_streaming_ws_fallbacks.py
++++ b/tests/test_streaming_ws_fallbacks.py
+@@ -72,50 +72,99 @@ def test_short_greeting_preserves_sentence():
+ 
+ def test_make_assistant_frames_ws_skips_legacy(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     legacy_called = False
+ 
+     def fake_legacy(*args, **kwargs):  # pragma: no cover - should never be invoked
+         nonlocal legacy_called
+         legacy_called = True
+         return "legacy", [{"type": "assistant_end", "turn_id": "legacy"}]
+ 
+     monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
+     monkeypatch.setattr(streaming, "_should_use_foundation", lambda *_: False)
+ 
+     tid, frames = streaming.make_assistant_frames(
+         "hello",
+         "session-ws",
+         meta={"source": "user_ws"},
+     )
+ 
+     assert tid is None
+     assert frames == []
+     assert legacy_called is False
+ 
+ 
++def test_make_assistant_frames_foundation_failure_uses_legacy(monkeypatch):
++    _stub_config(monkeypatch)
++
++    monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
++    monkeypatch.setattr(streaming, "_FOUNDATION_DISABLED_UNTIL", 0.0)
++    monkeypatch.setattr(streaming, "_FOUNDATION_LAST_ERROR", None)
++    monkeypatch.setattr(streaming.db, "memory", {})
++
++    def fake_prepare(seed_text, meta, cfg=None, telemetry=None):
++        prepared = dict(meta or {})
++        return prepared, {}, {}
++
++    monkeypatch.setattr(streaming, "prepare_turn_metadata", fake_prepare)
++
++    def raising_foundation(*args, **kwargs):
++        raise RuntimeError("foundation boom")
++
++    monkeypatch.setattr(streaming, "_make_foundation_frames", raising_foundation)
++
++    legacy_called = {"count": 0}
++
++    def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
++        legacy_called["count"] += 1
++        turn_id = kwargs.get("turn_id") or kwargs.get("force_turn_id") or "legacy-turn"
++        frames = [
++            {"type": "assistant_chunk", "turn_id": turn_id, "text": "legacy reply", "kb_hits": 0},
++            {"type": "assistant_end", "turn_id": turn_id},
++        ]
++        if kwargs.get("broadcast_immediately", True):
++            streaming._broadcast_frames(session_id, frames, turn_id)
++        return turn_id, frames
++
++    monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
++
++    tid, frames = streaming.make_assistant_frames(
++        "hello",
++        "session-fallback",
++        meta={"source": "ws_greet", "skip_legacy_fallback": True},
++        broadcast_immediately=False,
++    )
++
++    assert tid
++    assert frames and frames[0]["turn_id"] == tid and frames[0]["text"] == "legacy reply"
++    assert legacy_called["count"] == 1
++    assert not streaming._should_use_foundation("followup")
++    streaming._clear_foundation_failure()
++    assert streaming._should_use_foundation("followup")
++
++
+ def test_run_ws_greet_uses_foundation_frames(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
+ 
+     captured = {"called": 0}
+ 
+     def fake_foundation(seed_text, session_id, meta, cfg, **kwargs):
+         captured["called"] += 1
+         captured["seed_text"] = seed_text
+         turn_id = kwargs.get("force_turn_id") or "tid-foundation"
+         frames = [
+             {"type": "assistant_chunk", "turn_id": turn_id, "text": "foundation hello", "kb_hits": 0},
+             {"type": "assistant_end", "turn_id": turn_id},
+         ]
+         captured["frames"] = frames
+         return turn_id, frames
+ 
+     monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
+ 
+     outage_calls = []
+     monkeypatch.setattr(streaming, "_emit_ws_outage", lambda *a, **k: outage_calls.append((a, k)))
+ 
+     tts_texts = []
+ 
+@@ -152,50 +201,112 @@ def test_run_ws_greet_does_not_emit_clarify_fallback(monkeypatch):
+         turn_id = kwargs.get("force_turn_id") or "tid-greet"
+         if action == "clarify":
+             text = fallback_text
+         else:
+             text = "foundation hello"
+         frames = [
+             {"type": "assistant_chunk", "turn_id": turn_id, "text": text, "kb_hits": 0},
+             {"type": "assistant_end", "turn_id": turn_id},
+         ]
+         captured["frames"] = frames
+         captured["action"] = action
+         captured["fallback_text"] = fallback_text
+         return turn_id, frames
+ 
+     monkeypatch.setattr(streaming, "_make_foundation_frames", fake_foundation)
+     monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: None)
+     monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
+ 
+     tid = streaming.run_ws_greet("session-no-clarify")
+ 
+     assert tid == captured["frames"][0]["turn_id"]
+     assert captured["action"] == "offer_steps"
+     assert captured["frames"][0]["text"] != captured["fallback_text"]
+ 
+ 
++def test_run_ws_greet_falls_back_to_legacy_on_foundation_error(monkeypatch):
++    _stub_config(monkeypatch)
++
++    monkeypatch.setattr(streaming, "ENABLE_CHIP_FOUNDATION", True)
++    monkeypatch.setattr(streaming, "_FOUNDATION_DISABLED_UNTIL", 0.0)
++    monkeypatch.setattr(streaming, "_FOUNDATION_LAST_ERROR", None)
++    monkeypatch.setattr(streaming.db, "memory", {})
++
++    monkeypatch.setattr(streaming.nudges, "cancel_idle_timers", lambda *a, **k: None)
++    monkeypatch.setattr(streaming.nudges, "arm_idle_timers", lambda *a, **k: None)
++    monkeypatch.setattr(streaming, "should_emit_phase", lambda *a, **k: True)
++    monkeypatch.setattr(streaming, "set_phase", lambda *a, **k: None)
++
++    def fake_prepare(seed_text, meta, cfg=None, telemetry=None):
++        prepared = dict(meta or {})
++        return prepared, {}, {}
++
++    monkeypatch.setattr(streaming, "prepare_turn_metadata", fake_prepare)
++
++    def raise_foundation(*args, **kwargs):
++        raise RuntimeError("foundation failed")
++
++    monkeypatch.setattr(streaming, "_make_foundation_frames", raise_foundation)
++
++    captured_frames = []
++
++    def capture_frames(session_id, frames, turn_id=None):
++        for fr in frames:
++            captured_frames.append(fr)
++
++    monkeypatch.setattr(streaming, "_broadcast_frames", capture_frames)
++
++    def fake_legacy(seed_text, session_id, meta, cfg, **kwargs):
++        turn_id = kwargs.get("turn_id") or kwargs.get("force_turn_id") or "legacy-turn"
++        frames = [
++            {"type": "assistant_chunk", "turn_id": turn_id, "text": "legacy greet", "kb_hits": 0},
++            {"type": "assistant_end", "turn_id": turn_id},
++        ]
++        if kwargs.get("broadcast_immediately", True):
++            streaming._broadcast_frames(session_id, frames, turn_id)
++        return turn_id, frames
++
++    monkeypatch.setattr(streaming, "_make_legacy_frames", fake_legacy)
++
++    monkeypatch.setattr(streaming, "schedule_tts_audio", lambda *a, **k: False)
++
++    bus_events = []
++    monkeypatch.setattr(streaming.bus, "broadcast", lambda *a, **k: bus_events.append((a, k)))
++
++    monkeypatch.setattr(streaming, "get_or_create_greet_turn", lambda *a, **k: ("legacy-turn", False))
++
++    tid = streaming.run_ws_greet("session-failure")
++
++    assert tid
++    assert any(fr.get("type") == "assistant_chunk" and fr.get("text") == "legacy greet" for fr in captured_frames)
++    assert any(fr.get("type") == "assistant_end" for fr in captured_frames)
++    assert not any(streaming._WS_PIPELINE_MESSAGE in (frame.get("text") or "") for frame in captured_frames if isinstance(frame, dict))
++    assert not streaming._should_use_foundation("next")
++    streaming._clear_foundation_failure()
++    assert streaming._should_use_foundation("next")
++
++
+ def test_run_ws_greet_surfaces_tts_failure(monkeypatch):
+     _stub_config(monkeypatch)
+ 
+     from tests.tts_stub_provider import RaisingTTSProvider
+ 
+     monkeypatch.setattr(streaming, "should_emit_phase", lambda *_: True)
+     monkeypatch.setattr(streaming, "set_phase", lambda *a, **k: None)
+     monkeypatch.setattr(streaming.nudges, "cancel_idle_timers", lambda *a, **k: None)
+ 
+     idle_calls = []
+ 
+     def _capture_idle(session_id, reason=""):
+         idle_calls.append((session_id, reason))
+ 
+     monkeypatch.setattr(streaming.nudges, "arm_idle_timers", _capture_idle)
+ 
+     broadcast_frames = []
+ 
+     def _capture_broadcast(session_id, frame):
+         if isinstance(frame, dict):
+             broadcast_frames.append(frame)
+ 
+     monkeypatch.setattr(streaming.bus, "broadcast", _capture_broadcast)
+ 
+     monkeypatch.setattr(

@@ -1,8 +1,8 @@
 {
-  "generated_at": "2025-10-13T01:07:19.808Z",
+  "generated_at": "2025-10-13T02:23:47.251Z",
   "summary": {
     "total": 13,
-    "passed": 2,
+    "passed": 1,
     "failed": [
       "P1_greet_dupe_guard",
       "P2_mic_arms_after_greet",
@@ -10,23 +10,31 @@
       "P4_containerized_opus_sanitized",
       "P5_close_timeout_race",
       "P6_barge_in_pauses_tts",
+      "P7_state_debounce",
       "P9_chips_only_when_needed",
       "P10_persona_governor_on_diagnose",
       "P11_session_goal_persists",
       "P12_nlu_completeness",
       "P15_long_help_session"
-    ]
+    ],
+    "admin_stream_skipped": []
   },
   "probes": [
     {
       "id": "P1_greet_dupe_guard",
       "pass": false,
       "findings": [
-        "Admin missing 'assistant_end'",
-        "Admin missing 'UtteranceEnd'",
-        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+        "WS console missing 'assistant_end'",
+        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
       ],
-      "metrics": {},
+      "metrics": {
+        "browser_console_ws": {}
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
       "recommendations": [
         "Add per-turn assistant_final guard by turn_id in WS bus; ignore duplicate policy commits.",
         "Cancel 'wait for final' watchdog on either asr:final or CloseStream ack."
@@ -36,11 +44,20 @@
       "id": "P2_mic_arms_after_greet",
       "pass": false,
       "findings": [
-        "Admin missing 'asr:start'",
-        "Fail: admin missing 'asr:start'",
-        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+        "WS console missing 'asr:start'",
+        "WS latency 'first_partial_from_mic_start' unavailable",
+        "Fail: WS console missing 'asr:start'",
+        "Fail: WS latency 'first_partial_from_mic_start' unavailable",
+        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
       ],
-      "metrics": {},
+      "metrics": {
+        "browser_console_ws": {}
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
       "recommendations": [
         "Ensure recorder arms immediately after greet; verify mediaRecorder.ondataavailable fires; send raw binary frames.",
         "Set ASR_READY_WAIT_S to 0.2–0.3 or implement 'ready OR 300ms' trickle of buffered chunks."
@@ -50,10 +67,20 @@
       "id": "P3_asr_ready_gate",
       "pass": false,
       "findings": [
-        "Admin missing 'latency_breakdown'",
-        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+        "WS console missing 'latency_breakdown'",
+        "WS latency 'dg_connect' unavailable",
+        "WS latency 'first_partial_from_mic_start' unavailable",
+        "Fail: WS latency 'first_partial_from_mic_start' unavailable",
+        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
       ],
-      "metrics": {},
+      "metrics": {
+        "browser_console_ws": {}
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
       "recommendations": [
         "Gate flush on 'DG ready OR 300ms', whichever first; then stream."
       ]
@@ -63,12 +90,19 @@
       "pass": false,
       "findings": [
         "Deepgram WS URL not observed",
-        "Admin missing 'container=webm/opus'",
-        "Admin missing 'containerized=true'",
-        "Fail: admin missing 'containerized=true'",
-        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+        "WS console missing 'container=webm/opus'",
+        "WS console missing 'containerized=true'",
+        "Fail: WS console missing 'containerized=true'",
+        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
       ],
-      "metrics": {},
+      "metrics": {
+        "browser_console_ws": {}
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
       "recommendations": [
         "For WebM/Opus, omit encoding/sample_rate/channels in Deepgram URL."
       ]
@@ -77,11 +111,18 @@
       "id": "P5_close_timeout_race",
       "pass": false,
       "findings": [
-        "Admin missing 'asr:final'",
-        "Admin missing 'CloseStream ack'",
-        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+        "WS console missing 'asr:final'",
+        "WS console missing 'CloseStream ack'",
+        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
       ],
-      "metrics": {},
+      "metrics": {
+        "browser_console_ws": {}
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
       "recommendations": [
         "Cancel 'wait for final' watchdog on either asr:final or CloseStream ack."
       ]
@@ -90,9 +131,7 @@
       "id": "P6_barge_in_pauses_tts",
       "pass": false,
       "findings": [
-        "Admin missing 'barge_in'",
-        "Admin missing 'tts_pause'",
-        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+        "Runner error: page.goto: net::ERR_SOCKET_NOT_CONNECTED at https://chibot-ui.onrender.com/\nCall log:\n\u001b[2m  - navigating to \"https://chibot-ui.onrender.com/\", waiting until \"domcontentloaded\"\u001b[22m\n"
       ],
       "metrics": {},
       "recommendations": [
@@ -102,33 +141,59 @@
     },
     {
       "id": "P7_state_debounce",
-      "pass": true,
+      "pass": false,
       "findings": [
-        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+        "WS state events missing for spam check",
+        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
       ],
-      "metrics": {},
-      "recommendations": []
+      "metrics": {
+        "browser_console_ws": {}
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
+      "recommendations": [
+        "Debounce identical state emissions for 500ms to prevent spam."
+      ]
     },
     {
       "id": "P8_no_assistant_dup_messages",
       "pass": true,
       "findings": [
-        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
       ],
-      "metrics": {},
+      "metrics": {
+        "browser_console_ws": {}
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
       "recommendations": []
     },
     {
       "id": "P9_chips_only_when_needed",
       "pass": false,
       "findings": [
-        "Admin missing 'nlu'",
-        "nlu.needs_clarification expected true, got undefined",
-        "nlu.missing should include one of [depth, delivery_pref], got []",
-        "Admin missing 'suggestions_made'",
-        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+        "WS console missing 'nlu'",
+        "No WS NLU event observed",
+        "WS console missing 'suggestions_made'",
+        "WS suggestions payload missing for chips check",
+        "Fail: WS suggestions payload missing for chips check",
+        "Fail: No WS NLU event observed",
+        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
       ],
-      "metrics": {},
+      "metrics": {
+        "browser_console_ws": {}
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
       "recommendations": [
         "Generate chips strictly from nlu.missing (depth/delivery/phase).",
         "Respect chips_max and chips_word_max from DB config."
@@ -138,10 +203,17 @@
       "id": "P10_persona_governor_on_diagnose",
       "pass": false,
       "findings": [
-        "Admin missing 'policy_decision: diagnose'",
-        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+        "WS console missing 'policy_decision: diagnose'",
+        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
       ],
-      "metrics": {},
+      "metrics": {
+        "browser_console_ws": {}
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
       "recommendations": [
         "Persona composer should skip on strategy=diagnose or urgency=high."
       ]
@@ -150,13 +222,19 @@
       "id": "P11_session_goal_persists",
       "pass": false,
       "findings": [
-        "Admin missing 'session_goal'",
-        "session_goal.depth expected 'deep_dive', got 'undefined'",
-        "session_goal.confirmed missing 'depth'",
-        "Fail: session_goal missing 'depth'",
-        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+        "WS console missing 'session_goal'",
+        "WS session_goal hints missing",
+        "Fail: WS session_goal hints missing",
+        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
       ],
-      "metrics": {},
+      "metrics": {
+        "browser_console_ws": {}
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
       "recommendations": [
         "Merge NLU into session_goal; mark confirmed on user choice; do not re-ask."
       ]
@@ -165,14 +243,21 @@
       "id": "P12_nlu_completeness",
       "pass": false,
       "findings": [
-        "Admin missing 'nlu'",
-        "No nlu event observed",
-        "Fail: nlu missing 'delivery_pref'",
-        "Fail: nlu missing 'entities.product'",
-        "Fail: nlu missing 'entities.env'",
-        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms"
+        "WS console missing 'nlu'",
+        "No WS NLU event observed",
+        "Fail: WS nlu missing 'delivery_pref'",
+        "Fail: WS nlu missing 'entities.product'",
+        "Fail: WS nlu missing 'entities.env'",
+        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms"
       ],
-      "metrics": {},
+      "metrics": {
+        "browser_console_ws": {}
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
       "recommendations": [
         "Interpreter must always populate phase, delivery_pref, user_goal, entities; set needs_clarification when unknown."
       ]
@@ -181,11 +266,17 @@
       "id": "P15_long_help_session",
       "pass": false,
       "findings": [
-        "Admin missing 'latency_breakdown'",
-        "Admin should NOT include 'error'",
-        "DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 10000ms"
+        "WS console missing 'latency_breakdown'",
+        "DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 10000ms"
       ],
-      "metrics": {},
+      "metrics": {
+        "browser_console_ws": {}
+      },
+      "admin_stream_disabled": false,
+      "admin_capture_meta": {
+        "error": "eventsource_error",
+        "captureState": "active"
+      },
       "recommendations": [
         "Ensure session state persists across multi-minute interactions; verify buffers/reset logic after each user final.",
         "Emit admin breadcrumbs: latency_breakdown, CloseStream ack, policy_decision, and barge_in events before evaluating regressions."

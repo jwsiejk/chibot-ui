@@ -1,17 +1,20 @@
 # AskChip E2E Findings
 
-**Passed:** 2/13
+**Passed:** 1/13
 
-- **P1_greet_dupe_guard**: FAIL — Admin missing 'assistant_end'; Admin missing 'UtteranceEnd'; DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms
-- **P2_mic_arms_after_greet**: FAIL — Admin missing 'asr:start'; Fail: admin missing 'asr:start'; DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms
-- **P3_asr_ready_gate**: FAIL — Admin missing 'latency_breakdown'; DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms
-- **P4_containerized_opus_sanitized**: FAIL — Deepgram WS URL not observed; Admin missing 'container=webm/opus'; Admin missing 'containerized=true'; Fail: admin missing 'containerized=true'; DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms
-- **P5_close_timeout_race**: FAIL — Admin missing 'asr:final'; Admin missing 'CloseStream ack'; DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms
-- **P6_barge_in_pauses_tts**: FAIL — Admin missing 'barge_in'; Admin missing 'tts_pause'; DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms
-- **P7_state_debounce**: PASS — DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms
-- **P8_no_assistant_dup_messages**: PASS — DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms
-- **P9_chips_only_when_needed**: FAIL — Admin missing 'nlu'; nlu.needs_clarification expected true, got undefined; nlu.missing should include one of [depth, delivery_pref], got []; Admin missing 'suggestions_made'; DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms
-- **P10_persona_governor_on_diagnose**: FAIL — Admin missing 'policy_decision: diagnose'; DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms
-- **P11_session_goal_persists**: FAIL — Admin missing 'session_goal'; session_goal.depth expected 'deep_dive', got 'undefined'; session_goal.confirmed missing 'depth'; Fail: session_goal missing 'depth'; DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms
-- **P12_nlu_completeness**: FAIL — Admin missing 'nlu'; No nlu event observed; Fail: nlu missing 'delivery_pref'; Fail: nlu missing 'entities.product'; Fail: nlu missing 'entities.env'; DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 6000ms
-- **P15_long_help_session**: FAIL — Admin missing 'latency_breakdown'; Admin should NOT include 'error'; DOM expectation not met: none of [[data-testid='transcript-line'], .chip-suggestion, [data-testid='persona-banner']] appeared within 10000ms
+- **P1_greet_dupe_guard**: FAIL — WS console missing 'assistant_end'; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
+- **P2_mic_arms_after_greet**: FAIL — WS console missing 'asr:start'; WS latency 'first_partial_from_mic_start' unavailable; Fail: WS console missing 'asr:start'; Fail: WS latency 'first_partial_from_mic_start' unavailable; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
+- **P3_asr_ready_gate**: FAIL — WS console missing 'latency_breakdown'; WS latency 'dg_connect' unavailable; WS latency 'first_partial_from_mic_start' unavailable; Fail: WS latency 'first_partial_from_mic_start' unavailable; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
+- **P4_containerized_opus_sanitized**: FAIL — Deepgram WS URL not observed; WS console missing 'container=webm/opus'; WS console missing 'containerized=true'; Fail: WS console missing 'containerized=true'; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
+- **P5_close_timeout_race**: FAIL — WS console missing 'asr:final'; WS console missing 'CloseStream ack'; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
+- **P6_barge_in_pauses_tts**: FAIL — Runner error: page.goto: net::ERR_SOCKET_NOT_CONNECTED at https://chibot-ui.onrender.com/
+Call log:
+[2m  - navigating to "https://chibot-ui.onrender.com/", waiting until "domcontentloaded"[22m
+
+- **P7_state_debounce**: FAIL — WS state events missing for spam check; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
+- **P8_no_assistant_dup_messages**: PASS — DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
+- **P9_chips_only_when_needed**: FAIL — WS console missing 'nlu'; No WS NLU event observed; WS console missing 'suggestions_made'; WS suggestions payload missing for chips check; Fail: WS suggestions payload missing for chips check; Fail: No WS NLU event observed; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
+- **P10_persona_governor_on_diagnose**: FAIL — WS console missing 'policy_decision: diagnose'; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
+- **P11_session_goal_persists**: FAIL — WS console missing 'session_goal'; WS session_goal hints missing; Fail: WS session_goal hints missing; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
+- **P12_nlu_completeness**: FAIL — WS console missing 'nlu'; No WS NLU event observed; Fail: WS nlu missing 'delivery_pref'; Fail: WS nlu missing 'entities.product'; Fail: WS nlu missing 'entities.env'; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 6000ms
+- **P15_long_help_session**: FAIL — WS console missing 'latency_breakdown'; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 10000ms

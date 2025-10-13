@@ -59,6 +59,11 @@ _TTS_COMPLETION_LOCK = threading.Lock()
 _TTS_COMPLETION_EVENTS: Dict[str, Dict[str, threading.Event]] = {}
 _TTS_LATEST_TURN: Dict[str, str] = {}
 
+_FOUNDATION_FAILURE_LOCK = threading.Lock()
+_FOUNDATION_DISABLED_UNTIL: float = 0.0
+_FOUNDATION_LAST_ERROR: Optional[str] = None
+_FOUNDATION_BACKOFF_SECONDS = 30.0
+
 
 def _tts_event_key(turn_id: Optional[str]) -> str:
     return str(turn_id) if turn_id is not None else "greet"
@@ -561,6 +566,8 @@ def _log_policy_decision(*,
 def _should_use_foundation(seed_text: str) -> bool:
     if not ENABLE_CHIP_FOUNDATION:
         return False
+    if _foundation_backoff_active():
+        return False
     try:
         normalized = str(seed_text or "").strip().lower()
     except Exception:
@@ -993,7 +1000,11 @@ def _apply_action_shape(action: str,
 def _call_foundation_llm(messages: List[Dict[str, str]],
                          cfg: Dict[str, Any],
                          telemetry: Optional[NluLoggingContext] = None) -> Tuple[str, Dict[str, Any]]:
-    client = make_openai_client()
+    try:
+        client = make_openai_client()
+    except Exception as exc:
+        _note_foundation_failure(exc)
+        raise
     model = (
         cfg.get("openai_model")
         or cfg.get("OPENAI_MODEL")
@@ -1812,6 +1823,42 @@ def _log_persona_applied(turn_id: str,
         pass
 
 
+def _foundation_backoff_active(now: Optional[float] = None) -> bool:
+    global _FOUNDATION_DISABLED_UNTIL, _FOUNDATION_LAST_ERROR
+    if now is None:
+        now = _t.time()
+    with _FOUNDATION_FAILURE_LOCK:
+        if _FOUNDATION_DISABLED_UNTIL <= 0:
+            return False
+        if now >= _FOUNDATION_DISABLED_UNTIL:
+            _FOUNDATION_DISABLED_UNTIL = 0.0
+            _FOUNDATION_LAST_ERROR = None
+            return False
+        return True
+
+
+def _note_foundation_failure(exc: Optional[BaseException] = None,
+                             *,
+                             backoff_seconds: Optional[float] = None) -> None:
+    global _FOUNDATION_DISABLED_UNTIL, _FOUNDATION_LAST_ERROR
+    duration = _FOUNDATION_BACKOFF_SECONDS if backoff_seconds is None else float(backoff_seconds or 0.0)
+    now = _t.time()
+    with _FOUNDATION_FAILURE_LOCK:
+        if duration <= 0:
+            _FOUNDATION_DISABLED_UNTIL = now
+        else:
+            _FOUNDATION_DISABLED_UNTIL = now + duration
+        if exc is not None:
+            _FOUNDATION_LAST_ERROR = exc.__class__.__name__
+
+
+def _clear_foundation_failure() -> None:
+    global _FOUNDATION_DISABLED_UNTIL, _FOUNDATION_LAST_ERROR
+    with _FOUNDATION_FAILURE_LOCK:
+        _FOUNDATION_DISABLED_UNTIL = 0.0
+        _FOUNDATION_LAST_ERROR = None
+
+
 def _should_skip_legacy(meta: Optional[Dict[str, Any]]) -> bool:
     if not meta:
         return False
@@ -1964,6 +2011,10 @@ def make_assistant_frames(seed_text: str,
                 )
             except Exception as e:
                 context.log_error("foundation_pipeline_error", str(e))
+                _note_foundation_failure(e)
+                skip_legacy = False
+                if isinstance(meta, dict):
+                    meta.pop("skip_legacy_fallback", None)
                 try:
                     _admin_emit('foundation_pipeline_error', error=e.__class__.__name__)
                 except Exception:
@@ -2162,6 +2213,8 @@ def _make_foundation_frames(seed_text: str,
         except Exception as exc:
             telemetry.log_error("foundation_call_error", str(exc))
             raise
+        else:
+            _clear_foundation_failure()
         if isinstance(foundation_result, tuple) and len(foundation_result) == 2:
             reply, llm_info = foundation_result
         else:
