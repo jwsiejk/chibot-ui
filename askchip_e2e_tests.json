@@ -25,10 +25,9 @@
       "inputs": [],
       "expect_signals": [
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_include": [
-            "assistant_end",
-            "UtteranceEnd"
+            "assistant_end"
           ],
           "max_count_per_turn": {
             "assistant_end": 1
@@ -44,12 +43,12 @@
       ],
       "fail_if": [
         {
-          "admin_count_gt": {
+          "ws_console_count_gt": {
             "assistant_end": 1
           }
         },
         {
-          "admin_any": [
+          "ws_console_any": [
             "Timed out waiting for ASR final"
           ]
         }
@@ -75,7 +74,7 @@
       ],
       "expect_signals": [
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_include": [
             "asr:start"
           ],
@@ -86,12 +85,12 @@
       ],
       "fail_if": [
         {
-          "admin_missing": [
+          "ws_console_missing": [
             "asr:start"
           ]
         },
         {
-          "latency_gte_ms": {
+          "ws_console_latency_gte_ms": {
             "first_partial_from_mic_start": 2000
           }
         }
@@ -117,7 +116,7 @@
       ],
       "expect_signals": [
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_include": [
             "latency_breakdown"
           ],
@@ -129,7 +128,7 @@
       ],
       "fail_if": [
         {
-          "latency_gte_ms": {
+          "ws_console_latency_gte_ms": {
             "first_partial_from_mic_start": 2000
           }
         }
@@ -163,7 +162,7 @@
           ]
         },
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_include": [
             "container=webm/opus",
             "containerized=true"
@@ -179,7 +178,7 @@
           ]
         },
         {
-          "admin_missing": [
+          "ws_console_missing": [
             "containerized=true"
           ]
         }
@@ -204,7 +203,7 @@
       ],
       "expect_signals": [
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_include": [
             "asr:final",
             "CloseStream ack"
@@ -216,7 +215,7 @@
       ],
       "fail_if": [
         {
-          "admin_any": [
+          "ws_console_any": [
             "Timed out waiting for ASR final"
           ]
         }
@@ -241,7 +240,7 @@
       ],
       "expect_signals": [
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_include": [
             "barge_in",
             "tts_pause"
@@ -253,7 +252,7 @@
       ],
       "fail_if": [
         {
-          "latency_gte_ms": {
+          "ws_console_latency_gte_ms": {
             "tts_pause_after_vad": 300
           }
         }
@@ -280,7 +279,7 @@
       ],
       "expect_signals": [
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_not_spam_state": {
             "window_ms": 500
           }
@@ -288,7 +287,7 @@
       ],
       "fail_if": [
         {
-          "admin_any": [
+          "ws_console_any": [
             "state: ready",
             "state: ready",
             "state: ready"
@@ -315,7 +314,7 @@
       ],
       "expect_signals": [
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "max_count_per_turn": {
             "assistant_end": 1
           }
@@ -323,7 +322,7 @@
       ],
       "fail_if": [
         {
-          "admin_count_gt": {
+          "ws_console_count_gt": {
             "assistant_end": 1
           }
         }
@@ -349,7 +348,7 @@
       ],
       "expect_signals": [
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_include": [
             "nlu"
           ],
@@ -362,7 +361,7 @@
           }
         },
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_include": [
             "suggestions_made"
           ],
@@ -371,10 +370,10 @@
       ],
       "fail_if": [
         {
-          "chips_gt": 3
+          "ws_console_chips_gt": 3
         },
         {
-          "nlu_flags": {
+          "ws_console_nlu_flags": {
             "needs_clarification": false
           }
         }
@@ -400,7 +399,7 @@
       ],
       "expect_signals": [
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_include": [
             "policy_decision: diagnose"
           ],
@@ -411,7 +410,7 @@
       ],
       "fail_if": [
         {
-          "admin_any": [
+          "ws_console_any": [
             "persona_applied"
           ]
         }
@@ -437,7 +436,7 @@
       ],
       "expect_signals": [
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_include": [
             "session_goal"
           ],
@@ -449,7 +448,7 @@
           }
         },
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_not_include": [
             "re-ask depth"
           ]
@@ -457,7 +456,7 @@
       ],
       "fail_if": [
         {
-          "goal_missing": [
+          "ws_console_goal_missing": [
             "depth"
           ]
         }
@@ -482,7 +481,7 @@
       ],
       "expect_signals": [
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_include": [
             "nlu"
           ],
@@ -500,7 +499,7 @@
       ],
       "fail_if": [
         {
-          "nlu_missing_any": [
+          "ws_console_nlu_missing_any": [
             "delivery_pref",
             "entities.product",
             "entities.env"
@@ -527,7 +526,7 @@
       ],
       "expect_signals": [
         {
-          "stream": "admin",
+          "stream": "browser_console_ws",
           "must_include": [
             "latency_breakdown"
           ],

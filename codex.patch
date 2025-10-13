@@ -1,138 +1,597 @@
+diff --git a/askchip_e2e_tests.json b/askchip_e2e_tests.json
+index c28be7bc937af0be4aa78530e775282cce6e7fd1..a047df8dc26c8a2b9b47f24543bd1ce33910b598 100644
+--- a/askchip_e2e_tests.json
++++ b/askchip_e2e_tests.json
+@@ -3,553 +3,552 @@
+     "version": "1.1",
+     "notes": "Foundations-first probes aligned to current audio filenames."
+   },
+   "config": {
+     "clarify_threshold": 0.55,
+     "accept_threshold": 0.7,
+     "chips_max": 3,
+     "chips_word_max": 7,
+     "persona_intensity": 0.13,
+     "nlu_llm_enabled": true,
+     "nlu_pack_similarity_threshold": 0.55,
+     "nlu_llm_timeout_s": 6.0,
+     "asr_ready_wait_s": 0.3
+   },
+   "endpoints": {
+     "ui_base_url": "https://chibot-ui.onrender.com/",
+     "admin_sse_url": "https://chibot-ui.onrender.com/api/v1/admin/logs"
+   },
+   "probes": [
+     {
+       "id": "P1_greet_dupe_guard",
+       "user_action": "Press Start; do not speak for 3s.",
+       "inputs": [],
+       "expect_signals": [
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_include": [
+-            "assistant_end",
+-            "UtteranceEnd"
++            "assistant_end"
+           ],
+           "max_count_per_turn": {
+             "assistant_end": 1
+           }
+         },
+         {
+           "stream": "browser_console",
+           "must_not_include": [
+             "Duplicate assistant final",
+             "double greet"
+           ]
+         }
+       ],
+       "fail_if": [
+         {
+-          "admin_count_gt": {
++          "ws_console_count_gt": {
+             "assistant_end": 1
+           }
+         },
+         {
+-          "admin_any": [
++          "ws_console_any": [
+             "Timed out waiting for ASR final"
+           ]
+         }
+       ],
+       "recommendations_on_fail": [
+         "R_DEDUP_FINALS",
+         "R_CANCEL_TIMEOUT_ON_FINAL"
+       ],
+       "expect_dom": {
+         "any_of": [
+           ".chat-window .msg.assistant",
+           ".chat-window .msg.user",
+           "#suggestions .chip"
+         ],
+         "timeout_ms": 6000
+       }
+     },
+     {
+       "id": "P2_mic_arms_after_greet",
+       "user_action": "Begin speaking within 1s of Chip\u2019s greet audio.",
+       "inputs": [
+         "sample_sentence.wav"
+       ],
+       "expect_signals": [
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_include": [
+             "asr:start"
+           ],
+           "latency_lt_ms": {
+             "first_partial_from_mic_start": 1200
+           }
+         }
+       ],
+       "fail_if": [
+         {
+-          "admin_missing": [
++          "ws_console_missing": [
+             "asr:start"
+           ]
+         },
+         {
+-          "latency_gte_ms": {
++          "ws_console_latency_gte_ms": {
+             "first_partial_from_mic_start": 2000
+           }
+         }
+       ],
+       "recommendations_on_fail": [
+         "R_ARM_MIC_IMMEDIATELY",
+         "R_LOWER_READY_WAIT_OR_TRICKLE"
+       ],
+       "expect_dom": {
+         "any_of": [
+           ".chat-window .msg.assistant",
+           ".chat-window .msg.user",
+           "#suggestions .chip"
+         ],
+         "timeout_ms": 6000
+       }
+     },
+     {
+       "id": "P3_asr_ready_gate",
+       "user_action": "Speak one normal sentence.",
+       "inputs": [
+         "sample_sentence.wav"
+       ],
+       "expect_signals": [
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_include": [
+             "latency_breakdown"
+           ],
+           "latency_lt_ms": {
+             "dg_connect": 600,
+             "first_partial_from_mic_start": 1200
+           }
+         }
+       ],
+       "fail_if": [
+         {
+-          "latency_gte_ms": {
++          "ws_console_latency_gte_ms": {
+             "first_partial_from_mic_start": 2000
+           }
+         }
+       ],
+       "recommendations_on_fail": [
+         "R_READY_OR_300MS",
+         "R_LOWER_READY_WAIT"
+       ],
+       "expect_dom": {
+         "any_of": [
+           ".chat-window .msg.assistant",
+           ".chat-window .msg.user",
+           "#suggestions .chip"
+         ],
+         "timeout_ms": 6000
+       }
+     },
+     {
+       "id": "P4_containerized_opus_sanitized",
+       "user_action": "Speak and capture Deepgram WS request.",
+       "inputs": [
+         "sample_sentence.wav"
+       ],
+       "expect_signals": [
+         {
+           "stream": "network",
+           "must_not_include_query_params": [
+             "encoding",
+             "sample_rate",
+             "channels"
+           ]
+         },
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_include": [
+             "container=webm/opus",
+             "containerized=true"
+           ]
+         }
+       ],
+       "fail_if": [
+         {
+           "network_has_any_params": [
+             "encoding",
+             "sample_rate",
+             "channels"
+           ]
+         },
+         {
+-          "admin_missing": [
++          "ws_console_missing": [
+             "containerized=true"
+           ]
+         }
+       ],
+       "recommendations_on_fail": [
+         "R_SANITIZE_DG_URL_FOR_CONTAINERIZED"
+       ],
+       "expect_dom": {
+         "any_of": [
+           ".chat-window .msg.assistant",
+           ".chat-window .msg.user",
+           "#suggestions .chip"
+         ],
+         "timeout_ms": 6000
+       }
+     },
+     {
+       "id": "P5_close_timeout_race",
+       "user_action": "Finish speaking; remain silent.",
+       "inputs": [
+         "sample_sentence.wav"
+       ],
+       "expect_signals": [
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_include": [
+             "asr:final",
+             "CloseStream ack"
+           ],
+           "must_not_include": [
+             "Timed out waiting for ASR final"
+           ]
+         }
+       ],
+       "fail_if": [
+         {
+-          "admin_any": [
++          "ws_console_any": [
+             "Timed out waiting for ASR final"
+           ]
+         }
+       ],
+       "recommendations_on_fail": [
+         "R_CANCEL_TIMEOUT_ON_FINAL"
+       ],
+       "expect_dom": {
+         "any_of": [
+           ".chat-window .msg.assistant",
+           ".chat-window .msg.user",
+           "#suggestions .chip"
+         ],
+         "timeout_ms": 6000
+       }
+     },
+     {
+       "id": "P6_barge_in_pauses_tts",
+       "user_action": "Start talking while Chip is speaking.",
+       "inputs": [
+         "interrupt.wav"
+       ],
+       "expect_signals": [
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_include": [
+             "barge_in",
+             "tts_pause"
+           ],
+           "latency_lt_ms": {
+             "tts_pause_after_vad": 250
+           }
+         }
+       ],
+       "fail_if": [
+         {
+-          "latency_gte_ms": {
++          "ws_console_latency_gte_ms": {
+             "tts_pause_after_vad": 300
+           }
+         }
+       ],
+       "recommendations_on_fail": [
+         "R_BARGEIN_PAUSE_ON_VAD",
+         "R_ECHO_THRESHOLD_BOOST"
+       ],
+       "expect_dom": {
+         "any_of": [
+           ".chat-window .msg.assistant",
+           ".chat-window .msg.user",
+           "#suggestions .chip"
+         ],
+         "timeout_ms": 6000
+       }
+     },
+     {
+       "id": "P7_state_debounce",
+       "user_action": "Two short back-to-back turns.",
+       "inputs": [
+         "short1.wav",
+         "short2.wav"
+       ],
+       "expect_signals": [
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_not_spam_state": {
+             "window_ms": 500
+           }
+         }
+       ],
+       "fail_if": [
+         {
+-          "admin_any": [
++          "ws_console_any": [
+             "state: ready",
+             "state: ready",
+             "state: ready"
+           ]
+         }
+       ],
+       "recommendations_on_fail": [
+         "R_DEBOUNCE_STATE_500MS"
+       ],
+       "expect_dom": {
+         "any_of": [
+           ".chat-window .msg.assistant",
+           ".chat-window .msg.user",
+           "#suggestions .chip"
+         ],
+         "timeout_ms": 6000
+       }
+     },
+     {
+       "id": "P8_no_assistant_dup_messages",
+       "user_action": "One short question expecting text reply.",
+       "inputs": [
+         "sample_sentence.wav"
+       ],
+       "expect_signals": [
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "max_count_per_turn": {
+             "assistant_end": 1
+           }
+         }
+       ],
+       "fail_if": [
+         {
+-          "admin_count_gt": {
++          "ws_console_count_gt": {
+             "assistant_end": 1
+           }
+         }
+       ],
+       "recommendations_on_fail": [
+         "R_DEDUP_FINALS",
+         "R_SINGLE_POLICY_COMMIT"
+       ],
+       "expect_dom": {
+         "any_of": [
+           ".chat-window .msg.assistant",
+           ".chat-window .msg.user",
+           "#suggestions .chip"
+         ],
+         "timeout_ms": 6000
+       }
+     },
+     {
+       "id": "P9_chips_only_when_needed",
+       "user_action": "Say: 'Help me set up Portworx.'",
+       "inputs": [
+         "underspecified.wav"
+       ],
+       "expect_signals": [
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_include": [
+             "nlu"
+           ],
+           "nlu_flags": {
+             "needs_clarification": true,
+             "missing_any_of": [
+               "depth",
+               "delivery_pref"
+             ]
+           }
+         },
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_include": [
+             "suggestions_made"
+           ],
+           "chips_lte": 3
+         }
+       ],
+       "fail_if": [
+         {
+-          "chips_gt": 3
++          "ws_console_chips_gt": 3
+         },
+         {
+-          "nlu_flags": {
++          "ws_console_nlu_flags": {
+             "needs_clarification": false
+           }
+         }
+       ],
+       "recommendations_on_fail": [
+         "R_SYNTHESIZE_CHIPS_FROM_MISSING",
+         "R_CAP_CHIPS"
+       ],
+       "expect_dom": {
+         "any_of": [
+           ".chat-window .msg.assistant",
+           ".chat-window .msg.user",
+           "#suggestions .chip"
+         ],
+         "timeout_ms": 6000
+       }
+     },
+     {
+       "id": "P10_persona_governor_on_diagnose",
+       "user_action": "Say: 'After 3.x upgrade, PX cluster degraded; volumes won\u2019t mount.'",
+       "inputs": [
+         "diagnose.wav"
+       ],
+       "expect_signals": [
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_include": [
+             "policy_decision: diagnose"
+           ],
+           "must_not_include": [
+             "persona_applied"
+           ]
+         }
+       ],
+       "fail_if": [
+         {
+-          "admin_any": [
++          "ws_console_any": [
+             "persona_applied"
+           ]
+         }
+       ],
+       "recommendations_on_fail": [
+         "R_SKIP_PERSONA_ON_DIAGNOSE"
+       ],
+       "expect_dom": {
+         "any_of": [
+           ".chat-window .msg.assistant",
+           ".chat-window .msg.user",
+           "#suggestions .chip"
+         ],
+         "timeout_ms": 6000
+       }
+     },
+     {
+       "id": "P11_session_goal_persists",
+       "user_action": "Choose [Deep dive] when asked, then ask again for steps.",
+       "inputs": [
+         "short1.wav",
+         "sample_sentence.wav"
+       ],
+       "expect_signals": [
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_include": [
+             "session_goal"
+           ],
+           "goal_fields": {
+             "depth": "deep_dive",
+             "confirmed_contains": [
+               "depth"
+             ]
+           }
+         },
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_not_include": [
+             "re-ask depth"
+           ]
+         }
+       ],
+       "fail_if": [
+         {
+-          "goal_missing": [
++          "ws_console_goal_missing": [
+             "depth"
+           ]
+         }
+       ],
+       "recommendations_on_fail": [
+         "R_SESSION_GOAL_MERGE_AND_CONFIRM"
+       ],
+       "expect_dom": {
+         "any_of": [
+           ".chat-window .msg.assistant",
+           ".chat-window .msg.user",
+           "#suggestions .chip"
+         ],
+         "timeout_ms": 6000
+       }
+     },
+     {
+       "id": "P12_nlu_completeness",
+       "user_action": "Say: 'Install FlashArray for VMware and email me the steps.'",
+       "inputs": [
+         "fa_vmware_email.wav"
+       ],
+       "expect_signals": [
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_include": [
+             "nlu"
+           ],
+           "nlu_must_have_keys": [
+             "user_goal",
+             "phase",
+             "depth",
+             "delivery_pref",
+             "intent_hint",
+             "entities",
+             "confidence",
+             "needs_clarification"
+           ]
+         }
+       ],
+       "fail_if": [
+         {
+-          "nlu_missing_any": [
++          "ws_console_nlu_missing_any": [
+             "delivery_pref",
+             "entities.product",
+             "entities.env"
+           ]
+         }
+       ],
+       "recommendations_on_fail": [
+         "R_EXTEND_INTERPRETER_FIELDS"
+       ],
+       "expect_dom": {
+         "any_of": [
+           ".chat-window .msg.assistant",
+           ".chat-window .msg.user",
+           "#suggestions .chip"
+         ],
+         "timeout_ms": 6000
+       }
+     },
+     {
+       "id": "P15_long_help_session",
+       "user_action": "Press Start; allow a longer clip to play to exercise persistence.",
+       "inputs": [
+         "diagnose.wav"
+       ],
+       "expect_signals": [
+         {
+-          "stream": "admin",
++          "stream": "browser_console_ws",
+           "must_include": [
+             "latency_breakdown"
+           ],
+           "must_not_include": [
+             "error",
+             "Timed out"
+           ]
+         }
+       ],
+       "expect_dom": {
+         "any_of": [
+           ".chat-window .msg.assistant",
+           ".chat-window .msg.user",
+           "#suggestions .chip"
+         ],
+         "timeout_ms": 10000
+       },
+       "recommendations_on_fail": [
+         "R_SESSION_PERSISTENCE",
+         "R_ADMIN_BREADCRUMBS"
+       ]
+     }
+   ],
+   "recommendations_catalog": {
+     "R_DEDUP_FINALS": "Add per-turn assistant_final guard by turn_id in WS bus; ignore duplicate policy commits.",
 diff --git a/e2e_orchestrator.js b/e2e_orchestrator.js
-index 4fb2b29ab5025434de999ce5f7724d81b94e5451..e043b92889bbac3c73049efbb213b1789ed30bb8 100644
+index e043b92889bbac3c73049efbb213b1789ed30bb8..bf110e8aa227ed2021156c839e36337e8a58bc9c 100644
 --- a/e2e_orchestrator.js
 +++ b/e2e_orchestrator.js
-@@ -277,84 +277,123 @@ async function collectAdminSSEInPage(page, { url, ms }) {
-     return new Promise(resolve => {
-       const logs = [];
-       let es;
-       try {
-         es = new EventSource(url, { withCredentials: true });
-         es.onmessage = (e) => { try { logs.push(JSON.parse(e.data)); } catch {} };
-         es.onerror = () => { /* ignore; resolve on timeout */ };
-       } catch { resolve(logs); return; }
-       setTimeout(() => { try { es && es.close(); } catch {} resolve(logs); }, ms);
-       window.addEventListener('beforeunload', () => { try { es && es.close(); } catch {} });
-     });
-   }, { url, ms });
- }
- 
- async function startAdminCollector(page, url) {
-   await page.evaluate((adminUrl) => {
-     if (window.__adminCollector?.source) {
-       try { window.__adminCollector.source.close(); } catch {}
-     }
- 
-     const logs = [];
-     const collector = {
-       startedAt: Date.now(),
-       source: null,
-       logs,
--      lastError: null
-+      lastError: null,
-+      captureState: 'active'
-     };
- 
-     window.__adminLogs = logs;
-     window.__adminCollector = collector;
- 
-     try {
-       const es = new EventSource(adminUrl, { withCredentials: true });
-       collector.source = es;
-       es.onmessage = (event) => {
-         if (!window.__adminLogs) window.__adminLogs = logs;
-         try {
-           logs.push(JSON.parse(event.data));
-         } catch {
-           logs.push({ raw: event.data });
-         }
-       };
--      es.onerror = () => { collector.lastError = 'eventsource_error'; };
-+      es.onerror = (event) => {
-+        collector.lastError = 'eventsource_error';
-+        const status = event?.status ?? event?.target?.status ?? event?.currentTarget?.status ?? null;
-+        const message = event?.message || '';
-+        if (status === 403 || /403/.test(String(message))) {
-+          collector.lastError = 'forbidden';
-+          collector.captureState = 'disabled';
-+        }
-+      };
-       window.addEventListener('beforeunload', () => { try { es.close(); } catch {}; });
-     } catch (err) {
-       collector.lastError = err?.message || String(err);
-+      if (/403/.test(String(collector.lastError))) {
-+        collector.captureState = 'disabled';
-+      }
-     }
-   }, url);
- }
- 
- async function harvestAdminLogs(page) {
-   const logs = await page.evaluate(() => {
-     const data = Array.isArray(window.__adminLogs) ? window.__adminLogs.slice() : [];
--    return { data, error: window.__adminCollector?.lastError || null };
-+    const collector = window.__adminCollector || {};
-+    return {
-+      data,
-+      error: collector.lastError || null,
-+      captureState: collector.captureState || null
-+    };
-   });
--  if (logs.error) {
--    return logs.data.concat([{ event: 'collector_error', message: logs.error }]);
-+
-+  const events = Array.isArray(logs.data) ? logs.data.slice() : [];
-+  const meta = {
-+    error: logs.error || null,
-+    captureState: logs.captureState || null
-+  };
-+
-+  if (meta.error) {
-+    events.push({ event: 'collector_error', message: meta.error });
-+  }
-+
-+  if (!meta.captureState) {
-+    const hadCollectorError = events.some(entry => {
-+      if (!entry || typeof entry !== 'object') return false;
-+      if (entry.event !== 'collector_error') return false;
-+      if (entry.status === 403) return true;
-+      const text = [entry.message, entry.raw, entry.error]
-+        .filter(Boolean)
-+        .map(v => String(v))
-+        .join(' ');
-+      return /403/.test(text);
-+    });
-+    if (hadCollectorError) meta.captureState = 'disabled';
-   }
--  return logs.data;
-+
-+  return { events, meta };
- }
- 
- async function stopAdminCollector(page) {
-   await page.evaluate(() => {
-     const collector = window.__adminCollector;
-     if (!collector) return;
-     if (collector.source) {
-       try { collector.source.close(); } catch {}
-     }
-     collector.stoppedAt = Date.now();
-     collector.source = null;
-   });
- }
- 
- // ---- UI dump (buttons + clickables + DOM) ----
- async function dumpUI(page, dumpDir){
-   const out = [];
-   const frames = page.frames();
-   for (const f of frames){
-     try {
-       const buttons = await f.locator('button').all();
-       for (const loc of buttons) {
-         try {
-           const text = (await loc.textContent())?.trim() || '';
-           const id = await loc.getAttribute('id');
-@@ -651,58 +690,73 @@ function detectStateSpam(adminLogs, windowMs) {
+@@ -690,59 +690,203 @@ function detectStateSpam(adminLogs, windowMs) {
      while (buf.length && evt.ts - buf[0].ts > span) buf.shift();
      buffers.set(evt.key, buf);
  
@@ -158,31 +617,173 @@ index 4fb2b29ab5025434de999ce5f7724d81b94e5451..e043b92889bbac3c73049efbb213b178
    return findings;
  }
  
--function evalProbe(probe, adminLogs, consoleLines, wsUrls){
-+function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}){
++function parseBrowserConsoleWS(consoleLines) {
++  const events = [];
++  const latencies = {};
++  const turnMap = new Map();
++  const suggestions = [];
++  const sessionGoalHints = [];
++  const stateEvents = [];
++  let nluEvent = null;
++
++  const mergeLatencyMap = (source) => {
++    if (!source || typeof source !== 'object') return;
++    for (const [key, value] of Object.entries(source)) {
++      const num = typeof value === 'string' ? Number(value) : value;
++      if (!Number.isFinite(num)) continue;
++      latencies[key] = num;
++    }
++  };
++
++  const extractLatenciesFromEvent = (evt) => {
++    if (!evt || typeof evt !== 'object') return;
++    if (evt.latency_label && Number.isFinite(evt.latency_ms)) {
++      latencies[evt.latency_label] = evt.latency_ms;
++    }
++    mergeLatencyMap(evt.latency_breakdown || evt.latencies);
++    if (evt.metrics && typeof evt.metrics === 'object') {
++      mergeLatencyMap(evt.metrics.latency_breakdown || evt.metrics.latencies);
++      if (evt.metrics.latency_label && Number.isFinite(evt.metrics.latency_ms)) {
++        latencies[evt.metrics.latency_label] = evt.metrics.latency_ms;
++      }
++    }
++    if (evt.meta && typeof evt.meta === 'object') {
++      mergeLatencyMap(evt.meta.latency_breakdown || evt.meta.latencies);
++    }
++  };
++
++  for (const raw of consoleLines || []) {
++    if (typeof raw !== 'string') continue;
++    const trimmed = raw.trim();
++    if (!trimmed.startsWith('[WS→UI]')) continue;
++    const idx = trimmed.indexOf(']');
++    if (idx === -1) continue;
++    const jsonText = trimmed.slice(idx + 1).trim();
++    if (!jsonText) continue;
++    let evt;
++    try {
++      evt = JSON.parse(jsonText);
++    } catch {
++      continue;
++    }
++
++    events.push(evt);
++    extractLatenciesFromEvent(evt);
++
++    const type = typeof evt.type === 'string' ? evt.type.toLowerCase() : '';
++    if (!nluEvent && (type === 'nlu' || evt.event === 'nlu' || evt.nlu)) {
++      nluEvent = evt.nlu && typeof evt.nlu === 'object' ? evt.nlu : evt;
++    }
++
++    if (type === 'suggestions') {
++      suggestions.push(evt);
++    }
++
++    if (type.includes('session_goal') || evt.session_goal || evt.goal?.session_goal) {
++      const payloads = [];
++      if (evt.session_goal && typeof evt.session_goal === 'object') payloads.push(evt.session_goal);
++      if (evt.goal && typeof evt.goal === 'object') payloads.push(evt.goal);
++      if (!payloads.length && typeof evt === 'object') payloads.push(evt);
++      for (const p of payloads) {
++        if (p && typeof p === 'object') sessionGoalHints.push(p);
++      }
++    }
++
++    if (type === 'state' || type === 'phase') {
++      stateEvents.push(evt);
++    }
++
++    const turnId = evt.turn_id || evt.turnId || evt.turn;
++    if (turnId) {
++      const turn = turnMap.get(turnId) || {
++        turn_id: turnId,
++        chunks: [],
++        assistant_end_count: 0,
++        policy_chips: new Set(),
++        suggestions: []
++      };
++      if (type === 'assistant_chunk') {
++        if (typeof evt.text === 'string') turn.chunks.push(evt.text);
++        if (Array.isArray(evt.policy_chips)) {
++          for (const chip of evt.policy_chips) {
++            if (typeof chip === 'string') turn.policy_chips.add(chip);
++          }
++        }
++      }
++      if (type === 'assistant_end') {
++        turn.assistant_end_count += 1;
++      }
++      if (type === 'suggestions' && Array.isArray(evt.items)) {
++        turn.suggestions = evt.items.slice();
++      }
++      turnMap.set(turnId, turn);
++    }
++  }
++
++  const assistantFrames = Array.from(turnMap.values()).map(turn => ({
++    turn_id: turn.turn_id,
++    text: turn.chunks.join(' ').trim(),
++    chunk_count: turn.chunks.length,
++    assistant_end_count: turn.assistant_end_count,
++    policy_chips: Array.from(turn.policy_chips),
++    suggestions: turn.suggestions
++  }));
++
++  const chipsMax = suggestions.reduce((max, evt) => {
++    const count = Array.isArray(evt.items) ? evt.items.length : 0;
++    return count > max ? count : max;
++  }, 0);
++
++  return {
++    events,
++    latencies,
++    assistantFrames,
++    suggestions,
++    chipsMax,
++    sessionGoalHints,
++    stateEvents,
++    nluEvent
++  };
++}
++
+ function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}){
    const findings = [];
    const metrics = {};
--  const lat = getLatencies(adminLogs);
-+  const adminDisabled = String(adminCaptureMeta.captureState || '').toLowerCase() === 'disabled'
-+    || adminCaptureMeta.disabled === true;
-+  const lat = adminDisabled ? null : getLatencies(adminLogs);
+   const adminDisabled = String(adminCaptureMeta.captureState || '').toLowerCase() === 'disabled'
+     || adminCaptureMeta.disabled === true;
+   const lat = adminDisabled ? null : getLatencies(adminLogs);
    if (lat) metrics.latency_breakdown = lat;
-+  if (adminDisabled) metrics.admin_stream = 'disabled';
+   if (adminDisabled) metrics.admin_stream = 'disabled';
+ 
++  const wsConsole = parseBrowserConsoleWS(consoleLines);
++  if (!metrics.browser_console_ws) metrics.browser_console_ws = {};
++  if (Object.keys(wsConsole.latencies).length) {
++    metrics.browser_console_ws.latencies = wsConsole.latencies;
++  }
++  if (wsConsole.assistantFrames.length) {
++    metrics.browser_console_ws.assistant_frames = wsConsole.assistantFrames;
++  }
++  if (wsConsole.suggestions.length) {
++    metrics.browser_console_ws.suggestions = wsConsole.suggestions;
++  }
++  if (wsConsole.sessionGoalHints.length) {
++    metrics.browser_console_ws.session_goal_hints = wsConsole.sessionGoalHints;
++  }
 +
-+  let adminWarningLogged = false;
-+  const ensureAdminWarning = () => {
-+    if (adminWarningLogged || !adminDisabled) return;
-+    const probeId = probe?.id || '<unknown>';
-+    console.warn(`Skipping admin stream checks for probe ${probeId}: admin stream is gated (403).`);
-+    adminWarningLogged = true;
-+  };
+   let adminWarningLogged = false;
+   const ensureAdminWarning = () => {
+     if (adminWarningLogged || !adminDisabled) return;
+     const probeId = probe?.id || '<unknown>';
+     console.warn(`Skipping admin stream checks for probe ${probeId}: admin stream is gated (403).`);
+     adminWarningLogged = true;
+   };
  
    for (const rule of (probe.expect_signals || [])) {
      if (rule.stream === 'admin') {
-+      if (adminDisabled) {
-+        ensureAdminWarning();
-+        continue;
-+      }
+       if (adminDisabled) {
+         ensureAdminWarning();
+         continue;
+       }
        if (rule.must_include) for (const k of rule.must_include) if (!hasStr(adminLogs,k)) findings.push(`Admin missing '${k}'`);
        if (rule.must_not_include) for (const k of rule.must_not_include) if (hasStr(adminLogs,k)) findings.push(`Admin should NOT include '${k}'`);
        if (rule.max_count_per_turn) for (const [k,max] of Object.entries(rule.max_count_per_turn)){
@@ -194,21 +795,25 @@ index 4fb2b29ab5025434de999ce5f7724d81b94e5451..e043b92889bbac3c73049efbb213b178
        if (rule.nlu_flags) {
          const nlu = adminLogs.find(x=>x.event==='nlu') || {};
          const f = rule.nlu_flags;
-         if (typeof f.needs_clarification === 'boolean') {
-           if (!!nlu.needs_clarification !== f.needs_clarification) findings.push(`nlu.needs_clarification expected ${f.needs_clarification}, got ${nlu.needs_clarification}`);
-         }
-         if (f.missing_any_of) {
-           const missing = nlu.missing || [];
-           if (!f.missing_any_of.some(m => missing.includes(m))) findings.push(`nlu.missing should include one of [${f.missing_any_of.join(', ')}], got [${missing.join(', ')}]`);
-         }
-       }
-       if (rule.chips_lte != null) {
-         const sm = adminLogs.find(x => String(x.event).includes('suggestions_made')) || {};
+@@ -759,105 +903,250 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}
          const cnt = (sm.items?.length) ?? sm.count ?? 0;
          if (cnt > rule.chips_lte) findings.push(`chips count ${cnt} > ${rule.chips_lte}`);
        }
        if (rule.goal_fields) {
-@@ -723,54 +777,61 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls){
+         const sg = adminLogs.find(x => String(x.event).includes('session_goal')) || {};
+         for (const [k,expected] of Object.entries(rule.goal_fields)) {
+           if (k === 'confirmed_contains') {
+             const arr = sg.confirmed || [];
+             for (const item of expected) if (!arr.includes(item)) findings.push(`session_goal.confirmed missing '${item}'`);
+           } else if ((sg[k] ?? null) !== expected) {
+             findings.push(`session_goal.${k} expected '${expected}', got '${sg[k]}'`);
+           }
+         }
+       }
+       if (rule.must_not_spam_state) {
+         const windowMs = rule.must_not_spam_state.window_ms ?? rule.must_not_spam_state.windowMs ?? 0;
+         const spamFindings = detectStateSpam(adminLogs, windowMs);
+         if (spamFindings.length) findings.push(...spamFindings);
        }
        if (rule.nlu_must_have_keys) {
          const nlu = adminLogs.find(x=>x.event==='nlu');
@@ -216,6 +821,96 @@ index 4fb2b29ab5025434de999ce5f7724d81b94e5451..e043b92889bbac3c73049efbb213b178
          else for (const k of rule.nlu_must_have_keys) if (!(k in nlu)) findings.push(`nlu missing key '${k}'`);
        }
      }
++    if (rule.stream === 'browser_console_ws') {
++      const wsEvents = wsConsole.events;
++      if (rule.must_include) {
++        for (const k of rule.must_include) {
++          if (!hasStr(wsEvents, k)) findings.push(`WS console missing '${k}'`);
++        }
++      }
++      if (rule.must_not_include) {
++        for (const k of rule.must_not_include) {
++          if (hasStr(wsEvents, k)) findings.push(`WS console should NOT include '${k}'`);
++        }
++      }
++      if (rule.max_count_per_turn) {
++        for (const [label, max] of Object.entries(rule.max_count_per_turn)) {
++          const count = countStr(wsEvents, label);
++          if (count > max) findings.push(`'${label}' count ${count} > ${max}`);
++        }
++      }
++      if (rule.latency_lt_ms) {
++        for (const [label, limit] of Object.entries(rule.latency_lt_ms)) {
++          const got = wsConsole.latencies[label];
++          if (got == null) findings.push(`WS latency '${label}' unavailable`);
++          else if (got >= limit) findings.push(`WS latency '${label}' ${got}ms not < ${limit}ms`);
++        }
++      }
++      if (rule.nlu_flags) {
++        const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
++        if (!nlu) {
++          findings.push('No WS NLU event observed');
++        } else {
++          const flags = rule.nlu_flags;
++          if (typeof flags.needs_clarification === 'boolean') {
++            if (!!nlu.needs_clarification !== flags.needs_clarification) {
++              findings.push(`WS nlu.needs_clarification expected ${flags.needs_clarification}, got ${nlu.needs_clarification}`);
++            }
++          }
++          if (flags.missing_any_of) {
++            const missing = Array.isArray(nlu.missing) ? nlu.missing : [];
++            if (!flags.missing_any_of.some(m => missing.includes(m))) {
++              findings.push(`WS nlu.missing should include one of [${flags.missing_any_of.join(', ')}], got [${missing.join(', ')}]`);
++            }
++          }
++        }
++      }
++      if (rule.chips_lte != null) {
++        if (!wsConsole.suggestions.length) {
++          findings.push('WS suggestions payload missing for chips check');
++        } else if (wsConsole.chipsMax > rule.chips_lte) {
++          findings.push(`WS chips count ${wsConsole.chipsMax} > ${rule.chips_lte}`);
++        }
++      }
++      if (rule.goal_fields) {
++        if (!wsConsole.sessionGoalHints.length) {
++          findings.push('WS session_goal hints missing');
++        } else {
++          const latest = wsConsole.sessionGoalHints[wsConsole.sessionGoalHints.length - 1];
++          for (const [field, expected] of Object.entries(rule.goal_fields)) {
++            if (field === 'confirmed_contains') {
++              const confirmed = Array.isArray(latest.confirmed) ? latest.confirmed : [];
++              for (const item of expected) {
++                if (!confirmed.includes(item)) findings.push(`session_goal.confirmed missing '${item}'`);
++              }
++            } else if ((latest?.[field] ?? null) !== expected) {
++              findings.push(`session_goal.${field} expected '${expected}', got '${latest?.[field]}'`);
++            }
++          }
++        }
++      }
++      if (rule.must_not_spam_state) {
++        const windowMs = rule.must_not_spam_state.window_ms ?? rule.must_not_spam_state.windowMs ?? 0;
++        const spamFindings = detectStateSpam(wsConsole.events, windowMs);
++        if (spamFindings.length) {
++          findings.push(...spamFindings);
++        } else if (!wsConsole.stateEvents.length) {
++          findings.push('WS state events missing for spam check');
++        } else if (!wsConsole.stateEvents.some(evt => normalizeTimestampMs(evt) != null)) {
++          findings.push('WS state events missing timestamps for spam check');
++        }
++      }
++      if (rule.nlu_must_have_keys) {
++        const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
++        if (!nlu) {
++          findings.push('No WS NLU event observed');
++        } else {
++          for (const key of rule.nlu_must_have_keys) {
++            if (!(key in nlu)) findings.push(`WS nlu missing key '${key}'`);
++          }
++        }
++      }
++    }
      if (rule.stream === 'browser_console') {
        if (rule.must_include) for (const s of rule.must_include) if (!consoleLines.some(l=>l.includes(s))) findings.push(`Console missing '${s}'`);
        if (rule.must_not_include) for (const s of rule.must_not_include) if (consoleLines.some(l=>l.includes(s))) findings.push(`Console should NOT include '${s}'`);
@@ -234,18 +929,20 @@ index 4fb2b29ab5025434de999ce5f7724d81b94e5451..e043b92889bbac3c73049efbb213b178
    }
  
    for (const cond of (probe.fail_if || [])) {
-+    const touchesAdmin = cond.admin_any || cond.admin_missing || cond.admin_count_gt
-+      || cond.latency_gte_ms || cond.chips_gt != null || cond.nlu_flags
-+      || cond.goal_missing || cond.nlu_missing_any;
-+    if (adminDisabled && touchesAdmin) {
-+      ensureAdminWarning();
-+      continue;
-+    }
+     const touchesAdmin = cond.admin_any || cond.admin_missing || cond.admin_count_gt
+       || cond.latency_gte_ms || cond.chips_gt != null || cond.nlu_flags
+       || cond.goal_missing || cond.nlu_missing_any;
++    const touchesWs = cond.ws_console_any || cond.ws_console_missing || cond.ws_console_count_gt
++      || cond.ws_console_latency_gte_ms || cond.ws_console_chips_gt != null || cond.ws_console_nlu_flags
++      || cond.ws_console_goal_missing || cond.ws_console_nlu_missing_any;
+     if (adminDisabled && touchesAdmin) {
+       ensureAdminWarning();
+       continue;
+     }
      if (cond.admin_any) for (const s of cond.admin_any) if (hasStr(adminLogs,s)) findings.push(`Fail: admin contains '${s}'`);
      if (cond.admin_missing) for (const s of cond.admin_missing) if (!hasStr(adminLogs,s)) findings.push(`Fail: admin missing '${s}'`);
      if (cond.admin_count_gt) for (const [k,m] of Object.entries(cond.admin_count_gt)){ const c = countStr(adminLogs,k); if (c>m) findings.push(`Fail: '${k}' count ${c} > ${m}`); }
--    const lat2 = getLatencies(adminLogs);
-+    const lat2 = adminDisabled ? null : getLatencies(adminLogs);
+     const lat2 = adminDisabled ? null : getLatencies(adminLogs);
      if (cond.latency_gte_ms && lat2) for (const [k,v] of Object.entries(cond.latency_gte_ms)){ const got = lat2[k]; if (got!=null && got>=v) findings.push(`Fail: latency '${k}' ${got}ms >= ${v}ms`); }
      if (cond.chips_gt != null) {
        const sm = adminLogs.find(x => String(x.event).includes('suggestions_made')) || {};
@@ -271,134 +968,81 @@ index 4fb2b29ab5025434de999ce5f7724d81b94e5451..e043b92889bbac3c73049efbb213b178
          for (const p of parts) { if (cur && p in cur) cur = cur[p]; else { ok = false; break; } }
          if (!ok) findings.push(`Fail: nlu missing '${k}'`);
        }
-@@ -853,106 +914,125 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
-       return { id: probe.id, pass: false, findings: ['Start control not found/clickable'], metrics: {} };
      }
++    if (touchesWs) {
++      if (cond.ws_console_any) {
++        for (const s of cond.ws_console_any) if (hasStr(wsConsole.events, s)) findings.push(`Fail: WS console contains '${s}'`);
++      }
++      if (cond.ws_console_missing) {
++        for (const s of cond.ws_console_missing) if (!hasStr(wsConsole.events, s)) findings.push(`Fail: WS console missing '${s}'`);
++      }
++      if (cond.ws_console_count_gt) {
++        for (const [label, max] of Object.entries(cond.ws_console_count_gt)) {
++          const count = countStr(wsConsole.events, label);
++          if (count > max) findings.push(`Fail: '${label}' count ${count} > ${max}`);
++        }
++      }
++      if (cond.ws_console_latency_gte_ms) {
++        for (const [label, limit] of Object.entries(cond.ws_console_latency_gte_ms)) {
++          const got = wsConsole.latencies[label];
++          if (got == null) findings.push(`Fail: WS latency '${label}' unavailable`);
++          else if (got >= limit) findings.push(`Fail: WS latency '${label}' ${got}ms >= ${limit}ms`);
++        }
++      }
++      if (cond.ws_console_chips_gt != null) {
++        if (!wsConsole.suggestions.length) findings.push('Fail: WS suggestions payload missing for chips check');
++        else if (wsConsole.chipsMax > cond.ws_console_chips_gt) findings.push(`Fail: WS chips ${wsConsole.chipsMax} > ${cond.ws_console_chips_gt}`);
++      }
++      if (cond.ws_console_nlu_flags) {
++        const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
++        if (!nlu) {
++          findings.push('Fail: No WS NLU event observed');
++        } else if (typeof cond.ws_console_nlu_flags.needs_clarification === 'boolean') {
++          if (!!nlu.needs_clarification !== cond.ws_console_nlu_flags.needs_clarification) {
++            findings.push(`Fail: WS nlu.needs_clarification expected ${cond.ws_console_nlu_flags.needs_clarification}, got ${nlu.needs_clarification}`);
++          }
++        }
++      }
++      if (cond.ws_console_goal_missing) {
++        const latest = wsConsole.sessionGoalHints[wsConsole.sessionGoalHints.length - 1];
++        if (!latest) findings.push('Fail: WS session_goal hints missing');
++        else for (const key of cond.ws_console_goal_missing) if (!(key in latest)) findings.push(`Fail: session_goal missing '${key}'`);
++      }
++      if (cond.ws_console_nlu_missing_any) {
++        const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
++        for (const key of cond.ws_console_nlu_missing_any) {
++          let cur = nlu;
++          let ok = true;
++          for (const part of key.split('.')) {
++            if (cur && typeof cur === 'object' && part in cur) cur = cur[part];
++            else { ok = false; break; }
++          }
++          if (!ok) findings.push(`Fail: WS nlu missing '${key}'`);
++        }
++      }
++    }
    }
  
-   fs.writeFileSync(path.join(dir, 'start_click_attempts.json'), JSON.stringify(attempts,null,2));
+   return { passed: findings.length === 0, findings, metrics };
+ }
  
-   // Let any navigation settle
-   try { await page.waitForLoadState('networkidle', { timeout: 4000 }); } catch {}
-   
-   // Let the probe’s audio play/flow
-   const ua = (probe.user_action || '').toLowerCase();
-   const playbackDurationMs = Math.max(0, normalized.totalDurationMs || 0);
-   if (ua.includes('do not speak')) {
-     await sleep(Math.max(3000, playbackDurationMs));
-   } else if (ua.includes('two short back-to-back turns')) {
-     const waitMs = Math.max(playbackDurationMs + 1200, 2600);
-     await sleep(waitMs);
-   } else if (ua.includes('start talking while chip is speaking')) {
-     await sleep(Math.max(1500, Math.min(playbackDurationMs + 500, 2500)));
-   } else {
-     await sleep(Math.max(4200, playbackDurationMs + 800));
-   }
- 
-   // Pull the admin logs after we've allowed the scripted audio to play out.
-   let adminLogs = [];
-+  let adminMeta = { error: null, captureState: null };
+ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval){
+   let normalized;
    try {
--    adminLogs = await harvestAdminLogs(page);
-+    const capture = await harvestAdminLogs(page);
-+    adminLogs = Array.isArray(capture.events) ? capture.events : [];
-+    adminMeta = capture.meta || adminMeta;
+     normalized = normalizeInputs(probe.inputs, audioDir);
    } catch (err) {
--    adminLogs = [{ event: 'collector_error', message: err?.message || String(err) }];
-+    const message = err?.message || String(err);
-+    adminLogs = [{ event: 'collector_error', message }];
-+    const disabled = /403/.test(String(message)) ? 'disabled' : adminMeta.captureState;
-+    adminMeta = { error: message, captureState: disabled };
-   } finally {
-     try { await stopAdminCollector(page); } catch {}
+     return { id: probe.id, pass: false, findings: [err?.message || String(err)], metrics: {} };
    }
  
-   // Artifacts
-   fs.writeFileSync(path.join(dir,'admin_logs.json'), JSON.stringify(adminLogs,null,2));
-+  fs.writeFileSync(path.join(dir,'admin_capture_meta.json'), JSON.stringify(adminMeta,null,2));
-   fs.writeFileSync(path.join(dir,'browser_console.json'), JSON.stringify(consoleLines,null,2));
-   fs.writeFileSync(path.join(dir,'network_ws.json'), JSON.stringify(wsUrls,null,2));
- 
--  const { passed, findings, metrics } = evalProbe(probe, adminLogs, consoleLines, wsUrls);
-+  const { passed, findings, metrics } = evalProbe(probe, adminLogs, consoleLines, wsUrls, adminMeta);
- 
-   // DOM expectations
-   const domFindings = await checkDomExpectations(page, probe.expect_dom, artifactsDir, probe.id);
-   if (domFindings.length){ findings.push(...domFindings); }
- 
-   await context.close(); await browser.close();
--  return { id: probe.id, pass: passed, findings, metrics };
-+  return {
-+    id: probe.id,
-+    pass: passed,
-+    findings,
-+    metrics,
-+    admin_stream_disabled: String(adminMeta.captureState || '').toLowerCase() === 'disabled',
-+    admin_capture_meta: adminMeta
-+  };
- }
- 
- async function main() {
-   const { specPath, base, useChrome, dumpUI, startOverride, startEval } = parseCLI();
-   const spec = readJSON(specPath);
-   const baseUrl = (spec.endpoints?.ui_base_url && !/your_domain/i.test(spec.endpoints.ui_base_url))
-     ? spec.endpoints.ui_base_url
-     : base;
- 
-   const artifactsDir = path.resolve('artifacts');
-   const audioDir = path.resolve('audio');
-   ensureDir(artifactsDir);
- 
-   const results = [];
-   for (const probe of spec.probes) {
-     console.log(`\n=== Running ${probe.id} ===`);
-     try {
-       const r = await runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChrome, dumpUI, startOverride, startEval);
-       results.push(r);
-       console.log(`${probe.id}: ${r.pass ? 'PASS' : 'FAIL'}${r.findings.length ? ' – ' + r.findings.join('; ') : ''}`);
-     } catch (e) {
-       results.push({ id: probe.id, pass: false, findings: [`Runner error: ${e.message}`], metrics: {} });
-       console.error(`${probe.id}: Runner error`, e);
-     }
+   const useCustomMic = normalized.inputs.length > 1;
+   const firstAudioPath = normalized.audioFiles[0];
+   if (!firstAudioPath) {
+     return { id: probe.id, pass: false, findings: ['No audio fixtures found for probe'], metrics: {} };
    }
  
-   const catalog = spec.recommendations_catalog || {};
-   const enriched = results.map(r => {
-     const probe = spec.probes.find(p => p.id === r.id) || {};
-     const ids = r.pass ? [] : (probe.recommendations_on_fail || []);
-     return { ...r, recommendations: ids.map(id => catalog[id]).filter(Boolean) };
-   });
- 
-+  const adminSkipped = enriched.filter(x => x.admin_stream_disabled).map(x => x.id);
-   const report = {
-     generated_at: new Date().toISOString(),
-     summary: {
-       total: enriched.length,
-       passed: enriched.filter(x => x.pass).length,
--      failed: enriched.filter(x => !x.pass).map(x => x.id)
-+      failed: enriched.filter(x => !x.pass).map(x => x.id),
-+      admin_stream_skipped: adminSkipped
-     },
-     probes: enriched
-   };
-   fs.writeFileSync('report.json', JSON.stringify(report, null, 2));
- 
-   const lines = [];
-   lines.push(`# AskChip E2E Findings\n`);
-   lines.push(`**Passed:** ${report.summary.passed}/${report.summary.total}\n`);
-+  if (adminSkipped.length) {
-+    lines.push(`**Admin signals skipped for:** ${adminSkipped.join(', ')} (admin stream is gated)\n`);
-+  }
-   for (const p of report.probes) lines.push(`- **${p.id}**: ${p.pass ? 'PASS' : 'FAIL'}${p.findings.length ? ' — ' + p.findings.join('; ') : ''}`);
-   fs.writeFileSync('FINDINGS.md', lines.join('\n'));
-   console.log('\nReport written to report.json and FINDINGS.md');
- }
- 
- if (require.main === module) {
-   main().catch(err => {
-     console.error(err);
-     process.exitCode = 1;
-   });
- }
- 
- module.exports = { evalProbe };
+   const launchArgs = [
+     '--use-fake-device-for-media-stream',
+     '--autoplay-policy=no-user-gesture-required'
+   ];
+   if (!useCustomMic) {
+     launchArgs.push(`--use-file-for-fake-audio-capture=${firstAudioPath}`);

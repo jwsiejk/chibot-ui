@@ -712,6 +712,135 @@ function detectStateSpam(adminLogs, windowMs) {
   return findings;
 }
 
+function parseBrowserConsoleWS(consoleLines) {
+  const events = [];
+  const latencies = {};
+  const turnMap = new Map();
+  const suggestions = [];
+  const sessionGoalHints = [];
+  const stateEvents = [];
+  let nluEvent = null;
+
+  const mergeLatencyMap = (source) => {
+    if (!source || typeof source !== 'object') return;
+    for (const [key, value] of Object.entries(source)) {
+      const num = typeof value === 'string' ? Number(value) : value;
+      if (!Number.isFinite(num)) continue;
+      latencies[key] = num;
+    }
+  };
+
+  const extractLatenciesFromEvent = (evt) => {
+    if (!evt || typeof evt !== 'object') return;
+    if (evt.latency_label && Number.isFinite(evt.latency_ms)) {
+      latencies[evt.latency_label] = evt.latency_ms;
+    }
+    mergeLatencyMap(evt.latency_breakdown || evt.latencies);
+    if (evt.metrics && typeof evt.metrics === 'object') {
+      mergeLatencyMap(evt.metrics.latency_breakdown || evt.metrics.latencies);
+      if (evt.metrics.latency_label && Number.isFinite(evt.metrics.latency_ms)) {
+        latencies[evt.metrics.latency_label] = evt.metrics.latency_ms;
+      }
+    }
+    if (evt.meta && typeof evt.meta === 'object') {
+      mergeLatencyMap(evt.meta.latency_breakdown || evt.meta.latencies);
+    }
+  };
+
+  for (const raw of consoleLines || []) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith('[WS→UI]')) continue;
+    const idx = trimmed.indexOf(']');
+    if (idx === -1) continue;
+    const jsonText = trimmed.slice(idx + 1).trim();
+    if (!jsonText) continue;
+    let evt;
+    try {
+      evt = JSON.parse(jsonText);
+    } catch {
+      continue;
+    }
+
+    events.push(evt);
+    extractLatenciesFromEvent(evt);
+
+    const type = typeof evt.type === 'string' ? evt.type.toLowerCase() : '';
+    if (!nluEvent && (type === 'nlu' || evt.event === 'nlu' || evt.nlu)) {
+      nluEvent = evt.nlu && typeof evt.nlu === 'object' ? evt.nlu : evt;
+    }
+
+    if (type === 'suggestions') {
+      suggestions.push(evt);
+    }
+
+    if (type.includes('session_goal') || evt.session_goal || evt.goal?.session_goal) {
+      const payloads = [];
+      if (evt.session_goal && typeof evt.session_goal === 'object') payloads.push(evt.session_goal);
+      if (evt.goal && typeof evt.goal === 'object') payloads.push(evt.goal);
+      if (!payloads.length && typeof evt === 'object') payloads.push(evt);
+      for (const p of payloads) {
+        if (p && typeof p === 'object') sessionGoalHints.push(p);
+      }
+    }
+
+    if (type === 'state' || type === 'phase') {
+      stateEvents.push(evt);
+    }
+
+    const turnId = evt.turn_id || evt.turnId || evt.turn;
+    if (turnId) {
+      const turn = turnMap.get(turnId) || {
+        turn_id: turnId,
+        chunks: [],
+        assistant_end_count: 0,
+        policy_chips: new Set(),
+        suggestions: []
+      };
+      if (type === 'assistant_chunk') {
+        if (typeof evt.text === 'string') turn.chunks.push(evt.text);
+        if (Array.isArray(evt.policy_chips)) {
+          for (const chip of evt.policy_chips) {
+            if (typeof chip === 'string') turn.policy_chips.add(chip);
+          }
+        }
+      }
+      if (type === 'assistant_end') {
+        turn.assistant_end_count += 1;
+      }
+      if (type === 'suggestions' && Array.isArray(evt.items)) {
+        turn.suggestions = evt.items.slice();
+      }
+      turnMap.set(turnId, turn);
+    }
+  }
+
+  const assistantFrames = Array.from(turnMap.values()).map(turn => ({
+    turn_id: turn.turn_id,
+    text: turn.chunks.join(' ').trim(),
+    chunk_count: turn.chunks.length,
+    assistant_end_count: turn.assistant_end_count,
+    policy_chips: Array.from(turn.policy_chips),
+    suggestions: turn.suggestions
+  }));
+
+  const chipsMax = suggestions.reduce((max, evt) => {
+    const count = Array.isArray(evt.items) ? evt.items.length : 0;
+    return count > max ? count : max;
+  }, 0);
+
+  return {
+    events,
+    latencies,
+    assistantFrames,
+    suggestions,
+    chipsMax,
+    sessionGoalHints,
+    stateEvents,
+    nluEvent
+  };
+}
+
 function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}){
   const findings = [];
   const metrics = {};
@@ -720,6 +849,21 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}
   const lat = adminDisabled ? null : getLatencies(adminLogs);
   if (lat) metrics.latency_breakdown = lat;
   if (adminDisabled) metrics.admin_stream = 'disabled';
+
+  const wsConsole = parseBrowserConsoleWS(consoleLines);
+  if (!metrics.browser_console_ws) metrics.browser_console_ws = {};
+  if (Object.keys(wsConsole.latencies).length) {
+    metrics.browser_console_ws.latencies = wsConsole.latencies;
+  }
+  if (wsConsole.assistantFrames.length) {
+    metrics.browser_console_ws.assistant_frames = wsConsole.assistantFrames;
+  }
+  if (wsConsole.suggestions.length) {
+    metrics.browser_console_ws.suggestions = wsConsole.suggestions;
+  }
+  if (wsConsole.sessionGoalHints.length) {
+    metrics.browser_console_ws.session_goal_hints = wsConsole.sessionGoalHints;
+  }
 
   let adminWarningLogged = false;
   const ensureAdminWarning = () => {
@@ -781,6 +925,96 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}
         else for (const k of rule.nlu_must_have_keys) if (!(k in nlu)) findings.push(`nlu missing key '${k}'`);
       }
     }
+    if (rule.stream === 'browser_console_ws') {
+      const wsEvents = wsConsole.events;
+      if (rule.must_include) {
+        for (const k of rule.must_include) {
+          if (!hasStr(wsEvents, k)) findings.push(`WS console missing '${k}'`);
+        }
+      }
+      if (rule.must_not_include) {
+        for (const k of rule.must_not_include) {
+          if (hasStr(wsEvents, k)) findings.push(`WS console should NOT include '${k}'`);
+        }
+      }
+      if (rule.max_count_per_turn) {
+        for (const [label, max] of Object.entries(rule.max_count_per_turn)) {
+          const count = countStr(wsEvents, label);
+          if (count > max) findings.push(`'${label}' count ${count} > ${max}`);
+        }
+      }
+      if (rule.latency_lt_ms) {
+        for (const [label, limit] of Object.entries(rule.latency_lt_ms)) {
+          const got = wsConsole.latencies[label];
+          if (got == null) findings.push(`WS latency '${label}' unavailable`);
+          else if (got >= limit) findings.push(`WS latency '${label}' ${got}ms not < ${limit}ms`);
+        }
+      }
+      if (rule.nlu_flags) {
+        const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
+        if (!nlu) {
+          findings.push('No WS NLU event observed');
+        } else {
+          const flags = rule.nlu_flags;
+          if (typeof flags.needs_clarification === 'boolean') {
+            if (!!nlu.needs_clarification !== flags.needs_clarification) {
+              findings.push(`WS nlu.needs_clarification expected ${flags.needs_clarification}, got ${nlu.needs_clarification}`);
+            }
+          }
+          if (flags.missing_any_of) {
+            const missing = Array.isArray(nlu.missing) ? nlu.missing : [];
+            if (!flags.missing_any_of.some(m => missing.includes(m))) {
+              findings.push(`WS nlu.missing should include one of [${flags.missing_any_of.join(', ')}], got [${missing.join(', ')}]`);
+            }
+          }
+        }
+      }
+      if (rule.chips_lte != null) {
+        if (!wsConsole.suggestions.length) {
+          findings.push('WS suggestions payload missing for chips check');
+        } else if (wsConsole.chipsMax > rule.chips_lte) {
+          findings.push(`WS chips count ${wsConsole.chipsMax} > ${rule.chips_lte}`);
+        }
+      }
+      if (rule.goal_fields) {
+        if (!wsConsole.sessionGoalHints.length) {
+          findings.push('WS session_goal hints missing');
+        } else {
+          const latest = wsConsole.sessionGoalHints[wsConsole.sessionGoalHints.length - 1];
+          for (const [field, expected] of Object.entries(rule.goal_fields)) {
+            if (field === 'confirmed_contains') {
+              const confirmed = Array.isArray(latest.confirmed) ? latest.confirmed : [];
+              for (const item of expected) {
+                if (!confirmed.includes(item)) findings.push(`session_goal.confirmed missing '${item}'`);
+              }
+            } else if ((latest?.[field] ?? null) !== expected) {
+              findings.push(`session_goal.${field} expected '${expected}', got '${latest?.[field]}'`);
+            }
+          }
+        }
+      }
+      if (rule.must_not_spam_state) {
+        const windowMs = rule.must_not_spam_state.window_ms ?? rule.must_not_spam_state.windowMs ?? 0;
+        const spamFindings = detectStateSpam(wsConsole.events, windowMs);
+        if (spamFindings.length) {
+          findings.push(...spamFindings);
+        } else if (!wsConsole.stateEvents.length) {
+          findings.push('WS state events missing for spam check');
+        } else if (!wsConsole.stateEvents.some(evt => normalizeTimestampMs(evt) != null)) {
+          findings.push('WS state events missing timestamps for spam check');
+        }
+      }
+      if (rule.nlu_must_have_keys) {
+        const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
+        if (!nlu) {
+          findings.push('No WS NLU event observed');
+        } else {
+          for (const key of rule.nlu_must_have_keys) {
+            if (!(key in nlu)) findings.push(`WS nlu missing key '${key}'`);
+          }
+        }
+      }
+    }
     if (rule.stream === 'browser_console') {
       if (rule.must_include) for (const s of rule.must_include) if (!consoleLines.some(l=>l.includes(s))) findings.push(`Console missing '${s}'`);
       if (rule.must_not_include) for (const s of rule.must_not_include) if (consoleLines.some(l=>l.includes(s))) findings.push(`Console should NOT include '${s}'`);
@@ -802,6 +1036,9 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}
     const touchesAdmin = cond.admin_any || cond.admin_missing || cond.admin_count_gt
       || cond.latency_gte_ms || cond.chips_gt != null || cond.nlu_flags
       || cond.goal_missing || cond.nlu_missing_any;
+    const touchesWs = cond.ws_console_any || cond.ws_console_missing || cond.ws_console_count_gt
+      || cond.ws_console_latency_gte_ms || cond.ws_console_chips_gt != null || cond.ws_console_nlu_flags
+      || cond.ws_console_goal_missing || cond.ws_console_nlu_missing_any;
     if (adminDisabled && touchesAdmin) {
       ensureAdminWarning();
       continue;
@@ -834,6 +1071,58 @@ function evalProbe(probe, adminLogs, consoleLines, wsUrls, adminCaptureMeta = {}
         let cur = nlu, ok = true;
         for (const p of parts) { if (cur && p in cur) cur = cur[p]; else { ok = false; break; } }
         if (!ok) findings.push(`Fail: nlu missing '${k}'`);
+      }
+    }
+    if (touchesWs) {
+      if (cond.ws_console_any) {
+        for (const s of cond.ws_console_any) if (hasStr(wsConsole.events, s)) findings.push(`Fail: WS console contains '${s}'`);
+      }
+      if (cond.ws_console_missing) {
+        for (const s of cond.ws_console_missing) if (!hasStr(wsConsole.events, s)) findings.push(`Fail: WS console missing '${s}'`);
+      }
+      if (cond.ws_console_count_gt) {
+        for (const [label, max] of Object.entries(cond.ws_console_count_gt)) {
+          const count = countStr(wsConsole.events, label);
+          if (count > max) findings.push(`Fail: '${label}' count ${count} > ${max}`);
+        }
+      }
+      if (cond.ws_console_latency_gte_ms) {
+        for (const [label, limit] of Object.entries(cond.ws_console_latency_gte_ms)) {
+          const got = wsConsole.latencies[label];
+          if (got == null) findings.push(`Fail: WS latency '${label}' unavailable`);
+          else if (got >= limit) findings.push(`Fail: WS latency '${label}' ${got}ms >= ${limit}ms`);
+        }
+      }
+      if (cond.ws_console_chips_gt != null) {
+        if (!wsConsole.suggestions.length) findings.push('Fail: WS suggestions payload missing for chips check');
+        else if (wsConsole.chipsMax > cond.ws_console_chips_gt) findings.push(`Fail: WS chips ${wsConsole.chipsMax} > ${cond.ws_console_chips_gt}`);
+      }
+      if (cond.ws_console_nlu_flags) {
+        const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
+        if (!nlu) {
+          findings.push('Fail: No WS NLU event observed');
+        } else if (typeof cond.ws_console_nlu_flags.needs_clarification === 'boolean') {
+          if (!!nlu.needs_clarification !== cond.ws_console_nlu_flags.needs_clarification) {
+            findings.push(`Fail: WS nlu.needs_clarification expected ${cond.ws_console_nlu_flags.needs_clarification}, got ${nlu.needs_clarification}`);
+          }
+        }
+      }
+      if (cond.ws_console_goal_missing) {
+        const latest = wsConsole.sessionGoalHints[wsConsole.sessionGoalHints.length - 1];
+        if (!latest) findings.push('Fail: WS session_goal hints missing');
+        else for (const key of cond.ws_console_goal_missing) if (!(key in latest)) findings.push(`Fail: session_goal missing '${key}'`);
+      }
+      if (cond.ws_console_nlu_missing_any) {
+        const nlu = wsConsole.nluEvent && wsConsole.nluEvent.nlu ? wsConsole.nluEvent.nlu : wsConsole.nluEvent;
+        for (const key of cond.ws_console_nlu_missing_any) {
+          let cur = nlu;
+          let ok = true;
+          for (const part of key.split('.')) {
+            if (cur && typeof cur === 'object' && part in cur) cur = cur[part];
+            else { ok = false; break; }
+          }
+          if (!ok) findings.push(`Fail: WS nlu missing '${key}'`);
+        }
       }
     }
   }
