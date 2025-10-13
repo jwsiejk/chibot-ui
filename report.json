@@ -1,9 +1,10 @@
 {
-  "generated_at": "2025-10-13T22:56:59.611Z",
+  "generated_at": "2025-10-13T23:47:58.891Z",
   "summary": {
     "total": 13,
-    "passed": 2,
+    "passed": 1,
     "failed": [
+      "P1_greet_dupe_guard",
       "P2_mic_arms_after_greet",
       "P3_asr_ready_gate",
       "P4_containerized_opus_sanitized",
@@ -21,55 +22,17 @@
   "probes": [
     {
       "id": "P1_greet_dupe_guard",
-      "pass": true,
-      "findings": [],
+      "pass": false,
+      "findings": [
+        "WS console missing 'assistant_end'"
+      ],
       "metrics": {
         "browser_console_ws": {
-          "assistant_frames": [
-            {
-              "turn_id": "7267000840f6413885de736fce9b0603",
-              "text": "Hey James, what's the goal for this session?",
-              "chunk_count": 1,
-              "assistant_end_count": 1,
-              "policy_chips": [
-                "Send me the email",
-                "Walk me through it live"
-              ],
-              "suggestions": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                }
-              ]
-            }
-          ],
-          "suggestions": [
-            {
-              "type": "suggestions",
-              "turn_id": "7267000840f6413885de736fce9b0603",
-              "items": [
-                {
-                  "text": "Send me the email"
-                },
-                {
-                  "text": "Walk me through it live"
-                },
-                {
-                  "text": "Show install steps"
-                }
-              ]
-            }
-          ],
           "session_goal_hints": [
             {
               "type": "session_goal",
-              "ts": 1760396042.8245943,
-              "step": 298,
+              "ts": 1760399100.4173877,
+              "step": 6,
               "kind": "session_goal",
               "route": null,
               "label": "session_goal:normal",
@@ -88,8 +51,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "d54b0b25-60b3-458e-b5da-c12270ef2ab3",
-              "sid": "d54b0b25-60b3-458e-b5da-c12270ef2ab3"
+              "session_id": "79dcfbbc-b8d6-43a9-aed1-d98ff7b7ea7e",
+              "sid": "79dcfbbc-b8d6-43a9-aed1-d98ff7b7ea7e"
             }
           ]
         }
@@ -99,7 +62,10 @@
         "error": "eventsource_error",
         "captureState": "active"
       },
-      "recommendations": []
+      "recommendations": [
+        "Add per-turn assistant_final guard by turn_id in WS bus; ignore duplicate policy commits.",
+        "Cancel 'wait for final' watchdog on either asr:final or CloseStream ack."
+      ]
     },
     {
       "id": "P2_mic_arms_after_greet",
@@ -114,8 +80,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "6f1bf0160f85416a9a9698b3574c4752",
-              "text": "Hey James, what's the goal for this session?",
+              "turn_id": "7971b20e09614b7b99bc3f405f113cfd",
+              "text": "Hey James, what should we tackle first?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -138,7 +104,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "6f1bf0160f85416a9a9698b3574c4752",
+              "turn_id": "7971b20e09614b7b99bc3f405f113cfd",
               "items": [
                 {
                   "text": "Send me the email"
@@ -155,8 +121,8 @@
           "session_goal_hints": [
             {
               "type": "session_goal",
-              "ts": 1760396055.4950314,
-              "step": 317,
+              "ts": 1760399114.6957824,
+              "step": 25,
               "kind": "session_goal",
               "route": null,
               "label": "session_goal:normal",
@@ -175,8 +141,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "bd9c37e2-0c1d-432e-b969-112251227b81",
-              "sid": "bd9c37e2-0c1d-432e-b969-112251227b81"
+              "session_id": "70451222-7f2c-49f2-b616-5bba71eca1a7",
+              "sid": "70451222-7f2c-49f2-b616-5bba71eca1a7"
             }
           ]
         }
@@ -204,8 +170,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "a5a1e981339840398adcd53248ccddfb",
-              "text": "Hey James, what would you like to accomplish today?",
+              "turn_id": "addc33c8b2284478bdb2122f30f36043",
+              "text": "Hey James, what outcome are you aiming for today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -228,7 +194,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "a5a1e981339840398adcd53248ccddfb",
+              "turn_id": "addc33c8b2284478bdb2122f30f36043",
               "items": [
                 {
                   "text": "Send me the email"
@@ -245,8 +211,8 @@
           "session_goal_hints": [
             {
               "type": "session_goal",
-              "ts": 1760396069.1400213,
-              "step": 338,
+              "ts": 1760399128.188257,
+              "step": 44,
               "kind": "session_goal",
               "route": null,
               "label": "session_goal:normal",
@@ -265,8 +231,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "2c4bd2e5-ca3b-4d4a-a0f6-3e20e25b38a7",
-              "sid": "2c4bd2e5-ca3b-4d4a-a0f6-3e20e25b38a7"
+              "session_id": "456739c2-cacc-4b77-a5dd-65dcd775ad73",
+              "sid": "456739c2-cacc-4b77-a5dd-65dcd775ad73"
             }
           ]
         }
@@ -293,8 +259,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "7ce4c92fdef246e9a88b02e834b93911",
-              "text": "Hey James, what's the goal for this session?",
+              "turn_id": "6d1f7e109fe44a7ca9d6a18b4f7cc28d",
+              "text": "Hey James, what outcome are you aiming for today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -317,7 +283,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "7ce4c92fdef246e9a88b02e834b93911",
+              "turn_id": "6d1f7e109fe44a7ca9d6a18b4f7cc28d",
               "items": [
                 {
                   "text": "Send me the email"
@@ -334,8 +300,8 @@
           "session_goal_hints": [
             {
               "type": "session_goal",
-              "ts": 1760396082.677994,
-              "step": 358,
+              "ts": 1760399141.7845187,
+              "step": 63,
               "kind": "session_goal",
               "route": null,
               "label": "session_goal:normal",
@@ -354,8 +320,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "f3a10206-b6b9-4038-b9e5-4a5b35244e52",
-              "sid": "f3a10206-b6b9-4038-b9e5-4a5b35244e52"
+              "session_id": "06944d4f-558f-42b4-8139-2ec367fbbcd9",
+              "sid": "06944d4f-558f-42b4-8139-2ec367fbbcd9"
             }
           ]
         }
@@ -380,8 +346,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "93fea032ed1f4115828f3603439be7de",
-              "text": "Hey James, what should we tackle first?",
+              "turn_id": "cb7a16a956d347ccb52a82dae0f96c1c",
+              "text": "Hey James, what would you like to accomplish today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -404,7 +370,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "93fea032ed1f4115828f3603439be7de",
+              "turn_id": "cb7a16a956d347ccb52a82dae0f96c1c",
               "items": [
                 {
                   "text": "Send me the email"
@@ -421,8 +387,8 @@
           "session_goal_hints": [
             {
               "type": "session_goal",
-              "ts": 1760396095.998128,
-              "step": 386,
+              "ts": 1760399155.6252391,
+              "step": 91,
               "kind": "session_goal",
               "route": null,
               "label": "session_goal:normal",
@@ -441,8 +407,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "38b2d64a-dff4-4294-ac45-33d89b27a9e0",
-              "sid": "38b2d64a-dff4-4294-ac45-33d89b27a9e0"
+              "session_id": "47d3213a-dd83-4db7-a107-b147481f4c3e",
+              "sid": "47d3213a-dd83-4db7-a107-b147481f4c3e"
             }
           ]
         }
@@ -469,8 +435,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "5a65d52aeb4146ec873e1e58ac6257b9",
-              "text": "Hey James, what do you want to get done today?",
+              "turn_id": "0c072acfd61047c6bcb6fb9a59170044",
+              "text": "Hey James, what's the goal for this session?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -493,7 +459,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "5a65d52aeb4146ec873e1e58ac6257b9",
+              "turn_id": "0c072acfd61047c6bcb6fb9a59170044",
               "items": [
                 {
                   "text": "Send me the email"
@@ -510,8 +476,8 @@
           "session_goal_hints": [
             {
               "type": "session_goal",
-              "ts": 1760396109.319377,
-              "step": 408,
+              "ts": 1760399169.0675852,
+              "step": 121,
               "kind": "session_goal",
               "route": null,
               "label": "session_goal:normal",
@@ -530,8 +496,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "0ea5054d-b362-43ca-9729-05d293669cbc",
-              "sid": "0ea5054d-b362-43ca-9729-05d293669cbc"
+              "session_id": "ce739e57-1c01-406d-97a3-77c15cafcb50",
+              "sid": "ce739e57-1c01-406d-97a3-77c15cafcb50"
             }
           ]
         }
@@ -556,8 +522,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "7ccaf78e7bf64289a3e8d69ca0cc9080",
-              "text": "Hey James, what would you like to accomplish today?",
+              "turn_id": "aae9918859b44527b053ade9eca2ef03",
+              "text": "Hey James, what's the goal for this session?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -580,7 +546,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "7ccaf78e7bf64289a3e8d69ca0cc9080",
+              "turn_id": "aae9918859b44527b053ade9eca2ef03",
               "items": [
                 {
                   "text": "Send me the email"
@@ -597,8 +563,8 @@
           "session_goal_hints": [
             {
               "type": "session_goal",
-              "ts": 1760396121.3757014,
-              "step": 433,
+              "ts": 1760399181.2120848,
+              "step": 147,
               "kind": "session_goal",
               "route": null,
               "label": "session_goal:normal",
@@ -617,8 +583,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "6b0881db-289a-4288-bddb-7aeab49fe450",
-              "sid": "6b0881db-289a-4288-bddb-7aeab49fe450"
+              "session_id": "739c0126-91b5-4344-9b84-fc168a6aa2e6",
+              "sid": "739c0126-91b5-4344-9b84-fc168a6aa2e6"
             }
           ]
         }
@@ -640,8 +606,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "69d845969ede4683a656cca10be07469",
-              "text": "Hey James, what outcome are you aiming for today?",
+              "turn_id": "c7ff82c2bf31444b93e7cd2a6ea8293a",
+              "text": "Hey James, what's the goal for this session?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -664,7 +630,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "69d845969ede4683a656cca10be07469",
+              "turn_id": "c7ff82c2bf31444b93e7cd2a6ea8293a",
               "items": [
                 {
                   "text": "Send me the email"
@@ -681,8 +647,8 @@
           "session_goal_hints": [
             {
               "type": "session_goal",
-              "ts": 1760396134.6852994,
-              "step": 455,
+              "ts": 1760399194.1519463,
+              "step": 173,
               "kind": "session_goal",
               "route": null,
               "label": "session_goal:normal",
@@ -701,8 +667,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "0f5dcce5-f2e3-49cb-992d-e45396e95d90",
-              "sid": "0f5dcce5-f2e3-49cb-992d-e45396e95d90"
+              "session_id": "54c0968f-0610-4858-8498-b78879c4e31d",
+              "sid": "54c0968f-0610-4858-8498-b78879c4e31d"
             }
           ]
         }
@@ -725,7 +691,7 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "8f0570bfe3594e4199f1e80f5e50fd1d",
+              "turn_id": "f02a1652513141d2833e66a0e5b5f7f3",
               "text": "Hey James, what outcome are you aiming for today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -749,7 +715,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "8f0570bfe3594e4199f1e80f5e50fd1d",
+              "turn_id": "f02a1652513141d2833e66a0e5b5f7f3",
               "items": [
                 {
                   "text": "Send me the email"
@@ -766,8 +732,8 @@
           "session_goal_hints": [
             {
               "type": "session_goal",
-              "ts": 1760396148.595074,
-              "step": 480,
+              "ts": 1760399207.6076815,
+              "step": 194,
               "kind": "session_goal",
               "route": null,
               "label": "session_goal:normal",
@@ -786,8 +752,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "656b9a0c-1857-42dd-8646-3125c543d08f",
-              "sid": "656b9a0c-1857-42dd-8646-3125c543d08f"
+              "session_id": "744e420e-bb7c-4f9a-81a2-b847d4486d64",
+              "sid": "744e420e-bb7c-4f9a-81a2-b847d4486d64"
             }
           ]
         }
@@ -812,7 +778,7 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "ddff01b1c14143c3920a0e98f4bfd500",
+              "turn_id": "7d098ecd4155424093a8224fd931761e",
               "text": "Hey James, what would you like to accomplish today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
@@ -836,7 +802,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "ddff01b1c14143c3920a0e98f4bfd500",
+              "turn_id": "7d098ecd4155424093a8224fd931761e",
               "items": [
                 {
                   "text": "Send me the email"
@@ -853,8 +819,8 @@
           "session_goal_hints": [
             {
               "type": "session_goal",
-              "ts": 1760396162.4152644,
-              "step": 505,
+              "ts": 1760399221.6533933,
+              "step": 216,
               "kind": "session_goal",
               "route": null,
               "label": "session_goal:normal",
@@ -873,8 +839,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "401fe184-2143-47af-82ae-e82d579563c7",
-              "sid": "401fe184-2143-47af-82ae-e82d579563c7"
+              "session_id": "39a71446-dad1-4c65-9f31-f581fd55a7ac",
+              "sid": "39a71446-dad1-4c65-9f31-f581fd55a7ac"
             }
           ]
         }
@@ -898,8 +864,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "d455fdc56bc74ca6a83e17c7d319344c",
-              "text": "Hey James, what do you want to get done today?",
+              "turn_id": "94536abd822a4469a354dcaaaac293f7",
+              "text": "Hey James, what should we tackle first?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -922,7 +888,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "d455fdc56bc74ca6a83e17c7d319344c",
+              "turn_id": "94536abd822a4469a354dcaaaac293f7",
               "items": [
                 {
                   "text": "Send me the email"
@@ -939,8 +905,8 @@
           "session_goal_hints": [
             {
               "type": "session_goal",
-              "ts": 1760396179.2658377,
-              "step": 533,
+              "ts": 1760399238.3912723,
+              "step": 240,
               "kind": "session_goal",
               "route": null,
               "label": "session_goal:normal",
@@ -959,8 +925,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "60aa5ef1-72ba-4923-8458-20f48c85ac24",
-              "sid": "60aa5ef1-72ba-4923-8458-20f48c85ac24"
+              "session_id": "251c2f2a-e3e8-4385-81d6-fcf15098b3f9",
+              "sid": "251c2f2a-e3e8-4385-81d6-fcf15098b3f9"
             }
           ]
         }
@@ -993,8 +959,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "df495464a82d420f9e95e38e9099dc13",
-              "text": "Hey James, what's the goal for this session?",
+              "turn_id": "c3f76018251745848bcafa7924d6048b",
+              "text": "Hey James, what outcome are you aiming for today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -1017,7 +983,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "df495464a82d420f9e95e38e9099dc13",
+              "turn_id": "c3f76018251745848bcafa7924d6048b",
               "items": [
                 {
                   "text": "Send me the email"
@@ -1034,8 +1000,8 @@
           "session_goal_hints": [
             {
               "type": "session_goal",
-              "ts": 1760396193.1744237,
-              "step": 561,
+              "ts": 1760399252.440045,
+              "step": 270,
               "kind": "session_goal",
               "route": null,
               "label": "session_goal:normal",
@@ -1054,8 +1020,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "063a8fe6-476f-4275-9271-4f1b95149318",
-              "sid": "063a8fe6-476f-4275-9271-4f1b95149318"
+              "session_id": "1b669956-b2bc-4581-8b6c-0be8087c3fe9",
+              "sid": "1b669956-b2bc-4581-8b6c-0be8087c3fe9"
             }
           ]
         }
@@ -1079,8 +1045,8 @@
         "browser_console_ws": {
           "assistant_frames": [
             {
-              "turn_id": "9b150049c91b4b7f837ea8884fcec574",
-              "text": "Hey James, what would you like to accomplish today?",
+              "turn_id": "341ad80fb765496a8262deadb775e46e",
+              "text": "Hey James, what do you want to get done today?",
               "chunk_count": 1,
               "assistant_end_count": 1,
               "policy_chips": [
@@ -1103,7 +1069,7 @@
           "suggestions": [
             {
               "type": "suggestions",
-              "turn_id": "9b150049c91b4b7f837ea8884fcec574",
+              "turn_id": "341ad80fb765496a8262deadb775e46e",
               "items": [
                 {
                   "text": "Send me the email"
@@ -1120,8 +1086,8 @@
           "session_goal_hints": [
             {
               "type": "session_goal",
-              "ts": 1760396208.716077,
-              "step": 586,
+              "ts": 1760399268.0486128,
+              "step": 298,
               "kind": "session_goal",
               "route": null,
               "label": "session_goal:normal",
@@ -1140,8 +1106,8 @@
                 "working_intent"
               ],
               "event": "session_goal",
-              "session_id": "7093028d-242a-442d-8e80-e84a4268af51",
-              "sid": "7093028d-242a-442d-8e80-e84a4268af51"
+              "session_id": "f2c7a592-76b3-4a89-a1e7-de03ebaaf72b",
+              "sid": "f2c7a592-76b3-4a89-a1e7-de03ebaaf72b"
             }
           ]
         }

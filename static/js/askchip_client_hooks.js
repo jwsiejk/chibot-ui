@@ -2,7 +2,7 @@
 (function () {
   const ADMIN_POST = "/api/v1/admin/log";
 
-    function currentSessionId() {
+  function currentSessionId() {
     try {
       const key = "chip.sid";
       let sid = localStorage.getItem(key);
@@ -38,9 +38,27 @@
     return payload;
   }
   
+  function logAdminBreadcrumb(payload) {
+    try {
+      const label = payload?.label || payload?.event || payload?.kind;
+      if (label) {
+        try { console.info(String(label)); } catch {}
+      }
+      if (payload && typeof payload === "object") {
+        if (payload.containerized) {
+          try { console.info("containerized=true"); } catch {}
+        }
+        if (payload.container) {
+          try { console.info(`container=${payload.container}`); } catch {}
+        }
+      }
+    } catch {}
+  }
+
   async function postAdmin(evt) {
     try {
       const payload = normalizePayload(evt);
+      logAdminBreadcrumb(payload);
       await fetch(ADMIN_POST, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -104,4 +122,198 @@
       postAdmin({ event: "mic:auto_arm_suggested", delay_ms: delay });
     }
   };
+
+  function installAdminConsoleBridge() {
+    try {
+      if (window.__askchip_admin_console_bridge) {
+        return;
+      }
+      const es = new EventSource("/api/v1/admin/logs?live=1&bridge=ui", { withCredentials: true });
+      window.__askchip_admin_console_bridge = es;
+      es.addEventListener("message", (ev) => {
+        try {
+          const data = JSON.parse(ev.data || "{}");
+          const kind = data?.kind || data?.event || data?.label;
+          if (!kind) return;
+          const payload = data?.payload && typeof data.payload === "object" ? data.payload : undefined;
+          const info = payload || data;
+          switch (String(kind)) {
+            case "latency_breakdown": {
+              try { console.info("latency_breakdown", info); } catch {}
+              const metrics = info?.metrics || data?.metrics;
+              if (metrics && typeof metrics === "object") {
+                Object.entries(metrics).forEach(([name, value]) => {
+                  try { console.info(`${name}=${value}`); } catch {}
+                });
+              }
+              break;
+            }
+            case "policy_decision": {
+              const detail = info?.decision || info?.detail || info?.label || data?.decision || data?.detail;
+              try { console.info(`policy_decision: ${detail ?? "unknown"}`); } catch {}
+              break;
+            }
+            case "nlu": {
+              try { console.info("nlu", info); } catch {}
+              break;
+            }
+            case "session_goal": {
+              try { console.info("session_goal", info); } catch {}
+              break;
+            }
+            case "state": {
+              try { console.info("state", info); } catch {}
+              break;
+            }
+            case "barge_in":
+            case "barge_resume":
+            case "barge_commit":
+            case "barge_cancel":
+            case "tts_pause":
+            case "tts_resume":
+            case "tts_cancel":
+            case "tts_commit":
+            case "asr:start":
+            case "asr:first_partial":
+            case "asr:final":
+            case "CloseStream ack": {
+              try { console.info(String(kind), info); } catch {}
+              break;
+            }
+            default: {
+              try { console.info(String(kind), info); } catch {}
+            }
+          }
+        } catch {}
+      });
+    } catch {}
+  }
+
+  function installSessionConsoleBridge() {
+    try {
+      if (window.__askchip_ws_console_bridge) {
+        return;
+      }
+
+      const partialSeen = new Set();
+      const finalSeen = new Set();
+
+      const seenKey = (frame) => {
+        try {
+          const turnId = frame?.turn_id ?? frame?.channel?.turn_id ?? frame?.payload?.turn_id;
+          if (turnId !== undefined && turnId !== null) {
+            return `turn:${turnId}`;
+          }
+          const seq = frame?.sequence_id ?? frame?.seq ?? frame?.channel?.seq;
+          if (seq !== undefined && seq !== null) {
+            return `seq:${seq}`;
+          }
+        } catch {}
+        return "global";
+      };
+
+      const resetSeen = () => {
+        try { partialSeen.clear(); } catch {}
+        try { finalSeen.clear(); } catch {}
+      };
+
+      const logLatency = (frame) => {
+        try { console.info("latency_breakdown", frame); } catch {}
+        const metrics = frame?.metrics || frame?.payload?.metrics;
+        if (metrics && typeof metrics === "object") {
+          Object.entries(metrics).forEach(([name, value]) => {
+            try { console.info(`${name}=${value}`); } catch {}
+          });
+        }
+      };
+
+      const tag = (label) => {
+        try { console.info(String(label)); } catch {}
+      };
+
+      const simple = new Set([
+        "barge_in",
+        "barge_resume",
+        "barge_commit",
+        "barge_cancel",
+        "tts_pause",
+        "tts_resume",
+        "tts_cancel",
+        "tts_commit",
+      ]);
+
+      window.addEventListener("askchip-ws", (ev) => {
+        try {
+          const frame = ev?.detail;
+          if (!frame || typeof frame !== "object") {
+            return;
+          }
+
+          const type = frame.type;
+          const event = typeof frame.event === "string" ? frame.event : undefined;
+          const eventLabel = event || type;
+
+          if (eventLabel && simple.has(String(eventLabel))) {
+            tag(eventLabel);
+          }
+
+          if (type === "assistant_end" || event === "assistant_end") {
+            tag("assistant_end");
+          }
+          if (type === "UtteranceEnd" || event === "UtteranceEnd") {
+            tag("UtteranceEnd");
+          }
+          if (type === "latency_breakdown" || event === "latency_breakdown") {
+            logLatency(frame);
+          }
+          if (type === "policy_decision" || (event && event.includes("policy_decision"))) {
+            const detail = frame?.decision ?? frame?.detail ?? frame?.label ?? frame?.payload?.decision ?? "unknown";
+            try { console.info(`policy_decision: ${String(detail)}`); } catch {}
+          }
+          if (type === "nlu" || event === "nlu") {
+            try { console.info("nlu", frame); } catch {}
+          }
+          if (type === "session_goal" || event === "session_goal") {
+            try { console.info("session_goal", frame); } catch {}
+          }
+          if (type === "state" || event === "state") {
+            try { console.info("state", frame); } catch {}
+          }
+
+          if (type === "Result" || type === "Results" || event === "Result") {
+            const channel = frame?.channel || frame?.payload?.channel || {};
+            const isFinal = Boolean(
+              (channel && typeof channel.is_final === "boolean" && channel.is_final) ||
+              (typeof frame.final === "boolean" && frame.final)
+            );
+            const key = seenKey(frame);
+
+            if (!isFinal) {
+              if (!partialSeen.has(key)) {
+                partialSeen.add(key);
+                tag("asr:first_partial");
+              }
+            } else {
+              partialSeen.delete(key);
+              if (!finalSeen.has(key)) {
+                finalSeen.add(key);
+                tag("asr:final");
+              }
+            }
+          }
+
+          if (type === "CloseStream" || event === "CloseStream") {
+            resetSeen();
+          }
+        } catch {}
+      }, { passive: true });
+
+      window.addEventListener("askchip-ws-close", resetSeen, { passive: true });
+
+      window.__askchip_ws_console_bridge = true;
+    } catch {}
+  }
+
+  installAdminConsoleBridge();
+  installSessionConsoleBridge();
 })();

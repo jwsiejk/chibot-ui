@@ -39,6 +39,38 @@ try:
 except Exception:
     _admin_emit_base = None
 
+
+def _broadcast_admin_frame(event: str, payload: Dict[str, Any]) -> None:
+    """Mirror admin diagnostic breadcrumbs onto the session bus."""
+
+    try:
+        sid = payload.get("session_id") or payload.get("sid")
+    except Exception:
+        sid = None
+
+    if not sid:
+        return
+
+    try:
+        sid_str = str(sid)
+    except Exception:
+        sid_str = sid  # type: ignore[assignment]
+
+    frame: Dict[str, Any] = {"type": event}
+    try:
+        frame.update(dict(payload))
+    except Exception:
+        frame.update(payload)  # type: ignore[arg-type]
+
+    frame.setdefault("session_id", sid_str)
+    frame.setdefault("sid", sid_str)
+
+    try:
+        bus.broadcast(sid_str, frame)
+    except Exception:
+        pass
+
+
 def _admin_emit(event: str, **payload: Any) -> None:
     if callable(_admin_emit_base):
         try:

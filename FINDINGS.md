@@ -1,8 +1,8 @@
 # AskChip E2E Findings
 
-**Passed:** 2/13
+**Passed:** 1/13
 
-- **P1_greet_dupe_guard**: PASS
+- **P1_greet_dupe_guard**: FAIL — WS console missing 'assistant_end'
 - **P2_mic_arms_after_greet**: FAIL — WS console missing 'asr:start'; WS latency 'first_partial_from_mic_start' unavailable; Fail: WS console missing 'asr:start'; Fail: WS latency 'first_partial_from_mic_start' unavailable
 - **P3_asr_ready_gate**: FAIL — WS console missing 'latency_breakdown'; WS latency 'dg_connect' unavailable; WS latency 'first_partial_from_mic_start' unavailable; Fail: WS latency 'first_partial_from_mic_start' unavailable
 - **P4_containerized_opus_sanitized**: FAIL — Deepgram WS URL not observed; WS console missing 'container=webm/opus'; WS console missing 'containerized=true'; Fail: WS console missing 'containerized=true'
