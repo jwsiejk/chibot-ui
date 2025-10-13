@@ -1374,6 +1374,10 @@ def _planner_feature_summary(
         candidates.append((str(label), weight))
 
     nlu = dialog_nlu or {}
+    try:
+        emit_nlu_for_e2e(nlu, session_goal)
+    except Exception:
+        pass
     uni = universal or {}
 
     intent = nlu.get("intent") if isinstance(nlu, Mapping) else None
@@ -3588,3 +3592,15 @@ def run_ws_user_turn(session_id: str,
             except Exception:
                 pass
     return tid
+
+
+def emit_nlu_for_e2e(nlu: dict, session_goal: dict):
+    try:
+        from app.api_v1.admin import _emit as _admin_emit
+        payload = dict(nlu or {})
+        payload.setdefault('entities', payload.get('entities') or {})
+        _admin_emit('nlu', **payload)
+        if session_goal:
+            _admin_emit('session_goal', **session_goal)
+    except Exception:
+        pass

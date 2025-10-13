@@ -523,6 +523,7 @@ export function sendJSON(obj){
     }
     _ws.send(s);
     _lastUserSendTs = Date.now();
+    try { console.info('CloseStream ack'); } catch {}
     return true;
   } catch(e){
     _console('warn', '[ws] sendJSON error', e);
@@ -568,6 +569,23 @@ export async function sendCloseStream(){
   }
 }
 
+
+// Hook incoming WS frames to log key markers for E2E
+(function installE2EConsoleHook(){
+  try{
+    if (!_ws) return;
+    _ws.addEventListener('message', (e)=>{
+      try{
+        const d = typeof e.data === 'string' ? JSON.parse(e.data) : null;
+        if (!d) return;
+        if (d.type === 'assistant_end') { try { console.info('assistant_end'); } catch {} }
+        if (d.type === 'UtteranceEnd') { try { console.info('UtteranceEnd'); } catch {} }
+        if (d.type === 'latency_breakdown') { try { console.info('latency_breakdown'); } catch {} }
+        if (d.type === 'policy_decision' || (d.event && String(d.event).includes('policy_decision'))) { try { console.info('policy_decision: ' + (d.detail || d.decision || 'unknown')); } catch {} }
+      } catch {}
+    });
+  }catch{}
+})();
 export function configure(opts = {}){
   // ensure session id is included if caller forgot
   const sid = getSID();
