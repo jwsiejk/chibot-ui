@@ -1358,6 +1358,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     # them locally. Enabled once the socket is open and any backlog has been
     # flushed so transcription isn't gated on the not-ready timeout.
     asr_direct_stream = [False]
+    # Track whether the current turn has been committed (manual or automatic)
+    # so that we know when to flip into pass-through mode.
+    turn_stream_committed = [False]
+    # Coordinate async activation of the ASR stream once a turn commits.
+    asr_stream_activation_task: List[Optional[asyncio.Task]] = [None]
+    asr_not_ready_timeout_task: List[Optional[asyncio.Task]] = [None]
 
     # NEW: per-turn mic capture state
     mic_chunks: List[bytes] = []
@@ -1692,6 +1698,96 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             return False
         return True
 
+    def _cancel_asr_stream_activation() -> None:
+        task = asr_stream_activation_task[0]
+        if task and not task.done():
+            task.cancel()
+        asr_stream_activation_task[0] = None
+
+    def _cancel_asr_not_ready_timeout() -> None:
+        task = asr_not_ready_timeout_task[0]
+        if task and not task.done():
+            task.cancel()
+        asr_not_ready_timeout_task[0] = None
+
+    def _schedule_asr_not_ready_timeout() -> None:
+        _cancel_asr_not_ready_timeout()
+        wait_s = max(0.0, asr_ready_wait_s)
+        if wait_s <= 0:
+            return
+
+        async def _timer() -> None:
+            try:
+                await asyncio.sleep(wait_s)
+                if not asr_ready_evt.is_set():
+                    _jlog("asr_not_ready_timeout", sid=sid, phase="commit")
+            except asyncio.CancelledError:
+                return
+
+        asr_not_ready_timeout_task[0] = asyncio.create_task(_timer())
+
+    async def _run_asr_stream_activation(trigger: str) -> None:
+        nonlocal dg_connect_task
+        try:
+            try:
+                queued_chunks = len(buffered_chunks)
+            except Exception:
+                queued_chunks = 0
+            _jlog(
+                "asr_stream_activate",
+                sid=sid,
+                trigger=trigger,
+                queued=queued_chunks,
+                dg_state=dg_state,
+            )
+
+            if not _has_deepgram_key():
+                asr_direct_stream[0] = True
+                return
+
+            if dg_state == "closed" and dg_connect_task is None:
+                if not turn_connect_started[0]:
+                    turn_connect_started[0] = True
+                    _jlog(
+                        "asr_connect_schedule",
+                        sid=sid,
+                        turn_id=turn_id_ref[0],
+                        queued=len(buffered_chunks),
+                        dg_state=dg_state,
+                    )
+                dg_connect_task = asyncio.create_task(_ensure_dg_connected())
+
+            if dg_connect_task is not None and not asr_ready_evt.is_set():
+                _schedule_asr_not_ready_timeout()
+                try:
+                    await asyncio.wait_for(
+                        asr_ready_evt.wait(), timeout=asr_ready_wait_s
+                    )
+                except asyncio.TimeoutError:
+                    _jlog("asr_not_ready_timeout", sid=sid, phase="commit_wait")
+                finally:
+                    _cancel_asr_not_ready_timeout()
+
+            if dg_connect_task is not None and not dg_connect_task.done():
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(
+                        dg_connect_task, timeout=asr_ready_wait_s
+                    )
+
+            await _flush_buffered_chunks()
+
+            if dg_state == "open" and not buffered_chunks:
+                asr_direct_stream[0] = True
+        finally:
+            if asr_stream_activation_task[0] is asyncio.current_task():
+                asr_stream_activation_task[0] = None
+
+    def _schedule_asr_stream_activation(trigger: str) -> None:
+        _cancel_asr_stream_activation()
+        asr_stream_activation_task[0] = asyncio.create_task(
+            _run_asr_stream_activation(trigger)
+        )
+
     def _on_barge_commit() -> None:
         mode_raw = turn_commit_mode_ref[0]
         mode = mode_raw or ("manual" if manual_commit_pending[0] else "vad")
@@ -1719,6 +1815,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             admin_event="turn_committed",
             admin_label="turn_committed",
         )
+        if not turn_stream_committed[0]:
+            turn_stream_committed[0] = True
+            _schedule_asr_stream_activation(mode or "vad")
 
     def _cancel_no_audio_watch() -> None:
         task = no_audio_watch_task[0]
@@ -1913,6 +2012,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     )
                 )
                 _jlog("asr_connect_ok", sid=sid)
+                _cancel_asr_not_ready_timeout()
 
                 queued_chunks = len(buffered_chunks)
                 queued_bytes = 0
@@ -1944,6 +2044,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 dg_state = "closed"
                 dg = None
                 asr_direct_stream[0] = False
+                _cancel_asr_not_ready_timeout()
                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
                 with contextlib.suppress(Exception):
                     await _ws_send_json(
@@ -2242,9 +2343,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         sent_any_audio[0] = False
                         buffered_chunks.clear()
                         turn_connect_started[0] = False
-                        asr_direct_stream[0] = (
-                            dg_state == "open" and asr_ready_evt.is_set()
-                        )
+                        turn_stream_committed[0] = False
+                        asr_direct_stream[0] = False
+                        _cancel_asr_stream_activation()
+                        _cancel_asr_not_ready_timeout()
                         # reset mic capture
                         mic_chunks.clear()
                         mic_first_ts[0] = now
@@ -2688,6 +2790,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             _jlog("ws_close_stream", sid=sid)
                             manual_turn_active[0] = False
                             manual_button_down[0] = False
+                            turn_stream_committed[0] = False
+                            _cancel_asr_stream_activation()
+                            _cancel_asr_not_ready_timeout()
 
                             # Always define this first so later 'if synthetic_emitted' is safe
                             synthetic_emitted = False
@@ -3058,6 +3163,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         _cancel_confirm_timeout()
         with contextlib.suppress(Exception):
             _cancel_no_audio_watch()
+        _cancel_asr_stream_activation()
+        _cancel_asr_not_ready_timeout()
         await _remove_active_ws_entry("cleanup")
         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
         with contextlib.suppress(Exception):

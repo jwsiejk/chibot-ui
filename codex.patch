@@ -1,12 +1,8 @@
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 2b48a8a33b15de752d583d0a7866ab91e41ce556..b03eb1378458ad349aa493d1d7c140fb90ccceaf 100644
+index b03eb1378458ad349aa493d1d7c140fb90ccceaf..e6eb82257f1cf8f2d2f219584894e8d63d3eee20 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -1332,50 +1332,54 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     # Turn-scoped buffering + state
-     buffered_chunks: Deque[bytes] = deque()
-     sent_any_audio = [False]
-     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
+@@ -1336,50 +1336,56 @@ async def _ws_chat_asgi_impl(scope, receive, send):
      no_audio_notified = [False]
      no_audio_turn_id = [0]
      try:
@@ -28,10 +24,16 @@ index 2b48a8a33b15de752d583d0a7866ab91e41ce556..b03eb1378458ad349aa493d1d7c140fb
      backpressure_last_queue_len = 0
      backpressure_emit_interval = 1.0
      turn_connect_started = [False]
-+    # When True we stream new audio chunks directly to Deepgram instead of staging
-+    # them locally. Enabled once the socket is open and any backlog has been
-+    # flushed so transcription isn't gated on the not-ready timeout.
-+    asr_direct_stream = [False]
+     # When True we stream new audio chunks directly to Deepgram instead of staging
+     # them locally. Enabled once the socket is open and any backlog has been
+     # flushed so transcription isn't gated on the not-ready timeout.
+     asr_direct_stream = [False]
++    # Track whether the current turn has been committed (manual or automatic)
++    # so that we know when to flip into pass-through mode.
++    turn_stream_committed = [False]
++    # Coordinate async activation of the ASR stream once a turn commits.
++    asr_stream_activation_task: List[Optional[asyncio.Task]] = [None]
++    asr_not_ready_timeout_task: List[Optional[asyncio.Task]] = [None]
  
      # NEW: per-turn mic capture state
      mic_chunks: List[bytes] = []
@@ -57,53 +59,178 @@ index 2b48a8a33b15de752d583d0a7866ab91e41ce556..b03eb1378458ad349aa493d1d7c140fb
      try:
          confirm_min_tokens = max(1, int(cfg.get("confirm_min_tokens", 2) or 2))
      except Exception:
-@@ -1841,98 +1845,127 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         nonlocal dg, rx_task, dg_connect_task, dg_state
+@@ -1670,77 +1676,170 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         return manual_feature_enabled and manual_mode_manual_only
  
-         if not _has_deepgram_key():
-             with contextlib.suppress(Exception):
-                 _jlog("asr_connect_skip", sid=sid, reason="no_api_key")
+     def _manual_log_event(name: str, **fields: Any) -> None:
+         _jlog(
+             name,
+             sid=sid,
+             admin_event=name,
+             admin_label=name,
+             **fields,
+         )
+ 
+     def _session_ready_for_auto_commit() -> bool:
+         if manual_button_down[0] or manual_turn_active[0]:
              return False
+         if barge.is_paused():
+             return False
+         try:
+             active_turn = bus.current_assistant_turn(sid)
+         except Exception:
+             active_turn = None
+         tts_state, _ = _lookup_tts_state(sid, active_turn)
+         if _is_tts_active(tts_state):
+             return False
+         return True
  
-         if dg_state == "open" and dg is not None:
-             return True
- 
-         if dg_state == "connecting" and dg_connect_task is not None:
++    def _cancel_asr_stream_activation() -> None:
++        task = asr_stream_activation_task[0]
++        if task and not task.done():
++            task.cancel()
++        asr_stream_activation_task[0] = None
++
++    def _cancel_asr_not_ready_timeout() -> None:
++        task = asr_not_ready_timeout_task[0]
++        if task and not task.done():
++            task.cancel()
++        asr_not_ready_timeout_task[0] = None
++
++    def _schedule_asr_not_ready_timeout() -> None:
++        _cancel_asr_not_ready_timeout()
++        wait_s = max(0.0, asr_ready_wait_s)
++        if wait_s <= 0:
++            return
++
++        async def _timer() -> None:
++            try:
++                await asyncio.sleep(wait_s)
++                if not asr_ready_evt.is_set():
++                    _jlog("asr_not_ready_timeout", sid=sid, phase="commit")
++            except asyncio.CancelledError:
++                return
++
++        asr_not_ready_timeout_task[0] = asyncio.create_task(_timer())
++
++    async def _run_asr_stream_activation(trigger: str) -> None:
++        nonlocal dg_connect_task
++        try:
++            try:
++                queued_chunks = len(buffered_chunks)
++            except Exception:
++                queued_chunks = 0
++            _jlog(
++                "asr_stream_activate",
++                sid=sid,
++                trigger=trigger,
++                queued=queued_chunks,
++                dg_state=dg_state,
++            )
++
++            if not _has_deepgram_key():
++                asr_direct_stream[0] = True
++                return
++
++            if dg_state == "closed" and dg_connect_task is None:
++                if not turn_connect_started[0]:
++                    turn_connect_started[0] = True
++                    _jlog(
++                        "asr_connect_schedule",
++                        sid=sid,
++                        turn_id=turn_id_ref[0],
++                        queued=len(buffered_chunks),
++                        dg_state=dg_state,
++                    )
++                dg_connect_task = asyncio.create_task(_ensure_dg_connected())
++
++            if dg_connect_task is not None and not asr_ready_evt.is_set():
++                _schedule_asr_not_ready_timeout()
++                try:
++                    await asyncio.wait_for(
++                        asr_ready_evt.wait(), timeout=asr_ready_wait_s
++                    )
++                except asyncio.TimeoutError:
++                    _jlog("asr_not_ready_timeout", sid=sid, phase="commit_wait")
++                finally:
++                    _cancel_asr_not_ready_timeout()
++
++            if dg_connect_task is not None and not dg_connect_task.done():
++                with contextlib.suppress(asyncio.TimeoutError):
++                    await asyncio.wait_for(
++                        dg_connect_task, timeout=asr_ready_wait_s
++                    )
++
++            await _flush_buffered_chunks()
++
++            if dg_state == "open" and not buffered_chunks:
++                asr_direct_stream[0] = True
++        finally:
++            if asr_stream_activation_task[0] is asyncio.current_task():
++                asr_stream_activation_task[0] = None
++
++    def _schedule_asr_stream_activation(trigger: str) -> None:
++        _cancel_asr_stream_activation()
++        asr_stream_activation_task[0] = asyncio.create_task(
++            _run_asr_stream_activation(trigger)
++        )
++
+     def _on_barge_commit() -> None:
+         mode_raw = turn_commit_mode_ref[0]
+         mode = mode_raw or ("manual" if manual_commit_pending[0] else "vad")
+         manual_commit_pending[0] = False
+         turn_commit_mode_ref[0] = "vad"
+         active_turn_mode_ref[0] = mode or "vad"
+         target_turn = current_assistant_turn_ref[0]
+         try:
+             latest = bus.current_assistant_turn(sid)
+             if latest:
+                 target_turn = latest
+         except Exception:
+             pass
+         if target_turn:
              with contextlib.suppress(Exception):
-                 _jlog("asr_connect_wait", sid=sid, reason="existing_task")
-             with contextlib.suppress(Exception):
-                 await dg_connect_task
-             return dg_state == "open" and dg is not None
+                 bus.cancel_turn(sid, target_turn)
+         with contextlib.suppress(Exception):
+             bus.broadcast(sid, {"type": "state", "phase": "ready"})
+         _jlog(
+             "turn_committed",
+             sid=sid,
+             mode=mode,
+             manual=(mode == "manual"),
+             auto_commit=(mode == "auto_commit"),
+             admin_event="turn_committed",
+             admin_label="turn_committed",
+         )
++        if not turn_stream_committed[0]:
++            turn_stream_committed[0] = True
++            _schedule_asr_stream_activation(mode or "vad")
  
-         connect_result = {"ok": False}
+     def _cancel_no_audio_watch() -> None:
+         task = no_audio_watch_task[0]
+         if task and not task.done():
+             task.cancel()
+         no_audio_watch_task[0] = None
  
-         async def _connect() -> None:
-             nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
+     def _schedule_no_audio_watch(turn_id: int) -> None:
+         if no_audio_window_s <= 0:
+             return
+         _cancel_no_audio_watch()
+         no_audio_notified[0] = False
+         no_audio_turn_id[0] = turn_id
+ 
+         async def _watch() -> None:
              try:
-                 dg_state = "connecting"
-                 with contextlib.suppress(Exception):
-                     asr_ready_evt.clear()
-+                asr_direct_stream[0] = False
+                 await asyncio.sleep(no_audio_window_s)
+                 if sent_any_audio[0] or no_audio_notified[0]:
+                     return
+                 _emit_no_audio_alert("timeout")
+             except asyncio.CancelledError:
+                 pass
+             finally:
+                 no_audio_watch_task[0] = None
  
-                 cfg["_transport"] = transport
-                 cfg["_jlog"] = _jlog
-                 cfg.setdefault("session_id", sid)
-                 cfg["_url_tag"] = f"{WS_ASGI_BUILD}:{sid}"
- 
-                 def _diag_hook(label: str, **payload: Any) -> None:
-                     payload_copy = dict(payload) if payload else {}
-                     admin_cb = _admin_emit if callable(_admin_emit) else None
-                     if admin_cb:
-                         try:
-                             admin_cb("asr:diag", label=label, **payload_copy)
-                         except Exception:
-                             pass
- 
-                 cfg["_diag_hook"] = _diag_hook
-                 _jlog("asr_connect_begin", sid=sid, transport=transport)
-                 client = DeepgramClient(cfg)
-                 dg = client
-                 await client.connect()
+@@ -1891,81 +1990,83 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                  dg_state = "open"
                  connect_result["ok"] = True
                  turn_id_ref[0] = buf.turn_seq + 1
@@ -129,37 +256,39 @@ index 2b48a8a33b15de752d583d0a7866ab91e41ce556..b03eb1378458ad349aa493d1d7c140fb
                      )
                  )
                  _jlog("asr_connect_ok", sid=sid)
-+
-+                queued_chunks = len(buffered_chunks)
-+                queued_bytes = 0
-+                try:
-+                    queued_bytes = sum(
-+                        len(chunk)
-+                        for chunk in buffered_chunks
-+                        if isinstance(chunk, (bytes, bytearray))
-+                    )
-+                except Exception:
-+                    queued_bytes = 0
-+
-+                with contextlib.suppress(Exception):
-+                    if not asr_ready_evt.is_set():
-+                        asr_ready_evt.set()
-+
-+                _jlog(
-+                    "flush_on_open",
-+                    sid=sid,
-+                    queued_chunks=queued_chunks,
-+                    queued_bytes=queued_bytes,
-+                )
-+
-+                await _flush_buffered_chunks()
-+
-+                if dg_state == "open" and not buffered_chunks:
-+                    asr_direct_stream[0] = True
++                _cancel_asr_not_ready_timeout()
+ 
+                 queued_chunks = len(buffered_chunks)
+                 queued_bytes = 0
+                 try:
+                     queued_bytes = sum(
+                         len(chunk)
+                         for chunk in buffered_chunks
+                         if isinstance(chunk, (bytes, bytearray))
+                     )
+                 except Exception:
+                     queued_bytes = 0
+ 
+                 with contextlib.suppress(Exception):
+                     if not asr_ready_evt.is_set():
+                         asr_ready_evt.set()
+ 
+                 _jlog(
+                     "flush_on_open",
+                     sid=sid,
+                     queued_chunks=queued_chunks,
+                     queued_bytes=queued_bytes,
+                 )
+ 
+                 await _flush_buffered_chunks()
+ 
+                 if dg_state == "open" and not buffered_chunks:
+                     asr_direct_stream[0] = True
              except Exception as e:
                  dg_state = "closed"
                  dg = None
-+                asr_direct_stream[0] = False
+                 asr_direct_stream[0] = False
++                _cancel_asr_not_ready_timeout()
                  _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
                  with contextlib.suppress(Exception):
                      await _ws_send_json(
@@ -185,60 +314,7 @@ index 2b48a8a33b15de752d583d0a7866ab91e41ce556..b03eb1378458ad349aa493d1d7c140fb
  
      def _dg_client_ready(client: Optional[DeepgramClient]) -> bool:
          """Return True if the Deepgram client reports an open websocket."""
-@@ -2034,50 +2067,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         while buffered_chunks:
-             chunk = buffered_chunks[0]
-             chunk_len = len(chunk) if isinstance(chunk, (bytes, bytearray)) else 0
-             ok = await _send_chunk(chunk, from_buffer=True)
-             if ok:
-                 buffered_chunks.popleft()
-                 flushed_chunks += 1
-                 flushed_bytes += chunk_len
-                 if callable(final_guard_reset_ref[0]):
-                     with contextlib.suppress(Exception):
-                         final_guard_reset_ref[0]("flush")
-                 continue
-             break
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_flush_done",
-                 sid=sid,
-                 queued=initial_queued,
-                 flushed_chunks=flushed_chunks,
-                 flushed_bytes=flushed_bytes,
-                 remaining=len(buffered_chunks),
-             )
-         _maybe_emit_backpressure(len(buffered_chunks))
-         if not buffered_chunks:
-             backpressure_drop_count = 0
-+            if dg_state == "open":
-+                asr_direct_stream[0] = True
- 
-     try:
-         while True:
-             ev = await receive()
-             et = ev.get("type")
- 
-             if et == "websocket.disconnect":
-                 had_disconnect = True
-                 now = time.time()
-                 idle_s = (
-                     max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
-                 )
-                 with contextlib.suppress(Exception):
-                     _jlog(
-                         "ws_conn_disconnect",
-                         conn_id=conn_id,
-                         sid=sid,
-                         code=ev.get("code"),
-                         reason=ev.get("reason"),
-                         idle_s=idle_s,
-                     )
-                 with contextlib.suppress(Exception):
-                     if _admin_emit:
-                         _admin_emit(
-                             "ws_conn_disconnect",
-@@ -2185,50 +2220,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+@@ -2220,53 +2321,54 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                      send_state=_send_barge_state,
                                      auto_commit=False,
                                  )
@@ -264,9 +340,13 @@ index 2b48a8a33b15de752d583d0a7866ab91e41ce556..b03eb1378458ad349aa493d1d7c140fb
                          sent_any_audio[0] = False
                          buffered_chunks.clear()
                          turn_connect_started[0] = False
-+                        asr_direct_stream[0] = (
-+                            dg_state == "open" and asr_ready_evt.is_set()
-+                        )
+-                        asr_direct_stream[0] = (
+-                            dg_state == "open" and asr_ready_evt.is_set()
+-                        )
++                        turn_stream_committed[0] = False
++                        asr_direct_stream[0] = False
++                        _cancel_asr_stream_activation()
++                        _cancel_asr_not_ready_timeout()
                          # reset mic capture
                          mic_chunks.clear()
                          mic_first_ts[0] = now
@@ -292,167 +372,110 @@ index 2b48a8a33b15de752d583d0a7866ab91e41ce556..b03eb1378458ad349aa493d1d7c140fb
                      # Detect container early
                      try:
                          if transport.get("container") is None and raw_chunk:
-@@ -2277,67 +2315,87 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+@@ -2666,50 +2768,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+ 
+                             async def _bg_user():
+                                 try:
+                                     await asyncio.to_thread(
+                                         run_ws_user_turn,
+                                         sid,
+                                         text,
+                                         corr,
+                                         meta_overrides=meta_overrides,
                                      )
-                     except Exception:
-                         pass
- 
-                     chunk = raw_chunk
-                     buf.append(chunk)
- 
-                     # capture bytes for diagnostic playback
-                     if MIC_CAPTURE:
-                         mic_chunks.append(chunk)
-                         mic_last_ts[0] = now
-                     _jlog(
-                         "mic_capture_append",
-                         sid=sid,
-                         turn_id=turn_id_ref[0],
-                         chunks=len(mic_chunks),
-                         last_bytes=len(chunk),
-                     )
- 
-                     _handle_confirm_chunk(raw_chunk, now)
- 
-                     if not _has_deepgram_key():
-                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
-                         continue
- 
--                    # Stage early frames
-+                    # Stage early frames or stream directly when ASR is ready
-                     if chunk:
--                        buffered_chunks.append(chunk)
-                         if callable(final_guard_reset_ref[0]):
-                             with contextlib.suppress(Exception):
-                                 final_guard_reset_ref[0]("chunk")
--                        dropped_now = 0
--                        if len(buffered_chunks) > max_buffered_chunks:
--                            dropped_now = len(buffered_chunks) - max_buffered_chunks
--                            for _ in range(dropped_now):
--                                if not buffered_chunks:
--                                    break
--                                buffered_chunks.popleft()
--                            _jlog(
--                                "ws_audio_drop", sid=sid, dropped=dropped_now, queued=len(buffered_chunks)
-+
-+                        direct_sent = False
-+                        if (
-+                            asr_direct_stream[0]
-+                            and dg_state == "open"
-+                            and dg is not None
-+                            and asr_ready_evt.is_set()
-+                            and not buffered_chunks
-+                        ):
-+                            direct_sent = await _send_chunk(chunk, from_buffer=False)
-+                            if not direct_sent:
-+                                _jlog("ws_direct_stream_fallback", sid=sid)
-+
-+                        if not direct_sent:
-+                            asr_direct_stream[0] = False
-+                            buffered_chunks.append(chunk)
-+                            dropped_now = 0
-+                            if len(buffered_chunks) > max_buffered_chunks:
-+                                dropped_now = len(buffered_chunks) - max_buffered_chunks
-+                                for _ in range(dropped_now):
-+                                    if not buffered_chunks:
-+                                        break
-+                                    buffered_chunks.popleft()
-+                                _jlog(
-+                                    "ws_audio_drop",
-+                                    sid=sid,
-+                                    dropped=dropped_now,
-+                                    queued=len(buffered_chunks),
-+                                )
-+                            _maybe_emit_backpressure(
-+                                len(buffered_chunks), dropped_now=dropped_now
-                             )
--                        _maybe_emit_backpressure(len(buffered_chunks), dropped_now=dropped_now)
- 
-                     # Ensure provider connection
-                     if not turn_connect_started[0] and dg_state == "closed":
-                         turn_connect_started[0] = True
-                         if dg_connect_task is None:
-                             with contextlib.suppress(Exception):
-                                 _jlog(
-                                     "asr_connect_schedule",
-                                     sid=sid,
-                                     turn_id=turn_id_ref[0],
-                                     queued=len(buffered_chunks),
-                                     dg_state=dg_state,
-                                 )
-                             dg_connect_task = asyncio.create_task(
-                                 _ensure_dg_connected()
-                             )
-                     elif dg_state == "connecting":
-                         pass
- 
-                     # Flush when ready
-                     if dg is not None:
-                         if not asr_ready_evt.is_set():
-                             try:
-                                 await asyncio.wait_for(
-                                     asr_ready_evt.wait(), timeout=asr_ready_wait_s
-@@ -2798,61 +2856,63 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                             )
-                                         )  # ~800 ms grace
-                                         await dg.close(wait_for_final=True)
-                                     except DeepgramDrainTimeoutError as exc:
-                                         drain_timeout_exc = exc
-                                         _jlog(
-                                             "ws_close_dg_drain_timeout",
-                                             sid=sid,
-                                             queued_chunks=getattr(
-                                                 exc, "queued_chunks", None
-                                             ),
-                                             queued_bytes=getattr(
-                                                 exc, "queued_bytes", None
-                                             ),
-                                             wait_timeout=getattr(
-                                                 exc, "wait_timeout", None
-                                             ),
-                                         )
-                                     except Exception as exc:
-                                         _jlog(
-                                             "ws_close_dg_close_error",
-                                             sid=sid,
-                                             err=type(exc).__name__,
-                                         )
-                                     dg_state = "closed"
-+                                    asr_direct_stream[0] = False
-                                     _relay_task = rx_task
-                                     rx_task = None
-                                     if _relay_task:
-                                         _relay_task.cancel()
-                                         with contextlib.suppress(
-                                             asyncio.CancelledError, Exception
-                                         ):
-                                             await _relay_task
-                                     dg = None
+                                 except Exception as e:
                                      with contextlib.suppress(Exception):
-                                         asr_ready_evt.clear()
-+                                    asr_direct_stream[0] = False
-                                     if not final_seen[0]:
-                                         synth_reason = "dg_close_no_final"
-                                         if drain_timeout_exc is not None:
-                                             synth_reason = "dg_drain_timeout"
-                                         if await _emit_synthetic_final(
-                                             turn_id, synth_reason
-                                         ):
-                                             synthetic_emitted = True
-                                             with contextlib.suppress(ValueError):
-                                                 pending_final_turns.remove(turn_id)
-                                             synthetic_final_turns.add(turn_id)
-                                     if drain_timeout_exc is not None:
-                                         _jlog(
-                                             "ws_close_dg_drain_timeout_fallback",
-                                             sid=sid,
-                                             queued_chunks=getattr(
-                                                 drain_timeout_exc, "queued_chunks", None
-                                             ),
-                                             queued_bytes=getattr(
-                                                 drain_timeout_exc, "queued_bytes", None
+                                         await _ws_send_json(
+                                             send,
+                                             make_error(
+                                                 "user_fail", e.__class__.__name__
                                              ),
                                          )
-                                 else:
-                                     if fallback_reason == "dg_not_ready":
-                                         _jlog("ws_close_fallback_not_ready", sid=sid)
+ 
+                             asyncio.create_task(_bg_user())
+ 
+                         elif t == "CloseStream":
+                             _jlog("ws_close_stream", sid=sid)
+                             manual_turn_active[0] = False
+                             manual_button_down[0] = False
++                            turn_stream_committed[0] = False
++                            _cancel_asr_stream_activation()
++                            _cancel_asr_not_ready_timeout()
+ 
+                             # Always define this first so later 'if synthetic_emitted' is safe
+                             synthetic_emitted = False
+ 
+                             if callable(final_guard_local_vad_ref[0]):
+                                 with contextlib.suppress(Exception):
+                                     final_guard_local_vad_ref[0]("stop")
+ 
+                             _ensure_confirm_closed("close_stream")
+ 
+                             if buf.is_empty():
+                                 # Empty turn closure; synthesize ids + reset final tracking.
+                                 turn_id_ref[0] = buf.turn_seq + 1
+                                 final_seen[0] = False
+                                 _reset_turn_metrics(time.time())
+                                 with contextlib.suppress(Exception):
+                                     _jlog(
+                                         "turn_start",
+                                         sid=sid,
+                                         turn_id=turn_id_ref[0],
+                                         first_bytes=0,
+                                         empty_turn=True,
+                                     )
+ 
+                             # --- Get a turn_id (with guard logs) ---
+@@ -3036,50 +3141,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                 except Exception as e:
+                                     _jlog(
+                                         "mic_capture_fail",
+                                         sid=sid,
+                                         err=type(e).__name__,
+                                     )
+ 
+                         else:
+                             # Unknown type already filtered by schema; no-op to future-proof.
+                             pass
+ 
+                     except ValueError as e:
+                         await _ws_send_json(send, make_error("bad_message", str(e)))
+                 else:
+                     # websocket.receive without text/bytes
+                     pass
+             else:
+                 # Other ASGI events are ignored
+                 pass
+ 
+     finally:
+         _ensure_confirm_closed("shutdown")
+         _cancel_confirm_timeout()
+         with contextlib.suppress(Exception):
+             _cancel_no_audio_watch()
++        _cancel_asr_stream_activation()
++        _cancel_asr_not_ready_timeout()
+         await _remove_active_ws_entry("cleanup")
+         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "ws_conn_cleanup",
+                 conn_id=conn_id,
+                 sid=sid,
+                 duration=duration,
+                 had_disconnect=had_disconnect,
+             )
+         with contextlib.suppress(Exception):
+             if _admin_emit:
+                 _admin_emit(
+                     "ws_conn_cleanup",
+                     conn_id=conn_id,
+                     sid=sid,
+                     duration=duration,
+                     had_disconnect=had_disconnect,
+                 )
+         # Clean up safely; never raise in cleanup
+         with contextlib.suppress(Exception):
+             if rx_task:
+                 rx_task.cancel()
+                 await rx_task
+         with contextlib.suppress(Exception):
