@@ -1,18 +1,79 @@
 [
   {
     "event": "heartbeat",
-    "at": 1760404569621
+    "kind": "heartbeat",
+    "v": 1,
+    "ts_ms": 1760408327042,
+    "sid": null,
+    "turn_id": null
   },
   {
     "event": "heartbeat",
-    "at": 1760404572746
+    "ts": 1760408327.0436363,
+    "step": 117
   },
   {
-    "event": "heartbeat",
-    "at": 1760404575827
+    "event": "ws_scope_arrived",
+    "kind": "ws_scope_arrived",
+    "path": "/ws/v1/chat",
+    "v": 1,
+    "ts_ms": 1760408327470,
+    "ts": 1760408327.47,
+    "sid": null,
+    "turn_id": null,
+    "step": 118,
+    "type": "ws_scope_arrived"
   },
   {
-    "event": "collector_error",
-    "message": "eventsource_error"
+    "event": "ws_json_recv",
+    "kind": "ws_json_recv",
+    "label": "ws_json_recv",
+    "route": null,
+    "sid": "098838b2-3ae9-4c79-94b4-521db4310ffe",
+    "type": "Configure",
+    "v": 1,
+    "ts_ms": 1760408327723,
+    "ts": 1760408327.723,
+    "session_id": "098838b2-3ae9-4c79-94b4-521db4310ffe",
+    "turn_id": null,
+    "step": 122
+  },
+  {
+    "event": "turn_action_metadata",
+    "kind": "turn_action_metadata",
+    "turn_id": "e9bc94f848d34507b089e8118da349c8",
+    "is_greet": true,
+    "nlu": {
+      "intent": "fallback",
+      "topic": null,
+      "needs_scoping": null,
+      "wants_list": null,
+      "expected_depth": null,
+      "confidence": 0.2
+    },
+    "policy": {
+      "action": "offer_steps",
+      "verbosity": "brief",
+      "show_suggestions": true
+    },
+    "v": 1,
+    "ts_ms": 1760408329399,
+    "ts": 1760408329.399,
+    "sid": "098838b2-3ae9-4c79-94b4-521db4310ffe",
+    "session_id": "098838b2-3ae9-4c79-94b4-521db4310ffe",
+    "step": 125,
+    "type": "turn_action_metadata"
+  },
+  {
+    "event": "assistant_chunk",
+    "kind": "assistant_chunk",
+    "turn_id": "e9bc94f848d34507b089e8118da349c8",
+    "v": 1,
+    "ts_ms": 1760408329399,
+    "ts": 1760408329.399,
+    "sid": "098838b2-3ae9-4c79-94b4-521db4310ffe",
+    "session_id": "098838b2-3ae9-4c79-94b4-521db4310ffe",
+    "step": 128,
+    "type": "assistant_chunk"
   }
 ]

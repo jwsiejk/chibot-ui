@@ -1,70 +1,15 @@
 [
   {
     "event": "heartbeat",
-    "at": 1760404611070
+    "kind": "heartbeat",
+    "v": 1,
+    "ts_ms": 1760408368962,
+    "sid": null,
+    "turn_id": null
   },
   {
     "event": "heartbeat",
-    "at": 1760404614204
-  },
-  {
-    "ts": 1760404614.08433,
-    "step": 149,
-    "kind": "tts:start",
-    "route": null,
-    "label": "tts:start",
-    "session_id": "5ea4d658-cb61-46f7-8d24-8b225d13737b",
-    "turn_id": "401dced229df46b2aee06b763ac7a81e",
-    "event": "tts:start"
-  },
-  {
-    "ts": 1760404614.084932,
-    "step": 150,
-    "kind": "tts:first_chunk",
-    "route": null,
-    "label": "tts:first_chunk",
-    "session_id": "5ea4d658-cb61-46f7-8d24-8b225d13737b",
-    "turn_id": "401dced229df46b2aee06b763ac7a81e",
-    "event": "tts:first_chunk"
-  },
-  {
-    "ts": 1760404614.0851033,
-    "step": 151,
-    "kind": "tts:done",
-    "route": null,
-    "label": "tts:done",
-    "session_id": "5ea4d658-cb61-46f7-8d24-8b225d13737b",
-    "turn_id": "401dced229df46b2aee06b763ac7a81e",
-    "event": "tts:done"
-  },
-  {
-    "ts": 1760404614.0851645,
-    "step": 152,
-    "kind": "UtteranceEnd",
-    "route": null,
-    "label": "UtteranceEnd",
-    "session_id": "5ea4d658-cb61-46f7-8d24-8b225d13737b",
-    "turn_id": "401dced229df46b2aee06b763ac7a81e",
-    "reason": "finalizer",
-    "event": "UtteranceEnd"
-  },
-  {
-    "ts": 1760404614.0857623,
-    "step": 153,
-    "kind": "greet:resp",
-    "route": null,
-    "label": "greet:resp",
-    "session_id": "5ea4d658-cb61-46f7-8d24-8b225d13737b",
-    "turn_id": "401dced229df46b2aee06b763ac7a81e",
-    "audio_scheduled": true,
-    "event": "greet:resp"
-  },
-  {
-    "event": "heartbeat",
-    "at": 1760404617298
-  },
-  {
-    "event": "collector_error",
-    "message": "eventsource_error"
+    "ts": 1760408368.9631052,
+    "step": 204
   }
 ]

@@ -1,18 +1,15 @@
 [
   {
     "event": "heartbeat",
-    "at": 1760404695307
+    "kind": "heartbeat",
+    "v": 1,
+    "ts_ms": 1760408450972,
+    "sid": null,
+    "turn_id": null
   },
   {
     "event": "heartbeat",
-    "at": 1760404698666
-  },
-  {
-    "event": "heartbeat",
-    "at": 1760404702046
-  },
-  {
-    "event": "collector_error",
-    "message": "eventsource_error"
+    "ts": 1760408450.9731271,
+    "step": 355
   }
 ]

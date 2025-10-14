@@ -1,22 +1,63 @@
 [
   {
     "event": "heartbeat",
-    "at": 1760404664331
+    "kind": "heartbeat",
+    "v": 1,
+    "ts_ms": 1760408420473,
+    "sid": null,
+    "turn_id": null
   },
   {
     "event": "heartbeat",
-    "at": 1760404667397
+    "ts": 1760408420.4742746,
+    "step": 300
   },
   {
-    "event": "heartbeat",
-    "at": 1760404671245
+    "event": "ws_handshake_enter",
+    "kind": "ws_handshake_enter",
+    "label": "ws_handshake_enter",
+    "route": null,
+    "path": "/ws/v1/chat",
+    "raw_query": "session_id=e73f46ad-516b-4fa4-b695-1538fa2edca0",
+    "v": 1,
+    "ts_ms": 1760408420939,
+    "ts": 1760408420.939,
+    "sid": null,
+    "turn_id": null,
+    "step": 302,
+    "type": "ws_handshake_enter"
   },
   {
-    "event": "heartbeat",
-    "at": 1760404674380
+    "event": "ws_conn_open",
+    "kind": "ws_conn_open",
+    "label": "ws_conn_open",
+    "route": null,
+    "sid": "e73f46ad-516b-4fa4-b695-1538fa2edca0",
+    "conn_id": "38c41899faca4b5296b5bc00381d54dc",
+    "client_ip": "170.85.73.7",
+    "path": "/ws/v1/chat",
+    "query_string": "session_id=e73f46ad-516b-4fa4-b695-1538fa2edca0",
+    "v": 1,
+    "ts_ms": 1760408420940,
+    "ts": 1760408420.94,
+    "session_id": "e73f46ad-516b-4fa4-b695-1538fa2edca0",
+    "turn_id": null,
+    "step": 303,
+    "type": "ws_conn_open"
   },
   {
-    "event": "collector_error",
-    "message": "eventsource_error"
+    "event": "ws_conn_active",
+    "kind": "ws_conn_active",
+    "label": "ws_conn_active",
+    "route": null,
+    "conn_id": "38c41899faca4b5296b5bc00381d54dc",
+    "active": 1,
+    "v": 1,
+    "ts_ms": 1760408420940,
+    "ts": 1760408420.94,
+    "sid": null,
+    "turn_id": null,
+    "step": 304,
+    "type": "ws_conn_active"
   }
 ]

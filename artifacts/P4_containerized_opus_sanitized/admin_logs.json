@@ -1,18 +1,53 @@
 [
   {
     "event": "heartbeat",
-    "at": 1760404583329
+    "kind": "heartbeat",
+    "v": 1,
+    "ts_ms": 1760408340801,
+    "sid": null,
+    "turn_id": null
   },
   {
     "event": "heartbeat",
-    "at": 1760404586397
+    "ts": 1760408340.8018737,
+    "step": 150
   },
   {
-    "event": "heartbeat",
-    "at": 1760404589473
+    "event": "turn_action_metadata",
+    "kind": "turn_action_metadata",
+    "turn_id": "a16968e0903c450289d0baf93d0ba111",
+    "is_greet": true,
+    "nlu": {
+      "intent": "fallback",
+      "topic": null,
+      "needs_scoping": null,
+      "wants_list": null,
+      "expected_depth": null,
+      "confidence": 0.2
+    },
+    "policy": {
+      "action": "offer_steps",
+      "verbosity": "brief",
+      "show_suggestions": true
+    },
+    "v": 1,
+    "ts_ms": 1760408343049,
+    "ts": 1760408343.049,
+    "sid": "8b25a3fb-bdc1-4421-9c61-853b6a5d58b5",
+    "session_id": "8b25a3fb-bdc1-4421-9c61-853b6a5d58b5",
+    "step": 158,
+    "type": "turn_action_metadata"
   },
   {
-    "event": "collector_error",
-    "message": "eventsource_error"
+    "event": "tts:start",
+    "kind": "tts:start",
+    "turn_id": "a16968e0903c450289d0baf93d0ba111",
+    "v": 1,
+    "ts_ms": 1760408343050,
+    "ts": 1760408343.05,
+    "sid": "8b25a3fb-bdc1-4421-9c61-853b6a5d58b5",
+    "session_id": "8b25a3fb-bdc1-4421-9c61-853b6a5d58b5",
+    "step": 163,
+    "type": "tts:start"
   }
 ]

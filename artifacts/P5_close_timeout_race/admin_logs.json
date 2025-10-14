@@ -1,18 +1,113 @@
 [
   {
     "event": "heartbeat",
-    "at": 1760404597081
+    "kind": "heartbeat",
+    "v": 1,
+    "ts_ms": 1760408354396,
+    "sid": null,
+    "turn_id": null
   },
   {
     "event": "heartbeat",
-    "at": 1760404600183
+    "ts": 1760408354.3969316,
+    "step": 178
   },
   {
-    "event": "heartbeat",
-    "at": 1760404603255
+    "event": "ws_conn_open",
+    "kind": "ws_conn_open",
+    "label": "ws_conn_open",
+    "route": null,
+    "sid": "d8cb1670-c9b7-4744-8650-ce023b76ae02",
+    "conn_id": "749d39bbf9d940fcb5ef0ecd62e61705",
+    "client_ip": "170.85.73.7",
+    "path": "/ws/v1/chat",
+    "query_string": "session_id=d8cb1670-c9b7-4744-8650-ce023b76ae02",
+    "v": 1,
+    "ts_ms": 1760408355802,
+    "ts": 1760408355.802,
+    "session_id": "d8cb1670-c9b7-4744-8650-ce023b76ae02",
+    "turn_id": null,
+    "step": 181,
+    "type": "ws_conn_open"
   },
   {
-    "event": "collector_error",
-    "message": "eventsource_error"
+    "event": "session_goal",
+    "kind": "session_goal",
+    "label": "session_goal:normal",
+    "phase": "clarify",
+    "depth": "normal",
+    "delivery_pref": "explain",
+    "working_intent": "greet",
+    "entities": {
+      "products": [],
+      "keywords": []
+    },
+    "confirmed": [
+      "phase",
+      "depth",
+      "delivery_pref",
+      "working_intent"
+    ],
+    "v": 1,
+    "ts_ms": 1760408355916,
+    "ts": 1760408355.916,
+    "sid": "d8cb1670-c9b7-4744-8650-ce023b76ae02",
+    "session_id": "d8cb1670-c9b7-4744-8650-ce023b76ae02",
+    "turn_id": null,
+    "step": 185,
+    "type": "session_goal"
+  },
+  {
+    "event": "turn_action_metadata",
+    "kind": "turn_action_metadata",
+    "turn_id": "76e7012bcadf46d5a599be00723ca318",
+    "is_greet": true,
+    "nlu": {
+      "intent": "fallback",
+      "topic": null,
+      "needs_scoping": null,
+      "wants_list": null,
+      "expected_depth": null,
+      "confidence": 0.2
+    },
+    "policy": {
+      "action": "offer_steps",
+      "verbosity": "brief",
+      "show_suggestions": true
+    },
+    "v": 1,
+    "ts_ms": 1760408357352,
+    "ts": 1760408357.352,
+    "sid": "d8cb1670-c9b7-4744-8650-ce023b76ae02",
+    "session_id": "d8cb1670-c9b7-4744-8650-ce023b76ae02",
+    "step": 186,
+    "type": "turn_action_metadata"
+  },
+  {
+    "event": "tts:done",
+    "kind": "tts:done",
+    "turn_id": "76e7012bcadf46d5a599be00723ca318",
+    "v": 1,
+    "ts_ms": 1760408357353,
+    "ts": 1760408357.353,
+    "sid": "d8cb1670-c9b7-4744-8650-ce023b76ae02",
+    "session_id": "d8cb1670-c9b7-4744-8650-ce023b76ae02",
+    "step": 193,
+    "type": "tts:done"
+  },
+  {
+    "event": "barge_in",
+    "kind": "barge_in",
+    "label": "barge_in",
+    "route": null,
+    "sid": "d8cb1670-c9b7-4744-8650-ce023b76ae02",
+    "phase": "paused",
+    "v": 1,
+    "ts_ms": 1760408360908,
+    "ts": 1760408360.908,
+    "session_id": "d8cb1670-c9b7-4744-8650-ce023b76ae02",
+    "turn_id": null,
+    "step": 196,
+    "type": "barge_in"
   }
 ]
