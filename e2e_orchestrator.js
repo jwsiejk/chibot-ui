@@ -306,6 +306,18 @@ async function collectAdminSSEInPage(page, { url, ms }) {
   }, { url, ms });
 }
 
+function ensureAdminLiveUrl(url) {
+  if (!url) return url;
+  try {
+    const parsed = new URL(url);
+    if (!parsed.searchParams.has('live')) parsed.searchParams.set('live', '1');
+    return parsed.toString();
+  } catch {
+    if (/[?&]live=/.test(url)) return url;
+    return url.includes('?') ? `${url}&live=1` : `${url}?live=1`;
+  }
+}
+
 async function startAdminCollector(page, url) {
   await page.evaluate((adminUrl) => {
     if (window.__adminCollector?.source) {
