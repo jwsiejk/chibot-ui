@@ -1,4 +1,3 @@
-<script>
 /**
  * askchip_probe_instrumentation.js
  * - Console breadcrumbs for e2e probes (no PII, prod-safe)
@@ -175,4 +174,3 @@
     };
   })();
 })();
-</script>
