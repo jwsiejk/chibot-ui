@@ -122,3 +122,26 @@ def test_admin_log_post_accepts_sse_token(monkeypatch):
     assert "\"kind\": \"asr:start\"" in text
     assert "\"source\": \"mic\"" in text
     assert "\"token\"" not in text
+
+
+def test_admin_log_helper_mirrors_to_admin_sse(monkeypatch):
+    monkeypatch.setenv("ENABLE_ADMIN_SSE", "1")
+    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
+
+    admin_mod._LOG_Q.clear()
+    admin_mod._STEP = 0
+
+    client = flask_app.test_client()
+    with client.session_transaction() as sess:
+        sess["user"] = {"email": "admin@example.com"}
+
+    from app.logging import admin_log as admin_log_helper
+
+    admin_log_helper("Hello world", email="prod@example.com", role="system")
+
+    stream = client.get("/api/v1/admin/logs", buffered=True)
+    text = _decode(stream)
+
+    assert "\"kind\": \"admin_log\"" in text
+    assert "\"message\": \"Hello world\"" in text
+    assert "\"email\": \"prod@example.com\"" in text

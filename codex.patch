@@ -1,91 +1,82 @@
-diff --git a/app/api_v1/admin.py b/app/api_v1/admin.py
-index c8a43508668bd45f86a6b251103475a194b5ed40..94057dd11505720e6397789f47107a71fb02631e 100644
---- a/app/api_v1/admin.py
-+++ b/app/api_v1/admin.py
-@@ -7,50 +7,86 @@ import time
- import platform
- from collections import deque
- from flask import Blueprint, request, session, abort, Response, jsonify, stream_with_context
- 
- from ..utils.admin import is_admin_email
- from ..security_state import get_user
- from ..services.config_store import get_config
- from ..services import admin_settings as cfg
- from ..services import test_runner as testr
- 
- # add the prefix here so route is /api/v1/admin/logs
- bp = Blueprint("admin", __name__, url_prefix="/api/v1/admin")
- # ----------------- Admin access helpers -----------------
- 
- def _require_admin() -> None:
-     email = (session.get("user") or {}).get("email") or request.headers.get("X-User-Email") or (get_user() or "")
-     if not is_admin_email((email or "").strip().lower()):
-         abort(403)
- 
- # ----------------- Admin event log (SSE) ----------------
- 
- _LOG_Q = deque(maxlen=1000)
- _STEP = 0
- 
- 
-+def admin_log_iter(*, live: bool = False, heartbeat_interval: float = 15.0, poll_interval: float = 0.5):
-+    """Yield log events for the admin SSE endpoint.
+diff --git a/app/logging.py b/app/logging.py
+index 0d9e07ab297c2f8b6a8dda1cd9fbc21135da4d55..9ac53e786ab8657bebc22bbdd4921e98a2957e3d 100644
+--- a/app/logging.py
++++ b/app/logging.py
+@@ -1,5 +1,22 @@
+ from .db import db
+ from .admin_events import admin_events
 +
-+    When ``live`` is ``False`` the iterator drains the current queue contents
-+    and returns immediately.  When ``live`` is ``True`` it will continue to
-+    yield heartbeats at ``heartbeat_interval`` seconds while waiting for new
-+    events to arrive.  The polling strategy is intentionally simple so it can
-+    run inside the WSGI thread used by ``stream_with_context``.
-+    """
 +
-+    last_heartbeat = 0.0
++def _emit_admin_log(message: str, email: str, role: str) -> None:
++    try:
++        from .admin_log import emit as admin_emit  # type: ignore
++    except Exception:
++        admin_emit = None
 +
-+    while True:
++    if callable(admin_emit):
 +        try:
-+            evt = _LOG_Q.popleft()
-+        except IndexError:
-+            evt = None
-+
-+        if evt is not None:
-+            # Yield a shallow copy so downstream consumers cannot mutate the
-+            # stored object that might still be referenced elsewhere.
-+            yield dict(evt)
-+            continue
-+
-+        if not live:
-+            break
-+
-+        now = time.time()
-+        if now - last_heartbeat >= heartbeat_interval:
-+            last_heartbeat = now
-+            yield {"event": "heartbeat", "ts": now, "step": _STEP}
-+            continue
-+
-+        time.sleep(poll_interval)
++            admin_emit("admin_log", email=email, role=role, message=message)
++        except Exception:
++            pass
 +
 +
- def _admin_sse_enabled() -> bool:
-     flag = os.environ.get("ENABLE_ADMIN_SSE")
-     if flag is None:
-         # default-on so the harness can connect without extra configuration
-         return True
+ def admin_log(message: str, email: str = "system", role: str = "system"):
+-    db.memory['logs'].append({'email': email, 'role': role, 'message': message})
+-    admin_events.emit("audit", {"email": email, "role": role, "message": message})
++    payload = {"email": email, "role": role, "message": message}
++    db.memory['logs'].append(payload)
++    admin_events.emit("audit", payload)
++    _emit_admin_log(message=message, email=email, role=role)
+diff --git a/tests/test_admin_log_post.py b/tests/test_admin_log_post.py
+index 70c79000256c7dc14f6199f990dd8308fb14727b..01c97407049358d8c1f4b0d9af51e176c8fd0a8f 100644
+--- a/tests/test_admin_log_post.py
++++ b/tests/test_admin_log_post.py
+@@ -100,25 +100,48 @@ def test_admin_log_post_accepts_sse_token(monkeypatch):
  
-     if isinstance(flag, str):
-         return flag.strip().lower() in {"1", "true", "yes", "on"}
+     payload_asr = {
+         "token": "secret-token",
+         "kind": "asr:start",
+         "label": "asr_start",
+         "session_id": "sid-42",
+     }
  
-     return bool(flag)
+     rv2 = client.post(
+         "/api/v1/admin/log",
+         json=payload_asr,
+         headers={"X-CSRF-Token": token},
+     )
+     assert rv2.status_code == 200
+     data2 = rv2.get_json()
+     assert data2["ok"] is True
+     assert data2["kind"] == "asr:start"
  
+     stream = client.get("/api/v1/admin/logs?k=secret-token", buffered=True)
+     text = _decode(stream)
  
- def _extract_admin_token(payload: dict | None = None) -> str | None:
-     """Return a token supplied via query/header/payload for SSE admin access."""
- 
-     candidates: list[str] = []
- 
-     query_token = request.args.get("k")
-     if isinstance(query_token, str) and query_token.strip():
-         candidates.append(query_token.strip())
- 
-     header_token = request.headers.get("X-Admin-SSE-Token") or request.headers.get("X-Admin-Token")
-     if isinstance(header_token, str) and header_token.strip():
-         candidates.append(header_token.strip())
- 
+     assert "\"kind\": \"media\"" in text
+     assert "\"kind\": \"asr:start\"" in text
+     assert "\"source\": \"mic\"" in text
+     assert "\"token\"" not in text
++
++
++def test_admin_log_helper_mirrors_to_admin_sse(monkeypatch):
++    monkeypatch.setenv("ENABLE_ADMIN_SSE", "1")
++    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
++
++    admin_mod._LOG_Q.clear()
++    admin_mod._STEP = 0
++
++    client = flask_app.test_client()
++    with client.session_transaction() as sess:
++        sess["user"] = {"email": "admin@example.com"}
++
++    from app.logging import admin_log as admin_log_helper
++
++    admin_log_helper("Hello world", email="prod@example.com", role="system")
++
++    stream = client.get("/api/v1/admin/logs", buffered=True)
++    text = _decode(stream)
++
++    assert "\"kind\": \"admin_log\"" in text
++    assert "\"message\": \"Hello world\"" in text
++    assert "\"email\": \"prod@example.com\"" in text
