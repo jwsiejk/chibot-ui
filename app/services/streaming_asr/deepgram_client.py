@@ -613,6 +613,8 @@ class DeepgramClient:
         # TX queue + flushing
         self._tx_queue: Deque[bytes] = deque()
         self._flush_task: Optional[asyncio.Task] = None
+        self._auto_close_task: Optional[asyncio.Task] = None
+        self._auto_close_requested: bool = False
 
         # Graceful shutdown coordination
         self._final_event: asyncio.Event = asyncio.Event()
@@ -755,7 +757,7 @@ class DeepgramClient:
             except Exception:
                 pass
         # schedule a flush shortly after ASR open (lets DG finish configure)
-        self._schedule_flush(delay=0.05)
+        self._schedule_flush(delay=0.0)
 
     def _sid_for_log(self) -> str:
         try:
@@ -796,6 +798,41 @@ class DeepgramClient:
                 )
 
         self._flush_task = asyncio.create_task(_runner())
+
+    def _schedule_auto_close(self, reason: str) -> None:
+        if self._closed or self._closing:
+            return
+        if self._auto_close_requested:
+            return
+        if self._auto_close_task and not self._auto_close_task.done():
+            return
+
+        self._auto_close_requested = True
+        sid = self._sid_for_log()
+        self._logger.info(
+            "Deepgram auto close scheduled sid=%s reason=%s", sid, reason
+        )
+        if callable(self._jlog):
+            try:
+                self._jlog(
+                    "dg_auto_close_on_final",
+                    sid=sid,
+                    dg_id=self._dg_id,
+                    tag=self._url_tag,
+                    reason=reason,
+                    queued=len(self._tx_queue),
+                )
+            except Exception:
+                pass
+        self._emit_diag("auto_close_on_final", reason=reason, active=True)
+
+        try:
+            self._auto_close_task = asyncio.create_task(
+                self.close(wait_for_final=False, linger_ms=0)
+            )
+        except Exception:
+            self._auto_close_task = None
+            self._auto_close_requested = False
 
     async def _flush_tx(self) -> Tuple[int, Optional[str]]:
         """Drain queued audio if the socket is open and we've signaled ready."""
@@ -1406,6 +1443,18 @@ class DeepgramClient:
             return
         self._closing = True
         sid = self._sid_for_log()
+        current_task = asyncio.current_task()
+        if self._auto_close_task and self._auto_close_task is not current_task:
+            if not self._auto_close_task.done():
+                try:
+                    self._auto_close_task.cancel()
+                    await self._auto_close_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+        self._auto_close_task = None
+        self._auto_close_requested = False
         self._logger.info(
             "Deepgram close start sid=%s wait_for_final=%s linger_ms=%s",
             sid,
@@ -1922,6 +1971,7 @@ class DeepgramClient:
                         pass
 
                     if is_final:
+                        self._schedule_auto_close(final_reason or "provider_final")
                         self._any_result = True
                         self._final_event.set()
                         self._last_transcript = ""

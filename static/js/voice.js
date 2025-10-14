@@ -47,6 +47,7 @@ const MANUAL_DEBOUNCE_MS = 300;
 const MANUAL_NO_AUDIO_CANCEL_MS = 500;
 const MANUAL_CLOSESTREAM_DELAY_MS = 250;
 const AUTO_CLOSESTREAM_DELAY_MS = 320;
+const AUTO_FAILSAFE_DEFAULT_MS = 9000;
 const MANUAL_VAD_IGNORE_MS = 600;
 
 const state = {
@@ -70,6 +71,9 @@ const state = {
   eligibility: 'blocked_pregreet', // 'blocked_pregreet' | 'holdoff' | 'eligible'
   refractoryUntil: 0,
   turnCommitMode: 'idle',
+  serverFinalized: false,
+  wsListener: null,
+  wsCloseListener: null,
   direct: {
     descriptor: null,
     fetchPromise: null,
@@ -157,6 +161,103 @@ function _clearPostTtsHoldTimer() {
   }
   state.postTtsHoldTimer = null;
   return hadTimer;
+}
+
+function _ensureWsListeners() {
+  if (typeof window === 'undefined') return;
+  if (state.wsListener) return;
+
+  const handler = (ev) => {
+    const detail = ev?.detail || {};
+    const type = detail?.type;
+    const typeNorm = typeof type === 'string' ? type.toLowerCase() : '';
+
+    if (!state.turnOpen && !(state.rec && state.rec.state === 'recording')) {
+      return;
+    }
+
+    if (type === 'UtteranceEnd') {
+      _onServerFinalSignal('utterance_end');
+      return;
+    }
+
+    if (typeNorm === 'user_final') {
+      _onServerFinalSignal('server_final');
+      return;
+    }
+
+    if (typeNorm === 'result' || typeNorm === 'results') {
+      const channel = detail?.channel || {};
+      const eventType = typeof detail?.event === 'string' ? detail.event.toLowerCase() : '';
+      const utteranceEnd =
+        detail?.utterance_end === true || channel?.utterance_end === true || eventType === 'utterance_end';
+      const isFinal =
+        channel?.is_final === true ||
+        detail?.is_final === true ||
+        detail?.final === true ||
+        detail?.speech_final === true ||
+        utteranceEnd;
+      if (isFinal) {
+        _onServerFinalSignal(utteranceEnd ? 'utterance_end' : 'server_final');
+      }
+    }
+  };
+
+  const closeHandler = () => {
+    state.serverFinalized = false;
+  };
+
+  try { window.addEventListener('askchip-ws', handler); } catch {}
+  try { window.addEventListener('askchip-ws-close', closeHandler); } catch {}
+  state.wsListener = handler;
+  state.wsCloseListener = closeHandler;
+}
+
+function _removeWsListeners() {
+  if (typeof window === 'undefined') return;
+  if (state.wsListener) {
+    try { window.removeEventListener('askchip-ws', state.wsListener); } catch {}
+    state.wsListener = null;
+  }
+  if (state.wsCloseListener) {
+    try { window.removeEventListener('askchip-ws-close', state.wsCloseListener); } catch {}
+    state.wsCloseListener = null;
+  }
+}
+
+function _onServerFinalSignal(reason = 'server_final') {
+  if (state.serverFinalized) return;
+  state.serverFinalized = true;
+  _logLifecycle('server_final_signal', { reason });
+  _safeClearTurnTimer();
+  _clearPendingEndTimer();
+  if (state.auto.active) state.auto.deferCloseStream = true;
+  if (state.manual.active) state.manual.deferCloseStream = true;
+
+  const recorder = state.rec;
+  const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state === 'recording');
+  if (isRecording) {
+    _stopRecorder({ reason });
+    return;
+  }
+
+  if (!state.turnOpen) return;
+
+  Promise.resolve(state.chunkSendPromise)
+    .catch(() => {})
+    .finally(async () => {
+      if (!state.turnOpen) return;
+      try {
+        await sendCloseStream();
+      } catch {}
+      state.turnOpen = false;
+      state.manual.deferCloseStream = false;
+      state.manual.active = false;
+      state.auto.deferCloseStream = false;
+      state.auto.active = false;
+      state.turnCommitMode = 'idle';
+      _emitVoiceState('armed');
+    });
 }
 
 async function _fetchAsrClientSession(force = false) {
@@ -493,6 +594,7 @@ function _disarm() {
   _safeClearTurnTimer();
   _clearPendingEndTimer();
   _clearPostTtsHoldTimer();
+  _removeWsListeners();
 
   // 2) Stop capture/VAD cleanly
   _stopRecorder({ reason: 'manual_disarm' });
@@ -505,6 +607,7 @@ function _disarm() {
   state.turnCommitMode = 'idle';
   state.auto.active = false;
   state.auto.deferCloseStream = false;
+  state.serverFinalized = false;
 
   // 4) Block any pre-greet starts, and enforce a refractory lockout
   //    Use your configured cooldown (default 900ms) so we can't instantly re-arm.
@@ -515,7 +618,7 @@ function _disarm() {
 
   // 5) Final UI state
   try { console.info('[voice] state=idle'); } catch {}
-_emitVoiceState('idle');
+  _emitVoiceState('idle');
 }
 
 function _bargeIn() {
@@ -640,7 +743,8 @@ async function _arm(stream = null, opts = {}) {
     pollMs,
   });
   try { console.info('[voice] state=armed'); } catch {}
-_emitVoiceState('armed');
+  _emitVoiceState('armed');
+  _ensureWsListeners();
 
   return mic;
 }
@@ -662,6 +766,7 @@ function _startRecorder() {
   state.chunkSendError = null;
   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
+  state.serverFinalized = false;
 
   let recorder;
   const mimeType = _selectRecorderMime();
@@ -793,6 +898,7 @@ function _startRecorder() {
       state.auto.deferCloseStream = false;
       state.auto.active = false;
       state.turnCommitMode = 'idle';
+      state.serverFinalized = false;
       if (state.manual.noAudioTimer) {
         try { clearTimeout(state.manual.noAudioTimer); } catch {}
         state.manual.noAudioTimer = null;
@@ -817,10 +923,22 @@ function _startRecorder() {
   }
 
   // Safety timeout to prevent runaway recordings
-  const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
+  const rawMaxTurnMs = _toFiniteNumber(optsFromGlobal('max_turn_ms', AUTO_FAILSAFE_DEFAULT_MS));
+  let limitMs = rawMaxTurnMs !== null && rawMaxTurnMs > 0 ? rawMaxTurnMs : null;
+  if (limitMs === null) {
+    const fallbackSeconds = _toFiniteNumber(optsFromGlobal('max_turn_seconds'));
+    if (fallbackSeconds !== null && fallbackSeconds > 0) {
+      limitMs = fallbackSeconds * 1000;
+    } else {
+      limitMs = AUTO_FAILSAFE_DEFAULT_MS;
+    }
+  }
+  if (!(limitMs > 0)) {
+    limitMs = AUTO_FAILSAFE_DEFAULT_MS;
+  }
   _safeClearTurnTimer();
   state.turnTimer = setTimeout(() => {
-    try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
+    try { _onServerFinalSignal('turn_timeout'); } catch {}
   }, limitMs);
 
   return true;
