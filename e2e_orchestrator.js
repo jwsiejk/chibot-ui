@@ -291,6 +291,7 @@ function parseCLI(){
 
 // ---- IN-PAGE SSE collector (uses cookies/session) ----
 async function collectAdminSSEInPage(page, { url, ms }) {
+  const liveUrl = ensureAdminLiveUrl(url);  
   return await page.evaluate(({ url, ms }) => {
     return new Promise(resolve => {
       const logs = [];
@@ -303,9 +304,13 @@ async function collectAdminSSEInPage(page, { url, ms }) {
       setTimeout(() => { try { es && es.close(); } catch {} resolve(logs); }, ms);
       window.addEventListener('beforeunload', () => { try { es && es.close(); } catch {} });
     });
-  }, { url, ms });
+  }, { url: liveUrl, ms });
 }
 
+// The admin SSE endpoint drains the backlog and closes unless `live=1` is
+// provided (see `admin_log_iter` in app/api_v1/admin.py).  Production UI code
+// always opts into live mode, so mirror that behaviour here to keep the stream
+// open long enough for probe activity to arrive.
 function ensureAdminLiveUrl(url) {
   if (!url) return url;
   try {
@@ -1300,6 +1305,7 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
 
   let adminUrl = spec.endpoints?.admin_sse_url;
   if (!adminUrl || /your_domain/i.test(adminUrl)) adminUrl = baseUrl.replace(/\/$/,'') + '/api/v1/admin/logs';
+  adminUrl = ensureAdminLiveUrl(adminUrl);
 
   const dir = path.join(artifactsDir, probe.id); ensureDir(dir);
 
