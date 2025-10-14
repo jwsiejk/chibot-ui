@@ -16,12 +16,26 @@ def _require_user() -> str | None:
     return email or None
 
 
-@bp.get("/client-session")
-def client_session():
+def _extract_session_id(payload: dict[str, object] | None = None) -> str:
+    payload = payload or {}
+    sid = (
+        payload.get("session_id")
+        or payload.get("sid")
+        or request.args.get("session_id")
+        or request.args.get("sid")
+        or ""
+    )
+    try:
+        return str(sid).strip()
+    except Exception:
+        return ""
+
+
+def _client_session_response(payload: dict[str, object] | None = None):
     if not _require_user():
         return jsonify({"ok": False, "error": "auth_required"}), 401
 
-    sid = (request.args.get("session_id") or request.args.get("sid") or "").strip()
+    sid = _extract_session_id(payload)
 
     overrides: dict[str, object] = {
         "session_id": sid or None,
@@ -43,4 +57,17 @@ def client_session():
         ),
         200,
     )
+
+
+@bp.get("/client-session")
+def client_session_get():
+    return _client_session_response()
+
+
+@bp.post("/client-session")
+def client_session_post():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return _client_session_response(payload)
 
