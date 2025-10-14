@@ -29,6 +29,8 @@ export function isRecording() { return !!(state.rec && state.rec.state === 'reco
 export function bargeIn() { _bargeIn(); }         // keeps API parity
 export function setVadBoost(_v) { /* kept for API parity; no-op */ }
 export function setGreetGateActive(active = true) { _setGreetGateActive(!!active); }
+export function forceBargeInStart(meta = {}) { return _forceBargeInStart(meta); }
+export function forceBargeInEnd(opts = {}) { return _forceBargeInEnd(opts); }
 
 // ---- Internal state ---------------------------------------------------------
 
@@ -44,6 +46,9 @@ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve hea
 const PRE_ROLL_MS = 250;            // ~0.25s of pre-roll audio
 const SAFETY_CLOSE_DELAY_MS = 2200; // ~2.2s grace after last chunk
 const POST_TTS_HOLDOFF_MS = 600;    // grace window after Chip begins speaking
+const MANUAL_DEBOUNCE_MS = 300;     // debounce between manual presses
+const MANUAL_NO_AUDIO_CANCEL_MS = 500; // auto-cancel window if no audio captured
+const MANUAL_VAD_IGNORE_MS = 600;   // guard period after manual end before VAD restarts
 const GREET_BARGE_MIN_SNR_DB = 8;
 const GREET_CALIBRATE_DEFAULT_MS = 500;
 const GREET_CALIBRATE_MIN_MS = 400;
@@ -111,6 +116,18 @@ const state = {
   postTtsHoldTimer: null,
   eligibility: 'blocked_pregreet',
   refractoryUntil: 0,
+  manual: {
+    enabled: true,
+    buttonDown: false,
+    active: false,
+    debounceUntil: 0,
+    ignoreVadUntil: 0,
+    deferCloseStream: false,
+    sentStartFrame: false,
+    noAudioTimer: null,
+    startAt: 0,
+    firstChunkAt: 0,
+  },
 };
 
 const BARGE_CONFIRM_DEFAULT_MS = 420;
@@ -539,6 +556,150 @@ function _clearBargeConfirm(resume = false) {
       try { resumePlayback(); } catch {}
     }
   }
+}
+
+function _refreshManualConfig() {
+  const enabled = !!optsFromGlobal('feature_manual_barge_in', true);
+  state.manual.enabled = enabled;
+  return enabled;
+}
+
+function _clearManualTimers() {
+  if (state.manual.noAudioTimer) {
+    try { clearTimeout(state.manual.noAudioTimer); } catch {}
+    state.manual.noAudioTimer = null;
+  }
+}
+
+function _manualAutoCancel(reason = 'no_audio') {
+  const manual = state.manual;
+  if (!manual.buttonDown && !manual.active) {
+    return;
+  }
+  _logLifecycle('manual_barge_in_auto_cancel', { reason });
+  try {
+    forceBargeInEnd({ autoCancel: true, reason });
+  } catch (err) {
+    _voiceLog('warn', 'manual auto cancel failed', { error: err?.message || err, reason });
+  }
+}
+
+function _forceBargeInStart(meta = {}) {
+  const manual = state.manual;
+  const enabled = _refreshManualConfig();
+  if (!enabled) {
+    _voiceLog('debug', 'manual barge-in start ignored — feature disabled');
+    return false;
+  }
+
+  const now = Date.now();
+  if (manual.buttonDown) {
+    return true;
+  }
+  if (now < manual.debounceUntil) {
+    const remaining = Math.max(0, manual.debounceUntil - now);
+    _voiceLog('debug', 'manual barge-in start debounced', { remainingMs: remaining });
+    return false;
+  }
+
+  manual.buttonDown = true;
+  manual.active = false;
+  manual.deferCloseStream = false;
+  manual.sentStartFrame = false;
+  manual.startAt = _now();
+  manual.firstChunkAt = 0;
+  manual.ignoreVadUntil = 0;
+  manual.debounceUntil = now + MANUAL_DEBOUNCE_MS;
+  _clearManualTimers();
+
+  _bargeIn();
+
+  const source = (typeof meta === 'object' && meta && meta.source)
+    ? String(meta.source)
+    : 'ui';
+  _logLifecycle('manual_barge_in_start', { source });
+  try { console.info?.('manual_barge_in_start'); } catch {}
+
+  try {
+    const sent = sendJSON({ type: 'Control', action: 'barge_in_start' });
+    manual.sentStartFrame = sent === true;
+  } catch (err) {
+    _voiceLog('warn', 'failed to send manual barge-in start frame', { error: err?.message || err });
+    manual.sentStartFrame = false;
+  }
+
+  Promise.resolve(_startRecorder()).then((started) => {
+    if (!started) {
+      manual.buttonDown = false;
+      manual.active = false;
+      manual.deferCloseStream = false;
+      if (manual.sentStartFrame) {
+        try { sendJSON({ type: 'Control', action: 'barge_in_end' }); } catch {}
+        manual.sentStartFrame = false;
+      }
+      _voiceLog('warn', 'recorder unavailable — reverting to typing (manual barge-in)');
+      _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+      return;
+    }
+
+    manual.active = true;
+    manual.deferCloseStream = false;
+    _emitVoiceState('recording');
+    _clearManualTimers();
+    try {
+      manual.noAudioTimer = setTimeout(() => _manualAutoCancel('no_audio'), MANUAL_NO_AUDIO_CANCEL_MS);
+    } catch {}
+  }).catch((err) => {
+    manual.buttonDown = false;
+    manual.active = false;
+    manual.deferCloseStream = false;
+    _voiceLog('warn', 'manual barge-in start failed', { error: err?.message || err });
+    _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+  });
+
+  return true;
+}
+
+function _forceBargeInEnd(opts = {}) {
+  const manual = state.manual;
+  const enabled = _refreshManualConfig();
+  if (!enabled) {
+    return false;
+  }
+
+  const active = manual.buttonDown || manual.active;
+  if (!active) {
+    return false;
+  }
+
+  const options = (opts && typeof opts === 'object') ? opts : {};
+  const autoCancel = options.autoCancel === true;
+  const reason = options.reason || (autoCancel ? 'auto_cancel' : 'release');
+
+  manual.buttonDown = false;
+  manual.ignoreVadUntil = _now() + MANUAL_VAD_IGNORE_MS;
+  manual.debounceUntil = Date.now() + MANUAL_DEBOUNCE_MS;
+  manual.deferCloseStream = true;
+  _clearManualTimers();
+
+  _logLifecycle('manual_barge_in_end', { reason, auto_cancel: autoCancel });
+  try { console.info?.('manual_barge_in_end'); } catch {}
+
+  try {
+    sendJSON({ type: 'Control', action: 'barge_in_end' });
+  } catch (err) {
+    _voiceLog('warn', 'failed to send manual barge-in end frame', { error: err?.message || err });
+  }
+  manual.sentStartFrame = false;
+
+  if (state.rec && state.rec.state === 'recording') {
+    _stopRecorder({ reason: autoCancel ? 'manual_auto_cancel' : 'manual_release' });
+  } else {
+    manual.active = false;
+    manual.deferCloseStream = false;
+  }
+
+  return true;
 }
 
 function _ensureWSListener() {
@@ -1091,6 +1252,11 @@ async function _primeRecorderForPreRoll(options = {}) {
         try { await _primeRecorderForPreRoll(); } catch (err) { _voiceLog('warn', 'failed to re-prime recorder', { error: err?.message || err }); }
       }
     }
+    state.manual.active = false;
+    if (!state.manual.buttonDown) {
+      state.manual.deferCloseStream = false;
+    }
+    _clearManualTimers();
   };
 
   const greetGateBlockingHandshake = state.greetGateActive
@@ -1132,6 +1298,15 @@ function _handleRecorderData(event) {
   const blob = event.data;
   if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
     return;
+  }
+
+  if (state.manual.active) {
+    if (!state.manual.firstChunkAt) {
+      state.manual.firstChunkAt = _now();
+    }
+    if (state.manual.noAudioTimer) {
+      _clearManualTimers();
+    }
   }
 
   const timecode = Number.isFinite(event.timecode) ? event.timecode : null;
@@ -1268,6 +1443,15 @@ function _disarm() {
   _cancelGreetGate('disarm');
   _removeWSListener();
   _clearTurnTrace();
+  state.manual.buttonDown = false;
+  state.manual.active = false;
+  state.manual.deferCloseStream = false;
+  state.manual.sentStartFrame = false;
+  state.manual.ignoreVadUntil = 0;
+  state.manual.debounceUntil = 0;
+  state.manual.startAt = 0;
+  state.manual.firstChunkAt = 0;
+  _clearManualTimers();
   _emitVoiceState('idle');
 }
 
@@ -1410,6 +1594,12 @@ async function _onSpeechStartCommitted(detail = {}) {
   };
 
   const now = _now();
+
+  if (state.manual.ignoreVadUntil && now < state.manual.ignoreVadUntil) {
+    const remaining = Math.max(0, Math.round(state.manual.ignoreVadUntil - now));
+    _voiceLog('debug', 'speech start suppressed during manual cooldown', { remainingMs: remaining });
+    return;
+  }
 
   const holdUntilTts = state.postTtsHoldUntil || 0;
   const waitMs = Math.max(0, holdUntilTts - now);
@@ -1564,6 +1754,12 @@ function _onSpeechEndCommitted(detail = null) {
     : (typeof detail === 'string' ? detail : 'vad_silence');
   const now = performance.now ? performance.now() : Date.now();
   const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
+
+  if (state.manual.ignoreVadUntil && now < state.manual.ignoreVadUntil) {
+    const remaining = Math.max(0, Math.round(state.manual.ignoreVadUntil - now));
+    _voiceLog('debug', 'speech end suppressed during manual cooldown', { remainingMs: remaining });
+    return;
+  }
 
   state.vadMetrics = { ...metrics, phase: 'end' };
 
