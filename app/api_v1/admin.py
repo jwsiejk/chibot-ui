@@ -29,6 +29,42 @@ _LOG_Q = deque(maxlen=1000)
 _STEP = 0
 
 
+def admin_log_iter(*, live: bool = False, heartbeat_interval: float = 15.0, poll_interval: float = 0.5):
+    """Yield log events for the admin SSE endpoint.
+
+    When ``live`` is ``False`` the iterator drains the current queue contents
+    and returns immediately.  When ``live`` is ``True`` it will continue to
+    yield heartbeats at ``heartbeat_interval`` seconds while waiting for new
+    events to arrive.  The polling strategy is intentionally simple so it can
+    run inside the WSGI thread used by ``stream_with_context``.
+    """
+
+    last_heartbeat = 0.0
+
+    while True:
+        try:
+            evt = _LOG_Q.popleft()
+        except IndexError:
+            evt = None
+
+        if evt is not None:
+            # Yield a shallow copy so downstream consumers cannot mutate the
+            # stored object that might still be referenced elsewhere.
+            yield dict(evt)
+            continue
+
+        if not live:
+            break
+
+        now = time.time()
+        if now - last_heartbeat >= heartbeat_interval:
+            last_heartbeat = now
+            yield {"event": "heartbeat", "ts": now, "step": _STEP}
+            continue
+
+        time.sleep(poll_interval)
+
+
 def _admin_sse_enabled() -> bool:
     flag = os.environ.get("ENABLE_ADMIN_SSE")
     if flag is None:
