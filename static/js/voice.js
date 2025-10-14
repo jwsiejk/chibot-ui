@@ -1134,6 +1134,10 @@ function _sendRecorderChunk(blob, meta = {}) {
         }
         return;
       }
+      const opening = !state.turnOpen;
+      if (opening) {
+        state.turnOpen = true;
+      }
       try {
         await sendAudioChunk(blob);
         state.chunkBytesSent += blob.size;
@@ -1153,6 +1157,9 @@ function _sendRecorderChunk(blob, meta = {}) {
           totalBytes,
           totalKb,
         });
+        if (opening) {
+          _voiceLog('debug', 'turn marked open (first audio chunk queued)');
+        }
       } catch (err) {
         state.chunkSendError = err;
         _voiceLog('warn', 'failed to stream audio chunk', { error: err?.message || err });
@@ -1259,20 +1266,28 @@ async function _primeRecorderForPreRoll(options = {}) {
     _clearManualTimers();
   };
 
+  const manualPriming = !!(state.manual && state.manual.buttonDown);
   const greetGateBlockingHandshake = state.greetGateActive
     && (state.greetGatePhase === 'pending' || state.greetGatePhase === 'calibrating');
-  if (greetGateBlockingHandshake && !state.turnHintSent) {
-    _voiceLog('debug', 'AudioStart handshake deferred until greet gate release', {
-      mime: recorder.mimeType,
-      greetGatePhase: state.greetGatePhase,
-    });
-  } else {
-    const audioStartReady = await _ensureAudioStartSent();
-    if (!audioStartReady) {
-      _voiceLog('warn', 'AudioStart not confirmed — recorder start deferred', { mime: recorder.mimeType });
-      state.rec = null;
-      return false;
+
+  if (!manualPriming) {
+    if (greetGateBlockingHandshake && !state.turnHintSent) {
+      _voiceLog('debug', 'AudioStart handshake deferred until greet gate release', {
+        mime: recorder.mimeType,
+        greetGatePhase: state.greetGatePhase,
+      });
+    } else {
+      const audioStartReady = await _ensureAudioStartSent();
+      if (!audioStartReady) {
+        _voiceLog('warn', 'AudioStart not confirmed — recorder start deferred', { mime: recorder.mimeType });
+        state.rec = null;
+        return false;
+      }
     }
+  } else if (!state.turnHintSent) {
+    _voiceLog('debug', 'AudioStart handshake deferred during manual barge-in prime', {
+      mime: recorder.mimeType,
+    });
   }
 
   try {
@@ -1555,16 +1570,20 @@ async function _startRecorder() {
   state.recStopShouldSend = false;
   _ensureWSListener();
 
-  const preRollStats = _enqueuePreRollBlobs();
-  if (preRollStats?.count) {
-    _voiceLog('debug', 'flushed pre-roll buffer', {
-      chunks: preRollStats.count,
-      durationMs: preRollStats.durationMs,
-      bytes: preRollStats.totalBytes,
-    });
+  const manualActive = !!(state.manual && state.manual.buttonDown);
+  if (manualActive) {
+    _resetPreRollBuffer();
+  } else {
+    const preRollStats = _enqueuePreRollBlobs();
+    if (preRollStats?.count) {
+      _voiceLog('debug', 'flushed pre-roll buffer', {
+        chunks: preRollStats.count,
+        durationMs: preRollStats.durationMs,
+        bytes: preRollStats.totalBytes,
+      });
+    }
   }
 
-  state.turnOpen = true;
   _voiceLog('info', 'recorder streaming', {
     mime: (state.rec && state.rec.mimeType) || REC_MIME,
   });
