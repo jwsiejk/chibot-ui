@@ -691,7 +691,14 @@ async def _emit_user_final_payload(
 
     with contextlib.suppress(Exception):
         if _admin_emit:
-            _admin_emit("asr:final", session_id=sid)
+            final_payload: Dict[str, Any] = {
+                "session_id": sid,
+                "turn_id": turn_id_for_event,
+            }
+            if text_str:
+                final_payload["text"] = text_str
+                final_payload["text_preview"] = _clip_text(text_str)
+            _admin_emit("asr:final", **final_payload)
 
     if not text_str:
         return
@@ -878,7 +885,12 @@ async def _emit_user_final_payload(
                         asr_ready_evt.set()
                 with contextlib.suppress(Exception):
                     if _admin_emit:
-                        _admin_emit("asr:start", session_id=sid)
+                        turn_for_event = turn_id_ref[0] or None
+                        _admin_emit(
+                            "asr:start",
+                            session_id=sid,
+                            turn_id=turn_for_event,
+                        )
                 if on_asr_open_flush:
                     with contextlib.suppress(Exception):
                         await on_asr_open_flush()
@@ -917,17 +929,30 @@ async def _emit_user_final_payload(
                     with contextlib.suppress(Exception):
                         on_asr_partial(ev)
 
+                preview_text = _clip_text(text)
                 _jlog(
                     "dg_transcript",
                     sid=sid,
                     turn_id=turn_id_for_event,
                     is_final=is_final,
                     chars=len(text),
-                    preview=_clip_text(text),
+                    preview=preview_text,
                 )
-                with contextlib.suppress(Exception):
-                    if et == "user_partial" and _admin_emit:
-                        _admin_emit("asr:first_partial", session_id=sid)
+                if not is_final:
+                    with contextlib.suppress(Exception):
+                        if _admin_emit:
+                            asr_partial_counter[0] += 1
+                            emit_partial = (
+                                asr_partial_counter[0] == 1
+                                or asr_partial_counter[0] % 5 == 0
+                            )
+                            if emit_partial:
+                                _admin_emit(
+                                    "asr:partial",
+                                    session_id=sid,
+                                    turn_id=turn_id_for_event,
+                                    text_preview=preview_text,
+                                )
 
                 if not is_final:
                     await _ws_send_json(
@@ -955,7 +980,13 @@ async def _emit_user_final_payload(
                 _jlog("dg_asr_error", sid=sid, turn_id=turn_id_ref[0], error=err)
                 with contextlib.suppress(Exception):
                     if _admin_emit:
-                        _admin_emit("asr:error", session_id=sid, error=err)
+                        _admin_emit(
+                            "asr:error",
+                            session_id=sid,
+                            turn_id=turn_id_ref[0],
+                            msg=err,
+                            error=err,
+                        )
                 await _ws_send_json(send, make_error("asr_error", err))
     except asyncio.CancelledError:
         return
@@ -1231,6 +1262,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     synthetic_final_turns: Set[int] = set()
     final_seen = [False]
     asr_seen_partial = [False]
+    asr_partial_counter = [0]
     turn_timing: Dict[str, List[float]] = {
         "start": [0.0],
         "dg_open": [0.0],
@@ -1486,6 +1518,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         turn_timing["first_partial"][0] = 0.0
         turn_timing["final"][0] = 0.0
         turn_finish_logged[0] = False
+        asr_partial_counter[0] = 0
 
     def _emit_no_audio_alert(reason: str) -> None:
         if no_audio_notified[0]:
@@ -1575,7 +1608,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             int((now_ts - first_partial_ts) * 1000) if first_partial_ts else None
         )
         latency_ms: Dict[str, Optional[int]] = {
-            "final_from_mic_start": delta_start,
+            "asr_final": delta_start,
             "final_from_dg_open": delta_open,
             "final_from_first_partial": delta_partial,
         }
@@ -1733,9 +1766,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         send, make_error("asr_connect_fail", type(e).__name__)
                     )
                 with contextlib.suppress(Exception):
-                    _admin_emit and _admin_emit(
-                        "asr:error", session_id=sid, error=f"connect:{type(e).__name__}"
-                    )
+                    if _admin_emit:
+                        err_msg = f"connect:{type(e).__name__}"
+                        _admin_emit(
+                            "asr:error",
+                            session_id=sid,
+                            turn_id=turn_id_ref[0],
+                            msg=err_msg,
+                            error=err_msg,
+                        )
             finally:
                 dg_connect_task = None
 

@@ -7,6 +7,7 @@ import time
 import platform
 from collections import deque
 from flask import Blueprint, request, session, abort, Response, jsonify, stream_with_context
+from werkzeug.exceptions import HTTPException
 
 from ..utils.admin import is_admin_email
 from ..security_state import get_user
@@ -27,6 +28,107 @@ def _require_admin() -> None:
 
 _LOG_Q = deque(maxlen=1000)
 _STEP = 0
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _clip_preview(val: object, *, limit: int = 120) -> object:
+    if not isinstance(val, str):
+        return val
+    if len(val) <= limit:
+        return val
+    if limit <= 1:
+        return val[:limit]
+    return val[: limit - 1] + "…"
+
+
+def _normalize_sid(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        txt = str(value)
+    except Exception:
+        return None
+    txt = txt.strip()
+    return txt or None
+
+
+def _normalize_turn_id(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        txt = str(value)
+    except Exception:
+        return None
+    txt = txt.strip()
+    return txt or None
+
+
+def admin_log_emit(evt: dict | None) -> dict | None:
+    """Append an admin telemetry event to the SSE queue and WS bus."""
+
+    if not isinstance(evt, dict):
+        return None
+
+    payload = dict(evt)
+
+    event_name = payload.get("event") or payload.get("kind") or payload.get("label")
+    if not isinstance(event_name, str) or not event_name.strip():
+        event_name = "log"
+    event_name = event_name.strip()
+    payload["event"] = event_name
+    payload.setdefault("kind", event_name)
+
+    version = payload.get("v")
+    try:
+        version_int = int(version)
+    except Exception:
+        version_int = 1
+    payload["v"] = version_int
+
+    ts_ms = payload.get("ts_ms") or payload.get("sent_at") or payload.get("ts")
+    try:
+        ts_ms_int = int(ts_ms)
+    except Exception:
+        ts_ms_int = _now_ms()
+    payload["ts_ms"] = ts_ms_int
+    payload["ts"] = payload.get("ts") or (ts_ms_int / 1000.0)
+
+    raw_session = payload.pop("session_id", None)
+    sid = _normalize_sid(raw_session or payload.get("sid"))
+    payload["sid"] = sid
+    if sid is not None:
+        payload["session_id"] = sid
+
+    turn_val = payload.pop("turnId", None) or payload.pop("turn", None) or payload.get("turn_id")
+    payload["turn_id"] = _normalize_turn_id(turn_val)
+
+    for preview_field in ("text_preview", "textPreview"):
+        if preview_field in payload:
+            payload["text_preview"] = _clip_preview(payload.pop(preview_field))
+
+    if "text_preview" in payload:
+        payload["text_preview"] = _clip_preview(payload["text_preview"])
+
+    if "text" in payload:
+        payload["text"] = payload["text"] if not isinstance(payload["text"], str) else payload["text"][:4096]
+
+    global _STEP
+    _STEP += 1
+    payload["step"] = _STEP
+
+    if "type" not in payload:
+        payload["type"] = payload["event"]
+
+    try:
+        _mirror_ws_event(payload["event"], event=payload)
+    except Exception:
+        pass
+
+    _LOG_Q.append(dict(payload))
+    return payload
 
 
 def admin_log_iter(*, live: bool = False, heartbeat_interval: float = 15.0, poll_interval: float = 0.5):
@@ -67,10 +169,6 @@ def admin_log_iter(*, live: bool = False, heartbeat_interval: float = 15.0, poll
 
 def _admin_sse_enabled() -> bool:
     flag = os.environ.get("ENABLE_ADMIN_SSE")
-    if flag is None:
-        # default-on so the harness can connect without extra configuration
-        return True
-
     if isinstance(flag, str):
         return flag.strip().lower() in {"1", "true", "yes", "on"}
 
@@ -151,26 +249,17 @@ def _mirror_ws_event(kind: str, *, event: dict) -> None:
 def _emit(kind: str, *, label: str | None = None, route: str | None = None, **fields) -> bool:
     """Append an admin log event (and bump step)."""
     try:
-        global _STEP
-        _STEP += 1
         base = label or kind
         if route:
             base = f"{base} {route}"
         evt = {
-            "ts": time.time(),
-            "step": _STEP,
+            "event": kind,
             "kind": kind,
-            "route": route,
             "label": base,
-            **(fields or {})
+            "route": route,
+            **(fields or {}),
         }
-        evt.setdefault("event", kind)
-        try:
-            _mirror_ws_event(kind, event=evt)
-        except Exception:
-            pass
-        _LOG_Q.append(evt)
-        return True
+        return bool(admin_log_emit(evt))
     except Exception:
         return False
 
@@ -185,23 +274,28 @@ def logs_sse():
     if not _admin_sse_enabled():
         abort(404)
 
-    token = _extract_admin_token()
-    if token:
+    try:
+        _require_admin()
+    except HTTPException as exc:
+        if getattr(exc, "code", None) != 403:
+            raise
         if not _has_valid_admin_token():
-            _require_admin()
-    else:
-        session_data = session.get("user")
-        session_user = session_data.get("email") if isinstance(session_data, dict) else None
-        header_user = request.headers.get("X-User-Email")
-        if session_user or header_user:
-            _require_admin()
+            raise
 
     live = str(request.args.get("live") or "").lower() in ("1", "true", "yes")
 
     @stream_with_context
     def event_stream():
         # immediate heartbeat so the runner sees the pipe
-        yield f'event: message\ndata: {json.dumps({"event":"heartbeat","at":int(time.time()*1000)})}\n\n'
+        heartbeat = {
+            "event": "heartbeat",
+            "kind": "heartbeat",
+            "v": 1,
+            "ts_ms": _now_ms(),
+            "sid": None,
+            "turn_id": None,
+        }
+        yield f'event: message\ndata: {json.dumps(heartbeat)}\n\n'
 
         # ⬇️ keep your existing streaming logic here
         # Example: replace `admin_log_iter(live=live)` with your real iterator
@@ -234,11 +328,15 @@ def logs_append():
     if "payload" not in extra:
         extra["payload"] = filtered_payload
 
-    ok = False
-    try:
-        ok = _emit(kind, label=label, route=route, **extra)
-    except Exception:
-        ok = False
+    event_payload = {
+        "event": kind,
+        "kind": kind,
+        "label": label or kind,
+        "route": route,
+        **extra,
+    }
+
+    ok = bool(admin_log_emit(event_payload))
 
     return jsonify({"ok": bool(ok), "kind": kind, "label": label}), 200 if ok else 202
 

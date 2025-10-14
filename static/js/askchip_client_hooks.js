@@ -35,6 +35,13 @@
       payload.sid = String(sid);
     }
     if (!payload.sent_at) payload.sent_at = Date.now();
+    if (!payload.ts_ms) payload.ts_ms = payload.sent_at;
+    if (typeof payload.v !== "number") payload.v = 1;
+    const turn = payload.turn_id ?? payload.turnId ?? null;
+    payload.turn_id = turn == null ? null : String(turn);
+    if (typeof payload.text_preview === "string" && payload.text_preview.length > 120) {
+      payload.text_preview = payload.text_preview.slice(0, 120);
+    }
     return payload;
   }
   
@@ -174,6 +181,7 @@
             case "tts_cancel":
             case "tts_commit":
             case "asr:start":
+            case "asr:partial":
             case "asr:first_partial":
             case "asr:final":
             case "CloseStream ack": {
@@ -240,6 +248,7 @@
         "tts_resume",
         "tts_cancel",
         "tts_commit",
+        "asr:partial",
       ]);
 
       window.addEventListener("askchip-ws", (ev) => {
@@ -291,6 +300,7 @@
             if (!isFinal) {
               if (!partialSeen.has(key)) {
                 partialSeen.add(key);
+                tag("asr:partial");
                 tag("asr:first_partial");
               }
             } else {
