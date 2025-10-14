@@ -1354,6 +1354,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     backpressure_last_queue_len = 0
     backpressure_emit_interval = 1.0
     turn_connect_started = [False]
+    # When True we stream new audio chunks directly to Deepgram instead of staging
+    # them locally. Enabled once the socket is open and any backlog has been
+    # flushed so transcription isn't gated on the not-ready timeout.
+    asr_direct_stream = [False]
 
     # NEW: per-turn mic capture state
     mic_chunks: List[bytes] = []
@@ -1863,6 +1867,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 dg_state = "connecting"
                 with contextlib.suppress(Exception):
                     asr_ready_evt.clear()
+                asr_direct_stream[0] = False
 
                 cfg["_transport"] = transport
                 cfg["_jlog"] = _jlog
@@ -1908,9 +1913,37 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     )
                 )
                 _jlog("asr_connect_ok", sid=sid)
+
+                queued_chunks = len(buffered_chunks)
+                queued_bytes = 0
+                try:
+                    queued_bytes = sum(
+                        len(chunk)
+                        for chunk in buffered_chunks
+                        if isinstance(chunk, (bytes, bytearray))
+                    )
+                except Exception:
+                    queued_bytes = 0
+
+                with contextlib.suppress(Exception):
+                    if not asr_ready_evt.is_set():
+                        asr_ready_evt.set()
+
+                _jlog(
+                    "flush_on_open",
+                    sid=sid,
+                    queued_chunks=queued_chunks,
+                    queued_bytes=queued_bytes,
+                )
+
+                await _flush_buffered_chunks()
+
+                if dg_state == "open" and not buffered_chunks:
+                    asr_direct_stream[0] = True
             except Exception as e:
                 dg_state = "closed"
                 dg = None
+                asr_direct_stream[0] = False
                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
                 with contextlib.suppress(Exception):
                     await _ws_send_json(
@@ -2056,6 +2089,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         _maybe_emit_backpressure(len(buffered_chunks))
         if not buffered_chunks:
             backpressure_drop_count = 0
+            if dg_state == "open":
+                asr_direct_stream[0] = True
 
     try:
         while True:
@@ -2207,6 +2242,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         sent_any_audio[0] = False
                         buffered_chunks.clear()
                         turn_connect_started[0] = False
+                        asr_direct_stream[0] = (
+                            dg_state == "open" and asr_ready_evt.is_set()
+                        )
                         # reset mic capture
                         mic_chunks.clear()
                         mic_first_ts[0] = now
@@ -2299,23 +2337,43 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
                         continue
 
-                    # Stage early frames
+                    # Stage early frames or stream directly when ASR is ready
                     if chunk:
-                        buffered_chunks.append(chunk)
                         if callable(final_guard_reset_ref[0]):
                             with contextlib.suppress(Exception):
                                 final_guard_reset_ref[0]("chunk")
-                        dropped_now = 0
-                        if len(buffered_chunks) > max_buffered_chunks:
-                            dropped_now = len(buffered_chunks) - max_buffered_chunks
-                            for _ in range(dropped_now):
-                                if not buffered_chunks:
-                                    break
-                                buffered_chunks.popleft()
-                            _jlog(
-                                "ws_audio_drop", sid=sid, dropped=dropped_now, queued=len(buffered_chunks)
+
+                        direct_sent = False
+                        if (
+                            asr_direct_stream[0]
+                            and dg_state == "open"
+                            and dg is not None
+                            and asr_ready_evt.is_set()
+                            and not buffered_chunks
+                        ):
+                            direct_sent = await _send_chunk(chunk, from_buffer=False)
+                            if not direct_sent:
+                                _jlog("ws_direct_stream_fallback", sid=sid)
+
+                        if not direct_sent:
+                            asr_direct_stream[0] = False
+                            buffered_chunks.append(chunk)
+                            dropped_now = 0
+                            if len(buffered_chunks) > max_buffered_chunks:
+                                dropped_now = len(buffered_chunks) - max_buffered_chunks
+                                for _ in range(dropped_now):
+                                    if not buffered_chunks:
+                                        break
+                                    buffered_chunks.popleft()
+                                _jlog(
+                                    "ws_audio_drop",
+                                    sid=sid,
+                                    dropped=dropped_now,
+                                    queued=len(buffered_chunks),
+                                )
+                            _maybe_emit_backpressure(
+                                len(buffered_chunks), dropped_now=dropped_now
                             )
-                        _maybe_emit_backpressure(len(buffered_chunks), dropped_now=dropped_now)
 
                     # Ensure provider connection
                     if not turn_connect_started[0] and dg_state == "closed":
@@ -2820,6 +2878,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             err=type(exc).__name__,
                                         )
                                     dg_state = "closed"
+                                    asr_direct_stream[0] = False
                                     _relay_task = rx_task
                                     rx_task = None
                                     if _relay_task:
@@ -2831,6 +2890,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     dg = None
                                     with contextlib.suppress(Exception):
                                         asr_ready_evt.clear()
+                                    asr_direct_stream[0] = False
                                     if not final_seen[0]:
                                         synth_reason = "dg_close_no_final"
                                         if drain_timeout_exc is not None:
