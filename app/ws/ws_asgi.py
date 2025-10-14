@@ -1400,6 +1400,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     def _emit_local_vad_signal(now_ts: float) -> None:
         if local_vad_meta_sent[0]:
             return
+        if _manual_mode_active():
+            return
         local_vad_meta_sent[0] = True
         if callable(final_guard_local_vad_ref[0]):
             with contextlib.suppress(Exception):
@@ -1463,6 +1465,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     ) -> None:
         if confirm_window_ref[0] is not window:
             return
+        if manual_button_down[0] or manual_turn_active[0]:
+            _cancel_confirm_timeout()
+            confirm_window_ref[0] = None
+            return
         _cancel_confirm_timeout()
         confirm_window_ref[0] = None
         data = {k: v for k, v in (metrics or {}).items() if v is not None}
@@ -1480,6 +1486,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     ) -> None:
         if confirm_window_ref[0] is not window:
             return
+        if manual_button_down[0] or manual_turn_active[0]:
+            _cancel_confirm_timeout()
+            confirm_window_ref[0] = None
+            return
         _cancel_confirm_timeout()
         confirm_window_ref[0] = None
         data = {k: v for k, v in (metrics or {}).items() if v is not None}
@@ -1495,6 +1505,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 pass
 
     def _start_confirm_window(now_ts: float) -> None:
+        if _manual_mode_active():
+            return
+        if manual_button_down[0] or manual_turn_active[0]:
+            return
         window = ConfirmWindow(
             min_duration_ms=confirm_min_ms,
             max_duration_ms=confirm_max_ms,
@@ -1637,6 +1651,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         except Exception:
             pass
         return total
+
+    def _manual_mode_active() -> bool:
+        return manual_feature_enabled and manual_mode_manual_only
 
     def _manual_log_event(name: str, **fields: Any) -> None:
         _jlog(
@@ -2090,6 +2107,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     raw_chunk = chunk
 
                     if buf.is_empty():
+                        if _manual_mode_active() and not manual_turn_active[0]:
+                            _jlog(
+                                "manual_mode_voice_chunk_ignored",
+                                sid=sid,
+                                bytes=len(raw_chunk or b""),
+                            )
+                            continue
                         # New audio turn
                         try:
                             current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)

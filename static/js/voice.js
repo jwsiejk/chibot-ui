@@ -96,6 +96,10 @@ const state = {
   },
 };
 
+function _isManualOnlyMode() {
+  return state.manual.enabled && state.manual.modeManualOnly;
+}
+
 let _overrideEchoSignatureFn = null;
 
 // ---- Helpers ----------------------------------------------------------------
@@ -812,6 +816,11 @@ function _canStartSpeech() {
 function _onSpeechStartCommitted() {
   if (state.manual.buttonDown || state.manual.active) return;
   if (state.manual.ignoreVadUntil && _now() < state.manual.ignoreVadUntil) return;
+  _refreshManualConfig();
+  if (_isManualOnlyMode()) {
+    _logLifecycle('vad_speech_start_ignored', { reason: 'manual_mode' });
+    return;
+  }
   if (!_canStartSpeech()) return;
   const now = _now();
   const holdUntil = state.postTtsHoldUntil || 0;
@@ -845,6 +854,7 @@ _emitVoiceState('recording');
 function _onSpeechEndCommitted(detail = null) {
   if (state.manual.buttonDown || state.manual.active) return;
   if (state.manual.ignoreVadUntil && _now() < state.manual.ignoreVadUntil) return;
+  if (_isManualOnlyMode()) return;
   const reason = detail?.reason || 'vad_silence';
   const now = performance.now ? performance.now() : Date.now();
   const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
