@@ -2,7 +2,7 @@
 from __future__ import annotations
 import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
 from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
-from collections import deque
+from collections import deque, defaultdict
 from app.services.audio.container_sniffer import (
     AudioContainerSniffer,
     coerce_detection_from_meta,
@@ -172,6 +172,9 @@ def _emit_barge_admin_events(sid: str,
 ACTIVE_WS: dict[str, dict[str, Any]] = {}
 ACTIVE_WS_LOCK = asyncio.Lock()
 
+GREET_SEQ_CACHE: dict[str, Set[int]] = defaultdict(set)
+GREET_SEQ_CACHE_LOCK = asyncio.Lock()
+
 WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
 
 _SETTINGS = load_settings()
@@ -201,6 +204,16 @@ def _client_ip_from_scope(scope) -> str:
     except Exception:
         pass
     return "unknown"
+
+
+async def _greet_seq_mark_if_new(sid: str, seq: int) -> bool:
+    sid_key = str(sid or "") or "default"
+    async with GREET_SEQ_CACHE_LOCK:
+        seen = GREET_SEQ_CACHE[sid_key]
+        if seq in seen:
+            return False
+        seen.add(seq)
+        return True
 
 
 def _normalize_admin_event_name(name: str) -> str:
@@ -2237,18 +2250,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                         elif t == "Configure":
                             cfg.update(obj or {})
+                            greet_seq_raw = obj.get("greet_seq")
+                            greet_seq: Optional[int] = None
+                            is_new_greet_seq = True
+                            if greet_seq_raw is not None:
+                                try:
+                                    greet_seq = int(greet_seq_raw)
+                                except Exception:
+                                    greet_seq = None
+                            if greet_seq is not None and (obj.get("greet") or obj.get("reset")):
+                                try:
+                                    is_new_greet_seq = await _greet_seq_mark_if_new(sid, greet_seq)
+                                except Exception:
+                                    is_new_greet_seq = True
                             if obj.get("reset"):
-                                with contextlib.suppress(Exception):
-                                    clear_greet_turn_cache(sid)
-                                with contextlib.suppress(Exception):
-                                    _admin_emit and _admin_emit(
-                                        "greet:reset",
-                                        route="/ws/v1/chat",
-                                        label="greet:reset",
-                                        session_id=sid,
+                                if is_new_greet_seq:
+                                    with contextlib.suppress(Exception):
+                                        clear_greet_turn_cache(sid)
+                                    with contextlib.suppress(Exception):
+                                        _admin_emit and _admin_emit(
+                                            "greet:reset",
+                                            route="/ws/v1/chat",
+                                            label="greet:reset",
+                                            session_id=sid,
+                                            greet_seq=greet_seq,
+                                        )
+                                else:
+                                    _jlog(
+                                        "ws_greet_reset_skip_dup",
+                                        sid=sid,
+                                        greet_seq=greet_seq,
+                                        via="Configure",
                                     )
                             if obj.get("greet"):
-                                _jlog("ws_greet_recv", sid=sid, via="Configure")
+                                if not is_new_greet_seq:
+                                    _jlog(
+                                        "ws_greet_skip_dup",
+                                        sid=sid,
+                                        greet_seq=greet_seq,
+                                        via="Configure",
+                                    )
+                                    continue
+                                _jlog(
+                                    "ws_greet_recv",
+                                    sid=sid,
+                                    via="Configure",
+                                    greet_seq=greet_seq,
+                                )
 
                                 async def _bg2():
                                     try:

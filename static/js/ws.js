@@ -86,6 +86,8 @@ import { logIfEnabled } from './util/logging.js';
 
 let _ws = null;
 let _onOpen = [];
+let _lastConfigureSid = null;
+let _greetSeqCounter = 0;
 const _KEEPALIVE_POLL_MS = 1000;
 const _KEEPALIVE_IDLE_THRESHOLD_MS = 3500;
 const _KEEPALIVE_RESUME_AFTER_UPLOAD_MS = 750;
@@ -644,7 +646,18 @@ export async function sendCloseStream(){
 export function configure(opts = {}){
   // ensure session id is included if caller forgot
   const sid = getSID();
+  if (_lastConfigureSid !== sid) {
+    _lastConfigureSid = sid;
+    _greetSeqCounter = 0;
+  }
   const payload = { type: "Configure", session_id: sid, ...opts };
+  if (payload.greet) {
+    _greetSeqCounter += 1;
+    payload.greet_seq = _greetSeqCounter;
+    try {
+      window.__askchip_last_greet_seq = _greetSeqCounter;
+    } catch {}
+  }
   sendJSON(payload);
 }
 

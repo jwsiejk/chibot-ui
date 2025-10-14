@@ -14,6 +14,16 @@ const $ = (s) => document.querySelector(s);
 
 let startInFlight = false;
 let started = false;
+let startOnceCallCount = 0;
+let wsListenerSeq = 0;
+
+function logWsListenerAttach(eventName, note){
+  const id = `${eventName}#${++wsListenerSeq}`;
+  try {
+    _console('info', '[bootstrap] ws listener attached', { listener_id: id, event: eventName, note });
+  } catch {}
+  return id;
+}
 
 function _console(level, ...args) {
   logIfEnabled(() => {
@@ -89,6 +99,7 @@ function wireWSEventsOnce(){
   // Log first few frames to verify payload shape
   let seen = 0;
   const loggedTypes = new Set();
+  logWsListenerAttach('askchip-ws', 'bootstrap-wire');
   window.addEventListener('askchip-ws', (ev) => {
     const d = ev.detail || {};
     const t = d.type || '';
@@ -117,6 +128,7 @@ function wireWSEventsOnce(){
     try { App.handleAssistantFrame(d); } catch (e) { _console('warn', 'App.handleAssistantFrame error', e); }
   });
 
+  logWsListenerAttach('askchip-ws-close', 'bootstrap-wire');
   window.addEventListener('askchip-ws-close', (ev) => {
     const detail = ev.detail || {};
     const normal = detail.code === 1000 || detail.code === 1001;
@@ -184,7 +196,17 @@ async function ensureWsOpenOrFail(timeoutMs = 5000){
 }
 
 async function startOnce(){
-  if (started || startInFlight) return;
+  if (started || startInFlight) {
+    try {
+      _console('warn', '[bootstrap] startOnce duplicate guard hit', { started, startInFlight });
+    } catch {}
+    return;
+  }
+
+  const attempt = ++startOnceCallCount;
+  try {
+    _console('info', `[bootstrap] startOnce called N=${attempt}`);
+  } catch {}
   startInFlight = true;
   setDot('thinking');
 
@@ -280,9 +302,11 @@ async function startOnce(){
       }
     };
     try {
+      logWsListenerAttach('askchip-ws', 'bootstrap-markAssistant-once');
       window.addEventListener('askchip-ws', markAssistant, { once: true });
     } catch (err) {
       markAssistantRemove = true;
+      logWsListenerAttach('askchip-ws', 'bootstrap-markAssistant-fallback');
       window.addEventListener('askchip-ws', markAssistant);
       try { _console('warn', '[bootstrap] once listener fallback', err); } catch {}
     }

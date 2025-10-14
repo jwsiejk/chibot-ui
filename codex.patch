@@ -1,419 +1,683 @@
-diff --git a/app/ws/confirm_window.py b/app/ws/confirm_window.py
-index ae73962f2a5055babc7fb157348a52f0b49f0703..a5237a2230cc4f5dab8fbd2857b5a019630d80d4 100644
---- a/app/ws/confirm_window.py
-+++ b/app/ws/confirm_window.py
-@@ -3,90 +3,94 @@ from __future__ import annotations
+diff --git a/app/ws/bus.py b/app/ws/bus.py
+index 09a11c3c35f892b744504eea9b9e50c34ea981b3..248744c70e9fff9cad12b8476e5ba67c1a528fc7 100644
+--- a/app/ws/bus.py
++++ b/app/ws/bus.py
+@@ -38,62 +38,52 @@ class StreamBus:
+     _ASSIST_AUDIO_MAX_CHUNKS = 256          # cap chunks per assistant_audio frame
  
- import math
- import struct
- from dataclasses import dataclass
- from typing import Dict, Optional
- 
- 
- @dataclass
- class ConfirmDecision:
-     action: Optional[str]
-     metrics: Optional[Dict[str, object]]
- 
- 
- class ConfirmWindow:
-     """Stateful helper that validates mic activity before committing barge-in."""
- 
-     def __init__(
-         self,
-         *,
-         min_duration_ms: int = 420,
-         max_duration_ms: int = 900,
-         max_gap_ms: float = 180.0,
-         min_tokens: int = 2,
-         min_confidence: float = 0.5,
-         snr_threshold_db: float = 8.0,
-+        snr_slack_db: float = 0.5,
-         snr_enabled: bool = True,
-     ) -> None:
-         self.min_duration_ms = max(0, int(min_duration_ms))
-         max_dur = int(max_duration_ms)
-         if max_dur <= 0:
-             max_dur = self.min_duration_ms + 600
-         if max_dur < self.min_duration_ms:
-             max_dur = self.min_duration_ms
-         self.max_duration_ms = max_dur
-         self.max_gap_ms = max(0.0, float(max_gap_ms))
-         self.min_tokens = max(1, int(min_tokens))
-         self.min_confidence = float(min_confidence)
-         self.snr_threshold_db = float(snr_threshold_db)
-+        self.snr_slack_db = max(0.0, float(snr_slack_db))
-         self.snr_enabled = bool(snr_enabled)
- 
-         self.active = False
-         self.start_ts = 0.0
-         self.last_chunk_ts = 0.0
-         self.noise_rms: Optional[float] = None
-         self.peak_rms = 0.0
-         self.snr_db: Optional[float] = None
-         self.partial_tokens = 0
-         self.partial_confidence: Optional[float] = None
-         self.partial_ts = 0.0
-         self.total_bytes = 0
-+        self.gap_grace_used = False
- 
-     def set_snr_enabled(self, enabled: bool) -> None:
-         self.snr_enabled = bool(enabled)
- 
-     def start(self, now_ts: float) -> None:
-         self.active = True
-         self.start_ts = now_ts
-         self.last_chunk_ts = now_ts
-         self.noise_rms = None
-         self.peak_rms = 0.0
-         self.snr_db = None
-         self.partial_tokens = 0
-         self.partial_confidence = None
-         self.partial_ts = 0.0
-         self.total_bytes = 0
-+        self.gap_grace_used = False
- 
-     # ------------------------------- Public API -------------------------------
- 
-     def observe_chunk(self, chunk: bytes, now_ts: float) -> ConfirmDecision:
-         if not self.active:
-             return ConfirmDecision(None, None)
- 
-         elapsed_ms = self._elapsed_ms(now_ts)
-         gap_decision = self._check_gap(now_ts)
-         if gap_decision.action:
-             return gap_decision
- 
-         self.last_chunk_ts = now_ts
-         self.total_bytes += len(chunk or b"")
- 
-         if self.snr_enabled:
-             self._update_snr(chunk)
- 
-         commit_decision = self._maybe_commit("chunk", elapsed_ms)
-         if commit_decision.action:
-             return commit_decision
- 
-         if elapsed_ms >= self.max_duration_ms:
-             if self._can_commit():
-                 return self._finish("timeout_commit", elapsed_ms)
-@@ -135,95 +139,103 @@ class ConfirmWindow:
-     def cancel(self, reason: str, now_ts: float) -> ConfirmDecision:
-         if not self.active:
-             return ConfirmDecision(None, None)
-         return self._finish(reason or "cancel", self._elapsed_ms(now_ts))
- 
-     # ------------------------------- Internals --------------------------------
- 
-     def _elapsed_ms(self, now_ts: float) -> float:
-         return max(0.0, (now_ts - self.start_ts) * 1000.0)
- 
-     def _coerce_confidence(self, value: Optional[float]) -> Optional[float]:
-         if value is None:
-             return None
+     def is_canceled(self, sid, tid):
          try:
-             return float(value)
-         except (TypeError, ValueError):
-             return None
- 
-     def _check_gap(self, now_ts: float) -> ConfirmDecision:
-         if not self.active:
-             return ConfirmDecision(None, None)
-         if not self.last_chunk_ts:
-             return ConfirmDecision(None, None)
-         gap_ms = (now_ts - self.last_chunk_ts) * 1000.0
-         if self.max_gap_ms > 0.0 and gap_ms > self.max_gap_ms:
-+            if not self.gap_grace_used:
-+                elapsed = self._elapsed_ms(now_ts)
-+                early_window = elapsed <= (self.min_duration_ms + self.max_gap_ms)
-+                if early_window or self.total_bytes <= 12000:
-+                    self.gap_grace_used = True
-+                    return ConfirmDecision(None, None)
-             return self._finish("gap", self._elapsed_ms(now_ts), {"gap_ms": gap_ms})
-         return ConfirmDecision(None, None)
- 
-     def _can_commit(self) -> bool:
-         if self.partial_tokens < self.min_tokens:
+             return (sid, tid) in self._canceled
+         except Exception:
              return False
-         if not self.snr_enabled:
-             return True
-         if self.snr_db is None:
-             return False
--        return self.snr_db >= self.snr_threshold_db
-+        effective_threshold = max(0.0, self.snr_threshold_db - self.snr_slack_db)
-+        return self.snr_db >= effective_threshold
  
-     def _maybe_commit(self, trigger: str, elapsed_ms: float) -> ConfirmDecision:
-         if elapsed_ms >= self.min_duration_ms and self._can_commit():
-             return self._finish(trigger, elapsed_ms)
-         return ConfirmDecision(None, None)
+     def __init__(self):
+         self._subs = {}          # sid -> [Queue]
+         self._locks = {}         # sid -> Lock
+         self._canceled = set()   # (sid, tid)
+         self._pending = {}       # sid -> [frame]
+         self._max_pending = 256  # cap to avoid unbounded memory
+         self._assistant_turn = {}  # sid -> current assistant turn_id
  
-     def _update_snr(self, chunk: bytes) -> None:
-         if not chunk:
-             return
-         sample_count = len(chunk) // 2
-         if sample_count <= 0:
-             return
-         fmt = f"<{sample_count}h"
+     def _lock(self, sid):
+         if sid not in self._locks:
+             self._locks[sid] = threading.Lock()
+         return self._locks[sid]
+ 
+     def subscribe(self, sid):
+         q = Queue()
+         with self._lock(sid):
+             self._subs.setdefault(sid, []).append(q)
+-            pend = self._pending.pop(sid, [])
+-        # Drain pending into the new subscriber, honoring cancel state
+-        for fr in pend:
+-            try:
+-                t = fr.get('type')
+-                if t in self._CANCELLABLE_TYPES:
+-                    tid = fr.get('turn_id')
+-                    if tid and (sid, tid) in self._canceled:
+-                        continue
+-                q.put(fr)
+-            except Exception:
+-                pass
++            if sid in self._pending:
++                self._pending.pop(sid, None)
+         return q
+ 
+     def _coalesce_legacy_audio_chunk(self, buf, frame):
+         """
+         Coalesce adjacent legacy 'audio_chunk' frames with same turn_id by
+         concatenating base64 payload. Split when exceeding a soft limit.
+         """
          try:
-             samples = struct.unpack(fmt, chunk[: sample_count * 2])
-         except struct.error:
-             return
- 
-         total = 0.0
-         for s in samples:
-             total += float(s) * float(s)
-         if sample_count == 0:
-             return
-         rms = math.sqrt(total / sample_count)
-         if rms <= 0.0:
-             return
- 
-         if self.noise_rms is None:
-             self.noise_rms = max(1.0, rms * 0.4)
-         else:
-             if rms < self.noise_rms:
-                 alpha = 0.10
-                 self.noise_rms = (1 - alpha) * self.noise_rms + alpha * rms
+             if buf and buf[-1].get('type') == 'audio_chunk' and buf[-1].get('turn_id') == frame.get('turn_id'):
+                 prev = buf[-1]
+                 a = prev.get('base64') or ''
+                 b = frame.get('base64') or ''
+                 prev['base64'] = a + b
+                 if len(prev['base64']) > self._LEGACY_BASE64_SOFT_LIMIT:
+                     prev_data = prev['base64'][:self._LEGACY_BASE64_SOFT_LIMIT]
+                     rem_data = prev['base64'][self._LEGACY_BASE64_SOFT_LIMIT:]
+                     prev['base64'] = prev_data
+                     buf.append({'type': 'audio_chunk', 'turn_id': frame.get('turn_id'), 'base64': rem_data})
              else:
-                 alpha = 0.02
-                 self.noise_rms = (1 - alpha) * self.noise_rms + alpha * rms
+                 buf.append(frame)
+         except Exception:
+             buf.append(frame)
  
-         self.peak_rms = max(self.peak_rms, rms)
-         noise = max(self.noise_rms or 1.0, 1e-3)
-         snr = 20.0 * math.log10(max(rms, 1e-3) / noise)
-         self.snr_db = snr
- 
-     def _finish(
-         self, reason: str, elapsed_ms: float, extra: Optional[Dict[str, object]] = None
-     ) -> ConfirmDecision:
-         self.active = False
-         metrics: Dict[str, object] = {
-             "reason": reason,
-             "elapsed_ms": int(elapsed_ms),
-             "snr_db": round(self.snr_db, 2) if self.snr_db is not None else None,
-+            "gap_grace_used": self.gap_grace_used,
-             "noise_rms": round(self.noise_rms, 2) if self.noise_rms is not None else None,
-             "peak_rms": round(self.peak_rms, 2) if self.peak_rms else None,
-             "partial_tokens": self.partial_tokens or None,
-             "partial_confidence": self.partial_confidence,
-             "total_bytes": self.total_bytes,
-         }
-         if extra:
-             metrics.update(extra)
-         return ConfirmDecision("commit" if reason in ("chunk", "partial", "timeout_commit") else "abort", metrics)
+     def _coalesce_assistant_audio(self, buf, frame):
+         """
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 9523a3dbbfaf5aa58637bbe05b49b5f13e0a4af8..34d4ef3180010dc184e14e868d520258fa8d9f7b 100644
+index 34d4ef3180010dc184e14e868d520258fa8d9f7b..bc65e03b699c6ac8610f10c1a72c54ada32d107e 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -1311,50 +1311,56 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     except Exception:
-         confirm_min_ms = 420
-     confirm_min_ms = max(0, confirm_min_ms)
-     try:
-         confirm_max_ms = int(cfg.get("confirm_max_ms", confirm_min_ms + 600) or (confirm_min_ms + 600))
-     except Exception:
-         confirm_max_ms = confirm_min_ms + 600
-     if confirm_max_ms < confirm_min_ms:
-         confirm_max_ms = confirm_min_ms
-     try:
-         confirm_gap_ms = float(cfg.get("confirm_max_gap_ms", 180.0) or 180.0)
-     except Exception:
-         confirm_gap_ms = 180.0
-     try:
-         confirm_min_tokens = max(1, int(cfg.get("confirm_min_tokens", 2) or 2))
-     except Exception:
-         confirm_min_tokens = 2
-     try:
-         confirm_min_conf = float(cfg.get("confirm_min_confidence", 0.5) or 0.5)
-     except Exception:
-         confirm_min_conf = 0.5
-     try:
-         confirm_snr_db = float(cfg.get("confirm_min_snr_db", 8.0) or 8.0)
-     except Exception:
-         confirm_snr_db = 8.0
-+    try:
-+        confirm_snr_slack_db = float(cfg.get("confirm_snr_slack_db", 0.5) or 0.5)
-+    except Exception:
-+        confirm_snr_slack_db = 0.5
-+    if confirm_snr_slack_db < 0.0:
-+        confirm_snr_slack_db = 0.0
+@@ -1,30 +1,30 @@
+ # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
+ from __future__ import annotations
+ import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
+ from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
+-from collections import deque
++from collections import deque, defaultdict
+ from app.services.audio.container_sniffer import (
+     AudioContainerSniffer,
+     coerce_detection_from_meta,
+ )
  
-     confirm_window_ref: List[Optional[ConfirmWindow]] = [None]
-     confirm_timeout_task: List[Optional[asyncio.Task]] = [None]
-     confirm_timeout_cancelled: List[asyncio.Task] = []
-     local_vad_meta_sent = [False]
+ from .schema_v1 import (
+     parse_client_json,
+     make_keepalive_ack,
+     make_results,
+     make_utterance_end,
+     make_error,
+ )
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
+ from app.config import load_settings
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
  
-     def _cancel_confirm_timeout() -> None:
-         task = confirm_timeout_task[0]
-         if task:
-             task.cancel()
-             confirm_timeout_cancelled.append(task)
-         confirm_timeout_task[0] = None
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
+@@ -150,81 +150,94 @@ def _emit_barge_admin_events(sid: str,
+         payload["turn_id"] = turn_id
+     if previous_phase:
+         payload["previous_phase"] = previous_phase
+     if tts_key:
+         payload["tts_turn_key"] = tts_key
+     if tts_state is not None:
+         payload["tts_state"] = tts_state
  
-     def _emit_local_vad_signal(now_ts: float) -> None:
-         if local_vad_meta_sent[0]:
-             return
-         local_vad_meta_sent[0] = True
-         if callable(final_guard_local_vad_ref[0]):
-             with contextlib.suppress(Exception):
-                 final_guard_local_vad_ref[0]("start")
-         payload = {
-             "type": "meta",
-             "turn_id": turn_id_ref[0],
-             "meta": {"local_vad": "start", "ts": int(now_ts * 1000)},
+     if phase == "paused" and previous_phase != "paused":
+         admin_cb("barge_in", **payload)
+         if _is_tts_active(tts_state):
+             admin_cb("tts_pause", **payload)
+     elif phase == "assistant_speaking" and previous_phase == "paused":
+         admin_cb("barge_resume", **payload)
+         if _is_tts_active(tts_state):
+             admin_cb("tts_resume", **payload)
+     elif phase == "ready" and previous_phase == "paused":
+         admin_cb("barge_commit", **payload)
+         if _is_tts_active(tts_state):
+             admin_cb("tts_cancel", **payload)
+ 
+ 
+ ACTIVE_WS: dict[str, dict[str, Any]] = {}
+ ACTIVE_WS_LOCK = asyncio.Lock()
+ 
++GREET_SEQ_CACHE: dict[str, Set[int]] = defaultdict(set)
++GREET_SEQ_CACHE_LOCK = asyncio.Lock()
++
+ WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
+ 
+ _SETTINGS = load_settings()
+ _ADVANCED_LOGGING_ENABLED = bool(
+     getattr(_SETTINGS, "advanced_logging_enabled", True)
+ )
+ try:
+     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
+ except Exception:
+     pass
+ 
+ # ------------------------------ small helpers ------------------------------
+ 
+ 
+ def _client_ip_from_scope(scope) -> str:
+     try:
+         c = scope.get("client") or ()
+         if isinstance(c, (list, tuple)) and c:
+             return str(c[0])
+     except Exception:
+         pass
+     try:
+         hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
+         xff = hdrs.get("x-forwarded-for", "").split(",")[0].strip()
+         if xff:
+             return xff
+     except Exception:
+         pass
+     return "unknown"
+ 
+ 
++async def _greet_seq_mark_if_new(sid: str, seq: int) -> bool:
++    sid_key = str(sid or "") or "default"
++    async with GREET_SEQ_CACHE_LOCK:
++        seen = GREET_SEQ_CACHE[sid_key]
++        if seq in seen:
++            return False
++        seen.add(seq)
++        return True
++
++
+ def _normalize_admin_event_name(name: str) -> str:
+     try:
+         text = str(name or "").strip().lower()
+     except Exception:
+         text = ""
+     if not text:
+         return "log"
+     for ch in (" ", "\t", "\r", "\n"):
+         text = text.replace(ch, "_")
+     text = text.replace("/", ":").replace("..", ".")
+     text = text.replace(".", "_")
+     while "__" in text:
+         text = text.replace("__", "_")
+     return text or "log"
+ 
+ 
+ def _jlog(event: str, *, admin_event: Optional[str] = None, admin_label: Optional[str] = None, **fields):
+     """Lightweight JSON log (stdout). Keep dependency-free inside WS path."""
+     if not _ADVANCED_LOGGING_ENABLED:
+         return
+     try:
+         import time as _t, json as _json
+ 
+         fields.setdefault("event", event)
+         fields.setdefault("ts", _t.time())
+@@ -2215,62 +2228,97 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                             audio_on = bool(
+                                                 (cfg_now or {}).get(
+                                                     "feature_audio", True
+                                                 )
+                                             )
+                                             _admin_emit(
+                                                 "greet:resp",
+                                                 label="greet:resp",
+                                                 session_id=sid,
+                                                 turn_id=tid,
+                                                 audio_scheduled=audio_on,
+                                             )
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+                                         await _ws_send_json(
+                                             send,
+                                             make_error(
+                                                 "greet_fail", e.__class__.__name__
+                                             ),
+                                         )
+ 
+                             asyncio.create_task(_bg())
+ 
+                         elif t == "Configure":
+                             cfg.update(obj or {})
++                            greet_seq_raw = obj.get("greet_seq")
++                            greet_seq: Optional[int] = None
++                            is_new_greet_seq = True
++                            if greet_seq_raw is not None:
++                                try:
++                                    greet_seq = int(greet_seq_raw)
++                                except Exception:
++                                    greet_seq = None
++                            if greet_seq is not None and (obj.get("greet") or obj.get("reset")):
++                                try:
++                                    is_new_greet_seq = await _greet_seq_mark_if_new(sid, greet_seq)
++                                except Exception:
++                                    is_new_greet_seq = True
+                             if obj.get("reset"):
+-                                with contextlib.suppress(Exception):
+-                                    clear_greet_turn_cache(sid)
+-                                with contextlib.suppress(Exception):
+-                                    _admin_emit and _admin_emit(
+-                                        "greet:reset",
+-                                        route="/ws/v1/chat",
+-                                        label="greet:reset",
+-                                        session_id=sid,
++                                if is_new_greet_seq:
++                                    with contextlib.suppress(Exception):
++                                        clear_greet_turn_cache(sid)
++                                    with contextlib.suppress(Exception):
++                                        _admin_emit and _admin_emit(
++                                            "greet:reset",
++                                            route="/ws/v1/chat",
++                                            label="greet:reset",
++                                            session_id=sid,
++                                            greet_seq=greet_seq,
++                                        )
++                                else:
++                                    _jlog(
++                                        "ws_greet_reset_skip_dup",
++                                        sid=sid,
++                                        greet_seq=greet_seq,
++                                        via="Configure",
+                                     )
+                             if obj.get("greet"):
+-                                _jlog("ws_greet_recv", sid=sid, via="Configure")
++                                if not is_new_greet_seq:
++                                    _jlog(
++                                        "ws_greet_skip_dup",
++                                        sid=sid,
++                                        greet_seq=greet_seq,
++                                        via="Configure",
++                                    )
++                                    continue
++                                _jlog(
++                                    "ws_greet_recv",
++                                    sid=sid,
++                                    via="Configure",
++                                    greet_seq=greet_seq,
++                                )
+ 
+                                 async def _bg2():
+                                     try:
+                                         from app.services.streaming import run_ws_greet
+ 
+                                         tid = await asyncio.to_thread(run_ws_greet, sid)
+                                         with contextlib.suppress(Exception):
+                                             if _admin_emit:
+                                                 cfg_now = db.get_config()
+                                                 audio_on = bool(
+                                                     (cfg_now or {}).get(
+                                                         "feature_audio", True
+                                                     )
+                                                 )
+                                                 _admin_emit(
+                                                     "greet:resp",
+                                                     label="greet:resp",
+                                                     session_id=sid,
+                                                     turn_id=tid,
+                                                     audio_scheduled=audio_on,
+                                                 )
+                                     except Exception as e:
+                                         with contextlib.suppress(Exception):
+                                             await _ws_send_json(
+                                                 send,
+diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
+index a0599e199b8ccc56180660155faceab0fd2af0d7..688b5a2908b77a3289085ee05d8961e55f05602c 100644
+--- a/static/js/bootstrap.js
++++ b/static/js/bootstrap.js
+@@ -1,41 +1,51 @@
+ // bootstrap.js
+ import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
+ import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
+ import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
+ import { unlockAudio, stopPlayback } from '/static/js/audio.js';
+ import { getSID } from '/static/js/util/sid.js';
+ import * as App from '/static/js/app.js';
+ import * as Visualizer from '/static/js/visualizer.js';
+ import { logIfEnabled } from '/static/js/util/logging.js';
+ 
+ // /static/js/bootstrap.js — single owner of Start/End/Send + audio unlock + WS→UI wiring
+ 
+ const $ = (s) => document.querySelector(s);
+ 
+ let startInFlight = false;
+ let started = false;
++let startOnceCallCount = 0;
++let wsListenerSeq = 0;
++
++function logWsListenerAttach(eventName, note){
++  const id = `${eventName}#${++wsListenerSeq}`;
++  try {
++    _console('info', '[bootstrap] ws listener attached', { listener_id: id, event: eventName, note });
++  } catch {}
++  return id;
++}
+ 
+ function _console(level, ...args) {
+   logIfEnabled(() => {
+     try {
+       const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+       method?.apply(console, args);
+     } catch {}
+   });
+ }
+ 
+ // ----- Assistant text de-dupe (turn_id + text) -----
+ const _assistantSeen = new Set();
+ function _isAssistantTextFrame(d) {
+   const t = d?.type;
+   return t === 'assistant_text' || t === 'assistant_chunk' || t === 'assistant_final' || d?.role === 'assistant';
+ }
+ function _dedupeAssistant(d) {
+   // tolerate servers that send without turn_id (fallback to "na")
+   const turnId = d?.turn_id ?? 'na';
+   const text   = d?.text ?? d?.delta ?? d?.content ?? '';
+   const key    = `${turnId}::${text}`;
+   if (!text) return true; // empty texts don't render anyway
+   if (_assistantSeen.has(key)) return false;
+   _assistantSeen.add(key);
+   return true;
+@@ -67,78 +77,80 @@ function showBanner(msg){
+ function _disableButtons() {
+   const endBtn   = $('#endButton');
+   const sendBtnA = $('#composerSend');
+   const sendBtnB = $('#sendBtn');
+   if (sendBtnA) sendBtnA.disabled = true;
+   if (sendBtnB) sendBtnB.disabled = true;
+   if (endBtn)   endBtn.disabled   = true;
+ }
+ 
+ function _enableButtons() {
+   const endBtn   = $('#endButton');
+   const sendBtnA = $('#composerSend');
+   const sendBtnB = $('#sendBtn');
+   if (sendBtnA) sendBtnA.disabled = false;
+   if (sendBtnB) sendBtnB.disabled = false;
+   if (endBtn)   endBtn.disabled   = false;
+ }
+ 
+ function wireWSEventsOnce(){
+   if (window.__askchip_ws_wired) return;
+   window.__askchip_ws_wired = true;
+ 
+   // Log first few frames to verify payload shape
+   let seen = 0;
+   const loggedTypes = new Set();
++  logWsListenerAttach('askchip-ws', 'bootstrap-wire');
+   window.addEventListener('askchip-ws', (ev) => {
+     const d = ev.detail || {};
+     const t = d.type || '';
+ 
+     if (seen < 5 || (!loggedTypes.has(t) && loggedTypes.size < 12)) {
+       try { _console('log', '[WS→UI]', JSON.stringify(d)); } catch {}
+       seen++;
+       if (t) loggedTypes.add(t);
+     }
+ 
+     // Lightweight state dot hints (no UI regressions)
+     if (t === 'assistant_audio') setDot('speaking');
+     if (t === 'UtteranceEnd')    setDot('ready');
+     if (t === 'state' && d.phase) {
+       if (d.phase === 'ready')    setDot('ready');
+       if (d.phase === 'thinking') setDot('thinking');
+       if (d.phase === 'speaking') setDot('speaking');
+       if (d.phase === 'listening')setDot('listening');
+     }
+ 
+     // De-dupe assistant text frames so greet can't double-render
+     if (_isAssistantTextFrame(d)) {
+       if (!_dedupeAssistant(d)) return; // swallow duplicate
+     }
+ 
+     try { App.handleAssistantFrame(d); } catch (e) { _console('warn', 'App.handleAssistantFrame error', e); }
+   });
+ 
++  logWsListenerAttach('askchip-ws-close', 'bootstrap-wire');
+   window.addEventListener('askchip-ws-close', (ev) => {
+     const detail = ev.detail || {};
+     const normal = detail.code === 1000 || detail.code === 1001;
+     const reason = detail.reason || (normal ? 'normal closure' : '');
+     const payload = { ...detail, reason };
+ 
+     if (normal) {
+       _console('info', '[WS close]', payload);
+     } else {
+       _console('warn', '[WS close]', payload);
+     }
+     // When WS closes, disable Send/End and re-enable Start
+     _disableButtons();
+     const sb = $('#startButton');
+     if (sb) sb.disabled = false;
+     setDot('ready');
+   });
+ }
+ 
+ function wireVoiceEventsOnce(){
+   if (window.__askchip_voice_wired) return;
+   window.__askchip_voice_wired = true;
+ 
+   window.addEventListener('askchip-voice', (ev) => {
+     const detail = ev?.detail || {};
+@@ -162,51 +174,61 @@ function wireVoiceEventsOnce(){
+       setStatusText(label || 'Ready');
+     }
+   });
+ }
+ 
+ async function ensureWsOpenOrFail(timeoutMs = 5000){
+   if (isOpen()) return true;
+   try {
+     await openWS();
+   } catch (err) {
+     _console('warn', '[bootstrap] openWS failed', err);
+     return false;
+   }
+   try {
+     await Promise.race([
+       waitWSOpen(),
+       new Promise((_, rej) => setTimeout(() => rej(new Error('WS timeout')), timeoutMs))
+     ]);
+   } catch {
+     return false;
+   }
+   return isOpen();
+ }
+ 
+ async function startOnce(){
+-  if (started || startInFlight) return;
++  if (started || startInFlight) {
++    try {
++      _console('warn', '[bootstrap] startOnce duplicate guard hit', { started, startInFlight });
++    } catch {}
++    return;
++  }
++
++  const attempt = ++startOnceCallCount;
++  try {
++    _console('info', `[bootstrap] startOnce called N=${attempt}`);
++  } catch {}
+   startInFlight = true;
+   setDot('thinking');
+ 
+   const startBtn = $('#startButton');
+   const endBtn   = $('#endButton');
+ 
+   try{
+     if (startBtn) startBtn.disabled = true;
+ 
+     // 0) Audio unlock so TTS is permitted by browser autoplay policies
+     try { await unlockAudio(); } catch {}
+ 
+     // 1) Network/CSRF prep (kept for compatibility; harmless in WS-only mode)
+     try { installFetchInterceptor(); } catch {}
+     try { await ensureCSRF(); } catch {}
+ 
+     // 2) WS first — verify actually OPEN or abort
+     const ok = await ensureWsOpenOrFail(5000);
+     if (!ok){
+       showBanner('WebSocket did not open — greet aborted.');
+       setDot('ready');
+       if (startBtn) startBtn.disabled = false;
+       startInFlight = false;
+       return;
+     }
+@@ -258,53 +280,55 @@ async function startOnce(){
+       } catch {}
+       try { Visualizer.stop({ reset: true }); } catch {}
+       _disableButtons();
+       if (endBtn) endBtn.disabled = true;
+       if (startBtn) startBtn.disabled = false;
+       setDot('ready');
+       started = false;
+       try { window.__askchip_session_started = false; } catch {}
+       try { closeWS(1000, 'mic_unavailable'); } catch {}
+       startInFlight = false;
+       return;
+     }
+ 
+     // Watchdog: if no assistant frames within 6s after sending WS greet, warn
+     let gotAssistant = false;
+     let markAssistantRemove = false;
+     const markAssistant = (ev) => {
+       const d = ev.detail || {};
+       if (_isAssistantTextFrame(d)) gotAssistant = true;
+       if (markAssistantRemove) {
+         markAssistantRemove = false;
+         try { window.removeEventListener('askchip-ws', markAssistant); } catch {}
+       }
+     };
+     try {
++      logWsListenerAttach('askchip-ws', 'bootstrap-markAssistant-once');
+       window.addEventListener('askchip-ws', markAssistant, { once: true });
+     } catch (err) {
+       markAssistantRemove = true;
++      logWsListenerAttach('askchip-ws', 'bootstrap-markAssistant-fallback');
+       window.addEventListener('askchip-ws', markAssistant);
+       try { _console('warn', '[bootstrap] once listener fallback', err); } catch {}
+     }
+ 
+     setTimeout(() => {
+       if (!gotAssistant) showBanner('No assistant frames after greet — check WS handler/payload.');
+     }, 6000);
+ 
+     // Ready for user input
+     if (endBtn) endBtn.disabled = false;
+     _enableButtons();
+ 
+     // Mark session active so ws.js auto-reconnects through restarts
+     window.__askchip_session_started = true;
+     started = true;
+     setDot('ready');
+ 
+   } catch (e){
+     _console('error', '[bootstrap] start failed', e);
+     if (startBtn) startBtn.disabled = false;
+     _disableButtons();
+     setDot('ready');
+     try { Visualizer.stop({ reset: true }); } catch {}
+   } finally {
+     startInFlight = false;
+diff --git a/static/js/ws.js b/static/js/ws.js
+index 92fb9b09d2ac3ede81bb34c8e29bce000e1f0fc5..162647ce141a4210b013da8a318cc46c0eb767a2 100644
+--- a/static/js/ws.js
++++ b/static/js/ws.js
+@@ -64,50 +64,52 @@
+           };
+           return _add.call(this, ev, wrapper);
          }
-@@ -1427,66 +1433,68 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     def _finalize_confirm_abort(
-         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
-     ) -> None:
-         if confirm_window_ref[0] is not window:
-             return
-         _cancel_confirm_timeout()
-         confirm_window_ref[0] = None
-         data = {k: v for k, v in (metrics or {}).items() if v is not None}
-         data.setdefault("reason", trigger)
-         data.setdefault("snr_enabled", window.snr_enabled)
-         _jlog("confirm_abort", sid=sid, **data)
-         if barge.is_paused():
-             try:
-                 barge.cancel(_send_barge_state)
-             except Exception:
-                 pass
+         return _add.call(this, ev, fn);
+       };
+       WebSocket.prototype.addEventListener.__askchip_e2e_patched = true;
+     }
+   } catch {}
+ })();
  
-     def _start_confirm_window(now_ts: float) -> None:
-         window = ConfirmWindow(
-             min_duration_ms=confirm_min_ms,
-             max_duration_ms=confirm_max_ms,
-             max_gap_ms=confirm_gap_ms,
-             min_tokens=confirm_min_tokens,
-             min_confidence=confirm_min_conf,
-             snr_threshold_db=confirm_snr_db,
-+            snr_slack_db=confirm_snr_slack_db,
-             snr_enabled=True,
-         )
-         window.start(now_ts)
-         confirm_window_ref[0] = window
-         local_vad_meta_sent[0] = False
-         _emit_local_vad_signal(now_ts)
-         _jlog(
-             "confirm_start",
-             sid=sid,
-             turn_id=turn_id_ref[0],
-             min_ms=confirm_min_ms,
-             max_ms=confirm_max_ms,
-             max_gap_ms=confirm_gap_ms,
-             min_tokens=confirm_min_tokens,
-             min_confidence=confirm_min_conf,
-             snr_threshold_db=confirm_snr_db,
-+            snr_slack_db=confirm_snr_slack_db,
-         )
-         _schedule_confirm_timeout(window)
+ // Responsibilities:
+ //   (Patched) Optional reconnect control for diagnostics
+ let __WS_RECONNECT_ENABLED = true;
+ //   • Own a single WebSocket connection per tab to /ws/v1/chat
+ //   • Subprotocol auth (bearer + bearer.<token>)
+ //   • Auto-reconnect with bounded backoff (only if session is active)
+ //   • Helpers: waitWSOpen(), isOpen(), bufferedAmount(), sendJSON/audio, configure()
+ //   • DOM events: 'askchip-ws' (messages), 'askchip-ws-close' (terminal close)
  
-     def _handle_confirm_chunk(chunk: bytes, now_ts: float) -> None:
-         window = confirm_window_ref[0]
-         if not window:
-             return
-         window.set_snr_enabled(True)
-         decision = window.observe_chunk(chunk, now_ts)
-         if decision.action == "commit" and decision.metrics is not None:
-             _finalize_confirm_commit(
-                 decision.metrics.get("reason") or "chunk", decision.metrics, window
-             )
-         elif decision.action == "abort" and decision.metrics is not None:
-             _finalize_confirm_abort(
-                 decision.metrics.get("reason") or "chunk", decision.metrics, window
-             )
+ import { playStream, audioEnd, unlockAudio } from './audio.js';
+ import { getSID } from './util/sid.js';
+ import { logIfEnabled } from './util/logging.js';
  
-     def _handle_confirm_partial(ev: Dict[str, Any]) -> None:
-         window = confirm_window_ref[0]
-         if not window:
-             return
-         now_ts = time.time()
-         decision = window.observe_partial(
-             ev.get("token_count"), ev.get("confidence"), now_ts
-diff --git a/tests/test_phase3.py b/tests/test_phase3.py
-index 99c400b13df016181abd644ea134f92c3471c8ad..a8871e04b8a80fa4d6a7bf5427f7e2c9bf52b86b 100644
---- a/tests/test_phase3.py
-+++ b/tests/test_phase3.py
-@@ -98,25 +98,80 @@ def test_confirm_window_commits_after_valid_partial():
+ let _ws = null;
+ let _onOpen = [];
++let _lastConfigureSid = null;
++let _greetSeqCounter = 0;
+ const _KEEPALIVE_POLL_MS = 1000;
+ const _KEEPALIVE_IDLE_THRESHOLD_MS = 3500;
+ const _KEEPALIVE_RESUME_AFTER_UPLOAD_MS = 750;
+ const _KEEPALIVE_PROVIDER_FALLBACK_MS = 10000;
  
-     assert win.observe_chunk(loud_chunk, start + 0.12).action is None
-     assert win.observe_partial(3, 0.7, start + 0.28).action is None
-     decision = win.observe_chunk(loud_chunk, start + 0.45)
-     assert decision.action == "commit"
-     metrics = decision.metrics or {}
-     assert metrics.get("reason") == "chunk"
-     assert metrics.get("partial_tokens") == 3
+ const _KEEPALIVE_REASON_PROVIDER = 'provider_wait';
+ const _KEEPALIVE_REASON_UPLOAD = 'audio_upload';
  
+ const _keepaliveState = {
+   timer: null,
+   lastSentTs: 0,
+   lastReadyAt: 0,
+   providerReady: false,
+   pauseReasons: new Set(),
+   resumeTimers: new Map(),
+   providerGateTimer: null,
+   sawFirstDeepgram: false,
+ };
  
- def test_confirm_window_aborts_on_low_confidence_partial():
-     from app.ws.confirm_window import ConfirmWindow
-     import struct
+ function _getActiveTurnTraceId() {
+   try {
+     if (typeof window === 'undefined') return null;
+     const id = window.__askchip_turn_trace_id;
+     return id ? String(id) : null;
+   } catch {
+@@ -622,51 +624,62 @@ export async function sendAudioChunk(blob){
  
-     win = ConfirmWindow(min_duration_ms=350, max_duration_ms=900, snr_threshold_db=4.0)
-     start = 0.0
-     win.start(start)
-     chunk = struct.pack("<80h", *([900] * 80))
+ export async function sendCloseStream(){
+   // Drain the WS send buffer before closing the user turn.
+   try{
+     const deadline = Date.now() + 1500; // up to ~1.5s drain budget
+     // small sleep helper
+     const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
+     // allow two cycles to ensure MediaRecorder 'stop' enqueued the last blob
+     await sleep(20);
+     await sleep(20);
+     // drain bufferedAmount down near zero, without blocking forever
+     while (isOpen() && bufferedAmount() > 0 && Date.now() < deadline){
+       await sleep(20);
+     }
+   }catch(e){
+     _console('warn', '[ws] sendCloseStream drain failed', e);
+   } finally {
+     try { _console('debug', '[DBG] UI→WS', { type: 'CloseStream' }); } catch {}
+     sendJSON({ type: "CloseStream" });
+   }
+ }
  
-     win.observe_chunk(chunk, start + 0.1)
-     decision = win.observe_partial(3, 0.3, start + 0.2)
-     assert decision.action == "abort"
-     metrics = decision.metrics or {}
-     assert metrics.get("reason") == "partial_low_confidence"
+ export function configure(opts = {}){
+   // ensure session id is included if caller forgot
+   const sid = getSID();
++  if (_lastConfigureSid !== sid) {
++    _lastConfigureSid = sid;
++    _greetSeqCounter = 0;
++  }
+   const payload = { type: "Configure", session_id: sid, ...opts };
++  if (payload.greet) {
++    _greetSeqCounter += 1;
++    payload.greet_seq = _greetSeqCounter;
++    try {
++      window.__askchip_last_greet_seq = _greetSeqCounter;
++    } catch {}
++  }
+   sendJSON(payload);
+ }
  
-+
-+def test_confirm_window_tolerates_initial_gap_then_aborts():
-+    from app.ws.confirm_window import ConfirmWindow
-+    import struct
-+
-+    win = ConfirmWindow(
-+        min_duration_ms=400,
-+        max_duration_ms=900,
-+        max_gap_ms=180,
-+        snr_threshold_db=6.0,
-+    )
-+    start = 0.0
-+    win.start(start)
-+    loud_chunk = struct.pack("<80h", *([1200] * 80))
-+
-+    assert win.observe_chunk(loud_chunk, start + 0.1).action is None
-+
-+    # Gap of 500ms should be tolerated once for jitter
-+    assert win.observe_chunk(loud_chunk, start + 0.6).action is None
-+
-+    # A second large gap should abort the confirmation window
-+    decision = win.observe_chunk(loud_chunk, start + 1.2)
-+    assert decision.action == "abort"
-+    metrics = decision.metrics or {}
-+    assert metrics.get("reason") == "gap"
-+    assert metrics.get("gap_grace_used") is True
-+
-+
-+def test_confirm_window_borderline_snr_commits_with_slack():
-+    from app.ws.confirm_window import ConfirmWindow
-+    import struct
-+
-+    win = ConfirmWindow(
-+        min_duration_ms=200,
-+        max_duration_ms=800,
-+        max_gap_ms=300,
-+        min_tokens=2,
-+        snr_threshold_db=8.0,
-+        snr_slack_db=0.5,
-+    )
-+    start = 0.0
-+    win.start(start)
-+    chunk = struct.pack("<80h", *([1000] * 80))
-+
-+    # prime SNR tracking
-+    win.observe_chunk(chunk, start + 0.1)
-+    win.observe_chunk(chunk, start + 0.25)
-+    # Force borderline SNR slightly below threshold
-+    win.snr_db = win.snr_threshold_db - 0.3
-+
-+    decision = win.observe_partial(2, 0.8, start + 0.5)
-+    assert decision.action == "commit"
-+    metrics = decision.metrics or {}
-+    assert metrics.get("reason") == "partial"
-+
+ export const __TEST_ONLY__ = {
+   wsLog: _wsLog,
+   console: _console,
+ };
+ 
+ // Diagnostic: hold UI from ending too quickly unless explicitly allowed.
+ // Opt-in: localStorage.DIAG_MIN_SESSION_MS = '3500'
+ (function __installDiagMinSessionHold(){
+   try {
+     const minMs = parseInt((localStorage && localStorage.DIAG_MIN_SESSION_MS) || '0', 10);
+     if (!minMs || isNaN(minMs) || minMs <= 0) return;
+     const t0 = Date.now();
+     const _oldClose = WebSocket.prototype.close;
+     WebSocket.prototype.close = function(...args){
+       const elapsed = Date.now() - t0;
+       if (elapsed < minMs) {
+         try { console.info(`[diag] deferring WS close ${elapsed}ms < ${minMs}`); } catch {}
+         setTimeout(() => { try { _oldClose.apply(this, args); } catch {} }, (minMs - elapsed));
+         return;
+       }
+       return _oldClose.apply(this, args);
+     };

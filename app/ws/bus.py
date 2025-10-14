@@ -60,18 +60,8 @@ class StreamBus:
         q = Queue()
         with self._lock(sid):
             self._subs.setdefault(sid, []).append(q)
-            pend = self._pending.pop(sid, [])
-        # Drain pending into the new subscriber, honoring cancel state
-        for fr in pend:
-            try:
-                t = fr.get('type')
-                if t in self._CANCELLABLE_TYPES:
-                    tid = fr.get('turn_id')
-                    if tid and (sid, tid) in self._canceled:
-                        continue
-                q.put(fr)
-            except Exception:
-                pass
+            if sid in self._pending:
+                self._pending.pop(sid, None)
         return q
 
     def _coalesce_legacy_audio_chunk(self, buf, frame):
