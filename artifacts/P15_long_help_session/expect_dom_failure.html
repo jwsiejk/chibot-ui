@@ -1,7 +1,7 @@
 <!DOCTYPE html><html lang="en"><head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="csrf" content="99f63c9e464194db4be4a757efe35fd2">
+  <meta name="csrf" content="8c6abae571e3b553cd67b1b22f88b00d">
   <title>Ask Chip</title>
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
@@ -15,7 +15,7 @@
           <span class="askchip-caret" aria-hidden="true">▾</span>
         </button>
         <div id="menuDropdown" class="dropdown-content hidden" role="menu" aria-labelledby="menuAskChip">
-          <a id="menuAdmin" role="menuitem" href="/admin" style="display: none;">Admin</a>
+          <a id="menuAdmin" role="menuitem" href="/admin" style="">Admin</a>
           <a id="menuProfile" role="menuitem" href="#">Profile</a>
           <a id="menuLogout" role="menuitem" href="#">Logout</a>
         </div>
@@ -56,15 +56,15 @@
 
     <div class="meeting-toolbar">
       <div class="toolbar-buttons">
-        <button id="startButton" class="primary" title="Please complete your profile to continue" disabled="">Start</button>
+        <button id="startButton" class="primary" title="" disabled="">Start</button>
         <button id="endButton" disabled="">End</button>
-        <span id="stateDot" class="dot dot-ready" title="Ready"></span>
+        <span id="stateDot" class="dot dot-thinking" title="Ready"></span>
       </div>
     </div>
   </main>
 
   <!-- Login / Profile Modals -->
-  <div id="loginModal" class="modal">
+  <div id="loginModal" class="modal hidden">
     <div class="sheet">
       <h3>Sign in</h3>
       <p>Login with your Trace3 or Pure email.</p>
@@ -74,7 +74,7 @@
           <button id="inlineLoginSubmit" type="submit" class="primary">Sign in</button>
           <button id="inlineLoginCancel" type="button">Cancel</button>
         </div>
-        <div id="inlineLoginMsg" class="msgline warn">Please log in to continue.</div>
+        <div id="inlineLoginMsg" class="msgline"></div>
       </form>
     </div>
   </div>
@@ -98,13 +98,32 @@
   </div>
 
   <!-- Scripts -->
+  <script>
+    (function () {
+      const cfg = {"auth": {}, "logging": {"enabled": true}, "vad": {"baseThresholdDb": 10.0, "exitThresholdDb": 6.0, "minSpeechMs": 360, "ttsBoostDb": 6.0}};
+      try {
+        if (cfg && typeof cfg === 'object') {
+          const target = (window.__askchip_config = Object.assign({}, window.__askchip_config || {}));
+          for (const [key, value] of Object.entries(cfg)) {
+            if (value && typeof value === 'object' && !Array.isArray(value)) {
+              target[key] = Object.assign({}, target[key] || {}, value);
+            } else {
+              target[key] = value;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[index] failed to merge askchip_config', err);
+      }
+    })();
+  </script>
   
   <script>
-    window.__askchipAssetVersion = "1760325989";
+    window.__askchipAssetVersion = "1760401977";
   </script>
-  <script type="module" src="/static/js/askchip_client_hooks.js?v=1760325989"></script>
-  <script type="module" src="/static/js/bootstrap.js?v=1760325989"></script>
-  <script type="module" src="/static/js/auth_gate.js?v=1760325989"></script>
-  <script type="module" src="/static/js/ui_menu.js?v=1760325989"></script>
+  <script type="module" src="/static/js/askchip_client_hooks.js?v=1760401977"></script>
+  <script type="module" src="/static/js/bootstrap.js?v=1760401977"></script>
+  <script type="module" src="/static/js/auth_gate.js?v=1760401977"></script>
+  <script type="module" src="/static/js/ui_menu.js?v=1760401977"></script>
 
 </body></html>

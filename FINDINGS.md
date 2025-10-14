@@ -14,4 +14,4 @@
 - **P10_persona_governor_on_diagnose**: FAIL — WS console missing 'policy_decision: diagnose'
 - **P11_session_goal_persists**: FAIL — session_goal.depth expected 'deep_dive', got 'normal'
 - **P12_nlu_completeness**: FAIL — WS nlu missing key 'user_goal'; WS nlu missing key 'phase'; WS nlu missing key 'depth'; WS nlu missing key 'delivery_pref'; WS nlu missing key 'intent_hint'; WS nlu missing key 'entities'; WS nlu missing key 'needs_clarification'; Fail: WS nlu missing 'delivery_pref'; Fail: WS nlu missing 'entities.product'; Fail: WS nlu missing 'entities.env'
-- **P15_long_help_session**: FAIL — WS console missing 'latency_breakdown'
+- **P15_long_help_session**: FAIL — WS console missing 'latency_breakdown'; DOM expectation not met: none of [.chat-window .msg.assistant, .chat-window .msg.user, #suggestions .chip] appeared within 10000ms
