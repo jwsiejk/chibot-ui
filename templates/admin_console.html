@@ -73,6 +73,7 @@
 <label>Enable audio (TTS) <input id="feature_audio" type="checkbox"/></label>
 <label>Enable manual barge-in (PTT) <input id="feature_manual_barge_in" type="checkbox"/></label>
 <label>Manual-only barge mode <input id="barge_in_mode_manual" type="checkbox"/></label>
+<label>Auto-commit when ready <input id="auto_commit_when_ready" type="checkbox"/></label>
 <label>Confirm (ms) <input id="confirm_ms" type="number" value="420"/></label>
 <label>Min speech (ms) <input id="min_speech_ms" type="number" value="220"/></label>
 <label>Max turn seconds <input id="max_turn_seconds" type="number" value="90"/></label>
@@ -253,6 +254,7 @@
       if ($('feature_audio')) $('feature_audio').checked = !!s.feature_audio;
       if ($('feature_manual_barge_in')) $('feature_manual_barge_in').checked = s.feature_manual_barge_in !== false;
       if ($('barge_in_mode_manual')) $('barge_in_mode_manual').checked = s.barge_in_mode_manual !== false;
+      if ($('auto_commit_when_ready')) $('auto_commit_when_ready').checked = s.auto_commit_when_ready !== false;
       if ($('confirm_ms')) $('confirm_ms').value = s.confirm_ms ?? 420;
       if ($('min_speech_ms')) $('min_speech_ms').value = s.min_speech_ms ?? 220;
       if ($('max_turn_seconds')) $('max_turn_seconds').value = s.max_turn_seconds ?? 90;
@@ -270,6 +272,7 @@
         feature_audio: !!($('feature_audio') && $('feature_audio').checked),
         feature_manual_barge_in: !!($('feature_manual_barge_in') && $('feature_manual_barge_in').checked),
         barge_in_mode_manual: !!($('barge_in_mode_manual') && $('barge_in_mode_manual').checked),
+        auto_commit_when_ready: !!($('auto_commit_when_ready') && $('auto_commit_when_ready').checked),
         confirm_ms: parseInt($('confirm_ms')?.value||'420',10),
         min_speech_ms: parseInt($('min_speech_ms')?.value||'220',10),
         max_turn_seconds: parseInt($('max_turn_seconds')?.value||'90',10),

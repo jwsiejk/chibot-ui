@@ -22,6 +22,7 @@ _settings: Dict[str, Any] = {
     # Manual barge-in (PTT) feature flags
     "feature_manual_barge_in": True,
     "barge_in_mode_manual": True,
+    "auto_commit_when_ready": True,
 
     # TTS runtime tunables (non-secret) – keys remain in env only unless user saves
     "tts_voice_id": os.environ.get("ELEVENLABS_VOICE_ID", ""),

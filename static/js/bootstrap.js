@@ -62,7 +62,6 @@ function _updateManualButtonAvailability() {
   }
   btn.hidden = false;
   const shouldEnable = manualState.sessionActive
-    && manualState.phase === 'ready'
     && !manualState.pointerActive
     && !manualState.keyActive;
   btn.disabled = !shouldEnable;
@@ -351,6 +350,7 @@ async function startOnce(){
     const sid = getSID();
     try {
       const manualMode = !!_cfgValue('barge_in_mode_manual', true);
+      const autoCommit = !!_cfgValue('auto_commit_when_ready', true);
       _console('log', '[bootstrap] startOnce sending greet configure');
       configure({
         greet: true,
@@ -358,6 +358,7 @@ async function startOnce(){
         session_id: sid,
         feature_manual_barge_in: manualState.featureEnabled,
         barge_in_mode_manual: manualMode,
+        auto_commit_when_ready: autoCommit,
       });
       _console('log', '[bootstrap] startOnce greet configure sent — recorder setup will follow');
       try {

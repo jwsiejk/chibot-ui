@@ -46,6 +46,7 @@ const POST_TTS_HOLDOFF_MS = 600;    // grace window after Chip begins speaking
 const MANUAL_DEBOUNCE_MS = 300;
 const MANUAL_NO_AUDIO_CANCEL_MS = 500;
 const MANUAL_CLOSESTREAM_DELAY_MS = 250;
+const AUTO_CLOSESTREAM_DELAY_MS = 320;
 const MANUAL_VAD_IGNORE_MS = 600;
 
 const state = {
@@ -68,6 +69,7 @@ const state = {
   postTtsHoldTimer: null,
   eligibility: 'blocked_pregreet', // 'blocked_pregreet' | 'holdoff' | 'eligible'
   refractoryUntil: 0,
+  turnCommitMode: 'idle',
   direct: {
     descriptor: null,
     fetchPromise: null,
@@ -93,6 +95,11 @@ const state = {
     deferCloseStream: false,
     ignoreVadUntil: 0,
     sentStartFrame: false,
+  },
+  auto: {
+    enabled: optsFromGlobal('auto_commit_when_ready', true),
+    active: false,
+    deferCloseStream: false,
   },
 };
 
@@ -495,6 +502,9 @@ function _disarm() {
   // 3) Reset local state
   state.turnOpen = false;
   state.recStartedAt = 0;
+  state.turnCommitMode = 'idle';
+  state.auto.active = false;
+  state.auto.deferCloseStream = false;
 
   // 4) Block any pre-greet starts, and enforce a refractory lockout
   //    Use your configured cooldown (default 900ms) so we can't instantly re-arm.
@@ -673,6 +683,12 @@ function _startRecorder() {
 
   state.rec = recorder;
 
+  if (!state.turnCommitMode || state.turnCommitMode === 'idle') {
+    state.turnCommitMode = state.manual.active
+      ? 'manual'
+      : (state.auto.active ? 'auto_commit' : 'vad');
+  }
+
   state.rec.ondataavailable = (e) => {
     const blob = e.data;
     if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
@@ -760,7 +776,9 @@ function _startRecorder() {
       }
       // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
       if (state.turnOpen) {
-        const deferMs = state.manual.deferCloseStream ? MANUAL_CLOSESTREAM_DELAY_MS : 0;
+        const manualDelay = state.manual.deferCloseStream ? MANUAL_CLOSESTREAM_DELAY_MS : 0;
+        const autoDelay = state.auto.deferCloseStream ? AUTO_CLOSESTREAM_DELAY_MS : 0;
+        const deferMs = Math.max(manualDelay, autoDelay);
         if (deferMs > 0) {
           await new Promise((resolve) => setTimeout(resolve, deferMs));
         }
@@ -772,6 +790,9 @@ function _startRecorder() {
       state.manual.deferCloseStream = false;
       state.manual.active = false;
       state.manual.buttonDown = false;
+      state.auto.deferCloseStream = false;
+      state.auto.active = false;
+      state.turnCommitMode = 'idle';
       if (state.manual.noAudioTimer) {
         try { clearTimeout(state.manual.noAudioTimer); } catch {}
         state.manual.noAudioTimer = null;
@@ -817,7 +838,9 @@ function _onSpeechStartCommitted() {
   if (state.manual.buttonDown || state.manual.active) return;
   if (state.manual.ignoreVadUntil && _now() < state.manual.ignoreVadUntil) return;
   _refreshManualConfig();
-  if (_isManualOnlyMode()) {
+  const manualOnly = _isManualOnlyMode();
+  const allowAutoCommit = manualOnly && state.auto.enabled === true;
+  if (manualOnly && !allowAutoCommit) {
     _logLifecycle('vad_speech_start_ignored', { reason: 'manual_mode' });
     return;
   }
@@ -836,25 +859,35 @@ function _onSpeechStartCommitted() {
 
   _clearPostTtsHoldTimer();
   state.postTtsHoldUntil = 0;
-  _logLifecycle('vad_speech_start');
-  // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
-  try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} _bargeIn();
+  const isAutoCommit = allowAutoCommit;
+  state.auto.active = isAutoCommit;
+  state.auto.deferCloseStream = false;
+  state.turnCommitMode = isAutoCommit ? 'auto_commit' : 'vad';
+  if (isAutoCommit) {
+    _logLifecycle('vad_speech_start', { commit_mode: 'auto_commit' });
+  } else {
+    _logLifecycle('vad_speech_start', { commit_mode: 'vad' });
+    // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
+    try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} _bargeIn();
+  }
 
   const started = _startRecorder();
   if (started) {
     try { console.info('[voice] state=recording'); } catch {}
-_emitVoiceState('recording');
+    _emitVoiceState('recording', { commitMode: state.turnCommitMode });
     return;
   }
 
   _console('warn', '[voice] recorder unavailable — reverting to typing');
   _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+  state.auto.active = false;
+  state.turnCommitMode = 'idle';
 }
 
 function _onSpeechEndCommitted(detail = null) {
   if (state.manual.buttonDown || state.manual.active) return;
   if (state.manual.ignoreVadUntil && _now() < state.manual.ignoreVadUntil) return;
-  if (_isManualOnlyMode()) return;
+  if (_isManualOnlyMode() && !state.auto.active) return;
   const reason = detail?.reason || 'vad_silence';
   const now = performance.now ? performance.now() : Date.now();
   const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
@@ -875,6 +908,9 @@ function _onSpeechEndCommitted(detail = null) {
   _logLifecycle('vad_speech_end', { reason });
   _safeClearTurnTimer();
   _clearPendingEndTimer();
+  if (state.auto.active) {
+    state.auto.deferCloseStream = true;
+  }
   _stopRecorder({ reason });
   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
 }
@@ -884,6 +920,7 @@ function _onSpeechEndCommitted(detail = null) {
 function _refreshManualConfig() {
   state.manual.enabled = !!optsFromGlobal('feature_manual_barge_in', true);
   state.manual.modeManualOnly = !!optsFromGlobal('barge_in_mode_manual', true);
+  state.auto.enabled = !!optsFromGlobal('auto_commit_when_ready', true);
 }
 
 function _clearManualTimers() {
@@ -916,6 +953,9 @@ export function forceBargeInStart(meta = {}) {
   state.manual.ignoreVadUntil = 0;
   state.manual.deferCloseStream = false;
   state.manual.sentStartFrame = false;
+  state.auto.active = false;
+  state.auto.deferCloseStream = false;
+  state.turnCommitMode = 'manual';
   _clearManualTimers();
 
   _bargeIn();
@@ -924,6 +964,7 @@ export function forceBargeInStart(meta = {}) {
   if (!started) {
     state.manual.buttonDown = false;
     state.manual.active = false;
+    state.turnCommitMode = 'idle';
     return false;
   }
 
@@ -958,6 +999,8 @@ export function forceBargeInEnd(opts = {}) {
   state.manual.debounceUntil = Date.now() + MANUAL_DEBOUNCE_MS;
   _clearManualTimers();
   state.manual.deferCloseStream = true;
+  state.auto.active = false;
+  state.auto.deferCloseStream = false;
 
   _logLifecycle('manual_barge_in_end', { reason, auto_cancel: autoCancel });
   try { console.info('manual_barge_in_end'); } catch {}

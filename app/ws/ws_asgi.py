@@ -1230,6 +1230,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
     manual_feature_enabled = True
     manual_mode_manual_only = True
+    auto_commit_when_ready = True
     try:
         runtime_cfg = db.get_config()
         if isinstance(runtime_cfg, dict):
@@ -1238,6 +1239,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             )
             manual_mode_manual_only = bool(
                 runtime_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+            )
+            auto_commit_when_ready = bool(
+                runtime_cfg.get("auto_commit_when_ready", auto_commit_when_ready)
             )
     except Exception:
         pass
@@ -1252,10 +1256,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             manual_mode_manual_only = bool(
                 admin_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
             )
+            auto_commit_when_ready = bool(
+                admin_cfg.get("auto_commit_when_ready", auto_commit_when_ready)
+            )
     except Exception:
         pass
     cfg["feature_manual_barge_in"] = manual_feature_enabled
     cfg["barge_in_mode_manual"] = manual_mode_manual_only
+    cfg["auto_commit_when_ready"] = auto_commit_when_ready
     loop = asyncio.get_running_loop()
     barge = BargeState()
     last_barge_phase = [None]
@@ -1308,6 +1316,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     manual_commit_pending = [False]
     manual_button_down = [False]
     manual_turn_active = [False]
+    turn_commit_mode_ref: List[str] = ["vad"]
+    active_turn_mode_ref: List[str] = ["vad"]
     turn_timing: Dict[str, List[float]] = {
         "start": [0.0],
         "dg_open": [0.0],
@@ -1664,9 +1674,26 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             **fields,
         )
 
+    def _session_ready_for_auto_commit() -> bool:
+        if manual_button_down[0] or manual_turn_active[0]:
+            return False
+        if barge.is_paused():
+            return False
+        try:
+            active_turn = bus.current_assistant_turn(sid)
+        except Exception:
+            active_turn = None
+        tts_state, _ = _lookup_tts_state(sid, active_turn)
+        if _is_tts_active(tts_state):
+            return False
+        return True
+
     def _on_barge_commit() -> None:
-        mode = "manual" if manual_commit_pending[0] else "vad"
+        mode_raw = turn_commit_mode_ref[0]
+        mode = mode_raw or ("manual" if manual_commit_pending[0] else "vad")
         manual_commit_pending[0] = False
+        turn_commit_mode_ref[0] = "vad"
+        active_turn_mode_ref[0] = mode or "vad"
         target_turn = current_assistant_turn_ref[0]
         try:
             latest = bus.current_assistant_turn(sid)
@@ -1684,6 +1711,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             sid=sid,
             mode=mode,
             manual=(mode == "manual"),
+            auto_commit=(mode == "auto_commit"),
             admin_event="turn_committed",
             admin_label="turn_committed",
         )
@@ -2106,26 +2134,50 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                     raw_chunk = chunk
 
-                    if buf.is_empty():
-                        if _manual_mode_active() and not manual_turn_active[0]:
-                            _jlog(
-                                "manual_mode_voice_chunk_ignored",
-                                sid=sid,
-                                bytes=len(raw_chunk or b""),
-                            )
-                            continue
-                        # New audio turn
+                    new_turn = buf.is_empty()
+                    if new_turn:
                         try:
                             current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
                         except Exception:
                             current_assistant_turn_ref[0] = None
+
+                        commit_mode = "vad"
+                        if manual_turn_active[0]:
+                            commit_mode = "manual"
+                        elif manual_mode_manual_only:
+                            if not auto_commit_when_ready:
+                                _jlog(
+                                    "manual_mode_voice_chunk_ignored",
+                                    sid=sid,
+                                    bytes=len(raw_chunk or b""),
+                                    reason="auto_commit_disabled",
+                                )
+                                continue
+                            if not _session_ready_for_auto_commit():
+                                _jlog(
+                                    "manual_mode_voice_chunk_ignored",
+                                    sid=sid,
+                                    bytes=len(raw_chunk or b""),
+                                    reason="session_not_ready",
+                                )
+                                continue
+                            commit_mode = "auto_commit"
+
+                        active_turn_mode_ref[0] = commit_mode
+                        turn_commit_mode_ref[0] = commit_mode
+                        if commit_mode != "manual":
+                            manual_commit_pending[0] = False
+
                         confirm_ms = 420
                         try:
                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
                         except Exception:
                             confirm_ms = 420
                         barge_started = False
-                        if not manual_turn_active[0]:
+                        should_pause = not (
+                            manual_mode_manual_only and commit_mode == "auto_commit"
+                        )
+                        if not manual_turn_active[0] and should_pause:
                             try:
                                 barge_started = barge.start(
                                     confirm_ms=confirm_ms,
@@ -2167,7 +2219,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 sid=sid,
                                 turn_id=turn_id_ref[0],
                                 first_bytes=len(raw_chunk),
+                                commit_mode=commit_mode,
+                                auto_commit=(commit_mode == "auto_commit"),
                             )
+                        if commit_mode == "auto_commit":
+                            try:
+                                _on_barge_commit()
+                            except Exception:
+                                pass
                     # Detect container early using raw bytes
 
                     # Detect container early
@@ -2352,6 +2411,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     manual_button_down[0] = True
                                     manual_turn_active[0] = True
                                     manual_commit_pending[0] = True
+                                    turn_commit_mode_ref[0] = "manual"
+                                    active_turn_mode_ref[0] = "manual"
                                     _ensure_confirm_closed("manual_start")
                                     buffered_bytes = _manual_buffered_bytes()
                                     _manual_log_event(
@@ -2383,6 +2444,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     manual_button_down[0] = False
                                     manual_turn_active[0] = False
                                     manual_commit_pending[0] = False
+                                    turn_commit_mode_ref[0] = "vad"
                                     buffered_bytes = _manual_buffered_bytes()
                                     _manual_log_event(
                                         "manual_barge_in_end",
@@ -2399,6 +2461,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             )
                             manual_mode_manual_only = bool(
                                 cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+                            )
+                            auto_commit_when_ready = bool(
+                                cfg.get("auto_commit_when_ready", auto_commit_when_ready)
                             )
                             if not manual_feature_enabled:
                                 manual_button_down[0] = False
@@ -2729,9 +2794,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     try:
                                         await asyncio.sleep(
                                             float(
-                                                os.getenv("ASR_FINAL_GRACE_S", "0.30")
+                                                os.getenv("ASR_FINAL_GRACE_S", "0.80")
                                             )
-                                        )  # ~300 ms grace
+                                        )  # ~800 ms grace
                                         await dg.close(wait_for_final=True)
                                     except DeepgramDrainTimeoutError as exc:
                                         drain_timeout_exc = exc
@@ -2835,6 +2900,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     with contextlib.suppress(Exception):
                                         barge.cancel(_send_barge_state)
                                 await asyncio.sleep(0)
+
+                            active_turn_mode_ref[0] = "vad"
+                            turn_commit_mode_ref[0] = "vad"
 
                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
 

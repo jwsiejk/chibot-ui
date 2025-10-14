@@ -108,6 +108,7 @@ def create_app():
         feature_flags = {
             "feature_manual_barge_in": True,
             "barge_in_mode_manual": True,
+            "auto_commit_when_ready": True,
         }
         try:
             from .services import admin_settings as _admin_settings  # inline import to avoid cycles
@@ -135,6 +136,9 @@ def create_app():
         feature_flags["barge_in_mode_manual"] = _resolve_flag(
             "barge_in_mode_manual", True
         )
+        feature_flags["auto_commit_when_ready"] = _resolve_flag(
+            "auto_commit_when_ready", True
+        )
         return {
             "askchip_config": {
                 "logging": {"enabled": enabled},
@@ -143,6 +147,7 @@ def create_app():
                 "features": feature_flags,
                 "feature_manual_barge_in": feature_flags["feature_manual_barge_in"],
                 "barge_in_mode_manual": feature_flags["barge_in_mode_manual"],
+                "auto_commit_when_ready": feature_flags["auto_commit_when_ready"],
             }
         }
 

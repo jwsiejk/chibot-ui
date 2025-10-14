@@ -1,168 +1,352 @@
+diff --git a/app/__init__.py b/app/__init__.py
+index 212288a03cf1eac097bd3220f593737ef9b2a898..b68b281811429aa777efef5bf1deff6ffb626f38 100644
+--- a/app/__init__.py
++++ b/app/__init__.py
+@@ -86,85 +86,90 @@ def create_app():
+     @app.context_processor
+     def _inject_askchip_config():
+         enabled = True
+         try:
+             enabled = bool(getattr(_SETTINGS, "advanced_logging_enabled", True))
+         except Exception:
+             enabled = True
+         auth_config = {}
+         auto_login_email = (os.environ.get("ASKCHIP_AUTO_LOGIN_EMAIL") or "").strip()
+         if auto_login_email:
+             auth_config["autoLoginEmail"] = auto_login_email
+         vad_config = {}
+         try:
+             vad_config = {
+                 "baseThresholdDb": float(getattr(_SETTINGS, "vad_base_threshold_db", 10.0)),
+                 "exitThresholdDb": float(getattr(_SETTINGS, "vad_exit_threshold_db", 6.0)),
+                 "ttsBoostDb": float(getattr(_SETTINGS, "vad_tts_boost_db", 6.0)),
+                 "minSpeechMs": int(getattr(_SETTINGS, "vad_min_speech_ms", 360)),
+             }
+         except Exception:
+             vad_config = {}
+ 
+         feature_flags = {
+             "feature_manual_barge_in": True,
+             "barge_in_mode_manual": True,
++            "auto_commit_when_ready": True,
+         }
+         try:
+             from .services import admin_settings as _admin_settings  # inline import to avoid cycles
+ 
+             settings = _admin_settings.get_settings()
+         except Exception:
+             settings = {}
+         try:
+             from .db import db as _db
+ 
+             db_cfg = _db.get_config()
+         except Exception:
+             db_cfg = {}
+ 
+         def _resolve_flag(name: str, default: bool) -> bool:
+             if isinstance(settings, dict) and name in settings:
+                 return bool(settings.get(name))
+             if isinstance(db_cfg, dict) and name in db_cfg:
+                 return bool(db_cfg.get(name))
+             return default
+ 
+         feature_flags["feature_manual_barge_in"] = _resolve_flag(
+             "feature_manual_barge_in", True
+         )
+         feature_flags["barge_in_mode_manual"] = _resolve_flag(
+             "barge_in_mode_manual", True
+         )
++        feature_flags["auto_commit_when_ready"] = _resolve_flag(
++            "auto_commit_when_ready", True
++        )
+         return {
+             "askchip_config": {
+                 "logging": {"enabled": enabled},
+                 "auth": auth_config,
+                 "vad": vad_config,
+                 "features": feature_flags,
+                 "feature_manual_barge_in": feature_flags["feature_manual_barge_in"],
+                 "barge_in_mode_manual": feature_flags["barge_in_mode_manual"],
++                "auto_commit_when_ready": feature_flags["auto_commit_when_ready"],
+             }
+         }
+ 
+     @app.after_request
+     def maybe_allow_cors(resp):
+         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
+         if allow:
+             origins = [o.strip() for o in allow.split(",") if o.strip()]
+             ori = request.headers.get("Origin", "")
+             if ori in origins:
+                 resp.headers["Access-Control-Allow-Origin"] = ori
+                 resp.headers["Vary"] = "Origin"
+                 resp.headers["Access-Control-Allow-Credentials"] = "true"
+                 resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token"
+                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+         return resp
+ 
+     @app.route("/<path:_>", methods=["OPTIONS"])
+     def _cors_preflight(_):
+         return ("", 204)
+ 
+     @app.before_request
+     def _auth_gate():
+         p = request.path or "/"
+         allow = (
+diff --git a/app/db.py b/app/db.py
+index 3e05863e1cd9bf25e409b281f17d74d96590e51d..6b97475ceb9e9f817c62e44ab85e6a28ff28d44f 100644
+--- a/app/db.py
++++ b/app/db.py
+@@ -54,50 +54,51 @@ class DB:
+                 'vad_attack_ms': 12,
+                 'vad_release_ms': 240,
+                 'vad_dbfs_threshold': -42,
+                 'csrf_enforced': bool(__import__('os').environ.get('CSRF_ENFORCED','')).__bool__(),'profile_gate_enabled':False,
+                 'show_instruction_strip': True,'show_state_dots': True,'theme':'light',
+                 'suggestions_enabled': True,'suggestions_max_items':4,'suggestions_max_words':7,
+                 'nudges_enabled': True,'nudge_delay_ms':4200,'nudge_backoff_after_ignored':2,
+                 'silence_guard_ms':1800,
+                 'confirm_ms':420,'echo_threshold_boost':1.9,'min_speech_ms':220,'voice_command_hints':True,
+                 'language_lock':'en','max_turn_seconds':90,'normalization_table_version':1,
+                 'nebraska_persona_level':0.13,'nebraska_quotes_enabled':True,
+                 'ws_ping_interval_ms':25000,'ws_idle_timeout_ms':30000,'reconnect_policy':'1_attempt_5s','llm_provider':'auto','openai_model':'gpt-4o-mini','stt_provider':'auto','tts_provider':'auto',
+                 'redact_email_in_logs':True,
+                 'nlu_logging_enabled': True,
+                 'gen_humor': 0.0,
+                 'gen_target_verbosity': 'medium',
+                 'gen_max_sentences': 4,
+                 'gen_top_p': 1.0,
+                 'gen_temperature': 0.3,
+                 'feature_audio': True,
+                 'tts_voice_id': '',
+                 'tts_output_format': 'mp3_44100_128',
+                 'tts_model_id': 'eleven_multilingual_v2',
+                 'feature_manual_barge_in': True,
+                 'barge_in_mode_manual': True,
++                'auto_commit_when_ready': True,
+                 'planner_high_threshold': 0.75,
+                 'planner_medium_threshold': 0.60,
+             },
+             'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{}
+         }
+         self._ensure_config_defaults()
+     def ensure_session(self, sid, email):
+         try:
+             if persist_enabled():
+                 from .dal import neon_pg
+                 neon_pg.ensure_schema(); neon_pg.upsert_user(email); neon_pg.ensure_session(sid, email)
+         except Exception:
+             pass
+         session = self.memory['sessions'].setdefault(
+             sid,
+             {'email':email,'messages':[],'nudges':0,'persona_id':'chip'}
+         )
+         if not isinstance(session.get('goal'), dict):
+             session['goal'] = _empty_session_goal()
+         else:
+             session['goal'] = _normalize_session_goal(session['goal'])
+     def add_message(self, sid, role, text):
+         try:
+             if persist_enabled():
+                 from .dal import neon_pg
+diff --git a/app/services/admin_settings.py b/app/services/admin_settings.py
+index c1152a1281da952947ec964b25ae02e2a4587367..3e04f292f851bddcf6c9f8da459f958d959b6886 100644
+--- a/app/services/admin_settings.py
++++ b/app/services/admin_settings.py
+@@ -1,49 +1,50 @@
+ # app/services/admin_settings.py
+ from __future__ import annotations
+ import os, json, threading
+ from typing import Any, Dict
+ 
+ _LOCK = threading.Lock()
+ 
+ # ---------------- In-memory defaults (used as base / fallback) ----------------
+ _settings: Dict[str, Any] = {
+     "confirm_ms": 420,
+     "echo_threshold_boost": 1.9,
+     "language_lock": "en",
+     "min_speech_ms": 220,
+     "nudge_delay_ms": 4200,
+     "nudge_backoff_after_ignored": 2,
+     "silence_guard_ms": 1800,
+     "max_turn_seconds": 90,
+ 
+     # Audio feature toggle — default TRUE unless explicitly forced false via env/DB
+     "feature_audio": (os.environ.get("FEATURE_AUDIO") or "true").lower() == "true",
+ 
+     # Manual barge-in (PTT) feature flags
+     "feature_manual_barge_in": True,
+     "barge_in_mode_manual": True,
++    "auto_commit_when_ready": True,
+ 
+     # TTS runtime tunables (non-secret) – keys remain in env only unless user saves
+     "tts_voice_id": os.environ.get("ELEVENLABS_VOICE_ID", ""),
+     "tts_output_format": os.environ.get("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128"),
+     "tts_model_id": os.environ.get("ELEVEN_MODEL_ID", "eleven_multilingual_v2"),
+ }
+ 
+ # ------------------------- DB helpers (safe best-effort) ----------------------
+ 
+ def _persist_enabled() -> bool:
+     try:
+         from ..db import persist_enabled
+         return bool(persist_enabled())
+     except Exception:
+         return False
+ 
+ def _db_get_settings() -> Dict[str, Any]:
+     """
+     Load admin settings from Neon (admin_settings.value_jsonb where key='settings').
+     Returns {} if not available. Safe to call even if schema is missing.
+     """
+     if not _persist_enabled():
+         return {}
+     try:
+         from ..dal import neon_pg as pg
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 0f62a62dbb106f2dcc19277d9a8181c76b520bd8..0f4cc282bf409a6718b4c00a67425c5e970f587b 100644
+index 0f4cc282bf409a6718b4c00a67425c5e970f587b..2b48a8a33b15de752d583d0a7866ab91e41ce556 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -1378,50 +1378,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         confirm_snr_db = float(cfg.get("confirm_min_snr_db", 8.0) or 8.0)
-     except Exception:
-         confirm_snr_db = 8.0
+@@ -1208,76 +1208,84 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
+                     )
+                 except Exception:
+                     break
+         except asyncio.CancelledError:
+             pass
+ 
+     ping_task = asyncio.create_task(_ping_loop())
+ 
      try:
-         confirm_snr_slack_db = float(cfg.get("confirm_snr_slack_db", 0.5) or 0.5)
+         await _ws_send_json(send, {"type": "ready", "session_id": sid})
      except Exception:
-         confirm_snr_slack_db = 0.5
-     if confirm_snr_slack_db < 0.0:
-         confirm_snr_slack_db = 0.0
- 
-     confirm_window_ref: List[Optional[ConfirmWindow]] = [None]
-     confirm_timeout_task: List[Optional[asyncio.Task]] = [None]
-     confirm_timeout_cancelled: List[asyncio.Task] = []
-     local_vad_meta_sent = [False]
- 
-     def _cancel_confirm_timeout() -> None:
-         task = confirm_timeout_task[0]
-         if task:
-             task.cancel()
-             confirm_timeout_cancelled.append(task)
-         confirm_timeout_task[0] = None
- 
-     def _emit_local_vad_signal(now_ts: float) -> None:
-         if local_vad_meta_sent[0]:
-             return
-+        if _manual_mode_active():
-+            return
-         local_vad_meta_sent[0] = True
-         if callable(final_guard_local_vad_ref[0]):
-             with contextlib.suppress(Exception):
-                 final_guard_local_vad_ref[0]("start")
-         payload = {
-             "type": "meta",
-             "turn_id": turn_id_ref[0],
-             "meta": {"local_vad": "start", "ts": int(now_ts * 1000)},
-         }
          with contextlib.suppress(Exception):
-             _jlog(
-                 "local_vad_start",
-                 sid=sid,
-                 turn_id=turn_id_ref[0],
-                 ts_ms=int(now_ts * 1000),
+             await send(
+                 {
+                     "type": "websocket.close",
+                     "code": 1011,
+                     "reason": "initial_ready_failed",
+                 }
              )
-         with contextlib.suppress(Exception):
-             bus.broadcast(sid, payload)
+         return
+ 
+     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
+     manual_feature_enabled = True
+     manual_mode_manual_only = True
++    auto_commit_when_ready = True
+     try:
+         runtime_cfg = db.get_config()
+         if isinstance(runtime_cfg, dict):
+             manual_feature_enabled = bool(
+                 runtime_cfg.get("feature_manual_barge_in", manual_feature_enabled)
+             )
+             manual_mode_manual_only = bool(
+                 runtime_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+             )
++            auto_commit_when_ready = bool(
++                runtime_cfg.get("auto_commit_when_ready", auto_commit_when_ready)
++            )
+     except Exception:
+         pass
+     try:
+         from app.services import admin_settings as _admin_settings  # type: ignore
+ 
+         admin_cfg = _admin_settings.get_settings()
+         if isinstance(admin_cfg, dict):
+             manual_feature_enabled = bool(
+                 admin_cfg.get("feature_manual_barge_in", manual_feature_enabled)
+             )
+             manual_mode_manual_only = bool(
+                 admin_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+             )
++            auto_commit_when_ready = bool(
++                admin_cfg.get("auto_commit_when_ready", auto_commit_when_ready)
++            )
+     except Exception:
+         pass
+     cfg["feature_manual_barge_in"] = manual_feature_enabled
+     cfg["barge_in_mode_manual"] = manual_mode_manual_only
++    cfg["auto_commit_when_ready"] = auto_commit_when_ready
+     loop = asyncio.get_running_loop()
+     barge = BargeState()
+     last_barge_phase = [None]
+ 
+     def _send_barge_state(phase: str) -> None:
+         if not phase:
+             return
+         frame = {"type": "state", "phase": phase}
+         try:
+             bus.broadcast(sid, frame)
+         except Exception:
+             pass
+ 
+         try:
+             prev = last_barge_phase[0]
+             _emit_barge_admin_events(sid, phase, prev)
+             last_barge_phase[0] = phase
+         except Exception:
+             pass
          try:
              if loop.is_closed():
                  return
+             payload = dict(frame)
              try:
                  running = asyncio.get_running_loop()
-             except RuntimeError:
-                 running = None
-@@ -1441,82 +1443,94 @@ async def _ws_chat_asgi_impl(scope, receive, send):
- 
-         async def _timeout() -> None:
-             try:
-                 await asyncio.sleep(wait_s)
-                 if confirm_window_ref[0] is not window:
-                     return
-                 decision = window.timeout(time.time())
-                 if decision.action == "commit":
-                     metrics = decision.metrics or {}
-                     reason = metrics.get("reason") or "timeout_commit"
-                     _finalize_confirm_commit(reason, metrics, window)
-                 elif decision.action == "abort":
-                     metrics = decision.metrics or {}
-                     reason = metrics.get("reason") or "timeout"
-                     _finalize_confirm_abort(reason, metrics, window)
-             except asyncio.CancelledError:
-                 return
- 
-         confirm_timeout_task[0] = asyncio.create_task(_timeout())
- 
-     def _finalize_confirm_commit(
-         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
-     ) -> None:
-         if confirm_window_ref[0] is not window:
-             return
-+        if manual_button_down[0] or manual_turn_active[0]:
-+            _cancel_confirm_timeout()
-+            confirm_window_ref[0] = None
-+            return
-         _cancel_confirm_timeout()
-         confirm_window_ref[0] = None
-         data = {k: v for k, v in (metrics or {}).items() if v is not None}
-         data.setdefault("reason", trigger)
-         data.setdefault("snr_enabled", window.snr_enabled)
-         _jlog("confirm_commit", sid=sid, **data)
-         if barge.is_paused():
-             try:
-                 barge.commit(_send_barge_state)
-             except Exception:
-                 pass
- 
-     def _finalize_confirm_abort(
-         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
-     ) -> None:
-         if confirm_window_ref[0] is not window:
-             return
-+        if manual_button_down[0] or manual_turn_active[0]:
-+            _cancel_confirm_timeout()
-+            confirm_window_ref[0] = None
-+            return
-         _cancel_confirm_timeout()
-         confirm_window_ref[0] = None
-         data = {k: v for k, v in (metrics or {}).items() if v is not None}
-         data.setdefault("reason", trigger)
-         data.setdefault("snr_enabled", window.snr_enabled)
-         _jlog("confirm_abort", sid=sid, **data)
-         if barge.is_paused():
-             if manual_button_down[0]:
-                 return
-             try:
-                 barge.cancel(_send_barge_state)
-             except Exception:
-                 pass
- 
-     def _start_confirm_window(now_ts: float) -> None:
-+        if _manual_mode_active():
-+            return
-+        if manual_button_down[0] or manual_turn_active[0]:
-+            return
-         window = ConfirmWindow(
-             min_duration_ms=confirm_min_ms,
-             max_duration_ms=confirm_max_ms,
-             max_gap_ms=confirm_gap_ms,
-             min_tokens=confirm_min_tokens,
-             min_confidence=confirm_min_conf,
-             snr_threshold_db=confirm_snr_db,
-             snr_slack_db=confirm_snr_slack_db,
-             snr_enabled=True,
-         )
-         window.start(now_ts)
-         confirm_window_ref[0] = window
-         local_vad_meta_sent[0] = False
-         _emit_local_vad_signal(now_ts)
-         _jlog(
-             "confirm_start",
-             sid=sid,
-             turn_id=turn_id_ref[0],
-             min_ms=confirm_min_ms,
-             max_ms=confirm_max_ms,
-             max_gap_ms=confirm_gap_ms,
-             min_tokens=confirm_min_tokens,
-             min_confidence=confirm_min_conf,
-             snr_threshold_db=confirm_snr_db,
-             snr_slack_db=confirm_snr_slack_db,
-@@ -1616,50 +1630,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 "reason": reason,
-             }
-             if since_first_ms is not None:
-                 frame["since_first_chunk_ms"] = since_first_ms
-             with contextlib.suppress(Exception):
-                 bus.broadcast(sid, frame)
- 
-     def _manual_buffered_bytes() -> int:
-         total = 0
-         try:
-             total += sum(len(chunk) for chunk in buffered_chunks)
+@@ -1286,50 +1294,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             if running is loop:
+                 asyncio.create_task(_ws_send_json(send, payload))
+             else:
+                 loop.call_soon_threadsafe(
+                     asyncio.create_task, _ws_send_json(send, payload)
+                 )
          except Exception:
+             pass
+ 
+     buf = TurnBuffer()
+     dg: Optional[DeepgramClient] = None
+     rx_task: Optional[asyncio.Task] = None
+     dg_connect_task: Optional[asyncio.Task] = None
+     dg_state: str = "closed"
+     turn_id_ref = [0]
+     pending_final_turns: Deque[int] = deque()
+     completed_llm_turns: Set[int] = set()
+     synthetic_final_turns: Set[int] = set()
+     final_seen = [False]
+     asr_seen_partial = [False]
+     asr_partial_counter = [0]
+     current_assistant_turn_ref: List[Optional[Any]] = [None]
+     manual_commit_pending = [False]
+     manual_button_down = [False]
+     manual_turn_active = [False]
++    turn_commit_mode_ref: List[str] = ["vad"]
++    active_turn_mode_ref: List[str] = ["vad"]
+     turn_timing: Dict[str, List[float]] = {
+         "start": [0.0],
+         "dg_open": [0.0],
+         "first_partial": [0.0],
+         "final": [0.0],
+     }
+     turn_finish_logged = [False]
+ 
+     final_guard_reset_ref: List[Optional[Callable[[str], None]]] = [None]
+     final_guard_local_vad_ref: List[Optional[Callable[[str], None]]] = [None]
+ 
+     # Turn-scoped buffering + state
+     buffered_chunks: Deque[bytes] = deque()
+     sent_any_audio = [False]
+     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
+     no_audio_notified = [False]
+     no_audio_turn_id = [0]
+     try:
+         no_audio_window_s = float(
+             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
+         )
+     except Exception:
+         no_audio_window_s = 10.0
+     if no_audio_window_s < 0:
+         no_audio_window_s = 0.0
+@@ -1642,70 +1652,88 @@ async def _ws_chat_asgi_impl(scope, receive, send):
              pass
          try:
              buf_chunks = getattr(buf, "_buf", None)
@@ -176,9 +360,9 @@ index 0f62a62dbb106f2dcc19277d9a8181c76b520bd8..0f4cc282bf409a6718b4c00a67425c5e
              pass
          return total
  
-+    def _manual_mode_active() -> bool:
-+        return manual_feature_enabled and manual_mode_manual_only
-+
+     def _manual_mode_active() -> bool:
+         return manual_feature_enabled and manual_mode_manual_only
+ 
      def _manual_log_event(name: str, **fields: Any) -> None:
          _jlog(
              name,
@@ -188,9 +372,27 @@ index 0f62a62dbb106f2dcc19277d9a8181c76b520bd8..0f4cc282bf409a6718b4c00a67425c5e
              **fields,
          )
  
++    def _session_ready_for_auto_commit() -> bool:
++        if manual_button_down[0] or manual_turn_active[0]:
++            return False
++        if barge.is_paused():
++            return False
++        try:
++            active_turn = bus.current_assistant_turn(sid)
++        except Exception:
++            active_turn = None
++        tts_state, _ = _lookup_tts_state(sid, active_turn)
++        if _is_tts_active(tts_state):
++            return False
++        return True
++
      def _on_barge_commit() -> None:
-         mode = "manual" if manual_commit_pending[0] else "vad"
+-        mode = "manual" if manual_commit_pending[0] else "vad"
++        mode_raw = turn_commit_mode_ref[0]
++        mode = mode_raw or ("manual" if manual_commit_pending[0] else "vad")
          manual_commit_pending[0] = False
++        turn_commit_mode_ref[0] = "vad"
++        active_turn_mode_ref[0] = mode or "vad"
          target_turn = current_assistant_turn_ref[0]
          try:
              latest = bus.current_assistant_turn(sid)
@@ -204,7 +406,38 @@ index 0f62a62dbb106f2dcc19277d9a8181c76b520bd8..0f4cc282bf409a6718b4c00a67425c5e
          with contextlib.suppress(Exception):
              bus.broadcast(sid, {"type": "state", "phase": "ready"})
          _jlog(
-@@ -2068,50 +2085,57 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             "turn_committed",
+             sid=sid,
+             mode=mode,
+             manual=(mode == "manual"),
++            auto_commit=(mode == "auto_commit"),
+             admin_event="turn_committed",
+             admin_label="turn_committed",
+         )
+ 
+     def _cancel_no_audio_watch() -> None:
+         task = no_audio_watch_task[0]
+         if task and not task.done():
+             task.cancel()
+         no_audio_watch_task[0] = None
+ 
+     def _schedule_no_audio_watch(turn_id: int) -> None:
+         if no_audio_window_s <= 0:
+             return
+         _cancel_no_audio_watch()
+         no_audio_notified[0] = False
+         no_audio_turn_id[0] = turn_id
+ 
+         async def _watch() -> None:
+             try:
+                 await asyncio.sleep(no_audio_window_s)
+                 if sent_any_audio[0] or no_audio_notified[0]:
+                     return
+                 _emit_no_audio_alert("timeout")
+             except asyncio.CancelledError:
+                 pass
+@@ -2084,112 +2112,143 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                             with contextlib.suppress(Exception):
                                  _admin_emit(
                                      "ws_bin_recv",
                                      sid=sid,
@@ -229,26 +462,60 @@ index 0f62a62dbb106f2dcc19277d9a8181c76b520bd8..0f4cc282bf409a6718b4c00a67425c5e
  
                      raw_chunk = chunk
  
-                     if buf.is_empty():
-+                        if _manual_mode_active() and not manual_turn_active[0]:
-+                            _jlog(
-+                                "manual_mode_voice_chunk_ignored",
-+                                sid=sid,
-+                                bytes=len(raw_chunk or b""),
-+                            )
-+                            continue
-                         # New audio turn
+-                    if buf.is_empty():
+-                        if _manual_mode_active() and not manual_turn_active[0]:
+-                            _jlog(
+-                                "manual_mode_voice_chunk_ignored",
+-                                sid=sid,
+-                                bytes=len(raw_chunk or b""),
+-                            )
+-                            continue
+-                        # New audio turn
++                    new_turn = buf.is_empty()
++                    if new_turn:
                          try:
                              current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
                          except Exception:
                              current_assistant_turn_ref[0] = None
++
++                        commit_mode = "vad"
++                        if manual_turn_active[0]:
++                            commit_mode = "manual"
++                        elif manual_mode_manual_only:
++                            if not auto_commit_when_ready:
++                                _jlog(
++                                    "manual_mode_voice_chunk_ignored",
++                                    sid=sid,
++                                    bytes=len(raw_chunk or b""),
++                                    reason="auto_commit_disabled",
++                                )
++                                continue
++                            if not _session_ready_for_auto_commit():
++                                _jlog(
++                                    "manual_mode_voice_chunk_ignored",
++                                    sid=sid,
++                                    bytes=len(raw_chunk or b""),
++                                    reason="session_not_ready",
++                                )
++                                continue
++                            commit_mode = "auto_commit"
++
++                        active_turn_mode_ref[0] = commit_mode
++                        turn_commit_mode_ref[0] = commit_mode
++                        if commit_mode != "manual":
++                            manual_commit_pending[0] = False
++
                          confirm_ms = 420
                          try:
                              confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
                          except Exception:
                              confirm_ms = 420
                          barge_started = False
-                         if not manual_turn_active[0]:
+-                        if not manual_turn_active[0]:
++                        should_pause = not (
++                            manual_mode_manual_only and commit_mode == "auto_commit"
++                        )
++                        if not manual_turn_active[0] and should_pause:
                              try:
                                  barge_started = barge.start(
                                      confirm_ms=confirm_ms,
@@ -262,11 +529,455 @@ index 0f62a62dbb106f2dcc19277d9a8181c76b520bd8..0f4cc282bf409a6718b4c00a67425c5e
                          if barge_started:
                              if manual_mode_manual_only:
                                  try:
+                                     barge.commit(_send_barge_state)
+                                 except Exception:
+                                     pass
+                             else:
+                                 _start_confirm_window(now)
+                         else:
+                             confirm_window_ref[0] = None
+                             local_vad_meta_sent[0] = False
+                         with contextlib.suppress(Exception):
+                             pending_final_turns.append(turn_id_ref[0])
+                             completed_llm_turns.discard(turn_id_ref[0])
+                         final_seen[0] = False
+                         asr_seen_partial[0] = False
+                         sent_any_audio[0] = False
+                         buffered_chunks.clear()
+                         turn_connect_started[0] = False
+                         # reset mic capture
+                         mic_chunks.clear()
+                         mic_first_ts[0] = now
+                         mic_last_ts[0] = now
+                         _reset_turn_metrics(now)
+                         _schedule_no_audio_watch(turn_id_ref[0])
+                         with contextlib.suppress(Exception):
+                             _jlog(
+                                 "turn_start",
+                                 sid=sid,
+                                 turn_id=turn_id_ref[0],
+                                 first_bytes=len(raw_chunk),
++                                commit_mode=commit_mode,
++                                auto_commit=(commit_mode == "auto_commit"),
+                             )
++                        if commit_mode == "auto_commit":
++                            try:
++                                _on_barge_commit()
++                            except Exception:
++                                pass
+                     # Detect container early using raw bytes
+ 
+                     # Detect container early
+                     try:
+                         if transport.get("container") is None and raw_chunk:
+                             det = sniffer.feed(raw_chunk)
+                             if det:
+                                 container = getattr(det, "container", None)
+                                 codec = getattr(det, "codec", None)
+                                 containerized = bool(
+                                     getattr(det, "containerized", codec == "opus")
+                                 )
+                                 transport["container"] = container
+                                 transport["codec"] = codec
+                                 transport["containerized_opus"] = containerized
+                                 _jlog(
+                                     "sniffer_detect",
+                                     sid=sid,
+                                     container=transport.get("container"),
+                                     codec=transport.get("codec"),
+                                     containerized_opus=transport.get(
+                                         "containerized_opus"
+                                     ),
+                                 )
+                             else:
+@@ -2330,98 +2389,104 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                                 "greet:resp",
+                                                 label="greet:resp",
+                                                 session_id=sid,
+                                                 turn_id=tid,
+                                                 audio_scheduled=audio_on,
+                                             )
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+                                         await _ws_send_json(
+                                             send,
+                                             make_error(
+                                                 "greet_fail", e.__class__.__name__
+                                             ),
+                                         )
+ 
+                             asyncio.create_task(_bg())
+ 
+                         elif t == "Control":
+                             action_raw = obj.get("action")
+                             action = str(action_raw or "").strip().lower()
+                             if action == "barge_in_start":
+                                 if manual_feature_enabled:
+                                     manual_button_down[0] = True
+                                     manual_turn_active[0] = True
+                                     manual_commit_pending[0] = True
++                                    turn_commit_mode_ref[0] = "manual"
++                                    active_turn_mode_ref[0] = "manual"
+                                     _ensure_confirm_closed("manual_start")
+                                     buffered_bytes = _manual_buffered_bytes()
+                                     _manual_log_event(
+                                         "manual_barge_in_start",
+                                         bytes_buffered=buffered_bytes,
+                                         provider_open=dg_state == "open",
+                                     )
+                                     try:
+                                         current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
+                                     except Exception:
+                                         current_assistant_turn_ref[0] = None
+                                     if not barge.is_paused():
+                                         try:
+                                             barge.start(
+                                                 confirm_ms=0,
+                                                 on_commit=_on_barge_commit,
+                                                 send_state=_send_barge_state,
+                                                 auto_commit=False,
+                                             )
+                                         except Exception:
+                                             pass
+                                     try:
+                                         barge.commit(_send_barge_state)
+                                     except Exception:
+                                         manual_commit_pending[0] = False
+                                 continue
+                             if action == "barge_in_end":
+                                 if manual_feature_enabled:
+                                     manual_button_down[0] = False
+                                     manual_turn_active[0] = False
+                                     manual_commit_pending[0] = False
++                                    turn_commit_mode_ref[0] = "vad"
+                                     buffered_bytes = _manual_buffered_bytes()
+                                     _manual_log_event(
+                                         "manual_barge_in_end",
+                                         bytes_buffered=buffered_bytes,
+                                         provider_open=dg_state == "open",
+                                     )
+                                 continue
+                             continue
+ 
+                         elif t == "Configure":
+                             cfg.update(obj or {})
+                             manual_feature_enabled = bool(
+                                 cfg.get("feature_manual_barge_in", manual_feature_enabled)
+                             )
+                             manual_mode_manual_only = bool(
+                                 cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+                             )
++                            auto_commit_when_ready = bool(
++                                cfg.get("auto_commit_when_ready", auto_commit_when_ready)
++                            )
+                             if not manual_feature_enabled:
+                                 manual_button_down[0] = False
+                                 manual_turn_active[0] = False
+                                 manual_commit_pending[0] = False
+                             greet_seq_raw = obj.get("greet_seq")
+                             greet_seq: Optional[int] = None
+                             is_new_greet_seq = True
+                             if greet_seq_raw is not None:
+                                 try:
+                                     greet_seq = int(greet_seq_raw)
+                                 except Exception:
+                                     greet_seq = None
+                             if greet_seq is not None and (obj.get("greet") or obj.get("reset")):
+                                 try:
+                                     is_new_greet_seq = await _greet_seq_mark_if_new(sid, greet_seq)
+                                 except Exception:
+                                     is_new_greet_seq = True
+                             if obj.get("reset"):
+                                 if is_new_greet_seq:
+                                     with contextlib.suppress(Exception):
+                                         clear_greet_turn_cache(sid)
+                                     with contextlib.suppress(Exception):
+                                         _admin_emit and _admin_emit(
+                                             "greet:reset",
+                                             route="/ws/v1/chat",
+@@ -2707,53 +2772,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                         else:
+                                             fallback_reason = "no_audio"
+                                     else:
+                                         provider_can_close = True
+                                 elif (
+                                     fallback_reason == "dg_not_ready"
+                                     and dg_connect_task is not None
+                                 ):
+                                     if not dg_connect_task.done():
+                                         with contextlib.suppress(Exception):
+                                             await asyncio.wait_for(
+                                                 dg_connect_task,
+                                                 timeout=asr_ready_wait_s,
+                                             )
+                                     if dg is not None and sent_any_audio[0]:
+                                         fallback_reason = None
+                                         provider_can_close = True
+                                 if provider_can_close:
+                                     # Ask provider to finish; if no final came, we'll synthesize after
+                                     drain_timeout_exc: Optional[
+                                         DeepgramDrainTimeoutError
+                                     ] = None
+                                     try:
+                                         await asyncio.sleep(
+                                             float(
+-                                                os.getenv("ASR_FINAL_GRACE_S", "0.30")
++                                                os.getenv("ASR_FINAL_GRACE_S", "0.80")
+                                             )
+-                                        )  # ~300 ms grace
++                                        )  # ~800 ms grace
+                                         await dg.close(wait_for_final=True)
+                                     except DeepgramDrainTimeoutError as exc:
+                                         drain_timeout_exc = exc
+                                         _jlog(
+                                             "ws_close_dg_drain_timeout",
+                                             sid=sid,
+                                             queued_chunks=getattr(
+                                                 exc, "queued_chunks", None
+                                             ),
+                                             queued_bytes=getattr(
+                                                 exc, "queued_bytes", None
+                                             ),
+                                             wait_timeout=getattr(
+                                                 exc, "wait_timeout", None
+                                             ),
+                                         )
+                                     except Exception as exc:
+                                         _jlog(
+                                             "ws_close_dg_close_error",
+                                             sid=sid,
+                                             err=type(exc).__name__,
+                                         )
+                                     dg_state = "closed"
+                                     _relay_task = rx_task
+                                     rx_task = None
+@@ -2814,50 +2879,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                         with contextlib.suppress(ValueError):
+                                             pending_final_turns.remove(turn_id)
+                                         synthetic_final_turns.add(turn_id)
+ 
+                             _cancel_no_audio_watch()
+                             if (not sent_any_audio[0]) and not no_audio_notified[0]:
+                                 elapsed = None
+                                 if mic_first_ts[0]:
+                                     elapsed = time.time() - mic_first_ts[0]
+                                 if no_audio_window_s <= 0 or (
+                                     elapsed is not None and elapsed >= no_audio_window_s
+                                 ):
+                                     _emit_no_audio_alert("close_stream")
+ 
+                             if synthetic_emitted:
+                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
+                                 final_seen[0] = False
+ 
+                             if barge.is_paused():
+                                 _ensure_confirm_closed("cleanup")
+                                 if not manual_button_down[0]:
+                                     with contextlib.suppress(Exception):
+                                         barge.cancel(_send_barge_state)
+                                 await asyncio.sleep(0)
+ 
++                            active_turn_mode_ref[0] = "vad"
++                            turn_commit_mode_ref[0] = "vad"
++
+                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
+ 
+                             _jlog(
+                                 "mic_capture_block_enter",
+                                 sid=sid,
+                                 turn_id=turn_id,
+                                 mic_chunks=len(mic_chunks),
+                             )
+                             if MIC_CAPTURE:
+                                 try:
+                                     raw = b"".join(mic_chunks)
+                                     _jlog(
+                                         "mic_capture_summary",
+                                         sid=sid,
+                                         turn_id=turn_id,
+                                         bytes=len(raw),
+                                         chunks=len(mic_chunks),
+                                         container=transport.get("container"),
+                                         codec=transport.get("codec"),
+                                         containerized_opus=transport.get(
+                                             "containerized_opus"
+                                         ),
+                                     )
+ 
+                                     if raw:
+diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
+index 661ad7b660dde7273e81b60419afb5a0beab5623..940eea391861eddb0aa1742150694c3b78d91b69 100644
+--- a/static/js/bootstrap.js
++++ b/static/js/bootstrap.js
+@@ -40,51 +40,50 @@ function _cfgValue(key, fallback) {
+     if (key in cfg) return cfg[key];
+     if (cfg.features && key in cfg.features) return cfg.features[key];
+   } catch {}
+   return fallback;
+ }
+ 
+ const manualState = {
+   button: null,
+   featureEnabled: !!_cfgValue('feature_manual_barge_in', true),
+   phase: 'ready',
+   pointerActive: false,
+   keyActive: false,
+   sessionActive: false,
+ };
+ 
+ function _updateManualButtonAvailability() {
+   const btn = manualState.button;
+   if (!btn) return;
+   if (!manualState.featureEnabled) {
+     btn.hidden = true;
+     btn.disabled = true;
+     return;
+   }
+   btn.hidden = false;
+   const shouldEnable = manualState.sessionActive
+-    && manualState.phase === 'ready'
+     && !manualState.pointerActive
+     && !manualState.keyActive;
+   btn.disabled = !shouldEnable;
+ }
+ 
+ function _setManualSessionActive(active) {
+   manualState.sessionActive = !!active;
+   _updateManualButtonAvailability();
+ }
+ 
+ function _manualPhaseChanged(phase) {
+   manualState.phase = phase || 'ready';
+   _updateManualButtonAvailability();
+ }
+ 
+ function _manualPointerDown(ev) {
+   if (!manualState.featureEnabled) return;
+   if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+   if (manualState.pointerActive || manualState.keyActive) return;
+   manualState.pointerActive = true;
+   _updateManualButtonAvailability();
+   forceBargeInStart({ source: 'pointer' });
+ }
+ 
+ function _manualPointerUp(ev) {
+@@ -329,57 +328,59 @@ async function startOnce(){
+     // 0) Audio unlock so TTS is permitted by browser autoplay policies
+     try { await unlockAudio(); } catch {}
+ 
+     // 1) Network/CSRF prep (kept for compatibility; harmless in WS-only mode)
+     try { installFetchInterceptor(); } catch {}
+     try { await ensureCSRF(); } catch {}
+ 
+     // 2) WS first — verify actually OPEN or abort
+     const ok = await ensureWsOpenOrFail(5000);
+     if (!ok){
+       showBanner('WebSocket did not open — greet aborted.');
+       setDot('ready');
+       if (startBtn) startBtn.disabled = false;
+       startInFlight = false;
+       return;
+     }
+ 
+     // 3) Wire WS → UI events exactly once
+     wireWSEventsOnce();
+ 
+     // 4) WS-only greet using the SAME session id as WS — fire ASAP so text arrives while
+     //    audio hardware comes online.
+     const sid = getSID();
+     try {
+       const manualMode = !!_cfgValue('barge_in_mode_manual', true);
++      const autoCommit = !!_cfgValue('auto_commit_when_ready', true);
+       _console('log', '[bootstrap] startOnce sending greet configure');
+       configure({
+         greet: true,
+         reset: 1,
+         session_id: sid,
+         feature_manual_barge_in: manualState.featureEnabled,
+         barge_in_mode_manual: manualMode,
++        auto_commit_when_ready: autoCommit,
+       });
+       _console('log', '[bootstrap] startOnce greet configure sent — recorder setup will follow');
+       try {
+         window.dispatchEvent(new CustomEvent('chip-tts', {
+           detail: { state: 'playing', prime: true }
+         }));
+       } catch {}
+       // ^^ This “primes” holdoff if your server’s first audio event is delayed;
+       // when real assistant_audio arrives, your existing listener will extend the hold.
+     } catch (e) {
+       _console('warn', '[bootstrap] WS configure failed, cannot greet', e);
+       showBanner('Greet failed to send — check WS configure()');
+       throw e;
+     }
+ 
+     // 5) Mic permission + arm echo-aware VAD (voice-first path)
+     let visualizerStream = null;
+     try {
+       visualizerStream = await Visualizer.start();
+     } catch (e) {
+       _console('warn', '[bootstrap] visualizer init failed', e);
+     }
+ 
+     try {
+       const stream = await initMic(visualizerStream ?? undefined);
 diff --git a/static/js/voice.js b/static/js/voice.js
-index cc74a747b4c1cab4e90c32004a046522726f1c65..62a1b8ef7eb03d4b6e27c81b81bc22ecf83279f2 100644
+index 62a1b8ef7eb03d4b6e27c81b81bc22ecf83279f2..b2b65e8208422cf40bc295c51c7e4f7fe7a56214 100644
 --- a/static/js/voice.js
 +++ b/static/js/voice.js
-@@ -74,50 +74,54 @@ const state = {
+@@ -24,98 +24,105 @@ import { logIfEnabled } from './util/logging.js';
+ import { getSID } from './util/sid.js';
+ 
+ // Public API (matches prior usage)
+ export async function initMic(stream = null) { return await _ensureMic(stream); }
+ export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
+ export function disarmVAD() { _disarm(); }
+ export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
+ export function bargeIn() { try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} _bargeIn(); }         // keeps API parity
+ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+ 
+ // ---- Internal state ---------------------------------------------------------
+ 
+ // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   && typeof MediaRecorder.isTypeSupported === 'function'
+   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
+   ? 'audio/ogg; codecs=opus'
+   : 'audio/webm; codecs=opus';
+ 
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+ const POST_TTS_HOLDOFF_MS = 600;    // grace window after Chip begins speaking
+ const MANUAL_DEBOUNCE_MS = 300;
+ const MANUAL_NO_AUDIO_CANCEL_MS = 500;
+ const MANUAL_CLOSESTREAM_DELAY_MS = 250;
++const AUTO_CLOSESTREAM_DELAY_MS = 320;
+ const MANUAL_VAD_IGNORE_MS = 600;
+ 
+ const state = {
+   stream: null,
+   ctx: null,
+   source: null,
+   analyser: null,
+   vad: null,
+   rec: null,
+   chunkSendPromise: Promise.resolve(),
+   chunkBytesSent: 0,
+   chunkSendError: null,
+   turnTimer: null,
+   turnOpen: false,   // track whether a turn is currently open server-side
+   deviceLogged: false,
+   // NEW: min-turn gating
+   recStartedAt: 0,
+   pendingEndTimer: null,
+   postTtsHoldUntil: 0,
+   postTtsHoldTimer: null,
+   eligibility: 'blocked_pregreet', // 'blocked_pregreet' | 'holdoff' | 'eligible'
+   refractoryUntil: 0,
++  turnCommitMode: 'idle',
+   direct: {
+     descriptor: null,
+     fetchPromise: null,
      connectPromise: null,
      ws: null,
      ready: false,
@@ -290,12 +1001,17 @@ index cc74a747b4c1cab4e90c32004a046522726f1c65..62a1b8ef7eb03d4b6e27c81b81bc22ec
      ignoreVadUntil: 0,
      sentStartFrame: false,
    },
++  auto: {
++    enabled: optsFromGlobal('auto_commit_when_ready', true),
++    active: false,
++    deferCloseStream: false,
++  },
  };
  
-+function _isManualOnlyMode() {
-+  return state.manual.enabled && state.manual.modeManualOnly;
-+}
-+
+ function _isManualOnlyMode() {
+   return state.manual.enabled && state.manual.modeManualOnly;
+ }
+ 
  let _overrideEchoSignatureFn = null;
  
  // ---- Helpers ----------------------------------------------------------------
@@ -315,13 +1031,180 @@ index cc74a747b4c1cab4e90c32004a046522726f1c65..62a1b8ef7eb03d4b6e27c81b81bc22ec
    });
  }
  
- function _logLifecycle(event, detail = {}, level = 'debug') {
-   const payload = { event, ...(detail && typeof detail === 'object' ? detail : { detail }) };
-   _console(level, '[voice]', event, payload);
+@@ -473,50 +480,53 @@ function _teardownVADOnly() {
+ 
+ function _teardownAudioGraph() {
+   try { state.source && state.source.disconnect(); } catch {}
+   try { state.analyser && state.analyser.disconnect(); } catch {}
+   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
+   state.source = null;
+   state.analyser = null;
+   state.ctx = null;
+   state.deviceLogged = false;
+ }
+ 
+ function _disarm() {
+   // 1) Hard stop + clear all timers
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   _clearPostTtsHoldTimer();
+ 
+   // 2) Stop capture/VAD cleanly
+   _stopRecorder({ reason: 'manual_disarm' });
+   _teardownVADOnly();
+   _closeDirectWs();
+ 
+   // 3) Reset local state
+   state.turnOpen = false;
+   state.recStartedAt = 0;
++  state.turnCommitMode = 'idle';
++  state.auto.active = false;
++  state.auto.deferCloseStream = false;
+ 
+   // 4) Block any pre-greet starts, and enforce a refractory lockout
+   //    Use your configured cooldown (default 900ms) so we can't instantly re-arm.
+   const cooldown = _resolveNumber(cfg.cooldownMs, 900);
+   state.refractoryUntil = Date.now() + cooldown;  // prevent immediate re-starts
+   state.postTtsHoldUntil = 0;                     // no pending hold
+   state.eligibility = 'blocked_pregreet';         // require greet/tts to begin before starts are allowed
+ 
+   // 5) Final UI state
+   try { console.info('[voice] state=idle'); } catch {}
+ _emitVoiceState('idle');
+ }
+ 
+ function _bargeIn() {
+   _clearPostTtsHoldTimer();
+   state.postTtsHoldUntil = 0;
+   // Soft barge-in: pause audio locally
+   try { stopPlayback(); } catch {}
+   // If a prior ASR turn is somehow still open, politely close it.
+   // (Harmless if no turn is open; guarded to avoid duplicate closes.)
+   if (state.turnOpen) {
+     try { sendCloseStream(); } catch {}
+     state.turnOpen = false;
+   }
+ }
+@@ -651,50 +661,56 @@ function _startRecorder() {
+   state.chunkBytesSent = 0;
+   state.chunkSendError = null;
+   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
+   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
+ 
+   let recorder;
+   const mimeType = _selectRecorderMime();
+   try { console.info('containerized=true'); } catch {}
+   try { console.info(String('container=' + (mimeType.includes('webm') ? 'webm/opus' : 'ogg/opus'))); } catch {}
+ 
+ 
    try {
-     window.dispatchEvent(new CustomEvent('askchip-voice-lifecycle', { detail: payload }));
-   } catch {}
-@@ -790,83 +794,89 @@ function _startRecorder() {
+     recorder = new MediaRecorder(state.stream, { mimeType, audioBitsPerSecond: 128000 });
+   } catch (primaryErr) {
+     try {
+       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
+     } catch (fallbackErr) {
+       _console('warn', '[voice] MediaRecorder init failed', fallbackErr || primaryErr);
+       state.rec = null;
+       return false;
+     }
+   }
+ 
+   state.rec = recorder;
+ 
++  if (!state.turnCommitMode || state.turnCommitMode === 'idle') {
++    state.turnCommitMode = state.manual.active
++      ? 'manual'
++      : (state.auto.active ? 'auto_commit' : 'vad');
++  }
++
+   state.rec.ondataavailable = (e) => {
+     const blob = e.data;
+     if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
+       return;
+     }
+ 
+     if (state.manual.active && !state.manual.firstChunkAt) {
+       state.manual.firstChunkAt = performance.now ? performance.now() : Date.now();
+       if (state.manual.noAudioTimer) {
+         try { clearTimeout(state.manual.noAudioTimer); } catch {}
+         state.manual.noAudioTimer = null;
+       }
+       const delta = Math.max(0, state.manual.firstChunkAt - (state.manual.startAt || state.manual.firstChunkAt));
+       const deltaMs = Math.round(delta);
+       _logLifecycle('manual_ptt_first_chunk', { delta_ms: deltaMs });
+       try { console.info('manual_ptt_delta_ms', deltaMs); } catch {}
+     }
+ 
+     // Chain chunk sends to preserve ordering across the WS.
+     state.chunkSendPromise = state.chunkSendPromise
+       .catch(() => {}) // allow queue to continue even if a prior chunk failed
+       .then(async () => {
+         const direct = state.direct;
+         if (direct && direct.descriptor) {
+           try {
+@@ -738,248 +754,275 @@ function _startRecorder() {
+     } catch (e) {
+       _console('warn', '[voice] send audio failed', e);
+       state.chunkSendError = state.chunkSendError || e;
+     } finally {
+       if (state.chunkSendError && !finalDetail) {
+         finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
+       }
+       if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
+         try {
+           _console('warn', '[voice] recorder stopped with issues', {
+             bytesSent: state.chunkBytesSent,
+             error: state.chunkSendError,
+           });
+         } catch {}
+       } else {
+         try {
+           _console('debug', '[voice] recorder stopped', {
+             bytesSent: state.chunkBytesSent,
+             // state.rec may be nulled by _stopRecorder; fall back to selected REC_MIME
+             mime: (state.rec && state.rec.mimeType) || REC_MIME,
+           });
+         } catch {}
+       }
+       // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
+       if (state.turnOpen) {
+-        const deferMs = state.manual.deferCloseStream ? MANUAL_CLOSESTREAM_DELAY_MS : 0;
++        const manualDelay = state.manual.deferCloseStream ? MANUAL_CLOSESTREAM_DELAY_MS : 0;
++        const autoDelay = state.auto.deferCloseStream ? AUTO_CLOSESTREAM_DELAY_MS : 0;
++        const deferMs = Math.max(manualDelay, autoDelay);
+         if (deferMs > 0) {
+           await new Promise((resolve) => setTimeout(resolve, deferMs));
+         }
+         try {
+           await sendCloseStream();
+         } catch {}
+         state.turnOpen = false;
+       }
+       state.manual.deferCloseStream = false;
+       state.manual.active = false;
+       state.manual.buttonDown = false;
++      state.auto.deferCloseStream = false;
++      state.auto.active = false;
++      state.turnCommitMode = 'idle';
+       if (state.manual.noAudioTimer) {
+         try { clearTimeout(state.manual.noAudioTimer); } catch {}
+         state.manual.noAudioTimer = null;
+       }
+       _emitVoiceState('armed', finalDetail);
+     }
+   };
+ 
+   try {
+     // Small timeslice ensures non-empty dataavailable frames while still producing a single turn blob.
+     const timeslice = 150; // 150 ms sits comfortably within the 100–200 ms target window
+     state.rec.start(timeslice);
+     state.turnOpen = true; // mark an open ASR turn on the server
+     try {
+       _console('debug', '[voice] recorder started', { mime: state.rec.mimeType, timeslice });
+     } catch {}
+   } catch (e) {
+     _console('warn', '[voice] recorder start failed', e);
+     state.rec = null;
      state.turnOpen = false;
      return false;
    }
@@ -347,11 +1230,14 @@ index cc74a747b4c1cab4e90c32004a046522726f1c65..62a1b8ef7eb03d4b6e27c81b81bc22ec
  function _onSpeechStartCommitted() {
    if (state.manual.buttonDown || state.manual.active) return;
    if (state.manual.ignoreVadUntil && _now() < state.manual.ignoreVadUntil) return;
-+  _refreshManualConfig();
-+  if (_isManualOnlyMode()) {
-+    _logLifecycle('vad_speech_start_ignored', { reason: 'manual_mode' });
-+    return;
-+  }
+   _refreshManualConfig();
+-  if (_isManualOnlyMode()) {
++  const manualOnly = _isManualOnlyMode();
++  const allowAutoCommit = manualOnly && state.auto.enabled === true;
++  if (manualOnly && !allowAutoCommit) {
+     _logLifecycle('vad_speech_start_ignored', { reason: 'manual_mode' });
+     return;
+   }
    if (!_canStartSpeech()) return;
    const now = _now();
    const holdUntil = state.postTtsHoldUntil || 0;
@@ -367,25 +1253,40 @@ index cc74a747b4c1cab4e90c32004a046522726f1c65..62a1b8ef7eb03d4b6e27c81b81bc22ec
  
    _clearPostTtsHoldTimer();
    state.postTtsHoldUntil = 0;
-   _logLifecycle('vad_speech_start');
-   // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
-   try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} _bargeIn();
+-  _logLifecycle('vad_speech_start');
+-  // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
+-  try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} _bargeIn();
++  const isAutoCommit = allowAutoCommit;
++  state.auto.active = isAutoCommit;
++  state.auto.deferCloseStream = false;
++  state.turnCommitMode = isAutoCommit ? 'auto_commit' : 'vad';
++  if (isAutoCommit) {
++    _logLifecycle('vad_speech_start', { commit_mode: 'auto_commit' });
++  } else {
++    _logLifecycle('vad_speech_start', { commit_mode: 'vad' });
++    // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
++    try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} _bargeIn();
++  }
  
    const started = _startRecorder();
    if (started) {
      try { console.info('[voice] state=recording'); } catch {}
- _emitVoiceState('recording');
+-_emitVoiceState('recording');
++    _emitVoiceState('recording', { commitMode: state.turnCommitMode });
      return;
    }
  
    _console('warn', '[voice] recorder unavailable — reverting to typing');
    _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
++  state.auto.active = false;
++  state.turnCommitMode = 'idle';
  }
  
  function _onSpeechEndCommitted(detail = null) {
    if (state.manual.buttonDown || state.manual.active) return;
    if (state.manual.ignoreVadUntil && _now() < state.manual.ignoreVadUntil) return;
-+  if (_isManualOnlyMode()) return;
+-  if (_isManualOnlyMode()) return;
++  if (_isManualOnlyMode() && !state.auto.active) return;
    const reason = detail?.reason || 'vad_silence';
    const now = performance.now ? performance.now() : Date.now();
    const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
@@ -406,8 +1307,247 @@ index cc74a747b4c1cab4e90c32004a046522726f1c65..62a1b8ef7eb03d4b6e27c81b81bc22ec
    _logLifecycle('vad_speech_end', { reason });
    _safeClearTurnTimer();
    _clearPendingEndTimer();
++  if (state.auto.active) {
++    state.auto.deferCloseStream = true;
++  }
    _stopRecorder({ reason });
    // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
  }
  
  // ---- Utilities --------------------------------------------------------------
+ 
+ function _refreshManualConfig() {
+   state.manual.enabled = !!optsFromGlobal('feature_manual_barge_in', true);
+   state.manual.modeManualOnly = !!optsFromGlobal('barge_in_mode_manual', true);
++  state.auto.enabled = !!optsFromGlobal('auto_commit_when_ready', true);
+ }
+ 
+ function _clearManualTimers() {
+   if (state.manual.noAudioTimer) {
+     try { clearTimeout(state.manual.noAudioTimer); } catch {}
+     state.manual.noAudioTimer = null;
+   }
+ }
+ 
+ function _manualAutoCancel(reason = 'no_audio') {
+   if (!state.manual.buttonDown && !state.manual.active) {
+     return;
+   }
+   _logLifecycle('manual_barge_in_auto_cancel', { reason });
+   forceBargeInEnd({ autoCancel: true, reason });
+ }
+ 
+ export function forceBargeInStart(meta = {}) {
+   _refreshManualConfig();
+   if (!state.manual.enabled) return false;
+ 
+   const now = Date.now();
+   if (state.manual.buttonDown) return true;
+   if (now < state.manual.debounceUntil) return false;
+ 
+   state.manual.buttonDown = true;
+   state.manual.debounceUntil = now + MANUAL_DEBOUNCE_MS;
+   state.manual.firstChunkAt = 0;
+   state.manual.startAt = performance.now ? performance.now() : Date.now();
+   state.manual.ignoreVadUntil = 0;
+   state.manual.deferCloseStream = false;
+   state.manual.sentStartFrame = false;
++  state.auto.active = false;
++  state.auto.deferCloseStream = false;
++  state.turnCommitMode = 'manual';
+   _clearManualTimers();
+ 
+   _bargeIn();
+ 
+   const started = _startRecorder();
+   if (!started) {
+     state.manual.buttonDown = false;
+     state.manual.active = false;
++    state.turnCommitMode = 'idle';
+     return false;
+   }
+ 
+   state.manual.active = true;
+   _clearManualTimers();
+   state.manual.noAudioTimer = setTimeout(
+     () => _manualAutoCancel('no_audio'),
+     MANUAL_NO_AUDIO_CANCEL_MS
+   );
+ 
+   const source = typeof meta === 'object' && meta && meta.source ? String(meta.source) : 'ui';
+   _logLifecycle('manual_barge_in_start', { source });
+   try { console.info('manual_barge_in_start'); } catch {}
+ 
+   const sent = sendJSON({ type: 'Control', action: 'barge_in_start' });
+   state.manual.sentStartFrame = sent === true;
+ 
+   return true;
+ }
+ 
+ export function forceBargeInEnd(opts = {}) {
+   _refreshManualConfig();
+   const active = state.manual.buttonDown || state.manual.active;
+   if (!active) return false;
+ 
+   const options = typeof opts === 'object' && opts ? opts : {};
+   const autoCancel = options.autoCancel === true;
+   const reason = options.reason || (autoCancel ? 'auto_cancel' : 'release');
+ 
+   state.manual.buttonDown = false;
+   state.manual.ignoreVadUntil = _now() + MANUAL_VAD_IGNORE_MS;
+   state.manual.debounceUntil = Date.now() + MANUAL_DEBOUNCE_MS;
+   _clearManualTimers();
+   state.manual.deferCloseStream = true;
++  state.auto.active = false;
++  state.auto.deferCloseStream = false;
+ 
+   _logLifecycle('manual_barge_in_end', { reason, auto_cancel: autoCancel });
+   try { console.info('manual_barge_in_end'); } catch {}
+ 
+   sendJSON({ type: 'Control', action: 'barge_in_end' });
+   state.manual.sentStartFrame = false;
+ 
+   if (state.rec && state.rec.state === 'recording') {
+     _stopRecorder({ reason: autoCancel ? 'manual_auto_cancel' : 'manual_release' });
+   } else {
+     state.manual.deferCloseStream = false;
+     state.manual.active = false;
+   }
+ 
+   return true;
+ }
+ 
+ function optsFromGlobal(key, fallback) {
+   // Allow admin-configurable values to seep in (if app exposes them)
+   try {
+     const cfg = window.__askchip_config || {};
+     if (key in cfg) return cfg[key];
+     if (cfg.features && key in cfg.features) return cfg.features[key];
+   } catch {}
+   return fallback;
+diff --git a/templates/admin_console.html b/templates/admin_console.html
+index 5b2ce7d664827f3152eb8d6afad862be21a99712..97101a876b8922bfcae4fcc9178b449b6d1d8e45 100644
+--- a/templates/admin_console.html
++++ b/templates/admin_console.html
+@@ -51,50 +51,51 @@
+ </select>
+ </label>
+ <label>Show instruction strip <input id="show_instruction_strip" type="checkbox"/></label>
+ <label>Show state dots <input id="show_state_dots" type="checkbox"/></label>
+ <label>Suggestions enabled <input id="suggestions_enabled" type="checkbox"/></label>
+ <label>Suggestions — max items <input id="suggestions_max_items" min="0" type="number" value="4"/></label>
+ <label>Suggestions — max words <input id="suggestions_max_words" min="1" type="number" value="7"/></label>
+ <label>Nudge delay (ms) <input id="nudge_delay_ms" type="number" value="4200"/></label>
+ <label>Nudge backoff after ignored <input id="nudge_backoff_after_ignored" type="number" value="2"/></label>
+ <label>WS ping interval (ms) <input id="ws_ping_interval_ms" type="number" value="15000"/></label>
+ <label>WS idle timeout (ms) <input id="ws_idle_timeout_ms" type="number" value="60000"/></label>
+ </div>
+ <div class="actions" style="margin-top:10px"><button class="btn primary" id="save-ux">Save</button></div>
+ </section>
+ <!-- Flow -->
+ <section class="panel" id="tab-flow">
+   <h3>Conversational Flow</h3>
+   <div class="grid">
+ <label>Teacher move — summarize_next_actions (0..1) <input id="tm_summarize" max="1" min="0" step="0.05" type="number" value="0.6"/></label>
+ <label>Teacher move — check_understanding (0..1) <input id="tm_check" max="1" min="0" step="0.05" type="number" value="0.5"/></label>
+ <label>Teacher move — visualize (0..1) <input id="tm_visualize" max="1" min="0" step="0.05" type="number" value="0.2"/></label>
+ 
+ <label>Enable audio (TTS) <input id="feature_audio" type="checkbox"/></label>
+ <label>Enable manual barge-in (PTT) <input id="feature_manual_barge_in" type="checkbox"/></label>
+ <label>Manual-only barge mode <input id="barge_in_mode_manual" type="checkbox"/></label>
++<label>Auto-commit when ready <input id="auto_commit_when_ready" type="checkbox"/></label>
+ <label>Confirm (ms) <input id="confirm_ms" type="number" value="420"/></label>
+ <label>Min speech (ms) <input id="min_speech_ms" type="number" value="220"/></label>
+ <label>Max turn seconds <input id="max_turn_seconds" type="number" value="90"/></label>
+ <label>TTS voice ID <input id="tts_voice_id" placeholder="ElevenLabs voice id"/></label>
+ <label>TTS output format <input id="tts_output_format" placeholder="mp3_44100_128"/></label>
+ <label>TTS model id <input id="tts_model_id" placeholder="eleven_multilingual_v2"/></label>
+   </div>
+   <div class="flow-live-section">
+     <div class="flow-live-card" id="flow-live-card">
+       <div class="flow-live-header">
+         <h4>Live diagnostics</h4>
+         <span class="flow-live-timestamp" id="nlu-updated">—</span>
+       </div>
+       <dl class="flow-live-list">
+         <div class="flow-live-row">
+           <dt>Intent</dt>
+           <dd class="flow-live-value" id="nlu-intent" data-empty="true">—</dd>
+         </div>
+         <div class="flow-live-row" id="flow-live-guardrail">
+           <dt>Guardrail</dt>
+           <dd class="flow-live-value" id="nlu-guardrail" data-empty="true">—</dd>
+         </div>
+         <div class="flow-live-row">
+           <dt>Teacher move</dt>
+           <dd class="flow-live-value" id="nlu-move" data-empty="true">—</dd>
+@@ -231,67 +232,69 @@
+     }
+     const btn = document.getElementById('stream-refresh');
+     if (btn) btn.addEventListener('click', loadStreamingStatus);
+     // light polling only when Diagnostics tab is visible
+     setInterval(() => {
+       var panel = document.getElementById('tab-diag');
+       if (panel && panel.classList.contains('active')) loadStreamingStatus();
+     }, 1000);
+     // first paint
+     loadStreamingStatus();
+   })();
+ </script>
+ 
+ <script>
+ (function(){
+   async function loadFlow(){
+     try{
+       const r = await fetch('/api/v1/admin/config', {credentials:'include'});
+       const j = await r.json();
+       const s = j.settings || {};
+       const $ = (id)=>document.getElementById(id);
+ 
+       if ($('feature_audio')) $('feature_audio').checked = !!s.feature_audio;
+       if ($('feature_manual_barge_in')) $('feature_manual_barge_in').checked = s.feature_manual_barge_in !== false;
+       if ($('barge_in_mode_manual')) $('barge_in_mode_manual').checked = s.barge_in_mode_manual !== false;
++      if ($('auto_commit_when_ready')) $('auto_commit_when_ready').checked = s.auto_commit_when_ready !== false;
+       if ($('confirm_ms')) $('confirm_ms').value = s.confirm_ms ?? 420;
+       if ($('min_speech_ms')) $('min_speech_ms').value = s.min_speech_ms ?? 220;
+       if ($('max_turn_seconds')) $('max_turn_seconds').value = s.max_turn_seconds ?? 90;
+ 
+       if ($('tts_voice_id')) $('tts_voice_id').value = s.tts_voice_id || '';
+       if ($('tts_output_format')) $('tts_output_format').value = s.tts_output_format || 'mp3_44100_128';
+       if ($('tts_model_id')) $('tts_model_id').value = s.tts_model_id || 'eleven_multilingual_v2';
+     }catch(e){ console.warn('[admin/flow] load error', e); }
+   }
+ 
+   async function saveFlow(){
+     try{
+       const $ = (id)=>document.getElementById(id);
+       const payload = {
+         feature_audio: !!($('feature_audio') && $('feature_audio').checked),
+         feature_manual_barge_in: !!($('feature_manual_barge_in') && $('feature_manual_barge_in').checked),
+         barge_in_mode_manual: !!($('barge_in_mode_manual') && $('barge_in_mode_manual').checked),
++        auto_commit_when_ready: !!($('auto_commit_when_ready') && $('auto_commit_when_ready').checked),
+         confirm_ms: parseInt($('confirm_ms')?.value||'420',10),
+         min_speech_ms: parseInt($('min_speech_ms')?.value||'220',10),
+         max_turn_seconds: parseInt($('max_turn_seconds')?.value||'90',10),
+         tts_voice_id: $('tts_voice_id')?.value || '',
+         tts_output_format: $('tts_output_format')?.value || 'mp3_44100_128',
+         tts_model_id: $('tts_model_id')?.value || 'eleven_multilingual_v2'
+       };
+       const r = await fetch('/api/v1/admin/config', {
+         method:'POST',
+         credentials:'include',
+         headers:{'Content-Type':'application/json'},
+         body: JSON.stringify(payload)
+       });
+       const j = await r.json();
+       if (!j.ok) throw new Error('save failed');
+       alert('Saved');
+     }catch(e){ alert('Save failed'); console.warn('[admin/flow] save error', e); }
+   }
+ 
+   document.addEventListener('DOMContentLoaded', () => {
+     loadFlow();
+     const btn = document.getElementById('save-flow');
+     if (btn) btn.addEventListener('click', saveFlow);
+   });
+ })();

@@ -76,6 +76,7 @@ class DB:
                 'tts_model_id': 'eleven_multilingual_v2',
                 'feature_manual_barge_in': True,
                 'barge_in_mode_manual': True,
+                'auto_commit_when_ready': True,
                 'planner_high_threshold': 0.75,
                 'planner_medium_threshold': 0.60,
             },
