@@ -140,52 +140,62 @@ async function _fetchAsrClientSession(force = false) {
   const sid = (() => {
     try { return getSID(); } catch { return null; }
   })();
-  const qs = sid ? `?session_id=${encodeURIComponent(sid)}` : '';
 
-  const url = `/api/v1/asr/client-session${qs}`;
-  direct.fetchPromise = fetch(url, { credentials: 'include' })
-    .then(async (res) => {
-      if (!res.ok) {
-        const err = new Error(`fetch_failed_${res.status}`);
-        err.status = res.status;
-        throw err;
-      }
-      return res.json();
-    })
-    .then((body) => {
-      const session = body?.session || body?.descriptor || null;
-      if (!session || typeof session !== 'object') {
-        throw new Error('bad_descriptor');
-      }
-      direct.descriptor = session;
-      direct.container = (session?.transport?.container || 'webm');
-      direct.codec = (session?.transport?.codec || 'opus');
-      direct.containerized = session?.transport?.containerized !== false;
-      direct.sanitizedUrl = session?.sanitized_url || session?.url || null;
-
-      const diagContainer = `${direct.container || 'webm'}/${direct.codec || 'opus'}`;
-      _console('info', '[voice] direct ASR descriptor', {
-        sanitizedUrl: direct.sanitizedUrl,
-        container: diagContainer,
-        containerized: direct.containerized,
-      });
-
-      const diagFrame = {
-        type: 'ClientAsrSession',
-        sanitized_url: direct.sanitizedUrl || null,
-        container: diagContainer,
-        containerized: direct.containerized !== false,
-      };
-      try { sendJSON(diagFrame); } catch {}
-      return session;
-    })
-    .catch((err) => {
-      direct.lastError = err;
-      throw err;
-    })
-    .finally(() => {
-      direct.fetchPromise = null;
+  async function doPost() {
+    const res = await fetch('/api/v1/asr/client-session', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sid || 'default', force: !!force })
     });
+    if (!res.ok) {
+      const err = new Error(`fetch_failed_${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
+    return res.json();
+  }
+
+  async function doGetFallback() {
+    const qs = sid ? `?session_id=${encodeURIComponent(sid)}` : '';
+    const res = await fetch(`/api/v1/asr/client-session${qs}`, { credentials: 'include' });
+    if (!res.ok) {
+      const err = new Error(`fetch_failed_${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
+    return res.json();
+  }
+
+  direct.fetchPromise = (async () => {
+    let body;
+    try {
+      body = await doPost();
+    } catch (e) {
+      // If server only has GET, or POST blocked by some middleware, try GET once.
+      if (e && (e.status === 405 || e.status === 404)) {
+        body = await doGetFallback();
+      } else {
+        throw e;
+      }
+    }
+
+    const session = body?.session || body?.descriptor || null;
+    if (!session || typeof session !== 'object') {
+      throw new Error('bad_descriptor');
+    }
+
+    direct.descriptor = session;
+    direct.container = (session?.transport?.container || 'webm');
+    direct.codec = (session?.transport?.codec || 'opus');
+    direct.containerized = session?.transport?.containerized !== false;
+    direct.sanitizedUrl = session?.sanitized_url || session?.url || null;
+
+    // Optional: expose a breadcrumb for tests/diagnostics (no PII)
+    try { window.__askchip_probe?.onMediaContainerized?.(); } catch {}
+
+    return direct.descriptor;
+  })();
 
   return direct.fetchPromise;
 }
