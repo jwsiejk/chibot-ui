@@ -74,6 +74,8 @@ class DB:
                 'tts_voice_id': '',
                 'tts_output_format': 'mp3_44100_128',
                 'tts_model_id': 'eleven_multilingual_v2',
+                'feature_manual_barge_in': True,
+                'barge_in_mode_manual': True,
                 'planner_high_threshold': 0.75,
                 'planner_medium_threshold': 0.60,
             },

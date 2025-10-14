@@ -104,11 +104,45 @@ def create_app():
             }
         except Exception:
             vad_config = {}
+
+        feature_flags = {
+            "feature_manual_barge_in": True,
+            "barge_in_mode_manual": True,
+        }
+        try:
+            from .services import admin_settings as _admin_settings  # inline import to avoid cycles
+
+            settings = _admin_settings.get_settings()
+        except Exception:
+            settings = {}
+        try:
+            from .db import db as _db
+
+            db_cfg = _db.get_config()
+        except Exception:
+            db_cfg = {}
+
+        def _resolve_flag(name: str, default: bool) -> bool:
+            if isinstance(settings, dict) and name in settings:
+                return bool(settings.get(name))
+            if isinstance(db_cfg, dict) and name in db_cfg:
+                return bool(db_cfg.get(name))
+            return default
+
+        feature_flags["feature_manual_barge_in"] = _resolve_flag(
+            "feature_manual_barge_in", True
+        )
+        feature_flags["barge_in_mode_manual"] = _resolve_flag(
+            "barge_in_mode_manual", True
+        )
         return {
             "askchip_config": {
                 "logging": {"enabled": enabled},
                 "auth": auth_config,
                 "vad": vad_config,
+                "features": feature_flags,
+                "feature_manual_barge_in": feature_flags["feature_manual_barge_in"],
+                "barge_in_mode_manual": feature_flags["barge_in_mode_manual"],
             }
         }
 

@@ -1,204 +1,612 @@
-diff --git a/app/ws/bus.py b/app/ws/bus.py
-index 09a11c3c35f892b744504eea9b9e50c34ea981b3..248744c70e9fff9cad12b8476e5ba67c1a528fc7 100644
---- a/app/ws/bus.py
-+++ b/app/ws/bus.py
-@@ -38,62 +38,52 @@ class StreamBus:
-     _ASSIST_AUDIO_MAX_CHUNKS = 256          # cap chunks per assistant_audio frame
+diff --git a/app/__init__.py b/app/__init__.py
+index df8a4ba208c545ff562e0b4ba2f18039159c937d..212288a03cf1eac097bd3220f593737ef9b2a898 100644
+--- a/app/__init__.py
++++ b/app/__init__.py
+@@ -82,55 +82,89 @@ def create_app():
+     @app.context_processor
+     def _inject_asset_version():
+         return {"asset_version": asset_version}
  
-     def is_canceled(self, sid, tid):
+     @app.context_processor
+     def _inject_askchip_config():
+         enabled = True
          try:
-             return (sid, tid) in self._canceled
+             enabled = bool(getattr(_SETTINGS, "advanced_logging_enabled", True))
          except Exception:
-             return False
- 
-     def __init__(self):
-         self._subs = {}          # sid -> [Queue]
-         self._locks = {}         # sid -> Lock
-         self._canceled = set()   # (sid, tid)
-         self._pending = {}       # sid -> [frame]
-         self._max_pending = 256  # cap to avoid unbounded memory
-         self._assistant_turn = {}  # sid -> current assistant turn_id
- 
-     def _lock(self, sid):
-         if sid not in self._locks:
-             self._locks[sid] = threading.Lock()
-         return self._locks[sid]
- 
-     def subscribe(self, sid):
-         q = Queue()
-         with self._lock(sid):
-             self._subs.setdefault(sid, []).append(q)
--            pend = self._pending.pop(sid, [])
--        # Drain pending into the new subscriber, honoring cancel state
--        for fr in pend:
--            try:
--                t = fr.get('type')
--                if t in self._CANCELLABLE_TYPES:
--                    tid = fr.get('turn_id')
--                    if tid and (sid, tid) in self._canceled:
--                        continue
--                q.put(fr)
--            except Exception:
--                pass
-+            if sid in self._pending:
-+                self._pending.pop(sid, None)
-         return q
- 
-     def _coalesce_legacy_audio_chunk(self, buf, frame):
-         """
-         Coalesce adjacent legacy 'audio_chunk' frames with same turn_id by
-         concatenating base64 payload. Split when exceeding a soft limit.
-         """
+             enabled = True
+         auth_config = {}
+         auto_login_email = (os.environ.get("ASKCHIP_AUTO_LOGIN_EMAIL") or "").strip()
+         if auto_login_email:
+             auth_config["autoLoginEmail"] = auto_login_email
+         vad_config = {}
          try:
-             if buf and buf[-1].get('type') == 'audio_chunk' and buf[-1].get('turn_id') == frame.get('turn_id'):
-                 prev = buf[-1]
-                 a = prev.get('base64') or ''
-                 b = frame.get('base64') or ''
-                 prev['base64'] = a + b
-                 if len(prev['base64']) > self._LEGACY_BASE64_SOFT_LIMIT:
-                     prev_data = prev['base64'][:self._LEGACY_BASE64_SOFT_LIMIT]
-                     rem_data = prev['base64'][self._LEGACY_BASE64_SOFT_LIMIT:]
-                     prev['base64'] = prev_data
-                     buf.append({'type': 'audio_chunk', 'turn_id': frame.get('turn_id'), 'base64': rem_data})
-             else:
-                 buf.append(frame)
+             vad_config = {
+                 "baseThresholdDb": float(getattr(_SETTINGS, "vad_base_threshold_db", 10.0)),
+                 "exitThresholdDb": float(getattr(_SETTINGS, "vad_exit_threshold_db", 6.0)),
+                 "ttsBoostDb": float(getattr(_SETTINGS, "vad_tts_boost_db", 6.0)),
+                 "minSpeechMs": int(getattr(_SETTINGS, "vad_min_speech_ms", 360)),
+             }
          except Exception:
-             buf.append(frame)
+             vad_config = {}
++
++        feature_flags = {
++            "feature_manual_barge_in": True,
++            "barge_in_mode_manual": True,
++        }
++        try:
++            from .services import admin_settings as _admin_settings  # inline import to avoid cycles
++
++            settings = _admin_settings.get_settings()
++        except Exception:
++            settings = {}
++        try:
++            from .db import db as _db
++
++            db_cfg = _db.get_config()
++        except Exception:
++            db_cfg = {}
++
++        def _resolve_flag(name: str, default: bool) -> bool:
++            if isinstance(settings, dict) and name in settings:
++                return bool(settings.get(name))
++            if isinstance(db_cfg, dict) and name in db_cfg:
++                return bool(db_cfg.get(name))
++            return default
++
++        feature_flags["feature_manual_barge_in"] = _resolve_flag(
++            "feature_manual_barge_in", True
++        )
++        feature_flags["barge_in_mode_manual"] = _resolve_flag(
++            "barge_in_mode_manual", True
++        )
+         return {
+             "askchip_config": {
+                 "logging": {"enabled": enabled},
+                 "auth": auth_config,
+                 "vad": vad_config,
++                "features": feature_flags,
++                "feature_manual_barge_in": feature_flags["feature_manual_barge_in"],
++                "barge_in_mode_manual": feature_flags["barge_in_mode_manual"],
+             }
+         }
  
-     def _coalesce_assistant_audio(self, buf, frame):
-         """
+     @app.after_request
+     def maybe_allow_cors(resp):
+         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
+         if allow:
+             origins = [o.strip() for o in allow.split(",") if o.strip()]
+             ori = request.headers.get("Origin", "")
+             if ori in origins:
+                 resp.headers["Access-Control-Allow-Origin"] = ori
+                 resp.headers["Vary"] = "Origin"
+                 resp.headers["Access-Control-Allow-Credentials"] = "true"
+                 resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token"
+                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+         return resp
+ 
+     @app.route("/<path:_>", methods=["OPTIONS"])
+     def _cors_preflight(_):
+         return ("", 204)
+ 
+     @app.before_request
+     def _auth_gate():
+         p = request.path or "/"
+         allow = (
+diff --git a/app/db.py b/app/db.py
+index 67433552148663214a90db2a98cded84985d0eef..3e05863e1cd9bf25e409b281f17d74d96590e51d 100644
+--- a/app/db.py
++++ b/app/db.py
+@@ -52,50 +52,52 @@ class DB:
+             'configs':{
+                 'audio_worklet_enabled': False,
+                 'vad_attack_ms': 12,
+                 'vad_release_ms': 240,
+                 'vad_dbfs_threshold': -42,
+                 'csrf_enforced': bool(__import__('os').environ.get('CSRF_ENFORCED','')).__bool__(),'profile_gate_enabled':False,
+                 'show_instruction_strip': True,'show_state_dots': True,'theme':'light',
+                 'suggestions_enabled': True,'suggestions_max_items':4,'suggestions_max_words':7,
+                 'nudges_enabled': True,'nudge_delay_ms':4200,'nudge_backoff_after_ignored':2,
+                 'silence_guard_ms':1800,
+                 'confirm_ms':420,'echo_threshold_boost':1.9,'min_speech_ms':220,'voice_command_hints':True,
+                 'language_lock':'en','max_turn_seconds':90,'normalization_table_version':1,
+                 'nebraska_persona_level':0.13,'nebraska_quotes_enabled':True,
+                 'ws_ping_interval_ms':25000,'ws_idle_timeout_ms':30000,'reconnect_policy':'1_attempt_5s','llm_provider':'auto','openai_model':'gpt-4o-mini','stt_provider':'auto','tts_provider':'auto',
+                 'redact_email_in_logs':True,
+                 'nlu_logging_enabled': True,
+                 'gen_humor': 0.0,
+                 'gen_target_verbosity': 'medium',
+                 'gen_max_sentences': 4,
+                 'gen_top_p': 1.0,
+                 'gen_temperature': 0.3,
+                 'feature_audio': True,
+                 'tts_voice_id': '',
+                 'tts_output_format': 'mp3_44100_128',
+                 'tts_model_id': 'eleven_multilingual_v2',
++                'feature_manual_barge_in': True,
++                'barge_in_mode_manual': True,
+                 'planner_high_threshold': 0.75,
+                 'planner_medium_threshold': 0.60,
+             },
+             'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{}
+         }
+         self._ensure_config_defaults()
+     def ensure_session(self, sid, email):
+         try:
+             if persist_enabled():
+                 from .dal import neon_pg
+                 neon_pg.ensure_schema(); neon_pg.upsert_user(email); neon_pg.ensure_session(sid, email)
+         except Exception:
+             pass
+         session = self.memory['sessions'].setdefault(
+             sid,
+             {'email':email,'messages':[],'nudges':0,'persona_id':'chip'}
+         )
+         if not isinstance(session.get('goal'), dict):
+             session['goal'] = _empty_session_goal()
+         else:
+             session['goal'] = _normalize_session_goal(session['goal'])
+     def add_message(self, sid, role, text):
+         try:
+             if persist_enabled():
+                 from .dal import neon_pg
+diff --git a/app/services/admin_settings.py b/app/services/admin_settings.py
+index b9a4115d0cd856feb7bff73003fd8f361886d335..c1152a1281da952947ec964b25ae02e2a4587367 100644
+--- a/app/services/admin_settings.py
++++ b/app/services/admin_settings.py
+@@ -1,46 +1,50 @@
+ # app/services/admin_settings.py
+ from __future__ import annotations
+ import os, json, threading
+ from typing import Any, Dict
+ 
+ _LOCK = threading.Lock()
+ 
+ # ---------------- In-memory defaults (used as base / fallback) ----------------
+ _settings: Dict[str, Any] = {
+     "confirm_ms": 420,
+     "echo_threshold_boost": 1.9,
+     "language_lock": "en",
+     "min_speech_ms": 220,
+     "nudge_delay_ms": 4200,
+     "nudge_backoff_after_ignored": 2,
+     "silence_guard_ms": 1800,
+     "max_turn_seconds": 90,
+ 
+     # Audio feature toggle — default TRUE unless explicitly forced false via env/DB
+     "feature_audio": (os.environ.get("FEATURE_AUDIO") or "true").lower() == "true",
+ 
++    # Manual barge-in (PTT) feature flags
++    "feature_manual_barge_in": True,
++    "barge_in_mode_manual": True,
++
+     # TTS runtime tunables (non-secret) – keys remain in env only unless user saves
+     "tts_voice_id": os.environ.get("ELEVENLABS_VOICE_ID", ""),
+     "tts_output_format": os.environ.get("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128"),
+     "tts_model_id": os.environ.get("ELEVEN_MODEL_ID", "eleven_multilingual_v2"),
+ }
+ 
+ # ------------------------- DB helpers (safe best-effort) ----------------------
+ 
+ def _persist_enabled() -> bool:
+     try:
+         from ..db import persist_enabled
+         return bool(persist_enabled())
+     except Exception:
+         return False
+ 
+ def _db_get_settings() -> Dict[str, Any]:
+     """
+     Load admin settings from Neon (admin_settings.value_jsonb where key='settings').
+     Returns {} if not available. Safe to call even if schema is missing.
+     """
+     if not _persist_enabled():
+         return {}
+     try:
+         from ..dal import neon_pg as pg
+         pg.ensure_schema()
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 34d4ef3180010dc184e14e868d520258fa8d9f7b..bc65e03b699c6ac8610f10c1a72c54ada32d107e 100644
+index bc65e03b699c6ac8610f10c1a72c54ada32d107e..0f62a62dbb106f2dcc19277d9a8181c76b520bd8 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -1,30 +1,30 @@
- # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
- from __future__ import annotations
- import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
- from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
--from collections import deque
-+from collections import deque, defaultdict
- from app.services.audio.container_sniffer import (
-     AudioContainerSniffer,
-     coerce_detection_from_meta,
- )
+@@ -1206,98 +1206,130 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 try:
+                     await _ws_send_json(
+                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
+                     )
+                 except Exception:
+                     break
+         except asyncio.CancelledError:
+             pass
  
- from .schema_v1 import (
-     parse_client_json,
-     make_keepalive_ack,
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.config import load_settings
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
+     ping_task = asyncio.create_task(_ping_loop())
  
- # NEW: invoke LLM on final transcript
- from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
-@@ -150,81 +150,94 @@ def _emit_barge_admin_events(sid: str,
-         payload["turn_id"] = turn_id
-     if previous_phase:
-         payload["previous_phase"] = previous_phase
-     if tts_key:
-         payload["tts_turn_key"] = tts_key
-     if tts_state is not None:
-         payload["tts_state"] = tts_state
- 
-     if phase == "paused" and previous_phase != "paused":
-         admin_cb("barge_in", **payload)
-         if _is_tts_active(tts_state):
-             admin_cb("tts_pause", **payload)
-     elif phase == "assistant_speaking" and previous_phase == "paused":
-         admin_cb("barge_resume", **payload)
-         if _is_tts_active(tts_state):
-             admin_cb("tts_resume", **payload)
-     elif phase == "ready" and previous_phase == "paused":
-         admin_cb("barge_commit", **payload)
-         if _is_tts_active(tts_state):
-             admin_cb("tts_cancel", **payload)
- 
- 
- ACTIVE_WS: dict[str, dict[str, Any]] = {}
- ACTIVE_WS_LOCK = asyncio.Lock()
- 
-+GREET_SEQ_CACHE: dict[str, Set[int]] = defaultdict(set)
-+GREET_SEQ_CACHE_LOCK = asyncio.Lock()
-+
- WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
- 
- _SETTINGS = load_settings()
- _ADVANCED_LOGGING_ENABLED = bool(
-     getattr(_SETTINGS, "advanced_logging_enabled", True)
- )
- try:
-     _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
- except Exception:
-     pass
- 
- # ------------------------------ small helpers ------------------------------
- 
- 
- def _client_ip_from_scope(scope) -> str:
      try:
-         c = scope.get("client") or ()
-         if isinstance(c, (list, tuple)) and c:
-             return str(c[0])
+         await _ws_send_json(send, {"type": "ready", "session_id": sid})
      except Exception:
-         pass
-     try:
-         hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
-         xff = hdrs.get("x-forwarded-for", "").split(",")[0].strip()
-         if xff:
-             return xff
-     except Exception:
-         pass
-     return "unknown"
- 
- 
-+async def _greet_seq_mark_if_new(sid: str, seq: int) -> bool:
-+    sid_key = str(sid or "") or "default"
-+    async with GREET_SEQ_CACHE_LOCK:
-+        seen = GREET_SEQ_CACHE[sid_key]
-+        if seq in seen:
-+            return False
-+        seen.add(seq)
-+        return True
-+
-+
- def _normalize_admin_event_name(name: str) -> str:
-     try:
-         text = str(name or "").strip().lower()
-     except Exception:
-         text = ""
-     if not text:
-         return "log"
-     for ch in (" ", "\t", "\r", "\n"):
-         text = text.replace(ch, "_")
-     text = text.replace("/", ":").replace("..", ".")
-     text = text.replace(".", "_")
-     while "__" in text:
-         text = text.replace("__", "_")
-     return text or "log"
- 
- 
- def _jlog(event: str, *, admin_event: Optional[str] = None, admin_label: Optional[str] = None, **fields):
-     """Lightweight JSON log (stdout). Keep dependency-free inside WS path."""
-     if not _ADVANCED_LOGGING_ENABLED:
+         with contextlib.suppress(Exception):
+             await send(
+                 {
+                     "type": "websocket.close",
+                     "code": 1011,
+                     "reason": "initial_ready_failed",
+                 }
+             )
          return
-     try:
-         import time as _t, json as _json
  
-         fields.setdefault("event", event)
-         fields.setdefault("ts", _t.time())
-@@ -2215,62 +2228,97 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
++    manual_feature_enabled = True
++    manual_mode_manual_only = True
++    try:
++        runtime_cfg = db.get_config()
++        if isinstance(runtime_cfg, dict):
++            manual_feature_enabled = bool(
++                runtime_cfg.get("feature_manual_barge_in", manual_feature_enabled)
++            )
++            manual_mode_manual_only = bool(
++                runtime_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
++            )
++    except Exception:
++        pass
++    try:
++        from app.services import admin_settings as _admin_settings  # type: ignore
++
++        admin_cfg = _admin_settings.get_settings()
++        if isinstance(admin_cfg, dict):
++            manual_feature_enabled = bool(
++                admin_cfg.get("feature_manual_barge_in", manual_feature_enabled)
++            )
++            manual_mode_manual_only = bool(
++                admin_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
++            )
++    except Exception:
++        pass
++    cfg["feature_manual_barge_in"] = manual_feature_enabled
++    cfg["barge_in_mode_manual"] = manual_mode_manual_only
+     loop = asyncio.get_running_loop()
+     barge = BargeState()
+     last_barge_phase = [None]
+ 
+     def _send_barge_state(phase: str) -> None:
+         if not phase:
+             return
+         frame = {"type": "state", "phase": phase}
+         try:
+             bus.broadcast(sid, frame)
+         except Exception:
+             pass
+ 
+         try:
+             prev = last_barge_phase[0]
+             _emit_barge_admin_events(sid, phase, prev)
+             last_barge_phase[0] = phase
+         except Exception:
+             pass
+         try:
+             if loop.is_closed():
+                 return
+             payload = dict(frame)
+             try:
+                 running = asyncio.get_running_loop()
+             except RuntimeError:
+                 running = None
+             if running is loop:
+                 asyncio.create_task(_ws_send_json(send, payload))
+             else:
+                 loop.call_soon_threadsafe(
+                     asyncio.create_task, _ws_send_json(send, payload)
+                 )
+         except Exception:
+             pass
+ 
+     buf = TurnBuffer()
+     dg: Optional[DeepgramClient] = None
+     rx_task: Optional[asyncio.Task] = None
+     dg_connect_task: Optional[asyncio.Task] = None
+     dg_state: str = "closed"
+     turn_id_ref = [0]
+     pending_final_turns: Deque[int] = deque()
+     completed_llm_turns: Set[int] = set()
+     synthetic_final_turns: Set[int] = set()
+     final_seen = [False]
+     asr_seen_partial = [False]
+     asr_partial_counter = [0]
++    current_assistant_turn_ref: List[Optional[Any]] = [None]
++    manual_commit_pending = [False]
++    manual_button_down = [False]
++    manual_turn_active = [False]
+     turn_timing: Dict[str, List[float]] = {
+         "start": [0.0],
+         "dg_open": [0.0],
+         "first_partial": [0.0],
+         "final": [0.0],
+     }
+     turn_finish_logged = [False]
+ 
+     final_guard_reset_ref: List[Optional[Callable[[str], None]]] = [None]
+     final_guard_local_vad_ref: List[Optional[Callable[[str], None]]] = [None]
+ 
+     # Turn-scoped buffering + state
+     buffered_chunks: Deque[bytes] = deque()
+     sent_any_audio = [False]
+     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
+     no_audio_notified = [False]
+     no_audio_turn_id = [0]
+     try:
+         no_audio_window_s = float(
+             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
+         )
+     except Exception:
+         no_audio_window_s = 10.0
+     if no_audio_window_s < 0:
+         no_audio_window_s = 0.0
+@@ -1433,50 +1465,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             return
+         _cancel_confirm_timeout()
+         confirm_window_ref[0] = None
+         data = {k: v for k, v in (metrics or {}).items() if v is not None}
+         data.setdefault("reason", trigger)
+         data.setdefault("snr_enabled", window.snr_enabled)
+         _jlog("confirm_commit", sid=sid, **data)
+         if barge.is_paused():
+             try:
+                 barge.commit(_send_barge_state)
+             except Exception:
+                 pass
+ 
+     def _finalize_confirm_abort(
+         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
+     ) -> None:
+         if confirm_window_ref[0] is not window:
+             return
+         _cancel_confirm_timeout()
+         confirm_window_ref[0] = None
+         data = {k: v for k, v in (metrics or {}).items() if v is not None}
+         data.setdefault("reason", trigger)
+         data.setdefault("snr_enabled", window.snr_enabled)
+         _jlog("confirm_abort", sid=sid, **data)
+         if barge.is_paused():
++            if manual_button_down[0]:
++                return
+             try:
+                 barge.cancel(_send_barge_state)
+             except Exception:
+                 pass
+ 
+     def _start_confirm_window(now_ts: float) -> None:
+         window = ConfirmWindow(
+             min_duration_ms=confirm_min_ms,
+             max_duration_ms=confirm_max_ms,
+             max_gap_ms=confirm_gap_ms,
+             min_tokens=confirm_min_tokens,
+             min_confidence=confirm_min_conf,
+             snr_threshold_db=confirm_snr_db,
+             snr_slack_db=confirm_snr_slack_db,
+             snr_enabled=True,
+         )
+         window.start(now_ts)
+         confirm_window_ref[0] = window
+         local_vad_meta_sent[0] = False
+         _emit_local_vad_signal(now_ts)
+         _jlog(
+             "confirm_start",
+             sid=sid,
+             turn_id=turn_id_ref[0],
+             min_ms=confirm_min_ms,
+@@ -1564,50 +1598,101 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             )
+         if _admin_emit:
+             with contextlib.suppress(Exception):
+                 _admin_emit(
+                     "no_audio_detected",
+                     session_id=sid,
+                     turn_id=turn_id,
+                     reason=reason,
+                     window_s=no_audio_window_s,
+                     mic_chunks=len(mic_chunks),
+                     buffered_chunks=len(buffered_chunks),
+                     since_first_chunk_ms=since_first_ms,
+                 )
+         if no_audio_broadcast_enabled:
+             frame = {
+                 "type": "no_audio_detected",
+                 "turn_id": str(turn_id),
+                 "window_s": no_audio_window_s,
+                 "reason": reason,
+             }
+             if since_first_ms is not None:
+                 frame["since_first_chunk_ms"] = since_first_ms
+             with contextlib.suppress(Exception):
+                 bus.broadcast(sid, frame)
+ 
++    def _manual_buffered_bytes() -> int:
++        total = 0
++        try:
++            total += sum(len(chunk) for chunk in buffered_chunks)
++        except Exception:
++            pass
++        try:
++            buf_chunks = getattr(buf, "_buf", None)
++            if buf_chunks:
++                total += sum(
++                    len(chunk)
++                    for chunk in buf_chunks
++                    if isinstance(chunk, (bytes, bytearray))
++                )
++        except Exception:
++            pass
++        return total
++
++    def _manual_log_event(name: str, **fields: Any) -> None:
++        _jlog(
++            name,
++            sid=sid,
++            admin_event=name,
++            admin_label=name,
++            **fields,
++        )
++
++    def _on_barge_commit() -> None:
++        mode = "manual" if manual_commit_pending[0] else "vad"
++        manual_commit_pending[0] = False
++        target_turn = current_assistant_turn_ref[0]
++        try:
++            latest = bus.current_assistant_turn(sid)
++            if latest:
++                target_turn = latest
++        except Exception:
++            pass
++        if target_turn:
++            with contextlib.suppress(Exception):
++                bus.cancel_turn(sid, target_turn)
++        with contextlib.suppress(Exception):
++            bus.broadcast(sid, {"type": "state", "phase": "ready"})
++        _jlog(
++            "turn_committed",
++            sid=sid,
++            mode=mode,
++            manual=(mode == "manual"),
++            admin_event="turn_committed",
++            admin_label="turn_committed",
++        )
++
+     def _cancel_no_audio_watch() -> None:
+         task = no_audio_watch_task[0]
+         if task and not task.done():
+             task.cancel()
+         no_audio_watch_task[0] = None
+ 
+     def _schedule_no_audio_watch(turn_id: int) -> None:
+         if no_audio_window_s <= 0:
+             return
+         _cancel_no_audio_watch()
+         no_audio_notified[0] = False
+         no_audio_turn_id[0] = turn_id
+ 
+         async def _watch() -> None:
+             try:
+                 await asyncio.sleep(no_audio_window_s)
+                 if sent_any_audio[0] or no_audio_notified[0]:
+                     return
+                 _emit_no_audio_alert("timeout")
+             except asyncio.CancelledError:
+                 pass
+             finally:
+                 no_audio_watch_task[0] = None
+ 
+         no_audio_watch_task[0] = asyncio.create_task(_watch())
+@@ -1984,92 +2069,79 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                     "ws_bin_recv",
+                                     sid=sid,
+                                     frames_in=ws_frames_in,
+                                     bytes_total=ws_bytes_in,
+                                 )
+                     if chunk:
+                         _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
+                         if not audio_sig_logged:
+                             with contextlib.suppress(Exception):
+                                 _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
+                             audio_sig_logged = True
+                     else:
+                         with contextlib.suppress(Exception):
+                             _jlog(
+                                 "ws_audio_chunk_empty",
+                                 sid=sid,
+                                 bytes=len(frame_bytes or b""),
+                                 turn_id=turn_id_ref[0],
+                                 buf_empty=buf.is_empty(),
+                             )
+ 
+                     raw_chunk = chunk
+ 
+                     if buf.is_empty():
+                         # New audio turn
+-                        current_assistant_turn = None
+                         try:
+-                            current_assistant_turn = bus.current_assistant_turn(sid)
++                            current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
+                         except Exception:
+-                            current_assistant_turn = None
++                            current_assistant_turn_ref[0] = None
+                         confirm_ms = 420
+                         try:
+                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
+                         except Exception:
+                             confirm_ms = 420
+-
+-                        def _on_barge_commit() -> None:
+-                            target_turn = current_assistant_turn
++                        barge_started = False
++                        if not manual_turn_active[0]:
+                             try:
+-                                latest = bus.current_assistant_turn(sid)
++                                barge_started = barge.start(
++                                    confirm_ms=confirm_ms,
++                                    on_commit=_on_barge_commit,
++                                    send_state=_send_barge_state,
++                                    auto_commit=False,
++                                )
+                             except Exception:
+-                                latest = None
+-                            if latest:
+-                                target_turn = latest
+-                            if target_turn:
++                                barge_started = False
++                        turn_id_ref[0] = buf.turn_seq + 1
++                        if barge_started:
++                            if manual_mode_manual_only:
+                                 try:
+-                                    bus.cancel_turn(sid, target_turn)
++                                    barge.commit(_send_barge_state)
+                                 except Exception:
+                                     pass
+-                            try:
+-                                bus.broadcast(sid, {"type": "state", "phase": "ready"})
+-                            except Exception:
+-                                pass
+-
+-                        barge_started = False
+-                        try:
+-                            barge_started = barge.start(
+-                                confirm_ms=confirm_ms,
+-                                on_commit=_on_barge_commit,
+-                                send_state=_send_barge_state,
+-                                auto_commit=False,
+-                            )
+-                        except Exception:
+-                            barge_started = False
+-                        turn_id_ref[0] = buf.turn_seq + 1
+-                        if barge_started:
+-                            _start_confirm_window(now)
++                            else:
++                                _start_confirm_window(now)
+                         else:
+                             confirm_window_ref[0] = None
+                             local_vad_meta_sent[0] = False
+                         with contextlib.suppress(Exception):
+                             pending_final_turns.append(turn_id_ref[0])
+                             completed_llm_turns.discard(turn_id_ref[0])
+                         final_seen[0] = False
+                         asr_seen_partial[0] = False
+                         sent_any_audio[0] = False
+                         buffered_chunks.clear()
+                         turn_connect_started[0] = False
+                         # reset mic capture
+                         mic_chunks.clear()
+                         mic_first_ts[0] = now
+                         mic_last_ts[0] = now
+                         _reset_turn_metrics(now)
+                         _schedule_no_audio_watch(turn_id_ref[0])
+                         with contextlib.suppress(Exception):
+                             _jlog(
+                                 "turn_start",
+                                 sid=sid,
+                                 turn_id=turn_id_ref[0],
+                                 first_bytes=len(raw_chunk),
+                             )
+                     # Detect container early using raw bytes
+@@ -2226,52 +2298,110 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                         if _admin_emit:
+                                             cfg_now = db.get_config()
                                              audio_on = bool(
                                                  (cfg_now or {}).get(
                                                      "feature_audio", True
@@ -222,98 +630,210 @@ index 34d4ef3180010dc184e14e868d520258fa8d9f7b..bc65e03b699c6ac8610f10c1a72c54ad
  
                              asyncio.create_task(_bg())
  
++                        elif t == "Control":
++                            action_raw = obj.get("action")
++                            action = str(action_raw or "").strip().lower()
++                            if action == "barge_in_start":
++                                if manual_feature_enabled:
++                                    manual_button_down[0] = True
++                                    manual_turn_active[0] = True
++                                    manual_commit_pending[0] = True
++                                    _ensure_confirm_closed("manual_start")
++                                    buffered_bytes = _manual_buffered_bytes()
++                                    _manual_log_event(
++                                        "manual_barge_in_start",
++                                        bytes_buffered=buffered_bytes,
++                                        provider_open=dg_state == "open",
++                                    )
++                                    try:
++                                        current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
++                                    except Exception:
++                                        current_assistant_turn_ref[0] = None
++                                    if not barge.is_paused():
++                                        try:
++                                            barge.start(
++                                                confirm_ms=0,
++                                                on_commit=_on_barge_commit,
++                                                send_state=_send_barge_state,
++                                                auto_commit=False,
++                                            )
++                                        except Exception:
++                                            pass
++                                    try:
++                                        barge.commit(_send_barge_state)
++                                    except Exception:
++                                        manual_commit_pending[0] = False
++                                continue
++                            if action == "barge_in_end":
++                                if manual_feature_enabled:
++                                    manual_button_down[0] = False
++                                    manual_turn_active[0] = False
++                                    manual_commit_pending[0] = False
++                                    buffered_bytes = _manual_buffered_bytes()
++                                    _manual_log_event(
++                                        "manual_barge_in_end",
++                                        bytes_buffered=buffered_bytes,
++                                        provider_open=dg_state == "open",
++                                    )
++                                continue
++                            continue
++
                          elif t == "Configure":
                              cfg.update(obj or {})
-+                            greet_seq_raw = obj.get("greet_seq")
-+                            greet_seq: Optional[int] = None
-+                            is_new_greet_seq = True
-+                            if greet_seq_raw is not None:
-+                                try:
-+                                    greet_seq = int(greet_seq_raw)
-+                                except Exception:
-+                                    greet_seq = None
-+                            if greet_seq is not None and (obj.get("greet") or obj.get("reset")):
-+                                try:
-+                                    is_new_greet_seq = await _greet_seq_mark_if_new(sid, greet_seq)
-+                                except Exception:
-+                                    is_new_greet_seq = True
++                            manual_feature_enabled = bool(
++                                cfg.get("feature_manual_barge_in", manual_feature_enabled)
++                            )
++                            manual_mode_manual_only = bool(
++                                cfg.get("barge_in_mode_manual", manual_mode_manual_only)
++                            )
++                            if not manual_feature_enabled:
++                                manual_button_down[0] = False
++                                manual_turn_active[0] = False
++                                manual_commit_pending[0] = False
+                             greet_seq_raw = obj.get("greet_seq")
+                             greet_seq: Optional[int] = None
+                             is_new_greet_seq = True
+                             if greet_seq_raw is not None:
+                                 try:
+                                     greet_seq = int(greet_seq_raw)
+                                 except Exception:
+                                     greet_seq = None
+                             if greet_seq is not None and (obj.get("greet") or obj.get("reset")):
+                                 try:
+                                     is_new_greet_seq = await _greet_seq_mark_if_new(sid, greet_seq)
+                                 except Exception:
+                                     is_new_greet_seq = True
                              if obj.get("reset"):
--                                with contextlib.suppress(Exception):
--                                    clear_greet_turn_cache(sid)
--                                with contextlib.suppress(Exception):
--                                    _admin_emit and _admin_emit(
--                                        "greet:reset",
--                                        route="/ws/v1/chat",
--                                        label="greet:reset",
--                                        session_id=sid,
-+                                if is_new_greet_seq:
-+                                    with contextlib.suppress(Exception):
-+                                        clear_greet_turn_cache(sid)
-+                                    with contextlib.suppress(Exception):
-+                                        _admin_emit and _admin_emit(
-+                                            "greet:reset",
-+                                            route="/ws/v1/chat",
-+                                            label="greet:reset",
-+                                            session_id=sid,
-+                                            greet_seq=greet_seq,
-+                                        )
-+                                else:
-+                                    _jlog(
-+                                        "ws_greet_reset_skip_dup",
-+                                        sid=sid,
-+                                        greet_seq=greet_seq,
-+                                        via="Configure",
+                                 if is_new_greet_seq:
+                                     with contextlib.suppress(Exception):
+                                         clear_greet_turn_cache(sid)
+                                     with contextlib.suppress(Exception):
+                                         _admin_emit and _admin_emit(
+                                             "greet:reset",
+                                             route="/ws/v1/chat",
+                                             label="greet:reset",
+                                             session_id=sid,
+                                             greet_seq=greet_seq,
+                                         )
+@@ -2387,50 +2517,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                 if universal_pre:
+                                     meta_overrides["universal"] = dict(universal_pre)
+ 
+                             async def _bg_user():
+                                 try:
+                                     await asyncio.to_thread(
+                                         run_ws_user_turn,
+                                         sid,
+                                         text,
+                                         corr,
+                                         meta_overrides=meta_overrides,
                                      )
-                             if obj.get("greet"):
--                                _jlog("ws_greet_recv", sid=sid, via="Configure")
-+                                if not is_new_greet_seq:
-+                                    _jlog(
-+                                        "ws_greet_skip_dup",
-+                                        sid=sid,
-+                                        greet_seq=greet_seq,
-+                                        via="Configure",
-+                                    )
-+                                    continue
-+                                _jlog(
-+                                    "ws_greet_recv",
-+                                    sid=sid,
-+                                    via="Configure",
-+                                    greet_seq=greet_seq,
-+                                )
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+                                         await _ws_send_json(
+                                             send,
+                                             make_error(
+                                                 "user_fail", e.__class__.__name__
+                                             ),
+                                         )
  
-                                 async def _bg2():
-                                     try:
-                                         from app.services.streaming import run_ws_greet
+                             asyncio.create_task(_bg_user())
  
-                                         tid = await asyncio.to_thread(run_ws_greet, sid)
-                                         with contextlib.suppress(Exception):
-                                             if _admin_emit:
-                                                 cfg_now = db.get_config()
-                                                 audio_on = bool(
-                                                     (cfg_now or {}).get(
-                                                         "feature_audio", True
-                                                     )
-                                                 )
-                                                 _admin_emit(
-                                                     "greet:resp",
-                                                     label="greet:resp",
-                                                     session_id=sid,
-                                                     turn_id=tid,
-                                                     audio_scheduled=audio_on,
-                                                 )
-                                     except Exception as e:
-                                         with contextlib.suppress(Exception):
-                                             await _ws_send_json(
-                                                 send,
+                         elif t == "CloseStream":
+                             _jlog("ws_close_stream", sid=sid)
++                            manual_turn_active[0] = False
++                            manual_button_down[0] = False
+ 
+                             # Always define this first so later 'if synthetic_emitted' is safe
+                             synthetic_emitted = False
+ 
+                             if callable(final_guard_local_vad_ref[0]):
+                                 with contextlib.suppress(Exception):
+                                     final_guard_local_vad_ref[0]("stop")
+ 
+                             _ensure_confirm_closed("close_stream")
+ 
+                             if buf.is_empty():
+                                 # Empty turn closure; synthesize ids + reset final tracking.
+                                 turn_id_ref[0] = buf.turn_seq + 1
+                                 final_seen[0] = False
+                                 _reset_turn_metrics(time.time())
+                                 with contextlib.suppress(Exception):
+                                     _jlog(
+                                         "turn_start",
+                                         sid=sid,
+                                         turn_id=turn_id_ref[0],
+                                         first_bytes=0,
+                                         empty_turn=True,
+                                     )
+ 
+                             # --- Get a turn_id (with guard logs) ---
+@@ -2653,52 +2785,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                 if not final_seen[0]:
+                                     if await _emit_synthetic_final(
+                                         turn_id, "no_provider"
+                                     ):
+                                         synthetic_emitted = True
+                                         with contextlib.suppress(ValueError):
+                                             pending_final_turns.remove(turn_id)
+                                         synthetic_final_turns.add(turn_id)
+ 
+                             _cancel_no_audio_watch()
+                             if (not sent_any_audio[0]) and not no_audio_notified[0]:
+                                 elapsed = None
+                                 if mic_first_ts[0]:
+                                     elapsed = time.time() - mic_first_ts[0]
+                                 if no_audio_window_s <= 0 or (
+                                     elapsed is not None and elapsed >= no_audio_window_s
+                                 ):
+                                     _emit_no_audio_alert("close_stream")
+ 
+                             if synthetic_emitted:
+                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
+                                 final_seen[0] = False
+ 
+                             if barge.is_paused():
+                                 _ensure_confirm_closed("cleanup")
+-                                with contextlib.suppress(Exception):
+-                                    barge.cancel(_send_barge_state)
++                                if not manual_button_down[0]:
++                                    with contextlib.suppress(Exception):
++                                        barge.cancel(_send_barge_state)
+                                 await asyncio.sleep(0)
+ 
+                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
+ 
+                             _jlog(
+                                 "mic_capture_block_enter",
+                                 sid=sid,
+                                 turn_id=turn_id,
+                                 mic_chunks=len(mic_chunks),
+                             )
+                             if MIC_CAPTURE:
+                                 try:
+                                     raw = b"".join(mic_chunks)
+                                     _jlog(
+                                         "mic_capture_summary",
+                                         sid=sid,
+                                         turn_id=turn_id,
+                                         bytes=len(raw),
+                                         chunks=len(mic_chunks),
+                                         container=transport.get("container"),
+                                         codec=transport.get("codec"),
+                                         containerized_opus=transport.get(
+                                             "containerized_opus"
+                                         ),
+                                     )
 diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
-index a0599e199b8ccc56180660155faceab0fd2af0d7..688b5a2908b77a3289085ee05d8961e55f05602c 100644
+index 688b5a2908b77a3289085ee05d8961e55f05602c..661ad7b660dde7273e81b60419afb5a0beab5623 100644
 --- a/static/js/bootstrap.js
 +++ b/static/js/bootstrap.js
-@@ -1,41 +1,51 @@
+@@ -1,145 +1,253 @@
  // bootstrap.js
  import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
  import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
- import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
+-import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
++import { initMic, armVAD, disarmVAD, forceBargeInStart, forceBargeInEnd } from '/static/js/voice.js';
  import { unlockAudio, stopPlayback } from '/static/js/audio.js';
  import { getSID } from '/static/js/util/sid.js';
  import * as App from '/static/js/app.js';
@@ -326,16 +846,16 @@ index a0599e199b8ccc56180660155faceab0fd2af0d7..688b5a2908b77a3289085ee05d8961e5
  
  let startInFlight = false;
  let started = false;
-+let startOnceCallCount = 0;
-+let wsListenerSeq = 0;
-+
-+function logWsListenerAttach(eventName, note){
-+  const id = `${eventName}#${++wsListenerSeq}`;
-+  try {
-+    _console('info', '[bootstrap] ws listener attached', { listener_id: id, event: eventName, note });
-+  } catch {}
-+  return id;
-+}
+ let startOnceCallCount = 0;
+ let wsListenerSeq = 0;
+ 
+ function logWsListenerAttach(eventName, note){
+   const id = `${eventName}#${++wsListenerSeq}`;
+   try {
+     _console('info', '[bootstrap] ws listener attached', { listener_id: id, event: eventName, note });
+   } catch {}
+   return id;
+ }
  
  function _console(level, ...args) {
    logIfEnabled(() => {
@@ -346,6 +866,101 @@ index a0599e199b8ccc56180660155faceab0fd2af0d7..688b5a2908b77a3289085ee05d8961e5
    });
  }
  
++function _cfgValue(key, fallback) {
++  try {
++    const cfg = window.__askchip_config || {};
++    if (key in cfg) return cfg[key];
++    if (cfg.features && key in cfg.features) return cfg.features[key];
++  } catch {}
++  return fallback;
++}
++
++const manualState = {
++  button: null,
++  featureEnabled: !!_cfgValue('feature_manual_barge_in', true),
++  phase: 'ready',
++  pointerActive: false,
++  keyActive: false,
++  sessionActive: false,
++};
++
++function _updateManualButtonAvailability() {
++  const btn = manualState.button;
++  if (!btn) return;
++  if (!manualState.featureEnabled) {
++    btn.hidden = true;
++    btn.disabled = true;
++    return;
++  }
++  btn.hidden = false;
++  const shouldEnable = manualState.sessionActive
++    && manualState.phase === 'ready'
++    && !manualState.pointerActive
++    && !manualState.keyActive;
++  btn.disabled = !shouldEnable;
++}
++
++function _setManualSessionActive(active) {
++  manualState.sessionActive = !!active;
++  _updateManualButtonAvailability();
++}
++
++function _manualPhaseChanged(phase) {
++  manualState.phase = phase || 'ready';
++  _updateManualButtonAvailability();
++}
++
++function _manualPointerDown(ev) {
++  if (!manualState.featureEnabled) return;
++  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
++  if (manualState.pointerActive || manualState.keyActive) return;
++  manualState.pointerActive = true;
++  _updateManualButtonAvailability();
++  forceBargeInStart({ source: 'pointer' });
++}
++
++function _manualPointerUp(ev) {
++  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
++  if (!manualState.pointerActive) return;
++  manualState.pointerActive = false;
++  _updateManualButtonAvailability();
++  if (!manualState.keyActive) {
++    forceBargeInEnd({ reason: 'pointer_release' });
++  }
++}
++
++function _manualKeyDown(ev) {
++  if (!manualState.featureEnabled) return;
++  const key = ev?.code || ev?.key || '';
++  if (!(key === 'Space' || key === 'Spacebar' || key === ' ')) return;
++  if (ev?.repeat) return;
++  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
++  if (manualState.keyActive || manualState.pointerActive) return;
++  manualState.keyActive = true;
++  _updateManualButtonAvailability();
++  forceBargeInStart({ source: 'keyboard' });
++}
++
++function _manualKeyUp(ev) {
++  const key = ev?.code || ev?.key || '';
++  if (!(key === 'Space' || key === 'Spacebar' || key === ' ')) return;
++  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
++  if (!manualState.keyActive) return;
++  manualState.keyActive = false;
++  _updateManualButtonAvailability();
++  if (!manualState.pointerActive) {
++    forceBargeInEnd({ reason: 'keyboard_release' });
++  }
++}
++
++function _manualGlobalCancel(reason = 'global_cancel') {
++  if (!manualState.pointerActive && !manualState.keyActive) return;
++  manualState.pointerActive = false;
++  manualState.keyActive = false;
++  _updateManualButtonAvailability();
++  forceBargeInEnd({ reason });
++}
++
  // ----- Assistant text de-dupe (turn_id + text) -----
  const _assistantSeen = new Set();
  function _isAssistantTextFrame(d) {
@@ -361,14 +976,46 @@ index a0599e199b8ccc56180660155faceab0fd2af0d7..688b5a2908b77a3289085ee05d8961e5
    if (_assistantSeen.has(key)) return false;
    _assistantSeen.add(key);
    return true;
-@@ -67,78 +77,80 @@ function showBanner(msg){
+ }
+ 
+ function setDot(state){
+   const dot = $('#stateDot');
+   if (!dot) return;
+   dot.className = 'dot ' + (
+     state === 'listening' ? 'dot-listening' :
+     state === 'speaking'  ? 'dot-speaking'  :
+     state === 'thinking'  ? 'dot-thinking'  : 'dot-ready'
+   );
+ }
+ 
+ function setStatusText(text){
+   const status = $('#statusText');
+   if (!status) return;
+   status.textContent = text;
+ }
+ 
+ function showBanner(msg){
+   const b = $('#inlineLoginMsg');
+   if (!b) { _console('warn', '[AskChip]', msg); return; }
+   b.textContent = msg;
+   b.classList.add('warn');
+ }
+ 
  function _disableButtons() {
++  if (manualState.pointerActive || manualState.keyActive) {
++    _manualGlobalCancel('disable_buttons');
++  }
    const endBtn   = $('#endButton');
    const sendBtnA = $('#composerSend');
    const sendBtnB = $('#sendBtn');
    if (sendBtnA) sendBtnA.disabled = true;
    if (sendBtnB) sendBtnB.disabled = true;
    if (endBtn)   endBtn.disabled   = true;
++  manualState.pointerActive = false;
++  manualState.keyActive = false;
++  _setManualSessionActive(false);
++  manualState.phase = 'ready';
++  _updateManualButtonAvailability();
  }
  
  function _enableButtons() {
@@ -378,6 +1025,7 @@ index a0599e199b8ccc56180660155faceab0fd2af0d7..688b5a2908b77a3289085ee05d8961e5
    if (sendBtnA) sendBtnA.disabled = false;
    if (sendBtnB) sendBtnB.disabled = false;
    if (endBtn)   endBtn.disabled   = false;
++  _setManualSessionActive(true);
  }
  
  function wireWSEventsOnce(){
@@ -387,7 +1035,7 @@ index a0599e199b8ccc56180660155faceab0fd2af0d7..688b5a2908b77a3289085ee05d8961e5
    // Log first few frames to verify payload shape
    let seen = 0;
    const loggedTypes = new Set();
-+  logWsListenerAttach('askchip-ws', 'bootstrap-wire');
+   logWsListenerAttach('askchip-ws', 'bootstrap-wire');
    window.addEventListener('askchip-ws', (ev) => {
      const d = ev.detail || {};
      const t = d.type || '';
@@ -400,12 +1048,16 @@ index a0599e199b8ccc56180660155faceab0fd2af0d7..688b5a2908b77a3289085ee05d8961e5
  
      // Lightweight state dot hints (no UI regressions)
      if (t === 'assistant_audio') setDot('speaking');
++    if (t === 'assistant_audio') _manualPhaseChanged('speaking');
      if (t === 'UtteranceEnd')    setDot('ready');
++    if (t === 'UtteranceEnd')    _manualPhaseChanged('ready');
++    if (t === 'ready')           _manualPhaseChanged('ready');
      if (t === 'state' && d.phase) {
        if (d.phase === 'ready')    setDot('ready');
        if (d.phase === 'thinking') setDot('thinking');
        if (d.phase === 'speaking') setDot('speaking');
        if (d.phase === 'listening')setDot('listening');
++      _manualPhaseChanged(String(d.phase));
      }
  
      // De-dupe assistant text frames so greet can't double-render
@@ -416,7 +1068,7 @@ index a0599e199b8ccc56180660155faceab0fd2af0d7..688b5a2908b77a3289085ee05d8961e5
      try { App.handleAssistantFrame(d); } catch (e) { _console('warn', 'App.handleAssistantFrame error', e); }
    });
  
-+  logWsListenerAttach('askchip-ws-close', 'bootstrap-wire');
+   logWsListenerAttach('askchip-ws-close', 'bootstrap-wire');
    window.addEventListener('askchip-ws-close', (ev) => {
      const detail = ev.detail || {};
      const normal = detail.code === 1000 || detail.code === 1001;
@@ -431,36 +1083,7 @@ index a0599e199b8ccc56180660155faceab0fd2af0d7..688b5a2908b77a3289085ee05d8961e5
      // When WS closes, disable Send/End and re-enable Start
      _disableButtons();
      const sb = $('#startButton');
-     if (sb) sb.disabled = false;
-     setDot('ready');
-   });
- }
- 
- function wireVoiceEventsOnce(){
-   if (window.__askchip_voice_wired) return;
-   window.__askchip_voice_wired = true;
- 
-   window.addEventListener('askchip-voice', (ev) => {
-     const detail = ev?.detail || {};
-@@ -162,51 +174,61 @@ function wireVoiceEventsOnce(){
-       setStatusText(label || 'Ready');
-     }
-   });
- }
- 
- async function ensureWsOpenOrFail(timeoutMs = 5000){
-   if (isOpen()) return true;
-   try {
-     await openWS();
-   } catch (err) {
-     _console('warn', '[bootstrap] openWS failed', err);
-     return false;
-   }
-   try {
-     await Promise.race([
-       waitWSOpen(),
-       new Promise((_, rej) => setTimeout(() => rej(new Error('WS timeout')), timeoutMs))
-     ]);
+@@ -192,78 +300,87 @@ async function ensureWsOpenOrFail(timeoutMs = 5000){
    } catch {
      return false;
    }
@@ -468,18 +1091,17 @@ index a0599e199b8ccc56180660155faceab0fd2af0d7..688b5a2908b77a3289085ee05d8961e5
  }
  
  async function startOnce(){
--  if (started || startInFlight) return;
-+  if (started || startInFlight) {
-+    try {
-+      _console('warn', '[bootstrap] startOnce duplicate guard hit', { started, startInFlight });
-+    } catch {}
-+    return;
-+  }
-+
-+  const attempt = ++startOnceCallCount;
-+  try {
-+    _console('info', `[bootstrap] startOnce called N=${attempt}`);
-+  } catch {}
+   if (started || startInFlight) {
+     try {
+       _console('warn', '[bootstrap] startOnce duplicate guard hit', { started, startInFlight });
+     } catch {}
+     return;
+   }
+ 
+   const attempt = ++startOnceCallCount;
+   try {
+     _console('info', `[bootstrap] startOnce called N=${attempt}`);
+   } catch {}
    startInFlight = true;
    setDot('thinking');
  
@@ -487,6 +1109,8 @@ index a0599e199b8ccc56180660155faceab0fd2af0d7..688b5a2908b77a3289085ee05d8961e5
    const endBtn   = $('#endButton');
  
    try{
++    manualState.featureEnabled = !!_cfgValue('feature_manual_barge_in', true);
++    _updateManualButtonAvailability();
      if (startBtn) startBtn.disabled = true;
  
      // 0) Audio unlock so TTS is permitted by browser autoplay policies
@@ -505,179 +1129,801 @@ index a0599e199b8ccc56180660155faceab0fd2af0d7..688b5a2908b77a3289085ee05d8961e5
        startInFlight = false;
        return;
      }
-@@ -258,53 +280,55 @@ async function startOnce(){
-       } catch {}
-       try { Visualizer.stop({ reset: true }); } catch {}
-       _disableButtons();
-       if (endBtn) endBtn.disabled = true;
-       if (startBtn) startBtn.disabled = false;
-       setDot('ready');
-       started = false;
-       try { window.__askchip_session_started = false; } catch {}
-       try { closeWS(1000, 'mic_unavailable'); } catch {}
-       startInFlight = false;
-       return;
-     }
  
-     // Watchdog: if no assistant frames within 6s after sending WS greet, warn
-     let gotAssistant = false;
-     let markAssistantRemove = false;
-     const markAssistant = (ev) => {
-       const d = ev.detail || {};
-       if (_isAssistantTextFrame(d)) gotAssistant = true;
-       if (markAssistantRemove) {
-         markAssistantRemove = false;
-         try { window.removeEventListener('askchip-ws', markAssistant); } catch {}
-       }
-     };
+     // 3) Wire WS → UI events exactly once
+     wireWSEventsOnce();
+ 
+     // 4) WS-only greet using the SAME session id as WS — fire ASAP so text arrives while
+     //    audio hardware comes online.
+     const sid = getSID();
      try {
-+      logWsListenerAttach('askchip-ws', 'bootstrap-markAssistant-once');
-       window.addEventListener('askchip-ws', markAssistant, { once: true });
-     } catch (err) {
-       markAssistantRemove = true;
-+      logWsListenerAttach('askchip-ws', 'bootstrap-markAssistant-fallback');
-       window.addEventListener('askchip-ws', markAssistant);
-       try { _console('warn', '[bootstrap] once listener fallback', err); } catch {}
++      const manualMode = !!_cfgValue('barge_in_mode_manual', true);
+       _console('log', '[bootstrap] startOnce sending greet configure');
+-      configure({ greet: true, reset: 1, session_id: sid });
++      configure({
++        greet: true,
++        reset: 1,
++        session_id: sid,
++        feature_manual_barge_in: manualState.featureEnabled,
++        barge_in_mode_manual: manualMode,
++      });
+       _console('log', '[bootstrap] startOnce greet configure sent — recorder setup will follow');
+       try {
+         window.dispatchEvent(new CustomEvent('chip-tts', {
+           detail: { state: 'playing', prime: true }
+         }));
+       } catch {}
+       // ^^ This “primes” holdoff if your server’s first audio event is delayed;
+       // when real assistant_audio arrives, your existing listener will extend the hold.
+     } catch (e) {
+       _console('warn', '[bootstrap] WS configure failed, cannot greet', e);
+       showBanner('Greet failed to send — check WS configure()');
+       throw e;
      }
  
-     setTimeout(() => {
-       if (!gotAssistant) showBanner('No assistant frames after greet — check WS handler/payload.');
-     }, 6000);
+     // 5) Mic permission + arm echo-aware VAD (voice-first path)
+     let visualizerStream = null;
+     try {
+       visualizerStream = await Visualizer.start();
+     } catch (e) {
+       _console('warn', '[bootstrap] visualizer init failed', e);
+     }
  
-     // Ready for user input
-     if (endBtn) endBtn.disabled = false;
-     _enableButtons();
- 
-     // Mark session active so ws.js auto-reconnects through restarts
-     window.__askchip_session_started = true;
-     started = true;
-     setDot('ready');
- 
-   } catch (e){
-     _console('error', '[bootstrap] start failed', e);
+     try {
+       const stream = await initMic(visualizerStream ?? undefined);
+       _console('log', '[bootstrap] startOnce mic initialized — about to arm VAD for voice turns');
+@@ -329,58 +446,85 @@ async function startOnce(){
      if (startBtn) startBtn.disabled = false;
      _disableButtons();
      setDot('ready');
      try { Visualizer.stop({ reset: true }); } catch {}
    } finally {
      startInFlight = false;
-diff --git a/static/js/ws.js b/static/js/ws.js
-index 92fb9b09d2ac3ede81bb34c8e29bce000e1f0fc5..162647ce141a4210b013da8a318cc46c0eb767a2 100644
---- a/static/js/ws.js
-+++ b/static/js/ws.js
-@@ -64,50 +64,52 @@
-           };
-           return _add.call(this, ev, wrapper);
-         }
-         return _add.call(this, ev, fn);
-       };
-       WebSocket.prototype.addEventListener.__askchip_e2e_patched = true;
-     }
-   } catch {}
- })();
- 
- // Responsibilities:
- //   (Patched) Optional reconnect control for diagnostics
- let __WS_RECONNECT_ENABLED = true;
- //   • Own a single WebSocket connection per tab to /ws/v1/chat
- //   • Subprotocol auth (bearer + bearer.<token>)
- //   • Auto-reconnect with bounded backoff (only if session is active)
- //   • Helpers: waitWSOpen(), isOpen(), bufferedAmount(), sendJSON/audio, configure()
- //   • DOM events: 'askchip-ws' (messages), 'askchip-ws-close' (terminal close)
- 
- import { playStream, audioEnd, unlockAudio } from './audio.js';
- import { getSID } from './util/sid.js';
- import { logIfEnabled } from './util/logging.js';
- 
- let _ws = null;
- let _onOpen = [];
-+let _lastConfigureSid = null;
-+let _greetSeqCounter = 0;
- const _KEEPALIVE_POLL_MS = 1000;
- const _KEEPALIVE_IDLE_THRESHOLD_MS = 3500;
- const _KEEPALIVE_RESUME_AFTER_UPLOAD_MS = 750;
- const _KEEPALIVE_PROVIDER_FALLBACK_MS = 10000;
- 
- const _KEEPALIVE_REASON_PROVIDER = 'provider_wait';
- const _KEEPALIVE_REASON_UPLOAD = 'audio_upload';
- 
- const _keepaliveState = {
-   timer: null,
-   lastSentTs: 0,
-   lastReadyAt: 0,
-   providerReady: false,
-   pauseReasons: new Set(),
-   resumeTimers: new Map(),
-   providerGateTimer: null,
-   sawFirstDeepgram: false,
- };
- 
- function _getActiveTurnTraceId() {
-   try {
-     if (typeof window === 'undefined') return null;
-     const id = window.__askchip_turn_trace_id;
-     return id ? String(id) : null;
-   } catch {
-@@ -622,51 +624,62 @@ export async function sendAudioChunk(blob){
- 
- export async function sendCloseStream(){
-   // Drain the WS send buffer before closing the user turn.
-   try{
-     const deadline = Date.now() + 1500; // up to ~1.5s drain budget
-     // small sleep helper
-     const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
-     // allow two cycles to ensure MediaRecorder 'stop' enqueued the last blob
-     await sleep(20);
-     await sleep(20);
-     // drain bufferedAmount down near zero, without blocking forever
-     while (isOpen() && bufferedAmount() > 0 && Date.now() < deadline){
-       await sleep(20);
-     }
-   }catch(e){
-     _console('warn', '[ws] sendCloseStream drain failed', e);
-   } finally {
-     try { _console('debug', '[DBG] UI→WS', { type: 'CloseStream' }); } catch {}
-     sendJSON({ type: "CloseStream" });
    }
  }
  
- export function configure(opts = {}){
-   // ensure session id is included if caller forgot
-   const sid = getSID();
-+  if (_lastConfigureSid !== sid) {
-+    _lastConfigureSid = sid;
-+    _greetSeqCounter = 0;
+ function wireUI(){
+   // Safety guard: prevent duplicate UI wiring if module loaded twice
+   if (window.__bootstrapWired) {
+     _console('warn', '[bootstrap] duplicate wiring prevented');
+     return;
+   }
+   window.__bootstrapWired = true;
+ 
+   wireVoiceEventsOnce();
+ 
+   const startBtn = document.getElementById('startButton');
+   const endBtn   = document.getElementById('endButton');
+   const sendBtnA = document.getElementById('composerSend');
+   const sendBtnB = document.getElementById('sendBtn');
+   const form     = document.getElementById('composerForm');
+   const composer = document.getElementById('composer');
++  manualState.button = document.getElementById('pttButton');
++
++  if (manualState.button) {
++    if (!manualState.featureEnabled) {
++      manualState.button.hidden = true;
++      manualState.button.disabled = true;
++    } else {
++      manualState.button.hidden = false;
++      manualState.button.disabled = true;
++      manualState.button.addEventListener('mousedown', _manualPointerDown);
++      manualState.button.addEventListener('mouseup', _manualPointerUp);
++      manualState.button.addEventListener('mouseleave', _manualPointerUp);
++      manualState.button.addEventListener('touchstart', _manualPointerDown, { passive: false });
++      manualState.button.addEventListener('touchend', _manualPointerUp);
++      manualState.button.addEventListener('touchcancel', (ev) => _manualPointerUp(ev));
++      manualState.button.addEventListener('keydown', _manualKeyDown);
++      manualState.button.addEventListener('keyup', _manualKeyUp);
++    }
 +  }
-   const payload = { type: "Configure", session_id: sid, ...opts };
-+  if (payload.greet) {
-+    _greetSeqCounter += 1;
-+    payload.greet_seq = _greetSeqCounter;
-+    try {
-+      window.__askchip_last_greet_seq = _greetSeqCounter;
-+    } catch {}
++
++  window.addEventListener('mouseup', (ev) => { if (manualState.pointerActive) _manualPointerUp(ev); }, { passive: false });
++  window.addEventListener('touchend', (ev) => { if (manualState.pointerActive) _manualPointerUp(ev); }, { passive: false });
++  window.addEventListener('touchcancel', (ev) => { if (manualState.pointerActive) _manualPointerUp(ev); }, { passive: false });
++  window.addEventListener('keyup', _manualKeyUp, { passive: false });
++  window.addEventListener('blur', () => _manualGlobalCancel('window_blur'));
++  _updateManualButtonAvailability();
+ 
+   if (startBtn) startBtn.addEventListener('click', startOnce);
+   if (typeof window.startCall !== 'function' || window.startCall.__askchipPlaceholder) {
+     window.startCall = () => startOnce();
+   }
+   if (endBtn)   endBtn.addEventListener('click', () => {
+     try { disarmVAD(); } catch {}
+     try { Visualizer.stop({ reset: true }); } catch {}
++    _manualGlobalCancel('end_button');
+     App.onEnd();
+   });
+ 
+   // Stop TTS as soon as user interacts to send or type (soft barge-in polish)
+   const stopAudio = () => { try { stopPlayback(); } catch {} };
+ 
+   const bindSend = (btn) => {
+     if (!btn) return;
+     btn.addEventListener('click', (e) => { stopAudio(); App.onSend(); });
+   };
+   bindSend(sendBtnA);
+   bindSend(sendBtnB);
+ 
+   if (form) form.addEventListener('submit', (e) => { e.preventDefault(); stopAudio(); App.onSend(); });
+ 
+   if (composer) {
+     composer.addEventListener('keydown', (ev) => {
+       stopAudio();
+       if (ev.key !== 'Enter') return;
+       if (ev.shiftKey || ev.ctrlKey || ev.altKey || ev.metaKey) return;
+       const disabled = (sendBtnA && sendBtnA.disabled) || (sendBtnB && sendBtnB.disabled);
+       if (disabled) return;
+       if (!composer.value || !composer.value.trim()) return;
+       ev.preventDefault();
+       App.onSend();
+diff --git a/static/js/voice.js b/static/js/voice.js
+index 3e45abaa3c41602c644628502d5e7672f925d115..cc74a747b4c1cab4e90c32004a046522726f1c65 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -21,84 +21,101 @@ import { VAD } from './voice/vad.js';
+ import { sendAudioChunk, sendCloseStream, sendJSON } from './ws_module.js';
+ import { stopPlayback, isPlaying as ttsIsPlaying, getPlaybackSignature } from './audio.js';
+ import { logIfEnabled } from './util/logging.js';
+ import { getSID } from './util/sid.js';
+ 
+ // Public API (matches prior usage)
+ export async function initMic(stream = null) { return await _ensureMic(stream); }
+ export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
+ export function disarmVAD() { _disarm(); }
+ export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
+ export function bargeIn() { try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} _bargeIn(); }         // keeps API parity
+ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+ 
+ // ---- Internal state ---------------------------------------------------------
+ 
+ // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   && typeof MediaRecorder.isTypeSupported === 'function'
+   && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
+   ? 'audio/ogg; codecs=opus'
+   : 'audio/webm; codecs=opus';
+ 
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+ const POST_TTS_HOLDOFF_MS = 600;    // grace window after Chip begins speaking
++const MANUAL_DEBOUNCE_MS = 300;
++const MANUAL_NO_AUDIO_CANCEL_MS = 500;
++const MANUAL_CLOSESTREAM_DELAY_MS = 250;
++const MANUAL_VAD_IGNORE_MS = 600;
+ 
+ const state = {
+   stream: null,
+   ctx: null,
+   source: null,
+   analyser: null,
+   vad: null,
+   rec: null,
+   chunkSendPromise: Promise.resolve(),
+   chunkBytesSent: 0,
+   chunkSendError: null,
+   turnTimer: null,
+   turnOpen: false,   // track whether a turn is currently open server-side
+   deviceLogged: false,
+   // NEW: min-turn gating
+   recStartedAt: 0,
+   pendingEndTimer: null,
+   postTtsHoldUntil: 0,
+   postTtsHoldTimer: null,
+   eligibility: 'blocked_pregreet', // 'blocked_pregreet' | 'holdoff' | 'eligible'
+   refractoryUntil: 0,
+   direct: {
+     descriptor: null,
+     fetchPromise: null,
+     connectPromise: null,
+     ws: null,
+     ready: false,
+     sendPromise: Promise.resolve(),
+     lastError: null,
+     container: 'webm',
+     codec: 'opus',
+     containerized: true,
+     sanitizedUrl: null,
+   },
++  manual: {
++    enabled: optsFromGlobal('feature_manual_barge_in', true),
++    modeManualOnly: optsFromGlobal('barge_in_mode_manual', true),
++    buttonDown: false,
++    active: false,
++    debounceUntil: 0,
++    startAt: 0,
++    firstChunkAt: 0,
++    noAudioTimer: null,
++    deferCloseStream: false,
++    ignoreVadUntil: 0,
++    sentStartFrame: false,
++  },
+ };
+ 
+ let _overrideEchoSignatureFn = null;
+ 
+ // ---- Helpers ----------------------------------------------------------------
+ 
+ function _emitVoiceState(state, detail = {}) {
+   try {
+     window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
+   } catch {}
+ }
+ 
+ function _console(level, ...args) {
+   logIfEnabled(() => {
+     try {
+       const method = (typeof console?.[level] === 'function') ? console[level] : console.log;
+       method?.apply(console, args);
+     } catch {}
+   });
+ }
+ 
+ function _logLifecycle(event, detail = {}, level = 'debug') {
+   const payload = { event, ...(detail && typeof detail === 'object' ? detail : { detail }) };
+   _console(level, '[voice]', event, payload);
+   try {
+@@ -636,50 +653,62 @@ function _startRecorder() {
+   const mimeType = _selectRecorderMime();
+   try { console.info('containerized=true'); } catch {}
+   try { console.info(String('container=' + (mimeType.includes('webm') ? 'webm/opus' : 'ogg/opus'))); } catch {}
+ 
+ 
+   try {
+     recorder = new MediaRecorder(state.stream, { mimeType, audioBitsPerSecond: 128000 });
+   } catch (primaryErr) {
+     try {
+       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
+     } catch (fallbackErr) {
+       _console('warn', '[voice] MediaRecorder init failed', fallbackErr || primaryErr);
+       state.rec = null;
+       return false;
+     }
+   }
+ 
+   state.rec = recorder;
+ 
+   state.rec.ondataavailable = (e) => {
+     const blob = e.data;
+     if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
+       return;
+     }
+ 
++    if (state.manual.active && !state.manual.firstChunkAt) {
++      state.manual.firstChunkAt = performance.now ? performance.now() : Date.now();
++      if (state.manual.noAudioTimer) {
++        try { clearTimeout(state.manual.noAudioTimer); } catch {}
++        state.manual.noAudioTimer = null;
++      }
++      const delta = Math.max(0, state.manual.firstChunkAt - (state.manual.startAt || state.manual.firstChunkAt));
++      const deltaMs = Math.round(delta);
++      _logLifecycle('manual_ptt_first_chunk', { delta_ms: deltaMs });
++      try { console.info('manual_ptt_delta_ms', deltaMs); } catch {}
++    }
++
+     // Chain chunk sends to preserve ordering across the WS.
+     state.chunkSendPromise = state.chunkSendPromise
+       .catch(() => {}) // allow queue to continue even if a prior chunk failed
+       .then(async () => {
+         const direct = state.direct;
+         if (direct && direct.descriptor) {
+           try {
+             if (!direct.ws || direct.ws.readyState !== WebSocket.OPEN) {
+               await _ensureDirectWs();
+             }
+             if (direct.ws && direct.ws.readyState === WebSocket.OPEN) {
+               await _directSendChunk(blob);
+             }
+           } catch (err) {
+             direct.lastError = err;
+             _console('debug', '[voice] direct ASR chunk failed', err);
+           }
+         }
+ 
+         try {
+           await sendAudioChunk(blob);
+           state.chunkBytesSent += blob.size;
+           try {
+             _console('debug', '[voice] streamed audio chunk', { bytes: blob.size });
+           } catch {}
+@@ -705,144 +734,256 @@ function _startRecorder() {
+     } catch (e) {
+       _console('warn', '[voice] send audio failed', e);
+       state.chunkSendError = state.chunkSendError || e;
+     } finally {
+       if (state.chunkSendError && !finalDetail) {
+         finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
+       }
+       if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
+         try {
+           _console('warn', '[voice] recorder stopped with issues', {
+             bytesSent: state.chunkBytesSent,
+             error: state.chunkSendError,
+           });
+         } catch {}
+       } else {
+         try {
+           _console('debug', '[voice] recorder stopped', {
+             bytesSent: state.chunkBytesSent,
+             // state.rec may be nulled by _stopRecorder; fall back to selected REC_MIME
+             mime: (state.rec && state.rec.mimeType) || REC_MIME,
+           });
+         } catch {}
+       }
+       // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
+       if (state.turnOpen) {
++        const deferMs = state.manual.deferCloseStream ? MANUAL_CLOSESTREAM_DELAY_MS : 0;
++        if (deferMs > 0) {
++          await new Promise((resolve) => setTimeout(resolve, deferMs));
++        }
+         try {
+           await sendCloseStream();
+         } catch {}
+         state.turnOpen = false;
+       }
++      state.manual.deferCloseStream = false;
++      state.manual.active = false;
++      state.manual.buttonDown = false;
++      if (state.manual.noAudioTimer) {
++        try { clearTimeout(state.manual.noAudioTimer); } catch {}
++        state.manual.noAudioTimer = null;
++      }
+       _emitVoiceState('armed', finalDetail);
+     }
+   };
+ 
+   try {
+     // Small timeslice ensures non-empty dataavailable frames while still producing a single turn blob.
+     const timeslice = 150; // 150 ms sits comfortably within the 100–200 ms target window
+     state.rec.start(timeslice);
+     state.turnOpen = true; // mark an open ASR turn on the server
+     try {
+       _console('debug', '[voice] recorder started', { mime: state.rec.mimeType, timeslice });
+     } catch {}
+   } catch (e) {
+     _console('warn', '[voice] recorder start failed', e);
+     state.rec = null;
+     state.turnOpen = false;
+     return false;
+   }
+ 
+   // Safety timeout to prevent runaway recordings
+   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
+   _safeClearTurnTimer();
+   state.turnTimer = setTimeout(() => {
+     try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
+   }, limitMs);
+ 
+   return true;
+ }
+ 
+ function _canStartSpeech() {
+   if (Date.now() < state.refractoryUntil) return false;     // hard refractory
+   if (typeof ttsIsPlaying === 'function' && ttsIsPlaying()) return false; // never start while TTS plays
+   if (state.eligibility === 'blocked_pregreet') return false; // wait until greet has actually started
+   if (state.eligibility === 'holdoff' && _now() < state.postTtsHoldUntil) return false; // during post-TTS hold
+   return true;
+ } 
+ 
+ function _onSpeechStartCommitted() {
+-  if (!_canStartSpeech()) return; 
++  if (state.manual.buttonDown || state.manual.active) return;
++  if (state.manual.ignoreVadUntil && _now() < state.manual.ignoreVadUntil) return;
++  if (!_canStartSpeech()) return;
+   const now = _now();
+   const holdUntil = state.postTtsHoldUntil || 0;
+   const wait = Math.max(0, holdUntil - now);
+   if (wait > 0) {
+     _clearPostTtsHoldTimer();
+     state.postTtsHoldTimer = setTimeout(() => {
+       state.postTtsHoldTimer = null;
+       try { _onSpeechStartCommitted(); } catch {}
+     }, wait);
+     return;
+   }
+ 
+   _clearPostTtsHoldTimer();
+   state.postTtsHoldUntil = 0;
+   _logLifecycle('vad_speech_start');
+   // Pause Chip TTS; if a previous ASR turn somehow remained open, close it.
+   try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} try { console.info('barge_in'); console.info('tts_pause'); } catch {} _bargeIn();
+ 
+   const started = _startRecorder();
+   if (started) {
+     try { console.info('[voice] state=recording'); } catch {}
+ _emitVoiceState('recording');
+     return;
+   }
+ 
+   _console('warn', '[voice] recorder unavailable — reverting to typing');
+   _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+ }
+ 
+ function _onSpeechEndCommitted(detail = null) {
++  if (state.manual.buttonDown || state.manual.active) return;
++  if (state.manual.ignoreVadUntil && _now() < state.manual.ignoreVadUntil) return;
+   const reason = detail?.reason || 'vad_silence';
+   const now = performance.now ? performance.now() : Date.now();
+   const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
+ 
+   // If we haven't recorded at least minTurnMs, delay honoring VAD-end.
+   // Only applies while recorder is actually running.
+   if (state.rec && typeof state.rec.state === 'string' && state.rec.state === 'recording') {
+     const elapsed = Math.max(0, now - (state.recStartedAt || now));
+     const wait = Math.max(0, minTurnMs - elapsed);
+     if (wait > 0) {
+       try { _console('debug', '[voice] delaying VAD end', { waitMs: wait, elapsed }); } catch {}
+       _clearPendingEndTimer();
+       state.pendingEndTimer = setTimeout(() => _onSpeechEndCommitted(detail), wait);
+       return; // do not stop yet
+     }
+   }
+ 
+   _logLifecycle('vad_speech_end', { reason });
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   _stopRecorder({ reason });
+   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
+ }
+ 
+ // ---- Utilities --------------------------------------------------------------
+ 
++function _refreshManualConfig() {
++  state.manual.enabled = !!optsFromGlobal('feature_manual_barge_in', true);
++  state.manual.modeManualOnly = !!optsFromGlobal('barge_in_mode_manual', true);
++}
++
++function _clearManualTimers() {
++  if (state.manual.noAudioTimer) {
++    try { clearTimeout(state.manual.noAudioTimer); } catch {}
++    state.manual.noAudioTimer = null;
 +  }
-   sendJSON(payload);
++}
++
++function _manualAutoCancel(reason = 'no_audio') {
++  if (!state.manual.buttonDown && !state.manual.active) {
++    return;
++  }
++  _logLifecycle('manual_barge_in_auto_cancel', { reason });
++  forceBargeInEnd({ autoCancel: true, reason });
++}
++
++export function forceBargeInStart(meta = {}) {
++  _refreshManualConfig();
++  if (!state.manual.enabled) return false;
++
++  const now = Date.now();
++  if (state.manual.buttonDown) return true;
++  if (now < state.manual.debounceUntil) return false;
++
++  state.manual.buttonDown = true;
++  state.manual.debounceUntil = now + MANUAL_DEBOUNCE_MS;
++  state.manual.firstChunkAt = 0;
++  state.manual.startAt = performance.now ? performance.now() : Date.now();
++  state.manual.ignoreVadUntil = 0;
++  state.manual.deferCloseStream = false;
++  state.manual.sentStartFrame = false;
++  _clearManualTimers();
++
++  _bargeIn();
++
++  const started = _startRecorder();
++  if (!started) {
++    state.manual.buttonDown = false;
++    state.manual.active = false;
++    return false;
++  }
++
++  state.manual.active = true;
++  _clearManualTimers();
++  state.manual.noAudioTimer = setTimeout(
++    () => _manualAutoCancel('no_audio'),
++    MANUAL_NO_AUDIO_CANCEL_MS
++  );
++
++  const source = typeof meta === 'object' && meta && meta.source ? String(meta.source) : 'ui';
++  _logLifecycle('manual_barge_in_start', { source });
++  try { console.info('manual_barge_in_start'); } catch {}
++
++  const sent = sendJSON({ type: 'Control', action: 'barge_in_start' });
++  state.manual.sentStartFrame = sent === true;
++
++  return true;
++}
++
++export function forceBargeInEnd(opts = {}) {
++  _refreshManualConfig();
++  const active = state.manual.buttonDown || state.manual.active;
++  if (!active) return false;
++
++  const options = typeof opts === 'object' && opts ? opts : {};
++  const autoCancel = options.autoCancel === true;
++  const reason = options.reason || (autoCancel ? 'auto_cancel' : 'release');
++
++  state.manual.buttonDown = false;
++  state.manual.ignoreVadUntil = _now() + MANUAL_VAD_IGNORE_MS;
++  state.manual.debounceUntil = Date.now() + MANUAL_DEBOUNCE_MS;
++  _clearManualTimers();
++  state.manual.deferCloseStream = true;
++
++  _logLifecycle('manual_barge_in_end', { reason, auto_cancel: autoCancel });
++  try { console.info('manual_barge_in_end'); } catch {}
++
++  sendJSON({ type: 'Control', action: 'barge_in_end' });
++  state.manual.sentStartFrame = false;
++
++  if (state.rec && state.rec.state === 'recording') {
++    _stopRecorder({ reason: autoCancel ? 'manual_auto_cancel' : 'manual_release' });
++  } else {
++    state.manual.deferCloseStream = false;
++    state.manual.active = false;
++  }
++
++  return true;
++}
++
+ function optsFromGlobal(key, fallback) {
+   // Allow admin-configurable values to seep in (if app exposes them)
+   try {
+     const cfg = window.__askchip_config || {};
+     if (key in cfg) return cfg[key];
++    if (cfg.features && key in cfg.features) return cfg.features[key];
+   } catch {}
+   return fallback;
  }
  
  export const __TEST_ONLY__ = {
-   wsLog: _wsLog,
-   console: _console,
+   state,
+   startRecorder: _startRecorder,
+   stopRecorder: _stopRecorder,
+   logLifecycle: _logLifecycle,
+   onSpeechStartCommitted: _onSpeechStartCommitted,
++  forceBargeInStart,
++  forceBargeInEnd,
+   setEchoSignatureOverride(fn) {
+     _overrideEchoSignatureFn = typeof fn === 'function' ? fn : null;
+   },
  };
+diff --git a/static/js/ws.js b/static/js/ws.js
+index 162647ce141a4210b013da8a318cc46c0eb767a2..0d40e32793092ee3cd4f994493b40d500eb8bad7 100644
+--- a/static/js/ws.js
++++ b/static/js/ws.js
+@@ -575,51 +575,53 @@ export function openWS(options = {}){
  
- // Diagnostic: hold UI from ending too quickly unless explicitly allowed.
- // Opt-in: localStorage.DIAG_MIN_SESSION_MS = '3500'
- (function __installDiagMinSessionHold(){
+   return _openPromise;
+ }
+ 
+ // NOTE: updated to accept a code + reason so we emit a clean close (avoids 1005).
+ export function closeWS(code = 1000, reason = ''){
+   _stopKeepAlive();
+   clearTimeout(_reconnectTimer);
+   _reconnecting = false;
+   try { window.__askchip_session_started = false; } catch {}
    try {
-     const minMs = parseInt((localStorage && localStorage.DIAG_MIN_SESSION_MS) || '0', 10);
-     if (!minMs || isNaN(minMs) || minMs <= 0) return;
-     const t0 = Date.now();
-     const _oldClose = WebSocket.prototype.close;
-     WebSocket.prototype.close = function(...args){
-       const elapsed = Date.now() - t0;
-       if (elapsed < minMs) {
-         try { console.info(`[diag] deferring WS close ${elapsed}ms < ${minMs}`); } catch {}
-         setTimeout(() => { try { _oldClose.apply(this, args); } catch {} }, (minMs - elapsed));
-         return;
-       }
-       return _oldClose.apply(this, args);
-     };
+     if (_ws) _ws.close(code, reason || undefined);
+   } catch {}
+   _ws = null;
+ }
+ 
+ export function sendJSON(obj){
+   if (!_ws || _ws.readyState !== WebSocket.OPEN) return false;
+   try {
+     const s = JSON.stringify(obj);
+     if (bufferedAmount() > 5_000_000) { // ~5MB buffer guardrail
+       _console('warn', '[ws] bufferedAmount high; sending anyway', bufferedAmount());
+     }
+     _ws.send(s);
+     _lastUserSendTs = Date.now();
+-    try { console.info('CloseStream ack'); } catch {}
++    if (obj && obj.type === 'CloseStream') {
++      try { console.info('CloseStream ack'); } catch {}
++    }
+     return true;
+   } catch(e){
+     _console('warn', '[ws] sendJSON error', e);
+     return false;
+   }
+ }
+ 
+ export async function sendAudioChunk(blob){
+   if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
+   _pauseKeepalive(_KEEPALIVE_REASON_UPLOAD);
+   try{
+     const buf = await blob.arrayBuffer();
+     try {
+       _console('debug', '[ws] sending audio chunk', { bytes: buf.byteLength, mime: blob.type });
+     } catch {}
+     _ws.send(buf);
+     _lastUserSendTs = Date.now();
+   }catch(e){
+     _console('warn', '[ws] sendAudioChunk error', e);
+   } finally {
+     _scheduleKeepaliveResume(_KEEPALIVE_REASON_UPLOAD, _KEEPALIVE_RESUME_AFTER_UPLOAD_MS);
+   }
+ }
+ 
+ export async function sendCloseStream(){
+diff --git a/templates/admin_console.html b/templates/admin_console.html
+index df0c4dd2c2e55ea4a6d673ceb1b5a6f47efac798..5b2ce7d664827f3152eb8d6afad862be21a99712 100644
+--- a/templates/admin_console.html
++++ b/templates/admin_console.html
+@@ -49,50 +49,52 @@
+         <select id="theme">
+ <option>light</option><option>dark</option><option>system</option>
+ </select>
+ </label>
+ <label>Show instruction strip <input id="show_instruction_strip" type="checkbox"/></label>
+ <label>Show state dots <input id="show_state_dots" type="checkbox"/></label>
+ <label>Suggestions enabled <input id="suggestions_enabled" type="checkbox"/></label>
+ <label>Suggestions — max items <input id="suggestions_max_items" min="0" type="number" value="4"/></label>
+ <label>Suggestions — max words <input id="suggestions_max_words" min="1" type="number" value="7"/></label>
+ <label>Nudge delay (ms) <input id="nudge_delay_ms" type="number" value="4200"/></label>
+ <label>Nudge backoff after ignored <input id="nudge_backoff_after_ignored" type="number" value="2"/></label>
+ <label>WS ping interval (ms) <input id="ws_ping_interval_ms" type="number" value="15000"/></label>
+ <label>WS idle timeout (ms) <input id="ws_idle_timeout_ms" type="number" value="60000"/></label>
+ </div>
+ <div class="actions" style="margin-top:10px"><button class="btn primary" id="save-ux">Save</button></div>
+ </section>
+ <!-- Flow -->
+ <section class="panel" id="tab-flow">
+   <h3>Conversational Flow</h3>
+   <div class="grid">
+ <label>Teacher move — summarize_next_actions (0..1) <input id="tm_summarize" max="1" min="0" step="0.05" type="number" value="0.6"/></label>
+ <label>Teacher move — check_understanding (0..1) <input id="tm_check" max="1" min="0" step="0.05" type="number" value="0.5"/></label>
+ <label>Teacher move — visualize (0..1) <input id="tm_visualize" max="1" min="0" step="0.05" type="number" value="0.2"/></label>
+ 
+ <label>Enable audio (TTS) <input id="feature_audio" type="checkbox"/></label>
++<label>Enable manual barge-in (PTT) <input id="feature_manual_barge_in" type="checkbox"/></label>
++<label>Manual-only barge mode <input id="barge_in_mode_manual" type="checkbox"/></label>
+ <label>Confirm (ms) <input id="confirm_ms" type="number" value="420"/></label>
+ <label>Min speech (ms) <input id="min_speech_ms" type="number" value="220"/></label>
+ <label>Max turn seconds <input id="max_turn_seconds" type="number" value="90"/></label>
+ <label>TTS voice ID <input id="tts_voice_id" placeholder="ElevenLabs voice id"/></label>
+ <label>TTS output format <input id="tts_output_format" placeholder="mp3_44100_128"/></label>
+ <label>TTS model id <input id="tts_model_id" placeholder="eleven_multilingual_v2"/></label>
+   </div>
+   <div class="flow-live-section">
+     <div class="flow-live-card" id="flow-live-card">
+       <div class="flow-live-header">
+         <h4>Live diagnostics</h4>
+         <span class="flow-live-timestamp" id="nlu-updated">—</span>
+       </div>
+       <dl class="flow-live-list">
+         <div class="flow-live-row">
+           <dt>Intent</dt>
+           <dd class="flow-live-value" id="nlu-intent" data-empty="true">—</dd>
+         </div>
+         <div class="flow-live-row" id="flow-live-guardrail">
+           <dt>Guardrail</dt>
+           <dd class="flow-live-value" id="nlu-guardrail" data-empty="true">—</dd>
+         </div>
+         <div class="flow-live-row">
+           <dt>Teacher move</dt>
+           <dd class="flow-live-value" id="nlu-move" data-empty="true">—</dd>
+@@ -227,65 +229,69 @@
+         set('stream-breaker', j.breaker_open ? 'true' : 'false');
+       }catch(e){ /* no-op */ }
+     }
+     const btn = document.getElementById('stream-refresh');
+     if (btn) btn.addEventListener('click', loadStreamingStatus);
+     // light polling only when Diagnostics tab is visible
+     setInterval(() => {
+       var panel = document.getElementById('tab-diag');
+       if (panel && panel.classList.contains('active')) loadStreamingStatus();
+     }, 1000);
+     // first paint
+     loadStreamingStatus();
+   })();
+ </script>
+ 
+ <script>
+ (function(){
+   async function loadFlow(){
+     try{
+       const r = await fetch('/api/v1/admin/config', {credentials:'include'});
+       const j = await r.json();
+       const s = j.settings || {};
+       const $ = (id)=>document.getElementById(id);
+ 
+       if ($('feature_audio')) $('feature_audio').checked = !!s.feature_audio;
++      if ($('feature_manual_barge_in')) $('feature_manual_barge_in').checked = s.feature_manual_barge_in !== false;
++      if ($('barge_in_mode_manual')) $('barge_in_mode_manual').checked = s.barge_in_mode_manual !== false;
+       if ($('confirm_ms')) $('confirm_ms').value = s.confirm_ms ?? 420;
+       if ($('min_speech_ms')) $('min_speech_ms').value = s.min_speech_ms ?? 220;
+       if ($('max_turn_seconds')) $('max_turn_seconds').value = s.max_turn_seconds ?? 90;
+ 
+       if ($('tts_voice_id')) $('tts_voice_id').value = s.tts_voice_id || '';
+       if ($('tts_output_format')) $('tts_output_format').value = s.tts_output_format || 'mp3_44100_128';
+       if ($('tts_model_id')) $('tts_model_id').value = s.tts_model_id || 'eleven_multilingual_v2';
+     }catch(e){ console.warn('[admin/flow] load error', e); }
+   }
+ 
+   async function saveFlow(){
+     try{
+       const $ = (id)=>document.getElementById(id);
+       const payload = {
+         feature_audio: !!($('feature_audio') && $('feature_audio').checked),
++        feature_manual_barge_in: !!($('feature_manual_barge_in') && $('feature_manual_barge_in').checked),
++        barge_in_mode_manual: !!($('barge_in_mode_manual') && $('barge_in_mode_manual').checked),
+         confirm_ms: parseInt($('confirm_ms')?.value||'420',10),
+         min_speech_ms: parseInt($('min_speech_ms')?.value||'220',10),
+         max_turn_seconds: parseInt($('max_turn_seconds')?.value||'90',10),
+         tts_voice_id: $('tts_voice_id')?.value || '',
+         tts_output_format: $('tts_output_format')?.value || 'mp3_44100_128',
+         tts_model_id: $('tts_model_id')?.value || 'eleven_multilingual_v2'
+       };
+       const r = await fetch('/api/v1/admin/config', {
+         method:'POST',
+         credentials:'include',
+         headers:{'Content-Type':'application/json'},
+         body: JSON.stringify(payload)
+       });
+       const j = await r.json();
+       if (!j.ok) throw new Error('save failed');
+       alert('Saved');
+     }catch(e){ alert('Save failed'); console.warn('[admin/flow] save error', e); }
+   }
+ 
+   document.addEventListener('DOMContentLoaded', () => {
+     loadFlow();
+     const btn = document.getElementById('save-flow');
+     if (btn) btn.addEventListener('click', saveFlow);
+   });
+ })();
+diff --git a/templates/index.html b/templates/index.html
+index 7629f11297d639202c077ea1076a66c7f845b164..ff65f6513b4fa91bdb943dcc4d323b4d80f31a78 100644
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -44,50 +44,51 @@
+         </div>
+       </aside>
+ 
+       <section class="visualizer-pane">
+         <div class="status-row">
+           <span class="status-label">Status:</span>
+           <span id="statusText">Ready</span>
+         </div>
+         <div class="visualizer-shell" role="img" aria-label="Audio visualizer">
+           <div class="visualizer-backdrop">
+             <canvas class="visualizer-waveform" role="presentation"></canvas>
+           </div>
+         </div>
+       </section>
+ 
+       <aside class="suggestions-pane">
+         <h4>Suggestions</h4>
+         <ul id="suggestions"></ul>
+       </aside>
+     </div>
+ 
+     <div class="meeting-toolbar">
+       <div class="toolbar-buttons">
+         <button id="startButton" class="primary">Start</button>
+         <button id="endButton" disabled>End</button>
++        <button id="pttButton" class="secondary" type="button" disabled hidden>Hold to talk (Disrupt)</button>
+         <span id="stateDot" class="dot dot-ready" title="Ready"></span>
+       </div>
+     </div>
+   </main>
+ 
+   <!-- Login / Profile Modals -->
+   <div id="loginModal" class="modal hidden">
+     <div class="sheet">
+       <h3>Sign in</h3>
+       <p>Login with your Trace3 or Pure email.</p>
+       <form id="inlineLoginForm">
+         <input id="inlineLoginEmail" type="email" placeholder="you@trace3.com or you@purestorage.com" />
+         <div class="actions">
+           <button id="inlineLoginSubmit" type="submit" class="primary">Sign in</button>
+           <button id="inlineLoginCancel" type="button">Cancel</button>
+         </div>
+         <div id="inlineLoginMsg" class="msgline"></div>
+       </form>
+     </div>
+   </div>
+ 
+   <div id="profileModal" class="modal hidden">
+     <div class="sheet">
+       <h3>Profile</h3>
+       <div class="grid">

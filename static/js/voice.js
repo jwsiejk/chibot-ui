@@ -43,6 +43,10 @@ const REC_MIME = (typeof MediaRecorder !== 'undefined'
 const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
 const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
 const POST_TTS_HOLDOFF_MS = 600;    // grace window after Chip begins speaking
+const MANUAL_DEBOUNCE_MS = 300;
+const MANUAL_NO_AUDIO_CANCEL_MS = 500;
+const MANUAL_CLOSESTREAM_DELAY_MS = 250;
+const MANUAL_VAD_IGNORE_MS = 600;
 
 const state = {
   stream: null,
@@ -76,6 +80,19 @@ const state = {
     codec: 'opus',
     containerized: true,
     sanitizedUrl: null,
+  },
+  manual: {
+    enabled: optsFromGlobal('feature_manual_barge_in', true),
+    modeManualOnly: optsFromGlobal('barge_in_mode_manual', true),
+    buttonDown: false,
+    active: false,
+    debounceUntil: 0,
+    startAt: 0,
+    firstChunkAt: 0,
+    noAudioTimer: null,
+    deferCloseStream: false,
+    ignoreVadUntil: 0,
+    sentStartFrame: false,
   },
 };
 
@@ -658,6 +675,18 @@ function _startRecorder() {
       return;
     }
 
+    if (state.manual.active && !state.manual.firstChunkAt) {
+      state.manual.firstChunkAt = performance.now ? performance.now() : Date.now();
+      if (state.manual.noAudioTimer) {
+        try { clearTimeout(state.manual.noAudioTimer); } catch {}
+        state.manual.noAudioTimer = null;
+      }
+      const delta = Math.max(0, state.manual.firstChunkAt - (state.manual.startAt || state.manual.firstChunkAt));
+      const deltaMs = Math.round(delta);
+      _logLifecycle('manual_ptt_first_chunk', { delta_ms: deltaMs });
+      try { console.info('manual_ptt_delta_ms', deltaMs); } catch {}
+    }
+
     // Chain chunk sends to preserve ordering across the WS.
     state.chunkSendPromise = state.chunkSendPromise
       .catch(() => {}) // allow queue to continue even if a prior chunk failed
@@ -727,10 +756,21 @@ function _startRecorder() {
       }
       // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
       if (state.turnOpen) {
+        const deferMs = state.manual.deferCloseStream ? MANUAL_CLOSESTREAM_DELAY_MS : 0;
+        if (deferMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, deferMs));
+        }
         try {
           await sendCloseStream();
         } catch {}
         state.turnOpen = false;
+      }
+      state.manual.deferCloseStream = false;
+      state.manual.active = false;
+      state.manual.buttonDown = false;
+      if (state.manual.noAudioTimer) {
+        try { clearTimeout(state.manual.noAudioTimer); } catch {}
+        state.manual.noAudioTimer = null;
       }
       _emitVoiceState('armed', finalDetail);
     }
@@ -770,7 +810,9 @@ function _canStartSpeech() {
 } 
 
 function _onSpeechStartCommitted() {
-  if (!_canStartSpeech()) return; 
+  if (state.manual.buttonDown || state.manual.active) return;
+  if (state.manual.ignoreVadUntil && _now() < state.manual.ignoreVadUntil) return;
+  if (!_canStartSpeech()) return;
   const now = _now();
   const holdUntil = state.postTtsHoldUntil || 0;
   const wait = Math.max(0, holdUntil - now);
@@ -801,6 +843,8 @@ _emitVoiceState('recording');
 }
 
 function _onSpeechEndCommitted(detail = null) {
+  if (state.manual.buttonDown || state.manual.active) return;
+  if (state.manual.ignoreVadUntil && _now() < state.manual.ignoreVadUntil) return;
   const reason = detail?.reason || 'vad_silence';
   const now = performance.now ? performance.now() : Date.now();
   const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
@@ -827,11 +871,106 @@ function _onSpeechEndCommitted(detail = null) {
 
 // ---- Utilities --------------------------------------------------------------
 
+function _refreshManualConfig() {
+  state.manual.enabled = !!optsFromGlobal('feature_manual_barge_in', true);
+  state.manual.modeManualOnly = !!optsFromGlobal('barge_in_mode_manual', true);
+}
+
+function _clearManualTimers() {
+  if (state.manual.noAudioTimer) {
+    try { clearTimeout(state.manual.noAudioTimer); } catch {}
+    state.manual.noAudioTimer = null;
+  }
+}
+
+function _manualAutoCancel(reason = 'no_audio') {
+  if (!state.manual.buttonDown && !state.manual.active) {
+    return;
+  }
+  _logLifecycle('manual_barge_in_auto_cancel', { reason });
+  forceBargeInEnd({ autoCancel: true, reason });
+}
+
+export function forceBargeInStart(meta = {}) {
+  _refreshManualConfig();
+  if (!state.manual.enabled) return false;
+
+  const now = Date.now();
+  if (state.manual.buttonDown) return true;
+  if (now < state.manual.debounceUntil) return false;
+
+  state.manual.buttonDown = true;
+  state.manual.debounceUntil = now + MANUAL_DEBOUNCE_MS;
+  state.manual.firstChunkAt = 0;
+  state.manual.startAt = performance.now ? performance.now() : Date.now();
+  state.manual.ignoreVadUntil = 0;
+  state.manual.deferCloseStream = false;
+  state.manual.sentStartFrame = false;
+  _clearManualTimers();
+
+  _bargeIn();
+
+  const started = _startRecorder();
+  if (!started) {
+    state.manual.buttonDown = false;
+    state.manual.active = false;
+    return false;
+  }
+
+  state.manual.active = true;
+  _clearManualTimers();
+  state.manual.noAudioTimer = setTimeout(
+    () => _manualAutoCancel('no_audio'),
+    MANUAL_NO_AUDIO_CANCEL_MS
+  );
+
+  const source = typeof meta === 'object' && meta && meta.source ? String(meta.source) : 'ui';
+  _logLifecycle('manual_barge_in_start', { source });
+  try { console.info('manual_barge_in_start'); } catch {}
+
+  const sent = sendJSON({ type: 'Control', action: 'barge_in_start' });
+  state.manual.sentStartFrame = sent === true;
+
+  return true;
+}
+
+export function forceBargeInEnd(opts = {}) {
+  _refreshManualConfig();
+  const active = state.manual.buttonDown || state.manual.active;
+  if (!active) return false;
+
+  const options = typeof opts === 'object' && opts ? opts : {};
+  const autoCancel = options.autoCancel === true;
+  const reason = options.reason || (autoCancel ? 'auto_cancel' : 'release');
+
+  state.manual.buttonDown = false;
+  state.manual.ignoreVadUntil = _now() + MANUAL_VAD_IGNORE_MS;
+  state.manual.debounceUntil = Date.now() + MANUAL_DEBOUNCE_MS;
+  _clearManualTimers();
+  state.manual.deferCloseStream = true;
+
+  _logLifecycle('manual_barge_in_end', { reason, auto_cancel: autoCancel });
+  try { console.info('manual_barge_in_end'); } catch {}
+
+  sendJSON({ type: 'Control', action: 'barge_in_end' });
+  state.manual.sentStartFrame = false;
+
+  if (state.rec && state.rec.state === 'recording') {
+    _stopRecorder({ reason: autoCancel ? 'manual_auto_cancel' : 'manual_release' });
+  } else {
+    state.manual.deferCloseStream = false;
+    state.manual.active = false;
+  }
+
+  return true;
+}
+
 function optsFromGlobal(key, fallback) {
   // Allow admin-configurable values to seep in (if app exposes them)
   try {
     const cfg = window.__askchip_config || {};
     if (key in cfg) return cfg[key];
+    if (cfg.features && key in cfg.features) return cfg.features[key];
   } catch {}
   return fallback;
 }
@@ -842,6 +981,8 @@ export const __TEST_ONLY__ = {
   stopRecorder: _stopRecorder,
   logLifecycle: _logLifecycle,
   onSpeechStartCommitted: _onSpeechStartCommitted,
+  forceBargeInStart,
+  forceBargeInEnd,
   setEchoSignatureOverride(fn) {
     _overrideEchoSignatureFn = typeof fn === 'function' ? fn : null;
   },

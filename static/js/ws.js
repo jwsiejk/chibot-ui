@@ -597,7 +597,9 @@ export function sendJSON(obj){
     }
     _ws.send(s);
     _lastUserSendTs = Date.now();
-    try { console.info('CloseStream ack'); } catch {}
+    if (obj && obj.type === 'CloseStream') {
+      try { console.info('CloseStream ack'); } catch {}
+    }
     return true;
   } catch(e){
     _console('warn', '[ws] sendJSON error', e);

@@ -1228,6 +1228,34 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return
 
     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
+    manual_feature_enabled = True
+    manual_mode_manual_only = True
+    try:
+        runtime_cfg = db.get_config()
+        if isinstance(runtime_cfg, dict):
+            manual_feature_enabled = bool(
+                runtime_cfg.get("feature_manual_barge_in", manual_feature_enabled)
+            )
+            manual_mode_manual_only = bool(
+                runtime_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+            )
+    except Exception:
+        pass
+    try:
+        from app.services import admin_settings as _admin_settings  # type: ignore
+
+        admin_cfg = _admin_settings.get_settings()
+        if isinstance(admin_cfg, dict):
+            manual_feature_enabled = bool(
+                admin_cfg.get("feature_manual_barge_in", manual_feature_enabled)
+            )
+            manual_mode_manual_only = bool(
+                admin_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+            )
+    except Exception:
+        pass
+    cfg["feature_manual_barge_in"] = manual_feature_enabled
+    cfg["barge_in_mode_manual"] = manual_mode_manual_only
     loop = asyncio.get_running_loop()
     barge = BargeState()
     last_barge_phase = [None]
@@ -1276,6 +1304,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     final_seen = [False]
     asr_seen_partial = [False]
     asr_partial_counter = [0]
+    current_assistant_turn_ref: List[Optional[Any]] = [None]
+    manual_commit_pending = [False]
+    manual_button_down = [False]
+    manual_turn_active = [False]
     turn_timing: Dict[str, List[float]] = {
         "start": [0.0],
         "dg_open": [0.0],
@@ -1455,6 +1487,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         data.setdefault("snr_enabled", window.snr_enabled)
         _jlog("confirm_abort", sid=sid, **data)
         if barge.is_paused():
+            if manual_button_down[0]:
+                return
             try:
                 barge.cancel(_send_barge_state)
             except Exception:
@@ -1585,6 +1619,57 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 frame["since_first_chunk_ms"] = since_first_ms
             with contextlib.suppress(Exception):
                 bus.broadcast(sid, frame)
+
+    def _manual_buffered_bytes() -> int:
+        total = 0
+        try:
+            total += sum(len(chunk) for chunk in buffered_chunks)
+        except Exception:
+            pass
+        try:
+            buf_chunks = getattr(buf, "_buf", None)
+            if buf_chunks:
+                total += sum(
+                    len(chunk)
+                    for chunk in buf_chunks
+                    if isinstance(chunk, (bytes, bytearray))
+                )
+        except Exception:
+            pass
+        return total
+
+    def _manual_log_event(name: str, **fields: Any) -> None:
+        _jlog(
+            name,
+            sid=sid,
+            admin_event=name,
+            admin_label=name,
+            **fields,
+        )
+
+    def _on_barge_commit() -> None:
+        mode = "manual" if manual_commit_pending[0] else "vad"
+        manual_commit_pending[0] = False
+        target_turn = current_assistant_turn_ref[0]
+        try:
+            latest = bus.current_assistant_turn(sid)
+            if latest:
+                target_turn = latest
+        except Exception:
+            pass
+        if target_turn:
+            with contextlib.suppress(Exception):
+                bus.cancel_turn(sid, target_turn)
+        with contextlib.suppress(Exception):
+            bus.broadcast(sid, {"type": "state", "phase": "ready"})
+        _jlog(
+            "turn_committed",
+            sid=sid,
+            mode=mode,
+            manual=(mode == "manual"),
+            admin_event="turn_committed",
+            admin_label="turn_committed",
+        )
 
     def _cancel_no_audio_watch() -> None:
         task = no_audio_watch_task[0]
@@ -2006,48 +2091,35 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                     if buf.is_empty():
                         # New audio turn
-                        current_assistant_turn = None
                         try:
-                            current_assistant_turn = bus.current_assistant_turn(sid)
+                            current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
                         except Exception:
-                            current_assistant_turn = None
+                            current_assistant_turn_ref[0] = None
                         confirm_ms = 420
                         try:
                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
                         except Exception:
                             confirm_ms = 420
-
-                        def _on_barge_commit() -> None:
-                            target_turn = current_assistant_turn
-                            try:
-                                latest = bus.current_assistant_turn(sid)
-                            except Exception:
-                                latest = None
-                            if latest:
-                                target_turn = latest
-                            if target_turn:
-                                try:
-                                    bus.cancel_turn(sid, target_turn)
-                                except Exception:
-                                    pass
-                            try:
-                                bus.broadcast(sid, {"type": "state", "phase": "ready"})
-                            except Exception:
-                                pass
-
                         barge_started = False
-                        try:
-                            barge_started = barge.start(
-                                confirm_ms=confirm_ms,
-                                on_commit=_on_barge_commit,
-                                send_state=_send_barge_state,
-                                auto_commit=False,
-                            )
-                        except Exception:
-                            barge_started = False
+                        if not manual_turn_active[0]:
+                            try:
+                                barge_started = barge.start(
+                                    confirm_ms=confirm_ms,
+                                    on_commit=_on_barge_commit,
+                                    send_state=_send_barge_state,
+                                    auto_commit=False,
+                                )
+                            except Exception:
+                                barge_started = False
                         turn_id_ref[0] = buf.turn_seq + 1
                         if barge_started:
-                            _start_confirm_window(now)
+                            if manual_mode_manual_only:
+                                try:
+                                    barge.commit(_send_barge_state)
+                                except Exception:
+                                    pass
+                            else:
+                                _start_confirm_window(now)
                         else:
                             confirm_window_ref[0] = None
                             local_vad_meta_sent[0] = False
@@ -2248,8 +2320,66 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                             asyncio.create_task(_bg())
 
+                        elif t == "Control":
+                            action_raw = obj.get("action")
+                            action = str(action_raw or "").strip().lower()
+                            if action == "barge_in_start":
+                                if manual_feature_enabled:
+                                    manual_button_down[0] = True
+                                    manual_turn_active[0] = True
+                                    manual_commit_pending[0] = True
+                                    _ensure_confirm_closed("manual_start")
+                                    buffered_bytes = _manual_buffered_bytes()
+                                    _manual_log_event(
+                                        "manual_barge_in_start",
+                                        bytes_buffered=buffered_bytes,
+                                        provider_open=dg_state == "open",
+                                    )
+                                    try:
+                                        current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
+                                    except Exception:
+                                        current_assistant_turn_ref[0] = None
+                                    if not barge.is_paused():
+                                        try:
+                                            barge.start(
+                                                confirm_ms=0,
+                                                on_commit=_on_barge_commit,
+                                                send_state=_send_barge_state,
+                                                auto_commit=False,
+                                            )
+                                        except Exception:
+                                            pass
+                                    try:
+                                        barge.commit(_send_barge_state)
+                                    except Exception:
+                                        manual_commit_pending[0] = False
+                                continue
+                            if action == "barge_in_end":
+                                if manual_feature_enabled:
+                                    manual_button_down[0] = False
+                                    manual_turn_active[0] = False
+                                    manual_commit_pending[0] = False
+                                    buffered_bytes = _manual_buffered_bytes()
+                                    _manual_log_event(
+                                        "manual_barge_in_end",
+                                        bytes_buffered=buffered_bytes,
+                                        provider_open=dg_state == "open",
+                                    )
+                                continue
+                            continue
+
                         elif t == "Configure":
                             cfg.update(obj or {})
+                            manual_feature_enabled = bool(
+                                cfg.get("feature_manual_barge_in", manual_feature_enabled)
+                            )
+                            manual_mode_manual_only = bool(
+                                cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+                            )
+                            if not manual_feature_enabled:
+                                manual_button_down[0] = False
+                                manual_turn_active[0] = False
+                                manual_commit_pending[0] = False
                             greet_seq_raw = obj.get("greet_seq")
                             greet_seq: Optional[int] = None
                             is_new_greet_seq = True
@@ -2409,6 +2539,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                         elif t == "CloseStream":
                             _jlog("ws_close_stream", sid=sid)
+                            manual_turn_active[0] = False
+                            manual_button_down[0] = False
 
                             # Always define this first so later 'if synthetic_emitted' is safe
                             synthetic_emitted = False
@@ -2675,8 +2807,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                             if barge.is_paused():
                                 _ensure_confirm_closed("cleanup")
-                                with contextlib.suppress(Exception):
-                                    barge.cancel(_send_barge_state)
+                                if not manual_button_down[0]:
+                                    with contextlib.suppress(Exception):
+                                        barge.cancel(_send_barge_state)
                                 await asyncio.sleep(0)
 
                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----

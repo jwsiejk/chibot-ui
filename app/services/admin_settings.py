@@ -19,6 +19,10 @@ _settings: Dict[str, Any] = {
     # Audio feature toggle — default TRUE unless explicitly forced false via env/DB
     "feature_audio": (os.environ.get("FEATURE_AUDIO") or "true").lower() == "true",
 
+    # Manual barge-in (PTT) feature flags
+    "feature_manual_barge_in": True,
+    "barge_in_mode_manual": True,
+
     # TTS runtime tunables (non-secret) – keys remain in env only unless user saves
     "tts_voice_id": os.environ.get("ELEVENLABS_VOICE_ID", ""),
     "tts_output_format": os.environ.get("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128"),

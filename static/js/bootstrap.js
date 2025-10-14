@@ -1,7 +1,7 @@
 // bootstrap.js
 import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
 import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
-import { initMic, armVAD, disarmVAD } from '/static/js/voice.js';
+import { initMic, armVAD, disarmVAD, forceBargeInStart, forceBargeInEnd } from '/static/js/voice.js';
 import { unlockAudio, stopPlayback } from '/static/js/audio.js';
 import { getSID } from '/static/js/util/sid.js';
 import * as App from '/static/js/app.js';
@@ -32,6 +32,101 @@ function _console(level, ...args) {
       method?.apply(console, args);
     } catch {}
   });
+}
+
+function _cfgValue(key, fallback) {
+  try {
+    const cfg = window.__askchip_config || {};
+    if (key in cfg) return cfg[key];
+    if (cfg.features && key in cfg.features) return cfg.features[key];
+  } catch {}
+  return fallback;
+}
+
+const manualState = {
+  button: null,
+  featureEnabled: !!_cfgValue('feature_manual_barge_in', true),
+  phase: 'ready',
+  pointerActive: false,
+  keyActive: false,
+  sessionActive: false,
+};
+
+function _updateManualButtonAvailability() {
+  const btn = manualState.button;
+  if (!btn) return;
+  if (!manualState.featureEnabled) {
+    btn.hidden = true;
+    btn.disabled = true;
+    return;
+  }
+  btn.hidden = false;
+  const shouldEnable = manualState.sessionActive
+    && manualState.phase === 'ready'
+    && !manualState.pointerActive
+    && !manualState.keyActive;
+  btn.disabled = !shouldEnable;
+}
+
+function _setManualSessionActive(active) {
+  manualState.sessionActive = !!active;
+  _updateManualButtonAvailability();
+}
+
+function _manualPhaseChanged(phase) {
+  manualState.phase = phase || 'ready';
+  _updateManualButtonAvailability();
+}
+
+function _manualPointerDown(ev) {
+  if (!manualState.featureEnabled) return;
+  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+  if (manualState.pointerActive || manualState.keyActive) return;
+  manualState.pointerActive = true;
+  _updateManualButtonAvailability();
+  forceBargeInStart({ source: 'pointer' });
+}
+
+function _manualPointerUp(ev) {
+  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+  if (!manualState.pointerActive) return;
+  manualState.pointerActive = false;
+  _updateManualButtonAvailability();
+  if (!manualState.keyActive) {
+    forceBargeInEnd({ reason: 'pointer_release' });
+  }
+}
+
+function _manualKeyDown(ev) {
+  if (!manualState.featureEnabled) return;
+  const key = ev?.code || ev?.key || '';
+  if (!(key === 'Space' || key === 'Spacebar' || key === ' ')) return;
+  if (ev?.repeat) return;
+  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+  if (manualState.keyActive || manualState.pointerActive) return;
+  manualState.keyActive = true;
+  _updateManualButtonAvailability();
+  forceBargeInStart({ source: 'keyboard' });
+}
+
+function _manualKeyUp(ev) {
+  const key = ev?.code || ev?.key || '';
+  if (!(key === 'Space' || key === 'Spacebar' || key === ' ')) return;
+  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+  if (!manualState.keyActive) return;
+  manualState.keyActive = false;
+  _updateManualButtonAvailability();
+  if (!manualState.pointerActive) {
+    forceBargeInEnd({ reason: 'keyboard_release' });
+  }
+}
+
+function _manualGlobalCancel(reason = 'global_cancel') {
+  if (!manualState.pointerActive && !manualState.keyActive) return;
+  manualState.pointerActive = false;
+  manualState.keyActive = false;
+  _updateManualButtonAvailability();
+  forceBargeInEnd({ reason });
 }
 
 // ----- Assistant text de-dupe (turn_id + text) -----
@@ -75,12 +170,20 @@ function showBanner(msg){
 }
 
 function _disableButtons() {
+  if (manualState.pointerActive || manualState.keyActive) {
+    _manualGlobalCancel('disable_buttons');
+  }
   const endBtn   = $('#endButton');
   const sendBtnA = $('#composerSend');
   const sendBtnB = $('#sendBtn');
   if (sendBtnA) sendBtnA.disabled = true;
   if (sendBtnB) sendBtnB.disabled = true;
   if (endBtn)   endBtn.disabled   = true;
+  manualState.pointerActive = false;
+  manualState.keyActive = false;
+  _setManualSessionActive(false);
+  manualState.phase = 'ready';
+  _updateManualButtonAvailability();
 }
 
 function _enableButtons() {
@@ -90,6 +193,7 @@ function _enableButtons() {
   if (sendBtnA) sendBtnA.disabled = false;
   if (sendBtnB) sendBtnB.disabled = false;
   if (endBtn)   endBtn.disabled   = false;
+  _setManualSessionActive(true);
 }
 
 function wireWSEventsOnce(){
@@ -112,12 +216,16 @@ function wireWSEventsOnce(){
 
     // Lightweight state dot hints (no UI regressions)
     if (t === 'assistant_audio') setDot('speaking');
+    if (t === 'assistant_audio') _manualPhaseChanged('speaking');
     if (t === 'UtteranceEnd')    setDot('ready');
+    if (t === 'UtteranceEnd')    _manualPhaseChanged('ready');
+    if (t === 'ready')           _manualPhaseChanged('ready');
     if (t === 'state' && d.phase) {
       if (d.phase === 'ready')    setDot('ready');
       if (d.phase === 'thinking') setDot('thinking');
       if (d.phase === 'speaking') setDot('speaking');
       if (d.phase === 'listening')setDot('listening');
+      _manualPhaseChanged(String(d.phase));
     }
 
     // De-dupe assistant text frames so greet can't double-render
@@ -214,6 +322,8 @@ async function startOnce(){
   const endBtn   = $('#endButton');
 
   try{
+    manualState.featureEnabled = !!_cfgValue('feature_manual_barge_in', true);
+    _updateManualButtonAvailability();
     if (startBtn) startBtn.disabled = true;
 
     // 0) Audio unlock so TTS is permitted by browser autoplay policies
@@ -240,8 +350,15 @@ async function startOnce(){
     //    audio hardware comes online.
     const sid = getSID();
     try {
+      const manualMode = !!_cfgValue('barge_in_mode_manual', true);
       _console('log', '[bootstrap] startOnce sending greet configure');
-      configure({ greet: true, reset: 1, session_id: sid });
+      configure({
+        greet: true,
+        reset: 1,
+        session_id: sid,
+        feature_manual_barge_in: manualState.featureEnabled,
+        barge_in_mode_manual: manualMode,
+      });
       _console('log', '[bootstrap] startOnce greet configure sent — recorder setup will follow');
       try {
         window.dispatchEvent(new CustomEvent('chip-tts', {
@@ -351,6 +468,32 @@ function wireUI(){
   const sendBtnB = document.getElementById('sendBtn');
   const form     = document.getElementById('composerForm');
   const composer = document.getElementById('composer');
+  manualState.button = document.getElementById('pttButton');
+
+  if (manualState.button) {
+    if (!manualState.featureEnabled) {
+      manualState.button.hidden = true;
+      manualState.button.disabled = true;
+    } else {
+      manualState.button.hidden = false;
+      manualState.button.disabled = true;
+      manualState.button.addEventListener('mousedown', _manualPointerDown);
+      manualState.button.addEventListener('mouseup', _manualPointerUp);
+      manualState.button.addEventListener('mouseleave', _manualPointerUp);
+      manualState.button.addEventListener('touchstart', _manualPointerDown, { passive: false });
+      manualState.button.addEventListener('touchend', _manualPointerUp);
+      manualState.button.addEventListener('touchcancel', (ev) => _manualPointerUp(ev));
+      manualState.button.addEventListener('keydown', _manualKeyDown);
+      manualState.button.addEventListener('keyup', _manualKeyUp);
+    }
+  }
+
+  window.addEventListener('mouseup', (ev) => { if (manualState.pointerActive) _manualPointerUp(ev); }, { passive: false });
+  window.addEventListener('touchend', (ev) => { if (manualState.pointerActive) _manualPointerUp(ev); }, { passive: false });
+  window.addEventListener('touchcancel', (ev) => { if (manualState.pointerActive) _manualPointerUp(ev); }, { passive: false });
+  window.addEventListener('keyup', _manualKeyUp, { passive: false });
+  window.addEventListener('blur', () => _manualGlobalCancel('window_blur'));
+  _updateManualButtonAvailability();
 
   if (startBtn) startBtn.addEventListener('click', startOnce);
   if (typeof window.startCall !== 'function' || window.startCall.__askchipPlaceholder) {
@@ -359,6 +502,7 @@ function wireUI(){
   if (endBtn)   endBtn.addEventListener('click', () => {
     try { disarmVAD(); } catch {}
     try { Visualizer.stop({ reset: true }); } catch {}
+    _manualGlobalCancel('end_button');
     App.onEnd();
   });
 
