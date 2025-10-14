@@ -1,82 +1,149 @@
-diff --git a/app/logging.py b/app/logging.py
-index 0d9e07ab297c2f8b6a8dda1cd9fbc21135da4d55..9ac53e786ab8657bebc22bbdd4921e98a2957e3d 100644
---- a/app/logging.py
-+++ b/app/logging.py
-@@ -1,5 +1,22 @@
- from .db import db
- from .admin_events import admin_events
-+
-+
-+def _emit_admin_log(message: str, email: str, role: str) -> None:
-+    try:
-+        from .admin_log import emit as admin_emit  # type: ignore
-+    except Exception:
-+        admin_emit = None
-+
-+    if callable(admin_emit):
-+        try:
-+            admin_emit("admin_log", email=email, role=role, message=message)
-+        except Exception:
-+            pass
-+
-+
- def admin_log(message: str, email: str = "system", role: str = "system"):
--    db.memory['logs'].append({'email': email, 'role': role, 'message': message})
--    admin_events.emit("audit", {"email": email, "role": role, "message": message})
-+    payload = {"email": email, "role": role, "message": message}
-+    db.memory['logs'].append(payload)
-+    admin_events.emit("audit", payload)
-+    _emit_admin_log(message=message, email=email, role=role)
-diff --git a/tests/test_admin_log_post.py b/tests/test_admin_log_post.py
-index 70c79000256c7dc14f6199f990dd8308fb14727b..01c97407049358d8c1f4b0d9af51e176c8fd0a8f 100644
---- a/tests/test_admin_log_post.py
-+++ b/tests/test_admin_log_post.py
-@@ -100,25 +100,48 @@ def test_admin_log_post_accepts_sse_token(monkeypatch):
+diff --git a/e2e_orchestrator.js b/e2e_orchestrator.js
+index fd796137957d7b9dc35da9f18f34c45ddb4cc0c5..a23e276b9c5438d9fa571cd39a9a46a86fe94824 100644
+--- a/e2e_orchestrator.js
++++ b/e2e_orchestrator.js
+@@ -296,77 +296,89 @@ async function collectAdminSSEInPage(page, { url, ms }) {
+       const logs = [];
+       let es;
+       try {
+         es = new EventSource(url, { withCredentials: true });
+         es.onmessage = (e) => { try { logs.push(JSON.parse(e.data)); } catch {} };
+         es.onerror = () => { /* ignore; resolve on timeout */ };
+       } catch { resolve(logs); return; }
+       setTimeout(() => { try { es && es.close(); } catch {} resolve(logs); }, ms);
+       window.addEventListener('beforeunload', () => { try { es && es.close(); } catch {} });
+     });
+   }, { url, ms });
+ }
  
-     payload_asr = {
-         "token": "secret-token",
-         "kind": "asr:start",
-         "label": "asr_start",
-         "session_id": "sid-42",
+ async function startAdminCollector(page, url) {
+   await page.evaluate((adminUrl) => {
+     if (window.__adminCollector?.source) {
+       try { window.__adminCollector.source.close(); } catch {}
      }
  
-     rv2 = client.post(
-         "/api/v1/admin/log",
-         json=payload_asr,
-         headers={"X-CSRF-Token": token},
-     )
-     assert rv2.status_code == 200
-     data2 = rv2.get_json()
-     assert data2["ok"] is True
-     assert data2["kind"] == "asr:start"
+     const logs = [];
+     const collector = {
+       startedAt: Date.now(),
+       source: null,
+       logs,
+       lastError: null,
+-      captureState: 'active'
++      captureState: 'active',
++      manualClose: false
+     };
  
-     stream = client.get("/api/v1/admin/logs?k=secret-token", buffered=True)
-     text = _decode(stream)
+     window.__adminLogs = logs;
+     window.__adminCollector = collector;
  
-     assert "\"kind\": \"media\"" in text
-     assert "\"kind\": \"asr:start\"" in text
-     assert "\"source\": \"mic\"" in text
-     assert "\"token\"" not in text
-+
-+
-+def test_admin_log_helper_mirrors_to_admin_sse(monkeypatch):
-+    monkeypatch.setenv("ENABLE_ADMIN_SSE", "1")
-+    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
-+
-+    admin_mod._LOG_Q.clear()
-+    admin_mod._STEP = 0
-+
-+    client = flask_app.test_client()
-+    with client.session_transaction() as sess:
-+        sess["user"] = {"email": "admin@example.com"}
-+
-+    from app.logging import admin_log as admin_log_helper
-+
-+    admin_log_helper("Hello world", email="prod@example.com", role="system")
-+
-+    stream = client.get("/api/v1/admin/logs", buffered=True)
-+    text = _decode(stream)
-+
-+    assert "\"kind\": \"admin_log\"" in text
-+    assert "\"message\": \"Hello world\"" in text
-+    assert "\"email\": \"prod@example.com\"" in text
+     try {
+       const es = new EventSource(adminUrl, { withCredentials: true });
+       collector.source = es;
+       es.onmessage = (event) => {
+         if (!window.__adminLogs) window.__adminLogs = logs;
+         try {
+           logs.push(JSON.parse(event.data));
+         } catch {
+           logs.push({ raw: event.data });
+         }
+       };
+       es.onerror = (event) => {
++        if (collector.manualClose) return;
++        const target = event?.currentTarget || event?.target || es;
++        const readyState = target?.readyState;
++        const closedState = window.EventSource && window.EventSource.CLOSED;
++        if (readyState != null && closedState != null && readyState === closedState) {
++          collector.captureState = collector.captureState || 'closed';
++          return;
++        }
+         collector.lastError = 'eventsource_error';
+-        const status = event?.status ?? event?.target?.status ?? event?.currentTarget?.status ?? null;
++        const status = event?.status ?? target?.status ?? null;
+         const message = event?.message || '';
+         if (status === 403 || /403/.test(String(message))) {
+           collector.lastError = 'forbidden';
+           collector.captureState = 'disabled';
+         }
+       };
+-      window.addEventListener('beforeunload', () => { try { es.close(); } catch {}; });
++      window.addEventListener('beforeunload', () => {
++        collector.manualClose = true;
++        try { es.close(); } catch {};
++      });
+     } catch (err) {
+       collector.lastError = err?.message || String(err);
+       if (/403/.test(String(collector.lastError))) {
+         collector.captureState = 'disabled';
+       }
+     }
+   }, url);
+ }
+ 
+ async function harvestAdminLogs(page) {
+   const logs = await page.evaluate(() => {
+     const data = Array.isArray(window.__adminLogs) ? window.__adminLogs.slice() : [];
+     const collector = window.__adminCollector || {};
+     return {
+       data,
+       error: collector.lastError || null,
+       captureState: collector.captureState || null
+     };
+   });
+ 
+   const events = Array.isArray(logs.data) ? logs.data.slice() : [];
+   const meta = {
+     error: logs.error || null,
+     captureState: logs.captureState || null
+   };
+@@ -374,50 +386,51 @@ async function harvestAdminLogs(page) {
+   if (meta.error) {
+     events.push({ event: 'collector_error', message: meta.error });
+   }
+ 
+   if (!meta.captureState) {
+     const hadCollectorError = events.some(entry => {
+       if (!entry || typeof entry !== 'object') return false;
+       if (entry.event !== 'collector_error') return false;
+       if (entry.status === 403) return true;
+       const text = [entry.message, entry.raw, entry.error]
+         .filter(Boolean)
+         .map(v => String(v))
+         .join(' ');
+       return /403/.test(text);
+     });
+     if (hadCollectorError) meta.captureState = 'disabled';
+   }
+ 
+   return { events, meta };
+ }
+ 
+ async function stopAdminCollector(page) {
+   await page.evaluate(() => {
+     const collector = window.__adminCollector;
+     if (!collector) return;
++    collector.manualClose = true;
+     if (collector.source) {
+       try { collector.source.close(); } catch {}
+     }
+     collector.stoppedAt = Date.now();
+     collector.source = null;
+   });
+ }
+ 
+ // ---- UI dump (buttons + clickables + DOM) ----
+ async function dumpUI(page, dumpDir){
+   const out = [];
+   const frames = page.frames();
+   for (const f of frames){
+     try {
+       const buttons = await f.locator('button').all();
+       for (const loc of buttons) {
+         try {
+           const text = (await loc.textContent())?.trim() || '';
+           const id = await loc.getAttribute('id');
+           const testid = await loc.getAttribute('data-testid');
+           const role = await loc.getAttribute('role');
+           const aria = await loc.getAttribute('aria-label');
+           out.push({ frameUrl: f.url(), tag: 'button', text, id, testid, role, aria });
+         } catch {}
+       }

@@ -318,7 +318,8 @@ async function startAdminCollector(page, url) {
       source: null,
       logs,
       lastError: null,
-      captureState: 'active'
+      captureState: 'active',
+      manualClose: false
     };
 
     window.__adminLogs = logs;
@@ -336,15 +337,26 @@ async function startAdminCollector(page, url) {
         }
       };
       es.onerror = (event) => {
+        if (collector.manualClose) return;
+        const target = event?.currentTarget || event?.target || es;
+        const readyState = target?.readyState;
+        const closedState = window.EventSource && window.EventSource.CLOSED;
+        if (readyState != null && closedState != null && readyState === closedState) {
+          collector.captureState = collector.captureState || 'closed';
+          return;
+        }
         collector.lastError = 'eventsource_error';
-        const status = event?.status ?? event?.target?.status ?? event?.currentTarget?.status ?? null;
+        const status = event?.status ?? target?.status ?? null;
         const message = event?.message || '';
         if (status === 403 || /403/.test(String(message))) {
           collector.lastError = 'forbidden';
           collector.captureState = 'disabled';
         }
       };
-      window.addEventListener('beforeunload', () => { try { es.close(); } catch {}; });
+      window.addEventListener('beforeunload', () => {
+        collector.manualClose = true;
+        try { es.close(); } catch {};
+      });
     } catch (err) {
       collector.lastError = err?.message || String(err);
       if (/403/.test(String(collector.lastError))) {
@@ -396,6 +408,7 @@ async function stopAdminCollector(page) {
   await page.evaluate(() => {
     const collector = window.__adminCollector;
     if (!collector) return;
+    collector.manualClose = true;
     if (collector.source) {
       try { collector.source.close(); } catch {}
     }
