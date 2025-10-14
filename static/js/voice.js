@@ -62,6 +62,9 @@ const state = {
   chunkSendError: null,
   turnTimer: null,
   turnOpen: false,   // track whether a turn is currently open server-side
+  turnClosePromise: null,
+  turnCloseDetail: undefined,
+  turnCloseSuppressEmit: false,
   deviceLogged: false,
   // NEW: min-turn gating
   recStartedAt: 0,
@@ -241,23 +244,7 @@ function _onServerFinalSignal(reason = 'server_final') {
     return;
   }
 
-  if (!state.turnOpen) return;
-
-  Promise.resolve(state.chunkSendPromise)
-    .catch(() => {})
-    .finally(async () => {
-      if (!state.turnOpen) return;
-      try {
-        await sendCloseStream();
-      } catch {}
-      state.turnOpen = false;
-      state.manual.deferCloseStream = false;
-      state.manual.active = false;
-      state.auto.deferCloseStream = false;
-      state.auto.active = false;
-      state.turnCommitMode = 'idle';
-      _emitVoiceState('armed');
-    });
+  _queueTurnClose(reason);
 }
 
 async function _fetchAsrClientSession(force = false) {
@@ -560,6 +547,95 @@ function _safeClearTurnTimer() {
   if (state.turnTimer) { clearTimeout(state.turnTimer); state.turnTimer = null; }
 }
 
+async function _waitForChunkQueue() {
+  while (state.chunkSendPromise) {
+    const pending = state.chunkSendPromise;
+    try {
+      await pending;
+    } catch (err) {
+      state.chunkSendError = state.chunkSendError || err;
+    }
+    if (pending === state.chunkSendPromise) {
+      break;
+    }
+  }
+}
+
+function _resetAfterTurnClose(detail) {
+  state.manual.deferCloseStream = false;
+  state.manual.active = false;
+  state.manual.buttonDown = false;
+  state.auto.deferCloseStream = false;
+  state.auto.active = false;
+  state.turnCommitMode = 'idle';
+  state.serverFinalized = false;
+  if (state.manual.noAudioTimer) {
+    try { clearTimeout(state.manual.noAudioTimer); } catch {}
+    state.manual.noAudioTimer = null;
+  }
+
+  const suppressEmit = state.turnCloseSuppressEmit;
+  state.turnCloseSuppressEmit = false;
+
+  if (!suppressEmit) {
+    if (detail !== undefined) {
+      _emitVoiceState('armed', detail);
+    } else {
+      _emitVoiceState('armed');
+    }
+  }
+}
+
+function _queueTurnClose(reason = 'recorder_stop', finalDetail) {
+  if (finalDetail !== undefined) {
+    state.turnCloseDetail = finalDetail;
+  }
+
+  if (!state.turnOpen) {
+    if (!state.turnClosePromise) {
+      const detail = state.turnCloseDetail;
+      state.turnCloseDetail = undefined;
+      _resetAfterTurnClose(detail);
+      return Promise.resolve();
+    }
+    return state.turnClosePromise;
+  }
+
+  if (state.turnClosePromise) {
+    return state.turnClosePromise;
+  }
+
+  const manualDelay = state.manual.deferCloseStream ? MANUAL_CLOSESTREAM_DELAY_MS : 0;
+  const autoDelay = state.auto.deferCloseStream ? AUTO_CLOSESTREAM_DELAY_MS : 0;
+  const deferMs = Math.max(manualDelay, autoDelay);
+
+  if (reason === 'manual_disarm') {
+    state.turnCloseSuppressEmit = true;
+  }
+
+  try { _console('debug', '[voice] queue_turn_close', { reason, deferMs }); } catch {}
+
+  state.turnClosePromise = (async () => {
+    await _waitForChunkQueue();
+    if (deferMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, deferMs));
+    }
+    if (state.turnOpen) {
+      try { await sendCloseStream(); } catch {}
+      state.turnOpen = false;
+    }
+  })()
+    .catch(() => {})
+    .finally(() => {
+      const detail = state.turnCloseDetail;
+      state.turnCloseDetail = undefined;
+      _resetAfterTurnClose(detail);
+      state.turnClosePromise = null;
+    });
+
+  return state.turnClosePromise;
+}
+
 function _stopRecorder(detail = null) {
   const recorder = state.rec;
   const wasActive = !!recorder && recorder.state !== 'inactive';
@@ -572,6 +648,7 @@ function _stopRecorder(detail = null) {
   try { if (state.rec && state.rec.state !== 'inactive') state.rec.stop(); } catch {}
   // intentionally keep state.rec reference nullable here; onstop handler handles final close
   state.rec = null;
+  _queueTurnClose(detail?.reason || 'stop_request');
 }
 
 function _teardownVADOnly() {
@@ -603,6 +680,9 @@ function _disarm() {
 
   // 3) Reset local state
   state.turnOpen = false;
+  state.turnClosePromise = null;
+  state.turnCloseDetail = undefined;
+  state.turnCloseSuppressEmit = false;
   state.recStartedAt = 0;
   state.turnCommitMode = 'idle';
   state.auto.active = false;
@@ -755,6 +835,8 @@ function _startRecorder() {
   if (!state.stream) return false;
   if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
 
+  _ensureWsListeners();
+
   if (typeof MediaRecorder === 'undefined') {
     _console('warn', '[voice] MediaRecorder not supported in this browser');
     state.rec = null;
@@ -879,31 +961,7 @@ function _startRecorder() {
           });
         } catch {}
       }
-      // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
-      if (state.turnOpen) {
-        const manualDelay = state.manual.deferCloseStream ? MANUAL_CLOSESTREAM_DELAY_MS : 0;
-        const autoDelay = state.auto.deferCloseStream ? AUTO_CLOSESTREAM_DELAY_MS : 0;
-        const deferMs = Math.max(manualDelay, autoDelay);
-        if (deferMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, deferMs));
-        }
-        try {
-          await sendCloseStream();
-        } catch {}
-        state.turnOpen = false;
-      }
-      state.manual.deferCloseStream = false;
-      state.manual.active = false;
-      state.manual.buttonDown = false;
-      state.auto.deferCloseStream = false;
-      state.auto.active = false;
-      state.turnCommitMode = 'idle';
-      state.serverFinalized = false;
-      if (state.manual.noAudioTimer) {
-        try { clearTimeout(state.manual.noAudioTimer); } catch {}
-        state.manual.noAudioTimer = null;
-      }
-      _emitVoiceState('armed', finalDetail);
+      await _queueTurnClose('recorder_stop', finalDetail);
     }
   };
 

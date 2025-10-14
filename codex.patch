@@ -1,481 +1,444 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index b03eb1378458ad349aa493d1d7c140fb90ccceaf..e6eb82257f1cf8f2d2f219584894e8d63d3eee20 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1336,50 +1336,56 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     no_audio_notified = [False]
-     no_audio_turn_id = [0]
-     try:
-         no_audio_window_s = float(
-             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
-         )
-     except Exception:
-         no_audio_window_s = 10.0
-     if no_audio_window_s < 0:
-         no_audio_window_s = 0.0
-     no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
-     asr_ready_evt: asyncio.Event = asyncio.Event()
-     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
-     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
-     ws_frames_in = 0
-     ws_bytes_in = 0
-     backpressure_drop_count = 0
-     backpressure_last_emit = 0.0
-     backpressure_last_queue_len = 0
-     backpressure_emit_interval = 1.0
-     turn_connect_started = [False]
-     # When True we stream new audio chunks directly to Deepgram instead of staging
-     # them locally. Enabled once the socket is open and any backlog has been
-     # flushed so transcription isn't gated on the not-ready timeout.
-     asr_direct_stream = [False]
-+    # Track whether the current turn has been committed (manual or automatic)
-+    # so that we know when to flip into pass-through mode.
-+    turn_stream_committed = [False]
-+    # Coordinate async activation of the ASR stream once a turn commits.
-+    asr_stream_activation_task: List[Optional[asyncio.Task]] = [None]
-+    asr_not_ready_timeout_task: List[Optional[asyncio.Task]] = [None]
+diff --git a/static/js/voice.js b/static/js/voice.js
+index eed400c97915ed9fd13d6e1acb28f0394ed9ea11..41590246bd6952dc38a4e8ceb9c5ac3d01655b70 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -40,50 +40,53 @@ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   ? 'audio/ogg; codecs=opus'
+   : 'audio/webm; codecs=opus';
  
-     # NEW: per-turn mic capture state
-     mic_chunks: List[bytes] = []
-     mic_first_ts = [0.0]
-     mic_last_ts = [0.0]
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+ const POST_TTS_HOLDOFF_MS = 600;    // grace window after Chip begins speaking
+ const MANUAL_DEBOUNCE_MS = 300;
+ const MANUAL_NO_AUDIO_CANCEL_MS = 500;
+ const MANUAL_CLOSESTREAM_DELAY_MS = 250;
+ const AUTO_CLOSESTREAM_DELAY_MS = 320;
+ const AUTO_FAILSAFE_DEFAULT_MS = 9000;
+ const MANUAL_VAD_IGNORE_MS = 600;
  
-     # Local confirmation gating
-     try:
-         confirm_min_ms = int(cfg.get("confirm_ms", 420) or 420)
-     except Exception:
-         confirm_min_ms = 420
-     confirm_min_ms = max(0, confirm_min_ms)
-     try:
-         confirm_max_ms = int(cfg.get("confirm_max_ms", confirm_min_ms + 600) or (confirm_min_ms + 600))
-     except Exception:
-         confirm_max_ms = confirm_min_ms + 600
-     if confirm_max_ms < confirm_min_ms:
-         confirm_max_ms = confirm_min_ms
-     try:
-         confirm_gap_ms = float(cfg.get("confirm_max_gap_ms", 180.0) or 180.0)
-     except Exception:
-         confirm_gap_ms = 180.0
-     try:
-         confirm_min_tokens = max(1, int(cfg.get("confirm_min_tokens", 2) or 2))
-     except Exception:
-@@ -1670,77 +1676,170 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         return manual_feature_enabled and manual_mode_manual_only
+ const state = {
+   stream: null,
+   ctx: null,
+   source: null,
+   analyser: null,
+   vad: null,
+   rec: null,
+   chunkSendPromise: Promise.resolve(),
+   chunkBytesSent: 0,
+   chunkSendError: null,
+   turnTimer: null,
+   turnOpen: false,   // track whether a turn is currently open server-side
++  turnClosePromise: null,
++  turnCloseDetail: undefined,
++  turnCloseSuppressEmit: false,
+   deviceLogged: false,
+   // NEW: min-turn gating
+   recStartedAt: 0,
+   pendingEndTimer: null,
+   postTtsHoldUntil: 0,
+   postTtsHoldTimer: null,
+   eligibility: 'blocked_pregreet', // 'blocked_pregreet' | 'holdoff' | 'eligible'
+   refractoryUntil: 0,
+   turnCommitMode: 'idle',
+   serverFinalized: false,
+   wsListener: null,
+   wsCloseListener: null,
+   direct: {
+     descriptor: null,
+     fetchPromise: null,
+     connectPromise: null,
+     ws: null,
+     ready: false,
+     sendPromise: Promise.resolve(),
+     lastError: null,
+     container: 'webm',
+     codec: 'opus',
+     containerized: true,
+     sanitizedUrl: null,
+   },
+@@ -219,67 +222,51 @@ function _removeWsListeners() {
+     try { window.removeEventListener('askchip-ws', state.wsListener); } catch {}
+     state.wsListener = null;
+   }
+   if (state.wsCloseListener) {
+     try { window.removeEventListener('askchip-ws-close', state.wsCloseListener); } catch {}
+     state.wsCloseListener = null;
+   }
+ }
  
-     def _manual_log_event(name: str, **fields: Any) -> None:
-         _jlog(
-             name,
-             sid=sid,
-             admin_event=name,
-             admin_label=name,
-             **fields,
-         )
+ function _onServerFinalSignal(reason = 'server_final') {
+   if (state.serverFinalized) return;
+   state.serverFinalized = true;
+   _logLifecycle('server_final_signal', { reason });
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   if (state.auto.active) state.auto.deferCloseStream = true;
+   if (state.manual.active) state.manual.deferCloseStream = true;
  
-     def _session_ready_for_auto_commit() -> bool:
-         if manual_button_down[0] or manual_turn_active[0]:
-             return False
-         if barge.is_paused():
-             return False
-         try:
-             active_turn = bus.current_assistant_turn(sid)
-         except Exception:
-             active_turn = None
-         tts_state, _ = _lookup_tts_state(sid, active_turn)
-         if _is_tts_active(tts_state):
-             return False
-         return True
+   const recorder = state.rec;
+   const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state === 'recording');
+   if (isRecording) {
+     _stopRecorder({ reason });
+     return;
+   }
  
-+    def _cancel_asr_stream_activation() -> None:
-+        task = asr_stream_activation_task[0]
-+        if task and not task.done():
-+            task.cancel()
-+        asr_stream_activation_task[0] = None
+-  if (!state.turnOpen) return;
+-
+-  Promise.resolve(state.chunkSendPromise)
+-    .catch(() => {})
+-    .finally(async () => {
+-      if (!state.turnOpen) return;
+-      try {
+-        await sendCloseStream();
+-      } catch {}
+-      state.turnOpen = false;
+-      state.manual.deferCloseStream = false;
+-      state.manual.active = false;
+-      state.auto.deferCloseStream = false;
+-      state.auto.active = false;
+-      state.turnCommitMode = 'idle';
+-      _emitVoiceState('armed');
+-    });
++  _queueTurnClose(reason);
+ }
+ 
+ async function _fetchAsrClientSession(force = false) {
+   const direct = state.direct;
+   if (!direct) return null;
+   if (!force && direct.descriptor) return direct.descriptor;
+   if (direct.fetchPromise) return direct.fetchPromise;
+ 
+   const sid = (() => {
+     try { return getSID(); } catch { return null; }
+   })();
+ 
+   direct.fetchPromise = (async () => {
+     const res = await fetch('/api/v1/asr/client-session', {
+       method: 'POST',
+       credentials: 'include',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ session_id: sid || 'default', force: !!force })
+     });
+     if (!res.ok) {
+       const err = new Error(`fetch_failed_${res.status}`);
+       err.status = res.status;
+       throw err;
+     }
+     const body = await res.json();
+@@ -538,93 +525,186 @@ async function _ensureMic(externalStream = null) {
+   state.stream = stream;
+   state.ctx = ctx;
+   state.source = source;
+   state.analyser = analyser;
+ 
+   if (!state.deviceLogged) {
+     const [track] = stream.getAudioTracks();
+     let settings = {};
+     try { settings = track?.getSettings?.() || {}; } catch {}
+     const detail = {
+       label: (track?.label && track.label.trim()) || settings.label || settings.deviceId || 'unknown',
+       sampleRate: settings.sampleRate ?? ctx?.sampleRate ?? null,
+       channels: settings.channelCount ?? settings.channels ?? ctx?.destination?.channelCount ?? 1,
+     };
+     _logLifecycle('mic_device_selected', detail);
+     state.deviceLogged = true;
+   }
+ 
+   return stream;
+ }
+ 
+ function _safeClearTurnTimer() {
+   if (state.turnTimer) { clearTimeout(state.turnTimer); state.turnTimer = null; }
+ }
+ 
++async function _waitForChunkQueue() {
++  while (state.chunkSendPromise) {
++    const pending = state.chunkSendPromise;
++    try {
++      await pending;
++    } catch (err) {
++      state.chunkSendError = state.chunkSendError || err;
++    }
++    if (pending === state.chunkSendPromise) {
++      break;
++    }
++  }
++}
 +
-+    def _cancel_asr_not_ready_timeout() -> None:
-+        task = asr_not_ready_timeout_task[0]
-+        if task and not task.done():
-+            task.cancel()
-+        asr_not_ready_timeout_task[0] = None
++function _resetAfterTurnClose(detail) {
++  state.manual.deferCloseStream = false;
++  state.manual.active = false;
++  state.manual.buttonDown = false;
++  state.auto.deferCloseStream = false;
++  state.auto.active = false;
++  state.turnCommitMode = 'idle';
++  state.serverFinalized = false;
++  if (state.manual.noAudioTimer) {
++    try { clearTimeout(state.manual.noAudioTimer); } catch {}
++    state.manual.noAudioTimer = null;
++  }
 +
-+    def _schedule_asr_not_ready_timeout() -> None:
-+        _cancel_asr_not_ready_timeout()
-+        wait_s = max(0.0, asr_ready_wait_s)
-+        if wait_s <= 0:
-+            return
++  const suppressEmit = state.turnCloseSuppressEmit;
++  state.turnCloseSuppressEmit = false;
 +
-+        async def _timer() -> None:
-+            try:
-+                await asyncio.sleep(wait_s)
-+                if not asr_ready_evt.is_set():
-+                    _jlog("asr_not_ready_timeout", sid=sid, phase="commit")
-+            except asyncio.CancelledError:
-+                return
++  if (!suppressEmit) {
++    if (detail !== undefined) {
++      _emitVoiceState('armed', detail);
++    } else {
++      _emitVoiceState('armed');
++    }
++  }
++}
 +
-+        asr_not_ready_timeout_task[0] = asyncio.create_task(_timer())
++function _queueTurnClose(reason = 'recorder_stop', finalDetail) {
++  if (finalDetail !== undefined) {
++    state.turnCloseDetail = finalDetail;
++  }
 +
-+    async def _run_asr_stream_activation(trigger: str) -> None:
-+        nonlocal dg_connect_task
-+        try:
-+            try:
-+                queued_chunks = len(buffered_chunks)
-+            except Exception:
-+                queued_chunks = 0
-+            _jlog(
-+                "asr_stream_activate",
-+                sid=sid,
-+                trigger=trigger,
-+                queued=queued_chunks,
-+                dg_state=dg_state,
-+            )
++  if (!state.turnOpen) {
++    if (!state.turnClosePromise) {
++      const detail = state.turnCloseDetail;
++      state.turnCloseDetail = undefined;
++      _resetAfterTurnClose(detail);
++      return Promise.resolve();
++    }
++    return state.turnClosePromise;
++  }
 +
-+            if not _has_deepgram_key():
-+                asr_direct_stream[0] = True
-+                return
++  if (state.turnClosePromise) {
++    return state.turnClosePromise;
++  }
 +
-+            if dg_state == "closed" and dg_connect_task is None:
-+                if not turn_connect_started[0]:
-+                    turn_connect_started[0] = True
-+                    _jlog(
-+                        "asr_connect_schedule",
-+                        sid=sid,
-+                        turn_id=turn_id_ref[0],
-+                        queued=len(buffered_chunks),
-+                        dg_state=dg_state,
-+                    )
-+                dg_connect_task = asyncio.create_task(_ensure_dg_connected())
++  const manualDelay = state.manual.deferCloseStream ? MANUAL_CLOSESTREAM_DELAY_MS : 0;
++  const autoDelay = state.auto.deferCloseStream ? AUTO_CLOSESTREAM_DELAY_MS : 0;
++  const deferMs = Math.max(manualDelay, autoDelay);
 +
-+            if dg_connect_task is not None and not asr_ready_evt.is_set():
-+                _schedule_asr_not_ready_timeout()
-+                try:
-+                    await asyncio.wait_for(
-+                        asr_ready_evt.wait(), timeout=asr_ready_wait_s
-+                    )
-+                except asyncio.TimeoutError:
-+                    _jlog("asr_not_ready_timeout", sid=sid, phase="commit_wait")
-+                finally:
-+                    _cancel_asr_not_ready_timeout()
++  if (reason === 'manual_disarm') {
++    state.turnCloseSuppressEmit = true;
++  }
 +
-+            if dg_connect_task is not None and not dg_connect_task.done():
-+                with contextlib.suppress(asyncio.TimeoutError):
-+                    await asyncio.wait_for(
-+                        dg_connect_task, timeout=asr_ready_wait_s
-+                    )
++  try { _console('debug', '[voice] queue_turn_close', { reason, deferMs }); } catch {}
 +
-+            await _flush_buffered_chunks()
++  state.turnClosePromise = (async () => {
++    await _waitForChunkQueue();
++    if (deferMs > 0) {
++      await new Promise((resolve) => setTimeout(resolve, deferMs));
++    }
++    if (state.turnOpen) {
++      try { await sendCloseStream(); } catch {}
++      state.turnOpen = false;
++    }
++  })()
++    .catch(() => {})
++    .finally(() => {
++      const detail = state.turnCloseDetail;
++      state.turnCloseDetail = undefined;
++      _resetAfterTurnClose(detail);
++      state.turnClosePromise = null;
++    });
 +
-+            if dg_state == "open" and not buffered_chunks:
-+                asr_direct_stream[0] = True
-+        finally:
-+            if asr_stream_activation_task[0] is asyncio.current_task():
-+                asr_stream_activation_task[0] = None
++  return state.turnClosePromise;
++}
 +
-+    def _schedule_asr_stream_activation(trigger: str) -> None:
-+        _cancel_asr_stream_activation()
-+        asr_stream_activation_task[0] = asyncio.create_task(
-+            _run_asr_stream_activation(trigger)
-+        )
+ function _stopRecorder(detail = null) {
+   const recorder = state.rec;
+   const wasActive = !!recorder && recorder.state !== 'inactive';
+   const payload = Object.assign({
+     active: wasActive,
+     hasRecorder: !!recorder,
+   }, detail || {});
+   _logLifecycle('mic_stop', payload, wasActive ? 'debug' : 'info');
+ 
+   try { if (state.rec && state.rec.state !== 'inactive') state.rec.stop(); } catch {}
+   // intentionally keep state.rec reference nullable here; onstop handler handles final close
+   state.rec = null;
++  _queueTurnClose(detail?.reason || 'stop_request');
+ }
+ 
+ function _teardownVADOnly() {
+   try { state.vad && state.vad.stop(); } catch {}
+   state.vad = null;
+ }
+ 
+ function _teardownAudioGraph() {
+   try { state.source && state.source.disconnect(); } catch {}
+   try { state.analyser && state.analyser.disconnect(); } catch {}
+   try { state.ctx && state.ctx.close && state.ctx.close(); } catch {}
+   state.source = null;
+   state.analyser = null;
+   state.ctx = null;
+   state.deviceLogged = false;
+ }
+ 
+ function _disarm() {
+   // 1) Hard stop + clear all timers
+   _safeClearTurnTimer();
+   _clearPendingEndTimer();
+   _clearPostTtsHoldTimer();
+   _removeWsListeners();
+ 
+   // 2) Stop capture/VAD cleanly
+   _stopRecorder({ reason: 'manual_disarm' });
+   _teardownVADOnly();
+   _closeDirectWs();
+ 
+   // 3) Reset local state
+   state.turnOpen = false;
++  state.turnClosePromise = null;
++  state.turnCloseDetail = undefined;
++  state.turnCloseSuppressEmit = false;
+   state.recStartedAt = 0;
+   state.turnCommitMode = 'idle';
+   state.auto.active = false;
+   state.auto.deferCloseStream = false;
+   state.serverFinalized = false;
+ 
+   // 4) Block any pre-greet starts, and enforce a refractory lockout
+   //    Use your configured cooldown (default 900ms) so we can't instantly re-arm.
+   const cooldown = _resolveNumber(cfg.cooldownMs, 900);
+   state.refractoryUntil = Date.now() + cooldown;  // prevent immediate re-starts
+   state.postTtsHoldUntil = 0;                     // no pending hold
+   state.eligibility = 'blocked_pregreet';         // require greet/tts to begin before starts are allowed
+ 
+   // 5) Final UI state
+   try { console.info('[voice] state=idle'); } catch {}
+   _emitVoiceState('idle');
+ }
+ 
+ function _bargeIn() {
+   _clearPostTtsHoldTimer();
+   state.postTtsHoldUntil = 0;
+   // Soft barge-in: pause audio locally
+   try { stopPlayback(); } catch {}
+   // If a prior ASR turn is somehow still open, politely close it.
+   // (Harmless if no turn is open; guarded to avoid duplicate closes.)
+@@ -733,50 +813,52 @@ async function _arm(stream = null, opts = {}) {
+         const payload = Object.assign({ reason: 'echo' }, detail || {});
+         _logLifecycle('vad_echo_suppressed', payload);
+       },
+     }
+   );
+ 
+   state.vad = vad;
+   state.vad.start();
+   _logLifecycle('mic_start', {
+     sampleRate: state.ctx?.sampleRate,
+     pollMs,
+   });
+   try { console.info('[voice] state=armed'); } catch {}
+   _emitVoiceState('armed');
+   _ensureWsListeners();
+ 
+   return mic;
+ }
+ 
+ // ---- Recorder lifecycle -----------------------------------------------------
+ 
+ function _startRecorder() {
+   if (!state.stream) return false;
+   if (state.rec && state.rec.state === 'recording') return true; // guard duplicate starts
+ 
++  _ensureWsListeners();
 +
-     def _on_barge_commit() -> None:
-         mode_raw = turn_commit_mode_ref[0]
-         mode = mode_raw or ("manual" if manual_commit_pending[0] else "vad")
-         manual_commit_pending[0] = False
-         turn_commit_mode_ref[0] = "vad"
-         active_turn_mode_ref[0] = mode or "vad"
-         target_turn = current_assistant_turn_ref[0]
-         try:
-             latest = bus.current_assistant_turn(sid)
-             if latest:
-                 target_turn = latest
-         except Exception:
-             pass
-         if target_turn:
-             with contextlib.suppress(Exception):
-                 bus.cancel_turn(sid, target_turn)
-         with contextlib.suppress(Exception):
-             bus.broadcast(sid, {"type": "state", "phase": "ready"})
-         _jlog(
-             "turn_committed",
-             sid=sid,
-             mode=mode,
-             manual=(mode == "manual"),
-             auto_commit=(mode == "auto_commit"),
-             admin_event="turn_committed",
-             admin_label="turn_committed",
-         )
-+        if not turn_stream_committed[0]:
-+            turn_stream_committed[0] = True
-+            _schedule_asr_stream_activation(mode or "vad")
+   if (typeof MediaRecorder === 'undefined') {
+     _console('warn', '[voice] MediaRecorder not supported in this browser');
+     state.rec = null;
+     return false;
+   }
  
-     def _cancel_no_audio_watch() -> None:
-         task = no_audio_watch_task[0]
-         if task and not task.done():
-             task.cancel()
-         no_audio_watch_task[0] = None
+   state.chunkSendPromise = Promise.resolve();
+   state.chunkBytesSent = 0;
+   state.chunkSendError = null;
+   _clearPendingEndTimer();               // NEW: clear any delayed-end from prior turn
+   state.recStartedAt = performance.now();// NEW: start timestamp for min-turn gate
+   state.serverFinalized = false;
  
-     def _schedule_no_audio_watch(turn_id: int) -> None:
-         if no_audio_window_s <= 0:
-             return
-         _cancel_no_audio_watch()
-         no_audio_notified[0] = False
-         no_audio_turn_id[0] = turn_id
+   let recorder;
+   const mimeType = _selectRecorderMime();
+   try { console.info('containerized=true'); } catch {}
+   try { console.info(String('container=' + (mimeType.includes('webm') ? 'webm/opus' : 'ogg/opus'))); } catch {}
  
-         async def _watch() -> None:
-             try:
-                 await asyncio.sleep(no_audio_window_s)
-                 if sent_any_audio[0] or no_audio_notified[0]:
-                     return
-                 _emit_no_audio_alert("timeout")
-             except asyncio.CancelledError:
-                 pass
-             finally:
-                 no_audio_watch_task[0] = None
  
-@@ -1891,81 +1990,83 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 dg_state = "open"
-                 connect_result["ok"] = True
-                 turn_id_ref[0] = buf.turn_seq + 1
-                 rx_task = asyncio.create_task(
-                     _pump_dg_to_client(
-                         client,
-                         send,
-                         turn_id_ref,
-                         final_seen,
-                         pending_final_turns,
-                         synthetic_final_turns,
-                         completed_llm_turns,
-                         sid,
-                         asr_ready_evt,
-                         _flush_buffered_chunks,
-                         turn_timing,
-                         _log_turn_finish,
-                         _handle_confirm_partial,
-                         final_guard_hooks={
-                             "reset_ref": final_guard_reset_ref,
-                             "local_vad_ref": final_guard_local_vad_ref,
-                         },
-                     )
-                 )
-                 _jlog("asr_connect_ok", sid=sid)
-+                _cancel_asr_not_ready_timeout()
+   try {
+     recorder = new MediaRecorder(state.stream, { mimeType, audioBitsPerSecond: 128000 });
+   } catch (primaryErr) {
+     try {
+       recorder = new MediaRecorder(state.stream); // fallback, browser picks best
+     } catch (fallbackErr) {
+@@ -857,75 +939,51 @@ function _startRecorder() {
+         finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
+       }
+     } catch (e) {
+       _console('warn', '[voice] send audio failed', e);
+       state.chunkSendError = state.chunkSendError || e;
+     } finally {
+       if (state.chunkSendError && !finalDetail) {
+         finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
+       }
+       if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
+         try {
+           _console('warn', '[voice] recorder stopped with issues', {
+             bytesSent: state.chunkBytesSent,
+             error: state.chunkSendError,
+           });
+         } catch {}
+       } else {
+         try {
+           _console('debug', '[voice] recorder stopped', {
+             bytesSent: state.chunkBytesSent,
+             // state.rec may be nulled by _stopRecorder; fall back to selected REC_MIME
+             mime: (state.rec && state.rec.mimeType) || REC_MIME,
+           });
+         } catch {}
+       }
+-      // IMPORTANT: close the turn *after* the blob has been sent to preserve ordering.
+-      if (state.turnOpen) {
+-        const manualDelay = state.manual.deferCloseStream ? MANUAL_CLOSESTREAM_DELAY_MS : 0;
+-        const autoDelay = state.auto.deferCloseStream ? AUTO_CLOSESTREAM_DELAY_MS : 0;
+-        const deferMs = Math.max(manualDelay, autoDelay);
+-        if (deferMs > 0) {
+-          await new Promise((resolve) => setTimeout(resolve, deferMs));
+-        }
+-        try {
+-          await sendCloseStream();
+-        } catch {}
+-        state.turnOpen = false;
+-      }
+-      state.manual.deferCloseStream = false;
+-      state.manual.active = false;
+-      state.manual.buttonDown = false;
+-      state.auto.deferCloseStream = false;
+-      state.auto.active = false;
+-      state.turnCommitMode = 'idle';
+-      state.serverFinalized = false;
+-      if (state.manual.noAudioTimer) {
+-        try { clearTimeout(state.manual.noAudioTimer); } catch {}
+-        state.manual.noAudioTimer = null;
+-      }
+-      _emitVoiceState('armed', finalDetail);
++      await _queueTurnClose('recorder_stop', finalDetail);
+     }
+   };
  
-                 queued_chunks = len(buffered_chunks)
-                 queued_bytes = 0
-                 try:
-                     queued_bytes = sum(
-                         len(chunk)
-                         for chunk in buffered_chunks
-                         if isinstance(chunk, (bytes, bytearray))
-                     )
-                 except Exception:
-                     queued_bytes = 0
+   try {
+     // Small timeslice ensures non-empty dataavailable frames while still producing a single turn blob.
+     const timeslice = 150; // 150 ms sits comfortably within the 100–200 ms target window
+     state.rec.start(timeslice);
+     state.turnOpen = true; // mark an open ASR turn on the server
+     try {
+       _console('debug', '[voice] recorder started', { mime: state.rec.mimeType, timeslice });
+     } catch {}
+   } catch (e) {
+     _console('warn', '[voice] recorder start failed', e);
+     state.rec = null;
+     state.turnOpen = false;
+     return false;
+   }
  
-                 with contextlib.suppress(Exception):
-                     if not asr_ready_evt.is_set():
-                         asr_ready_evt.set()
- 
-                 _jlog(
-                     "flush_on_open",
-                     sid=sid,
-                     queued_chunks=queued_chunks,
-                     queued_bytes=queued_bytes,
-                 )
- 
-                 await _flush_buffered_chunks()
- 
-                 if dg_state == "open" and not buffered_chunks:
-                     asr_direct_stream[0] = True
-             except Exception as e:
-                 dg_state = "closed"
-                 dg = None
-                 asr_direct_stream[0] = False
-+                _cancel_asr_not_ready_timeout()
-                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
-                 with contextlib.suppress(Exception):
-                     await _ws_send_json(
-                         send, make_error("asr_connect_fail", type(e).__name__)
-                     )
-                 with contextlib.suppress(Exception):
-                     if _admin_emit:
-                         err_msg = f"connect:{type(e).__name__}"
-                         _admin_emit(
-                             "asr:error",
-                             session_id=sid,
-                             turn_id=turn_id_ref[0],
-                             msg=err_msg,
-                             error=err_msg,
-                         )
-             finally:
-                 dg_connect_task = None
- 
-         dg_connect_task = asyncio.create_task(_connect())
-         with contextlib.suppress(Exception):
-             await dg_connect_task
-         return connect_result["ok"]
- 
-     def _dg_client_ready(client: Optional[DeepgramClient]) -> bool:
-         """Return True if the Deepgram client reports an open websocket."""
-@@ -2220,53 +2321,54 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                     send_state=_send_barge_state,
-                                     auto_commit=False,
-                                 )
-                             except Exception:
-                                 barge_started = False
-                         turn_id_ref[0] = buf.turn_seq + 1
-                         if barge_started:
-                             if manual_mode_manual_only:
-                                 try:
-                                     barge.commit(_send_barge_state)
-                                 except Exception:
-                                     pass
-                             else:
-                                 _start_confirm_window(now)
-                         else:
-                             confirm_window_ref[0] = None
-                             local_vad_meta_sent[0] = False
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-                             completed_llm_turns.discard(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
-                         turn_connect_started[0] = False
--                        asr_direct_stream[0] = (
--                            dg_state == "open" and asr_ready_evt.is_set()
--                        )
-+                        turn_stream_committed[0] = False
-+                        asr_direct_stream[0] = False
-+                        _cancel_asr_stream_activation()
-+                        _cancel_asr_not_ready_timeout()
-                         # reset mic capture
-                         mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
-                         _reset_turn_metrics(now)
-                         _schedule_no_audio_watch(turn_id_ref[0])
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "turn_start",
-                                 sid=sid,
-                                 turn_id=turn_id_ref[0],
-                                 first_bytes=len(raw_chunk),
-                                 commit_mode=commit_mode,
-                                 auto_commit=(commit_mode == "auto_commit"),
-                             )
-                         if commit_mode == "auto_commit":
-                             try:
-                                 _on_barge_commit()
-                             except Exception:
-                                 pass
-                     # Detect container early using raw bytes
- 
-                     # Detect container early
-                     try:
-                         if transport.get("container") is None and raw_chunk:
-@@ -2666,50 +2768,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
- 
-                             async def _bg_user():
-                                 try:
-                                     await asyncio.to_thread(
-                                         run_ws_user_turn,
-                                         sid,
-                                         text,
-                                         corr,
-                                         meta_overrides=meta_overrides,
-                                     )
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-                                         await _ws_send_json(
-                                             send,
-                                             make_error(
-                                                 "user_fail", e.__class__.__name__
-                                             ),
-                                         )
- 
-                             asyncio.create_task(_bg_user())
- 
-                         elif t == "CloseStream":
-                             _jlog("ws_close_stream", sid=sid)
-                             manual_turn_active[0] = False
-                             manual_button_down[0] = False
-+                            turn_stream_committed[0] = False
-+                            _cancel_asr_stream_activation()
-+                            _cancel_asr_not_ready_timeout()
- 
-                             # Always define this first so later 'if synthetic_emitted' is safe
-                             synthetic_emitted = False
- 
-                             if callable(final_guard_local_vad_ref[0]):
-                                 with contextlib.suppress(Exception):
-                                     final_guard_local_vad_ref[0]("stop")
- 
-                             _ensure_confirm_closed("close_stream")
- 
-                             if buf.is_empty():
-                                 # Empty turn closure; synthesize ids + reset final tracking.
-                                 turn_id_ref[0] = buf.turn_seq + 1
-                                 final_seen[0] = False
-                                 _reset_turn_metrics(time.time())
-                                 with contextlib.suppress(Exception):
-                                     _jlog(
-                                         "turn_start",
-                                         sid=sid,
-                                         turn_id=turn_id_ref[0],
-                                         first_bytes=0,
-                                         empty_turn=True,
-                                     )
- 
-                             # --- Get a turn_id (with guard logs) ---
-@@ -3036,50 +3141,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 except Exception as e:
-                                     _jlog(
-                                         "mic_capture_fail",
-                                         sid=sid,
-                                         err=type(e).__name__,
-                                     )
- 
-                         else:
-                             # Unknown type already filtered by schema; no-op to future-proof.
-                             pass
- 
-                     except ValueError as e:
-                         await _ws_send_json(send, make_error("bad_message", str(e)))
-                 else:
-                     # websocket.receive without text/bytes
-                     pass
-             else:
-                 # Other ASGI events are ignored
-                 pass
- 
-     finally:
-         _ensure_confirm_closed("shutdown")
-         _cancel_confirm_timeout()
-         with contextlib.suppress(Exception):
-             _cancel_no_audio_watch()
-+        _cancel_asr_stream_activation()
-+        _cancel_asr_not_ready_timeout()
-         await _remove_active_ws_entry("cleanup")
-         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_conn_cleanup",
-                 conn_id=conn_id,
-                 sid=sid,
-                 duration=duration,
-                 had_disconnect=had_disconnect,
-             )
-         with contextlib.suppress(Exception):
-             if _admin_emit:
-                 _admin_emit(
-                     "ws_conn_cleanup",
-                     conn_id=conn_id,
-                     sid=sid,
-                     duration=duration,
-                     had_disconnect=had_disconnect,
-                 )
-         # Clean up safely; never raise in cleanup
-         with contextlib.suppress(Exception):
-             if rx_task:
-                 rx_task.cancel()
-                 await rx_task
-         with contextlib.suppress(Exception):
+   // Safety timeout to prevent runaway recordings
+   const rawMaxTurnMs = _toFiniteNumber(optsFromGlobal('max_turn_ms', AUTO_FAILSAFE_DEFAULT_MS));
+   let limitMs = rawMaxTurnMs !== null && rawMaxTurnMs > 0 ? rawMaxTurnMs : null;
+   if (limitMs === null) {
+     const fallbackSeconds = _toFiniteNumber(optsFromGlobal('max_turn_seconds'));
+     if (fallbackSeconds !== null && fallbackSeconds > 0) {
+       limitMs = fallbackSeconds * 1000;
