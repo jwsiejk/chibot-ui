@@ -8,7 +8,7 @@ from ..services.streaming_asr.deepgram_client import (
 )
 
 
-bp = Blueprint("asr_v1", __name__, url_prefix="/api/v1/asr")
+bp = Blueprint("asr_v1", __name__, url_prefix="/asr")
 
 
 def _require_user() -> str | None:

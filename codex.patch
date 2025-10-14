@@ -1,8 +1,37 @@
+diff --git a/app/api_v1/__init__.py b/app/api_v1/__init__.py
+index d24038cb997f7cc79d46766d174965934953c57d..df43e4479a24680d876c57bea0b4ed4c1f60bfb6 100644
+--- a/app/api_v1/__init__.py
++++ b/app/api_v1/__init__.py
+@@ -1,23 +1,23 @@
+ from flask import Blueprint
+ from .admin import bp as admin_bp
+ from .auth import bp as auth_bp
+ from .profile import bp as profile_bp
+ from .greet import bp as greet_bp
+ from .chat import bp as chat_bp
+ from .voice import bp as voice_bp
+ from .asr import bp as asr_bp
+ from .diag import bp as diag_bp
+ from .metrics import bp as metrics_bp
+ 
+ def create_v1_blueprint():
+     bp = Blueprint("api_v1", __name__)
+     bp.register_blueprint(admin_bp, url_prefix="/admin")
+     bp.register_blueprint(auth_bp, url_prefix="/auth")
+     bp.register_blueprint(profile_bp, url_prefix="/profile")
+     bp.register_blueprint(greet_bp, url_prefix="/greet")
+     bp.register_blueprint(chat_bp, url_prefix="/chat")
+     bp.register_blueprint(voice_bp, url_prefix="/voice")
+-    bp.register_blueprint(asr_bp, url_prefix="")
++    bp.register_blueprint(asr_bp)
+     bp.register_blueprint(diag_bp, url_prefix="")
+     bp.register_blueprint(metrics_bp, url_prefix="")
+     return bp
 diff --git a/app/api_v1/asr.py b/app/api_v1/asr.py
-index a4e7f89786205ab7945a06c69709d7d18ef5ed22..303594a3f5e70c2b281d416093a0c1389d490e47 100644
+index 303594a3f5e70c2b281d416093a0c1389d490e47..485e2b1547099acfbc22a2742f35b15edc934290 100644
 --- a/app/api_v1/asr.py
 +++ b/app/api_v1/asr.py
-@@ -1,46 +1,73 @@
+@@ -1,36 +1,36 @@
  from __future__ import annotations
  
  from flask import Blueprint, jsonify, request, session
@@ -13,7 +42,8 @@ index a4e7f89786205ab7945a06c69709d7d18ef5ed22..303594a3f5e70c2b281d416093a0c138
  )
  
  
- bp = Blueprint("asr_v1", __name__, url_prefix="/api/v1/asr")
+-bp = Blueprint("asr_v1", __name__, url_prefix="/api/v1/asr")
++bp = Blueprint("asr_v1", __name__, url_prefix="/asr")
  
  
  def _require_user() -> str | None:
@@ -21,61 +51,164 @@ index a4e7f89786205ab7945a06c69709d7d18ef5ed22..303594a3f5e70c2b281d416093a0c138
      return email or None
  
  
--@bp.get("/client-session")
--def client_session():
-+def _extract_session_id(payload: dict[str, object] | None = None) -> str:
-+    payload = payload or {}
-+    sid = (
-+        payload.get("session_id")
-+        or payload.get("sid")
-+        or request.args.get("session_id")
-+        or request.args.get("sid")
-+        or ""
-+    )
-+    try:
-+        return str(sid).strip()
-+    except Exception:
-+        return ""
-+
-+
-+def _client_session_response(payload: dict[str, object] | None = None):
+ def _extract_session_id(payload: dict[str, object] | None = None) -> str:
+     payload = payload or {}
+     sid = (
+         payload.get("session_id")
+         or payload.get("sid")
+         or request.args.get("session_id")
+         or request.args.get("sid")
+         or ""
+     )
+     try:
+         return str(sid).strip()
+     except Exception:
+         return ""
+ 
+ 
+ def _client_session_response(payload: dict[str, object] | None = None):
      if not _require_user():
          return jsonify({"ok": False, "error": "auth_required"}), 401
+diff --git a/static/js/voice.js b/static/js/voice.js
+index a5a4ee6c73dea9ede2aa465b4c8f5291916c4632..c291a59a3ad7b9cabe7f85abeff6ba2b6c27d898 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -119,88 +119,63 @@ function _clearPendingEndTimer() {
+   if (state.pendingEndTimer) {
+     try { clearTimeout(state.pendingEndTimer); } catch {}
+     state.pendingEndTimer = null;
+   }
+ }
  
--    sid = (request.args.get("session_id") or request.args.get("sid") or "").strip()
-+    sid = _extract_session_id(payload)
+ function _clearPostTtsHoldTimer() {
+   const hadTimer = !!state.postTtsHoldTimer;
+   if (hadTimer) {
+     try { clearTimeout(state.postTtsHoldTimer); } catch {}
+   }
+   state.postTtsHoldTimer = null;
+   return hadTimer;
+ }
  
-     overrides: dict[str, object] = {
-         "session_id": sid or None,
-         "_transport": {
-             "containerized_opus": True,
-             "container": "webm",
-             "codec": "opus",
-         },
+ async function _fetchAsrClientSession(force = false) {
+   const direct = state.direct;
+   if (!direct) return null;
+   if (!force && direct.descriptor) return direct.descriptor;
+   if (direct.fetchPromise) return direct.fetchPromise;
+ 
+   const sid = (() => {
+     try { return getSID(); } catch { return null; }
+   })();
+ 
+-  async function doPost() {
++  direct.fetchPromise = (async () => {
+     const res = await fetch('/api/v1/asr/client-session', {
+       method: 'POST',
+       credentials: 'include',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ session_id: sid || 'default', force: !!force })
+     });
+     if (!res.ok) {
+       const err = new Error(`fetch_failed_${res.status}`);
+       err.status = res.status;
+       throw err;
+     }
+-    return res.json();
+-  }
+-
+-  async function doGetFallback() {
+-    const qs = sid ? `?session_id=${encodeURIComponent(sid)}` : '';
+-    const res = await fetch(`/api/v1/asr/client-session${qs}`, { credentials: 'include' });
+-    if (!res.ok) {
+-      const err = new Error(`fetch_failed_${res.status}`);
+-      err.status = res.status;
+-      throw err;
+-    }
+-    return res.json();
+-  }
+-
+-  direct.fetchPromise = (async () => {
+-    let body;
+-    try {
+-      body = await doPost();
+-    } catch (e) {
+-      // If server only has GET, or POST blocked by some middleware, try GET once.
+-      if (e && (e.status === 405 || e.status === 404)) {
+-        body = await doGetFallback();
+-      } else {
+-        throw e;
+-      }
+-    }
++    const body = await res.json();
+ 
+     const session = body?.session || body?.descriptor || null;
+     if (!session || typeof session !== 'object') {
+       throw new Error('bad_descriptor');
      }
  
-     descriptor = build_client_session_descriptor(overrides)
+     direct.descriptor = session;
+     direct.container = (session?.transport?.container || 'webm');
+     direct.codec = (session?.transport?.codec || 'opus');
+     direct.containerized = session?.transport?.containerized !== false;
+     direct.sanitizedUrl = session?.sanitized_url || session?.url || null;
  
-     return (
-         jsonify(
-             {
-                 "ok": True,
-                 "session": descriptor,
-             }
-         ),
-         200,
-     )
+     // Optional: expose a breadcrumb for tests/diagnostics (no PII)
+     try { window.__askchip_probe?.onMediaContainerized?.(); } catch {}
  
+     return direct.descriptor;
+   })();
+ 
+   return direct.fetchPromise;
+ }
+ 
+ function _handleDirectWsMessage(evt) {
+   if (!evt) return;
+   const data = evt.data;
+   if (typeof data !== 'string') {
+diff --git a/tests/test_asr_client_session_routes.py b/tests/test_asr_client_session_routes.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..7cdf7b8a0abcaf61462c9e18f353b9a666695916
+--- /dev/null
++++ b/tests/test_asr_client_session_routes.py
+@@ -0,0 +1,42 @@
++import pytest
 +
-+@bp.get("/client-session")
-+def client_session_get():
-+    return _client_session_response()
++from app import create_app
 +
 +
-+@bp.post("/client-session")
-+def client_session_post():
-+    payload = request.get_json(silent=True) or {}
-+    if not isinstance(payload, dict):
-+        payload = {}
-+    return _client_session_response(payload)
++@pytest.fixture
++def client():
++    app = create_app()
++    app.config.update(TESTING=True)
++    with app.test_client() as client:
++        with client.session_transaction() as sess:
++            sess['user'] = {'email': 'tester@example.com'}
++        yield client
 +
++
++def _get_csrf(client):
++    resp = client.get('/api/v1/csrf')
++    assert resp.status_code == 200
++    token = resp.headers.get('X-CSRF-Token')
++    assert token
++    return token
++
++
++def test_post_client_session(client):
++    token = _get_csrf(client)
++    resp = client.post(
++        '/api/v1/asr/client-session',
++        json={'session_id': 'unit-test'},
++        headers={'X-CSRF-Token': token},
++    )
++    assert resp.status_code == 200
++    payload = resp.get_json()
++    assert payload['ok'] is True
++    assert 'session' in payload and isinstance(payload['session'], dict)
++
++
++def test_get_client_session(client):
++    resp = client.get('/api/v1/asr/client-session?session_id=tester')
++    assert resp.status_code == 200
++    payload = resp.get_json()
++    assert payload['ok'] is True
++    assert 'session' in payload and isinstance(payload['session'], dict)

@@ -17,7 +17,7 @@ def create_v1_blueprint():
     bp.register_blueprint(greet_bp, url_prefix="/greet")
     bp.register_blueprint(chat_bp, url_prefix="/chat")
     bp.register_blueprint(voice_bp, url_prefix="/voice")
-    bp.register_blueprint(asr_bp, url_prefix="")
+    bp.register_blueprint(asr_bp)
     bp.register_blueprint(diag_bp, url_prefix="")
     bp.register_blueprint(metrics_bp, url_prefix="")
     return bp

@@ -141,7 +141,7 @@ async function _fetchAsrClientSession(force = false) {
     try { return getSID(); } catch { return null; }
   })();
 
-  async function doPost() {
+  direct.fetchPromise = (async () => {
     const res = await fetch('/api/v1/asr/client-session', {
       method: 'POST',
       credentials: 'include',
@@ -153,32 +153,7 @@ async function _fetchAsrClientSession(force = false) {
       err.status = res.status;
       throw err;
     }
-    return res.json();
-  }
-
-  async function doGetFallback() {
-    const qs = sid ? `?session_id=${encodeURIComponent(sid)}` : '';
-    const res = await fetch(`/api/v1/asr/client-session${qs}`, { credentials: 'include' });
-    if (!res.ok) {
-      const err = new Error(`fetch_failed_${res.status}`);
-      err.status = res.status;
-      throw err;
-    }
-    return res.json();
-  }
-
-  direct.fetchPromise = (async () => {
-    let body;
-    try {
-      body = await doPost();
-    } catch (e) {
-      // If server only has GET, or POST blocked by some middleware, try GET once.
-      if (e && (e.status === 405 || e.status === 404)) {
-        body = await doGetFallback();
-      } else {
-        throw e;
-      }
-    }
+    const body = await res.json();
 
     const session = body?.session || body?.descriptor || null;
     if (!session || typeof session !== 'object') {
