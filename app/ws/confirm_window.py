@@ -25,6 +25,7 @@ class ConfirmWindow:
         min_tokens: int = 2,
         min_confidence: float = 0.5,
         snr_threshold_db: float = 8.0,
+        snr_slack_db: float = 0.5,
         snr_enabled: bool = True,
     ) -> None:
         self.min_duration_ms = max(0, int(min_duration_ms))
@@ -38,6 +39,7 @@ class ConfirmWindow:
         self.min_tokens = max(1, int(min_tokens))
         self.min_confidence = float(min_confidence)
         self.snr_threshold_db = float(snr_threshold_db)
+        self.snr_slack_db = max(0.0, float(snr_slack_db))
         self.snr_enabled = bool(snr_enabled)
 
         self.active = False
@@ -50,6 +52,7 @@ class ConfirmWindow:
         self.partial_confidence: Optional[float] = None
         self.partial_ts = 0.0
         self.total_bytes = 0
+        self.gap_grace_used = False
 
     def set_snr_enabled(self, enabled: bool) -> None:
         self.snr_enabled = bool(enabled)
@@ -65,6 +68,7 @@ class ConfirmWindow:
         self.partial_confidence = None
         self.partial_ts = 0.0
         self.total_bytes = 0
+        self.gap_grace_used = False
 
     # ------------------------------- Public API -------------------------------
 
@@ -157,6 +161,12 @@ class ConfirmWindow:
             return ConfirmDecision(None, None)
         gap_ms = (now_ts - self.last_chunk_ts) * 1000.0
         if self.max_gap_ms > 0.0 and gap_ms > self.max_gap_ms:
+            if not self.gap_grace_used:
+                elapsed = self._elapsed_ms(now_ts)
+                early_window = elapsed <= (self.min_duration_ms + self.max_gap_ms)
+                if early_window or self.total_bytes <= 12000:
+                    self.gap_grace_used = True
+                    return ConfirmDecision(None, None)
             return self._finish("gap", self._elapsed_ms(now_ts), {"gap_ms": gap_ms})
         return ConfirmDecision(None, None)
 
@@ -167,7 +177,8 @@ class ConfirmWindow:
             return True
         if self.snr_db is None:
             return False
-        return self.snr_db >= self.snr_threshold_db
+        effective_threshold = max(0.0, self.snr_threshold_db - self.snr_slack_db)
+        return self.snr_db >= effective_threshold
 
     def _maybe_commit(self, trigger: str, elapsed_ms: float) -> ConfirmDecision:
         if elapsed_ms >= self.min_duration_ms and self._can_commit():
@@ -218,6 +229,7 @@ class ConfirmWindow:
             "reason": reason,
             "elapsed_ms": int(elapsed_ms),
             "snr_db": round(self.snr_db, 2) if self.snr_db is not None else None,
+            "gap_grace_used": self.gap_grace_used,
             "noise_rms": round(self.noise_rms, 2) if self.noise_rms is not None else None,
             "peak_rms": round(self.peak_rms, 2) if self.peak_rms else None,
             "partial_tokens": self.partial_tokens or None,

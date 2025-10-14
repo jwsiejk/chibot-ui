@@ -1,64 +1,419 @@
-diff --git a/static/js/voice.js b/static/js/voice.js
-index c291a59a3ad7b9cabe7f85abeff6ba2b6c27d898..3e45abaa3c41602c644628502d5e7672f925d115 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -178,50 +178,59 @@ async function _fetchAsrClientSession(force = false) {
- function _handleDirectWsMessage(evt) {
-   if (!evt) return;
-   const data = evt.data;
-   if (typeof data !== 'string') {
-     return;
-   }
-   try {
-     const parsed = JSON.parse(data);
-     _console('debug', '[voice] direct ASR frame', parsed);
-   } catch (err) {
-     _console('debug', '[voice] direct ASR frame (raw)', { error: err?.message || err });
-   }
- }
+diff --git a/app/ws/confirm_window.py b/app/ws/confirm_window.py
+index ae73962f2a5055babc7fb157348a52f0b49f0703..a5237a2230cc4f5dab8fbd2857b5a019630d80d4 100644
+--- a/app/ws/confirm_window.py
++++ b/app/ws/confirm_window.py
+@@ -3,90 +3,94 @@ from __future__ import annotations
  
- async function _ensureDirectWs() {
-   const direct = state.direct;
-   if (!direct || !direct.descriptor) return null;
-   if (direct.ws && direct.ws.readyState === WebSocket.OPEN) return direct.ws;
-   if (direct.connectPromise) return direct.connectPromise;
+ import math
+ import struct
+ from dataclasses import dataclass
+ from typing import Dict, Optional
  
-   if (typeof WebSocket === 'undefined') {
-     return null;
-   }
  
-   const descriptor = direct.descriptor;
-+  const auth = descriptor?.auth;
-+  if (auth && auth.requires_proxy) {
-+    direct.lastError = new Error('direct_ws_unavailable_proxy_required');
-+    try {
-+      const safeUrl = direct.sanitizedUrl || descriptor.url || 'unknown';
-+      _console('debug', '[voice] direct ASR disabled (proxy required)', { url: safeUrl });
-+    } catch {}
-+    return null;
-+  }
-   const wsUrl = descriptor?.url;
-   if (!wsUrl || typeof wsUrl !== 'string') {
-     return null;
-   }
+ @dataclass
+ class ConfirmDecision:
+     action: Optional[str]
+     metrics: Optional[Dict[str, object]]
  
-   const protocols = (() => {
-     const raw = descriptor?.protocols;
-     if (Array.isArray(raw)) {
-       return raw.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim());
-     }
-     if (typeof raw === 'string' && raw.trim()) {
-       return [raw.trim()];
-     }
-     return [];
-   })();
  
-   direct.connectPromise = new Promise((resolve, reject) => {
-     let ws;
-     try {
-       ws = protocols.length ? new WebSocket(wsUrl, protocols) : new WebSocket(wsUrl);
-     } catch (err) {
-       direct.lastError = err;
-       direct.connectPromise = null;
-       return reject(err);
-     }
+ class ConfirmWindow:
+     """Stateful helper that validates mic activity before committing barge-in."""
+ 
+     def __init__(
+         self,
+         *,
+         min_duration_ms: int = 420,
+         max_duration_ms: int = 900,
+         max_gap_ms: float = 180.0,
+         min_tokens: int = 2,
+         min_confidence: float = 0.5,
+         snr_threshold_db: float = 8.0,
++        snr_slack_db: float = 0.5,
+         snr_enabled: bool = True,
+     ) -> None:
+         self.min_duration_ms = max(0, int(min_duration_ms))
+         max_dur = int(max_duration_ms)
+         if max_dur <= 0:
+             max_dur = self.min_duration_ms + 600
+         if max_dur < self.min_duration_ms:
+             max_dur = self.min_duration_ms
+         self.max_duration_ms = max_dur
+         self.max_gap_ms = max(0.0, float(max_gap_ms))
+         self.min_tokens = max(1, int(min_tokens))
+         self.min_confidence = float(min_confidence)
+         self.snr_threshold_db = float(snr_threshold_db)
++        self.snr_slack_db = max(0.0, float(snr_slack_db))
+         self.snr_enabled = bool(snr_enabled)
+ 
+         self.active = False
+         self.start_ts = 0.0
+         self.last_chunk_ts = 0.0
+         self.noise_rms: Optional[float] = None
+         self.peak_rms = 0.0
+         self.snr_db: Optional[float] = None
+         self.partial_tokens = 0
+         self.partial_confidence: Optional[float] = None
+         self.partial_ts = 0.0
+         self.total_bytes = 0
++        self.gap_grace_used = False
+ 
+     def set_snr_enabled(self, enabled: bool) -> None:
+         self.snr_enabled = bool(enabled)
+ 
+     def start(self, now_ts: float) -> None:
+         self.active = True
+         self.start_ts = now_ts
+         self.last_chunk_ts = now_ts
+         self.noise_rms = None
+         self.peak_rms = 0.0
+         self.snr_db = None
+         self.partial_tokens = 0
+         self.partial_confidence = None
+         self.partial_ts = 0.0
+         self.total_bytes = 0
++        self.gap_grace_used = False
+ 
+     # ------------------------------- Public API -------------------------------
+ 
+     def observe_chunk(self, chunk: bytes, now_ts: float) -> ConfirmDecision:
+         if not self.active:
+             return ConfirmDecision(None, None)
+ 
+         elapsed_ms = self._elapsed_ms(now_ts)
+         gap_decision = self._check_gap(now_ts)
+         if gap_decision.action:
+             return gap_decision
+ 
+         self.last_chunk_ts = now_ts
+         self.total_bytes += len(chunk or b"")
+ 
+         if self.snr_enabled:
+             self._update_snr(chunk)
+ 
+         commit_decision = self._maybe_commit("chunk", elapsed_ms)
+         if commit_decision.action:
+             return commit_decision
+ 
+         if elapsed_ms >= self.max_duration_ms:
+             if self._can_commit():
+                 return self._finish("timeout_commit", elapsed_ms)
+@@ -135,95 +139,103 @@ class ConfirmWindow:
+     def cancel(self, reason: str, now_ts: float) -> ConfirmDecision:
+         if not self.active:
+             return ConfirmDecision(None, None)
+         return self._finish(reason or "cancel", self._elapsed_ms(now_ts))
+ 
+     # ------------------------------- Internals --------------------------------
+ 
+     def _elapsed_ms(self, now_ts: float) -> float:
+         return max(0.0, (now_ts - self.start_ts) * 1000.0)
+ 
+     def _coerce_confidence(self, value: Optional[float]) -> Optional[float]:
+         if value is None:
+             return None
+         try:
+             return float(value)
+         except (TypeError, ValueError):
+             return None
+ 
+     def _check_gap(self, now_ts: float) -> ConfirmDecision:
+         if not self.active:
+             return ConfirmDecision(None, None)
+         if not self.last_chunk_ts:
+             return ConfirmDecision(None, None)
+         gap_ms = (now_ts - self.last_chunk_ts) * 1000.0
+         if self.max_gap_ms > 0.0 and gap_ms > self.max_gap_ms:
++            if not self.gap_grace_used:
++                elapsed = self._elapsed_ms(now_ts)
++                early_window = elapsed <= (self.min_duration_ms + self.max_gap_ms)
++                if early_window or self.total_bytes <= 12000:
++                    self.gap_grace_used = True
++                    return ConfirmDecision(None, None)
+             return self._finish("gap", self._elapsed_ms(now_ts), {"gap_ms": gap_ms})
+         return ConfirmDecision(None, None)
+ 
+     def _can_commit(self) -> bool:
+         if self.partial_tokens < self.min_tokens:
+             return False
+         if not self.snr_enabled:
+             return True
+         if self.snr_db is None:
+             return False
+-        return self.snr_db >= self.snr_threshold_db
++        effective_threshold = max(0.0, self.snr_threshold_db - self.snr_slack_db)
++        return self.snr_db >= effective_threshold
+ 
+     def _maybe_commit(self, trigger: str, elapsed_ms: float) -> ConfirmDecision:
+         if elapsed_ms >= self.min_duration_ms and self._can_commit():
+             return self._finish(trigger, elapsed_ms)
+         return ConfirmDecision(None, None)
+ 
+     def _update_snr(self, chunk: bytes) -> None:
+         if not chunk:
+             return
+         sample_count = len(chunk) // 2
+         if sample_count <= 0:
+             return
+         fmt = f"<{sample_count}h"
+         try:
+             samples = struct.unpack(fmt, chunk[: sample_count * 2])
+         except struct.error:
+             return
+ 
+         total = 0.0
+         for s in samples:
+             total += float(s) * float(s)
+         if sample_count == 0:
+             return
+         rms = math.sqrt(total / sample_count)
+         if rms <= 0.0:
+             return
+ 
+         if self.noise_rms is None:
+             self.noise_rms = max(1.0, rms * 0.4)
+         else:
+             if rms < self.noise_rms:
+                 alpha = 0.10
+                 self.noise_rms = (1 - alpha) * self.noise_rms + alpha * rms
+             else:
+                 alpha = 0.02
+                 self.noise_rms = (1 - alpha) * self.noise_rms + alpha * rms
+ 
+         self.peak_rms = max(self.peak_rms, rms)
+         noise = max(self.noise_rms or 1.0, 1e-3)
+         snr = 20.0 * math.log10(max(rms, 1e-3) / noise)
+         self.snr_db = snr
+ 
+     def _finish(
+         self, reason: str, elapsed_ms: float, extra: Optional[Dict[str, object]] = None
+     ) -> ConfirmDecision:
+         self.active = False
+         metrics: Dict[str, object] = {
+             "reason": reason,
+             "elapsed_ms": int(elapsed_ms),
+             "snr_db": round(self.snr_db, 2) if self.snr_db is not None else None,
++            "gap_grace_used": self.gap_grace_used,
+             "noise_rms": round(self.noise_rms, 2) if self.noise_rms is not None else None,
+             "peak_rms": round(self.peak_rms, 2) if self.peak_rms else None,
+             "partial_tokens": self.partial_tokens or None,
+             "partial_confidence": self.partial_confidence,
+             "total_bytes": self.total_bytes,
+         }
+         if extra:
+             metrics.update(extra)
+         return ConfirmDecision("commit" if reason in ("chunk", "partial", "timeout_commit") else "abort", metrics)
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 9523a3dbbfaf5aa58637bbe05b49b5f13e0a4af8..34d4ef3180010dc184e14e868d520258fa8d9f7b 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -1311,50 +1311,56 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+     except Exception:
+         confirm_min_ms = 420
+     confirm_min_ms = max(0, confirm_min_ms)
+     try:
+         confirm_max_ms = int(cfg.get("confirm_max_ms", confirm_min_ms + 600) or (confirm_min_ms + 600))
+     except Exception:
+         confirm_max_ms = confirm_min_ms + 600
+     if confirm_max_ms < confirm_min_ms:
+         confirm_max_ms = confirm_min_ms
+     try:
+         confirm_gap_ms = float(cfg.get("confirm_max_gap_ms", 180.0) or 180.0)
+     except Exception:
+         confirm_gap_ms = 180.0
+     try:
+         confirm_min_tokens = max(1, int(cfg.get("confirm_min_tokens", 2) or 2))
+     except Exception:
+         confirm_min_tokens = 2
+     try:
+         confirm_min_conf = float(cfg.get("confirm_min_confidence", 0.5) or 0.5)
+     except Exception:
+         confirm_min_conf = 0.5
+     try:
+         confirm_snr_db = float(cfg.get("confirm_min_snr_db", 8.0) or 8.0)
+     except Exception:
+         confirm_snr_db = 8.0
++    try:
++        confirm_snr_slack_db = float(cfg.get("confirm_snr_slack_db", 0.5) or 0.5)
++    except Exception:
++        confirm_snr_slack_db = 0.5
++    if confirm_snr_slack_db < 0.0:
++        confirm_snr_slack_db = 0.0
+ 
+     confirm_window_ref: List[Optional[ConfirmWindow]] = [None]
+     confirm_timeout_task: List[Optional[asyncio.Task]] = [None]
+     confirm_timeout_cancelled: List[asyncio.Task] = []
+     local_vad_meta_sent = [False]
+ 
+     def _cancel_confirm_timeout() -> None:
+         task = confirm_timeout_task[0]
+         if task:
+             task.cancel()
+             confirm_timeout_cancelled.append(task)
+         confirm_timeout_task[0] = None
+ 
+     def _emit_local_vad_signal(now_ts: float) -> None:
+         if local_vad_meta_sent[0]:
+             return
+         local_vad_meta_sent[0] = True
+         if callable(final_guard_local_vad_ref[0]):
+             with contextlib.suppress(Exception):
+                 final_guard_local_vad_ref[0]("start")
+         payload = {
+             "type": "meta",
+             "turn_id": turn_id_ref[0],
+             "meta": {"local_vad": "start", "ts": int(now_ts * 1000)},
+         }
+@@ -1427,66 +1433,68 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+     def _finalize_confirm_abort(
+         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
+     ) -> None:
+         if confirm_window_ref[0] is not window:
+             return
+         _cancel_confirm_timeout()
+         confirm_window_ref[0] = None
+         data = {k: v for k, v in (metrics or {}).items() if v is not None}
+         data.setdefault("reason", trigger)
+         data.setdefault("snr_enabled", window.snr_enabled)
+         _jlog("confirm_abort", sid=sid, **data)
+         if barge.is_paused():
+             try:
+                 barge.cancel(_send_barge_state)
+             except Exception:
+                 pass
+ 
+     def _start_confirm_window(now_ts: float) -> None:
+         window = ConfirmWindow(
+             min_duration_ms=confirm_min_ms,
+             max_duration_ms=confirm_max_ms,
+             max_gap_ms=confirm_gap_ms,
+             min_tokens=confirm_min_tokens,
+             min_confidence=confirm_min_conf,
+             snr_threshold_db=confirm_snr_db,
++            snr_slack_db=confirm_snr_slack_db,
+             snr_enabled=True,
+         )
+         window.start(now_ts)
+         confirm_window_ref[0] = window
+         local_vad_meta_sent[0] = False
+         _emit_local_vad_signal(now_ts)
+         _jlog(
+             "confirm_start",
+             sid=sid,
+             turn_id=turn_id_ref[0],
+             min_ms=confirm_min_ms,
+             max_ms=confirm_max_ms,
+             max_gap_ms=confirm_gap_ms,
+             min_tokens=confirm_min_tokens,
+             min_confidence=confirm_min_conf,
+             snr_threshold_db=confirm_snr_db,
++            snr_slack_db=confirm_snr_slack_db,
+         )
+         _schedule_confirm_timeout(window)
+ 
+     def _handle_confirm_chunk(chunk: bytes, now_ts: float) -> None:
+         window = confirm_window_ref[0]
+         if not window:
+             return
+         window.set_snr_enabled(True)
+         decision = window.observe_chunk(chunk, now_ts)
+         if decision.action == "commit" and decision.metrics is not None:
+             _finalize_confirm_commit(
+                 decision.metrics.get("reason") or "chunk", decision.metrics, window
+             )
+         elif decision.action == "abort" and decision.metrics is not None:
+             _finalize_confirm_abort(
+                 decision.metrics.get("reason") or "chunk", decision.metrics, window
+             )
+ 
+     def _handle_confirm_partial(ev: Dict[str, Any]) -> None:
+         window = confirm_window_ref[0]
+         if not window:
+             return
+         now_ts = time.time()
+         decision = window.observe_partial(
+             ev.get("token_count"), ev.get("confidence"), now_ts
+diff --git a/tests/test_phase3.py b/tests/test_phase3.py
+index 99c400b13df016181abd644ea134f92c3471c8ad..a8871e04b8a80fa4d6a7bf5427f7e2c9bf52b86b 100644
+--- a/tests/test_phase3.py
++++ b/tests/test_phase3.py
+@@ -98,25 +98,80 @@ def test_confirm_window_commits_after_valid_partial():
+ 
+     assert win.observe_chunk(loud_chunk, start + 0.12).action is None
+     assert win.observe_partial(3, 0.7, start + 0.28).action is None
+     decision = win.observe_chunk(loud_chunk, start + 0.45)
+     assert decision.action == "commit"
+     metrics = decision.metrics or {}
+     assert metrics.get("reason") == "chunk"
+     assert metrics.get("partial_tokens") == 3
+ 
+ 
+ def test_confirm_window_aborts_on_low_confidence_partial():
+     from app.ws.confirm_window import ConfirmWindow
+     import struct
+ 
+     win = ConfirmWindow(min_duration_ms=350, max_duration_ms=900, snr_threshold_db=4.0)
+     start = 0.0
+     win.start(start)
+     chunk = struct.pack("<80h", *([900] * 80))
+ 
+     win.observe_chunk(chunk, start + 0.1)
+     decision = win.observe_partial(3, 0.3, start + 0.2)
+     assert decision.action == "abort"
+     metrics = decision.metrics or {}
+     assert metrics.get("reason") == "partial_low_confidence"
+ 
++
++def test_confirm_window_tolerates_initial_gap_then_aborts():
++    from app.ws.confirm_window import ConfirmWindow
++    import struct
++
++    win = ConfirmWindow(
++        min_duration_ms=400,
++        max_duration_ms=900,
++        max_gap_ms=180,
++        snr_threshold_db=6.0,
++    )
++    start = 0.0
++    win.start(start)
++    loud_chunk = struct.pack("<80h", *([1200] * 80))
++
++    assert win.observe_chunk(loud_chunk, start + 0.1).action is None
++
++    # Gap of 500ms should be tolerated once for jitter
++    assert win.observe_chunk(loud_chunk, start + 0.6).action is None
++
++    # A second large gap should abort the confirmation window
++    decision = win.observe_chunk(loud_chunk, start + 1.2)
++    assert decision.action == "abort"
++    metrics = decision.metrics or {}
++    assert metrics.get("reason") == "gap"
++    assert metrics.get("gap_grace_used") is True
++
++
++def test_confirm_window_borderline_snr_commits_with_slack():
++    from app.ws.confirm_window import ConfirmWindow
++    import struct
++
++    win = ConfirmWindow(
++        min_duration_ms=200,
++        max_duration_ms=800,
++        max_gap_ms=300,
++        min_tokens=2,
++        snr_threshold_db=8.0,
++        snr_slack_db=0.5,
++    )
++    start = 0.0
++    win.start(start)
++    chunk = struct.pack("<80h", *([1000] * 80))
++
++    # prime SNR tracking
++    win.observe_chunk(chunk, start + 0.1)
++    win.observe_chunk(chunk, start + 0.25)
++    # Force borderline SNR slightly below threshold
++    win.snr_db = win.snr_threshold_db - 0.3
++
++    decision = win.observe_partial(2, 0.8, start + 0.5)
++    assert decision.action == "commit"
++    metrics = decision.metrics or {}
++    assert metrics.get("reason") == "partial"
++

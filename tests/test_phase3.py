@@ -120,3 +120,58 @@ def test_confirm_window_aborts_on_low_confidence_partial():
     metrics = decision.metrics or {}
     assert metrics.get("reason") == "partial_low_confidence"
 
+
+def test_confirm_window_tolerates_initial_gap_then_aborts():
+    from app.ws.confirm_window import ConfirmWindow
+    import struct
+
+    win = ConfirmWindow(
+        min_duration_ms=400,
+        max_duration_ms=900,
+        max_gap_ms=180,
+        snr_threshold_db=6.0,
+    )
+    start = 0.0
+    win.start(start)
+    loud_chunk = struct.pack("<80h", *([1200] * 80))
+
+    assert win.observe_chunk(loud_chunk, start + 0.1).action is None
+
+    # Gap of 500ms should be tolerated once for jitter
+    assert win.observe_chunk(loud_chunk, start + 0.6).action is None
+
+    # A second large gap should abort the confirmation window
+    decision = win.observe_chunk(loud_chunk, start + 1.2)
+    assert decision.action == "abort"
+    metrics = decision.metrics or {}
+    assert metrics.get("reason") == "gap"
+    assert metrics.get("gap_grace_used") is True
+
+
+def test_confirm_window_borderline_snr_commits_with_slack():
+    from app.ws.confirm_window import ConfirmWindow
+    import struct
+
+    win = ConfirmWindow(
+        min_duration_ms=200,
+        max_duration_ms=800,
+        max_gap_ms=300,
+        min_tokens=2,
+        snr_threshold_db=8.0,
+        snr_slack_db=0.5,
+    )
+    start = 0.0
+    win.start(start)
+    chunk = struct.pack("<80h", *([1000] * 80))
+
+    # prime SNR tracking
+    win.observe_chunk(chunk, start + 0.1)
+    win.observe_chunk(chunk, start + 0.25)
+    # Force borderline SNR slightly below threshold
+    win.snr_db = win.snr_threshold_db - 0.3
+
+    decision = win.observe_partial(2, 0.8, start + 0.5)
+    assert decision.action == "commit"
+    metrics = decision.metrics or {}
+    assert metrics.get("reason") == "partial"
+

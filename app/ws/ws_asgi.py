@@ -1333,6 +1333,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         confirm_snr_db = float(cfg.get("confirm_min_snr_db", 8.0) or 8.0)
     except Exception:
         confirm_snr_db = 8.0
+    try:
+        confirm_snr_slack_db = float(cfg.get("confirm_snr_slack_db", 0.5) or 0.5)
+    except Exception:
+        confirm_snr_slack_db = 0.5
+    if confirm_snr_slack_db < 0.0:
+        confirm_snr_slack_db = 0.0
 
     confirm_window_ref: List[Optional[ConfirmWindow]] = [None]
     confirm_timeout_task: List[Optional[asyncio.Task]] = [None]
@@ -1449,6 +1455,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             min_tokens=confirm_min_tokens,
             min_confidence=confirm_min_conf,
             snr_threshold_db=confirm_snr_db,
+            snr_slack_db=confirm_snr_slack_db,
             snr_enabled=True,
         )
         window.start(now_ts)
@@ -1465,6 +1472,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             min_tokens=confirm_min_tokens,
             min_confidence=confirm_min_conf,
             snr_threshold_db=confirm_snr_db,
+            snr_slack_db=confirm_snr_slack_db,
         )
         _schedule_confirm_timeout(window)
 
