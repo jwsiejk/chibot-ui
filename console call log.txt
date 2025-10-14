@@ -1,572 +1,292 @@
-heartbeat Object
-askchip_client_hooks.js?v=1760455645:192 heartbeat Object
-bootstrap.js?v=1760455645:32 [AskChip] bootstrap loaded
-debug.js?v=1760455645:4 [DBG] debug:on Object
-bootstrap.js?v=1760455645:32 [bootstrap] startOnce called N=1
-ws.js?v=1760455645:124 [ws] openWS build Object
-ws.js?v=1760455645:124 [ws] openWS options= Object reconnect= true
-bootstrap.js?v=1760455645:32 [bootstrap] ws listener attached Object
-bootstrap.js?v=1760455645:32 [bootstrap] ws listener attached Object
-bootstrap.js?v=1760455645:32 [bootstrap] startOnce sending greet configure
-debug.js?v=1760455645:4 [DBG] UI→WS Object
-bootstrap.js?v=1760455645:32 [bootstrap] startOnce greet configure sent — recorder setup will follow
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"ready","session_id":"e074d0c4-2b99-4e44-acaf-4d6372284d09"}
-voice.js:124 [voice] mic_device_selected Object
-bootstrap.js?v=1760455645:32 [bootstrap] startOnce mic initialized — about to arm VAD for voice turns
-voice.js:124 [voice] mic_start Object
-voice.js:642 [voice] state=armed
-bootstrap.js?v=1760455645:32 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
-bootstrap.js?v=1760455645:32 [bootstrap] ws listener attached Object
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"Configure","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"e074d0c4-2b99-4e44-acaf-4d6372284d09","v":1,"ts_ms":1760455794463,"ts":1760455794.463,"session_id":"e074d0c4-2b99-4e44-acaf-4d6372284d09","turn_id":null,"step":5}
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"Configure","sid":"e074d0c4-2b99-4e44-acaf-4d6372284d09","session_id":"e074d0c4-2b99-4e44-acaf-4d6372284d09"}
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"greet:reset","event":"greet:reset","kind":"greet:reset","label":"greet:reset /ws/v1/chat","route":"/ws/v1/chat","greet_seq":1,"v":1,"ts_ms":1760455794463,"ts":1760455794.463,"sid":"e074d0c4-2b99-4e44-acaf-4d6372284d09","session_id":"e074d0c4-2b99-4e44-acaf-4d6372284d09","turn_id":null,"step":6}
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"greet:reset","route":"/ws/v1/chat","label":"greet:reset","session_id":"e074d0c4-2b99-4e44-acaf-4d6372284d09","greet_seq":1,"sid":"e074d0c4-2b99-4e44-acaf-4d6372284d09"}
-askchip_client_hooks.js?v=1760455645:286 session_goal Object
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"session_goal","event":"session_goal","kind":"session_goal","label":"session_goal:normal","phase":"clarify","depth":"normal","delivery_pref":"explain","working_intent":"greet","entities":{"products":[],"keywords":[]},"confirmed":["phase","depth","delivery_pref","working_intent"],"v":1,"ts_ms":1760455794465,"ts":1760455794.465,"sid":"e074d0c4-2b99-4e44-acaf-4d6372284d09","session_id":"e074d0c4-2b99-4e44-acaf-4d6372284d09","turn_id":null,"step":7}
-askchip_client_hooks.js?v=1760455645:286 session_goal Object
-askchip_client_hooks.js?v=1760455645:192 ws_scope_arrived Object
-askchip_client_hooks.js?v=1760455645:192 ws_handshake_enter Object
-askchip_client_hooks.js?v=1760455645:192 ws_conn_open Object
-askchip_client_hooks.js?v=1760455645:192 ws_conn_active Object
-askchip_client_hooks.js?v=1760455645:192 ws_json_recv Object
-askchip_client_hooks.js?v=1760455645:192 greet:reset Object
-askchip_client_hooks.js?v=1760455645:168 session_goal Object
-voice.js:124 [voice] direct ASR disabled (proxy required) Object
-askchip_client_hooks.js?v=1760455645:192 heartbeat {event: 'heartbeat', ts: 1760455804.2728088, step: 7}
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"turn_action_metadata","event":"turn_action_metadata","kind":"turn_action_metadata","turn_id":"cfff3863ef174378b4c3e61cd4d088ba","is_greet":true,"nlu":{"intent":"fallback","topic":null,"needs_scoping":null,"wants_list":null,"expected_depth":null,"confidence":0.2},"policy":{"action":"offer_steps","verbosity":"brief","show_suggestions":true},"v":1,"ts_ms":1760455804978,"ts":1760455804.978,"sid":"e074d0c4-2b99-4e44-acaf-4d6372284d09","session_id":"e074d0c4-2b99-4e44-acaf-4d6372284d09","step":8}
-askchip_client_hooks.js?v=1760455645:280 policy_decision: offer_steps
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"policy_decision","event":"policy_decision","kind":"policy_decision","label":"policy_decision: offer_steps","decision":"offer_steps","sid":"e074d0c4-2b99-4e44-acaf-4d6372284d09","turn_id":"cfff3863ef174378b4c3e61cd4d088ba","teacher_move":"offer_steps","teacher_move_family":"answer","reason":"meta_override","fallback_fired":false,"fallback_reason":null,"nlu_intent":"fallback","nlu_confidence":0.2,"meta_action":"offer_steps","policy_move":"check_understanding","persona_move":"compare","v":1,"ts_ms":1760455804978,"ts":1760455804.978,"session_id":"e074d0c4-2b99-4e44-acaf-4d6372284d09","step":9}
-askchip_client_hooks.js?v=1760455645:280 policy_decision: unknown
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"suggestions_made","event":"suggestions_made","kind":"suggestions_made","turn_id":"cfff3863ef174378b4c3e61cd4d088ba","items":[{"text":"Send me the email","source":"policy"},{"text":"Walk me through it live","source":"policy"},{"text":"Show install steps","source":"retrieval"}],"max_items":4,"max_words_per_item":7,"count":3,"sid":"e074d0c4-2b99-4e44-acaf-4d6372284d09","v":1,"ts_ms":1760455804978,"ts":1760455804.978,"session_id":"e074d0c4-2b99-4e44-acaf-4d6372284d09","step":10}
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"assistant_chunk","turn_id":"cfff3863ef174378b4c3e61cd4d088ba","text":"Hey James, what should we tackle first?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps","policy_chips":["Send me the email","Walk me through it live"]}
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"suggestions","turn_id":"cfff3863ef174378b4c3e61cd4d088ba","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"}]}
-askchip_client_hooks.js?v=1760455645:239 assistant_end
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"assistant_end","turn_id":"cfff3863ef174378b4c3e61cd4d088ba"}
-askchip_client_hooks.js?v=1760455645:239 assistant_end
-askchip_client_hooks.js?v=1760455645:192 turn_action_metadata {event: 'turn_action_metadata', kind: 'turn_action_metadata', turn_id: 'cfff3863ef174378b4c3e61cd4d088ba', is_greet: true, nlu: {…}, …}
-askchip_client_hooks.js?v=1760455645:160 policy_decision: offer_steps
-askchip_client_hooks.js?v=1760455645:192 suggestions_made {event: 'suggestions_made', kind: 'suggestions_made', turn_id: 'cfff3863ef174378b4c3e61cd4d088ba', items: Array(3), max_items: 4, …}
-askchip_client_hooks.js?v=1760455645:192 assistant_chunk {event: 'assistant_chunk', kind: 'assistant_chunk', turn_id: 'cfff3863ef174378b4c3e61cd4d088ba', v: 1, ts_ms: 1760455804978, …}
-askchip_client_hooks.js?v=1760455645:192 assistant_end {event: 'assistant_end', kind: 'assistant_end', turn_id: 'cfff3863ef174378b4c3e61cd4d088ba', v: 1, ts_ms: 1760455804978, …}
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"tts:start","event":"tts:start","kind":"tts:start","turn_id":"cfff3863ef174378b4c3e61cd4d088ba","v":1,"ts_ms":1760455806078,"ts":1760455806.078,"sid":"e074d0c4-2b99-4e44-acaf-4d6372284d09","session_id":"e074d0c4-2b99-4e44-acaf-4d6372284d09","step":13}
-bootstrap.js?v=1760455645:32 [WS→UI] {"type":"assistant_audio","turn_id":"cfff3863ef174378b4c3e61cd4d088ba","mime":"audio/mpeg","audio_chunks":["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
-3askchip_client_hooks.js?v=1760455645:239 UtteranceEnd
-askchip_client_hooks.js?v=1760455645:289 state {type: 'state', phase: 'ready'}
-askchip_client_hooks.js?v=1760455645:192 tts:start {event: 'tts:start', kind: 'tts:start', turn_id: 'cfff3863ef174378b4c3e61cd4d088ba', v: 1, ts_ms: 1760455806078, …}
-askchip_client_hooks.js?v=1760455645:192 tts:first_chunk {event: 'tts:first_chunk', kind: 'tts:first_chunk', turn_id: 'cfff3863ef174378b4c3e61cd4d088ba', v: 1, ts_ms: 1760455806078, …}
-askchip_client_hooks.js?v=1760455645:192 tts:done {event: 'tts:done', kind: 'tts:done', turn_id: 'cfff3863ef174378b4c3e61cd4d088ba', v: 1, ts_ms: 1760455806078, …}
-askchip_client_hooks.js?v=1760455645:192 UtteranceEnd {event: 'UtteranceEnd', kind: 'UtteranceEnd', turn_id: 'cfff3863ef174378b4c3e61cd4d088ba', reason: 'finalizer', v: 1, …}
-askchip_client_hooks.js?v=1760455645:192 greet:resp {event: 'greet:resp', kind: 'greet:resp', label: 'greet:resp', route: null, turn_id: 'cfff3863ef174378b4c3e61cd4d088ba', …}
-voice.js:124 [voice] vad_speech_start {event: 'vad_speech_start', commit_mode: 'auto_commit'}
-voice.js:668 containerized=true
-voice.js:669 container=webm/opus
-voice.js:124 [voice] recorder started {mime: 'audio/webm; codecs=opus', timeslice: 150}
-voice.js:876 [voice] state=recording
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2094, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2094)
-voice.js:124 [voice] streamed audio chunk {bytes: 2094}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-askchip_client_hooks.js?v=1760455645:289 state {type: 'state', phase: 'ready'}
-askchip_client_hooks.js?v=1760455645:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'provider_open', route: null, provider: 'deepgram', …}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-askchip_client_hooks.js?v=1760455645:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'asr_open', route: null, provider: 'deepgram', …}
-askchip_client_hooks.js?v=1760455645:192 dg_connect {event: 'dg_connect', kind: 'dg_connect', dg_id: 127876786567360, safe_url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true', containerized: true, …}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-askchip_client_hooks.js?v=1760455645:192 heartbeat {event: 'heartbeat', ts: 1760455819.4825473, step: 20}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-askchip_client_hooks.js?v=1760455645:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'asr_final', route: null, provider: 'deepgram', …}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2898)
-voice.js:124 [voice] streamed audio chunk {bytes: 2898}
-voice.js:124 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'manual_disarm'}
-voice.js:124 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…d6372284d09&utterance_end_ms=3000&vad_events=true'}
-ws.js?v=1760455645:124 [ws] sending audio chunk {bytes: 2897, mime: 'audio/webm;codecs=opus'}
-debug.js?v=1760455645:4 [DBG] UI→WS ArrayBuffer(2897)
-voice.js:124 [voice] streamed audio chunk {bytes: 2897}
-voice.js:124 [voice] recorder stopped {bytesSent: 355649, mime: 'audio/webm; codecs=opus'}
-ws.js?v=1760455645:124 [DBG] UI→WS {type: 'CloseStream'}
-debug.js?v=1760455645:4 [DBG] UI→WS {type: 'CloseStream'}
-ws.js?v=1760455645:601 CloseStream ack
-voice.js:124 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
-bootstrap.js?v=1760455645:32 [WS close] {code: 1000, reason: 'normal closure'}
-askchip_client_hooks.js?v=1760455645:192 heartbeat {event: 'heartbeat', ts: 1760455834.5506117, step: 21}
-askchip_client_hooks.js?v=1760455645:192 ws_bin_recv {event: 'ws_bin_recv', kind: 'ws_bin_recv', label: 'ws_bin_recv', route: null, sid: 'e074d0c4-2b99-4e44-acaf-4d6372284d09', …}
-askchip_client_hooks.js?v=1760455645:192 heartbeat {event: 'heartbeat', ts: 1760455849.6015315, step: 22}
+askchip_client_hooks.js?v=1760458159:192 heartbeat Object
+askchip_client_hooks.js?v=1760458159:192 heartbeat Object
+bootstrap.js?v=1760458159:32 [AskChip] bootstrap loaded
+debug.js?v=1760458159:4 [DBG] debug:on Object
+bootstrap.js?v=1760458159:32 [bootstrap] startOnce called N=1
+ws.js?v=1760458159:124 [ws] openWS build Object
+ws.js?v=1760458159:124 [ws] openWS options= Object reconnect= true
+bootstrap.js?v=1760458159:32 [bootstrap] ws listener attached Object
+bootstrap.js?v=1760458159:32 [bootstrap] ws listener attached Object
+bootstrap.js?v=1760458159:32 [bootstrap] startOnce sending greet configure
+debug.js?v=1760458159:4 [DBG] UI→WS Object
+bootstrap.js?v=1760458159:32 [bootstrap] startOnce greet configure sent — recorder setup will follow
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"ready","session_id":"6e28f17f-df53-4e9a-93fb-03e66525bb62"}
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"Configure","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"6e28f17f-df53-4e9a-93fb-03e66525bb62","v":1,"ts_ms":1760458477144,"ts":1760458477.144,"session_id":"6e28f17f-df53-4e9a-93fb-03e66525bb62","turn_id":null,"step":5}
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"Configure","sid":"6e28f17f-df53-4e9a-93fb-03e66525bb62","session_id":"6e28f17f-df53-4e9a-93fb-03e66525bb62"}
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"greet:reset","event":"greet:reset","kind":"greet:reset","label":"greet:reset /ws/v1/chat","route":"/ws/v1/chat","greet_seq":1,"v":1,"ts_ms":1760458477144,"ts":1760458477.144,"sid":"6e28f17f-df53-4e9a-93fb-03e66525bb62","session_id":"6e28f17f-df53-4e9a-93fb-03e66525bb62","turn_id":null,"step":6}
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"greet:reset","route":"/ws/v1/chat","label":"greet:reset","session_id":"6e28f17f-df53-4e9a-93fb-03e66525bb62","greet_seq":1,"sid":"6e28f17f-df53-4e9a-93fb-03e66525bb62"}
+askchip_client_hooks.js?v=1760458159:286 session_goal Object
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"session_goal","event":"session_goal","kind":"session_goal","label":"session_goal:normal","phase":"clarify","depth":"normal","delivery_pref":"explain","working_intent":"greet","entities":{"products":[],"keywords":[]},"confirmed":["phase","depth","delivery_pref","working_intent"],"v":1,"ts_ms":1760458477146,"ts":1760458477.146,"sid":"6e28f17f-df53-4e9a-93fb-03e66525bb62","session_id":"6e28f17f-df53-4e9a-93fb-03e66525bb62","turn_id":null,"step":7}
+askchip_client_hooks.js?v=1760458159:286 session_goal Object
+askchip_client_hooks.js?v=1760458159:192 ws_scope_arrived Object
+askchip_client_hooks.js?v=1760458159:192 ws_handshake_enter Object
+askchip_client_hooks.js?v=1760458159:192 ws_conn_open Object
+askchip_client_hooks.js?v=1760458159:192 ws_conn_active Object
+askchip_client_hooks.js?v=1760458159:192 ws_json_recv Object
+askchip_client_hooks.js?v=1760458159:192 greet:reset Object
+askchip_client_hooks.js?v=1760458159:168 session_goal Object
+voice.js:128 [voice] mic_device_selected Object
+bootstrap.js?v=1760458159:32 [bootstrap] startOnce mic initialized — about to arm VAD for voice turns
+voice.js:128 [voice] mic_start Object
+voice.js:745 [voice] state=armed
+bootstrap.js?v=1760458159:32 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
+bootstrap.js?v=1760458159:32 [bootstrap] ws listener attached Object
+voice.js:128 [voice] direct ASR disabled (proxy required) Object
+askchip_client_hooks.js?v=1760458159:192 heartbeat {event: 'heartbeat', ts: 1760458483.3230894, step: 7}
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"turn_action_metadata","event":"turn_action_metadata","kind":"turn_action_metadata","turn_id":"764d9fe1f74d49cda67a4846162a5b66","is_greet":true,"nlu":{"intent":"fallback","topic":null,"needs_scoping":null,"wants_list":null,"expected_depth":null,"confidence":0.2},"policy":{"action":"offer_steps","verbosity":"brief","show_suggestions":true},"v":1,"ts_ms":1760458489276,"ts":1760458489.276,"sid":"6e28f17f-df53-4e9a-93fb-03e66525bb62","session_id":"6e28f17f-df53-4e9a-93fb-03e66525bb62","step":8}
+askchip_client_hooks.js?v=1760458159:280 policy_decision: offer_steps
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"policy_decision","event":"policy_decision","kind":"policy_decision","label":"policy_decision: offer_steps","decision":"offer_steps","sid":"6e28f17f-df53-4e9a-93fb-03e66525bb62","turn_id":"764d9fe1f74d49cda67a4846162a5b66","teacher_move":"offer_steps","teacher_move_family":"answer","reason":"meta_override","fallback_fired":false,"fallback_reason":null,"nlu_intent":"fallback","nlu_confidence":0.2,"meta_action":"offer_steps","policy_move":"check_understanding","v":1,"ts_ms":1760458489276,"ts":1760458489.276,"session_id":"6e28f17f-df53-4e9a-93fb-03e66525bb62","step":9}
+askchip_client_hooks.js?v=1760458159:280 policy_decision: unknown
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"suggestions_made","event":"suggestions_made","kind":"suggestions_made","turn_id":"764d9fe1f74d49cda67a4846162a5b66","items":[{"text":"Send me the email","source":"policy"},{"text":"Walk me through it live","source":"policy"},{"text":"Show install steps","source":"retrieval"}],"max_items":4,"max_words_per_item":7,"count":3,"sid":"6e28f17f-df53-4e9a-93fb-03e66525bb62","v":1,"ts_ms":1760458489276,"ts":1760458489.276,"session_id":"6e28f17f-df53-4e9a-93fb-03e66525bb62","step":10}
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"assistant_chunk","turn_id":"764d9fe1f74d49cda67a4846162a5b66","text":"Hey James, what outcome are you aiming for today?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps","policy_chips":["Send me the email","Walk me through it live"]}
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"suggestions","turn_id":"764d9fe1f74d49cda67a4846162a5b66","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"}]}
+askchip_client_hooks.js?v=1760458159:239 assistant_end
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"assistant_end","turn_id":"764d9fe1f74d49cda67a4846162a5b66"}
+askchip_client_hooks.js?v=1760458159:239 assistant_end
+askchip_client_hooks.js?v=1760458159:192 turn_action_metadata {event: 'turn_action_metadata', kind: 'turn_action_metadata', turn_id: '764d9fe1f74d49cda67a4846162a5b66', is_greet: true, nlu: {…}, …}
+askchip_client_hooks.js?v=1760458159:160 policy_decision: offer_steps
+askchip_client_hooks.js?v=1760458159:192 suggestions_made {event: 'suggestions_made', kind: 'suggestions_made', turn_id: '764d9fe1f74d49cda67a4846162a5b66', items: Array(3), max_items: 4, …}
+askchip_client_hooks.js?v=1760458159:192 assistant_chunk {event: 'assistant_chunk', kind: 'assistant_chunk', turn_id: '764d9fe1f74d49cda67a4846162a5b66', v: 1, ts_ms: 1760458489276, …}
+askchip_client_hooks.js?v=1760458159:192 assistant_end {event: 'assistant_end', kind: 'assistant_end', turn_id: '764d9fe1f74d49cda67a4846162a5b66', v: 1, ts_ms: 1760458489276, …}
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"tts:start","event":"tts:start","kind":"tts:start","turn_id":"764d9fe1f74d49cda67a4846162a5b66","v":1,"ts_ms":1760458490389,"ts":1760458490.389,"sid":"6e28f17f-df53-4e9a-93fb-03e66525bb62","session_id":"6e28f17f-df53-4e9a-93fb-03e66525bb62","step":13}
+bootstrap.js?v=1760458159:32 [WS→UI] {"type":"assistant_audio","turn_id":"764d9fe1f74d49cda67a4846162a5b66","mime":"audio/mpeg","audio_chunks":["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
+3askchip_client_hooks.js?v=1760458159:239 UtteranceEnd
+askchip_client_hooks.js?v=1760458159:289 state {type: 'state', phase: 'ready'}
+askchip_client_hooks.js?v=1760458159:192 tts:start {event: 'tts:start', kind: 'tts:start', turn_id: '764d9fe1f74d49cda67a4846162a5b66', v: 1, ts_ms: 1760458490389, …}
+askchip_client_hooks.js?v=1760458159:192 tts:first_chunk {event: 'tts:first_chunk', kind: 'tts:first_chunk', turn_id: '764d9fe1f74d49cda67a4846162a5b66', v: 1, ts_ms: 1760458490389, …}
+askchip_client_hooks.js?v=1760458159:192 tts:done {event: 'tts:done', kind: 'tts:done', turn_id: '764d9fe1f74d49cda67a4846162a5b66', v: 1, ts_ms: 1760458490389, …}
+askchip_client_hooks.js?v=1760458159:192 UtteranceEnd {event: 'UtteranceEnd', kind: 'UtteranceEnd', turn_id: '764d9fe1f74d49cda67a4846162a5b66', reason: 'finalizer', v: 1, …}
+askchip_client_hooks.js?v=1760458159:192 greet:resp {event: 'greet:resp', kind: 'greet:resp', label: 'greet:resp', route: null, turn_id: '764d9fe1f74d49cda67a4846162a5b66', …}
+voice.js:128 [voice] vad_echo_suppressed {event: 'vad_echo_suppressed', reason: 'echo', micRmsDb: -58.380780575901824, echoRmsDb: -28.283151607298983, gapDb: -30.09762896860284, …}
+voice.js:128 [voice] vad_speech_start {event: 'vad_speech_start', commit_mode: 'auto_commit'}
+voice.js:773 containerized=true
+voice.js:774 container=webm/opus
+voice.js:128 [voice] recorder started {mime: 'audio/webm; codecs=opus', timeslice: 150}
+voice.js:994 [voice] state=recording
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2094, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2094)
+voice.js:128 [voice] streamed audio chunk {bytes: 2094}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+askchip_client_hooks.js?v=1760458159:289 state {type: 'state', phase: 'ready'}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+askchip_client_hooks.js?v=1760458159:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'provider_open', route: null, provider: 'deepgram', …}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+askchip_client_hooks.js?v=1760458159:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'asr_open', route: null, provider: 'deepgram', …}
+askchip_client_hooks.js?v=1760458159:192 dg_connect {event: 'dg_connect', kind: 'dg_connect', dg_id: 131135127828336, safe_url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true', containerized: true, …}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] vad_speech_end {event: 'vad_speech_end', reason: 'vad_silence'}
+voice.js:128 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'vad_silence'}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2897, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2897)
+voice.js:128 [voice] streamed audio chunk {bytes: 2897}
+voice.js:128 [voice] recorder stopped {bytesSent: 65849, mime: 'audio/webm; codecs=opus'}
+ws.js?v=1760458159:124 [DBG] UI→WS {type: 'CloseStream'}
+debug.js?v=1760458159:4 [DBG] UI→WS {type: 'CloseStream'}
+ws.js?v=1760458159:601 CloseStream ack
+askchip_client_hooks.js?v=1760458159:192 heartbeat {event: 'heartbeat', ts: 1760458498.752853, step: 20}
+debug.js?v=1760458159:4 [DBG] UI→WS {type: 'KeepAlive'}
+askchip_client_hooks.js?v=1760458159:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'asr_partial', route: null, provider: 'deepgram', …}
+voice.js:128 [voice] vad_speech_start {event: 'vad_speech_start', commit_mode: 'auto_commit'}
+voice.js:773 containerized=true
+voice.js:774 container=webm/opus
+voice.js:128 [voice] recorder started {mime: 'audio/webm; codecs=opus', timeslice: 150}
+voice.js:994 [voice] state=recording
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2094, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2094)
+voice.js:128 [voice] streamed audio chunk {bytes: 2094}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(2898)
+voice.js:128 [voice] streamed audio chunk {bytes: 2898}
+voice.js:128 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'manual_disarm'}
+voice.js:128 [voice] direct ASR disabled (proxy required) {url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3e66525bb62&utterance_end_ms=3000&vad_events=true'}
+ws.js?v=1760458159:124 [ws] sending audio chunk {bytes: 965, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760458159:4 [DBG] UI→WS ArrayBuffer(965)
+voice.js:128 [voice] streamed audio chunk {bytes: 965}
+voice.js:128 [voice] recorder stopped {bytesSent: 75509, mime: 'audio/webm; codecs=opus'}
+ws.js?v=1760458159:124 [DBG] UI→WS {type: 'CloseStream'}
+debug.js?v=1760458159:4 [DBG] UI→WS {type: 'CloseStream'}
+ws.js?v=1760458159:601 CloseStream ack
+voice.js:128 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
+bootstrap.js?v=1760458159:32 [WS close] {code: 1000, reason: 'normal closure'}
+askchip_client_hooks.js?v=1760458159:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'asr_partial', route: null, provider: 'deepgram', …}
+askchip_client_hooks.js?v=1760458159:192 heartbeat {event: 'heartbeat', ts: 1760458513.7974327, step: 22}
