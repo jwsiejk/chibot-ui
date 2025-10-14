@@ -200,6 +200,15 @@ async function _ensureDirectWs() {
   }
 
   const descriptor = direct.descriptor;
+  const auth = descriptor?.auth;
+  if (auth && auth.requires_proxy) {
+    direct.lastError = new Error('direct_ws_unavailable_proxy_required');
+    try {
+      const safeUrl = direct.sanitizedUrl || descriptor.url || 'unknown';
+      _console('debug', '[voice] direct ASR disabled (proxy required)', { url: safeUrl });
+    } catch {}
+    return null;
+  }
   const wsUrl = descriptor?.url;
   if (!wsUrl || typeof wsUrl !== 'string') {
     return null;
