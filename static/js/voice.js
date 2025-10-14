@@ -1547,8 +1547,81 @@ async function _startRecorder() {
   if (!state.stream) return false;
 
   const primed = await _primeRecorderForPreRoll({ resetBuffer: false });
-  if (!primed || !state.rec || state.rec.state !== 'recording') {
+  const recorder = state.rec;
+  if (!primed || !recorder) {
     return false;
+  }
+
+  if (recorder.state !== 'recording') {
+    const ready = await new Promise((resolve) => {
+      const deadline = Date.now() + 500;
+      let settleTimer = null;
+      let onStart = null;
+      let onError = null;
+      const supportsAddEventListener = typeof recorder.addEventListener === 'function';
+      const originalOnStart = supportsAddEventListener ? null : (typeof recorder.onstart === 'function' ? recorder.onstart : null);
+      const originalOnError = supportsAddEventListener ? null : (typeof recorder.onerror === 'function' ? recorder.onerror : null);
+      const cleanup = () => {
+        if (settleTimer) {
+          try { clearTimeout(settleTimer); } catch {}
+          settleTimer = null;
+        }
+        if (onStart) {
+          try { recorder.removeEventListener?.('start', onStart); } catch {}
+        }
+        if (onError) {
+          try { recorder.removeEventListener?.('error', onError); } catch {}
+        }
+        if (!supportsAddEventListener) {
+          try { recorder.onstart = originalOnStart; } catch {}
+          try { recorder.onerror = originalOnError; } catch {}
+        }
+      };
+      const checkState = () => {
+        if (recorder.state === 'recording') {
+          cleanup();
+          resolve(true);
+          return;
+        }
+        if (Date.now() >= deadline) {
+          cleanup();
+          resolve(recorder.state === 'recording');
+          return;
+        }
+        settleTimer = setTimeout(checkState, 40);
+      };
+      onStart = () => {
+        cleanup();
+        resolve(true);
+      };
+      onError = () => {
+        cleanup();
+        resolve(false);
+      };
+      try { recorder.addEventListener?.('start', onStart, { once: true }); } catch {}
+      try { recorder.addEventListener?.('error', onError, { once: true }); } catch {}
+      if (!supportsAddEventListener) {
+        recorder.onstart = (...args) => {
+          cleanup();
+          resolve(true);
+          if (typeof originalOnStart === 'function') {
+            try { originalOnStart.apply(recorder, args); } catch {}
+          }
+        };
+        recorder.onerror = (...args) => {
+          cleanup();
+          resolve(false);
+          if (typeof originalOnError === 'function') {
+            try { originalOnError.apply(recorder, args); } catch {}
+          }
+        };
+      }
+      checkState();
+    });
+
+    if (!ready || recorder.state !== 'recording' || state.rec !== recorder) {
+      return false;
+    }
   }
 
   if (state.recStreaming) {

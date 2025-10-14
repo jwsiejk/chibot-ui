@@ -1,174 +1,111 @@
 diff --git a/static/js/voice.js b/static/js/voice.js
-index ee5444b0c26907d35a04c892e6f217235154334d..e0f8e14fb906bf457bcb303aaacb27d8e583b0e5 100644
+index e0f8e14fb906bf457bcb303aaacb27d8e583b0e5..b9a74d46721538470533a86ea88476aa068f00bd 100644
 --- a/static/js/voice.js
 +++ b/static/js/voice.js
-@@ -1112,69 +1112,76 @@ async function _ensureAudioStartSent() {
-       }
-     });
+@@ -1525,54 +1525,127 @@ async function _arm(stream = null, opts = {}) {
+     {
+       onSpeechStart: (detail) => _onSpeechStartCommitted(detail),
+       onSpeechEnd: (detail) => _onSpeechEndCommitted(detail),
+     }
+   );
  
-   return state.turnHintPromise;
+   state.vad = vad;
+   state.vad.start();
+   _logLifecycle('mic_start', {
+     sampleRate: state.ctx?.sampleRate,
+     pollMs,
+   });
+   _emitVoiceState('armed');
+ 
+   await _primeRecorderForPreRoll();
+ 
+   return mic;
  }
  
- function _sendRecorderChunk(blob, meta = {}) {
-   if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
-     return;
-   }
+ // ---- Recorder lifecycle -----------------------------------------------------
  
-   const { preRoll = false, durationMs = null, timecode = null } = meta || {};
-   const logLabel = preRoll ? 'streamed pre-roll chunk' : 'streamed audio chunk';
-   state.chunkSendPromise = state.chunkSendPromise
-     .catch(() => {})
-     .then(async () => {
-       const handshakeOk = await _ensureAudioStartSent();
-       if (!handshakeOk) {
-         const detail = { mime: blob.type, preRoll, durationMs, timecode };
-         _voiceLog('warn', 'skipping audio chunk; AudioStart not confirmed', detail);
-         if (!state.chunkSendError) {
-           state.chunkSendError = new Error('AudioStart not confirmed');
-         }
-         return;
-       }
-+      const opening = !state.turnOpen;
-+      if (opening) {
-+        state.turnOpen = true;
-+      }
-       try {
-         await sendAudioChunk(blob);
-         state.chunkBytesSent += blob.size;
-         const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-           ? performance.now()
-           : Date.now();
-         state.lastChunkAt = now;
-         state.audioStopSent = false;
-         _armSafetyCloseTimer();
-         const totalBytes = state.chunkBytesSent;
-         const totalKb = Math.round((totalBytes / 1024) * 10) / 10;
-         _voiceLog('info', logLabel, {
-           bytes: blob.size,
-           durationMs,
-           timecode,
-           mime: blob.type,
-           totalBytes,
-           totalKb,
-         });
-+        if (opening) {
-+          _voiceLog('debug', 'turn marked open (first audio chunk queued)');
-+        }
-       } catch (err) {
-         state.chunkSendError = err;
-         _voiceLog('warn', 'failed to stream audio chunk', { error: err?.message || err });
-       }
-     });
- }
- 
- async function _primeRecorderForPreRoll(options = {}) {
-   const { resetBuffer = true } = options || {};
-   if (!state.stream) {
-     return false;
-   }
-   if (typeof MediaRecorder === 'undefined') {
-     _voiceLog('warn', 'MediaRecorder not supported in this browser');
-     state.rec = null;
-     return false;
-   }
-   if (state.rec && state.rec.state === 'recording') {
-     if (resetBuffer) {
-       _resetPreRollBuffer();
-     }
-     return true;
-   }
- 
-   let recorder;
-@@ -1237,64 +1244,72 @@ async function _primeRecorderForPreRoll(options = {}) {
-         });
-       } else {
-         _voiceLog('info', 'recorder stopped', {
-           bytesSent: state.chunkBytesSent,
-           mime: (recorder && recorder.mimeType) || REC_MIME,
-         });
-       }
-       const pendingClose = _closeTurnIfOpen();
-       if (pendingClose) {
-         try {
-           await pendingClose;
-         } catch {}
-       }
-       _emitVoiceState('armed', finalDetail);
-       if (state.vad && state.stream && state.stream.active) {
-         try { await _primeRecorderForPreRoll(); } catch (err) { _voiceLog('warn', 'failed to re-prime recorder', { error: err?.message || err }); }
-       }
-     }
-     state.manual.active = false;
-     if (!state.manual.buttonDown) {
-       state.manual.deferCloseStream = false;
-     }
-     _clearManualTimers();
-   };
- 
-+  const manualPriming = !!(state.manual && state.manual.buttonDown);
-   const greetGateBlockingHandshake = state.greetGateActive
-     && (state.greetGatePhase === 'pending' || state.greetGatePhase === 'calibrating');
--  if (greetGateBlockingHandshake && !state.turnHintSent) {
--    _voiceLog('debug', 'AudioStart handshake deferred until greet gate release', {
-+
-+  if (!manualPriming) {
-+    if (greetGateBlockingHandshake && !state.turnHintSent) {
-+      _voiceLog('debug', 'AudioStart handshake deferred until greet gate release', {
-+        mime: recorder.mimeType,
-+        greetGatePhase: state.greetGatePhase,
-+      });
-+    } else {
-+      const audioStartReady = await _ensureAudioStartSent();
-+      if (!audioStartReady) {
-+        _voiceLog('warn', 'AudioStart not confirmed — recorder start deferred', { mime: recorder.mimeType });
-+        state.rec = null;
-+        return false;
-+      }
-+    }
-+  } else if (!state.turnHintSent) {
-+    _voiceLog('debug', 'AudioStart handshake deferred during manual barge-in prime', {
-       mime: recorder.mimeType,
--      greetGatePhase: state.greetGatePhase,
-     });
--  } else {
--    const audioStartReady = await _ensureAudioStartSent();
--    if (!audioStartReady) {
--      _voiceLog('warn', 'AudioStart not confirmed — recorder start deferred', { mime: recorder.mimeType });
--      state.rec = null;
--      return false;
--    }
-   }
- 
-   try {
-     recorder.start(timeslice);
-     state.preRollTimeslice = timeslice;
-     _voiceLog('debug', 'recorder primed', { mime: recorder.mimeType, timeslice });
-   } catch (err) {
-     _voiceLog('warn', 'recorder start failed', { error: err?.message || err });
-     state.rec = null;
-     return false;
-   }
- 
-   return true;
- }
- 
- function _handleRecorderData(event) {
-   if (!event) {
-     return;
-   }
-   if (state.finalized) {
-     return;
-   }
-   const blob = event.data;
-   if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
-     return;
-@@ -1533,60 +1548,64 @@ async function _startRecorder() {
+ async function _startRecorder() {
+   if (!state.stream) return false;
  
    const primed = await _primeRecorderForPreRoll({ resetBuffer: false });
-   if (!primed || !state.rec || state.rec.state !== 'recording') {
+-  if (!primed || !state.rec || state.rec.state !== 'recording') {
++  const recorder = state.rec;
++  if (!primed || !recorder) {
      return false;
    }
  
++  if (recorder.state !== 'recording') {
++    const ready = await new Promise((resolve) => {
++      const deadline = Date.now() + 500;
++      let settleTimer = null;
++      let onStart = null;
++      let onError = null;
++      const supportsAddEventListener = typeof recorder.addEventListener === 'function';
++      const originalOnStart = supportsAddEventListener ? null : (typeof recorder.onstart === 'function' ? recorder.onstart : null);
++      const originalOnError = supportsAddEventListener ? null : (typeof recorder.onerror === 'function' ? recorder.onerror : null);
++      const cleanup = () => {
++        if (settleTimer) {
++          try { clearTimeout(settleTimer); } catch {}
++          settleTimer = null;
++        }
++        if (onStart) {
++          try { recorder.removeEventListener?.('start', onStart); } catch {}
++        }
++        if (onError) {
++          try { recorder.removeEventListener?.('error', onError); } catch {}
++        }
++        if (!supportsAddEventListener) {
++          try { recorder.onstart = originalOnStart; } catch {}
++          try { recorder.onerror = originalOnError; } catch {}
++        }
++      };
++      const checkState = () => {
++        if (recorder.state === 'recording') {
++          cleanup();
++          resolve(true);
++          return;
++        }
++        if (Date.now() >= deadline) {
++          cleanup();
++          resolve(recorder.state === 'recording');
++          return;
++        }
++        settleTimer = setTimeout(checkState, 40);
++      };
++      onStart = () => {
++        cleanup();
++        resolve(true);
++      };
++      onError = () => {
++        cleanup();
++        resolve(false);
++      };
++      try { recorder.addEventListener?.('start', onStart, { once: true }); } catch {}
++      try { recorder.addEventListener?.('error', onError, { once: true }); } catch {}
++      if (!supportsAddEventListener) {
++        recorder.onstart = (...args) => {
++          cleanup();
++          resolve(true);
++          if (typeof originalOnStart === 'function') {
++            try { originalOnStart.apply(recorder, args); } catch {}
++          }
++        };
++        recorder.onerror = (...args) => {
++          cleanup();
++          resolve(false);
++          if (typeof originalOnError === 'function') {
++            try { originalOnError.apply(recorder, args); } catch {}
++          }
++        };
++      }
++      checkState();
++    });
++
++    if (!ready || recorder.state !== 'recording' || state.rec !== recorder) {
++      return false;
++    }
++  }
++
    if (state.recStreaming) {
      return true;
    }
@@ -188,50 +125,9 @@ index ee5444b0c26907d35a04c892e6f217235154334d..e0f8e14fb906bf457bcb303aaacb27d8
    state.recStopShouldSend = false;
    _ensureWSListener();
  
--  const preRollStats = _enqueuePreRollBlobs();
--  if (preRollStats?.count) {
--    _voiceLog('debug', 'flushed pre-roll buffer', {
--      chunks: preRollStats.count,
--      durationMs: preRollStats.durationMs,
--      bytes: preRollStats.totalBytes,
--    });
-+  const manualActive = !!(state.manual && state.manual.buttonDown);
-+  if (manualActive) {
-+    _resetPreRollBuffer();
-+  } else {
-+    const preRollStats = _enqueuePreRollBlobs();
-+    if (preRollStats?.count) {
-+      _voiceLog('debug', 'flushed pre-roll buffer', {
-+        chunks: preRollStats.count,
-+        durationMs: preRollStats.durationMs,
-+        bytes: preRollStats.totalBytes,
-+      });
-+    }
-   }
- 
--  state.turnOpen = true;
-   _voiceLog('info', 'recorder streaming', {
-     mime: (state.rec && state.rec.mimeType) || REC_MIME,
-   });
- 
-   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
-   _safeClearTurnTimer();
-   state.turnTimer = setTimeout(() => {
-     try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
-   }, limitMs);
- 
-   return true;
- }
- 
- async function _onSpeechStartCommitted(detail = {}) {
-   const metrics = (detail && typeof detail === 'object') ? detail : {};
-   state.vadMetrics = { ...metrics, phase: 'start' };
-   const bufferedMsRaw = Number.isFinite(state.preRollDurationMs) ? state.preRollDurationMs : 0;
-   const preRollBlobs = state.preRollBlobs || [];
-   const totalBytes = preRollBlobs.reduce((sum, chunk) => sum + (chunk?.blob?.size || 0), 0);
-   const round = (v) => {
-     if (!Number.isFinite(v)) return 0;
-     return Math.round(v * 100) / 100;
-   };
-   const roundTenths = (v) => {
-     if (!Number.isFinite(v)) return null;
+   const manualActive = !!(state.manual && state.manual.buttonDown);
+   if (manualActive) {
+     _resetPreRollBuffer();
+   } else {
+     const preRollStats = _enqueuePreRollBlobs();
+     if (preRollStats?.count) {
