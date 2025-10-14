@@ -1,8 +1,20 @@
 diff --git a/e2e_orchestrator.js b/e2e_orchestrator.js
-index fd796137957d7b9dc35da9f18f34c45ddb4cc0c5..a23e276b9c5438d9fa571cd39a9a46a86fe94824 100644
+index fd796137957d7b9dc35da9f18f34c45ddb4cc0c5..34ec7556b23d595b5b2b278b2965496c6dd92d6a 100644
 --- a/e2e_orchestrator.js
 +++ b/e2e_orchestrator.js
-@@ -296,77 +296,89 @@ async function collectAdminSSEInPage(page, { url, ms }) {
+@@ -284,89 +284,113 @@ function parseCLI(){
+     } else {
+       autoLoginEmail = trimmed;
+     }
+   }
+   if (!autoLoginEmail && !disableAutoLogin) autoLoginEmail = 'jwsiejk@purestorage.com';
+   return { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail };
+ }
+ 
+ // ---- IN-PAGE SSE collector (uses cookies/session) ----
+ async function collectAdminSSEInPage(page, { url, ms }) {
+   return await page.evaluate(({ url, ms }) => {
+     return new Promise(resolve => {
        const logs = [];
        let es;
        try {
@@ -16,6 +28,18 @@ index fd796137957d7b9dc35da9f18f34c45ddb4cc0c5..a23e276b9c5438d9fa571cd39a9a46a8
    }, { url, ms });
  }
  
++function ensureAdminLiveUrl(url) {
++  if (!url) return url;
++  try {
++    const parsed = new URL(url);
++    if (!parsed.searchParams.has('live')) parsed.searchParams.set('live', '1');
++    return parsed.toString();
++  } catch {
++    if (/[?&]live=/.test(url)) return url;
++    return url.includes('?') ? `${url}&live=1` : `${url}?live=1`;
++  }
++}
++
  async function startAdminCollector(page, url) {
    await page.evaluate((adminUrl) => {
      if (window.__adminCollector?.source) {
@@ -95,7 +119,7 @@ index fd796137957d7b9dc35da9f18f34c45ddb4cc0c5..a23e276b9c5438d9fa571cd39a9a46a8
      error: logs.error || null,
      captureState: logs.captureState || null
    };
-@@ -374,50 +386,51 @@ async function harvestAdminLogs(page) {
+@@ -374,50 +398,51 @@ async function harvestAdminLogs(page) {
    if (meta.error) {
      events.push({ event: 'collector_error', message: meta.error });
    }
@@ -147,3 +171,55 @@ index fd796137957d7b9dc35da9f18f34c45ddb4cc0c5..a23e276b9c5438d9fa571cd39a9a46a8
            out.push({ frameUrl: f.url(), tag: 'button', text, id, testid, role, aria });
          } catch {}
        }
+@@ -1253,50 +1278,51 @@ async function runProbeOnce(spec, baseUrl, probe, artifactsDir, audioDir, useChr
+   ];
+   if (!useCustomMic) {
+     launchArgs.push(`--use-file-for-fake-audio-capture=${firstAudioPath}`);
+   }
+ 
+   const browser = await chromium.launch({
+     headless: false,
+     channel: useChrome ? 'chrome' : undefined,
+     args: launchArgs
+   });
+ 
+   const context = await browser.newContext();
+   if (useCustomMic) {
+     await installCustomMicrophone(context, normalized);
+   }
+   await context.grantPermissions(['microphone'], { origin: baseUrl });
+   const page = await context.newPage();
+ 
+   const consoleLines = [];
+   page.on('console', m => consoleLines.push(m.text()));
+   const wsUrls = [];
+   page.on('websocket', ws => { try { wsUrls.push(ws.url()); } catch {} });
+ 
+   let adminUrl = spec.endpoints?.admin_sse_url;
+   if (!adminUrl || /your_domain/i.test(adminUrl)) adminUrl = baseUrl.replace(/\/$/,'') + '/api/v1/admin/logs';
++  adminUrl = ensureAdminLiveUrl(adminUrl);
+ 
+   const dir = path.join(artifactsDir, probe.id); ensureDir(dir);
+ 
+   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+ 
+   let autoLoginResult = null;
+   if (autoLoginEmail) {
+     autoLoginResult = await performAutoLogin(page, autoLoginEmail);
+     try { fs.writeFileSync(path.join(dir, 'auto_login_result.json'), JSON.stringify(autoLoginResult, null, 2)); } catch {}
+     if (autoLoginResult?.ok) {
+       try { await page.waitForTimeout(300); } catch {}
+     }
+   }
+ 
+   // Start admin collector before kicking off the call so we capture the whole exchange.
+   await startAdminCollector(page, adminUrl);
+ 
+   await page.screenshot({ path: path.join(dir, 'after_goto.png') });
+   fs.writeFileSync(path.join(dir, 'page_url.txt'), page.url());
+ 
+   const attempts = [];
+ 
+   // user overrides first
+   if (!(await clickStartWithOverrides(page, startOverride, startEval, attempts))) {
+     // heuristics across frames/shadow
