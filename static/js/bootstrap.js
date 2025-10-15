@@ -351,6 +351,7 @@ async function startOnce(){
     //    audio hardware comes online.
     const sid = getSID();
     try {
+      try { setGreetGateActive(true); } catch {}      
       const manualMode = !!_cfgValue('barge_in_mode_manual', true);
       const autoCommit = !!_cfgValue('auto_commit_when_ready', true);
       _console('log', '[bootstrap] startOnce sending greet configure');
@@ -450,6 +451,7 @@ async function startOnce(){
     _disableButtons();
     setDot('ready');
     try { Visualizer.stop({ reset: true }); } catch {}
+    try { setGreetGateActive(false); } catch {}    
   } finally {
     startInFlight = false;
   }
