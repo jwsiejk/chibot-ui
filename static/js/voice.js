@@ -17,6 +17,8 @@ Citations for context (non-functional):
     • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
 */
 
+// Modularization notice: logic will progressively move into static/js/voice/* modules.
+
 import { VAD } from './voice/vad.js';
 import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from './ws_module.js';
 import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';

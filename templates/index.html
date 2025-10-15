@@ -109,6 +109,66 @@
   <!-- Scripts -->
   <script>
     (function () {
+      const root = (window.__askchip_config = window.__askchip_config || {});
+      Object.assign(root, {
+        barge_in: root.barge_in || {},
+        vad: root.vad || {},
+        tts: root.tts || {},
+        evidence: root.evidence || {},
+        shadow: root.shadow || {},
+        commit: root.commit || {},
+        transport: root.transport || {},
+      });
+
+      if (typeof root.barge_in.mode === 'undefined') {
+        root.barge_in.mode = 'manual_only';
+      }
+
+      if (typeof root.vad.enabled === 'undefined') {
+        root.vad.enabled = true;
+      }
+      Object.assign(root.vad, {
+        hysteresis: root.vad.hysteresis || {},
+      });
+      if (typeof root.vad.hysteresis.enter === 'undefined') {
+        root.vad.hysteresis.enter = 3;
+      }
+      if (typeof root.vad.hysteresis.exit === 'undefined') {
+        root.vad.hysteresis.exit = 4;
+      }
+
+      if (typeof root.tts.mask_auto_vad === 'undefined') {
+        root.tts.mask_auto_vad = true;
+      }
+      if (typeof root.tts.decay_ms === 'undefined') {
+        root.tts.decay_ms = 700;
+      }
+
+      if (typeof root.evidence.snr_sigma === 'undefined') {
+        root.evidence.snr_sigma = 2.5;
+      }
+      if (typeof root.evidence.asr_conf === 'undefined') {
+        root.evidence.asr_conf = 0.65;
+      }
+
+      if (typeof root.shadow.ms === 'undefined') {
+        root.shadow.ms = 450;
+      }
+
+      if (typeof root.commit.min_ms === 'undefined') {
+        root.commit.min_ms = 500;
+      }
+      if (typeof root.commit.drop_if_no_partial === 'undefined') {
+        root.commit.drop_if_no_partial = true;
+      }
+
+      if (typeof root.transport.close_on_turn_end === 'undefined') {
+        root.transport.close_on_turn_end = false;
+      }
+    })();
+  </script>
+  <script>
+    (function () {
       const cfg = {{ askchip_config|tojson }};
       try {
         if (cfg && typeof cfg === 'object') {
