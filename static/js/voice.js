@@ -35,10 +35,11 @@ export function forceBargeInEnd(opts = {}) { return _forceBargeInEnd(opts); }
 // ---- Internal state ---------------------------------------------------------
 
 // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+const WEBM_MIME = 'audio/webm; codecs=opus';
 const REC_MIME = (typeof MediaRecorder !== 'undefined'
   && typeof MediaRecorder.isTypeSupported === 'function'
-  && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus'))
-  ? 'audio/ogg; codecs=opus'
+  && MediaRecorder.isTypeSupported(WEBM_MIME))
+  ? WEBM_MIME
   : 'audio/webm; codecs=opus';
 
 const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
@@ -118,6 +119,8 @@ const state = {
   refractoryUntil: 0,
   manual: {
     enabled: true,
+    modeManualOnly: false,
+    autoCommitWhenReady: true,
     buttonDown: false,
     active: false,
     debounceUntil: 0,
@@ -128,7 +131,13 @@ const state = {
     startAt: 0,
     firstChunkAt: 0,
   },
+  assistantPhase: 'init',
+  assistantReady: false,
+  lastAssistantReadyAt: 0,
+  currentCommitMode: 'idle',
 };
+
+_refreshManualConfig();
 
 const BARGE_CONFIRM_DEFAULT_MS = 420;
 let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
@@ -148,6 +157,8 @@ try {
 
     if (stateValue === 'playing') {
       state.ttsPlaying = true;
+      state.assistantReady = false;
+      state.assistantPhase = 'speaking';
       const holdUntil = _now() + POST_TTS_HOLDOFF_MS;
       state.postTtsHoldUntil = holdUntil;
 
@@ -173,6 +184,9 @@ try {
     state.ttsPlaying = false;
     state.postTtsHoldUntil = 0;
     _clearPostTtsHoldTimer();
+    state.assistantReady = true;
+    state.assistantPhase = 'ready';
+    state.lastAssistantReadyAt = _now();
     if (state.eligibility === 'holdoff') {
       state.eligibility = 'eligible';
     }
@@ -186,6 +200,37 @@ function _now() {
     }
   } catch {}
   return Date.now();
+}
+
+function _normalizePhase(value) {
+  if (typeof value !== 'string') return '';
+  return value.trim().toLowerCase();
+}
+
+function _updateAssistantPhaseFromDetail(detail = {}) {
+  const phase = _normalizePhase(detail?.phase)
+    || _normalizePhase(detail?.channel?.phase)
+    || _normalizePhase(detail?.state);
+  const readyFlag = _valueIsReadyFlag(detail?.ready_for_user)
+    || _valueIsReadyFlag(detail?.channel?.ready_for_user);
+
+  if (phase) {
+    state.assistantPhase = phase;
+    if (phase === 'ready' || phase === 'ready_for_user') {
+      state.assistantReady = true;
+      state.lastAssistantReadyAt = _now();
+    } else if (phase === 'speaking' || phase === 'thinking' || phase === 'tts') {
+      state.assistantReady = false;
+    }
+  }
+
+  if (readyFlag && !state.assistantReady) {
+    state.assistantReady = true;
+    state.lastAssistantReadyAt = _now();
+  }
+  if (readyFlag === false) {
+    state.assistantReady = false;
+  }
 }
 
 // ---- Helpers ----------------------------------------------------------------
@@ -364,15 +409,12 @@ function _valueIsReadyFlag(value) {
 
 function _handleGreetGateStateFrame(detail = {}) {
   if (!state.greetGateActive) return;
+  _updateAssistantPhaseFromDetail(detail);
   const channelReady = _valueIsReadyFlag(detail?.channel?.ready_for_user);
   const ready = _valueIsReadyFlag(detail?.ready_for_user) || channelReady;
-  const normalizePhase = (value) => {
-    if (typeof value !== 'string') return '';
-    return value.trim().toLowerCase();
-  };
-  const stateField = normalizePhase(detail?.state);
-  const phaseField = normalizePhase(detail?.phase);
-  const channelPhaseField = normalizePhase(detail?.channel?.phase);
+  const stateField = _normalizePhase(detail?.state);
+  const phaseField = _normalizePhase(detail?.phase);
+  const channelPhaseField = _normalizePhase(detail?.channel?.phase);
   const explicitReady = ['ready_for_user', 'ready'].some((target) =>
     stateField === target || phaseField === target || channelPhaseField === target
   );
@@ -560,7 +602,11 @@ function _clearBargeConfirm(resume = false) {
 
 function _refreshManualConfig() {
   const enabled = !!optsFromGlobal('feature_manual_barge_in', true);
+  const manualOnly = !!optsFromGlobal('barge_in_mode_manual', true);
+  const autoCommit = !!optsFromGlobal('auto_commit_when_ready', true);
   state.manual.enabled = enabled;
+  state.manual.modeManualOnly = manualOnly;
+  state.manual.autoCommitWhenReady = autoCommit;
   return enabled;
 }
 
@@ -613,6 +659,9 @@ function _forceBargeInStart(meta = {}) {
   _clearManualTimers();
 
   _bargeIn();
+
+  state.currentCommitMode = 'manual';
+  state.assistantReady = false;
 
   const source = (typeof meta === 'object' && meta && meta.source)
     ? String(meta.source)
@@ -711,6 +760,8 @@ function _ensureWSListener() {
     const type = detail?.type;
     const typeNorm = typeof type === 'string' ? type.toLowerCase() : '';
 
+    _updateAssistantPhaseFromDetail(detail);
+
     if (typeNorm === 'utteranceend') {
       _handleGreetGateUtteranceEnd(detail);
     }
@@ -780,11 +831,9 @@ async function _ensureMic(externalStream = null) {
 
     const constraints = {
       audio: {
-        channelCount: 1,
-        sampleRate: 48000,
         echoCancellation: true,
         noiseSuppression: true,
-        autoGainControl: false
+        autoGainControl: true,
       }
     };
 
@@ -880,8 +929,29 @@ function _closeTurnIfOpen() {
   if (!state.turnOpen) {
     return null;
   }
+  let waitMs = 0;
+  if (state.manual?.deferCloseStream) {
+    const rawDelay = Number(optsFromGlobal('manual_close_delay_ms', 320));
+    waitMs = Number.isFinite(rawDelay) ? Math.max(0, rawDelay) : 320;
+  }
   const closePromise = (async () => {
     try {
+      if (waitMs > 0) {
+        _voiceLog('debug', 'delaying CloseStream', { waitMs });
+        await new Promise((resolve) => {
+          try {
+            setTimeout(resolve, waitMs);
+          } catch {
+            resolve();
+          }
+        });
+      }
+      const recorderActive = !!(state.rec && state.rec.state === 'recording');
+      if (!recorderActive && state.chunkBytesSent === 0) {
+        _logLifecycle('turn_close_skipped', { reason: 'no_audio', bytesSent: 0, waitMs }, 'warn');
+        _voiceLog('warn', 'skipping CloseStream — no audio captured');
+        return;
+      }
       const closeFrame = { type: 'CloseStream' };
       const totalBytes = state.chunkBytesSent;
       _logLifecycle('turn_close_signal', { frame: closeFrame, bytesSent: totalBytes }, 'info');
@@ -890,6 +960,7 @@ function _closeTurnIfOpen() {
     } finally {
       state.turnOpen = false;
       state.turnClosePromise = null;
+      state.manual.deferCloseStream = false;
     }
   })();
   state.turnClosePromise = closePromise;
@@ -1158,6 +1229,17 @@ function _sendRecorderChunk(blob, meta = {}) {
           totalKb,
         });
         if (opening) {
+          const startedAt = state.recStartedAt || 0;
+          if (startedAt) {
+            const firstChunkMs = Math.max(0, Math.round(now - startedAt));
+            const level = firstChunkMs > 400 ? 'warn' : 'debug';
+            _logLifecycle('recorder_first_chunk', { ms: firstChunkMs }, level);
+            if (firstChunkMs > 400) {
+              _voiceLog('warn', 'first audio chunk delayed', { firstChunkMs });
+            } else {
+              _voiceLog('debug', 'first audio chunk latency', { firstChunkMs });
+            }
+          }
           _voiceLog('debug', 'turn marked open (first audio chunk queued)');
         }
       } catch (err) {
@@ -1264,6 +1346,7 @@ async function _primeRecorderForPreRoll(options = {}) {
       state.manual.deferCloseStream = false;
     }
     _clearManualTimers();
+    state.currentCommitMode = 'idle';
   };
 
   const manualPriming = !!(state.manual && state.manual.buttonDown);
@@ -1467,6 +1550,10 @@ function _disarm() {
   state.manual.startAt = 0;
   state.manual.firstChunkAt = 0;
   _clearManualTimers();
+  state.currentCommitMode = 'idle';
+  state.assistantReady = false;
+  state.assistantPhase = 'init';
+  state.lastAssistantReadyAt = 0;
   _emitVoiceState('idle');
 }
 
@@ -1672,6 +1759,7 @@ async function _startRecorder() {
 
 async function _onSpeechStartCommitted(detail = {}) {
   const metrics = (detail && typeof detail === 'object') ? detail : {};
+  _refreshManualConfig();
   state.vadMetrics = { ...metrics, phase: 'start' };
   const bufferedMsRaw = Number.isFinite(state.preRollDurationMs) ? state.preRollDurationMs : 0;
   const preRollBlobs = state.preRollBlobs || [];
@@ -1686,6 +1774,24 @@ async function _onSpeechStartCommitted(detail = {}) {
   };
 
   const now = _now();
+
+  const manualOnlyMode = !!state.manual.modeManualOnly;
+  const allowAutoCommit = manualOnlyMode && !!state.manual.autoCommitWhenReady;
+  if (manualOnlyMode && state.ttsPlaying) {
+    _logLifecycle('vad_speech_start_suppressed', { reason: 'tts_active_manual_mode' });
+    _voiceLog('debug', 'speech start ignored while TTS playing (manual mode)');
+    return;
+  }
+  if (manualOnlyMode && !allowAutoCommit) {
+    _logLifecycle('vad_speech_start_suppressed', { reason: 'manual_mode_vad_disabled' });
+    _voiceLog('debug', 'speech start ignored — manual mode without auto-commit');
+    return;
+  }
+  if (allowAutoCommit && !state.assistantReady) {
+    _logLifecycle('vad_speech_start_suppressed', { reason: 'assistant_not_ready' });
+    _voiceLog('debug', 'speech start ignored — assistant not ready for auto-commit');
+    return;
+  }
 
   if (state.manual.ignoreVadUntil && now < state.manual.ignoreVadUntil) {
     const remaining = Math.max(0, Math.round(state.manual.ignoreVadUntil - now));
@@ -1751,6 +1857,12 @@ async function _onSpeechStartCommitted(detail = {}) {
     _beginTurnTrace('speech_start');
   }
 
+  const commitMode = allowAutoCommit ? 'auto_commit' : 'vad';
+  state.currentCommitMode = commitMode;
+  if (commitMode === 'auto_commit') {
+    state.assistantReady = false;
+  }
+
   _logLifecycle('vad_speech_start', {
     preRollBufferedMs: round(bufferedMsRaw),
     preRollSentMs: round(Math.min(bufferedMsRaw, PRE_ROLL_MS)),
@@ -1761,11 +1873,13 @@ async function _onSpeechStartCommitted(detail = {}) {
     snrDb: roundTenths(metrics?.snrDb),
     noiseFloorDb: roundTenths(metrics?.noiseFloorDb),
     thresholdStartDb: roundTenths(metrics?.thresholds?.startDb),
+    commitMode,
   });
   _voiceLog('info', 'speech started', {
     preRollChunks: preRollBlobs.length,
     preRollBytes: totalBytes,
     snrDb: roundTenths(metrics?.snrDb),
+    commitMode,
   });
 
   if (state.greetGateActive) {

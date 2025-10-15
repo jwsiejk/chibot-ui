@@ -1526,6 +1526,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     def _start_confirm_window(now_ts: float) -> None:
         if _manual_mode_active():
+            try:
+                active_turn = bus.current_assistant_turn(sid)
+            except Exception:
+                active_turn = None
+            tts_state, _ = _lookup_tts_state(sid, active_turn)
+            if _is_tts_active(tts_state):
+                _jlog(
+                    "confirm_skip_manual_mode_tts",
+                    sid=sid,
+                    phase=tts_state,
+                )
             return
         if manual_button_down[0] or manual_turn_active[0]:
             return
@@ -1817,6 +1828,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         )
         if not turn_stream_committed[0]:
             turn_stream_committed[0] = True
+            asr_direct_stream[0] = True
             _schedule_asr_stream_activation(mode or "vad")
 
     def _cancel_no_audio_watch() -> None:
