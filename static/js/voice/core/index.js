@@ -5,3 +5,13 @@ export { ShadowBuffer } from './ShadowBuffer.js';
 export { EvidenceGate } from './EvidenceGate.js';
 export { TtsMask } from './TtsMask.js';
 export { TurnState } from './TurnState.js';
+export {
+  computeEnergy,
+  toArrayBuffer,
+  computePreRollDuration,
+  bufferShadowChunk,
+  drainShadowBuffer,
+  bufferPreRollFrame,
+  flushShadowBuffer,
+  resetShadowBufferState,
+} from './FrameUtils.js';

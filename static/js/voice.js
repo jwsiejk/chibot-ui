@@ -6,6 +6,9 @@ import {
   ShadowBuffer,
   TtsMask,
   TurnState,
+  bufferPreRollFrame,
+  flushShadowBuffer,
+  resetShadowBufferState,
 } from './voice/core/index.js';
 import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from './ws_module.js';
 import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
@@ -469,7 +472,7 @@ function _abortEvidenceGate(reason, detail = null) {
     bufferedMs: stats.durationMs,
     bufferedBytes: stats.totalBytes,
   });
-  _resetPreRollBuffer();
+  resetShadowBufferState(state);
   _resetEvidenceGate(state.evidenceGate.reason());
   emitVoiceEvent('state', { state: 'armed' });
 }
@@ -1035,11 +1038,11 @@ async function _setupPreRollTap(ctx, source) {
   _teardownPreRollTap();
 
   if (!ctx || !source) {
-    _resetPreRollBuffer();
+    resetShadowBufferState(state);
     return;
   }
 
-  _resetPreRollBuffer();
+  resetShadowBufferState(state);
 
   const worklet = ctx.audioWorklet;
   if (!worklet || typeof worklet.addModule !== 'function') {
@@ -1088,68 +1091,7 @@ function _teardownPreRollTap() {
   }
   state.preRollNode = null;
   state.preRollGain = null;
-  _resetPreRollBuffer();
-}
-function _resetPreRollBuffer() {
-  state.preRollLastTimecode = null;
-  if (state.shadowBuffer) {
-    state.shadowBuffer.clear();
-  }
-}
-function _computePreRollDuration(timecode) {
-  const timeslice = state.preRollTimeslice || 0;
-  let duration = timeslice || PRE_ROLL_MS;
-  if (Number.isFinite(timecode)) {
-    const last = state.preRollLastTimecode;
-    if (Number.isFinite(last)) {
-      duration = Math.max(0, timecode - last);
-    } else if (timecode > 0) {
-      duration = timecode;
-    }
-    state.preRollLastTimecode = timecode;
-  }
-  if (!Number.isFinite(duration) || duration <= 0) {
-    duration = timeslice || PRE_ROLL_MS;
-  }
-  return duration;
-}
-function _bufferPreRollChunk(entry) {
-  if (!entry || !entry.blob) {
-    return;
-  }
-  const durationMs = Number.isFinite(entry.durationMs) ? Math.max(0, entry.durationMs) : 0;
-  const timecode = Number.isFinite(entry.timecode) ? entry.timecode : null;
-  if (state.shadowBuffer) {
-    state.shadowBuffer.push(entry.blob, { durationMs, timecode });
-  }
-  _updateEvidenceGateWithChunk(durationMs, entry.blob?.size || 0);
-}
-function _enqueuePreRollBlobs() {
-  const buffer = state.shadowBuffer;
-  if (!buffer) {
-    return { count: 0, durationMs: 0, totalBytes: 0 };
-  }
-  const entries = buffer.drain();
-  let durationMs = 0;
-  let totalBytes = 0;
-  let count = 0;
-  for (const entry of entries) {
-    const blob = entry?.buffer;
-    if (!blob) continue;
-    count += 1;
-    const chunkDuration = Number.isFinite(entry.durationMs) ? entry.durationMs : 0;
-    durationMs += chunkDuration;
-    const bytes = Number.isFinite(entry.byteLength)
-      ? entry.byteLength
-      : (typeof blob.size === 'number' ? blob.size : 0);
-    totalBytes += bytes;
-    _sendRecorderChunk(blob, {
-      preRoll: true,
-      durationMs: chunkDuration,
-      timecode: Number.isFinite(entry.timecode) ? entry.timecode : null,
-    });
-  }
-  return { count, durationMs, totalBytes };
+  resetShadowBufferState(state);
 }
 function _attemptAudioStartSend(mime) {
   try {
@@ -1314,7 +1256,7 @@ async function _primeRecorderForPreRoll(options = {}) {
   }
   if (state.rec && state.rec.state === 'recording') {
     if (resetBuffer) {
-      _resetPreRollBuffer();
+      resetShadowBufferState(state);
       _resetEvidenceGate();
     }
     return true;
@@ -1342,7 +1284,7 @@ async function _primeRecorderForPreRoll(options = {}) {
   state.turnHintPromise = null;
   state.turnHintAwaitingWS = false;
   if (resetBuffer) {
-    _resetPreRollBuffer();
+    resetShadowBufferState(state);
     _resetEvidenceGate();
   }
 
@@ -1482,8 +1424,15 @@ function _handleRecorderData(event) {
     return;
   }
 
-  const durationMs = _computePreRollDuration(timecode);
-  _bufferPreRollChunk({ blob, durationMs, timecode });
+  state.preRollLastTimecode = bufferPreRollFrame({
+    shadowBuffer: state.shadowBuffer,
+    blob,
+    timecode,
+    timeslice: state.preRollTimeslice || 0,
+    fallbackMs: PRE_ROLL_MS,
+    lastTimecode: state.preRollLastTimecode,
+    onBuffered: ({ durationMs, byteLength }) => _updateEvidenceGateWithChunk(durationMs, byteLength),
+  }).nextTimecode;
 }
 function _stopRecorder(detail = null) {
   _clearSafetyCloseTimer();
@@ -1531,7 +1480,7 @@ function _stopRecorder(detail = null) {
   state.recStopping = true;
   state.recStreaming = false;
   if (!shouldSendFinal) {
-    _resetPreRollBuffer();
+    resetShadowBufferState(state);
     _resetEvidenceGate('recorder_stop');
   }
 
@@ -1764,16 +1713,17 @@ async function _startRecorder() {
 
   const manualActive = !!(state.manual && state.manual.buttonDown);
   if (manualActive) {
-    _resetPreRollBuffer();
+    resetShadowBufferState(state);
   } else {
-    const preRollStats = _enqueuePreRollBlobs();
-    if (preRollStats?.count) {
-      _voiceLog('debug', 'flushed pre-roll buffer', {
-        chunks: preRollStats.count,
-        durationMs: preRollStats.durationMs,
-        bytes: preRollStats.totalBytes,
-      });
-    }
+    flushShadowBuffer(
+      state.shadowBuffer,
+      (buffer, { durationMs, timecode }) => _sendRecorderChunk(buffer, { preRoll: true, durationMs, timecode }),
+      (stats) => stats?.count && _voiceLog('debug', 'flushed pre-roll buffer', {
+        chunks: stats.count,
+        durationMs: stats.durationMs,
+        bytes: stats.totalBytes,
+      }),
+    );
   }
 
   _voiceLog('info', 'recorder streaming', {
