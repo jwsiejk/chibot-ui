@@ -44,6 +44,7 @@ import {
   legacyUpdateEvidenceGateWithChunk,
   legacyUpdateEvidenceGateWithPartial,
   createVadSchedulerLegacy,
+  onFrameSpeech as facadeOnFrameSpeech,
   startVadLoop as facadeStartVadLoop,
   onTtsStart,
   onTtsEnd,
@@ -75,6 +76,7 @@ import {
   _updateAssistantPhaseFromDetail,
   _voiceLog,
   _waitForGreetGate,
+  _getActiveTurnTraceId,
   optsFromGlobal,
   state,
 } from './voice/legacy/VoiceLegacyTopLevel.js';
@@ -145,232 +147,33 @@ VadFrameUtils.refreshManualConfig();
 registerTtsEventListener({ createContext: () => ({ state, now: _now, abortEvidenceGate: _abortEvidenceGate, ttsIsPlaying, clearPostTtsHoldTimer: VadFrameUtils.clearPostTtsHoldTimer, TurnState }), onTtsStart, onTtsEnd });
 
 async function _onSpeechStartCommitted(detail = {}) {
-  const metrics = (detail && typeof detail === 'object') ? detail : {};
-  VadFrameUtils.refreshManualConfig();
-  state.vadMetrics = { ...metrics, phase: 'start' };
-  const shadowStats = getShadowStats(state);
-  const bufferedMsRaw = Number.isFinite(shadowStats.durationMs) ? shadowStats.durationMs : 0;
-  const totalBytes = Number.isFinite(shadowStats.totalBytes) ? shadowStats.totalBytes : 0;
-  const preRollCount = Number.isFinite(shadowStats.count) ? shadowStats.count : 0;
-  const round = (v) => {
-    if (!Number.isFinite(v)) return 0;
-    return Math.round(v * 100) / 100;
-  };
-  const roundTenths = (v) => {
-    if (!Number.isFinite(v)) return null;
-    return Math.round(v * 10) / 10;
-  };
-
-  const now = _now();
-
-  updateSessionNoise(state, metrics);
-
-  const manualOnlyMode = !!state.manual.modeManualOnly;
-  const allowAutoCommit = manualOnlyMode && !!state.manual.autoCommitWhenReady;
-  if (manualOnlyMode && state.ttsPlaying) {
-    _logLifecycle('vad_speech_start_suppressed', { reason: 'tts_active_manual_mode' });
-    _voiceLog('debug', 'speech start ignored while TTS playing (manual mode)');
-    return;
-  }
-  if (manualOnlyMode && !allowAutoCommit) {
-    _logLifecycle('vad_speech_start_suppressed', { reason: 'manual_mode_vad_disabled' });
-    _voiceLog('debug', 'speech start ignored — manual mode without auto-commit');
-    return;
-  }
-  if (allowAutoCommit && !state.assistantReady) {
-    _logLifecycle('vad_speech_start_suppressed', { reason: 'assistant_not_ready' });
-    _voiceLog('debug', 'speech start ignored — assistant not ready for auto-commit');
-    return;
-  }
-
-  if (state.manual.ignoreVadUntil && now < state.manual.ignoreVadUntil) {
-    const remaining = Math.max(0, Math.round(state.manual.ignoreVadUntil - now));
-    _voiceLog('debug', 'speech start suppressed during manual cooldown', { remainingMs: remaining });
-    return;
-  }
-
-  const holdUntilTts = state.postTtsHoldUntil || 0;
-  const waitMs = Math.max(0, holdUntilTts - now);
-  if (waitMs > 0) {
-    _logLifecycle('vad_speech_start_suppressed', { reason: 'post_tts_hold', holdUntil: holdUntilTts, waitMs });
-    VadFrameUtils.clearPostTtsHoldTimer();
-    try { _voiceLog('info', 'speech start deferred by post-TTS hold', { holdUntil: holdUntilTts, waitMs }); } catch {}
-    state.postTtsHoldTimer = setTimeout(() => {
-      state.postTtsHoldTimer = null;
-      try { _onSpeechStartCommitted(detail); } catch {}
-    }, waitMs);
-    return;
-  }
-
-  VadFrameUtils.clearPostTtsHoldTimer();
-  state.postTtsHoldUntil = 0;
-
-  if (state.eligibility === 'holdoff') {
-    state.eligibility = 'eligible';
-  }
-
-  const greetActive = state.greetGateActive && (state.greetGatePhase === 'pending' || state.greetGatePhase === 'calibrating');
-  if (state.eligibility === 'blocked_pregreet' && !greetActive) {
-    _logLifecycle('vad_speech_start_suppressed', { reason: 'pregreet_block' });
-    return;
-  }
-
-  const holdUntil = state.postFinalHoldUntil || 0;
-
-  if (state.finalized) {
-    if (now < holdUntil) {
-      _logLifecycle('vad_speech_start_suppressed', {
-        reason: 'post_final_hold_finalized',
-        holdUntil,
-        now,
-      });
-      return;
-    }
-    state.finalized = false;
-  }
-
-  if (now < holdUntil) {
-    _logLifecycle('vad_speech_start_suppressed', {
-      reason: 'post_final_hold',
-      holdUntil,
-      now,
-    });
-    return;
-  }
-
-  if (state.postFinalHoldUntil) {
-    state.postFinalHoldUntil = 0;
-  }
-
-  const traceActive = _getActiveTurnTraceId();
-  if (!state.recStreaming || !traceActive) {
-    _beginTurnTrace('speech_start');
-  }
-
-  const commitMode = allowAutoCommit ? 'auto_commit' : 'vad';
-  state.currentCommitMode = commitMode;
-  if (commitMode === 'auto_commit') {
-    state.assistantReady = false;
-  }
-
-  _logLifecycle('vad_speech_start', {
-    preRollBufferedMs: round(bufferedMsRaw),
-    preRollSentMs: round(Math.min(bufferedMsRaw, PRE_ROLL_MS)),
-    preRollChunks: preRollCount,
-    preRollBytes: totalBytes,
-    preRollEnabled: preRollCount > 0,
-    preRollMime: (state.rec && state.rec.mimeType) || REC_MIME,
-    snrDb: roundTenths(metrics?.snrDb),
-    noiseFloorDb: roundTenths(metrics?.noiseFloorDb),
-    thresholdStartDb: roundTenths(metrics?.thresholds?.startDb),
-    commitMode,
-  });
-  _voiceLog('info', 'speech started', {
-    preRollChunks: preRollCount,
-    preRollBytes: totalBytes,
-    snrDb: roundTenths(metrics?.snrDb),
-    commitMode,
-  });
-
-  // FAST PATH: Ready-phase hands-free turn start
-  if (commitMode === 'auto_commit') {
-    // Start the MediaRecorder now (not just priming)
-    let ok = await _startRecorder();         // internally sets state.recStreaming = true and flushes pre-roll
-    if (!ok) {
-      try { await _primeRecorderForPreRoll({ resetBuffer: false }); } catch {}
-      ok = await _startRecorder();
-    }
-    if (ok) {
-      emitVoiceEvent('state', { state: 'recording' });
-      return;                                // we're streaming; rest of the function can return
-    }
-    _voiceLog('warn', 'recorder unavailable — reverting to typing');
-    emitVoiceEvent('state', { state: 'armed', statusText: 'Listening… (mic unavailable — please type)' });
-    return;
-  }
-
-  if (state.greetGateActive) {
-    if (state.greetGatePhase === 'calibrating') {
-      _voiceLog('info', 'speech start suppressed during greet calibration', {
-        calibrateUntil: state.greetGateCalibrateUntil,
-        snrDb: roundTenths(metrics?.snrDb),
-      });
-      return;
-    }
-    if (state.greetGatePhase === 'pending') {
-      const snrDb = Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null;
-      if (state.ttsPlaying) {
-        _voiceLog('info', 'speech start suppressed by greet gate while TTS playing', {
-          snrDb: roundTenths(snrDb),
-          ttsPlaying: true,
-        });
-        return;
-      }
-      if (Number.isFinite(snrDb) && snrDb >= GREET_BARGE_MIN_SNR_DB) {
-        _voiceLog('info', 'greet gate bypassed via barge-in', {
-          snrDb: roundTenths(snrDb),
-        });
-        _completeGreetGate('barge_in');
-      } else {
-        _voiceLog('info', 'speech start suppressed by greet gate', {
-          snrDb: roundTenths(metrics?.snrDb),
-        });
-        return;
-      }
-    }
-  }
-
-  const manualPressing = !!(state.manual && state.manual.buttonDown);
-  if (state.ttsPlaying && !manualPressing) {
-    _logLifecycle('vad_speech_start_suppressed', { reason: 'tts_playback_active' });
-    _voiceLog('debug', 'speech start ignored while TTS playback active');
-    return;
-  }
-
-  if (state.ttsMask && state.ttsMask.isMasked(now)) {
-    const requiredSnr = getEvidenceSnrRequirement(state, _now, EVIDENCE_MIN_SNR_DB);
-    const snrDb = Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null;
-    if (!Number.isFinite(snrDb) || snrDb < requiredSnr) {
-      _logLifecycle('vad_speech_start_suppressed', {
-        reason: 'tts_decay_guard',
-        snrDb: roundTenths(snrDb),
-        requiredSnrDb: roundTenths(requiredSnr),
-        decayUntil: state.ttsMask.decayUntil(),
-      });
-      return;
-    }
-  }
-
-  _bargeIn();
-
-  if (!state.evidenceGate.isOpen()) {
-    _resetEvidenceGate();
-    state.evidenceGate.start({
-      startedAt: now,
-      detail: metrics || null,
-      bufferedMs: bufferedMsRaw,
-      bufferedBytes: totalBytes,
-    });
-    const requiredSnr = getEvidenceSnrRequirement(state, _now, EVIDENCE_MIN_SNR_DB);
-    const minSpeechOpt = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
-    const minSpeechMs = Number.isFinite(minSpeechOpt) ? Math.max(0, minSpeechOpt) : EVIDENCE_MIN_SPEECH_MS;
-    const minBytesOpt = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
-    const minBytes = Number.isFinite(minBytesOpt) ? Math.max(0, minBytesOpt) : EVIDENCE_MIN_BYTES;
-    state.evidenceGate.update({
-      vadState: 'speech',
-      snr: Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null,
-      snrBoost: Math.max(0, requiredSnr - EVIDENCE_MIN_SNR_DB),
-      bufferedMs: bufferedMsRaw,
-      bufferedBytes: totalBytes,
-      minSpeechMs,
-      minBytes,
-    });
-    emitVoiceEvent('state', { state: 'recording', gated: true });
-  } else {
-    state.evidenceGate.setDetail(metrics || state.evidenceGate.lastDetail);
-  }
-
-  _evaluateEvidenceGate('vad_start');
+  return await facadeOnFrameSpeech({
+    state,
+    VadFrameUtils,
+    updateSessionNoise,
+    getShadowStats,
+    getEvidenceSnrRequirement,
+    PRE_ROLL_MS,
+    EVIDENCE_MIN_SNR_DB,
+    EVIDENCE_MIN_SPEECH_MS,
+    EVIDENCE_MIN_BYTES,
+    GREET_BARGE_MIN_SNR_DB,
+    REC_MIME,
+    optsFromGlobal,
+    emitVoiceEvent,
+    startRecorder: _startRecorder,
+    primeRecorderForPreRoll: _primeRecorderForPreRoll,
+    bargeIn: _bargeIn,
+    resetEvidenceGate: _resetEvidenceGate,
+    evaluateEvidenceGate: _evaluateEvidenceGate,
+    onSpeechStartCommitted: _onSpeechStartCommitted,
+    now: _now,
+    logLifecycle: _logLifecycle,
+    voiceLog: _voiceLog,
+    beginTurnTrace: _beginTurnTrace,
+    completeGreetGate: _completeGreetGate,
+    getActiveTurnTraceId: _getActiveTurnTraceId,
+  }, detail);
 }
 function _onSpeechEndCommitted(detail = null) {
   const metrics = (detail && typeof detail === 'object') ? detail : {};
