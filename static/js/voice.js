@@ -4,8 +4,6 @@ import { sendJSON } from './ws_module.js';
 import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
 import { registerTtsEventListener } from './voice/tts/TtsHandlers.js';
 import {
-  startVadLoop,
-  stopVadLoop,
   updateSessionNoise,
   getEvidenceSnrRequirement,
   getShadowStats,
@@ -45,6 +43,8 @@ import {
   legacyCommitEvidenceGate,
   legacyUpdateEvidenceGateWithChunk,
   legacyUpdateEvidenceGateWithPartial,
+  createVadSchedulerLegacy,
+  startVadLoop as facadeStartVadLoop,
   onTtsStart,
   onTtsEnd,
   VadFrameUtils,
@@ -79,12 +79,57 @@ import {
   state,
 } from './voice/legacy/VoiceLegacyTopLevel.js';
 
-const _clearManualTimers = legacyClearManualTimers;
 const _resetEvidenceGate = legacyResetEvidenceGate;
 const _clearSafetyCloseTimer = legacyClearSafetyCloseTimer;
 const _closeTurnIfOpen = legacyCloseTurnIfOpen;
 const _sendRecorderChunk = legacySendRecorderChunk;
 const _stopRecorder = legacyStopRecorder;
+
+const {
+  setGreetGateActive: _setGreetGateActive,
+  abortEvidenceGate: _abortEvidenceGate,
+  evaluateEvidenceGate: _evaluateEvidenceGate,
+  commitEvidenceGate: _commitEvidenceGate,
+  updateEvidenceGateWithChunk: _updateEvidenceGateWithChunk,
+  updateEvidenceGateWithPartial: _updateEvidenceGateWithPartial,
+  manualAutoCancel: _manualAutoCancel,
+  forceBargeInStart: _forceBargeInStart,
+  forceBargeInEnd: _forceBargeInEnd,
+  ensureWSListener: _ensureWSListener,
+  primeRecorderForPreRoll: _primeRecorderForPreRoll,
+  startRecorder: _startRecorder,
+  bargeIn: _bargeIn,
+  arm: _arm,
+} = createVadSchedulerLegacy({
+  state,
+  emitVoiceEvent,
+  sendJSON,
+  stopPlayback,
+  ttsIsPlaying,
+  startVadLoop: facadeStartVadLoop,
+  forceBargeInEnd: facadeForceBargeInEnd,
+  facadeOnWsMessage,
+  legacySetGreetGateActive,
+  legacyAbortEvidenceGate,
+  legacyEvaluateEvidenceGate,
+  legacyCommitEvidenceGate,
+  legacyUpdateEvidenceGateWithChunk,
+  legacyUpdateEvidenceGateWithPartial,
+  legacyPrimeRecorderForPreRoll,
+  legacyStartRecorder,
+  legacyStopRecorder,
+  legacyClearManualTimers,
+  legacyCloseTurnIfOpen,
+  VadFrameUtils,
+  now: _now,
+  logLifecycle: _logLifecycle,
+  voiceLog: _voiceLog,
+  MANUAL_DEBOUNCE_MS,
+  MANUAL_NO_AUDIO_CANCEL_MS,
+  MANUAL_VAD_IGNORE_MS,
+  onSpeechEndCommitted: _onSpeechEndCommitted,
+  onSpeechStartCommitted: _onSpeechStartCommitted,
+});
 
 export async function initMic(stream = null) { return await facadeInitMic(stream); }
 export async function armVAD(stream = null, opts = {}) { return await facadeArmVAD(stream, opts); }
@@ -98,249 +143,6 @@ export function forceBargeInEnd(opts = {}) { return facadeForceBargeInEnd(opts);
 
 VadFrameUtils.refreshManualConfig();
 registerTtsEventListener({ createContext: () => ({ state, now: _now, abortEvidenceGate: _abortEvidenceGate, ttsIsPlaying, clearPostTtsHoldTimer: VadFrameUtils.clearPostTtsHoldTimer, TurnState }), onTtsStart, onTtsEnd });
-
-function _setGreetGateActive(active) {
-  legacySetGreetGateActive(active, { ensureWsListener: _ensureWSListener });
-}
-
-function _abortEvidenceGate(reason, detail = null) {
-  legacyAbortEvidenceGate(reason, detail);
-}
-function _evaluateEvidenceGate(trigger = 'poll') {
-  return legacyEvaluateEvidenceGate(trigger, {
-    startRecorder: () => _startRecorder(),
-    primeRecorderForPreRoll: (opts = {}) => _primeRecorderForPreRoll(opts),
-  });
-}
-async function _commitEvidenceGate(trigger = 'unknown') {
-  return legacyCommitEvidenceGate(trigger, {
-    startRecorder: () => _startRecorder(),
-    primeRecorderForPreRoll: (opts = {}) => _primeRecorderForPreRoll(opts),
-  });
-}
-function _updateEvidenceGateWithChunk(durationMs, bytes) {
-  legacyUpdateEvidenceGateWithChunk(durationMs, bytes, {
-    startRecorder: () => _startRecorder(),
-    primeRecorderForPreRoll: (opts = {}) => _primeRecorderForPreRoll(opts),
-  });
-}
-function _updateEvidenceGateWithPartial(confidence = null, transcript = '') {
-  legacyUpdateEvidenceGateWithPartial(confidence, transcript, {
-    startRecorder: () => _startRecorder(),
-    primeRecorderForPreRoll: (opts = {}) => _primeRecorderForPreRoll(opts),
-  });
-}
-function _manualAutoCancel(reason = 'no_audio') {
-  const manual = state.manual;
-  if (!manual.buttonDown && !manual.active) {
-    return;
-  }
-  _logLifecycle('manual_barge_in_auto_cancel', { reason });
-  try {
-    forceBargeInEnd({ autoCancel: true, reason });
-  } catch (err) {
-    _voiceLog('warn', 'manual auto cancel failed', { error: err?.message || err, reason });
-  }
-}
-function _forceBargeInStart(meta = {}) {
-  const manual = state.manual;
-  const enabled = VadFrameUtils.refreshManualConfig();
-  if (!enabled) {
-    _voiceLog('debug', 'manual barge-in start ignored — feature disabled');
-    return false;
-  }
-
-  const now = Date.now();
-  if (manual.buttonDown) {
-    return true;
-  }
-  if (now < manual.debounceUntil) {
-    const remaining = Math.max(0, manual.debounceUntil - now);
-    _voiceLog('debug', 'manual barge-in start debounced', { remainingMs: remaining });
-    return false;
-  }
-
-  manual.buttonDown = true;
-  manual.active = false;
-  manual.deferCloseStream = false;
-  manual.sentStartFrame = false;
-  manual.startAt = _now();
-  manual.firstChunkAt = 0;
-  manual.ignoreVadUntil = 0;
-  manual.debounceUntil = now + MANUAL_DEBOUNCE_MS;
-  _clearManualTimers();
-
-  _bargeIn();
-
-  state.currentCommitMode = 'manual';
-  state.assistantReady = false;
-
-  const source = (typeof meta === 'object' && meta && meta.source)
-    ? String(meta.source)
-    : 'ui';
-  _logLifecycle('manual_barge_in_start', { source });
-  try { console.info?.('manual_barge_in_start'); } catch {}
-
-  try {
-    const sent = sendJSON({ type: 'Control', action: 'barge_in_start' });
-    manual.sentStartFrame = sent === true;
-  } catch (err) {
-    _voiceLog('warn', 'failed to send manual barge-in start frame', { error: err?.message || err });
-    manual.sentStartFrame = false;
-  }
-
-  Promise.resolve(_startRecorder()).then((started) => {
-    if (!started) {
-      manual.buttonDown = false;
-      manual.active = false;
-      manual.deferCloseStream = false;
-      if (manual.sentStartFrame) {
-        try { sendJSON({ type: 'Control', action: 'barge_in_end' }); } catch {}
-        manual.sentStartFrame = false;
-      }
-      _voiceLog('warn', 'recorder unavailable — reverting to typing (manual barge-in)');
-      emitVoiceEvent('state', { state: 'armed', statusText: 'Listening… (mic unavailable — please type)' });
-      return;
-    }
-
-    manual.active = true;
-    manual.deferCloseStream = false;
-    emitVoiceEvent('state', { state: 'recording' });
-    _clearManualTimers();
-    try {
-      manual.noAudioTimer = setTimeout(() => _manualAutoCancel('no_audio'), MANUAL_NO_AUDIO_CANCEL_MS);
-    } catch {}
-  }).catch((err) => {
-    manual.buttonDown = false;
-    manual.active = false;
-    manual.deferCloseStream = false;
-    _voiceLog('warn', 'manual barge-in start failed', { error: err?.message || err });
-    emitVoiceEvent('state', { state: 'armed', statusText: 'Listening… (mic unavailable — please type)' });
-  });
-
-  return true;
-}
-function _forceBargeInEnd(opts = {}) {
-  const manual = state.manual;
-  const enabled = VadFrameUtils.refreshManualConfig();
-  if (!enabled) {
-    return false;
-  }
-
-  const active = manual.buttonDown || manual.active;
-  if (!active) {
-    return false;
-  }
-
-  const options = (opts && typeof opts === 'object') ? opts : {};
-  const autoCancel = options.autoCancel === true;
-  const reason = options.reason || (autoCancel ? 'auto_cancel' : 'release');
-
-  manual.buttonDown = false;
-  manual.ignoreVadUntil = _now() + MANUAL_VAD_IGNORE_MS;
-  manual.debounceUntil = Date.now() + MANUAL_DEBOUNCE_MS;
-  manual.deferCloseStream = true;
-  _clearManualTimers();
-
-  _logLifecycle('manual_barge_in_end', { reason, auto_cancel: autoCancel });
-  try { console.info?.('manual_barge_in_end'); } catch {}
-
-  try {
-    sendJSON({ type: 'Control', action: 'barge_in_end' });
-  } catch (err) {
-    _voiceLog('warn', 'failed to send manual barge-in end frame', { error: err?.message || err });
-  }
-  manual.sentStartFrame = false;
-
-  if (state.rec && state.rec.state === 'recording') {
-    _stopRecorder({ reason: autoCancel ? 'manual_auto_cancel' : 'manual_release' });
-  } else {
-    manual.active = false;
-    manual.deferCloseStream = false;
-  }
-
-  return true;
-}
-function _ensureWSListener() {
-  if (state.wsListener || typeof window === 'undefined') {
-    return;
-  }
-  const handler = async (ev) => {
-    const detail = ev?.detail || {};
-    await facadeOnWsMessage(detail, {
-      updateEvidenceGateWithPartial: _updateEvidenceGateWithPartial,
-    });
-  };
-
-  try { window.addEventListener('askchip-ws', handler); } catch {}
-  state.wsListener = handler;
-}
-function _primeRecorderForPreRoll(options = {}) {
-  return legacyPrimeRecorderForPreRoll(options, {
-    updateEvidenceGateWithChunk: _updateEvidenceGateWithChunk,
-    primeRecorderForPreRoll: (opts = {}) => _primeRecorderForPreRoll(opts),
-  });
-}
-
-async function _startRecorder() {
-  return legacyStartRecorder({
-    primeRecorderForPreRoll: (opts = {}) => _primeRecorderForPreRoll(opts),
-    clearPendingEndTimer: () => VadFrameUtils.clearPendingEndTimer(),
-    ensureWSListener: _ensureWSListener,
-    onSpeechEndCommitted: _onSpeechEndCommitted,
-    clearTurnTimer: () => VadFrameUtils.safeClearTurnTimer(),
-  });
-}
-function _bargeIn() {
-  // Soft barge-in: pause audio locally
-  VadFrameUtils.clearBargeConfirm(false);
-  try { stopPlayback(); } catch {}
-  // If a prior ASR turn is somehow still open, politely close it.
-  // (Harmless if no turn is open; guarded to avoid duplicate closes.)
-  const pendingClose = _closeTurnIfOpen();
-  if (pendingClose) {
-    pendingClose.catch(() => {});
-  }
-}
-
-async function _arm(stream = null, opts = {}) {
-  const mic = stream || await VadFrameUtils.ensureMic();
-
-  // Build / rebuild VAD
-  VadFrameUtils.teardownVadOnly();
-
-  // Merge runtime globals so admins can tune without rebuilds:
-  let globalVad = {};
-  try { globalVad = (window.__askchip_config && window.__askchip_config.vad) || {}; } catch {}
-  const cfg = { ...globalVad, ...opts };
-
-  const pollMs = cfg.pollMs ?? 33;
-  const vadLoop = startVadLoop(state, () => ({
-    analyser: state.analyser,
-    cfg,
-    pollMs,
-    onSpeechStart: _onSpeechStartCommitted,
-    onSpeechEnd: _onSpeechEndCommitted,
-    ttsIsPlaying,
-  }));
-
-  if (!vadLoop || !vadLoop.vad) {
-    return mic;
-  }
-
-  state.vad = vadLoop.vad;
-  const effectivePollMs = Number.isFinite(vadLoop.pollMs) ? vadLoop.pollMs : pollMs;
-
-  _logLifecycle('mic_start', {
-    sampleRate: state.ctx?.sampleRate,
-    pollMs: effectivePollMs,
-  });
-  emitVoiceEvent('state', { state: 'armed' });
-
-  await _primeRecorderForPreRoll();
-
-  return mic;
-}
 
 async function _onSpeechStartCommitted(detail = {}) {
   const metrics = (detail && typeof detail === 'object') ? detail : {};

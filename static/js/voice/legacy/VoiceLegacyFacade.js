@@ -85,6 +85,8 @@ export const onMicStop = delegate('onMicStop');
 export const onRecorderData = delegate('onRecorderData');
 export const onRecorderError = delegate('onRecorderError');
 
+export { startVadLoop, stopVadLoop, createVadSchedulerLegacy } from './VadSchedulerLegacy.js';
+
 export function registerVoiceLegacyFacade(overrides = {}) {
   if (!overrides || typeof overrides !== 'object') {
     return { ...IMPLEMENTATION };
