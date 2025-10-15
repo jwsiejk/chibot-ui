@@ -80,11 +80,36 @@ function _manualPhaseChanged(phase) {
 function _manualPointerDown(ev) {
   if (!manualState.featureEnabled) return;
   if (!ev?.isTrusted) return;  // ← block synthetic/programmatic starts
+
+  const btn = manualState.button;
+  if (!btn || btn.disabled || btn.hidden || !manualState.sessionActive) {
+    return;
+  }
+
+  if (ev?.type === 'mousedown') {
+    if (typeof ev.button === 'number' && ev.button !== 0) return;
+    if (typeof ev.buttons === 'number' && (ev.buttons & 1) === 0) return;
+  }
+
+  if (ev?.type === 'touchstart' && ev?.touches && ev.touches.length > 1) {
+    return;
+  }
+
+  if (btn && ev?.target && !btn.contains(ev.target)) {
+    return;
+  }
+
   if (ev) { ev.preventDefault(); ev.stopPropagation(); }
   if (manualState.pointerActive || manualState.keyActive) return;
+
   manualState.pointerActive = true;
   _updateManualButtonAvailability();
-  forceBargeInStart({ source: 'pointer' });
+
+  const started = forceBargeInStart({ source: 'pointer' });
+  if (!started) {
+    manualState.pointerActive = false;
+    _updateManualButtonAvailability();
+  }
 }
 
 function _manualPointerUp(ev) {
@@ -100,14 +125,29 @@ function _manualPointerUp(ev) {
 function _manualKeyDown(ev) {
   if (!manualState.featureEnabled) return;
   if (!ev?.isTrusted) return;  // ← block synthetic/programmatic starts
+
+  const btn = manualState.button;
+  if (!btn || btn.disabled || btn.hidden || !manualState.sessionActive) {
+    return;
+  }
+  if (ev?.target && ev.target !== btn) {
+    return;
+  }
+
   const key = ev?.code || ev?.key || '';
   if (!(key === 'Space' || key === 'Spacebar' || key === ' ')) return;
   if (ev?.repeat) return;
   if (ev) { ev.preventDefault(); ev.stopPropagation(); }
   if (manualState.keyActive || manualState.pointerActive) return;
+
   manualState.keyActive = true;
   _updateManualButtonAvailability();
-  forceBargeInStart({ source: 'keyboard' });
+
+  const started = forceBargeInStart({ source: 'keyboard' });
+  if (!started) {
+    manualState.keyActive = false;
+    _updateManualButtonAvailability();
+  }
 }
 
 function _manualKeyUp(ev) {
