@@ -1356,3 +1356,5 @@ export function legacyOnWsCloseImpl(detail = null) {
 
   emitVoiceEvent('state', { state: 'armed', statusText: 'Listening…' });
 }
+
+export * as VadFrameUtils from './VadFrameUtilsLegacy.js';
