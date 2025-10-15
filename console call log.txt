@@ -1,104 +1,99 @@
 heartbeat Object
-askchip_client_hooks.js?v=1760486801:192 heartbeat Object
-bootstrap.js?v=1760486801:32 [AskChip] bootstrap loaded
-debug.js?v=1760486801:4 [DBG] debug:on Object
-askchip_client_hooks.js?v=1760486801:192 heartbeat Object
-bootstrap.js?v=1760486801:32 [bootstrap] startOnce called N=1
-ws.js?v=1760486801:124 [ws] openWS build Object
-ws.js?v=1760486801:124 [ws] openWS options= Object reconnect= true
-bootstrap.js?v=1760486801:32 [bootstrap] ws listener attached Object
-bootstrap.js?v=1760486801:32 [bootstrap] ws listener attached Object
-bootstrap.js?v=1760486801:32 [bootstrap] startOnce sending greet configure
-debug.js?v=1760486801:4 [DBG] UI→WS Object
-bootstrap.js?v=1760486801:32 [bootstrap] startOnce greet configure sent — recorder setup will follow
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"ready","session_id":"f1ab33e1-07de-4a41-8ba7-c02841f8330a"}
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"Configure","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","v":1,"ts_ms":1760487056151,"ts":1760487056.151,"session_id":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","turn_id":null,"step":5}
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"Configure","sid":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","session_id":"f1ab33e1-07de-4a41-8ba7-c02841f8330a"}
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"greet:reset","event":"greet:reset","kind":"greet:reset","label":"greet:reset /ws/v1/chat","route":"/ws/v1/chat","greet_seq":1,"v":1,"ts_ms":1760487056151,"ts":1760487056.151,"sid":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","session_id":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","turn_id":null,"step":6}
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"greet:reset","route":"/ws/v1/chat","label":"greet:reset","session_id":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","greet_seq":1,"sid":"f1ab33e1-07de-4a41-8ba7-c02841f8330a"}
-askchip_client_hooks.js?v=1760486801:286 session_goal Object
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"session_goal","event":"session_goal","kind":"session_goal","label":"session_goal:normal","phase":"clarify","depth":"normal","delivery_pref":"explain","working_intent":"greet","entities":{"products":[],"keywords":[]},"confirmed":["phase","depth","delivery_pref","working_intent"],"v":1,"ts_ms":1760487056153,"ts":1760487056.153,"sid":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","session_id":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","turn_id":null,"step":7}
-askchip_client_hooks.js?v=1760486801:286 session_goal Object
-voice.js:503 [voice] mic_device_selected Object
-bootstrap.js?v=1760486801:32 [bootstrap] startOnce mic initialized — about to arm VAD for voice turns
-voice.js:503 [voice] mic_start Object
-voice.js:503 [voice] ensure AudioStart called Object
-debug.js?v=1760486801:4 [DBG] UI→WS Object
-voice.js:503 [voice] AudioStart sent Object
-voice.js:503 [voice] recorder primed Object
-bootstrap.js?v=1760486801:32 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
-bootstrap.js?v=1760486801:32 [bootstrap] ws listener attached Object
-askchip_client_hooks.js?v=1760486801:192 ws_scope_arrived Object
-askchip_client_hooks.js?v=1760486801:192 ws_handshake_enter Object
-askchip_client_hooks.js?v=1760486801:192 ws_conn_open Object
-askchip_client_hooks.js?v=1760486801:192 ws_conn_active Object
-askchip_client_hooks.js?v=1760486801:192 ws_json_recv Object
-askchip_client_hooks.js?v=1760486801:192 greet:reset Object
-askchip_client_hooks.js?v=1760486801:168 session_goal Object
-askchip_client_hooks.js?v=1760486801:192 ws_json_recv Object
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"AudioStart","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","v":1,"ts_ms":1760487056335,"ts":1760487056.335,"session_id":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","turn_id":null,"step":8}
-voice.js:503 [voice] vad_speech_start_suppressed Object
+askchip_client_hooks.js?v=1760489645:192 heartbeat Object
+bootstrap.js?v=1760489645:32 [AskChip] bootstrap loaded
+debug.js?v=1760489645:4 [DBG] debug:on Object
+askchip_client_hooks.js?v=1760489645:192 heartbeat Object
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489855.704977, step: 0}
+bootstrap.js?v=1760489645:32 [bootstrap] startOnce called N=1
+ws.js?v=1760489645:124 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760489645', version: '1760489645', flags: undefined, reconnectEnabled: true, sessionStarted: false}
+ws.js?v=1760489645:124 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760489645:32 [bootstrap] ws listener attached {listener_id: 'askchip-ws#1', event: 'askchip-ws', note: 'bootstrap-wire'}
+bootstrap.js?v=1760489645:32 [bootstrap] ws listener attached {listener_id: 'askchip-ws-close#2', event: 'askchip-ws-close', note: 'bootstrap-wire'}
+bootstrap.js?v=1760489645:32 [bootstrap] startOnce sending greet configure
+debug.js?v=1760489645:4 [DBG] UI→WS {type: 'Configure', session_id: '3fb7be0c-433e-44dd-b27c-49f0374fa31f', greet: true, reset: 1, feature_manual_barge_in: true, …}
+bootstrap.js?v=1760489645:32 [bootstrap] startOnce greet configure sent — recorder setup will follow
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"ready","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f"}
+askchip_client_hooks.js?v=1760489645:192 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760489856110, …}
+askchip_client_hooks.js?v=1760489645:192 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760489645:192 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '3fb7be0c-433e-44dd-b27c-49f0374fa31f', …}
+askchip_client_hooks.js?v=1760489645:192 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '1d443dd6e45e4793835690b8dc9d0e4d', …}
+askchip_client_hooks.js?v=1760489645:192 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '3fb7be0c-433e-44dd-b27c-49f0374fa31f', …}
+askchip_client_hooks.js?v=1760489645:192 greet:reset {event: 'greet:reset', kind: 'greet:reset', label: 'greet:reset /ws/v1/chat', route: '/ws/v1/chat', greet_seq: 1, …}
+askchip_client_hooks.js?v=1760489645:168 session_goal {event: 'session_goal', kind: 'session_goal', label: 'session_goal:normal', phase: 'clarify', depth: 'normal', …}
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"Configure","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","v":1,"ts_ms":1760489856290,"ts":1760489856.29,"session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","turn_id":null,"step":5}
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"Configure","sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f"}
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"greet:reset","event":"greet:reset","kind":"greet:reset","label":"greet:reset /ws/v1/chat","route":"/ws/v1/chat","greet_seq":1,"v":1,"ts_ms":1760489856290,"ts":1760489856.29,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","turn_id":null,"step":6}
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"greet:reset","route":"/ws/v1/chat","label":"greet:reset","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","greet_seq":1,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f"}
+askchip_client_hooks.js?v=1760489645:286 session_goal {type: 'session_goal', event: 'session_goal', kind: 'session_goal', label: 'session_goal:normal', phase: 'clarify', …}
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"session_goal","event":"session_goal","kind":"session_goal","label":"session_goal:normal","phase":"clarify","depth":"normal","delivery_pref":"explain","working_intent":"greet","entities":{"products":[],"keywords":[]},"confirmed":["phase","depth","delivery_pref","working_intent"],"v":1,"ts_ms":1760489856292,"ts":1760489856.292,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","turn_id":null,"step":7}
+askchip_client_hooks.js?v=1760489645:286 session_goal {type: 'session_goal', phase: 'clarify', depth: 'normal', delivery_pref: 'explain', working_intent: 'greet', …}
+voice.js:503 [voice] mic_device_selected {event: 'mic_device_selected', label: 'Microphone Array (Intel® Smart Sound Technology for Digital Microphones)', sampleRate: 48000, channels: 1}
+bootstrap.js?v=1760489645:32 [bootstrap] startOnce mic initialized — about to arm VAD for voice turns
+voice.js:503 [voice] mic_start {event: 'mic_start', sampleRate: 48000, pollMs: 33}
+voice.js:503 [voice] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: false, turnHintAwaitingWS: false}
+debug.js?v=1760489645:4 [DBG] UI→WS {type: 'AudioStart', mime: 'audio/webm; codecs=opus'}
+voice.js:503 [voice] AudioStart sent {mime: 'audio/webm; codecs=opus', attempt: 'immediate'}
+voice.js:503 [voice] recorder primed {mime: 'audio/webm; codecs=opus', timeslice: 150}
+bootstrap.js?v=1760489645:32 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
+bootstrap.js?v=1760489645:32 [bootstrap] ws listener attached {listener_id: 'askchip-ws#3', event: 'askchip-ws', note: 'bootstrap-markAssistant-once'}
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"AudioStart","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","v":1,"ts_ms":1760489856471,"ts":1760489856.471,"session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","turn_id":null,"step":8}
+askchip_client_hooks.js?v=1760489645:192 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '3fb7be0c-433e-44dd-b27c-49f0374fa31f', …}
+voice.js:503 [voice] vad_speech_start_suppressed {event: 'vad_speech_start_suppressed', reason: 'tts_active_manual_mode'}
 voice.js:499 [voice] speech start ignored while TTS playing (manual mode)
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"turn_action_metadata","event":"turn_action_metadata","kind":"turn_action_metadata","turn_id":"638d61addc6a4dada806dc426fdf0482","is_greet":true,"nlu":{"intent":"fallback","topic":null,"needs_scoping":null,"wants_list":null,"expected_depth":null,"confidence":0.2},"policy":{"action":"offer_steps","verbosity":"brief","show_suggestions":true},"v":1,"ts_ms":1760487065037,"ts":1760487065.037,"sid":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","session_id":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","step":9}
-askchip_client_hooks.js?v=1760486801:192 turn_action_metadata {event: 'turn_action_metadata', kind: 'turn_action_metadata', turn_id: '638d61addc6a4dada806dc426fdf0482', is_greet: true, nlu: {…}, …}
-askchip_client_hooks.js?v=1760486801:160 policy_decision: offer_steps
-askchip_client_hooks.js?v=1760486801:192 suggestions_made {event: 'suggestions_made', kind: 'suggestions_made', turn_id: '638d61addc6a4dada806dc426fdf0482', items: Array(3), max_items: 4, …}
-askchip_client_hooks.js?v=1760486801:192 assistant_chunk {event: 'assistant_chunk', kind: 'assistant_chunk', turn_id: '638d61addc6a4dada806dc426fdf0482', v: 1, ts_ms: 1760487065037, …}
-askchip_client_hooks.js?v=1760486801:192 assistant_end {event: 'assistant_end', kind: 'assistant_end', turn_id: '638d61addc6a4dada806dc426fdf0482', v: 1, ts_ms: 1760487065038, …}
-askchip_client_hooks.js?v=1760486801:280 policy_decision: offer_steps
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"policy_decision","event":"policy_decision","kind":"policy_decision","label":"policy_decision: offer_steps","decision":"offer_steps","sid":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","turn_id":"638d61addc6a4dada806dc426fdf0482","teacher_move":"offer_steps","teacher_move_family":"answer","reason":"meta_override","fallback_fired":false,"fallback_reason":null,"nlu_intent":"fallback","nlu_confidence":0.2,"meta_action":"offer_steps","policy_move":"check_understanding","persona_move":"deep_dive","v":1,"ts_ms":1760487065037,"ts":1760487065.037,"session_id":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","step":10}
-askchip_client_hooks.js?v=1760486801:280 policy_decision: unknown
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"suggestions_made","event":"suggestions_made","kind":"suggestions_made","turn_id":"638d61addc6a4dada806dc426fdf0482","items":[{"text":"Send me the email","source":"policy"},{"text":"Walk me through it live","source":"policy"},{"text":"Show install steps","source":"retrieval"}],"max_items":4,"max_words_per_item":7,"count":3,"sid":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","v":1,"ts_ms":1760487065037,"ts":1760487065.037,"session_id":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","step":11}
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"assistant_chunk","turn_id":"638d61addc6a4dada806dc426fdf0482","text":"Hey James, what should we tackle first?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps","policy_chips":["Send me the email","Walk me through it live"]}
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"suggestions","turn_id":"638d61addc6a4dada806dc426fdf0482","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"}]}
-askchip_client_hooks.js?v=1760486801:239 assistant_end
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"assistant_end","turn_id":"638d61addc6a4dada806dc426fdf0482"}
-askchip_client_hooks.js?v=1760486801:239 assistant_end
-bootstrap.js?v=1760486801:32 [WS→UI] {"type":"tts:start","event":"tts:start","kind":"tts:start","turn_id":"638d61addc6a4dada806dc426fdf0482","v":1,"ts_ms":1760487066138,"ts":1760487066.138,"sid":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","session_id":"f1ab33e1-07de-4a41-8ba7-c02841f8330a","step":14}
-3askchip_client_hooks.js?v=1760486801:239 UtteranceEnd
-askchip_client_hooks.js?v=1760486801:289 state {type: 'state', phase: 'ready'}
-askchip_client_hooks.js?v=1760486801:192 tts:start {event: 'tts:start', kind: 'tts:start', turn_id: '638d61addc6a4dada806dc426fdf0482', v: 1, ts_ms: 1760487066138, …}
-askchip_client_hooks.js?v=1760486801:192 tts:first_chunk {event: 'tts:first_chunk', kind: 'tts:first_chunk', turn_id: '638d61addc6a4dada806dc426fdf0482', v: 1, ts_ms: 1760487066138, …}
-askchip_client_hooks.js?v=1760486801:192 tts:done {event: 'tts:done', kind: 'tts:done', turn_id: '638d61addc6a4dada806dc426fdf0482', v: 1, ts_ms: 1760487066138, …}
-askchip_client_hooks.js?v=1760486801:192 UtteranceEnd {event: 'UtteranceEnd', kind: 'UtteranceEnd', turn_id: '638d61addc6a4dada806dc426fdf0482', reason: 'finalizer', v: 1, …}
-askchip_client_hooks.js?v=1760486801:192 greet:resp {event: 'greet:resp', kind: 'greet:resp', label: 'greet:resp', route: null, turn_id: '638d61addc6a4dada806dc426fdf0482', …}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487069.1187584, step: 18}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487084.151597, step: 18}
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"turn_action_metadata","event":"turn_action_metadata","kind":"turn_action_metadata","turn_id":"df6421792e6143c688319f5a9c4af982","is_greet":true,"nlu":{"intent":"fallback","topic":null,"needs_scoping":null,"wants_list":null,"expected_depth":null,"confidence":0.2},"policy":{"action":"offer_steps","verbosity":"brief","show_suggestions":true},"v":1,"ts_ms":1760489866245,"ts":1760489866.245,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","step":9}
+askchip_client_hooks.js?v=1760489645:280 policy_decision: offer_steps
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"policy_decision","event":"policy_decision","kind":"policy_decision","label":"policy_decision: offer_steps","decision":"offer_steps","sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","turn_id":"df6421792e6143c688319f5a9c4af982","teacher_move":"offer_steps","teacher_move_family":"answer","reason":"meta_override","fallback_fired":false,"fallback_reason":null,"nlu_intent":"fallback","nlu_confidence":0.2,"meta_action":"offer_steps","policy_move":"check_understanding","v":1,"ts_ms":1760489866246,"ts":1760489866.246,"session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","step":10}
+askchip_client_hooks.js?v=1760489645:280 policy_decision: unknown
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"suggestions_made","event":"suggestions_made","kind":"suggestions_made","turn_id":"df6421792e6143c688319f5a9c4af982","items":[{"text":"Send me the email","source":"policy"},{"text":"Walk me through it live","source":"policy"},{"text":"Show install steps","source":"retrieval"}],"max_items":4,"max_words_per_item":7,"count":3,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","v":1,"ts_ms":1760489866246,"ts":1760489866.246,"session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","step":11}
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"assistant_chunk","turn_id":"df6421792e6143c688319f5a9c4af982","text":"Hey James, what's the goal for this session?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps","policy_chips":["Send me the email","Walk me through it live"]}
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"suggestions","turn_id":"df6421792e6143c688319f5a9c4af982","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"}]}
+askchip_client_hooks.js?v=1760489645:239 assistant_end
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"assistant_end","turn_id":"df6421792e6143c688319f5a9c4af982"}
+askchip_client_hooks.js?v=1760489645:239 assistant_end
+askchip_client_hooks.js?v=1760489645:192 turn_action_metadata {event: 'turn_action_metadata', kind: 'turn_action_metadata', turn_id: 'df6421792e6143c688319f5a9c4af982', is_greet: true, nlu: {…}, …}
+askchip_client_hooks.js?v=1760489645:160 policy_decision: offer_steps
+askchip_client_hooks.js?v=1760489645:192 suggestions_made {event: 'suggestions_made', kind: 'suggestions_made', turn_id: 'df6421792e6143c688319f5a9c4af982', items: Array(3), max_items: 4, …}
+askchip_client_hooks.js?v=1760489645:192 assistant_chunk {event: 'assistant_chunk', kind: 'assistant_chunk', turn_id: 'df6421792e6143c688319f5a9c4af982', v: 1, ts_ms: 1760489866246, …}
+askchip_client_hooks.js?v=1760489645:192 assistant_end {event: 'assistant_end', kind: 'assistant_end', turn_id: 'df6421792e6143c688319f5a9c4af982', v: 1, ts_ms: 1760489866246, …}
+bootstrap.js?v=1760489645:32 [WS→UI] {"type":"tts:start","event":"tts:start","kind":"tts:start","turn_id":"df6421792e6143c688319f5a9c4af982","v":1,"ts_ms":1760489867356,"ts":1760489867.356,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","step":14}
+3askchip_client_hooks.js?v=1760489645:239 UtteranceEnd
+askchip_client_hooks.js?v=1760489645:289 state {type: 'state', phase: 'ready'}
+askchip_client_hooks.js?v=1760489645:192 tts:start {event: 'tts:start', kind: 'tts:start', turn_id: 'df6421792e6143c688319f5a9c4af982', v: 1, ts_ms: 1760489867356, …}
+askchip_client_hooks.js?v=1760489645:192 tts:first_chunk {event: 'tts:first_chunk', kind: 'tts:first_chunk', turn_id: 'df6421792e6143c688319f5a9c4af982', v: 1, ts_ms: 1760489867356, …}
+askchip_client_hooks.js?v=1760489645:192 tts:done {event: 'tts:done', kind: 'tts:done', turn_id: 'df6421792e6143c688319f5a9c4af982', v: 1, ts_ms: 1760489867356, …}
+askchip_client_hooks.js?v=1760489645:192 UtteranceEnd {event: 'UtteranceEnd', kind: 'UtteranceEnd', turn_id: 'df6421792e6143c688319f5a9c4af982', reason: 'finalizer', v: 1, …}
+askchip_client_hooks.js?v=1760489645:192 greet:resp {event: 'greet:resp', kind: 'greet:resp', label: 'greet:resp', route: null, turn_id: 'df6421792e6143c688319f5a9c4af982', …}
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489871.0933447, step: 18}
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489886.096625, step: 18}
 voice.js:503 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'manual_disarm'}
 voice.js:503 [voice] recorder_stop_invoked {event: 'recorder_stop_invoked', reason: 'manual_disarm'}
 voice.js:499 [voice] recorder.stop() invoked
-voice.js:503 [voice] recorded chunks too small {bytesSent: 0}
+voice.js:503 [voice] recorded chunks too small {bytesSent: 0}bytesSent: 0[[Prototype]]: Object
 _voiceLog @ voice.js:503
 recorder.onstop @ voice.js:1312Understand this warning
 voice.js:503 [voice] recorder stopped with issues {bytesSent: 0, error: null}
 _voiceLog @ voice.js:503
 recorder.onstop @ voice.js:1323Understand this warning
-ws.js?v=1760486801:124 [DBG] UI→WS {type: 'CloseStream'}
-debug.js?v=1760486801:4 [DBG] UI→WS {type: 'CloseStream'}
-ws.js?v=1760486801:601 CloseStream ack
+ws.js?v=1760489645:124 [DBG] UI→WS {type: 'CloseStream'}
+debug.js?v=1760489645:4 [DBG] UI→WS {type: 'CloseStream'}
+ws.js?v=1760489645:601 CloseStream ack
 voice.js:503 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
-bootstrap.js?v=1760486801:32 [WS close] {code: 1000, reason: 'normal closure'}
-askchip_client_hooks.js?v=1760486801:192 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: 'f1ab33e1-07de-4a41-8ba7-c02841f8330a', …}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487099.1993103, step: 19}
-askchip_client_hooks.js?v=1760486801:192 ws_conn_close {event: 'ws_conn_close', kind: 'ws_conn_close', label: 'ws_conn_close', route: null, conn_id: 'dfd994f3d451445b9fdc0f8c3532d44c', …}
-askchip_client_hooks.js?v=1760486801:192 ws_conn_cleanup {event: 'ws_conn_cleanup', kind: 'ws_conn_cleanup', label: 'ws_conn_cleanup', route: null, conn_id: 'dfd994f3d451445b9fdc0f8c3532d44c', …}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487114.2033544, step: 21}
-ws.js?v=1760486801:32 [ui] visibility=hidden
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487129.2070308, step: 21}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487144.2103658, step: 21}
-ws.js?v=1760486801:32 [ui] visibility=visible
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487159.21419, step: 21}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487174.2176597, step: 21}
-ws.js?v=1760486801:32 [ui] visibility=hidden
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487189.2247818, step: 21}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487204.2284818, step: 21}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487219.2324467, step: 21}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487234.2357967, step: 21}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487249.2422893, step: 21}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487264.246136, step: 21}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487279.2515702, step: 21}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487294.2553985, step: 21}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487309.2598844, step: 21}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487324.2633576, step: 21}
-askchip_client_hooks.js?v=1760486801:192 heartbeat {event: 'heartbeat', ts: 1760487339.2670705, step: 21}
-ws.js?v=1760486801:32 [ui] visibility=visible
+bootstrap.js?v=1760489645:32 [WS close] {code: 1000, reason: 'normal closure'}
+askchip_client_hooks.js?v=1760489645:192 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '3fb7be0c-433e-44dd-b27c-49f0374fa31f', …}
+askchip_client_hooks.js?v=1760489645:192 ws_conn_close {event: 'ws_conn_close', kind: 'ws_conn_close', label: 'ws_conn_close', route: null, conn_id: '1d443dd6e45e4793835690b8dc9d0e4d', …}
+askchip_client_hooks.js?v=1760489645:192 ws_conn_cleanup {event: 'ws_conn_cleanup', kind: 'ws_conn_cleanup', label: 'ws_conn_cleanup', route: null, conn_id: '1d443dd6e45e4793835690b8dc9d0e4d', …}
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489901.1259305, step: 21}
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489916.1311722, step: 21}
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489931.1345456, step: 21}
+ws.js?v=1760489645:32 [ui] visibility=hidden
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489946.1382372, step: 21}
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489961.1418335, step: 21}
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489976.1454105, step: 21}
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489991.1489851, step: 21}
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760490006.152511, step: 21}
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760490021.157739, step: 21}
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760490036.1621323, step: 21}
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760490051.1686463, step: 21}
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760490066.1734855, step: 21}
+ws.js?v=1760489645:32 [ui] visibility=visible
+askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760490081.1804304, step: 21}
