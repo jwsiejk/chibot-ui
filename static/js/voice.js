@@ -11,6 +11,7 @@ import {
 } from './voice/core/index.js';
 import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from './ws_module.js';
 import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
+import { onTtsStart, onTtsEnd, registerTtsEventListener } from './voice/tts/TtsHandlers.js';
 
 export async function initMic(stream = null) { return await _ensureMic(stream); }
 export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
@@ -33,7 +34,6 @@ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
 const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
 const PRE_ROLL_MS = 550;            // maintain ~0.5s pre-roll (shadow buffer)
 const SAFETY_CLOSE_DELAY_MS = 2200; // ~2.2s grace after last chunk
-const POST_TTS_HOLDOFF_MS = 600;    // grace window after Chip begins speaking
 const MANUAL_DEBOUNCE_MS = 300;     // debounce between manual presses
 const MANUAL_NO_AUDIO_CANCEL_MS = 500; // auto-cancel window if no audio captured
 const MANUAL_VAD_IGNORE_MS = 600;   // guard period after manual end before VAD restarts
@@ -42,7 +42,6 @@ const EVIDENCE_MIN_BYTES = 8 * 1024; // minimum payload before commit (~8 KiB)
 const EVIDENCE_MIN_SNR_DB = 3.5;    // require SNR comfortably above noise floor
 const PARTIAL_CONF_THRESHOLD = 0.55; // DG partial high-confidence gate
 const PARTIAL_CONF_RISE_DELTA = 0.05; // rising confidence delta before trust
-const TTS_DECAY_MS = 750;           // 0.75s decay after TTS stops
 const GREET_BARGE_MIN_SNR_DB = 8;
 const GREET_CALIBRATE_DEFAULT_MS = 500;
 const GREET_CALIBRATE_MIN_MS = 400;
@@ -135,7 +134,6 @@ const state = {
   lastAssistantReadyAt: 0,
   currentCommitMode: 'idle',
 };
-
 _refreshManualConfig();
 const BARGE_CONFIRM_DEFAULT_MS = 420;
 let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
@@ -146,55 +144,7 @@ try {
   }
 } catch {}
 bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
-try {
-  window.addEventListener('chip-tts', (ev) => {
-    const detail = ev?.detail || {};
-    const rawState = detail.state;
-    const stateValue = typeof rawState === 'string' ? rawState.trim().toLowerCase() : '';
-
-    if (stateValue === 'playing') {
-      state.ttsPlaying = true;
-      state.assistantReady = false;
-      state.assistantPhase = TurnState.Speaking.toLowerCase();
-      const holdUntil = _now() + POST_TTS_HOLDOFF_MS;
-      state.postTtsHoldUntil = holdUntil;
-      state.ttsMask.start();
-      if (state.evidenceGate.isOpen()) {
-        _abortEvidenceGate('tts_playback_start');
-      }
-
-      const isPrime = detail && detail.prime === true;
-      const playbackConfirmed = detail && (detail.confirmed === true || detail.playbackConfirmed === true);
-      let playbackActive = playbackConfirmed;
-      if (!playbackActive) {
-        try { playbackActive = !!ttsIsPlaying(); } catch { playbackActive = false; }
-      }
-
-      if (!isPrime && playbackActive && state.eligibility === 'blocked_pregreet') {
-        state.eligibility = 'holdoff';
-      }
-      return;
-    }
-
-    const endedStates = new Set(['ended', 'stopped', 'idle', 'paused', '']);
-    if (!endedStates.has(stateValue)) {
-      state.ttsPlaying = stateValue === 'playing';
-      return;
-    }
-
-    state.ttsPlaying = false;
-    state.postTtsHoldUntil = 0;
-    _clearPostTtsHoldTimer();
-    const sigma = Number.isFinite(state.sessionSnrStd) ? state.sessionSnrStd : 0;
-    state.ttsMask.end({ decayMs: TTS_DECAY_MS, snrBoost: Math.max(3, sigma * 1.5) });
-    state.assistantReady = true;
-    state.assistantPhase = TurnState.Ready.toLowerCase();
-    state.lastAssistantReadyAt = _now();
-    if (state.eligibility === 'holdoff') {
-      state.eligibility = 'eligible';
-    }
-  });
-} catch {}
+registerTtsEventListener({ createContext: () => ({ state, now: _now, abortEvidenceGate: _abortEvidenceGate, ttsIsPlaying, clearPostTtsHoldTimer: _clearPostTtsHoldTimer, TurnState }), onTtsStart, onTtsEnd });
 function _now() {
   try {
     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {

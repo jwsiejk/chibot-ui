@@ -1,116 +1,455 @@
-diff --git a/static/js/voice/orchestrator/StateHelpers.js b/static/js/voice/orchestrator/StateHelpers.js
+diff --git a/static/js/voice.js b/static/js/voice.js
+index 5fc688f000f6423ff52a430d1de22d1e6562c173..35d09303719e7921894fa5364ac8127451f2fa76 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -1,70 +1,69 @@
+ import { emitVoiceEvent } from './voice/ui/Events.js';
+ import { VAD } from './voice/vad.js';
+ import {
+   EvidenceGate,
+   HysteresisVAD,
+   NoiseModel,
+   ShadowBuffer,
+   TtsMask,
+   TurnState,
+   dbToRms,
+ } from './voice/core/index.js';
+ import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from './ws_module.js';
+ import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
++import { onTtsStart, onTtsEnd, registerTtsEventListener } from './voice/tts/TtsHandlers.js';
+ 
+ export async function initMic(stream = null) { return await _ensureMic(stream); }
+ export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
+ export function disarmVAD() { _disarm(); }
+ export function isRecording() { return !!(state.rec && state.rec.state === 'recording'); }
+ export function bargeIn() { _bargeIn(); }         // keeps API parity
+ export function setVadBoost(_v) { /* kept for API parity; no-op */ }
+ export function setGreetGateActive(active = true) { _setGreetGateActive(!!active); }
+ export function forceBargeInStart(meta = {}) { return _forceBargeInStart(meta); }
+ export function forceBargeInEnd(opts = {}) { return _forceBargeInEnd(opts); }
+ 
+ // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
+ const WEBM_MIME = 'audio/webm; codecs=opus';
+ const REC_MIME = (typeof MediaRecorder !== 'undefined'
+   && typeof MediaRecorder.isTypeSupported === 'function'
+   && MediaRecorder.isTypeSupported(WEBM_MIME))
+   ? WEBM_MIME
+   : 'audio/webm; codecs=opus';
+ const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
+ const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
+ const PRE_ROLL_MS = 550;            // maintain ~0.5s pre-roll (shadow buffer)
+ const SAFETY_CLOSE_DELAY_MS = 2200; // ~2.2s grace after last chunk
+-const POST_TTS_HOLDOFF_MS = 600;    // grace window after Chip begins speaking
+ const MANUAL_DEBOUNCE_MS = 300;     // debounce between manual presses
+ const MANUAL_NO_AUDIO_CANCEL_MS = 500; // auto-cancel window if no audio captured
+ const MANUAL_VAD_IGNORE_MS = 600;   // guard period after manual end before VAD restarts
+ const EVIDENCE_MIN_SPEECH_MS = 480; // shadow gate must accumulate >= ~0.5s
+ const EVIDENCE_MIN_BYTES = 8 * 1024; // minimum payload before commit (~8 KiB)
+ const EVIDENCE_MIN_SNR_DB = 3.5;    // require SNR comfortably above noise floor
+ const PARTIAL_CONF_THRESHOLD = 0.55; // DG partial high-confidence gate
+ const PARTIAL_CONF_RISE_DELTA = 0.05; // rising confidence delta before trust
+-const TTS_DECAY_MS = 750;           // 0.75s decay after TTS stops
+ const GREET_BARGE_MIN_SNR_DB = 8;
+ const GREET_CALIBRATE_DEFAULT_MS = 500;
+ const GREET_CALIBRATE_MIN_MS = 400;
+ const GREET_CALIBRATE_MAX_MS = 600;
+ const state = {
+   stream: null,
+   ctx: null,
+   source: null,
+   analyser: null,
+   highpass: null,
+   noiseGate: null,
+   limiter: null,
+   vad: null,
+   rec: null,
+   finalized: false,
+   postFinalHoldUntil: 0,
+   wsListener: null,
+   chunkSendPromise: Promise.resolve(),
+   chunkBytesSent: 0,
+   chunkSendError: null,
+   turnTimer: null,
+   turnOpen: false,   // track whether a turn is currently open server-side
+   turnClosePromise: null,
+   turnHintSent: false,
+   turnHintMime: null,
+@@ -113,110 +112,61 @@ const state = {
+   sessionSnrMean: 0,
+   sessionSnrM2: 0,
+   sessionSnrStd: 0,
+   sessionSnrSamples: 0,
+   evidenceGate: new EvidenceGate(),
+   evidenceGateCommitPromise: null,
+   manual: {
+     enabled: true,
+     modeManualOnly: false,
+     autoCommitWhenReady: true,
+     buttonDown: false,
+     active: false,
+     debounceUntil: 0,
+     ignoreVadUntil: 0,
+     deferCloseStream: false,
+     sentStartFrame: false,
+     noAudioTimer: null,
+     startAt: 0,
+     firstChunkAt: 0,
+   },
+   assistantPhase: 'init',
+   assistantReady: false,
+   lastAssistantReadyAt: 0,
+   currentCommitMode: 'idle',
+ };
+-
+ _refreshManualConfig();
+ const BARGE_CONFIRM_DEFAULT_MS = 420;
+ let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
+ try {
+   const cfg = window.__askchip_config || {};
+   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
+     bargeConfirmMs = cfg.barge_confirm_ms;
+   }
+ } catch {}
+ bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
+-try {
+-  window.addEventListener('chip-tts', (ev) => {
+-    const detail = ev?.detail || {};
+-    const rawState = detail.state;
+-    const stateValue = typeof rawState === 'string' ? rawState.trim().toLowerCase() : '';
+-
+-    if (stateValue === 'playing') {
+-      state.ttsPlaying = true;
+-      state.assistantReady = false;
+-      state.assistantPhase = TurnState.Speaking.toLowerCase();
+-      const holdUntil = _now() + POST_TTS_HOLDOFF_MS;
+-      state.postTtsHoldUntil = holdUntil;
+-      state.ttsMask.start();
+-      if (state.evidenceGate.isOpen()) {
+-        _abortEvidenceGate('tts_playback_start');
+-      }
+-
+-      const isPrime = detail && detail.prime === true;
+-      const playbackConfirmed = detail && (detail.confirmed === true || detail.playbackConfirmed === true);
+-      let playbackActive = playbackConfirmed;
+-      if (!playbackActive) {
+-        try { playbackActive = !!ttsIsPlaying(); } catch { playbackActive = false; }
+-      }
+-
+-      if (!isPrime && playbackActive && state.eligibility === 'blocked_pregreet') {
+-        state.eligibility = 'holdoff';
+-      }
+-      return;
+-    }
+-
+-    const endedStates = new Set(['ended', 'stopped', 'idle', 'paused', '']);
+-    if (!endedStates.has(stateValue)) {
+-      state.ttsPlaying = stateValue === 'playing';
+-      return;
+-    }
+-
+-    state.ttsPlaying = false;
+-    state.postTtsHoldUntil = 0;
+-    _clearPostTtsHoldTimer();
+-    const sigma = Number.isFinite(state.sessionSnrStd) ? state.sessionSnrStd : 0;
+-    state.ttsMask.end({ decayMs: TTS_DECAY_MS, snrBoost: Math.max(3, sigma * 1.5) });
+-    state.assistantReady = true;
+-    state.assistantPhase = TurnState.Ready.toLowerCase();
+-    state.lastAssistantReadyAt = _now();
+-    if (state.eligibility === 'holdoff') {
+-      state.eligibility = 'eligible';
+-    }
+-  });
+-} catch {}
++registerTtsEventListener({ createContext: () => ({ state, now: _now, abortEvidenceGate: _abortEvidenceGate, ttsIsPlaying, clearPostTtsHoldTimer: _clearPostTtsHoldTimer, TurnState }), onTtsStart, onTtsEnd });
+ function _now() {
+   try {
+     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+       return performance.now();
+     }
+   } catch {}
+   return Date.now();
+ }
+ function _normalizePhase(value) {
+   if (typeof value !== 'string') return '';
+   return value.trim().toLowerCase();
+ }
+ function _updateAssistantPhaseFromDetail(detail = {}) {
+   const phase = _normalizePhase(detail?.phase)
+     || _normalizePhase(detail?.channel?.phase)
+     || _normalizePhase(detail?.state);
+   const readyFlag = _valueIsReadyFlag(detail?.ready_for_user)
+     || _valueIsReadyFlag(detail?.channel?.ready_for_user);
+ 
+   if (phase) {
+     if (phase === 'ready' || phase === 'ready_for_user') {
+       state.assistantPhase = TurnState.Ready.toLowerCase();
+       state.assistantReady = true;
+       state.lastAssistantReadyAt = _now();
+     } else if (phase === 'speaking' || phase === 'tts') {
+diff --git a/static/js/voice/tts/TtsHandlers.js b/static/js/voice/tts/TtsHandlers.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..f682eeeb62f93d54e9c575b3b746c6e7336c6c83
+index 0000000000000000000000000000000000000000..7c39c1aa570aa7b66e067adb5a343f38cd149cb8
 --- /dev/null
-+++ b/static/js/voice/orchestrator/StateHelpers.js
-@@ -0,0 +1,110 @@
-+import { TurnState } from '../core/TurnState.js';
++++ b/static/js/voice/tts/TtsHandlers.js
+@@ -0,0 +1,137 @@
 +import { emitVoiceEvent } from '../ui/Events.js';
 +
-+export function setState(next, ctx) {
-+  if (ctx && typeof ctx === 'object') {
-+    ctx.state = next;
++const POST_TTS_HOLDOFF_MS = 600;
++const TTS_DECAY_MS = 750;
++const ENDED_STATES = new Set(['ended', 'stopped', 'idle', 'paused', '']);
++
++function normalizeStateValue(value) {
++  return typeof value === 'string' ? value.trim().toLowerCase() : '';
++}
++
++function extractDetailAndState(ctx = {}) {
++  const detail = ctx.detail ?? ctx.event?.detail ?? {};
++  const stateValue = normalizeStateValue(detail?.state);
++  ctx.detail = detail;
++  ctx.stateValue = stateValue;
++  return { detail, stateValue };
++}
++
++function resolveNowFn(now) {
++  if (typeof now === 'function') {
++    return now;
 +  }
-+  return next;
++  return () => Date.now();
 +}
 +
-+export function emitVoiceState(stateName, detail = undefined) {
-+  const payload = detail && typeof detail === 'object'
-+    ? { state: stateName, ...detail }
-+    : { state: stateName };
-+  emitVoiceEvent('state', payload);
-+  return stateName;
-+}
-+
-+export function normalizePhase(value) {
-+  if (typeof value !== 'string') return '';
-+  return value.trim().toLowerCase();
-+}
-+
-+export function valueIsReadyFlag(value) {
-+  if (value === true || value === 1) return true;
-+  if (typeof value === 'string') {
-+    const lowered = value.trim().toLowerCase();
-+    if (lowered === 'true' || lowered === '1' || lowered === 'yes') return true;
++export function onTtsStart(ctx = {}) {
++  const { state, abortEvidenceGate, ttsIsPlaying, TurnState } = ctx;
++  if (!state) {
++    return false;
 +  }
-+  return false;
++
++  const { detail, stateValue } = extractDetailAndState(ctx);
++  if (stateValue !== 'playing') {
++    return false;
++  }
++
++  const nowFn = resolveNowFn(ctx.now);
++  state.ttsPlaying = true;
++  state.assistantReady = false;
++  state.assistantPhase = typeof TurnState?.Speaking === 'string'
++    ? TurnState.Speaking.toLowerCase()
++    : 'speaking';
++  state.postTtsHoldUntil = nowFn() + POST_TTS_HOLDOFF_MS;
++  if (state.ttsMask && typeof state.ttsMask.start === 'function') {
++    state.ttsMask.start();
++  }
++  if (state.evidenceGate?.isOpen?.() && typeof abortEvidenceGate === 'function') {
++    abortEvidenceGate('tts_playback_start');
++  }
++
++  const isPrime = detail?.prime === true;
++  const playbackConfirmed = detail?.confirmed === true || detail?.playbackConfirmed === true;
++  let playbackActive = !!playbackConfirmed;
++  if (!playbackActive && typeof ttsIsPlaying === 'function') {
++    try {
++      playbackActive = !!ttsIsPlaying();
++    } catch {
++      playbackActive = false;
++    }
++  }
++
++  if (!isPrime && playbackActive && state.eligibility === 'blocked_pregreet') {
++    state.eligibility = 'holdoff';
++  }
++
++  emitVoiceEvent('tts', {
++    state: 'playing',
++    prime: isPrime,
++    playbackConfirmed: playbackConfirmed === true,
++  });
++
++  return true;
 +}
 +
-+export function updateAssistantPhaseFromDetail(ctx, detail = {}, nowProvider = Date.now) {
-+  if (!ctx || typeof ctx !== 'object') {
++export function onTtsEnd(ctx = {}) {
++  const { state, clearPostTtsHoldTimer, TurnState } = ctx;
++  if (!state) {
++    return false;
++  }
++
++  const { stateValue } = extractDetailAndState(ctx);
++  state.ttsPlaying = stateValue === 'playing';
++  if (!ENDED_STATES.has(stateValue)) {
++    return false;
++  }
++
++  const nowFn = resolveNowFn(ctx.now);
++  state.ttsPlaying = false;
++  state.postTtsHoldUntil = 0;
++  if (typeof clearPostTtsHoldTimer === 'function') {
++    clearPostTtsHoldTimer();
++  }
++
++  const sigma = Number.isFinite(state.sessionSnrStd) ? state.sessionSnrStd : 0;
++  if (state.ttsMask && typeof state.ttsMask.end === 'function') {
++    state.ttsMask.end({
++      decayMs: TTS_DECAY_MS,
++      snrBoost: Math.max(3, sigma * 1.5),
++    });
++  }
++
++  state.assistantReady = true;
++  state.assistantPhase = typeof TurnState?.Ready === 'string'
++    ? TurnState.Ready.toLowerCase()
++    : 'ready';
++  state.lastAssistantReadyAt = nowFn();
++  if (state.eligibility === 'holdoff') {
++    state.eligibility = 'eligible';
++  }
++
++  emitVoiceEvent('tts', { state: stateValue || 'ended' });
++
++  return true;
++}
++
++export function registerTtsEventListener({ createContext, onTtsStart: startFn, onTtsEnd: endFn, windowRef } = {}) {
++  const win = windowRef || (typeof window !== 'undefined' ? window : null);
++  const addEventListener = win?.addEventListener?.bind(win);
++  if (!addEventListener) {
 +    return;
 +  }
 +
-+  const resolveNow = () => {
-+    try {
-+      return typeof nowProvider === 'function' ? nowProvider() : nowProvider;
-+    } catch {
-+      return Date.now();
-+    }
++  try {
++    addEventListener('chip-tts', (event) => {
++      const contextBase = typeof createContext === 'function' ? createContext(event) || {} : {};
++      contextBase.event = event;
++      const handledStart = typeof startFn === 'function' ? startFn(contextBase) : false;
++      if (handledStart) {
++        return;
++      }
++      const handledEnd = typeof endFn === 'function' ? endFn(contextBase) : false;
++      if (handledEnd) {
++        return;
++      }
++    });
++  } catch {}
++}
+diff --git a/tests/js/voice-tts-handlers.test.mjs b/tests/js/voice-tts-handlers.test.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..a8cbdf923c2a5f1b043f072d2cab6d4c7897610f
+--- /dev/null
++++ b/tests/js/voice-tts-handlers.test.mjs
+@@ -0,0 +1,118 @@
++import { test } from 'node:test';
++import assert from 'node:assert/strict';
++
++import { onTtsStart, onTtsEnd, registerTtsEventListener } from '../../static/js/voice/tts/TtsHandlers.js';
++
++const listenerMap = new Map();
++
++const windowStub = globalThis.window || {};
++windowStub.ADVANCED_LOGGING_ENABLED = false;
++windowStub.addEventListener = function addEventListener(type, handler) {
++  if (!listenerMap.has(type)) {
++    listenerMap.set(type, new Set());
++  }
++  listenerMap.get(type).add(handler);
++};
++windowStub.dispatchEvent = function dispatchEvent(event) {
++  const listeners = listenerMap.get(event.type);
++  if (!listeners) return true;
++  for (const handler of Array.from(listeners)) {
++    handler(event);
++  }
++  return true;
++};
++globalThis.window = windowStub;
++
++function resetWindowListeners() {
++  listenerMap.clear();
++}
++
++test('onTtsStart updates state for playing events', () => {
++  const maskCalls = [];
++  const state = {
++    ttsPlaying: false,
++    assistantReady: true,
++    assistantPhase: 'init',
++    postTtsHoldUntil: 0,
++    ttsMask: { start: () => maskCalls.push('start'), end: () => {} },
++    evidenceGate: { isOpen: () => false },
++    eligibility: 'blocked_pregreet',
++  };
++  const ctx = {
++    state,
++    now: () => 1000,
++    abortEvidenceGate: () => {},
++    ttsIsPlaying: () => true,
++    TurnState: { Speaking: 'SPEAKING', Ready: 'READY' },
++    event: { detail: { state: 'playing' } },
 +  };
 +
-+  const phase = normalizePhase(detail?.phase)
-+    || normalizePhase(detail?.channel?.phase)
-+    || normalizePhase(detail?.state);
++  const result = onTtsStart(ctx);
 +
-+  const readyFlag = valueIsReadyFlag(detail?.ready_for_user)
-+    || valueIsReadyFlag(detail?.channel?.ready_for_user);
++  assert.equal(result, true);
++  assert.equal(state.ttsPlaying, true);
++  assert.equal(state.assistantReady, false);
++  assert.equal(state.assistantPhase, 'speaking');
++  assert.equal(state.postTtsHoldUntil, 1600);
++  assert.equal(state.eligibility, 'holdoff');
++  assert.deepEqual(maskCalls, ['start']);
++});
 +
-+  if (phase) {
-+    if (phase === 'ready' || phase === 'ready_for_user') {
-+      ctx.assistantPhase = TurnState.Ready.toLowerCase();
-+      ctx.assistantReady = true;
-+      ctx.lastAssistantReadyAt = resolveNow();
-+    } else if (phase === 'speaking' || phase === 'tts') {
-+      ctx.assistantPhase = TurnState.Speaking.toLowerCase();
-+      ctx.assistantReady = false;
-+    } else if (phase === 'thinking') {
-+      ctx.assistantPhase = TurnState.Thinking.toLowerCase();
-+      ctx.assistantReady = false;
-+    } else if (phase === 'listening') {
-+      ctx.assistantPhase = TurnState.Listening.toLowerCase();
-+    } else {
-+      ctx.assistantPhase = phase;
-+    }
-+  }
++test('onTtsEnd resets playback state for ended events', () => {
++  let cleared = 0;
++  const maskArgs = [];
++  const state = {
++    ttsPlaying: true,
++    postTtsHoldUntil: 500,
++    sessionSnrStd: 2,
++    assistantReady: false,
++    assistantPhase: 'speaking',
++    lastAssistantReadyAt: 0,
++    eligibility: 'holdoff',
++    ttsMask: { start: () => {}, end: (args) => maskArgs.push(args) },
++  };
++  const ctx = {
++    state,
++    now: () => 2000,
++    clearPostTtsHoldTimer: () => { cleared += 1; },
++    TurnState: { Ready: 'READY', Speaking: 'SPEAKING' },
++    event: { detail: { state: 'ended' } },
++  };
 +
-+  if (readyFlag && !ctx.assistantReady) {
-+    ctx.assistantReady = true;
-+    ctx.lastAssistantReadyAt = resolveNow();
-+  }
-+  if (readyFlag === false) {
-+    ctx.assistantReady = false;
-+  }
-+}
++  const result = onTtsEnd(ctx);
 +
-+export function clearGreetGateWaiters(ctx, result = false) {
-+  if (!ctx || typeof ctx !== 'object') {
-+    return;
-+  }
-+  const waiters = Array.isArray(ctx.greetGateWaiters) ? ctx.greetGateWaiters : [];
-+  ctx.greetGateWaiters = [];
-+  for (const waiter of waiters) {
-+    try { waiter(result); } catch {}
-+  }
-+}
++  assert.equal(result, true);
++  assert.equal(cleared, 1);
++  assert.equal(state.ttsPlaying, false);
++  assert.equal(state.postTtsHoldUntil, 0);
++  assert.equal(state.assistantReady, true);
++  assert.equal(state.assistantPhase, 'ready');
++  assert.equal(state.lastAssistantReadyAt, 2000);
++  assert.equal(state.eligibility, 'eligible');
++  assert.deepEqual(maskArgs, [{ decayMs: 750, snrBoost: 3 }]);
++});
 +
-+export function clearGreetGateCalibrateTimer(ctx) {
-+  if (!ctx || typeof ctx !== 'object') {
-+    return;
-+  }
-+  if (ctx.greetGateCalibrateTimer) {
-+    try { clearTimeout(ctx.greetGateCalibrateTimer); } catch {}
-+  }
-+  ctx.greetGateCalibrateTimer = null;
-+  ctx.greetGateCalibrateUntil = 0;
-+  ctx.greetGateCalibrateLastMs = null;
-+}
++test('registerTtsEventListener reuses context between handlers', () => {
++  resetWindowListeners();
++  const contexts = [];
 +
-+export function resetGreetGateState(ctx) {
-+  if (!ctx || typeof ctx !== 'object') {
-+    return;
-+  }
-+  clearGreetGateCalibrateTimer(ctx);
-+  ctx.greetGatePhase = 'idle';
-+  ctx.greetGateLastSignal = null;
-+}
++  registerTtsEventListener({
++    createContext: () => ({ markers: [] }),
++    onTtsStart: (ctx) => {
++      contexts.push({ phase: 'start', ctx });
++      ctx.markers.push('start');
++      return false;
++    },
++    onTtsEnd: (ctx) => {
++      contexts.push({ phase: 'end', ctx });
++      ctx.markers.push('end');
++      return true;
++    },
++  });
++
++  window.dispatchEvent({ type: 'chip-tts', detail: { state: 'ended' } });
++
++  assert.equal(contexts.length, 2);
++  assert.strictEqual(contexts[0].ctx, contexts[1].ctx);
++  assert.deepEqual(contexts[1].ctx.markers, ['start', 'end']);
++});
