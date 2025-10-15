@@ -1,99 +1,335 @@
-heartbeat Object
-askchip_client_hooks.js?v=1760489645:192 heartbeat Object
-bootstrap.js?v=1760489645:32 [AskChip] bootstrap loaded
-debug.js?v=1760489645:4 [DBG] debug:on Object
-askchip_client_hooks.js?v=1760489645:192 heartbeat Object
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489855.704977, step: 0}
-bootstrap.js?v=1760489645:32 [bootstrap] startOnce called N=1
-ws.js?v=1760489645:124 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760489645', version: '1760489645', flags: undefined, reconnectEnabled: true, sessionStarted: false}
-ws.js?v=1760489645:124 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760489645:32 [bootstrap] ws listener attached {listener_id: 'askchip-ws#1', event: 'askchip-ws', note: 'bootstrap-wire'}
-bootstrap.js?v=1760489645:32 [bootstrap] ws listener attached {listener_id: 'askchip-ws-close#2', event: 'askchip-ws-close', note: 'bootstrap-wire'}
-bootstrap.js?v=1760489645:32 [bootstrap] startOnce sending greet configure
-debug.js?v=1760489645:4 [DBG] UI→WS {type: 'Configure', session_id: '3fb7be0c-433e-44dd-b27c-49f0374fa31f', greet: true, reset: 1, feature_manual_barge_in: true, …}
-bootstrap.js?v=1760489645:32 [bootstrap] startOnce greet configure sent — recorder setup will follow
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"ready","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f"}
-askchip_client_hooks.js?v=1760489645:192 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760489856110, …}
-askchip_client_hooks.js?v=1760489645:192 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760489645:192 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '3fb7be0c-433e-44dd-b27c-49f0374fa31f', …}
-askchip_client_hooks.js?v=1760489645:192 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '1d443dd6e45e4793835690b8dc9d0e4d', …}
-askchip_client_hooks.js?v=1760489645:192 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '3fb7be0c-433e-44dd-b27c-49f0374fa31f', …}
-askchip_client_hooks.js?v=1760489645:192 greet:reset {event: 'greet:reset', kind: 'greet:reset', label: 'greet:reset /ws/v1/chat', route: '/ws/v1/chat', greet_seq: 1, …}
-askchip_client_hooks.js?v=1760489645:168 session_goal {event: 'session_goal', kind: 'session_goal', label: 'session_goal:normal', phase: 'clarify', depth: 'normal', …}
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"Configure","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","v":1,"ts_ms":1760489856290,"ts":1760489856.29,"session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","turn_id":null,"step":5}
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"Configure","sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f"}
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"greet:reset","event":"greet:reset","kind":"greet:reset","label":"greet:reset /ws/v1/chat","route":"/ws/v1/chat","greet_seq":1,"v":1,"ts_ms":1760489856290,"ts":1760489856.29,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","turn_id":null,"step":6}
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"greet:reset","route":"/ws/v1/chat","label":"greet:reset","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","greet_seq":1,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f"}
-askchip_client_hooks.js?v=1760489645:286 session_goal {type: 'session_goal', event: 'session_goal', kind: 'session_goal', label: 'session_goal:normal', phase: 'clarify', …}
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"session_goal","event":"session_goal","kind":"session_goal","label":"session_goal:normal","phase":"clarify","depth":"normal","delivery_pref":"explain","working_intent":"greet","entities":{"products":[],"keywords":[]},"confirmed":["phase","depth","delivery_pref","working_intent"],"v":1,"ts_ms":1760489856292,"ts":1760489856.292,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","turn_id":null,"step":7}
-askchip_client_hooks.js?v=1760489645:286 session_goal {type: 'session_goal', phase: 'clarify', depth: 'normal', delivery_pref: 'explain', working_intent: 'greet', …}
-voice.js:503 [voice] mic_device_selected {event: 'mic_device_selected', label: 'Microphone Array (Intel® Smart Sound Technology for Digital Microphones)', sampleRate: 48000, channels: 1}
-bootstrap.js?v=1760489645:32 [bootstrap] startOnce mic initialized — about to arm VAD for voice turns
-voice.js:503 [voice] mic_start {event: 'mic_start', sampleRate: 48000, pollMs: 33}
-voice.js:503 [voice] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: false, turnHintAwaitingWS: false}
-debug.js?v=1760489645:4 [DBG] UI→WS {type: 'AudioStart', mime: 'audio/webm; codecs=opus'}
-voice.js:503 [voice] AudioStart sent {mime: 'audio/webm; codecs=opus', attempt: 'immediate'}
-voice.js:503 [voice] recorder primed {mime: 'audio/webm; codecs=opus', timeslice: 150}
-bootstrap.js?v=1760489645:32 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
-bootstrap.js?v=1760489645:32 [bootstrap] ws listener attached {listener_id: 'askchip-ws#3', event: 'askchip-ws', note: 'bootstrap-markAssistant-once'}
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"AudioStart","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","v":1,"ts_ms":1760489856471,"ts":1760489856.471,"session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","turn_id":null,"step":8}
-askchip_client_hooks.js?v=1760489645:192 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '3fb7be0c-433e-44dd-b27c-49f0374fa31f', …}
-voice.js:503 [voice] vad_speech_start_suppressed {event: 'vad_speech_start_suppressed', reason: 'tts_active_manual_mode'}
+askchip_client_hooks.js?v=1760495805:192 heartbeat Object
+askchip_client_hooks.js?v=1760495805:192 heartbeat Object
+bootstrap.js?v=1760495805:32 [AskChip] bootstrap loaded
+debug.js?v=1760495805:4 [DBG] debug:on Object
+bootstrap.js?v=1760495805:32 [bootstrap] startOnce called N=1
+ws.js?v=1760495805:124 [ws] openWS build Object
+ws.js?v=1760495805:124 [ws] openWS options= Object reconnect= true
+bootstrap.js?v=1760495805:32 [bootstrap] ws listener attached Object
+bootstrap.js?v=1760495805:32 [bootstrap] ws listener attached Object
+bootstrap.js?v=1760495805:32 [bootstrap] startOnce sending greet configure
+debug.js?v=1760495805:4 [DBG] UI→WS Object
+bootstrap.js?v=1760495805:32 [bootstrap] startOnce greet configure sent — recorder setup will follow
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"ready","session_id":"85f547b2-d77b-41fb-aa8a-f223aa69e979"}
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"Configure","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"85f547b2-d77b-41fb-aa8a-f223aa69e979","v":1,"ts_ms":1760496184115,"ts":1760496184.115,"session_id":"85f547b2-d77b-41fb-aa8a-f223aa69e979","turn_id":null,"step":47}
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"Configure","sid":"85f547b2-d77b-41fb-aa8a-f223aa69e979","session_id":"85f547b2-d77b-41fb-aa8a-f223aa69e979"}
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"greet:reset","event":"greet:reset","kind":"greet:reset","label":"greet:reset /ws/v1/chat","route":"/ws/v1/chat","greet_seq":1,"v":1,"ts_ms":1760496184115,"ts":1760496184.115,"sid":"85f547b2-d77b-41fb-aa8a-f223aa69e979","session_id":"85f547b2-d77b-41fb-aa8a-f223aa69e979","turn_id":null,"step":48}
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"greet:reset","route":"/ws/v1/chat","label":"greet:reset","session_id":"85f547b2-d77b-41fb-aa8a-f223aa69e979","greet_seq":1,"sid":"85f547b2-d77b-41fb-aa8a-f223aa69e979"}
+askchip_client_hooks.js?v=1760495805:286 session_goal Object
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"session_goal","event":"session_goal","kind":"session_goal","label":"session_goal:normal","phase":"clarify","depth":"normal","delivery_pref":"explain","working_intent":"greet","entities":{"products":[],"keywords":[]},"confirmed":["phase","depth","delivery_pref","working_intent"],"v":1,"ts_ms":1760496184116,"ts":1760496184.116,"sid":"85f547b2-d77b-41fb-aa8a-f223aa69e979","session_id":"85f547b2-d77b-41fb-aa8a-f223aa69e979","turn_id":null,"step":49}
+askchip_client_hooks.js?v=1760495805:286 session_goal Object
+askchip_client_hooks.js?v=1760495805:192 ws_scope_arrived Object
+askchip_client_hooks.js?v=1760495805:192 ws_handshake_enter Object
+askchip_client_hooks.js?v=1760495805:192 ws_conn_active Object
+voice.js:503 [voice] mic_device_selected Object
+bootstrap.js?v=1760495805:32 [bootstrap] startOnce mic initialized — about to arm VAD for voice turns
+voice.js:503 [voice] mic_start Object
+voice.js:503 [voice] ensure AudioStart called Object
+debug.js?v=1760495805:4 [DBG] UI→WS Object
+voice.js:503 [voice] AudioStart sent Object
+voice.js:503 [voice] recorder primed Object
+bootstrap.js?v=1760495805:32 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
+bootstrap.js?v=1760495805:32 [bootstrap] ws listener attached Object
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"AudioStart","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"85f547b2-d77b-41fb-aa8a-f223aa69e979","v":1,"ts_ms":1760496184298,"ts":1760496184.298,"session_id":"85f547b2-d77b-41fb-aa8a-f223aa69e979","turn_id":null,"step":50}
+voice.js:503 [voice] vad_speech_start_suppressed Object
 voice.js:499 [voice] speech start ignored while TTS playing (manual mode)
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"turn_action_metadata","event":"turn_action_metadata","kind":"turn_action_metadata","turn_id":"df6421792e6143c688319f5a9c4af982","is_greet":true,"nlu":{"intent":"fallback","topic":null,"needs_scoping":null,"wants_list":null,"expected_depth":null,"confidence":0.2},"policy":{"action":"offer_steps","verbosity":"brief","show_suggestions":true},"v":1,"ts_ms":1760489866245,"ts":1760489866.245,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","step":9}
-askchip_client_hooks.js?v=1760489645:280 policy_decision: offer_steps
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"policy_decision","event":"policy_decision","kind":"policy_decision","label":"policy_decision: offer_steps","decision":"offer_steps","sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","turn_id":"df6421792e6143c688319f5a9c4af982","teacher_move":"offer_steps","teacher_move_family":"answer","reason":"meta_override","fallback_fired":false,"fallback_reason":null,"nlu_intent":"fallback","nlu_confidence":0.2,"meta_action":"offer_steps","policy_move":"check_understanding","v":1,"ts_ms":1760489866246,"ts":1760489866.246,"session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","step":10}
-askchip_client_hooks.js?v=1760489645:280 policy_decision: unknown
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"suggestions_made","event":"suggestions_made","kind":"suggestions_made","turn_id":"df6421792e6143c688319f5a9c4af982","items":[{"text":"Send me the email","source":"policy"},{"text":"Walk me through it live","source":"policy"},{"text":"Show install steps","source":"retrieval"}],"max_items":4,"max_words_per_item":7,"count":3,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","v":1,"ts_ms":1760489866246,"ts":1760489866.246,"session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","step":11}
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"assistant_chunk","turn_id":"df6421792e6143c688319f5a9c4af982","text":"Hey James, what's the goal for this session?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps","policy_chips":["Send me the email","Walk me through it live"]}
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"suggestions","turn_id":"df6421792e6143c688319f5a9c4af982","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"}]}
-askchip_client_hooks.js?v=1760489645:239 assistant_end
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"assistant_end","turn_id":"df6421792e6143c688319f5a9c4af982"}
-askchip_client_hooks.js?v=1760489645:239 assistant_end
-askchip_client_hooks.js?v=1760489645:192 turn_action_metadata {event: 'turn_action_metadata', kind: 'turn_action_metadata', turn_id: 'df6421792e6143c688319f5a9c4af982', is_greet: true, nlu: {…}, …}
-askchip_client_hooks.js?v=1760489645:160 policy_decision: offer_steps
-askchip_client_hooks.js?v=1760489645:192 suggestions_made {event: 'suggestions_made', kind: 'suggestions_made', turn_id: 'df6421792e6143c688319f5a9c4af982', items: Array(3), max_items: 4, …}
-askchip_client_hooks.js?v=1760489645:192 assistant_chunk {event: 'assistant_chunk', kind: 'assistant_chunk', turn_id: 'df6421792e6143c688319f5a9c4af982', v: 1, ts_ms: 1760489866246, …}
-askchip_client_hooks.js?v=1760489645:192 assistant_end {event: 'assistant_end', kind: 'assistant_end', turn_id: 'df6421792e6143c688319f5a9c4af982', v: 1, ts_ms: 1760489866246, …}
-bootstrap.js?v=1760489645:32 [WS→UI] {"type":"tts:start","event":"tts:start","kind":"tts:start","turn_id":"df6421792e6143c688319f5a9c4af982","v":1,"ts_ms":1760489867356,"ts":1760489867.356,"sid":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","session_id":"3fb7be0c-433e-44dd-b27c-49f0374fa31f","step":14}
-3askchip_client_hooks.js?v=1760489645:239 UtteranceEnd
-askchip_client_hooks.js?v=1760489645:289 state {type: 'state', phase: 'ready'}
-askchip_client_hooks.js?v=1760489645:192 tts:start {event: 'tts:start', kind: 'tts:start', turn_id: 'df6421792e6143c688319f5a9c4af982', v: 1, ts_ms: 1760489867356, …}
-askchip_client_hooks.js?v=1760489645:192 tts:first_chunk {event: 'tts:first_chunk', kind: 'tts:first_chunk', turn_id: 'df6421792e6143c688319f5a9c4af982', v: 1, ts_ms: 1760489867356, …}
-askchip_client_hooks.js?v=1760489645:192 tts:done {event: 'tts:done', kind: 'tts:done', turn_id: 'df6421792e6143c688319f5a9c4af982', v: 1, ts_ms: 1760489867356, …}
-askchip_client_hooks.js?v=1760489645:192 UtteranceEnd {event: 'UtteranceEnd', kind: 'UtteranceEnd', turn_id: 'df6421792e6143c688319f5a9c4af982', reason: 'finalizer', v: 1, …}
-askchip_client_hooks.js?v=1760489645:192 greet:resp {event: 'greet:resp', kind: 'greet:resp', label: 'greet:resp', route: null, turn_id: 'df6421792e6143c688319f5a9c4af982', …}
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489871.0933447, step: 18}
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489886.096625, step: 18}
-voice.js:503 [voice] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'manual_disarm'}
-voice.js:503 [voice] recorder_stop_invoked {event: 'recorder_stop_invoked', reason: 'manual_disarm'}
-voice.js:499 [voice] recorder.stop() invoked
-voice.js:503 [voice] recorded chunks too small {bytesSent: 0}bytesSent: 0[[Prototype]]: Object
-_voiceLog @ voice.js:503
-recorder.onstop @ voice.js:1312Understand this warning
-voice.js:503 [voice] recorder stopped with issues {bytesSent: 0, error: null}
-_voiceLog @ voice.js:503
-recorder.onstop @ voice.js:1323Understand this warning
-ws.js?v=1760489645:124 [DBG] UI→WS {type: 'CloseStream'}
-debug.js?v=1760489645:4 [DBG] UI→WS {type: 'CloseStream'}
-ws.js?v=1760489645:601 CloseStream ack
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"turn_action_metadata","event":"turn_action_metadata","kind":"turn_action_metadata","turn_id":"5ee9e5ceacee4d5ea06d4d57ee8fbaf5","is_greet":true,"nlu":{"intent":"fallback","topic":null,"needs_scoping":null,"wants_list":null,"expected_depth":null,"confidence":0.2},"policy":{"action":"offer_steps","verbosity":"brief","show_suggestions":true},"v":1,"ts_ms":1760496186565,"ts":1760496186.565,"sid":"85f547b2-d77b-41fb-aa8a-f223aa69e979","session_id":"85f547b2-d77b-41fb-aa8a-f223aa69e979","step":51}
+askchip_client_hooks.js?v=1760495805:280 policy_decision: offer_steps
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"policy_decision","event":"policy_decision","kind":"policy_decision","label":"policy_decision: offer_steps","decision":"offer_steps","sid":"85f547b2-d77b-41fb-aa8a-f223aa69e979","turn_id":"5ee9e5ceacee4d5ea06d4d57ee8fbaf5","teacher_move":"offer_steps","teacher_move_family":"answer","reason":"meta_override","fallback_fired":false,"fallback_reason":null,"nlu_intent":"fallback","nlu_confidence":0.2,"meta_action":"offer_steps","policy_move":"check_understanding","persona_move":"summarize_next_actions","v":1,"ts_ms":1760496186565,"ts":1760496186.565,"session_id":"85f547b2-d77b-41fb-aa8a-f223aa69e979","step":52}
+askchip_client_hooks.js?v=1760495805:280 policy_decision: unknown
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"suggestions_made","event":"suggestions_made","kind":"suggestions_made","turn_id":"5ee9e5ceacee4d5ea06d4d57ee8fbaf5","items":[{"text":"Send me the email","source":"policy"},{"text":"Walk me through it live","source":"policy"},{"text":"Show install steps","source":"retrieval"}],"max_items":4,"max_words_per_item":7,"count":3,"sid":"85f547b2-d77b-41fb-aa8a-f223aa69e979","v":1,"ts_ms":1760496186565,"ts":1760496186.565,"session_id":"85f547b2-d77b-41fb-aa8a-f223aa69e979","step":53}
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"assistant_chunk","turn_id":"5ee9e5ceacee4d5ea06d4d57ee8fbaf5","text":"Hey James, what should we tackle first?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps","policy_chips":["Send me the email","Walk me through it live"]}
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"suggestions","turn_id":"5ee9e5ceacee4d5ea06d4d57ee8fbaf5","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"}]}
+askchip_client_hooks.js?v=1760495805:239 assistant_end
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"assistant_end","turn_id":"5ee9e5ceacee4d5ea06d4d57ee8fbaf5"}
+askchip_client_hooks.js?v=1760495805:239 assistant_end
+askchip_client_hooks.js?v=1760495805:160 policy_decision: offer_steps
+askchip_client_hooks.js?v=1760495805:192 suggestions_made Object
+bootstrap.js?v=1760495805:32 [WS→UI] {"type":"tts:start","event":"tts:start","kind":"tts:start","turn_id":"5ee9e5ceacee4d5ea06d4d57ee8fbaf5","v":1,"ts_ms":1760496187347,"ts":1760496187.347,"sid":"85f547b2-d77b-41fb-aa8a-f223aa69e979","session_id":"85f547b2-d77b-41fb-aa8a-f223aa69e979","step":56}
+3askchip_client_hooks.js?v=1760495805:239 UtteranceEnd
+askchip_client_hooks.js?v=1760495805:289 state Object
+askchip_client_hooks.js?v=1760495805:192 tts:start Object
+askchip_client_hooks.js?v=1760495805:192 greet:resp {event: 'greet:resp', kind: 'greet:resp', label: 'greet:resp', route: null, turn_id: '5ee9e5ceacee4d5ea06d4d57ee8fbaf5', …}
+voice.js:503 [voice] speech ended {source: 'vad', reason: 'vad_silence', snrDb: 51.4, durationMs: 3334}
+voice.js:503 [voice] delaying VAD end {waitMs: 1200, elapsed: 0}
+voice.js:503 [voice] speech ended {source: 'vad', reason: 'vad_silence', snrDb: 51.4, durationMs: 3334}
+voice.js:503 [voice] delaying VAD end {waitMs: 1200, elapsed: 0}
+voice.js:503 [voice][trace:4i6_1] turn trace started {reason: 'speech_start', traceId: '4i6_1'}
+voice.js:503 [voice][trace:4i6_1] vad_speech_start {event: 'vad_speech_start', preRollBufferedMs: 150, preRollSentMs: 150, preRollChunks: 1, preRollBytes: 409, …}
+voice.js:503 [voice][trace:4i6_1] speech started {preRollChunks: 1, preRollBytes: 409, snrDb: 35.5, commitMode: 'auto_commit', traceId: '4i6_1'}
+voice.js:503 [voice][trace:4i6_1] flushed pre-roll buffer {chunks: 1, durationMs: 150, bytes: 409, traceId: '4i6_1'}
+voice.js:503 [voice][trace:4i6_1] recorder streaming {mime: 'audio/webm;codecs=opus', traceId: '4i6_1'}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 409, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(409)
+voice.js:503 [voice][trace:4i6_1] streamed pre-roll chunk {bytes: 409, durationMs: 150, timecode: 0, mime: 'audio/webm;codecs=opus', totalBytes: 409, …}
+voice.js:503 [voice][trace:4i6_1] recorder_first_chunk {event: 'recorder_first_chunk', ms: 3, traceId: '4i6_1'}
+voice.js:503 [voice][trace:4i6_1] first audio chunk latency {firstChunkMs: 3, traceId: '4i6_1'}
+voice.js:499 [voice][trace:4i6_1] turn marked open (first audio chunk queued)
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 580, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(580)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 580, durationMs: null, timecode: 5578.071, mime: 'audio/webm;codecs=opus', totalBytes: 989, …}
+askchip_client_hooks.js?v=1760495805:289 state {type: 'state', phase: 'ready'}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 574, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(574)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 574, durationMs: null, timecode: 5759.901, mime: 'audio/webm;codecs=opus', totalBytes: 1563, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 555, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(555)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 555, durationMs: null, timecode: 5938.013, mime: 'audio/webm;codecs=opus', totalBytes: 2118, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 555, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(555)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 555, durationMs: null, timecode: 6119.44, mime: 'audio/webm;codecs=opus', totalBytes: 2673, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 609, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(609)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 609, durationMs: null, timecode: 6300.163, mime: 'audio/webm;codecs=opus', totalBytes: 3282, …}
+askchip_client_hooks.js?v=1760495805:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'asr_open', route: null, provider: 'deepgram', …}
+askchip_client_hooks.js?v=1760495805:192 dg_connect {event: 'dg_connect', kind: 'dg_connect', dg_id: 139074332623568, safe_url: 'wss://api.deepgram.com/v1/listen?interim_results=t…223aa69e979&utterance_end_ms=3000&vad_events=true', containerized: true, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 557, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(557)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 557, durationMs: null, timecode: 6479.044, mime: 'audio/webm;codecs=opus', totalBytes: 3839, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 573, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(573)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 573, durationMs: null, timecode: 6660.953, mime: 'audio/webm;codecs=opus', totalBytes: 4412, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 538, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(538)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 538, durationMs: null, timecode: 6840.357, mime: 'audio/webm;codecs=opus', totalBytes: 4950, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 555, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(555)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 555, durationMs: null, timecode: 7018.204, mime: 'audio/webm;codecs=opus', totalBytes: 5505, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 547, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(547)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 547, durationMs: null, timecode: 7198.274, mime: 'audio/webm;codecs=opus', totalBytes: 6052, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 546, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(546)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 546, durationMs: null, timecode: 7377.911, mime: 'audio/webm;codecs=opus', totalBytes: 6598, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 556, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(556)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 556, durationMs: null, timecode: 7558.617, mime: 'audio/webm;codecs=opus', totalBytes: 7154, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 533, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(533)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 533, durationMs: null, timecode: 7738.083, mime: 'audio/webm;codecs=opus', totalBytes: 7687, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 545, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(545)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 545, durationMs: null, timecode: 7918.266, mime: 'audio/webm;codecs=opus', totalBytes: 8232, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 547, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(547)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 547, durationMs: null, timecode: 8098.091, mime: 'audio/webm;codecs=opus', totalBytes: 8779, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 545, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(545)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 545, durationMs: null, timecode: 8277.835, mime: 'audio/webm;codecs=opus', totalBytes: 9324, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 536, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(536)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 536, durationMs: null, timecode: 8458.407, mime: 'audio/webm;codecs=opus', totalBytes: 9860, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 527, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(527)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 527, durationMs: null, timecode: 8637.715, mime: 'audio/webm;codecs=opus', totalBytes: 10387, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 592, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(592)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 592, durationMs: null, timecode: 8817.758, mime: 'audio/webm;codecs=opus', totalBytes: 10979, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 561, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(561)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 561, durationMs: null, timecode: 8998.595, mime: 'audio/webm;codecs=opus', totalBytes: 11540, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 509, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(509)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 509, durationMs: null, timecode: 9179.53, mime: 'audio/webm;codecs=opus', totalBytes: 12049, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 548, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(548)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 548, durationMs: null, timecode: 9358.077, mime: 'audio/webm;codecs=opus', totalBytes: 12597, …}
+askchip_client_hooks.js?v=1760495805:192 ws_bin_recv {event: 'ws_bin_recv', kind: 'ws_bin_recv', label: 'ws_bin_recv', route: null, sid: '85f547b2-d77b-41fb-aa8a-f223aa69e979', …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 544, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(544)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 544, durationMs: null, timecode: 9537.972, mime: 'audio/webm;codecs=opus', totalBytes: 13141, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 534, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(534)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 534, durationMs: null, timecode: 9718.152, mime: 'audio/webm;codecs=opus', totalBytes: 13675, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 568, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(568)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 568, durationMs: null, timecode: 9898.571, mime: 'audio/webm;codecs=opus', totalBytes: 14243, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 520, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(520)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 520, durationMs: null, timecode: 10080.202, mime: 'audio/webm;codecs=opus', totalBytes: 14763, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 529, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(529)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 529, durationMs: null, timecode: 10260.404, mime: 'audio/webm;codecs=opus', totalBytes: 15292, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 521, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(521)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 521, durationMs: null, timecode: 10441.195, mime: 'audio/webm;codecs=opus', totalBytes: 15813, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 534, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(534)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 534, durationMs: null, timecode: 10618.271, mime: 'audio/webm;codecs=opus', totalBytes: 16347, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 499, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(499)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 499, durationMs: null, timecode: 10799.93, mime: 'audio/webm;codecs=opus', totalBytes: 16846, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 529, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(529)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 529, durationMs: null, timecode: 10979.275, mime: 'audio/webm;codecs=opus', totalBytes: 17375, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 532, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(532)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 532, durationMs: null, timecode: 11159.73, mime: 'audio/webm;codecs=opus', totalBytes: 17907, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 510, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(510)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 510, durationMs: null, timecode: 11340.848, mime: 'audio/webm;codecs=opus', totalBytes: 18417, …}
+askchip_client_hooks.js?v=1760495805:192 heartbeat {event: 'heartbeat', ts: 1760496195.8139124, step: 64}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 538, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(538)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 538, durationMs: null, timecode: 11518.801, mime: 'audio/webm;codecs=opus', totalBytes: 18955, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 532, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(532)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 532, durationMs: null, timecode: 11698.293, mime: 'audio/webm;codecs=opus', totalBytes: 19487, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 539, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(539)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 539, durationMs: null, timecode: 11879.925, mime: 'audio/webm;codecs=opus', totalBytes: 20026, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 523, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(523)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 523, durationMs: null, timecode: 12060.067, mime: 'audio/webm;codecs=opus', totalBytes: 20549, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 537, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(537)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 537, durationMs: null, timecode: 12237.763, mime: 'audio/webm;codecs=opus', totalBytes: 21086, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 534, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(534)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 534, durationMs: null, timecode: 12420.179, mime: 'audio/webm;codecs=opus', totalBytes: 21620, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 519, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(519)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 519, durationMs: null, timecode: 12599.629, mime: 'audio/webm;codecs=opus', totalBytes: 22139, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 516, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(516)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 516, durationMs: null, timecode: 12779.533, mime: 'audio/webm;codecs=opus', totalBytes: 22655, …}
+askchip_client_hooks.js?v=1760495805:192 ws_bin_recv {event: 'ws_bin_recv', kind: 'ws_bin_recv', label: 'ws_bin_recv', route: null, sid: '85f547b2-d77b-41fb-aa8a-f223aa69e979', …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 556, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(556)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 556, durationMs: null, timecode: 12960.014, mime: 'audio/webm;codecs=opus', totalBytes: 23211, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 518, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(518)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 518, durationMs: null, timecode: 13138.263, mime: 'audio/webm;codecs=opus', totalBytes: 23729, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 505, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(505)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 505, durationMs: null, timecode: 13318.175, mime: 'audio/webm;codecs=opus', totalBytes: 24234, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 557, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(557)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 557, durationMs: null, timecode: 13499.23, mime: 'audio/webm;codecs=opus', totalBytes: 24791, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 508, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(508)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 508, durationMs: null, timecode: 13679.657, mime: 'audio/webm;codecs=opus', totalBytes: 25299, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 557, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(557)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 557, durationMs: null, timecode: 13860.182, mime: 'audio/webm;codecs=opus', totalBytes: 25856, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 516, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(516)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 516, durationMs: null, timecode: 14038.184, mime: 'audio/webm;codecs=opus', totalBytes: 26372, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 533, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(533)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 533, durationMs: null, timecode: 14218.588, mime: 'audio/webm;codecs=opus', totalBytes: 26905, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 516, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(516)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 516, durationMs: null, timecode: 14398.191, mime: 'audio/webm;codecs=opus', totalBytes: 27421, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 540, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(540)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 540, durationMs: null, timecode: 14577.897, mime: 'audio/webm;codecs=opus', totalBytes: 27961, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 544, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(544)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 544, durationMs: null, timecode: 14757.969, mime: 'audio/webm;codecs=opus', totalBytes: 28505, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 541, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(541)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 541, durationMs: null, timecode: 14938.327, mime: 'audio/webm;codecs=opus', totalBytes: 29046, …}
+askchip_client_hooks.js?v=1760495805:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'auto_close_on_final', route: null, provider: 'deepgram', …}
+askchip_client_hooks.js?v=1760495805:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'CloseStream ack', route: null, provider: 'deepgram', …}
+askchip_client_hooks.js?v=1760495805:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'end', route: null, provider: 'deepgram', …}
+askchip_client_hooks.js?v=1760495805:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'provider_open', route: null, provider: 'deepgram', …}
+askchip_client_hooks.js?v=1760495805:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'provider_open', route: null, provider: 'deepgram', …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 514, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(514)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 514, durationMs: null, timecode: 15117.838, mime: 'audio/webm;codecs=opus', totalBytes: 29560, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 509, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(509)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 509, durationMs: null, timecode: 15297.802, mime: 'audio/webm;codecs=opus', totalBytes: 30069, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 509, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(509)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 509, durationMs: null, timecode: 15478.581, mime: 'audio/webm;codecs=opus', totalBytes: 30578, …}
+askchip_client_hooks.js?v=1760495805:192 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'provider_open', route: null, provider: 'deepgram', …}
+askchip_client_hooks.js?v=1760495805:192 dg_connect {event: 'dg_connect', kind: 'dg_connect', dg_id: 139074332623568, safe_url: 'wss://api.deepgram.com/v1/listen?interim_results=t…223aa69e979&utterance_end_ms=3000&vad_events=true', containerized: true, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 507, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(507)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 507, durationMs: null, timecode: 15658.173, mime: 'audio/webm;codecs=opus', totalBytes: 31085, …}
+voice.js:503 [voice][trace:4i6_1] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: true, turnHintAwaitingWS: false, traceId: '4i6_1'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 530, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(530)
+voice.js:503 [voice][trace:4i6_1] streamed audio chunk {bytes: 530, durationMs: null, timecode: 15837.907, mime: 'audio/webm;codecs=opus', totalBytes: 31615, …}
+voice.js:503 [voice][trace:4i6_1] mic_stop {event: 'mic_stop', active: true, hasRecorder: true, reason: 'manual_disarm', traceId: '4i6_1'}
+voice.js:503 [voice][trace:4i6_1] recorder_stop_invoked {event: 'recorder_stop_invoked', reason: 'manual_disarm', traceId: '4i6_1'}
+voice.js:499 [voice][trace:4i6_1] recorder.stop() invoked
+voice.js:499 [voice][trace:4i6_1] turn trace cleared
+voice.js:503 [voice] ensure AudioStart called {greetGateActive: false, greetGatePhase: 'idle', turnHintSent: false, turnHintAwaitingWS: false}
+debug.js?v=1760495805:4 [DBG] UI→WS {type: 'AudioStart', mime: 'audio/webm; codecs=opus'}
+voice.js:503 [voice] AudioStart sent {mime: 'audio/webm; codecs=opus', attempt: 'immediate'}
+ws.js?v=1760495805:124 [ws] sending audio chunk {bytes: 358, mime: 'audio/webm;codecs=opus'}
+debug.js?v=1760495805:4 [DBG] UI→WS ArrayBuffer(358)
+voice.js:503 [voice] streamed audio chunk {bytes: 358, durationMs: null, timecode: 15955.911, mime: 'audio/webm;codecs=opus', totalBytes: 31973, …}
+voice.js:499 [voice] turn marked open (first audio chunk queued)
+voice.js:503 [voice] recorder stopped {bytesSent: 31973, mime: 'audio/webm;codecs=opus'}
+voice.js:503 [voice] turn_close_signal {event: 'turn_close_signal', frame: {…}, bytesSent: 31973}
+voice.js:503 [voice] turn-end signal sent {bytesSent: 31973}
+ws.js?v=1760495805:124 [DBG] UI→WS {type: 'CloseStream'}
+debug.js?v=1760495805:4 [DBG] UI→WS {type: 'CloseStream'}
+ws.js?v=1760495805:601 CloseStream ack
 voice.js:503 [voice] mic_stop {event: 'mic_stop', active: false, hasRecorder: false, reason: 'manual_disarm'}
-bootstrap.js?v=1760489645:32 [WS close] {code: 1000, reason: 'normal closure'}
-askchip_client_hooks.js?v=1760489645:192 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '3fb7be0c-433e-44dd-b27c-49f0374fa31f', …}
-askchip_client_hooks.js?v=1760489645:192 ws_conn_close {event: 'ws_conn_close', kind: 'ws_conn_close', label: 'ws_conn_close', route: null, conn_id: '1d443dd6e45e4793835690b8dc9d0e4d', …}
-askchip_client_hooks.js?v=1760489645:192 ws_conn_cleanup {event: 'ws_conn_cleanup', kind: 'ws_conn_cleanup', label: 'ws_conn_cleanup', route: null, conn_id: '1d443dd6e45e4793835690b8dc9d0e4d', …}
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489901.1259305, step: 21}
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489916.1311722, step: 21}
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489931.1345456, step: 21}
-ws.js?v=1760489645:32 [ui] visibility=hidden
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489946.1382372, step: 21}
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489961.1418335, step: 21}
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489976.1454105, step: 21}
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760489991.1489851, step: 21}
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760490006.152511, step: 21}
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760490021.157739, step: 21}
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760490036.1621323, step: 21}
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760490051.1686463, step: 21}
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760490066.1734855, step: 21}
-ws.js?v=1760489645:32 [ui] visibility=visible
-askchip_client_hooks.js?v=1760489645:192 heartbeat {event: 'heartbeat', ts: 1760490081.1804304, step: 21}
+ws.js?v=1760495805:124 [DBG] UI→WS {type: 'CloseStream'}
+askchip_client_hooks.js?v=1760495805:192 dg_connect {event: 'dg_connect', kind: 'dg_connect', dg_id: 139074332623568, safe_url: 'wss://api.deepgram.com/v1/listen?interim_results=t…223aa69e979&utterance_end_ms=3000&vad_events=true', containerized: true, …}
+askchip_client_hooks.js?v=1760495805:192 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '85f547b2-d77b-41fb-aa8a-f223aa69e979', …}
+bootstrap.js?v=1760495805:32 [WS close] {code: 1000, reason: 'normal closure'}
