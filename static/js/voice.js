@@ -20,6 +20,15 @@ Citations for context (non-functional):
 // Modularization notice: logic will progressively move into static/js/voice/* modules.
 
 import { VAD } from './voice/vad.js';
+import {
+  EvidenceGate,
+  HysteresisVAD,
+  NoiseModel,
+  ShadowBuffer,
+  TtsMask,
+  TurnState,
+  dbToRms,
+} from './voice/core/index.js';
 import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from './ws_module.js';
 import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
 
@@ -96,8 +105,7 @@ const state = {
   // Pre-roll tap state
   preRollNode: null,
   preRollGain: null,
-  preRollBlobs: [],
-  preRollDurationMs: 0,
+  shadowBuffer: new ShadowBuffer({ maxMs: PRE_ROLL_MS }),
   preRollLastTimecode: null,
   preRollTimeslice: 150,
   recStreaming: false,
@@ -123,31 +131,18 @@ const state = {
   greetGateLastReason: null,
   postTtsHoldUntil: 0,
   postTtsHoldTimer: null,
-  ttsDecayUntil: 0,
-  ttsDecaySnrBoostDb: 0,
+  ttsMask: new TtsMask(),
   eligibility: 'blocked_pregreet',
   refractoryUntil: 0,
+  noiseModel: new NoiseModel({ alpha: 0.2 }),
+  vadHysteresis: new HysteresisVAD(),
   sessionNoiseFloorDb: null,
   sessionSnrMean: 0,
   sessionSnrM2: 0,
   sessionSnrStd: 0,
   sessionSnrSamples: 0,
-  evidenceGate: {
-    active: false,
-    satisfied: false,
-    aborted: false,
-    startedAt: 0,
-    lastDetail: null,
-    bufferedMs: 0,
-    bufferedBytes: 0,
-    minMassOk: false,
-    snrOk: false,
-    partialConfidence: null,
-    partialRising: false,
-    partialGateOk: false,
-    commitPromise: null,
-    reason: null,
-  },
+  evidenceGate: new EvidenceGate(),
+  evidenceGateCommitPromise: null,
   manual: {
     enabled: true,
     modeManualOnly: false,
@@ -189,12 +184,11 @@ try {
     if (stateValue === 'playing') {
       state.ttsPlaying = true;
       state.assistantReady = false;
-      state.assistantPhase = 'speaking';
+      state.assistantPhase = TurnState.Speaking.toLowerCase();
       const holdUntil = _now() + POST_TTS_HOLDOFF_MS;
       state.postTtsHoldUntil = holdUntil;
-      state.ttsDecayUntil = 0;
-      state.ttsDecaySnrBoostDb = 0;
-      if (state.evidenceGate.active && !state.evidenceGate.satisfied) {
+      state.ttsMask.start();
+      if (state.evidenceGate.isOpen()) {
         _abortEvidenceGate('tts_playback_start');
       }
 
@@ -220,12 +214,10 @@ try {
     state.ttsPlaying = false;
     state.postTtsHoldUntil = 0;
     _clearPostTtsHoldTimer();
-    const decayBase = _now();
-    state.ttsDecayUntil = decayBase + TTS_DECAY_MS;
     const sigma = Number.isFinite(state.sessionSnrStd) ? state.sessionSnrStd : 0;
-    state.ttsDecaySnrBoostDb = Math.max(3, sigma * 1.5);
+    state.ttsMask.end({ decayMs: TTS_DECAY_MS, snrBoost: Math.max(3, sigma * 1.5) });
     state.assistantReady = true;
-    state.assistantPhase = 'ready';
+    state.assistantPhase = TurnState.Ready.toLowerCase();
     state.lastAssistantReadyAt = _now();
     if (state.eligibility === 'holdoff') {
       state.eligibility = 'eligible';
@@ -255,12 +247,20 @@ function _updateAssistantPhaseFromDetail(detail = {}) {
     || _valueIsReadyFlag(detail?.channel?.ready_for_user);
 
   if (phase) {
-    state.assistantPhase = phase;
     if (phase === 'ready' || phase === 'ready_for_user') {
+      state.assistantPhase = TurnState.Ready.toLowerCase();
       state.assistantReady = true;
       state.lastAssistantReadyAt = _now();
-    } else if (phase === 'speaking' || phase === 'thinking' || phase === 'tts') {
+    } else if (phase === 'speaking' || phase === 'tts') {
+      state.assistantPhase = TurnState.Speaking.toLowerCase();
       state.assistantReady = false;
+    } else if (phase === 'thinking') {
+      state.assistantPhase = TurnState.Thinking.toLowerCase();
+      state.assistantReady = false;
+    } else if (phase === 'listening') {
+      state.assistantPhase = TurnState.Listening.toLowerCase();
+    } else {
+      state.assistantPhase = phase;
     }
   }
 
@@ -564,13 +564,19 @@ function _updateSessionNoise(detail = null) {
   if (!detail || typeof detail !== 'object') {
     return;
   }
-  const noise = Number.isFinite(detail.noiseFloorDb) ? detail.noiseFloorDb : null;
-  if (Number.isFinite(noise)) {
-    if (!Number.isFinite(state.sessionNoiseFloorDb)) {
-      state.sessionNoiseFloorDb = noise;
+  const noiseDb = Number.isFinite(detail.noiseFloorDb) ? detail.noiseFloorDb : null;
+  if (Number.isFinite(noiseDb)) {
+    if (state.noiseModel) {
+      state.noiseModel.observeSilence({ energy: dbToRms(noiseDb) });
+      const floorDb = state.noiseModel.getFloor();
+      if (Number.isFinite(floorDb)) {
+        state.sessionNoiseFloorDb = floorDb;
+      }
+    } else if (!Number.isFinite(state.sessionNoiseFloorDb)) {
+      state.sessionNoiseFloorDb = noiseDb;
     } else {
       const alpha = 0.2;
-      state.sessionNoiseFloorDb = (1 - alpha) * state.sessionNoiseFloorDb + alpha * noise;
+      state.sessionNoiseFloorDb = (1 - alpha) * state.sessionNoiseFloorDb + alpha * noiseDb;
     }
   }
 
@@ -588,96 +594,87 @@ function _updateSessionNoise(detail = null) {
   }
 }
 
-function _sumPreRollBytes() {
-  const blobs = state.preRollBlobs || [];
-  return blobs.reduce((sum, chunk) => sum + (chunk?.blob?.size || 0), 0);
-}
-
-function _resetEvidenceGate(reason = null) {
-  const gate = state.evidenceGate;
-  gate.active = false;
-  gate.satisfied = false;
-  gate.aborted = false;
-  gate.startedAt = 0;
-  gate.lastDetail = null;
-  gate.bufferedMs = 0;
-  gate.bufferedBytes = 0;
-  gate.minMassOk = false;
-  gate.snrOk = false;
-  gate.partialConfidence = null;
-  gate.partialRising = false;
-  gate.partialGateOk = false;
-  gate.reason = reason || null;
-  gate.commitPromise = null;
-}
-
-function _abortEvidenceGate(reason, detail = null) {
-  const gate = state.evidenceGate;
-  if (!gate.active || gate.satisfied) {
-    return;
-  }
-  const bufferedMs = Number.isFinite(state.preRollDurationMs) ? state.preRollDurationMs : 0;
-  const bufferedBytes = _sumPreRollBytes();
-  gate.aborted = true;
-  gate.active = false;
-  gate.reason = reason || 'aborted';
-  gate.lastDetail = detail || gate.lastDetail;
-  gate.bufferedMs = bufferedMs;
-  gate.bufferedBytes = bufferedBytes;
-  _voiceLog('info', 'evidence gate aborted', {
-    reason: gate.reason,
-    bufferedMs,
-    bufferedBytes,
-  });
-  _resetPreRollBuffer();
-  _resetEvidenceGate(gate.reason);
-  _emitVoiceState('armed');
-}
-
 function _getEvidenceSnrRequirement() {
   let base = EVIDENCE_MIN_SNR_DB;
   if (state.ttsPlaying) {
     base += 3;
-  } else if (state.ttsDecayUntil) {
+  } else if (state.ttsMask) {
     const now = _now();
-    if (now < state.ttsDecayUntil) {
-      base += Math.max(0, state.ttsDecaySnrBoostDb || 0);
+    if (state.ttsMask.isMasked(now)) {
+      base += Math.max(0, state.ttsMask.snrBoost(now));
     }
   }
   return base;
 }
 
+function _getShadowStats() {
+  const stats = state.shadowBuffer ? state.shadowBuffer.stats() : null;
+  if (!stats) {
+    return { count: 0, durationMs: 0, totalBytes: 0 };
+  }
+  return {
+    count: Number.isFinite(stats.count) ? stats.count : (stats.count || 0),
+    durationMs: Number.isFinite(stats.durationMs) ? stats.durationMs : 0,
+    totalBytes: Number.isFinite(stats.totalBytes) ? stats.totalBytes : 0,
+  };
+}
+
+function _resetEvidenceGate(reason = null) {
+  state.evidenceGate.reset(reason);
+  state.evidenceGateCommitPromise = null;
+}
+
+function _abortEvidenceGate(reason, detail = null) {
+  if (!state.evidenceGate.isOpen()) {
+    return;
+  }
+  const stats = _getShadowStats();
+  state.evidenceGate.abort(reason || 'aborted', detail, stats);
+  _voiceLog('info', 'evidence gate aborted', {
+    reason: state.evidenceGate.reason(),
+    bufferedMs: stats.durationMs,
+    bufferedBytes: stats.totalBytes,
+  });
+  _resetPreRollBuffer();
+  _resetEvidenceGate(state.evidenceGate.reason());
+  _emitVoiceState('armed');
+}
+
 function _evaluateEvidenceGate(trigger = 'poll') {
-  const gate = state.evidenceGate;
-  if (!gate.active || gate.satisfied || gate.aborted) {
+  if (!state.evidenceGate.isOpen()) {
     return false;
   }
-
-  const bufferedMs = Number.isFinite(state.preRollDurationMs) ? state.preRollDurationMs : 0;
-  const bufferedBytes = _sumPreRollBytes();
-  const snrDb = Number.isFinite(gate.lastDetail?.snrDb) ? gate.lastDetail.snrDb : null;
+  const stats = _getShadowStats();
+  const snrDb = Number.isFinite(state.evidenceGate.lastDetail?.snrDb)
+    ? state.evidenceGate.lastDetail.snrDb
+    : null;
   const requiredSnr = _getEvidenceSnrRequirement();
-  const minMs = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
-  const minBytes = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
-
-  gate.bufferedMs = bufferedMs;
-  gate.bufferedBytes = bufferedBytes;
-  gate.minMassOk = Number.isFinite(minMs) ? bufferedMs >= Math.max(0, minMs) : bufferedMs >= EVIDENCE_MIN_SPEECH_MS;
-  gate.snrOk = Number.isFinite(snrDb) ? snrDb >= requiredSnr : false;
-
-  const massOk = gate.minMassOk && bufferedBytes >= Math.max(0, minBytes);
-  const partialOk = !!gate.partialGateOk;
-
-  if (gate.snrOk && (massOk || partialOk)) {
-    if (!gate.commitPromise) {
-      gate.commitPromise = _commitEvidenceGate(trigger).catch((err) => {
-        _voiceLog('warn', 'evidence gate commit failed', { error: err?.message || err });
-        throw err;
-      });
-    }
-    return true;
+  const minMsRaw = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
+  const minBytesRaw = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
+  const minMs = Number.isFinite(minMsRaw) ? Math.max(0, minMsRaw) : EVIDENCE_MIN_SPEECH_MS;
+  const minBytes = Number.isFinite(minBytesRaw) ? Math.max(0, minBytesRaw) : EVIDENCE_MIN_BYTES;
+  const { shouldCommit } = state.evidenceGate.update({
+    vadState: 'speech',
+    snr: snrDb,
+    snrBoost: Math.max(0, requiredSnr - EVIDENCE_MIN_SNR_DB),
+    bufferedMs: stats.durationMs,
+    bufferedBytes: stats.totalBytes,
+    minSpeechMs: minMs,
+    minBytes,
+  });
+  if (shouldCommit && !state.evidenceGateCommitPromise) {
+    const commitPromise = _commitEvidenceGate(trigger).catch((err) => {
+      _voiceLog('warn', 'evidence gate commit failed', { error: err?.message || err });
+      throw err;
+    });
+    state.evidenceGateCommitPromise = commitPromise;
+    commitPromise.finally(() => {
+      if (state.evidenceGateCommitPromise === commitPromise) {
+        state.evidenceGateCommitPromise = null;
+      }
+    });
   }
-  return false;
+  return shouldCommit;
 }
 
 async function _commitEvidenceGate(trigger = 'unknown') {
@@ -685,17 +682,15 @@ async function _commitEvidenceGate(trigger = 'unknown') {
   if (gate.satisfied) {
     return true;
   }
-  gate.satisfied = true;
-  gate.active = false;
-  gate.reason = trigger;
-  _voiceLog('info', 'evidence gate satisfied', {
-    trigger,
+  const snapshot = {
     bufferedMs: gate.bufferedMs,
     bufferedBytes: gate.bufferedBytes,
     snrOk: gate.snrOk,
     minMassOk: gate.minMassOk,
     partialGateOk: gate.partialGateOk,
-  });
+  };
+  gate.satisfy(trigger);
+  _voiceLog('info', 'evidence gate satisfied', { trigger, ...snapshot });
 
   let ok = await _startRecorder();
   if (!ok) {
@@ -706,64 +701,62 @@ async function _commitEvidenceGate(trigger = 'unknown') {
   }
 
   if (ok) {
-    gate.commitPromise = null;
-    _resetEvidenceGate('committed');
+    state.evidenceGateCommitPromise = null;
+    gate.reset('committed');
     _emitVoiceState('recording');
     return true;
   }
 
   _voiceLog('warn', 'recorder unavailable after evidence gate');
   _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
-  gate.commitPromise = null;
-  _resetEvidenceGate('recorder_unavailable');
+  state.evidenceGateCommitPromise = null;
+  gate.reset('recorder_unavailable');
   return false;
 }
 
 function _updateEvidenceGateWithChunk(durationMs, bytes) {
-  const gate = state.evidenceGate;
-  if (!gate.active || gate.satisfied || gate.aborted) {
+  if (!state.evidenceGate.isOpen()) {
     return;
   }
-  if (Number.isFinite(durationMs) && durationMs > 0) {
-    gate.bufferedMs = Math.max(gate.bufferedMs, state.preRollDurationMs || durationMs);
-  }
-  if (Number.isFinite(bytes) && bytes > 0) {
-    gate.bufferedBytes = Math.max(gate.bufferedBytes, _sumPreRollBytes());
-  }
+  const stats = _getShadowStats();
+  state.evidenceGate.extendBuffer({
+    durationMs,
+    bytes,
+    bufferedMs: stats.durationMs,
+    bufferedBytes: stats.totalBytes,
+  });
   _evaluateEvidenceGate('chunk');
 }
 
 function _updateEvidenceGateWithPartial(confidence = null, transcript = '') {
-  const gate = state.evidenceGate;
-  if (!gate.active || gate.satisfied || gate.aborted) {
+  if (!state.evidenceGate.isOpen()) {
     return;
   }
-  if (typeof confidence === 'number' && Number.isFinite(confidence)) {
-    if (gate.partialConfidence === null || !Number.isFinite(gate.partialConfidence)) {
-      gate.partialConfidence = confidence;
-    } else if (confidence > gate.partialConfidence + PARTIAL_CONF_RISE_DELTA) {
-      gate.partialRising = true;
-      gate.partialConfidence = confidence;
-    } else {
-      gate.partialConfidence = Math.max(gate.partialConfidence, confidence);
-    }
-    if (confidence >= PARTIAL_CONF_THRESHOLD) {
-      if (gate.partialConfidence === null) {
-        gate.partialConfidence = confidence;
-      }
-      gate.partialGateOk = true;
-    } else if (gate.partialRising && confidence >= PARTIAL_CONF_THRESHOLD - 0.05) {
-      gate.partialGateOk = true;
-    }
-  }
-
-  if (typeof transcript === 'string' && transcript.trim().length > 2) {
-    gate.partialGateOk = gate.partialGateOk || gate.partialRising;
-  }
-
-  if (gate.partialGateOk) {
-    _evaluateEvidenceGate('partial');
-  }
+  const stats = _getShadowStats();
+  const requiredSnr = _getEvidenceSnrRequirement();
+  const minMsRaw = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
+  const minBytesRaw = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
+  const minMs = Number.isFinite(minMsRaw) ? Math.max(0, minMsRaw) : EVIDENCE_MIN_SPEECH_MS;
+  const minBytes = Number.isFinite(minBytesRaw) ? Math.max(0, minBytesRaw) : EVIDENCE_MIN_BYTES;
+  state.evidenceGate.update({
+    vadState: 'hold',
+    snr: Number.isFinite(state.evidenceGate.lastDetail?.snrDb)
+      ? state.evidenceGate.lastDetail.snrDb
+      : null,
+    snrBoost: Math.max(0, requiredSnr - EVIDENCE_MIN_SNR_DB),
+    bufferedMs: stats.durationMs,
+    bufferedBytes: stats.totalBytes,
+    minSpeechMs: minMs,
+    minBytes,
+    asrCue: {
+      type: 'partial',
+      conf: typeof confidence === 'number' ? confidence : null,
+      transcript,
+      threshold: PARTIAL_CONF_THRESHOLD,
+      delta: PARTIAL_CONF_RISE_DELTA,
+    },
+  });
+  _evaluateEvidenceGate('partial');
 }
 
 function _maybeSendAudioStop(detail = {}) {
@@ -1287,9 +1280,10 @@ function _teardownPreRollTap() {
 }
 
 function _resetPreRollBuffer() {
-  state.preRollBlobs = [];
-  state.preRollDurationMs = 0;
   state.preRollLastTimecode = null;
+  if (state.shadowBuffer) {
+    state.shadowBuffer.clear();
+  }
 }
 
 function _computePreRollDuration(timecode) {
@@ -1314,41 +1308,37 @@ function _bufferPreRollChunk(entry) {
   if (!entry || !entry.blob) {
     return;
   }
-  const chunk = {
-    blob: entry.blob,
-    durationMs: Number.isFinite(entry.durationMs) ? Math.max(0, entry.durationMs) : 0,
-    timecode: Number.isFinite(entry.timecode) ? entry.timecode : null,
-  };
-  state.preRollBlobs.push(chunk);
-  state.preRollDurationMs += chunk.durationMs;
-  while (state.preRollDurationMs > PRE_ROLL_MS && state.preRollBlobs.length > 1) {
-    // Preserve the very first blob because it contains the container header. Dropping
-    // it causes downstream consumers to miss the WebM/OGG signature and reject the
-    // stream. Instead, trim from the oldest *non-header* chunk.
-    const removed = state.preRollBlobs.splice(1, 1)[0];
-    state.preRollDurationMs -= removed?.durationMs || 0;
-    if (state.preRollBlobs.length <= 1) {
-      break;
-    }
+  const durationMs = Number.isFinite(entry.durationMs) ? Math.max(0, entry.durationMs) : 0;
+  const timecode = Number.isFinite(entry.timecode) ? entry.timecode : null;
+  if (state.shadowBuffer) {
+    state.shadowBuffer.push(entry.blob, { durationMs, timecode });
   }
-  if (state.preRollDurationMs < 0) {
-    state.preRollDurationMs = 0;
-  }
-  _updateEvidenceGateWithChunk(chunk.durationMs, chunk.blob?.size || 0);
+  _updateEvidenceGateWithChunk(durationMs, entry.blob?.size || 0);
 }
 
 function _enqueuePreRollBlobs() {
-  const queued = state.preRollBlobs ? [...state.preRollBlobs] : [];
-  const durationMs = queued.reduce((sum, chunk) => sum + (chunk?.durationMs || 0), 0);
-  const totalBytes = queued.reduce((sum, chunk) => sum + (chunk?.blob?.size || 0), 0);
-  const count = queued.length;
-  _resetPreRollBuffer();
-  for (const chunk of queued) {
-    if (!chunk?.blob) continue;
-    _sendRecorderChunk(chunk.blob, {
+  const buffer = state.shadowBuffer;
+  if (!buffer) {
+    return { count: 0, durationMs: 0, totalBytes: 0 };
+  }
+  const entries = buffer.drain();
+  let durationMs = 0;
+  let totalBytes = 0;
+  let count = 0;
+  for (const entry of entries) {
+    const blob = entry?.buffer;
+    if (!blob) continue;
+    count += 1;
+    const chunkDuration = Number.isFinite(entry.durationMs) ? entry.durationMs : 0;
+    durationMs += chunkDuration;
+    const bytes = Number.isFinite(entry.byteLength)
+      ? entry.byteLength
+      : (typeof blob.size === 'number' ? blob.size : 0);
+    totalBytes += bytes;
+    _sendRecorderChunk(blob, {
       preRoll: true,
-      durationMs: chunk.durationMs,
-      timecode: chunk.timecode,
+      durationMs: chunkDuration,
+      timecode: Number.isFinite(entry.timecode) ? entry.timecode : null,
     });
   }
   return { count, durationMs, totalBytes };
@@ -2024,9 +2014,10 @@ async function _onSpeechStartCommitted(detail = {}) {
   const metrics = (detail && typeof detail === 'object') ? detail : {};
   _refreshManualConfig();
   state.vadMetrics = { ...metrics, phase: 'start' };
-  const bufferedMsRaw = Number.isFinite(state.preRollDurationMs) ? state.preRollDurationMs : 0;
-  const preRollBlobs = state.preRollBlobs || [];
-  const totalBytes = preRollBlobs.reduce((sum, chunk) => sum + (chunk?.blob?.size || 0), 0);
+  const shadowStats = _getShadowStats();
+  const bufferedMsRaw = Number.isFinite(shadowStats.durationMs) ? shadowStats.durationMs : 0;
+  const totalBytes = Number.isFinite(shadowStats.totalBytes) ? shadowStats.totalBytes : 0;
+  const preRollCount = Number.isFinite(shadowStats.count) ? shadowStats.count : 0;
   const round = (v) => {
     if (!Number.isFinite(v)) return 0;
     return Math.round(v * 100) / 100;
@@ -2131,9 +2122,9 @@ async function _onSpeechStartCommitted(detail = {}) {
   _logLifecycle('vad_speech_start', {
     preRollBufferedMs: round(bufferedMsRaw),
     preRollSentMs: round(Math.min(bufferedMsRaw, PRE_ROLL_MS)),
-    preRollChunks: preRollBlobs.length,
+    preRollChunks: preRollCount,
     preRollBytes: totalBytes,
-    preRollEnabled: preRollBlobs.length > 0,
+    preRollEnabled: preRollCount > 0,
     preRollMime: (state.rec && state.rec.mimeType) || REC_MIME,
     snrDb: roundTenths(metrics?.snrDb),
     noiseFloorDb: roundTenths(metrics?.noiseFloorDb),
@@ -2141,7 +2132,7 @@ async function _onSpeechStartCommitted(detail = {}) {
     commitMode,
   });
   _voiceLog('info', 'speech started', {
-    preRollChunks: preRollBlobs.length,
+    preRollChunks: preRollCount,
     preRollBytes: totalBytes,
     snrDb: roundTenths(metrics?.snrDb),
     commitMode,
@@ -2202,45 +2193,47 @@ async function _onSpeechStartCommitted(detail = {}) {
     return;
   }
 
-  if (state.ttsDecayUntil) {
-    if (now >= state.ttsDecayUntil) {
-      state.ttsDecayUntil = 0;
-      state.ttsDecaySnrBoostDb = 0;
-    } else {
-      const requiredSnr = _getEvidenceSnrRequirement();
-      const snrDb = Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null;
-      if (!Number.isFinite(snrDb) || snrDb < requiredSnr) {
-        _logLifecycle('vad_speech_start_suppressed', {
-          reason: 'tts_decay_guard',
-          snrDb: roundTenths(snrDb),
-          requiredSnrDb: roundTenths(requiredSnr),
-          decayUntil: state.ttsDecayUntil,
-        });
-        return;
-      }
+  if (state.ttsMask && state.ttsMask.isMasked(now)) {
+    const requiredSnr = _getEvidenceSnrRequirement();
+    const snrDb = Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null;
+    if (!Number.isFinite(snrDb) || snrDb < requiredSnr) {
+      _logLifecycle('vad_speech_start_suppressed', {
+        reason: 'tts_decay_guard',
+        snrDb: roundTenths(snrDb),
+        requiredSnrDb: roundTenths(requiredSnr),
+        decayUntil: state.ttsMask.decayUntil(),
+      });
+      return;
     }
   }
 
   _bargeIn();
 
-  if (!state.evidenceGate.active) {
+  if (!state.evidenceGate.isOpen()) {
     _resetEvidenceGate();
-    const gate = state.evidenceGate;
-    gate.active = true;
-    gate.startedAt = now;
-    gate.lastDetail = metrics || null;
-    gate.bufferedMs = bufferedMsRaw;
-    gate.bufferedBytes = totalBytes;
-    const minMs = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
-    gate.minMassOk = Number.isFinite(minMs)
-      ? bufferedMsRaw >= Math.max(0, minMs)
-      : bufferedMsRaw >= EVIDENCE_MIN_SPEECH_MS;
-    gate.snrOk = Number.isFinite(metrics?.snrDb)
-      ? metrics.snrDb >= _getEvidenceSnrRequirement()
-      : false;
+    state.evidenceGate.start({
+      startedAt: now,
+      detail: metrics || null,
+      bufferedMs: bufferedMsRaw,
+      bufferedBytes: totalBytes,
+    });
+    const requiredSnr = _getEvidenceSnrRequirement();
+    const minSpeechOpt = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
+    const minSpeechMs = Number.isFinite(minSpeechOpt) ? Math.max(0, minSpeechOpt) : EVIDENCE_MIN_SPEECH_MS;
+    const minBytesOpt = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
+    const minBytes = Number.isFinite(minBytesOpt) ? Math.max(0, minBytesOpt) : EVIDENCE_MIN_BYTES;
+    state.evidenceGate.update({
+      vadState: 'speech',
+      snr: Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null,
+      snrBoost: Math.max(0, requiredSnr - EVIDENCE_MIN_SNR_DB),
+      bufferedMs: bufferedMsRaw,
+      bufferedBytes: totalBytes,
+      minSpeechMs,
+      minBytes,
+    });
     _emitVoiceState('recording', { gated: true });
   } else {
-    state.evidenceGate.lastDetail = metrics || state.evidenceGate.lastDetail;
+    state.evidenceGate.setDetail(metrics || state.evidenceGate.lastDetail);
   }
 
   _evaluateEvidenceGate('vad_start');
@@ -2276,7 +2269,7 @@ function _onSpeechEndCommitted(detail = null) {
     durationMs: Number.isFinite(metrics?.speechDurationMs) ? Math.round(metrics.speechDurationMs) : null,
   });
 
-  if (!state.recStreaming && state.evidenceGate.active && !state.evidenceGate.satisfied) {
+  if (!state.recStreaming && state.evidenceGate.isOpen()) {
     _abortEvidenceGate(reason || 'evidence_not_met', metrics);
     return;
   }
