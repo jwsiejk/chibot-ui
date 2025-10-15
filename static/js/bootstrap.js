@@ -79,6 +79,7 @@ function _manualPhaseChanged(phase) {
 
 function _manualPointerDown(ev) {
   if (!manualState.featureEnabled) return;
+  if (!ev?.isTrusted) return;  // ← block synthetic/programmatic starts
   if (ev) { ev.preventDefault(); ev.stopPropagation(); }
   if (manualState.pointerActive || manualState.keyActive) return;
   manualState.pointerActive = true;
@@ -98,6 +99,7 @@ function _manualPointerUp(ev) {
 
 function _manualKeyDown(ev) {
   if (!manualState.featureEnabled) return;
+  if (!ev?.isTrusted) return;  // ← block synthetic/programmatic starts
   const key = ev?.code || ev?.key || '';
   if (!(key === 'Space' || key === 'Spacebar' || key === ' ')) return;
   if (ev?.repeat) return;

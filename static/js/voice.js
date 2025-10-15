@@ -1882,6 +1882,23 @@ async function _onSpeechStartCommitted(detail = {}) {
     commitMode,
   });
 
+  // FAST PATH: Ready-phase hands-free turn start
+  if (commitMode === 'auto_commit') {
+    // Start the MediaRecorder now (not just priming)
+    let ok = await _startRecorder();         // internally sets state.recStreaming = true and flushes pre-roll
+    if (!ok) {
+      try { await _primeRecorderForPreRoll({ resetBuffer: false }); } catch {}
+      ok = await _startRecorder();
+    }
+    if (ok) {
+      _emitVoiceState('recording');
+      return;                                // we're streaming; rest of the function can return
+    }
+    _voiceLog('warn', 'recorder unavailable — reverting to typing');
+    _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+    return;
+  }
+
   if (state.greetGateActive) {
     if (state.greetGatePhase === 'calibrating') {
       _voiceLog('info', 'speech start suppressed during greet calibration', {
