@@ -1,7 +1,6 @@
 import { emitVoiceEvent } from './voice/ui/Events.js';
 import {
   TurnState,
-  bufferPreRollFrame,
   flushShadowBuffer,
   resetShadowBufferState,
 } from './voice/core/index.js';
@@ -38,8 +37,16 @@ import {
   legacyOnWsCloseImpl,
   legacyOnWsMessageImpl,
   legacyOnWsOpenImpl,
+  legacyOnMicAvailable,
+  legacyOnMicStop,
+  legacyOnRecorderData,
+  legacyOnRecorderError,
+  legacyEnsureMic,
   legacyResetEvidenceGate,
   legacySendRecorderChunk,
+  legacyPrimeRecorderForPreRoll,
+  legacyStartRecorder,
+  legacyTeardownPreRollTap,
   legacyStopRecorder,
 } from './voice/legacy/VoiceLegacyFacade.js';
 import {
@@ -51,7 +58,6 @@ import {
   MANUAL_DEBOUNCE_MS,
   MANUAL_NO_AUDIO_CANCEL_MS,
   MANUAL_VAD_IGNORE_MS,
-  MIN_VALID_BLOB_BYTES,
   PARTIAL_CONF_RISE_DELTA,
   PARTIAL_CONF_THRESHOLD,
   PRE_ROLL_MS,
@@ -84,6 +90,7 @@ const _ensureAudioStartSent = legacyEnsureAudioStartSent;
 const _sendRecorderChunk = legacySendRecorderChunk;
 const _stopRecorder = legacyStopRecorder;
 const _applyPostFinalHold = legacyApplyPostFinalHold;
+const _teardownPreRollTap = legacyTeardownPreRollTap;
 
 export async function initMic(stream = null) { return await facadeInitMic(stream); }
 export async function armVAD(stream = null, opts = {}) { return await facadeArmVAD(stream, opts); }
@@ -459,356 +466,28 @@ function _removeWSListener() {
   state.wsListener = null;
 }
 async function _ensureMic(externalStream = null) {
-  if (state.stream && state.stream.active) return state.stream;
-
-  if (state.stream && !state.stream.active) {
-    _teardownAudioGraph();
-    state.stream = null;
-  }
-
-  let stream = externalStream;
-
-  if (!stream || !stream.active) {
-    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
-      _logLifecycle('mic_perm_denied', { reason: 'mediaDevices_unavailable' }, 'warn');
-      throw new Error('Media devices API unavailable');
-    }
-
-    const constraints = {
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      }
-    };
-
-    _logLifecycle('mic_request_perm', { constraints });
-    try {
-      // Request a clean mono stream with echo/noise controls
-      stream = await navigator.mediaDevices.getUserMedia(constraints);
-      _logLifecycle('mic_perm_granted');
-    } catch (err) {
-      _logLifecycle('mic_perm_denied', {
-        name: err?.name,
-        message: err?.message,
-        constraints,
-      }, 'warn');
-      throw err;
-    }
-  }
-
-  // Build WebAudio chain
-  const AC = window.AudioContext || window.webkitAudioContext;
-  const ctx = new AC({ sampleRate: 48000 });
-  if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
-
-  const source = ctx.createMediaStreamSource(stream);
-
-  // Front-end conditioning chain: high-pass -> light gate -> limiter -> analyser
-  const highpass = ctx.createBiquadFilter();
-  highpass.type = 'highpass';
-  highpass.frequency.value = 80; // Trim HVAC / handling rumble
-  highpass.Q.value = Math.SQRT1_2;
-
-  const noiseGate = ctx.createDynamicsCompressor();
-  noiseGate.threshold.value = -60;   // close gently on low-level room tone
-  noiseGate.knee.value = 15;
-  noiseGate.ratio.value = 12;
-  noiseGate.attack.value = 0.02;
-  noiseGate.release.value = 0.18;
-
-  const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -6;      // prevent spikes from re-triggering VAD
-  limiter.knee.value = 0;
-  limiter.ratio.value = 20;
-  limiter.attack.value = 0.003;
-  limiter.release.value = 0.08;
-
-  const analyser = ctx.createAnalyser();
-  analyser.fftSize = 2048;
-  analyser.smoothingTimeConstant = 0.06;          // LESS twitchy (was 0.03)
-
-  source.connect(highpass);
-  highpass.connect(noiseGate);
-  noiseGate.connect(limiter);
-  limiter.connect(analyser);
-
-  await _setupPreRollTap(ctx, source);
-
-  state.stream = stream;
-  state.ctx = ctx;
-  state.source = source;
-  state.analyser = analyser;
-  state.highpass = highpass;
-  state.noiseGate = noiseGate;
-  state.limiter = limiter;
-
-  if (!state.deviceLogged) {
-    const [track] = stream.getAudioTracks();
-    let settings = {};
-    try { settings = track?.getSettings?.() || {}; } catch {}
-    const detail = {
-      label: (track?.label && track.label.trim()) || settings.label || settings.deviceId || 'unknown',
-      sampleRate: settings.sampleRate ?? ctx?.sampleRate ?? null,
-      channels: settings.channelCount ?? settings.channels ?? ctx?.destination?.channelCount ?? 1,
-    };
-    _logLifecycle('mic_device_selected', detail);
-    state.deviceLogged = true;
-  }
-
-  return stream;
+  return legacyEnsureMic(externalStream, {
+    teardownAudioGraph: () => _teardownAudioGraph(),
+  });
 }
 function _safeClearTurnTimer() {
   if (state.turnTimer) { clearTimeout(state.turnTimer); state.turnTimer = null; }
 }
-async function _setupPreRollTap(ctx, source) {
-  _teardownPreRollTap();
-
-  if (!ctx || !source) {
-    resetShadowBufferState(state);
-    return;
-  }
-
-  resetShadowBufferState(state);
-
-  const worklet = ctx.audioWorklet;
-  if (!worklet || typeof worklet.addModule !== 'function') {
-    // AudioWorklet unavailable; gracefully degrade without pre-roll.
-    return;
-  }
-
-  try {
-    const moduleUrl = new URL('./voice/pre_roll_processor.js', import.meta.url);
-    await worklet.addModule(moduleUrl);
-  } catch (err) {
-    _voiceLog('warn', 'failed to load pre-roll worklet', { error: err?.message || err });
-    return;
-  }
-
-  try {
-    const node = new AudioWorkletNode(ctx, 'pre-roll-processor', {
-      numberOfInputs: 1,
-      numberOfOutputs: 1,
-      channelCount: 1,
-      outputChannelCount: [1],
-    });
-    // Preserve the tap for VAD/visualization without buffering PCM samples.
-    node.port.onmessage = null;
-    const silentGain = ctx.createGain();
-    silentGain.gain.value = 0;
-    source.connect(node);
-    node.connect(silentGain);
-    if (ctx.destination) {
-      silentGain.connect(ctx.destination);
-    }
-    state.preRollNode = node;
-    state.preRollGain = silentGain;
-  } catch (err) {
-    _voiceLog('warn', 'pre-roll worklet unavailable', { error: err?.message || err });
-    _teardownPreRollTap();
-  }
+function _primeRecorderForPreRoll(options = {}) {
+  return legacyPrimeRecorderForPreRoll(options, {
+    updateEvidenceGateWithChunk: _updateEvidenceGateWithChunk,
+    primeRecorderForPreRoll: (opts = {}) => _primeRecorderForPreRoll(opts),
+  });
 }
-function _teardownPreRollTap() {
-  if (state.preRollNode) {
-    try { state.preRollNode.port.onmessage = null; } catch {}
-    try { state.preRollNode.disconnect(); } catch {}
-  }
-  if (state.preRollGain) {
-    try { state.preRollGain.disconnect(); } catch {}
-  }
-  state.preRollNode = null;
-  state.preRollGain = null;
-  resetShadowBufferState(state);
-}
-async function _primeRecorderForPreRoll(options = {}) {
-  const { resetBuffer = true } = options || {};
-  if (!state.stream) {
-    return false;
-  }
-  if (typeof MediaRecorder === 'undefined') {
-    _voiceLog('warn', 'MediaRecorder not supported in this browser');
-    state.rec = null;
-    return false;
-  }
-  if (state.rec && state.rec.state === 'recording') {
-    if (resetBuffer) {
-      resetShadowBufferState(state);
-      _resetEvidenceGate();
-    }
-    return true;
-  }
 
-  let recorder;
-  try {
-    recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 32000 });
-  } catch (primaryErr) {
-    try {
-      recorder = new MediaRecorder(state.stream); // fallback, browser picks best
-    } catch (fallbackErr) {
-      _voiceLog('warn', 'MediaRecorder init failed', { error: (fallbackErr || primaryErr)?.message || fallbackErr || primaryErr });
-      state.rec = null;
-      return false;
-    }
-  }
-
-  state.rec = recorder;
-  state.recStreaming = false;
-  state.recStopping = false;
-  state.recStopShouldSend = false;
-  state.turnHintSent = false;
-  state.turnHintMime = null;
-  state.turnHintPromise = null;
-  state.turnHintAwaitingWS = false;
-  if (resetBuffer) {
-    resetShadowBufferState(state);
-    _resetEvidenceGate();
-  }
-
-  const timeslice = state.preRollTimeslice || 150;
-  recorder.ondataavailable = _handleRecorderData;
-  recorder.onstop = async () => {
-    _clearSafetyCloseTimer();
-    state.turnHintSent = false;
-    state.turnHintMime = null;
-    state.turnHintPromise = null;
-    state.turnHintAwaitingWS = false;
-    state.recStreaming = false;
-    state.recStopping = false;
-    state.recStopShouldSend = false;
-    state.rec = null;
-    let finalDetail;
-    try {
-      await state.chunkSendPromise.catch((err) => {
-        state.chunkSendError = state.chunkSendError || err;
-      });
-      if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
-        _voiceLog('warn', 'recorded chunks too small', { bytesSent: state.chunkBytesSent });
-        finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
-      }
-    } catch (e) {
-      _voiceLog('warn', 'send audio failed', { error: e?.message || e });
-      state.chunkSendError = state.chunkSendError || e;
-    } finally {
-      if (state.chunkSendError && !finalDetail) {
-        finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
-      }
-      if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
-        _voiceLog('warn', 'recorder stopped with issues', {
-          bytesSent: state.chunkBytesSent,
-          error: state.chunkSendError?.message || state.chunkSendError || null,
-        });
-      } else {
-        _voiceLog('info', 'recorder stopped', {
-          bytesSent: state.chunkBytesSent,
-          mime: (recorder && recorder.mimeType) || REC_MIME,
-        });
-      }
-      const pendingClose = _closeTurnIfOpen();
-      if (pendingClose) {
-        try {
-          await pendingClose;
-        } catch {}
-      }
-      emitVoiceEvent('state', {
-        state: 'armed',
-        ...(finalDetail && typeof finalDetail === 'object' ? finalDetail : {}),
-      });
-      if (state.vad && state.stream && state.stream.active) {
-        try { await _primeRecorderForPreRoll(); } catch (err) { _voiceLog('warn', 'failed to re-prime recorder', { error: err?.message || err }); }
-      }
-    }
-    state.manual.active = false;
-    if (!state.manual.buttonDown) {
-      state.manual.deferCloseStream = false;
-    }
-    _clearManualTimers();
-    state.currentCommitMode = 'idle';
-  };
-
-  const manualPriming = !!(state.manual && state.manual.buttonDown);
-  const greetGateBlockingHandshake = state.greetGateActive
-    && (state.greetGatePhase === 'pending' || state.greetGatePhase === 'calibrating');
-
-  if (!manualPriming) {
-    if (greetGateBlockingHandshake && !state.turnHintSent) {
-      _voiceLog('debug', 'AudioStart handshake deferred until greet gate release', {
-        mime: recorder.mimeType,
-        greetGatePhase: state.greetGatePhase,
-      });
-    } else {
-      const audioStartReady = await _ensureAudioStartSent();
-      if (!audioStartReady) {
-        _voiceLog('warn', 'AudioStart not confirmed — recorder start deferred', { mime: recorder.mimeType });
-        state.rec = null;
-        return false;
-      }
-    }
-  } else if (!state.turnHintSent) {
-    _voiceLog('debug', 'AudioStart handshake deferred during manual barge-in prime', {
-      mime: recorder.mimeType,
-    });
-  }
-
-  try {
-    recorder.start(timeslice);
-    state.preRollTimeslice = timeslice;
-    _voiceLog('debug', 'recorder primed', { mime: recorder.mimeType, timeslice });
-  } catch (err) {
-    _voiceLog('warn', 'recorder start failed', { error: err?.message || err });
-    state.rec = null;
-    return false;
-  }
-
-  return true;
-}
-function _handleRecorderData(event) {
-  if (!event) {
-    return;
-  }
-  if (state.finalized) {
-    return;
-  }
-  const blob = event.data;
-  if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
-    return;
-  }
-
-  if (state.manual.active) {
-    if (!state.manual.firstChunkAt) {
-      state.manual.firstChunkAt = _now();
-    }
-    if (state.manual.noAudioTimer) {
-      _clearManualTimers();
-    }
-  }
-
-  const timecode = Number.isFinite(event.timecode) ? event.timecode : null;
-
-  if (state.recStopping && !state.recStopShouldSend) {
-    return;
-  }
-
-  if (state.recStopping && state.recStopShouldSend) {
-    state.recStopShouldSend = false;
-    state.recStopping = false;
-    _sendRecorderChunk(blob, { preRoll: false, durationMs: null, timecode });
-    return;
-  }
-
-  if (state.recStreaming) {
-    _sendRecorderChunk(blob, { preRoll: false, durationMs: null, timecode });
-    return;
-  }
-
-  state.preRollLastTimecode = bufferPreRollFrame({
-    shadowBuffer: state.shadowBuffer,
-    blob,
-    timecode,
-    timeslice: state.preRollTimeslice || 0,
-    fallbackMs: PRE_ROLL_MS,
-    lastTimecode: state.preRollLastTimecode,
-    onBuffered: ({ durationMs, byteLength }) => _updateEvidenceGateWithChunk(durationMs, byteLength),
-  }).nextTimecode;
+async function _startRecorder() {
+  return legacyStartRecorder({
+    primeRecorderForPreRoll: (opts = {}) => _primeRecorderForPreRoll(opts),
+    clearPendingEndTimer: _clearPendingEndTimer,
+    ensureWSListener: _ensureWSListener,
+    onSpeechEndCommitted: _onSpeechEndCommitted,
+    clearTurnTimer: _safeClearTurnTimer,
+  });
 }
 function _teardownVADOnly() {
   try { state.vad && state.vad.stop(); } catch {}
@@ -1358,6 +1037,10 @@ registerVoiceLegacyFacade({
   onWsOpen: (detail = null) => { legacyOnWsOpenImpl(detail); },
   onWsMessage: (detail = {}, helpers = {}) => legacyOnWsMessageImpl(detail, helpers),
   onWsClose: (detail = null) => { legacyOnWsCloseImpl(detail); },
+  onMicAvailable: (detail = {}) => { legacyOnMicAvailable(detail); },
+  onMicStop: (detail = {}) => legacyOnMicStop(detail),
+  onRecorderData: (event, helpers = {}) => legacyOnRecorderData(event, helpers),
+  onRecorderError: (event = null, helpers = {}) => legacyOnRecorderError(event, helpers),
 });
 
 export const __TEST_ONLY__ = {

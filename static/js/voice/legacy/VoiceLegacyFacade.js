@@ -1,16 +1,19 @@
 import { emitVoiceEvent } from '../ui/Events.js';
-import { resetShadowBufferState } from '../core/index.js';
+import { bufferPreRollFrame, flushShadowBuffer, resetShadowBufferState } from '../core/index.js';
 import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from '../../ws_module.js';
 import {
+  DEFAULT_MAX_TURN_MS,
   MIN_VALID_BLOB_BYTES,
   REC_MIME,
   SAFETY_CLOSE_DELAY_MS,
+  PRE_ROLL_MS,
   optsFromGlobal,
   _handleGreetGateStateFrame,
   _handleGreetGateUtteranceEnd,
   _logLifecycle,
   _updateAssistantPhaseFromDetail,
   _voiceLog,
+  _now,
   _waitForGreetGate,
   state,
 } from './VoiceLegacyTopLevel.js';
@@ -34,6 +37,9 @@ const KNOWN_METHODS = [
   'onWsMessage',
   'onWsClose',
   'onMicAvailable',
+  'onMicStop',
+  'onRecorderData',
+  'onRecorderError',
 ];
 
 function resolveImplementation(name) {
@@ -66,6 +72,9 @@ export const onWsOpen = delegate('onWsOpen');
 export const onWsMessage = delegate('onWsMessage');
 export const onWsClose = delegate('onWsClose');
 export const onMicAvailable = delegate('onMicAvailable');
+export const onMicStop = delegate('onMicStop');
+export const onRecorderData = delegate('onRecorderData');
+export const onRecorderError = delegate('onRecorderError');
 
 export function registerVoiceLegacyFacade(overrides = {}) {
   if (!overrides || typeof overrides !== 'object') {
@@ -266,6 +275,523 @@ export async function legacyEnsureAudioStartSent() {
     });
 
   return state.turnHintPromise;
+}
+
+export async function legacySetupPreRollTap(ctx, source) {
+  legacyTeardownPreRollTap();
+
+  if (!ctx || !source) {
+    resetShadowBufferState(state);
+    return;
+  }
+
+  resetShadowBufferState(state);
+
+  const worklet = ctx.audioWorklet;
+  if (!worklet || typeof worklet.addModule !== 'function') {
+    return;
+  }
+
+  try {
+    const moduleUrl = new URL('./voice/pre_roll_processor.js', import.meta.url);
+    await worklet.addModule(moduleUrl);
+  } catch (err) {
+    _voiceLog('warn', 'failed to load pre-roll worklet', { error: err?.message || err });
+    return;
+  }
+
+  try {
+    const node = new AudioWorkletNode(ctx, 'pre-roll-processor', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      channelCount: 1,
+      outputChannelCount: [1],
+    });
+    node.port.onmessage = null;
+    const silentGain = ctx.createGain();
+    silentGain.gain.value = 0;
+    source.connect(node);
+    node.connect(silentGain);
+    if (ctx.destination) {
+      silentGain.connect(ctx.destination);
+    }
+    state.preRollNode = node;
+    state.preRollGain = silentGain;
+  } catch (err) {
+    _voiceLog('warn', 'pre-roll worklet unavailable', { error: err?.message || err });
+    legacyTeardownPreRollTap();
+  }
+}
+
+export function legacyTeardownPreRollTap() {
+  if (state.preRollNode) {
+    try { state.preRollNode.port.onmessage = null; } catch {}
+    try { state.preRollNode.disconnect(); } catch {}
+  }
+  if (state.preRollGain) {
+    try { state.preRollGain.disconnect(); } catch {}
+  }
+  state.preRollNode = null;
+  state.preRollGain = null;
+  resetShadowBufferState(state);
+}
+
+export async function legacyEnsureMic(externalStream = null, helpers = {}) {
+  if (state.stream && state.stream.active) return state.stream;
+
+  if (state.stream && !state.stream.active) {
+    try { helpers.teardownAudioGraph?.(); } catch {}
+    state.stream = null;
+  }
+
+  let stream = externalStream;
+
+  if (!stream || !stream.active) {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+      _logLifecycle('mic_perm_denied', { reason: 'mediaDevices_unavailable' }, 'warn');
+      throw new Error('Media devices API unavailable');
+    }
+
+    const constraints = {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      }
+    };
+
+    _logLifecycle('mic_request_perm', { constraints });
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      _logLifecycle('mic_perm_granted');
+    } catch (err) {
+      _logLifecycle('mic_perm_denied', {
+        name: err?.name,
+        message: err?.message,
+        constraints,
+      }, 'warn');
+      throw err;
+    }
+  }
+
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC({ sampleRate: 48000 });
+  if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
+
+  const source = ctx.createMediaStreamSource(stream);
+
+  const highpass = ctx.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 80;
+  highpass.Q.value = Math.SQRT1_2;
+
+  const noiseGate = ctx.createDynamicsCompressor();
+  noiseGate.threshold.value = -60;
+  noiseGate.knee.value = 15;
+  noiseGate.ratio.value = 12;
+  noiseGate.attack.value = 0.02;
+  noiseGate.release.value = 0.18;
+
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -6;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.08;
+
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.06;
+
+  source.connect(highpass);
+  highpass.connect(noiseGate);
+  noiseGate.connect(limiter);
+  limiter.connect(analyser);
+
+  await legacySetupPreRollTap(ctx, source);
+
+  state.stream = stream;
+  state.ctx = ctx;
+  state.source = source;
+  state.analyser = analyser;
+  state.highpass = highpass;
+  state.noiseGate = noiseGate;
+  state.limiter = limiter;
+
+  if (!state.deviceLogged) {
+    const [track] = stream.getAudioTracks();
+    let settings = {};
+    try { settings = track?.getSettings?.() || {}; } catch {}
+    const detail = {
+      label: (track?.label && track.label.trim()) || settings.label || settings.deviceId || 'unknown',
+      sampleRate: settings.sampleRate ?? ctx?.sampleRate ?? null,
+      channels: settings.channelCount ?? settings.channels ?? ctx?.destination?.channelCount ?? 1,
+    };
+    _logLifecycle('mic_device_selected', detail);
+    state.deviceLogged = true;
+  }
+
+  return stream;
+}
+
+export function legacyOnMicAvailable({ recorder, resetBuffer = true } = {}) {
+  state.rec = recorder || null;
+  state.recStreaming = false;
+  state.recStopping = false;
+  state.recStopShouldSend = false;
+  state.turnHintSent = false;
+  state.turnHintMime = null;
+  state.turnHintPromise = null;
+  state.turnHintAwaitingWS = false;
+
+  if (resetBuffer) {
+    resetShadowBufferState(state);
+    legacyResetEvidenceGate();
+  }
+}
+
+export async function legacyOnMicStop({ recorder, helpers = {} } = {}) {
+  legacyClearSafetyCloseTimer();
+  state.turnHintSent = false;
+  state.turnHintMime = null;
+  state.turnHintPromise = null;
+  state.turnHintAwaitingWS = false;
+  state.recStreaming = false;
+  state.recStopping = false;
+  state.recStopShouldSend = false;
+  state.rec = null;
+  let finalDetail;
+  try {
+    await state.chunkSendPromise?.catch((err) => {
+      state.chunkSendError = state.chunkSendError || err;
+    });
+    if (state.chunkBytesSent < MIN_VALID_BLOB_BYTES && !state.chunkSendError) {
+      _voiceLog('warn', 'recorded chunks too small', { bytesSent: state.chunkBytesSent });
+      finalDetail = { statusText: 'Listening… (heard silence — please try again)' };
+    }
+  } catch (err) {
+    _voiceLog('warn', 'send audio failed', { error: err?.message || err });
+    state.chunkSendError = state.chunkSendError || err;
+  } finally {
+    if (state.chunkSendError && !finalDetail) {
+      finalDetail = { statusText: 'Listening… (audio send failed — please try again)' };
+    }
+    if (state.chunkSendError || state.chunkBytesSent < MIN_VALID_BLOB_BYTES) {
+      _voiceLog('warn', 'recorder stopped with issues', {
+        bytesSent: state.chunkBytesSent,
+        error: state.chunkSendError?.message || state.chunkSendError || null,
+      });
+    } else {
+      _voiceLog('info', 'recorder stopped', {
+        bytesSent: state.chunkBytesSent,
+        mime: (recorder && recorder.mimeType) || REC_MIME,
+      });
+    }
+    const pendingClose = legacyCloseTurnIfOpen();
+    if (pendingClose) {
+      try {
+        await pendingClose;
+      } catch {}
+    }
+    emitVoiceEvent('state', {
+      state: 'armed',
+      ...(finalDetail && typeof finalDetail === 'object' ? finalDetail : {}),
+    });
+    if (state.vad && state.stream && state.stream.active) {
+      const prime = helpers.primeRecorderForPreRoll
+        || ((opts = {}) => legacyPrimeRecorderForPreRoll(opts, helpers));
+      try { await prime(); } catch (err) {
+        _voiceLog('warn', 'failed to re-prime recorder', { error: err?.message || err });
+      }
+    }
+  }
+  state.manual.active = false;
+  if (!state.manual.buttonDown) {
+    state.manual.deferCloseStream = false;
+  }
+  legacyClearManualTimers();
+  state.currentCommitMode = 'idle';
+}
+
+export function legacyOnRecorderData(event, helpers = {}) {
+  if (!event) {
+    return;
+  }
+  if (state.finalized) {
+    return;
+  }
+  const blob = event.data;
+  if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
+    return;
+  }
+
+  if (state.manual.active) {
+    if (!state.manual.firstChunkAt) {
+      state.manual.firstChunkAt = _now();
+    }
+    if (state.manual.noAudioTimer) {
+      legacyClearManualTimers();
+    }
+  }
+
+  const timecode = Number.isFinite(event.timecode) ? event.timecode : null;
+
+  if (state.recStopping && !state.recStopShouldSend) {
+    return;
+  }
+
+  if (state.recStopping && state.recStopShouldSend) {
+    state.recStopShouldSend = false;
+    state.recStopping = false;
+    legacySendRecorderChunk(blob, { preRoll: false, durationMs: null, timecode });
+    return;
+  }
+
+  if (state.recStreaming) {
+    legacySendRecorderChunk(blob, { preRoll: false, durationMs: null, timecode });
+    return;
+  }
+
+  const updateEvidenceGateWithChunk = helpers.updateEvidenceGateWithChunk;
+  state.preRollLastTimecode = bufferPreRollFrame({
+    shadowBuffer: state.shadowBuffer,
+    blob,
+    timecode,
+    timeslice: state.preRollTimeslice || 0,
+    fallbackMs: PRE_ROLL_MS,
+    lastTimecode: state.preRollLastTimecode,
+    onBuffered: ({ durationMs, byteLength }) => {
+      if (typeof updateEvidenceGateWithChunk === 'function') {
+        updateEvidenceGateWithChunk(durationMs, byteLength);
+      }
+    },
+  }).nextTimecode;
+}
+
+export function legacyOnRecorderError(event = null) {
+  const detail = event && typeof event === 'object' ? (event.error || event) : event;
+  if (!detail) {
+    return;
+  }
+  _voiceLog('warn', 'recorder error event', { error: detail?.message || detail });
+}
+
+export async function legacyPrimeRecorderForPreRoll(options = {}, helpers = {}) {
+  const { resetBuffer = true } = options || {};
+  if (!state.stream) {
+    return false;
+  }
+  if (typeof MediaRecorder === 'undefined') {
+    _voiceLog('warn', 'MediaRecorder not supported in this browser');
+    state.rec = null;
+    return false;
+  }
+  if (state.rec && state.rec.state === 'recording') {
+    if (resetBuffer) {
+      resetShadowBufferState(state);
+      legacyResetEvidenceGate();
+    }
+    return true;
+  }
+
+  let recorder;
+  try {
+    recorder = new MediaRecorder(state.stream, { mimeType: REC_MIME, audioBitsPerSecond: 32000 });
+  } catch (primaryErr) {
+    try {
+      recorder = new MediaRecorder(state.stream);
+    } catch (fallbackErr) {
+      _voiceLog('warn', 'MediaRecorder init failed', { error: (fallbackErr || primaryErr)?.message || fallbackErr || primaryErr });
+      state.rec = null;
+      return false;
+    }
+  }
+
+  legacyOnMicAvailable({ recorder, resetBuffer });
+
+  const nextHelpers = { ...helpers };
+  if (!nextHelpers.primeRecorderForPreRoll) {
+    nextHelpers.primeRecorderForPreRoll = (opts = {}) => legacyPrimeRecorderForPreRoll(opts, helpers);
+  }
+
+  const timeslice = state.preRollTimeslice || 150;
+  recorder.ondataavailable = (event) => legacyOnRecorderData(event, nextHelpers);
+  recorder.onstop = async () => {
+    await legacyOnMicStop({ recorder, helpers: nextHelpers });
+  };
+  recorder.onerror = (event) => {
+    legacyOnRecorderError(event, nextHelpers);
+  };
+
+  const manualPriming = !!(state.manual && state.manual.buttonDown);
+  const greetGateBlockingHandshake = state.greetGateActive
+    && (state.greetGatePhase === 'pending' || state.greetGatePhase === 'calibrating');
+
+  if (!manualPriming) {
+    if (greetGateBlockingHandshake && !state.turnHintSent) {
+      _voiceLog('debug', 'AudioStart handshake deferred until greet gate release', {
+        mime: recorder.mimeType,
+        greetGatePhase: state.greetGatePhase,
+      });
+    } else {
+      const audioStartReady = await legacyEnsureAudioStartSent();
+      if (!audioStartReady) {
+        _voiceLog('warn', 'AudioStart not confirmed — recorder start deferred', { mime: recorder.mimeType });
+        state.rec = null;
+        return false;
+      }
+    }
+  } else if (!state.turnHintSent) {
+    _voiceLog('debug', 'AudioStart handshake deferred during manual barge-in prime', {
+      mime: recorder.mimeType,
+    });
+  }
+
+  try {
+    recorder.start(timeslice);
+    state.preRollTimeslice = timeslice;
+    _voiceLog('debug', 'recorder primed', { mime: recorder.mimeType, timeslice });
+  } catch (err) {
+    _voiceLog('warn', 'recorder start failed', { error: err?.message || err });
+    state.rec = null;
+    return false;
+  }
+
+  return true;
+}
+
+export async function legacyStartRecorder(helpers = {}) {
+  if (!state.stream) return false;
+
+  const prime = helpers.primeRecorderForPreRoll
+    || ((opts = {}) => legacyPrimeRecorderForPreRoll(opts, helpers));
+  const primed = await prime({ resetBuffer: false });
+  const recorder = state.rec;
+  if (!primed || !recorder) {
+    return false;
+  }
+
+  if (recorder.state !== 'recording') {
+    const ready = await new Promise((resolve) => {
+      const deadline = Date.now() + 500;
+      let settleTimer = null;
+      let onStart = null;
+      let onError = null;
+      const supportsAddEventListener = typeof recorder.addEventListener === 'function';
+      const originalOnStart = supportsAddEventListener ? null : (typeof recorder.onstart === 'function' ? recorder.onstart : null);
+      const originalOnError = supportsAddEventListener ? null : (typeof recorder.onerror === 'function' ? recorder.onerror : null);
+      const cleanup = () => {
+        if (settleTimer) {
+          try { clearTimeout(settleTimer); } catch {}
+          settleTimer = null;
+        }
+        if (onStart) {
+          try { recorder.removeEventListener?.('start', onStart); } catch {}
+        }
+        if (onError) {
+          try { recorder.removeEventListener?.('error', onError); } catch {}
+        }
+        if (!supportsAddEventListener) {
+          try { recorder.onstart = originalOnStart; } catch {}
+          try { recorder.onerror = originalOnError; } catch {}
+        }
+      };
+      const checkState = () => {
+        if (recorder.state === 'recording') {
+          cleanup();
+          resolve(true);
+          return;
+        }
+        if (Date.now() >= deadline) {
+          cleanup();
+          resolve(recorder.state === 'recording');
+          return;
+        }
+        settleTimer = setTimeout(checkState, 40);
+      };
+      onStart = () => {
+        cleanup();
+        resolve(true);
+      };
+      onError = () => {
+        cleanup();
+        resolve(false);
+      };
+      try { recorder.addEventListener?.('start', onStart, { once: true }); } catch {}
+      try { recorder.addEventListener?.('error', onError, { once: true }); } catch {}
+      if (!supportsAddEventListener) {
+        recorder.onstart = (...args) => {
+          cleanup();
+          resolve(true);
+          if (typeof originalOnStart === 'function') {
+            try { originalOnStart.apply(recorder, args); } catch {}
+          }
+        };
+        recorder.onerror = (...args) => {
+          cleanup();
+          resolve(false);
+          if (typeof originalOnError === 'function') {
+            try { originalOnError.apply(recorder, args); } catch {}
+          }
+        };
+      }
+      checkState();
+    });
+
+    if (!ready || recorder.state !== 'recording' || state.rec !== recorder) {
+      return false;
+    }
+  }
+
+  if (state.recStreaming) {
+    return true;
+  }
+
+  state.chunkSendPromise = Promise.resolve();
+  state.chunkBytesSent = 0;
+  state.chunkSendError = null;
+  state.turnClosePromise = null;
+  state.lastChunkAt = 0;
+  state.audioStopSent = false;
+  helpers.clearPendingEndTimer?.();
+  state.recStartedAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+    ? performance.now()
+    : Date.now();
+  state.finalized = false;
+  state.postFinalHoldUntil = 0;
+  state.recStreaming = true;
+  state.recStopping = false;
+  state.recStopShouldSend = false;
+  helpers.ensureWSListener?.();
+
+  const manualActive = !!(state.manual && state.manual.buttonDown);
+  if (manualActive) {
+    resetShadowBufferState(state);
+  } else {
+    flushShadowBuffer(
+      state.shadowBuffer,
+      (buffer, { durationMs, timecode }) => legacySendRecorderChunk(buffer, { preRoll: true, durationMs, timecode }),
+      (stats) => stats?.count && _voiceLog('debug', 'flushed pre-roll buffer', {
+        chunks: stats.count,
+        durationMs: stats.durationMs,
+        bytes: stats.totalBytes,
+      }),
+    );
+  }
+
+  _voiceLog('info', 'recorder streaming', {
+    mime: (state.rec && state.rec.mimeType) || REC_MIME,
+  });
+
+  const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
+  helpers.clearTurnTimer?.();
+  try {
+    state.turnTimer = setTimeout(() => {
+      try { helpers.onSpeechEndCommitted?.({ reason: 'turn_timeout' }); } catch {}
+    }, limitMs);
+  } catch {}
+
+  return true;
 }
 
 export function legacySendRecorderChunk(blob, meta = {}) {
