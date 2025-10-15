@@ -1,7 +1,7 @@
 // bootstrap.js
 import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
 import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
-import { initMic, armVAD, disarmVAD, forceBargeInStart, forceBargeInEnd } from '/static/js/voice.js';
+import { initMic, armVAD, disarmVAD, forceBargeInStart, forceBargeInEnd, setGreetGateActive } from '/static/js/voice.js';
 import { unlockAudio, stopPlayback } from '/static/js/audio.js';
 import { getSID } from '/static/js/util/sid.js';
 import * as App from '/static/js/app.js';
