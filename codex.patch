@@ -1,148 +1,139 @@
 diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
-index 940eea391861eddb0aa1742150694c3b78d91b69..bb24ac2dbced8bb5153df0b36e8cccf1b3875de5 100644
+index bb24ac2dbced8bb5153df0b36e8cccf1b3875de5..c275960095a8a2a015df505bc23dc8a4b4de217d 100644
 --- a/static/js/bootstrap.js
 +++ b/static/js/bootstrap.js
-@@ -57,69 +57,71 @@ function _updateManualButtonAvailability() {
-   if (!btn) return;
-   if (!manualState.featureEnabled) {
-     btn.hidden = true;
-     btn.disabled = true;
-     return;
-   }
-   btn.hidden = false;
-   const shouldEnable = manualState.sessionActive
-     && !manualState.pointerActive
-     && !manualState.keyActive;
-   btn.disabled = !shouldEnable;
+@@ -1,29 +1,29 @@
+ // bootstrap.js
+ import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
+ import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
+-import { initMic, armVAD, disarmVAD, forceBargeInStart, forceBargeInEnd } from '/static/js/voice.js';
++import { initMic, armVAD, disarmVAD, forceBargeInStart, forceBargeInEnd, setGreetGateActive } from '/static/js/voice.js';
+ import { unlockAudio, stopPlayback } from '/static/js/audio.js';
+ import { getSID } from '/static/js/util/sid.js';
+ import * as App from '/static/js/app.js';
+ import * as Visualizer from '/static/js/visualizer.js';
+ import { logIfEnabled } from '/static/js/util/logging.js';
+ 
+ // /static/js/bootstrap.js — single owner of Start/End/Send + audio unlock + WS→UI wiring
+ 
+ const $ = (s) => document.querySelector(s);
+ 
+ let startInFlight = false;
+ let started = false;
+ let startOnceCallCount = 0;
+ let wsListenerSeq = 0;
+ 
+ function logWsListenerAttach(eventName, note){
+   const id = `${eventName}#${++wsListenerSeq}`;
+   try {
+     _console('info', '[bootstrap] ws listener attached', { listener_id: id, event: eventName, note });
+   } catch {}
+   return id;
  }
  
- function _setManualSessionActive(active) {
-   manualState.sessionActive = !!active;
-   _updateManualButtonAvailability();
- }
+ function _console(level, ...args) {
+   logIfEnabled(() => {
+@@ -329,50 +329,51 @@ async function startOnce(){
  
- function _manualPhaseChanged(phase) {
-   manualState.phase = phase || 'ready';
-   _updateManualButtonAvailability();
- }
+     // 0) Audio unlock so TTS is permitted by browser autoplay policies
+     try { await unlockAudio(); } catch {}
  
- function _manualPointerDown(ev) {
-   if (!manualState.featureEnabled) return;
-+  if (!ev?.isTrusted) return;  // ← block synthetic/programmatic starts
-   if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-   if (manualState.pointerActive || manualState.keyActive) return;
-   manualState.pointerActive = true;
-   _updateManualButtonAvailability();
-   forceBargeInStart({ source: 'pointer' });
- }
+     // 1) Network/CSRF prep (kept for compatibility; harmless in WS-only mode)
+     try { installFetchInterceptor(); } catch {}
+     try { await ensureCSRF(); } catch {}
  
- function _manualPointerUp(ev) {
-   if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-   if (!manualState.pointerActive) return;
-   manualState.pointerActive = false;
-   _updateManualButtonAvailability();
-   if (!manualState.keyActive) {
-     forceBargeInEnd({ reason: 'pointer_release' });
-   }
- }
- 
- function _manualKeyDown(ev) {
-   if (!manualState.featureEnabled) return;
-+  if (!ev?.isTrusted) return;  // ← block synthetic/programmatic starts
-   const key = ev?.code || ev?.key || '';
-   if (!(key === 'Space' || key === 'Spacebar' || key === ' ')) return;
-   if (ev?.repeat) return;
-   if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-   if (manualState.keyActive || manualState.pointerActive) return;
-   manualState.keyActive = true;
-   _updateManualButtonAvailability();
-   forceBargeInStart({ source: 'keyboard' });
- }
- 
- function _manualKeyUp(ev) {
-   const key = ev?.code || ev?.key || '';
-   if (!(key === 'Space' || key === 'Spacebar' || key === ' ')) return;
-   if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-   if (!manualState.keyActive) return;
-   manualState.keyActive = false;
-   _updateManualButtonAvailability();
-   if (!manualState.pointerActive) {
-     forceBargeInEnd({ reason: 'keyboard_release' });
-   }
- }
- 
- function _manualGlobalCancel(reason = 'global_cancel') {
-   if (!manualState.pointerActive && !manualState.keyActive) return;
-   manualState.pointerActive = false;
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 2734550f449694390666b61660ed479bc6ce76d4..83ef847ad40e2547f1804703ffd409aba572d9cd 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -1860,50 +1860,67 @@ async function _onSpeechStartCommitted(detail = {}) {
-   const commitMode = allowAutoCommit ? 'auto_commit' : 'vad';
-   state.currentCommitMode = commitMode;
-   if (commitMode === 'auto_commit') {
-     state.assistantReady = false;
-   }
- 
-   _logLifecycle('vad_speech_start', {
-     preRollBufferedMs: round(bufferedMsRaw),
-     preRollSentMs: round(Math.min(bufferedMsRaw, PRE_ROLL_MS)),
-     preRollChunks: preRollBlobs.length,
-     preRollBytes: totalBytes,
-     preRollEnabled: preRollBlobs.length > 0,
-     preRollMime: (state.rec && state.rec.mimeType) || REC_MIME,
-     snrDb: roundTenths(metrics?.snrDb),
-     noiseFloorDb: roundTenths(metrics?.noiseFloorDb),
-     thresholdStartDb: roundTenths(metrics?.thresholds?.startDb),
-     commitMode,
-   });
-   _voiceLog('info', 'speech started', {
-     preRollChunks: preRollBlobs.length,
-     preRollBytes: totalBytes,
-     snrDb: roundTenths(metrics?.snrDb),
-     commitMode,
-   });
- 
-+  // FAST PATH: Ready-phase hands-free turn start
-+  if (commitMode === 'auto_commit') {
-+    // Start the MediaRecorder now (not just priming)
-+    let ok = await _startRecorder();         // internally sets state.recStreaming = true and flushes pre-roll
-+    if (!ok) {
-+      try { await _primeRecorderForPreRoll({ resetBuffer: false }); } catch {}
-+      ok = await _startRecorder();
-+    }
-+    if (ok) {
-+      _emitVoiceState('recording');
-+      return;                                // we're streaming; rest of the function can return
-+    }
-+    _voiceLog('warn', 'recorder unavailable — reverting to typing');
-+    _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
-+    return;
-+  }
-+
-   if (state.greetGateActive) {
-     if (state.greetGatePhase === 'calibrating') {
-       _voiceLog('info', 'speech start suppressed during greet calibration', {
-         calibrateUntil: state.greetGateCalibrateUntil,
-         snrDb: roundTenths(metrics?.snrDb),
-       });
+     // 2) WS first — verify actually OPEN or abort
+     const ok = await ensureWsOpenOrFail(5000);
+     if (!ok){
+       showBanner('WebSocket did not open — greet aborted.');
+       setDot('ready');
+       if (startBtn) startBtn.disabled = false;
+       startInFlight = false;
        return;
      }
-     if (state.greetGatePhase === 'pending') {
-       const snrDb = Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null;
-       if (state.ttsPlaying) {
-         _voiceLog('info', 'speech start suppressed by greet gate while TTS playing', {
-           snrDb: roundTenths(snrDb),
-           ttsPlaying: true,
-         });
-         return;
-       }
-       if (Number.isFinite(snrDb) && snrDb >= GREET_BARGE_MIN_SNR_DB) {
-         _voiceLog('info', 'greet gate bypassed via barge-in', {
-           snrDb: roundTenths(snrDb),
-         });
-         _completeGreetGate('barge_in');
-       } else {
-         _voiceLog('info', 'speech start suppressed by greet gate', {
-           snrDb: roundTenths(metrics?.snrDb),
+ 
+     // 3) Wire WS → UI events exactly once
+     wireWSEventsOnce();
+ 
+     // 4) WS-only greet using the SAME session id as WS — fire ASAP so text arrives while
+     //    audio hardware comes online.
+     const sid = getSID();
+     try {
++      try { setGreetGateActive(true); } catch {}
+       const manualMode = !!_cfgValue('barge_in_mode_manual', true);
+       const autoCommit = !!_cfgValue('auto_commit_when_ready', true);
+       _console('log', '[bootstrap] startOnce sending greet configure');
+       configure({
+         greet: true,
+         reset: 1,
+         session_id: sid,
+         feature_manual_barge_in: manualState.featureEnabled,
+         barge_in_mode_manual: manualMode,
+         auto_commit_when_ready: autoCommit,
+       });
+       _console('log', '[bootstrap] startOnce greet configure sent — recorder setup will follow');
+       try {
+         window.dispatchEvent(new CustomEvent('chip-tts', {
+           detail: { state: 'playing', prime: true }
+         }));
+       } catch {}
+       // ^^ This “primes” holdoff if your server’s first audio event is delayed;
+       // when real assistant_audio arrives, your existing listener will extend the hold.
+     } catch (e) {
+       _console('warn', '[bootstrap] WS configure failed, cannot greet', e);
+       showBanner('Greet failed to send — check WS configure()');
+       throw e;
+     }
+ 
+@@ -428,50 +429,51 @@ async function startOnce(){
+       markAssistantRemove = true;
+       logWsListenerAttach('askchip-ws', 'bootstrap-markAssistant-fallback');
+       window.addEventListener('askchip-ws', markAssistant);
+       try { _console('warn', '[bootstrap] once listener fallback', err); } catch {}
+     }
+ 
+     setTimeout(() => {
+       if (!gotAssistant) showBanner('No assistant frames after greet — check WS handler/payload.');
+     }, 6000);
+ 
+     // Ready for user input
+     if (endBtn) endBtn.disabled = false;
+     _enableButtons();
+ 
+     // Mark session active so ws.js auto-reconnects through restarts
+     window.__askchip_session_started = true;
+     started = true;
+     setDot('ready');
+ 
+   } catch (e){
+     _console('error', '[bootstrap] start failed', e);
+     if (startBtn) startBtn.disabled = false;
+     _disableButtons();
+     setDot('ready');
+     try { Visualizer.stop({ reset: true }); } catch {}
++    try { setGreetGateActive(false); } catch {}
+   } finally {
+     startInFlight = false;
+   }
+ }
+ 
+ function wireUI(){
+   // Safety guard: prevent duplicate UI wiring if module loaded twice
+   if (window.__bootstrapWired) {
+     _console('warn', '[bootstrap] duplicate wiring prevented');
+     return;
+   }
+   window.__bootstrapWired = true;
+ 
+   wireVoiceEventsOnce();
+ 
+   const startBtn = document.getElementById('startButton');
+   const endBtn   = document.getElementById('endButton');
+   const sendBtnA = document.getElementById('composerSend');
+   const sendBtnB = document.getElementById('sendBtn');
+   const form     = document.getElementById('composerForm');
+   const composer = document.getElementById('composer');
+   manualState.button = document.getElementById('pttButton');
+ 
+   if (manualState.button) {
+     if (!manualState.featureEnabled) {

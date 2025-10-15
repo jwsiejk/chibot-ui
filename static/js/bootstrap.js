@@ -1,7 +1,7 @@
 // bootstrap.js
 import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
 import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
-import { initMic, armVAD, disarmVAD, forceBargeInStart, forceBargeInEnd } from '/static/js/voice.js';
+import { initMic, armVAD, disarmVAD, forceBargeInStart, forceBargeInEnd, setGreetGateActive } from '/static/js/voice.js';
 import { unlockAudio, stopPlayback } from '/static/js/audio.js';
 import { getSID } from '/static/js/util/sid.js';
 import * as App from '/static/js/app.js';
@@ -351,6 +351,7 @@ async function startOnce(){
     //    audio hardware comes online.
     const sid = getSID();
     try {
+      try { setGreetGateActive(true); } catch {}
       const manualMode = !!_cfgValue('barge_in_mode_manual', true);
       const autoCommit = !!_cfgValue('auto_commit_when_ready', true);
       _console('log', '[bootstrap] startOnce sending greet configure');
@@ -450,6 +451,7 @@ async function startOnce(){
     _disableButtons();
     setDot('ready');
     try { Visualizer.stop({ reset: true }); } catch {}
+    try { setGreetGateActive(false); } catch {}
   } finally {
     startInFlight = false;
   }
