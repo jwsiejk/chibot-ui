@@ -3,20 +3,29 @@ import { bufferPreRollFrame, flushShadowBuffer, resetShadowBufferState } from '.
 import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from '../../ws_module.js';
 import {
   DEFAULT_MAX_TURN_MS,
+  EVIDENCE_MIN_BYTES,
+  EVIDENCE_MIN_SNR_DB,
+  EVIDENCE_MIN_SPEECH_MS,
   MIN_VALID_BLOB_BYTES,
+  PARTIAL_CONF_RISE_DELTA,
+  PARTIAL_CONF_THRESHOLD,
   REC_MIME,
   SAFETY_CLOSE_DELAY_MS,
   PRE_ROLL_MS,
   optsFromGlobal,
+  _clearGreetGateWaiters,
+  _completeGreetGate,
   _handleGreetGateStateFrame,
   _handleGreetGateUtteranceEnd,
   _logLifecycle,
+  _resetGreetGateState,
   _updateAssistantPhaseFromDetail,
   _voiceLog,
   _now,
   _waitForGreetGate,
   state,
 } from './VoiceLegacyTopLevel.js';
+import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
 
 const IMPLEMENTATION = Object.create(null);
 
@@ -89,6 +98,310 @@ export function registerVoiceLegacyFacade(overrides = {}) {
     }
   }
   return { ...IMPLEMENTATION };
+}
+
+const POST_TTS_HOLDOFF_MS = 600;
+const TTS_DECAY_MS = 750;
+const ENDED_STATES = new Set(['ended', 'stopped', 'idle', 'paused', '']);
+
+function normalizeStateValue(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function extractDetailAndState(ctx = {}) {
+  const detail = ctx.detail ?? ctx.event?.detail ?? {};
+  const stateValue = normalizeStateValue(detail?.state);
+  ctx.detail = detail;
+  ctx.stateValue = stateValue;
+  return { detail, stateValue };
+}
+
+function resolveNowFn(now) {
+  if (typeof now === 'function') {
+    return now;
+  }
+  return () => Date.now();
+}
+
+export function onTtsStart(ctx = {}) {
+  const { state: ctxState, abortEvidenceGate, ttsIsPlaying, TurnState } = ctx;
+  if (!ctxState) {
+    return false;
+  }
+
+  const { detail, stateValue } = extractDetailAndState(ctx);
+  if (stateValue !== 'playing') {
+    return false;
+  }
+
+  const nowFn = resolveNowFn(ctx.now);
+  ctxState.ttsPlaying = true;
+  ctxState.assistantReady = false;
+  ctxState.assistantPhase = typeof TurnState?.Speaking === 'string'
+    ? TurnState.Speaking.toLowerCase()
+    : 'speaking';
+  ctxState.postTtsHoldUntil = nowFn() + POST_TTS_HOLDOFF_MS;
+  if (ctxState.ttsMask && typeof ctxState.ttsMask.start === 'function') {
+    ctxState.ttsMask.start();
+  }
+  if (ctxState.evidenceGate?.isOpen?.() && typeof abortEvidenceGate === 'function') {
+    abortEvidenceGate('tts_playback_start');
+  }
+
+  const isPrime = detail?.prime === true;
+  const playbackConfirmed = detail?.confirmed === true || detail?.playbackConfirmed === true;
+  let playbackActive = !!playbackConfirmed;
+  if (!playbackActive && typeof ttsIsPlaying === 'function') {
+    try {
+      playbackActive = !!ttsIsPlaying();
+    } catch {
+      playbackActive = false;
+    }
+  }
+
+  if (!isPrime && playbackActive && ctxState.eligibility === 'blocked_pregreet') {
+    ctxState.eligibility = 'holdoff';
+  }
+
+  emitVoiceEvent('tts', {
+    state: 'playing',
+    prime: isPrime,
+    playbackConfirmed: playbackConfirmed === true,
+  });
+
+  return true;
+}
+
+export function onTtsEnd(ctx = {}) {
+  const { state: ctxState, clearPostTtsHoldTimer, TurnState } = ctx;
+  if (!ctxState) {
+    return false;
+  }
+
+  const { stateValue } = extractDetailAndState(ctx);
+  ctxState.ttsPlaying = stateValue === 'playing';
+  if (!ENDED_STATES.has(stateValue)) {
+    return false;
+  }
+
+  const nowFn = resolveNowFn(ctx.now);
+  ctxState.ttsPlaying = false;
+  ctxState.postTtsHoldUntil = 0;
+  if (typeof clearPostTtsHoldTimer === 'function') {
+    clearPostTtsHoldTimer();
+  }
+
+  const sigma = Number.isFinite(ctxState.sessionSnrStd) ? ctxState.sessionSnrStd : 0;
+  if (ctxState.ttsMask && typeof ctxState.ttsMask.end === 'function') {
+    ctxState.ttsMask.end({
+      decayMs: TTS_DECAY_MS,
+      snrBoost: Math.max(3, sigma * 1.5),
+    });
+  }
+
+  ctxState.assistantReady = true;
+  ctxState.assistantPhase = typeof TurnState?.Ready === 'string'
+    ? TurnState.Ready.toLowerCase()
+    : 'ready';
+  ctxState.lastAssistantReadyAt = nowFn();
+  if (ctxState.eligibility === 'holdoff') {
+    ctxState.eligibility = 'eligible';
+  }
+
+  emitVoiceEvent('tts', { state: stateValue || 'ended' });
+
+  return true;
+}
+
+export function legacyClearPostTtsHoldTimer() {
+  if (state.postTtsHoldTimer) {
+    try { clearTimeout(state.postTtsHoldTimer); } catch {}
+  }
+  state.postTtsHoldTimer = null;
+}
+
+export function legacySetGreetGateActive(active, helpers = {}) {
+  if (active) {
+    _voiceLog('debug', 'greet gate activation requested', {
+      alreadyActive: state.greetGateActive,
+      turnHintSent: state.turnHintSent,
+      turnHintAwaitingWS: state.turnHintAwaitingWS,
+    });
+    _clearGreetGateWaiters(false);
+    _resetGreetGateState();
+    state.greetGateActive = true;
+    state.greetGatePhase = 'pending';
+    state.greetGateLastReason = 'armed';
+    state.greetGateLastSignal = 'armed';
+    state.eligibility = 'blocked_pregreet';
+    state.postTtsHoldUntil = 0;
+    legacyClearPostTtsHoldTimer();
+    _voiceLog('info', 'greet gate armed', {
+      greetGateActive: state.greetGateActive,
+      turnHintSent: state.turnHintSent,
+      turnHintAwaitingWS: state.turnHintAwaitingWS,
+    });
+    const ensureWsListener = helpers && typeof helpers.ensureWsListener === 'function'
+      ? helpers.ensureWsListener
+      : null;
+    if (ensureWsListener) {
+      ensureWsListener();
+    }
+    return;
+  }
+  if (state.greetGateActive) {
+    _completeGreetGate('manual_release');
+  } else {
+    _resetGreetGateState();
+  }
+}
+
+export function legacyAbortEvidenceGate(reason, detail = null) {
+  if (!state.evidenceGate.isOpen()) {
+    return;
+  }
+  const stats = getShadowStats(state);
+  state.evidenceGate.abort(reason || 'aborted', detail, stats);
+  _voiceLog('info', 'evidence gate aborted', {
+    reason: state.evidenceGate.reason(),
+    bufferedMs: stats.durationMs,
+    bufferedBytes: stats.totalBytes,
+  });
+  resetShadowBufferState(state);
+  legacyResetEvidenceGate(state.evidenceGate.reason());
+  emitVoiceEvent('state', { state: 'armed' });
+}
+
+export function legacyEvaluateEvidenceGate(trigger = 'poll', helpers = {}) {
+  if (!state.evidenceGate.isOpen()) {
+    return false;
+  }
+  const stats = getShadowStats(state);
+  const snrDb = Number.isFinite(state.evidenceGate.lastDetail?.snrDb)
+    ? state.evidenceGate.lastDetail.snrDb
+    : null;
+  const requiredSnr = getEvidenceSnrRequirement(state, _now, EVIDENCE_MIN_SNR_DB);
+  const minMsRaw = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
+  const minBytesRaw = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
+  const minMs = Number.isFinite(minMsRaw) ? Math.max(0, minMsRaw) : EVIDENCE_MIN_SPEECH_MS;
+  const minBytes = Number.isFinite(minBytesRaw) ? Math.max(0, minBytesRaw) : EVIDENCE_MIN_BYTES;
+  const { shouldCommit } = state.evidenceGate.update({
+    vadState: 'speech',
+    snr: snrDb,
+    snrBoost: Math.max(0, requiredSnr - EVIDENCE_MIN_SNR_DB),
+    bufferedMs: stats.durationMs,
+    bufferedBytes: stats.totalBytes,
+    minSpeechMs: minMs,
+    minBytes,
+  });
+  if (shouldCommit && !state.evidenceGateCommitPromise) {
+    const commitPromise = legacyCommitEvidenceGate(trigger, helpers).catch((err) => {
+      _voiceLog('warn', 'evidence gate commit failed', { error: err?.message || err });
+      throw err;
+    });
+    state.evidenceGateCommitPromise = commitPromise;
+    commitPromise.finally(() => {
+      if (state.evidenceGateCommitPromise === commitPromise) {
+        state.evidenceGateCommitPromise = null;
+      }
+    });
+  }
+  return shouldCommit;
+}
+
+export async function legacyCommitEvidenceGate(trigger = 'unknown', helpers = {}) {
+  const gate = state.evidenceGate;
+  if (gate.satisfied) {
+    return true;
+  }
+  const snapshot = {
+    bufferedMs: gate.bufferedMs,
+    bufferedBytes: gate.bufferedBytes,
+    snrOk: gate.snrOk,
+    minMassOk: gate.minMassOk,
+    partialGateOk: gate.partialGateOk,
+  };
+  gate.satisfy(trigger);
+  _voiceLog('info', 'evidence gate satisfied', { trigger, ...snapshot });
+
+  const startRecorder = typeof helpers.startRecorder === 'function'
+    ? helpers.startRecorder
+    : (() => legacyStartRecorder({
+      primeRecorderForPreRoll: helpers.primeRecorderForPreRoll,
+      clearPendingEndTimer: helpers.clearPendingEndTimer,
+      ensureWSListener: helpers.ensureWsListener,
+      onSpeechEndCommitted: helpers.onSpeechEndCommitted,
+      clearTurnTimer: helpers.clearTurnTimer,
+    }));
+  const primeRecorder = typeof helpers.primeRecorderForPreRoll === 'function'
+    ? helpers.primeRecorderForPreRoll
+    : ((opts = {}) => legacyPrimeRecorderForPreRoll(opts));
+
+  let ok = await startRecorder();
+  if (!ok) {
+    try {
+      await primeRecorder({ resetBuffer: false });
+    } catch {}
+    ok = await startRecorder();
+  }
+
+  if (ok) {
+    state.evidenceGateCommitPromise = null;
+    gate.reset('committed');
+    emitVoiceEvent('state', { state: 'recording' });
+    return true;
+  }
+
+  _voiceLog('warn', 'recorder unavailable after evidence gate');
+  emitVoiceEvent('state', { state: 'armed', statusText: 'Listening… (mic unavailable — please type)' });
+  state.evidenceGateCommitPromise = null;
+  gate.reset('recorder_unavailable');
+  return false;
+}
+
+export function legacyUpdateEvidenceGateWithChunk(durationMs, bytes, helpers = {}) {
+  if (!state.evidenceGate.isOpen()) {
+    return;
+  }
+  const stats = getShadowStats(state);
+  state.evidenceGate.extendBuffer({
+    durationMs,
+    bytes,
+    bufferedMs: stats.durationMs,
+    bufferedBytes: stats.totalBytes,
+  });
+  legacyEvaluateEvidenceGate('chunk', helpers);
+}
+
+export function legacyUpdateEvidenceGateWithPartial(confidence = null, transcript = '', helpers = {}) {
+  if (!state.evidenceGate.isOpen()) {
+    return;
+  }
+  const stats = getShadowStats(state);
+  const requiredSnr = getEvidenceSnrRequirement(state, _now, EVIDENCE_MIN_SNR_DB);
+  const minMsRaw = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
+  const minBytesRaw = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
+  const minMs = Number.isFinite(minMsRaw) ? Math.max(0, minMsRaw) : EVIDENCE_MIN_SPEECH_MS;
+  const minBytes = Number.isFinite(minBytesRaw) ? Math.max(0, minBytesRaw) : EVIDENCE_MIN_BYTES;
+  state.evidenceGate.update({
+    vadState: 'hold',
+    snr: Number.isFinite(state.evidenceGate.lastDetail?.snrDb)
+      ? state.evidenceGate.lastDetail.snrDb
+      : null,
+    snrBoost: Math.max(0, requiredSnr - EVIDENCE_MIN_SNR_DB),
+    bufferedMs: stats.durationMs,
+    bufferedBytes: stats.totalBytes,
+    minSpeechMs: minMs,
+    minBytes,
+    asrCue: {
+      type: 'partial',
+      conf: typeof confidence === 'number' ? confidence : null,
+      transcript,
+      threshold: PARTIAL_CONF_THRESHOLD,
+      delta: PARTIAL_CONF_RISE_DELTA,
+    },
+  });
+  legacyEvaluateEvidenceGate('partial', helpers);
 }
 
 export function legacyClearManualTimers() {

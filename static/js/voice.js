@@ -6,7 +6,7 @@ import {
 } from './voice/core/index.js';
 import { sendJSON } from './ws_module.js';
 import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
-import { onTtsStart, onTtsEnd, registerTtsEventListener } from './voice/tts/TtsHandlers.js';
+import { registerTtsEventListener } from './voice/tts/TtsHandlers.js';
 import {
   startVadLoop,
   stopVadLoop,
@@ -34,6 +34,7 @@ import {
   legacyClearSafetyCloseTimer,
   legacyCloseTurnIfOpen,
   legacyEnsureAudioStartSent,
+  legacySetGreetGateActive,
   legacyOnWsCloseImpl,
   legacyOnWsMessageImpl,
   legacyOnWsOpenImpl,
@@ -48,6 +49,14 @@ import {
   legacyStartRecorder,
   legacyTeardownPreRollTap,
   legacyStopRecorder,
+  legacyAbortEvidenceGate,
+  legacyEvaluateEvidenceGate,
+  legacyCommitEvidenceGate,
+  legacyUpdateEvidenceGateWithChunk,
+  legacyUpdateEvidenceGateWithPartial,
+  legacyClearPostTtsHoldTimer,
+  onTtsStart,
+  onTtsEnd,
 } from './voice/legacy/VoiceLegacyFacade.js';
 import {
   DEFAULT_MAX_TURN_MS,
@@ -66,14 +75,12 @@ import {
   WEBM_MIME,
   _beginTurnTrace,
   _cancelGreetGate,
-  _clearGreetGateWaiters,
   _clearTurnTrace,
   _completeGreetGate,
   _handleGreetGateStateFrame,
   _handleGreetGateUtteranceEnd,
   _logLifecycle,
   _now,
-  _resetGreetGateState,
   _updateAssistantPhaseFromDetail,
   _voiceLog,
   _waitForGreetGate,
@@ -106,165 +113,35 @@ _refreshManualConfig();
 registerTtsEventListener({ createContext: () => ({ state, now: _now, abortEvidenceGate: _abortEvidenceGate, ttsIsPlaying, clearPostTtsHoldTimer: _clearPostTtsHoldTimer, TurnState }), onTtsStart, onTtsEnd });
 
 function _setGreetGateActive(active) {
-  if (active) {
-    _voiceLog('debug', 'greet gate activation requested', {
-      alreadyActive: state.greetGateActive,
-      turnHintSent: state.turnHintSent,
-      turnHintAwaitingWS: state.turnHintAwaitingWS,
-    });
-    _clearGreetGateWaiters(false);
-    _resetGreetGateState();
-    state.greetGateActive = true;
-    state.greetGatePhase = 'pending';
-    state.greetGateLastReason = 'armed';
-    state.greetGateLastSignal = 'armed';
-    state.eligibility = 'blocked_pregreet';
-    state.postTtsHoldUntil = 0;
-    _clearPostTtsHoldTimer();
-    _voiceLog('info', 'greet gate armed', {
-      greetGateActive: state.greetGateActive,
-      turnHintSent: state.turnHintSent,
-      turnHintAwaitingWS: state.turnHintAwaitingWS,
-    });
-    _ensureWSListener();
-    return;
-  }
-  if (state.greetGateActive) {
-    _completeGreetGate('manual_release');
-  } else {
-    _resetGreetGateState();
-  }
+  legacySetGreetGateActive(active, { ensureWsListener: _ensureWSListener });
 }
 
 function _abortEvidenceGate(reason, detail = null) {
-  if (!state.evidenceGate.isOpen()) {
-    return;
-  }
-  const stats = getShadowStats(state);
-  state.evidenceGate.abort(reason || 'aborted', detail, stats);
-  _voiceLog('info', 'evidence gate aborted', {
-    reason: state.evidenceGate.reason(),
-    bufferedMs: stats.durationMs,
-    bufferedBytes: stats.totalBytes,
-  });
-  resetShadowBufferState(state);
-  _resetEvidenceGate(state.evidenceGate.reason());
-  emitVoiceEvent('state', { state: 'armed' });
+  legacyAbortEvidenceGate(reason, detail);
 }
 function _evaluateEvidenceGate(trigger = 'poll') {
-  if (!state.evidenceGate.isOpen()) {
-    return false;
-  }
-  const stats = getShadowStats(state);
-  const snrDb = Number.isFinite(state.evidenceGate.lastDetail?.snrDb)
-    ? state.evidenceGate.lastDetail.snrDb
-    : null;
-  const requiredSnr = getEvidenceSnrRequirement(state, _now, EVIDENCE_MIN_SNR_DB);
-  const minMsRaw = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
-  const minBytesRaw = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
-  const minMs = Number.isFinite(minMsRaw) ? Math.max(0, minMsRaw) : EVIDENCE_MIN_SPEECH_MS;
-  const minBytes = Number.isFinite(minBytesRaw) ? Math.max(0, minBytesRaw) : EVIDENCE_MIN_BYTES;
-  const { shouldCommit } = state.evidenceGate.update({
-    vadState: 'speech',
-    snr: snrDb,
-    snrBoost: Math.max(0, requiredSnr - EVIDENCE_MIN_SNR_DB),
-    bufferedMs: stats.durationMs,
-    bufferedBytes: stats.totalBytes,
-    minSpeechMs: minMs,
-    minBytes,
+  return legacyEvaluateEvidenceGate(trigger, {
+    startRecorder: () => _startRecorder(),
+    primeRecorderForPreRoll: (opts = {}) => _primeRecorderForPreRoll(opts),
   });
-  if (shouldCommit && !state.evidenceGateCommitPromise) {
-    const commitPromise = _commitEvidenceGate(trigger).catch((err) => {
-      _voiceLog('warn', 'evidence gate commit failed', { error: err?.message || err });
-      throw err;
-    });
-    state.evidenceGateCommitPromise = commitPromise;
-    commitPromise.finally(() => {
-      if (state.evidenceGateCommitPromise === commitPromise) {
-        state.evidenceGateCommitPromise = null;
-      }
-    });
-  }
-  return shouldCommit;
 }
 async function _commitEvidenceGate(trigger = 'unknown') {
-  const gate = state.evidenceGate;
-  if (gate.satisfied) {
-    return true;
-  }
-  const snapshot = {
-    bufferedMs: gate.bufferedMs,
-    bufferedBytes: gate.bufferedBytes,
-    snrOk: gate.snrOk,
-    minMassOk: gate.minMassOk,
-    partialGateOk: gate.partialGateOk,
-  };
-  gate.satisfy(trigger);
-  _voiceLog('info', 'evidence gate satisfied', { trigger, ...snapshot });
-
-  let ok = await _startRecorder();
-  if (!ok) {
-    try {
-      await _primeRecorderForPreRoll({ resetBuffer: false });
-    } catch {}
-    ok = await _startRecorder();
-  }
-
-  if (ok) {
-    state.evidenceGateCommitPromise = null;
-    gate.reset('committed');
-    emitVoiceEvent('state', { state: 'recording' });
-    return true;
-  }
-
-  _voiceLog('warn', 'recorder unavailable after evidence gate');
-  emitVoiceEvent('state', { state: 'armed', statusText: 'Listening… (mic unavailable — please type)' });
-  state.evidenceGateCommitPromise = null;
-  gate.reset('recorder_unavailable');
-  return false;
+  return legacyCommitEvidenceGate(trigger, {
+    startRecorder: () => _startRecorder(),
+    primeRecorderForPreRoll: (opts = {}) => _primeRecorderForPreRoll(opts),
+  });
 }
 function _updateEvidenceGateWithChunk(durationMs, bytes) {
-  if (!state.evidenceGate.isOpen()) {
-    return;
-  }
-  const stats = getShadowStats(state);
-  state.evidenceGate.extendBuffer({
-    durationMs,
-    bytes,
-    bufferedMs: stats.durationMs,
-    bufferedBytes: stats.totalBytes,
+  legacyUpdateEvidenceGateWithChunk(durationMs, bytes, {
+    startRecorder: () => _startRecorder(),
+    primeRecorderForPreRoll: (opts = {}) => _primeRecorderForPreRoll(opts),
   });
-  _evaluateEvidenceGate('chunk');
 }
 function _updateEvidenceGateWithPartial(confidence = null, transcript = '') {
-  if (!state.evidenceGate.isOpen()) {
-    return;
-  }
-  const stats = getShadowStats(state);
-  const requiredSnr = getEvidenceSnrRequirement(state, _now, EVIDENCE_MIN_SNR_DB);
-  const minMsRaw = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
-  const minBytesRaw = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
-  const minMs = Number.isFinite(minMsRaw) ? Math.max(0, minMsRaw) : EVIDENCE_MIN_SPEECH_MS;
-  const minBytes = Number.isFinite(minBytesRaw) ? Math.max(0, minBytesRaw) : EVIDENCE_MIN_BYTES;
-  state.evidenceGate.update({
-    vadState: 'hold',
-    snr: Number.isFinite(state.evidenceGate.lastDetail?.snrDb)
-      ? state.evidenceGate.lastDetail.snrDb
-      : null,
-    snrBoost: Math.max(0, requiredSnr - EVIDENCE_MIN_SNR_DB),
-    bufferedMs: stats.durationMs,
-    bufferedBytes: stats.totalBytes,
-    minSpeechMs: minMs,
-    minBytes,
-    asrCue: {
-      type: 'partial',
-      conf: typeof confidence === 'number' ? confidence : null,
-      transcript,
-      threshold: PARTIAL_CONF_THRESHOLD,
-      delta: PARTIAL_CONF_RISE_DELTA,
-    },
+  legacyUpdateEvidenceGateWithPartial(confidence, transcript, {
+    startRecorder: () => _startRecorder(),
+    primeRecorderForPreRoll: (opts = {}) => _primeRecorderForPreRoll(opts),
   });
-  _evaluateEvidenceGate('partial');
 }
 function _maybeSendAudioStop(detail = {}) {
   if (state.audioStopSent) {
@@ -287,10 +164,7 @@ function _clearPendingEndTimer() {
   }
 }
 function _clearPostTtsHoldTimer() {
-  if (state.postTtsHoldTimer) {
-    try { clearTimeout(state.postTtsHoldTimer); } catch {}
-  }
-  state.postTtsHoldTimer = null;
+  legacyClearPostTtsHoldTimer();
 }
 function _clearBargeConfirm(resume = false) {
   if (state.bargeConfirmTimer) {
@@ -602,133 +476,6 @@ async function _arm(stream = null, opts = {}) {
   return mic;
 }
 
-async function _startRecorder() {
-  if (!state.stream) return false;
-
-  const primed = await _primeRecorderForPreRoll({ resetBuffer: false });
-  const recorder = state.rec;
-  if (!primed || !recorder) {
-    return false;
-  }
-
-  if (recorder.state !== 'recording') {
-    const ready = await new Promise((resolve) => {
-      const deadline = Date.now() + 500;
-      let settleTimer = null;
-      let onStart = null;
-      let onError = null;
-      const supportsAddEventListener = typeof recorder.addEventListener === 'function';
-      const originalOnStart = supportsAddEventListener ? null : (typeof recorder.onstart === 'function' ? recorder.onstart : null);
-      const originalOnError = supportsAddEventListener ? null : (typeof recorder.onerror === 'function' ? recorder.onerror : null);
-      const cleanup = () => {
-        if (settleTimer) {
-          try { clearTimeout(settleTimer); } catch {}
-          settleTimer = null;
-        }
-        if (onStart) {
-          try { recorder.removeEventListener?.('start', onStart); } catch {}
-        }
-        if (onError) {
-          try { recorder.removeEventListener?.('error', onError); } catch {}
-        }
-        if (!supportsAddEventListener) {
-          try { recorder.onstart = originalOnStart; } catch {}
-          try { recorder.onerror = originalOnError; } catch {}
-        }
-      };
-      const checkState = () => {
-        if (recorder.state === 'recording') {
-          cleanup();
-          resolve(true);
-          return;
-        }
-        if (Date.now() >= deadline) {
-          cleanup();
-          resolve(recorder.state === 'recording');
-          return;
-        }
-        settleTimer = setTimeout(checkState, 40);
-      };
-      onStart = () => {
-        cleanup();
-        resolve(true);
-      };
-      onError = () => {
-        cleanup();
-        resolve(false);
-      };
-      try { recorder.addEventListener?.('start', onStart, { once: true }); } catch {}
-      try { recorder.addEventListener?.('error', onError, { once: true }); } catch {}
-      if (!supportsAddEventListener) {
-        recorder.onstart = (...args) => {
-          cleanup();
-          resolve(true);
-          if (typeof originalOnStart === 'function') {
-            try { originalOnStart.apply(recorder, args); } catch {}
-          }
-        };
-        recorder.onerror = (...args) => {
-          cleanup();
-          resolve(false);
-          if (typeof originalOnError === 'function') {
-            try { originalOnError.apply(recorder, args); } catch {}
-          }
-        };
-      }
-      checkState();
-    });
-
-    if (!ready || recorder.state !== 'recording' || state.rec !== recorder) {
-      return false;
-    }
-  }
-
-  if (state.recStreaming) {
-    return true;
-  }
-
-  state.chunkSendPromise = Promise.resolve();
-  state.chunkBytesSent = 0;
-  state.chunkSendError = null;
-  state.turnClosePromise = null;
-  state.lastChunkAt = 0;
-  state.audioStopSent = false;
-  _clearPendingEndTimer();
-  state.recStartedAt = performance.now ? performance.now() : Date.now();
-  state.finalized = false;
-  state.postFinalHoldUntil = 0;
-  state.recStreaming = true;
-  state.recStopping = false;
-  state.recStopShouldSend = false;
-  _ensureWSListener();
-
-  const manualActive = !!(state.manual && state.manual.buttonDown);
-  if (manualActive) {
-    resetShadowBufferState(state);
-  } else {
-    flushShadowBuffer(
-      state.shadowBuffer,
-      (buffer, { durationMs, timecode }) => _sendRecorderChunk(buffer, { preRoll: true, durationMs, timecode }),
-      (stats) => stats?.count && _voiceLog('debug', 'flushed pre-roll buffer', {
-        chunks: stats.count,
-        durationMs: stats.durationMs,
-        bytes: stats.totalBytes,
-      }),
-    );
-  }
-
-  _voiceLog('info', 'recorder streaming', {
-    mime: (state.rec && state.rec.mimeType) || REC_MIME,
-  });
-
-  const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
-  _safeClearTurnTimer();
-  state.turnTimer = setTimeout(() => {
-    try { _onSpeechEndCommitted({ reason: 'turn_timeout' }); } catch {}
-  }, limitMs);
-
-  return true;
-}
 async function _onSpeechStartCommitted(detail = {}) {
   const metrics = (detail && typeof detail === 'object') ? detail : {};
   _refreshManualConfig();
