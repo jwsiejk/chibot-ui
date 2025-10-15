@@ -1,5 +1,4 @@
 import { emitVoiceEvent } from './voice/ui/Events.js';
-import { VAD } from './voice/vad.js';
 import {
   EvidenceGate,
   HysteresisVAD,
@@ -7,11 +6,17 @@ import {
   ShadowBuffer,
   TtsMask,
   TurnState,
-  dbToRms,
 } from './voice/core/index.js';
 import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from './ws_module.js';
 import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
 import { onTtsStart, onTtsEnd, registerTtsEventListener } from './voice/tts/TtsHandlers.js';
+import {
+  startVadLoop,
+  stopVadLoop,
+  updateSessionNoise,
+  getEvidenceSnrRequirement,
+  getShadowStats,
+} from './voice/loops/VadLoop.js';
 
 export async function initMic(stream = null) { return await _ensureMic(stream); }
 export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
@@ -449,62 +454,6 @@ function _logLifecycle(event, detail = {}, level = 'debug') {
     window.dispatchEvent(new CustomEvent('askchip-voice-lifecycle', { detail: payload }));
   } catch {}
 }
-function _updateSessionNoise(detail = null) {
-  if (!detail || typeof detail !== 'object') {
-    return;
-  }
-  const noiseDb = Number.isFinite(detail.noiseFloorDb) ? detail.noiseFloorDb : null;
-  if (Number.isFinite(noiseDb)) {
-    if (state.noiseModel) {
-      state.noiseModel.observeSilence({ energy: dbToRms(noiseDb) });
-      const floorDb = state.noiseModel.getFloor();
-      if (Number.isFinite(floorDb)) {
-        state.sessionNoiseFloorDb = floorDb;
-      }
-    } else if (!Number.isFinite(state.sessionNoiseFloorDb)) {
-      state.sessionNoiseFloorDb = noiseDb;
-    } else {
-      const alpha = 0.2;
-      state.sessionNoiseFloorDb = (1 - alpha) * state.sessionNoiseFloorDb + alpha * noiseDb;
-    }
-  }
-
-  const snr = Number.isFinite(detail.snrDb) ? detail.snrDb : null;
-  if (Number.isFinite(snr)) {
-    const count = (state.sessionSnrSamples || 0) + 1;
-    const prevMean = state.sessionSnrMean || 0;
-    const delta = snr - prevMean;
-    const mean = prevMean + delta / count;
-    const m2 = (state.sessionSnrM2 || 0) + delta * (snr - mean);
-    state.sessionSnrSamples = count;
-    state.sessionSnrMean = mean;
-    state.sessionSnrM2 = m2;
-    state.sessionSnrStd = count > 1 ? Math.sqrt(Math.max(0, m2 / (count - 1))) : state.sessionSnrStd;
-  }
-}
-function _getEvidenceSnrRequirement() {
-  let base = EVIDENCE_MIN_SNR_DB;
-  if (state.ttsPlaying) {
-    base += 3;
-  } else if (state.ttsMask) {
-    const now = _now();
-    if (state.ttsMask.isMasked(now)) {
-      base += Math.max(0, state.ttsMask.snrBoost(now));
-    }
-  }
-  return base;
-}
-function _getShadowStats() {
-  const stats = state.shadowBuffer ? state.shadowBuffer.stats() : null;
-  if (!stats) {
-    return { count: 0, durationMs: 0, totalBytes: 0 };
-  }
-  return {
-    count: Number.isFinite(stats.count) ? stats.count : (stats.count || 0),
-    durationMs: Number.isFinite(stats.durationMs) ? stats.durationMs : 0,
-    totalBytes: Number.isFinite(stats.totalBytes) ? stats.totalBytes : 0,
-  };
-}
 function _resetEvidenceGate(reason = null) {
   state.evidenceGate.reset(reason);
   state.evidenceGateCommitPromise = null;
@@ -513,7 +462,7 @@ function _abortEvidenceGate(reason, detail = null) {
   if (!state.evidenceGate.isOpen()) {
     return;
   }
-  const stats = _getShadowStats();
+  const stats = getShadowStats(state);
   state.evidenceGate.abort(reason || 'aborted', detail, stats);
   _voiceLog('info', 'evidence gate aborted', {
     reason: state.evidenceGate.reason(),
@@ -528,11 +477,11 @@ function _evaluateEvidenceGate(trigger = 'poll') {
   if (!state.evidenceGate.isOpen()) {
     return false;
   }
-  const stats = _getShadowStats();
+  const stats = getShadowStats(state);
   const snrDb = Number.isFinite(state.evidenceGate.lastDetail?.snrDb)
     ? state.evidenceGate.lastDetail.snrDb
     : null;
-  const requiredSnr = _getEvidenceSnrRequirement();
+  const requiredSnr = getEvidenceSnrRequirement(state, _now, EVIDENCE_MIN_SNR_DB);
   const minMsRaw = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
   const minBytesRaw = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
   const minMs = Number.isFinite(minMsRaw) ? Math.max(0, minMsRaw) : EVIDENCE_MIN_SPEECH_MS;
@@ -600,7 +549,7 @@ function _updateEvidenceGateWithChunk(durationMs, bytes) {
   if (!state.evidenceGate.isOpen()) {
     return;
   }
-  const stats = _getShadowStats();
+  const stats = getShadowStats(state);
   state.evidenceGate.extendBuffer({
     durationMs,
     bytes,
@@ -613,8 +562,8 @@ function _updateEvidenceGateWithPartial(confidence = null, transcript = '') {
   if (!state.evidenceGate.isOpen()) {
     return;
   }
-  const stats = _getShadowStats();
-  const requiredSnr = _getEvidenceSnrRequirement();
+  const stats = getShadowStats(state);
+  const requiredSnr = getEvidenceSnrRequirement(state, _now, EVIDENCE_MIN_SNR_DB);
   const minMsRaw = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
   const minBytesRaw = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
   const minMs = Number.isFinite(minMsRaw) ? Math.max(0, minMsRaw) : EVIDENCE_MIN_SPEECH_MS;
@@ -1686,43 +1635,25 @@ async function _arm(stream = null, opts = {}) {
   const cfg = { ...globalVad, ...opts };
 
   const pollMs = cfg.pollMs ?? 33;
-  const vad = new VAD(
-    state.analyser,
-    {
-      // Tunables (admin-configurable via opts or window.__askchip_config.vad)
-      pollMs,
-      minSpeechMs: cfg.minSpeechMs ?? 280,
-      minSilenceMs: cfg.minSilenceMs ?? 300,
-      cooldownMs: cfg.cooldownMs ?? 380,
-      startDbOffset: cfg.startDbOffset ?? 10,
-      stopDbOffset: cfg.stopDbOffset ?? 6,
-      minStartDb: cfg.minStartDb ?? -65,
-      minStopDb: cfg.minStopDb ?? -70,
-      echoBoostStartDb: cfg.echoBoostStartDb ?? 8,
-      echoBoostStopDb: cfg.echoBoostStopDb ?? 6,
-      noiseFloorAlpha: cfg.noiseFloorAlpha ?? 0.05,
-      noiseFloorRiseAlpha: cfg.noiseFloorRiseAlpha ?? 0.01,
-      noiseFloorGuardDb: cfg.noiseFloorGuardDb ?? 3,
-      noiseFloorHangMs: cfg.noiseFloorHangMs ?? 600,
-      initialNoiseFloorDb: cfg.initialNoiseFloorDb,
-      startRms: cfg.startRms,
-      stopRms: cfg.stopRms,
-      echoStateFn: () => {
-        // treat "TTS is playing" as echo present
-        try { return !!ttsIsPlaying(); } catch { return false; }
-      }
-    },
-    {
-      onSpeechStart: (detail) => _onSpeechStartCommitted(detail),
-      onSpeechEnd: (detail) => _onSpeechEndCommitted(detail),
-    }
-  );
+  const vadLoop = startVadLoop(state, () => ({
+    analyser: state.analyser,
+    cfg,
+    pollMs,
+    onSpeechStart: _onSpeechStartCommitted,
+    onSpeechEnd: _onSpeechEndCommitted,
+    ttsIsPlaying,
+  }));
 
-  state.vad = vad;
-  state.vad.start();
+  if (!vadLoop || !vadLoop.vad) {
+    return mic;
+  }
+
+  state.vad = vadLoop.vad;
+  const effectivePollMs = Number.isFinite(vadLoop.pollMs) ? vadLoop.pollMs : pollMs;
+
   _logLifecycle('mic_start', {
     sampleRate: state.ctx?.sampleRate,
-    pollMs,
+    pollMs: effectivePollMs,
   });
   emitVoiceEvent('state', { state: 'armed' });
 
@@ -1861,7 +1792,7 @@ async function _onSpeechStartCommitted(detail = {}) {
   const metrics = (detail && typeof detail === 'object') ? detail : {};
   _refreshManualConfig();
   state.vadMetrics = { ...metrics, phase: 'start' };
-  const shadowStats = _getShadowStats();
+  const shadowStats = getShadowStats(state);
   const bufferedMsRaw = Number.isFinite(shadowStats.durationMs) ? shadowStats.durationMs : 0;
   const totalBytes = Number.isFinite(shadowStats.totalBytes) ? shadowStats.totalBytes : 0;
   const preRollCount = Number.isFinite(shadowStats.count) ? shadowStats.count : 0;
@@ -1876,7 +1807,7 @@ async function _onSpeechStartCommitted(detail = {}) {
 
   const now = _now();
 
-  _updateSessionNoise(metrics);
+  updateSessionNoise(state, metrics);
 
   const manualOnlyMode = !!state.manual.modeManualOnly;
   const allowAutoCommit = manualOnlyMode && !!state.manual.autoCommitWhenReady;
@@ -2041,7 +1972,7 @@ async function _onSpeechStartCommitted(detail = {}) {
   }
 
   if (state.ttsMask && state.ttsMask.isMasked(now)) {
-    const requiredSnr = _getEvidenceSnrRequirement();
+    const requiredSnr = getEvidenceSnrRequirement(state, _now, EVIDENCE_MIN_SNR_DB);
     const snrDb = Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null;
     if (!Number.isFinite(snrDb) || snrDb < requiredSnr) {
       _logLifecycle('vad_speech_start_suppressed', {
@@ -2064,7 +1995,7 @@ async function _onSpeechStartCommitted(detail = {}) {
       bufferedMs: bufferedMsRaw,
       bufferedBytes: totalBytes,
     });
-    const requiredSnr = _getEvidenceSnrRequirement();
+    const requiredSnr = getEvidenceSnrRequirement(state, _now, EVIDENCE_MIN_SNR_DB);
     const minSpeechOpt = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
     const minSpeechMs = Number.isFinite(minSpeechOpt) ? Math.max(0, minSpeechOpt) : EVIDENCE_MIN_SPEECH_MS;
     const minBytesOpt = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
@@ -2106,7 +2037,7 @@ function _onSpeechEndCommitted(detail = null) {
     return Math.round(v * 10) / 10;
   };
 
-  _updateSessionNoise(metrics);
+  updateSessionNoise(state, metrics);
 
   _voiceLog('info', 'speech ended', {
     source: 'vad',
