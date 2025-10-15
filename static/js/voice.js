@@ -1,24 +1,4 @@
-/*
-Citations for context (non-functional):
-:contentReference[oaicite:0]{index=0}
-:contentReference[oaicite:1]{index=1}
-*/
-
-/* static/js/voice.js — Production voice pipeline (VAD + one-turn recorder + WS)
-   Goals satisfied:
-    • Echo-aware VAD (threshold boost while TTS is playing)
-    • Streaming Opus blobs per user turn (prefers OGG/Opus when supported; falls back to WebM/Opus)
-    • Soft barge-in: pause Chip TTS on committed speech start
-    • Turn timeout (safety), robust errors, clean session end
-    • UI state events: 'askchip-voice' {state:'armed'|'recording'|'idle'}
-
-   Notes:
-    • Do NOT JSON-wrap audio; send raw binary via ws.send(ArrayBuffer) (see ws.js).
-    • CloseStream is emitted AFTER all audio chunks are queued to the socket (keep WS stream open while draining).
-*/
-
-// Modularization notice: logic will progressively move into static/js/voice/* modules.
-
+import { emitVoiceEvent } from './voice/ui/Events.js';
 import { VAD } from './voice/vad.js';
 import {
   EvidenceGate,
@@ -32,7 +12,6 @@ import {
 import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from './ws_module.js';
 import { stopPlayback, pausePlayback, resumePlayback, isPlaying as ttsIsPlaying } from './audio.js';
 
-// Public API (matches prior usage)
 export async function initMic(stream = null) { return await _ensureMic(stream); }
 export async function armVAD(stream = null, opts = {}) { return await _arm(stream, opts); }
 export function disarmVAD() { _disarm(); }
@@ -43,8 +22,6 @@ export function setGreetGateActive(active = true) { _setGreetGateActive(!!active
 export function forceBargeInStart(meta = {}) { return _forceBargeInStart(meta); }
 export function forceBargeInEnd(opts = {}) { return _forceBargeInEnd(opts); }
 
-// ---- Internal state ---------------------------------------------------------
-
 // Prefer OGG/Opus where supported (provider-friendly); fallback to WebM/Opus.
 const WEBM_MIME = 'audio/webm; codecs=opus';
 const REC_MIME = (typeof MediaRecorder !== 'undefined'
@@ -52,7 +29,6 @@ const REC_MIME = (typeof MediaRecorder !== 'undefined'
   && MediaRecorder.isTypeSupported(WEBM_MIME))
   ? WEBM_MIME
   : 'audio/webm; codecs=opus';
-
 const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
 const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
 const PRE_ROLL_MS = 550;            // maintain ~0.5s pre-roll (shadow buffer)
@@ -71,7 +47,6 @@ const GREET_BARGE_MIN_SNR_DB = 8;
 const GREET_CALIBRATE_DEFAULT_MS = 500;
 const GREET_CALIBRATE_MIN_MS = 400;
 const GREET_CALIBRATE_MAX_MS = 600;
-
 const state = {
   stream: null,
   ctx: null,
@@ -96,13 +71,11 @@ const state = {
   turnHintPromise: null,
   turnHintAwaitingWS: false,
   deviceLogged: false,
-  // NEW: min-turn gating
   recStartedAt: 0,
   pendingEndTimer: null,
   ttsPlaying: false,
   bargeConfirmTimer: null,
   bargeConfirmActive: false,
-  // Pre-roll tap state
   preRollNode: null,
   preRollGain: null,
   shadowBuffer: new ShadowBuffer({ maxMs: PRE_ROLL_MS }),
@@ -164,7 +137,6 @@ const state = {
 };
 
 _refreshManualConfig();
-
 const BARGE_CONFIRM_DEFAULT_MS = 420;
 let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
 try {
@@ -174,7 +146,6 @@ try {
   }
 } catch {}
 bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
-
 try {
   window.addEventListener('chip-tts', (ev) => {
     const detail = ev?.detail || {};
@@ -224,7 +195,6 @@ try {
     }
   });
 } catch {}
-
 function _now() {
   try {
     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
@@ -233,12 +203,10 @@ function _now() {
   } catch {}
   return Date.now();
 }
-
 function _normalizePhase(value) {
   if (typeof value !== 'string') return '';
   return value.trim().toLowerCase();
 }
-
 function _updateAssistantPhaseFromDetail(detail = {}) {
   const phase = _normalizePhase(detail?.phase)
     || _normalizePhase(detail?.channel?.phase)
@@ -273,8 +241,6 @@ function _updateAssistantPhaseFromDetail(detail = {}) {
   }
 }
 
-// ---- Helpers ----------------------------------------------------------------
-
 function _clearGreetGateWaiters(result = false) {
   const waiters = Array.isArray(state.greetGateWaiters) ? state.greetGateWaiters : [];
   state.greetGateWaiters = [];
@@ -282,7 +248,6 @@ function _clearGreetGateWaiters(result = false) {
     try { waiter(result); } catch {}
   }
 }
-
 function _clearGreetGateCalibrateTimer() {
   if (state.greetGateCalibrateTimer) {
     try { clearTimeout(state.greetGateCalibrateTimer); } catch {}
@@ -291,13 +256,11 @@ function _clearGreetGateCalibrateTimer() {
   state.greetGateCalibrateUntil = 0;
   state.greetGateCalibrateLastMs = null;
 }
-
 function _resetGreetGateState() {
   _clearGreetGateCalibrateTimer();
   state.greetGatePhase = 'idle';
   state.greetGateLastSignal = null;
 }
-
 function _resolveGreetGateCalibrateMs() {
   const fallback = Number.isFinite(state.greetGateCalibrateMs)
     ? state.greetGateCalibrateMs
@@ -314,7 +277,6 @@ function _resolveGreetGateCalibrateMs() {
   const target = Number.isFinite(raw) ? raw : fallback;
   return Math.max(min, Math.min(max, target));
 }
-
 function _completeGreetGate(reason = 'open') {
   if (!state.greetGateActive) {
     _resetGreetGateState();
@@ -331,7 +293,6 @@ function _completeGreetGate(reason = 'open') {
   _clearGreetGateWaiters(true);
   _resetGreetGateState();
 }
-
 function _cancelGreetGate(reason = 'cancelled') {
   if (!state.greetGateActive) {
     _resetGreetGateState();
@@ -348,7 +309,6 @@ function _cancelGreetGate(reason = 'cancelled') {
   _clearGreetGateWaiters(false);
   _resetGreetGateState();
 }
-
 function _setGreetGateActive(active) {
   if (active) {
     _voiceLog('debug', 'greet gate activation requested', {
@@ -379,7 +339,6 @@ function _setGreetGateActive(active) {
     _resetGreetGateState();
   }
 }
-
 function _startGreetGateCalibrate(source = 'unknown') {
   if (!state.greetGateActive) return;
   if (state.greetGatePhase === 'calibrating' && state.greetGateCalibrateTimer) {
@@ -411,7 +370,6 @@ function _startGreetGateCalibrate(source = 'unknown') {
     _completeGreetGate('calibrate_timer_failed');
   }
 }
-
 function _waitForGreetGate() {
   if (!state.greetGateActive) {
     return null;
@@ -425,7 +383,6 @@ function _waitForGreetGate() {
     });
   });
 }
-
 function _handleGreetGateUtteranceEnd(detail = {}) {
   if (!state.greetGateActive) return;
   state.ttsPlaying = false;
@@ -436,7 +393,6 @@ function _handleGreetGateUtteranceEnd(detail = {}) {
   });
   _startGreetGateCalibrate('UtteranceEnd');
 }
-
 function _valueIsReadyFlag(value) {
   if (value === true) return true;
   if (value === 1) return true;
@@ -446,7 +402,6 @@ function _valueIsReadyFlag(value) {
   }
   return false;
 }
-
 function _handleGreetGateStateFrame(detail = {}) {
   if (!state.greetGateActive) return;
   _updateAssistantPhaseFromDetail(detail);
@@ -472,29 +427,19 @@ function _handleGreetGateStateFrame(detail = {}) {
     _startGreetGateCalibrate('ready_for_user');
   }
 }
-
-function _emitVoiceState(state, detail = {}) {
-  try {
-    window.dispatchEvent(new CustomEvent('askchip-voice', { detail: { state, ...detail } }));
-  } catch {}
-}
-
 function _setActiveTurnTraceId(traceId) {
   state.turnTraceId = traceId || null;
   try { window.__askchip_turn_trace_id = state.turnTraceId; } catch {}
 }
-
 function _getActiveTurnTraceId() {
   return state.turnTraceId || null;
 }
-
 function _ensureTurnTraceBase() {
   if (!state.turnTraceBase) {
     const entropy = Math.floor(Math.random() * 46656).toString(36).padStart(3, '0');
     state.turnTraceBase = entropy;
   }
 }
-
 function _beginTurnTrace(reason = 'turn_start') {
   _ensureTurnTraceBase();
   state.turnTraceSeq = (state.turnTraceSeq || 0) + 1;
@@ -503,13 +448,11 @@ function _beginTurnTrace(reason = 'turn_start') {
   _voiceLog('info', 'turn trace started', { reason });
   return traceId;
 }
-
 function _clearTurnTrace() {
   if (!_getActiveTurnTraceId()) return;
   _voiceLog('info', 'turn trace cleared');
   _setActiveTurnTraceId(null);
 }
-
 function _withTrace(detail = {}) {
   const traceId = _getActiveTurnTraceId();
   if (!traceId) {
@@ -523,13 +466,11 @@ function _withTrace(detail = {}) {
   }
   return { value: detail, traceId };
 }
-
 function _formatVoiceMessage(message) {
   const traceId = _getActiveTurnTraceId();
   const base = '[voice]';
   return traceId ? `${base}[trace:${traceId}] ${message}` : `${base} ${message}`;
 }
-
 function _voiceLog(level, message, detail = undefined) {
   try {
     const method = typeof console?.[level] === 'function' ? console[level] : console.log;
@@ -551,7 +492,6 @@ function _voiceLog(level, message, detail = undefined) {
     method.call(console, formatted, detail);
   } catch {}
 }
-
 function _logLifecycle(event, detail = {}, level = 'debug') {
   const payload = { event, ...(detail && typeof detail === 'object' ? detail : { detail }) };
   _voiceLog(level, event, payload);
@@ -559,7 +499,6 @@ function _logLifecycle(event, detail = {}, level = 'debug') {
     window.dispatchEvent(new CustomEvent('askchip-voice-lifecycle', { detail: payload }));
   } catch {}
 }
-
 function _updateSessionNoise(detail = null) {
   if (!detail || typeof detail !== 'object') {
     return;
@@ -593,7 +532,6 @@ function _updateSessionNoise(detail = null) {
     state.sessionSnrStd = count > 1 ? Math.sqrt(Math.max(0, m2 / (count - 1))) : state.sessionSnrStd;
   }
 }
-
 function _getEvidenceSnrRequirement() {
   let base = EVIDENCE_MIN_SNR_DB;
   if (state.ttsPlaying) {
@@ -606,7 +544,6 @@ function _getEvidenceSnrRequirement() {
   }
   return base;
 }
-
 function _getShadowStats() {
   const stats = state.shadowBuffer ? state.shadowBuffer.stats() : null;
   if (!stats) {
@@ -618,12 +555,10 @@ function _getShadowStats() {
     totalBytes: Number.isFinite(stats.totalBytes) ? stats.totalBytes : 0,
   };
 }
-
 function _resetEvidenceGate(reason = null) {
   state.evidenceGate.reset(reason);
   state.evidenceGateCommitPromise = null;
 }
-
 function _abortEvidenceGate(reason, detail = null) {
   if (!state.evidenceGate.isOpen()) {
     return;
@@ -637,9 +572,8 @@ function _abortEvidenceGate(reason, detail = null) {
   });
   _resetPreRollBuffer();
   _resetEvidenceGate(state.evidenceGate.reason());
-  _emitVoiceState('armed');
+  emitVoiceEvent('state', { state: 'armed' });
 }
-
 function _evaluateEvidenceGate(trigger = 'poll') {
   if (!state.evidenceGate.isOpen()) {
     return false;
@@ -676,7 +610,6 @@ function _evaluateEvidenceGate(trigger = 'poll') {
   }
   return shouldCommit;
 }
-
 async function _commitEvidenceGate(trigger = 'unknown') {
   const gate = state.evidenceGate;
   if (gate.satisfied) {
@@ -703,17 +636,16 @@ async function _commitEvidenceGate(trigger = 'unknown') {
   if (ok) {
     state.evidenceGateCommitPromise = null;
     gate.reset('committed');
-    _emitVoiceState('recording');
+    emitVoiceEvent('state', { state: 'recording' });
     return true;
   }
 
   _voiceLog('warn', 'recorder unavailable after evidence gate');
-  _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+  emitVoiceEvent('state', { state: 'armed', statusText: 'Listening… (mic unavailable — please type)' });
   state.evidenceGateCommitPromise = null;
   gate.reset('recorder_unavailable');
   return false;
 }
-
 function _updateEvidenceGateWithChunk(durationMs, bytes) {
   if (!state.evidenceGate.isOpen()) {
     return;
@@ -727,7 +659,6 @@ function _updateEvidenceGateWithChunk(durationMs, bytes) {
   });
   _evaluateEvidenceGate('chunk');
 }
-
 function _updateEvidenceGateWithPartial(confidence = null, transcript = '') {
   if (!state.evidenceGate.isOpen()) {
     return;
@@ -758,7 +689,6 @@ function _updateEvidenceGateWithPartial(confidence = null, transcript = '') {
   });
   _evaluateEvidenceGate('partial');
 }
-
 function _maybeSendAudioStop(detail = {}) {
   if (state.audioStopSent) {
     return false;
@@ -773,28 +703,24 @@ function _maybeSendAudioStop(detail = {}) {
     return false;
   }
 }
-
 function _clearPendingEndTimer() {
   if (state.pendingEndTimer) {
     try { clearTimeout(state.pendingEndTimer); } catch {}
     state.pendingEndTimer = null;
   }
 }
-
 function _clearPostTtsHoldTimer() {
   if (state.postTtsHoldTimer) {
     try { clearTimeout(state.postTtsHoldTimer); } catch {}
   }
   state.postTtsHoldTimer = null;
 }
-
 function _clearSafetyCloseTimer() {
   if (state.safetyCloseTimer) {
     try { clearTimeout(state.safetyCloseTimer); } catch {}
     state.safetyCloseTimer = null;
   }
 }
-
 function _armSafetyCloseTimer() {
   const shouldArm = state.turnOpen || state.recStreaming;
   if (!shouldArm) {
@@ -825,7 +751,6 @@ function _armSafetyCloseTimer() {
     }
   }, delayMs);
 }
-
 function _clearBargeConfirm(resume = false) {
   if (state.bargeConfirmTimer) {
     try { clearTimeout(state.bargeConfirmTimer); } catch {}
@@ -838,7 +763,6 @@ function _clearBargeConfirm(resume = false) {
     }
   }
 }
-
 function _refreshManualConfig() {
   const enabled = !!optsFromGlobal('feature_manual_barge_in', true);
   const manualOnly = !!optsFromGlobal('barge_in_mode_manual', true);
@@ -848,14 +772,12 @@ function _refreshManualConfig() {
   state.manual.autoCommitWhenReady = autoCommit;
   return enabled;
 }
-
 function _clearManualTimers() {
   if (state.manual.noAudioTimer) {
     try { clearTimeout(state.manual.noAudioTimer); } catch {}
     state.manual.noAudioTimer = null;
   }
 }
-
 function _manualAutoCancel(reason = 'no_audio') {
   const manual = state.manual;
   if (!manual.buttonDown && !manual.active) {
@@ -868,7 +790,6 @@ function _manualAutoCancel(reason = 'no_audio') {
     _voiceLog('warn', 'manual auto cancel failed', { error: err?.message || err, reason });
   }
 }
-
 function _forceBargeInStart(meta = {}) {
   const manual = state.manual;
   const enabled = _refreshManualConfig();
@@ -926,13 +847,13 @@ function _forceBargeInStart(meta = {}) {
         manual.sentStartFrame = false;
       }
       _voiceLog('warn', 'recorder unavailable — reverting to typing (manual barge-in)');
-      _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+      emitVoiceEvent('state', { state: 'armed', statusText: 'Listening… (mic unavailable — please type)' });
       return;
     }
 
     manual.active = true;
     manual.deferCloseStream = false;
-    _emitVoiceState('recording');
+    emitVoiceEvent('state', { state: 'recording' });
     _clearManualTimers();
     try {
       manual.noAudioTimer = setTimeout(() => _manualAutoCancel('no_audio'), MANUAL_NO_AUDIO_CANCEL_MS);
@@ -942,12 +863,11 @@ function _forceBargeInStart(meta = {}) {
     manual.active = false;
     manual.deferCloseStream = false;
     _voiceLog('warn', 'manual barge-in start failed', { error: err?.message || err });
-    _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+    emitVoiceEvent('state', { state: 'armed', statusText: 'Listening… (mic unavailable — please type)' });
   });
 
   return true;
 }
-
 function _forceBargeInEnd(opts = {}) {
   const manual = state.manual;
   const enabled = _refreshManualConfig();
@@ -989,7 +909,6 @@ function _forceBargeInEnd(opts = {}) {
 
   return true;
 }
-
 function _ensureWSListener() {
   if (state.wsListener || typeof window === 'undefined') {
     return;
@@ -1055,7 +974,6 @@ function _ensureWSListener() {
   try { window.addEventListener('askchip-ws', handler); } catch {}
   state.wsListener = handler;
 }
-
 function _removeWSListener() {
   if (!state.wsListener || typeof window === 'undefined') {
     return;
@@ -1063,7 +981,6 @@ function _removeWSListener() {
   try { window.removeEventListener('askchip-ws', state.wsListener); } catch {}
   state.wsListener = null;
 }
-
 async function _ensureMic(externalStream = null) {
   if (state.stream && state.stream.active) return state.stream;
 
@@ -1164,11 +1081,9 @@ async function _ensureMic(externalStream = null) {
 
   return stream;
 }
-
 function _safeClearTurnTimer() {
   if (state.turnTimer) { clearTimeout(state.turnTimer); state.turnTimer = null; }
 }
-
 function _closeTurnIfOpen() {
   _clearSafetyCloseTimer();
   if (!state.turnOpen && !state.turnClosePromise) {
@@ -1217,7 +1132,6 @@ function _closeTurnIfOpen() {
   state.turnClosePromise = closePromise;
   return closePromise;
 }
-
 async function _setupPreRollTap(ctx, source) {
   _teardownPreRollTap();
 
@@ -1265,7 +1179,6 @@ async function _setupPreRollTap(ctx, source) {
     _teardownPreRollTap();
   }
 }
-
 function _teardownPreRollTap() {
   if (state.preRollNode) {
     try { state.preRollNode.port.onmessage = null; } catch {}
@@ -1278,14 +1191,12 @@ function _teardownPreRollTap() {
   state.preRollGain = null;
   _resetPreRollBuffer();
 }
-
 function _resetPreRollBuffer() {
   state.preRollLastTimecode = null;
   if (state.shadowBuffer) {
     state.shadowBuffer.clear();
   }
 }
-
 function _computePreRollDuration(timecode) {
   const timeslice = state.preRollTimeslice || 0;
   let duration = timeslice || PRE_ROLL_MS;
@@ -1303,7 +1214,6 @@ function _computePreRollDuration(timecode) {
   }
   return duration;
 }
-
 function _bufferPreRollChunk(entry) {
   if (!entry || !entry.blob) {
     return;
@@ -1315,7 +1225,6 @@ function _bufferPreRollChunk(entry) {
   }
   _updateEvidenceGateWithChunk(durationMs, entry.blob?.size || 0);
 }
-
 function _enqueuePreRollBlobs() {
   const buffer = state.shadowBuffer;
   if (!buffer) {
@@ -1343,7 +1252,6 @@ function _enqueuePreRollBlobs() {
   }
   return { count, durationMs, totalBytes };
 }
-
 function _attemptAudioStartSend(mime) {
   try {
     const result = sendJSON({ type: 'AudioStart', mime });
@@ -1353,7 +1261,6 @@ function _attemptAudioStartSend(mime) {
     return false;
   }
 }
-
 async function _ensureAudioStartSent() {
   _voiceLog('debug', 'ensure AudioStart called', {
     greetGateActive: state.greetGateActive,
@@ -1434,7 +1341,6 @@ async function _ensureAudioStartSent() {
 
   return state.turnHintPromise;
 }
-
 function _sendRecorderChunk(blob, meta = {}) {
   if (!blob || blob.size < MIN_VALID_BLOB_BYTES) {
     return;
@@ -1497,7 +1403,6 @@ function _sendRecorderChunk(blob, meta = {}) {
       }
     });
 }
-
 async function _primeRecorderForPreRoll(options = {}) {
   const { resetBuffer = true } = options || {};
   if (!state.stream) {
@@ -1587,7 +1492,10 @@ async function _primeRecorderForPreRoll(options = {}) {
           await pendingClose;
         } catch {}
       }
-      _emitVoiceState('armed', finalDetail);
+      emitVoiceEvent('state', {
+        state: 'armed',
+        ...(finalDetail && typeof finalDetail === 'object' ? finalDetail : {}),
+      });
       if (state.vad && state.stream && state.stream.active) {
         try { await _primeRecorderForPreRoll(); } catch (err) { _voiceLog('warn', 'failed to re-prime recorder', { error: err?.message || err }); }
       }
@@ -1636,7 +1544,6 @@ async function _primeRecorderForPreRoll(options = {}) {
 
   return true;
 }
-
 function _handleRecorderData(event) {
   if (!event) {
     return;
@@ -1679,7 +1586,6 @@ function _handleRecorderData(event) {
   const durationMs = _computePreRollDuration(timecode);
   _bufferPreRollChunk({ blob, durationMs, timecode });
 }
-
 function _stopRecorder(detail = null) {
   _clearSafetyCloseTimer();
   const recorder = state.rec;
@@ -1744,12 +1650,10 @@ function _stopRecorder(detail = null) {
   state.turnHintPromise = null;
   state.turnHintAwaitingWS = false;
 }
-
 function _teardownVADOnly() {
   try { state.vad && state.vad.stop(); } catch {}
   state.vad = null;
 }
-
 function _teardownAudioGraph() {
   _teardownPreRollTap();
   try { state.source && state.source.disconnect(); } catch {}
@@ -1770,7 +1674,6 @@ function _teardownAudioGraph() {
   state.vadMetrics = null;
   _removeWSListener();
 }
-
 function _disarm() {
   _safeClearTurnTimer();
   _clearPendingEndTimer();
@@ -1807,9 +1710,8 @@ function _disarm() {
   state.assistantReady = false;
   state.assistantPhase = 'init';
   state.lastAssistantReadyAt = 0;
-  _emitVoiceState('idle');
+  emitVoiceEvent('state', { state: 'idle' });
 }
-
 function _bargeIn() {
   // Soft barge-in: pause audio locally
   _clearBargeConfirm(false);
@@ -1821,8 +1723,6 @@ function _bargeIn() {
     pendingClose.catch(() => {});
   }
 }
-
-// ---- VAD wiring -------------------------------------------------------------
 
 async function _arm(stream = null, opts = {}) {
   const mic = stream || await _ensureMic();
@@ -1874,14 +1774,12 @@ async function _arm(stream = null, opts = {}) {
     sampleRate: state.ctx?.sampleRate,
     pollMs,
   });
-  _emitVoiceState('armed');
+  emitVoiceEvent('state', { state: 'armed' });
 
   await _primeRecorderForPreRoll();
 
   return mic;
 }
-
-// ---- Recorder lifecycle -----------------------------------------------------
 
 async function _startRecorder() {
   if (!state.stream) return false;
@@ -2009,7 +1907,6 @@ async function _startRecorder() {
 
   return true;
 }
-
 async function _onSpeechStartCommitted(detail = {}) {
   const metrics = (detail && typeof detail === 'object') ? detail : {};
   _refreshManualConfig();
@@ -2147,11 +2044,11 @@ async function _onSpeechStartCommitted(detail = {}) {
       ok = await _startRecorder();
     }
     if (ok) {
-      _emitVoiceState('recording');
+      emitVoiceEvent('state', { state: 'recording' });
       return;                                // we're streaming; rest of the function can return
     }
     _voiceLog('warn', 'recorder unavailable — reverting to typing');
-    _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+    emitVoiceEvent('state', { state: 'armed', statusText: 'Listening… (mic unavailable — please type)' });
     return;
   }
 
@@ -2231,14 +2128,13 @@ async function _onSpeechStartCommitted(detail = {}) {
       minSpeechMs,
       minBytes,
     });
-    _emitVoiceState('recording', { gated: true });
+    emitVoiceEvent('state', { state: 'recording', gated: true });
   } else {
     state.evidenceGate.setDetail(metrics || state.evidenceGate.lastDetail);
   }
 
   _evaluateEvidenceGate('vad_start');
 }
-
 function _onSpeechEndCommitted(detail = null) {
   const metrics = (detail && typeof detail === 'object') ? detail : {};
   const reason = (detail && typeof detail === 'object' && detail.reason)
@@ -2306,8 +2202,6 @@ function _onSpeechEndCommitted(detail = null) {
   // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
 }
 
-// ---- Utilities --------------------------------------------------------------
-
 function optsFromGlobal(key, fallback) {
   // Allow admin-configurable values to seep in (if app exposes them)
   try {
@@ -2316,7 +2210,6 @@ function optsFromGlobal(key, fallback) {
   } catch {}
   return fallback;
 }
-
 function _applyPostFinalHold(source = 'unknown') {
   const rawHold = Number(optsFromGlobal('post_final_hold_ms', 600));
   const holdMs = Number.isFinite(rawHold) ? Math.max(0, rawHold) : 0;
